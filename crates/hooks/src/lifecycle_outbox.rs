@@ -45,10 +45,36 @@
 //! never fed back into the agent loop. The fan-out is itself bounded — at
 //! most [`WEBHOOK_MAX_IN_FLIGHT`] deliveries run concurrently, and a full
 //! backlog drops the newest delivery instead of queueing it.
+//!
+//! # Session ownership of turn boundaries
+//!
+//! A session owns its turn events: the process that starts a turn is the
+//! one that ends it — except when it cannot. A session killed mid-turn
+//! (SIGKILL, a closed pane, a crashed host) dies between the `turn_start`
+//! and `turn_end` appends, leaving an unpaired `turn_start` in the file.
+//!
+//! - **Graceful shutdown** closes the loop for catchable signals: the TUI's
+//!   terminating-signal task calls [`LifecycleOutbox::reconcile_interrupted_turns`]
+//!   before exiting, which appends a synthetic `turn_end`
+//!   (`status: "interrupted"`, `payload.reconciled: true`, a `reason` naming
+//!   the signal) for every turn this session left open.
+//! - **SIGKILL runs no code**, so nothing can be appended at death; that is
+//!   what **boot reconciliation** covers: on the next session start the
+//!   session calls [`LifecycleOutbox::reconcile_interrupted_turns`] again
+//!   (reason `boot_reconciliation`) and the same scan pairs anything the
+//!   killed process left behind. The session owns its events across process
+//!   lifetimes.
+//!
+//! Both paths derive the open turn from the *file* (a `turn_start` with no
+//! matching `turn_end` for the same `thread_id`), never from in-memory
+//! state, so a signal handler that races the writer task cannot fabricate a
+//! duplicate `turn_end`. The scan and the appends run under the outbox's
+//! exclusive lock, so two reconcilers (or a reconciler racing another
+//! session's writer) serialize and never double-append.
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -81,6 +107,17 @@ const SEQ_RECOVERY_TAIL_BYTES: u64 = 64 * 1024;
 /// newest delivery is logged and dropped instead of queued unbounded. The
 /// local append path is never blocked either way.
 const WEBHOOK_MAX_IN_FLIGHT: usize = 4;
+
+/// How long [`LifecycleOutbox::reconcile_interrupted_turns`] waits for this
+/// process's own queued events to drain before it scans the file. Only the
+/// signal path can observe a non-empty queue (a `turn_start` still on the
+/// channel); boot reconciliation runs before the first emit and returns
+/// immediately. The wait is bounded so a wedged writer can never trap the
+/// terminating-signal handler.
+const RECONCILE_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Poll interval for the reconcile drain wait above.
+const RECONCILE_DRAIN_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// One lifecycle event destined for the outbox.
 ///
@@ -151,6 +188,7 @@ impl LifecycleOutbox {
                 writer_spawned: AtomicBool::new(false),
                 spawn_lock: Mutex::new(()),
                 webhook_slots: Arc::new(Semaphore::new(WEBHOOK_MAX_IN_FLIGHT)),
+                pending: Arc::new(AtomicUsize::new(0)),
             })),
         }
     }
@@ -180,6 +218,52 @@ impl LifecycleOutbox {
             tracing::warn!(target: "lifecycle_outbox", %error, "lifecycle event dropped");
         }
     }
+
+    /// Emit one lifecycle event synchronously, on the calling thread.
+    ///
+    /// Bypasses the async queue: the seq is recovered and the line appended
+    /// under the outbox's cross-process exclusive lock before this returns.
+    /// No tokio runtime is required. This is the append primitive for paths
+    /// that must land a line before the process dies (terminating-signal
+    /// handlers) and for deterministic offline writers (fixture generators,
+    /// tests); ordinary emit sites keep using the non-blocking [`emit`].
+    ///
+    /// Returns the written envelope. A disabled outbox appends nothing and
+    /// returns an error.
+    pub fn emit_blocking(&self, event: LifecycleEvent) -> Result<RuntimeEventEnvelope> {
+        let Some(inner) = self.inner.clone() else {
+            anyhow::bail!("lifecycle outbox is disabled");
+        };
+        let (envelope, append_result) = append_event_under_lock(&inner.path, event)?;
+        append_result?;
+        Ok(envelope)
+    }
+
+    /// Reconcile interrupted turns owned by `thread_id`: scan the outbox for
+    /// this thread's `turn_start` lines that lack a matching `turn_end` and
+    /// append one synthetic `turn_end` for each (`status: "interrupted"`,
+    /// `payload.reconciled: true`, `payload.reason: reason`). Returns the
+    /// number of synthetic ends appended (0 when the file is healthy or the
+    /// outbox is disabled).
+    ///
+    /// Runs synchronously: first it waits (bounded) for this process's own
+    /// queued events to drain so a still-queued `turn_start` is visible to
+    /// the scan, then it scans the whole file and appends under the outbox's
+    /// exclusive lock. Holding the lock across scan and appends makes the
+    /// reconciliation idempotent across concurrent sessions: a second
+    /// reconciler sees the first one's synthetic ends and appends nothing.
+    ///
+    /// Call it once at session start (reason `"boot_reconciliation"` — the
+    /// SIGKILL/closed-pane recovery path, since a killed process cannot
+    /// append its own ends) and again from a terminating-signal handler
+    /// (reason `"signal:SIGTERM"` etc. — the graceful-shutdown path).
+    /// A disabled outbox is a no-op returning 0.
+    pub fn reconcile_interrupted_turns(&self, thread_id: &str, reason: &str) -> Result<usize> {
+        let Some(inner) = self.inner.clone() else {
+            return Ok(0);
+        };
+        inner.reconcile_interrupted_turns(thread_id, reason)
+    }
 }
 
 struct OutboxInner {
@@ -194,6 +278,11 @@ struct OutboxInner {
     spawn_lock: Mutex<()>,
     /// Concurrency cap for webhook fan-out tasks (see [`WEBHOOK_MAX_IN_FLIGHT`]).
     webhook_slots: Arc<Semaphore>,
+    /// Events enqueued on the channel and not yet appended (bumped on
+    /// enqueue, decremented after each append attempt). Lets the synchronous
+    /// paths (blocking emit, reconciliation) wait a bounded time for this
+    /// process's own queue to drain before they touch the file.
+    pending: Arc<AtomicUsize>,
 }
 
 impl OutboxInner {
@@ -202,9 +291,12 @@ impl OutboxInner {
     /// Ordering: `send` happens before the spawn so events queued before the
     /// writer starts are drained first, preserving enqueue order.
     fn enqueue(self: &Arc<Self>, event: LifecycleEvent) -> Result<()> {
-        self.sender
-            .send(event)
-            .map_err(|_| anyhow::anyhow!("lifecycle outbox writer task is gone"))?;
+        self.pending.fetch_add(1, Ordering::AcqRel);
+        if self.sender.send(event).is_err() {
+            // The writer task is gone; nothing will ever drain this event.
+            self.pending.fetch_sub(1, Ordering::AcqRel);
+            return Err(anyhow::anyhow!("lifecycle outbox writer task is gone"));
+        }
         self.ensure_writer_spawned();
         Ok(())
     }
@@ -239,12 +331,41 @@ impl OutboxInner {
             path: self.path.clone(),
             webhook: self.webhook.clone(),
             webhook_slots: self.webhook_slots.clone(),
+            pending: self.pending.clone(),
             receiver,
         };
         self.writer_spawned.store(true, Ordering::Release);
         handle.spawn(async move {
             state.run().await;
         });
+    }
+
+    /// See [`LifecycleOutbox::reconcile_interrupted_turns`].
+    fn reconcile_interrupted_turns(&self, thread_id: &str, reason: &str) -> Result<usize> {
+        self.wait_for_pending_drain();
+        if thread_id.is_empty() {
+            return Ok(0);
+        }
+        reconcile_interrupted_turns_under_lock(&self.path, thread_id, reason)
+    }
+
+    /// Wait (bounded) for this process's own queued events to be appended so
+    /// a synchronous file scan sees them. Only the signal path can observe a
+    /// non-empty queue; on a single-worker runtime the writer task cannot
+    /// progress while this busy-waits, so the bound keeps the exit reachable.
+    fn wait_for_pending_drain(&self) {
+        let deadline = std::time::Instant::now() + RECONCILE_DRAIN_TIMEOUT;
+        while self.pending.load(Ordering::Acquire) > 0 {
+            if std::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    target: "lifecycle_outbox",
+                    pending = self.pending.load(Ordering::Acquire),
+                    "lifecycle outbox queue did not drain in time; reconciling against the file as-is"
+                );
+                return;
+            }
+            std::thread::sleep(RECONCILE_DRAIN_POLL);
+        }
     }
 }
 
@@ -256,6 +377,9 @@ struct WriterState {
     webhook: Option<WebhookHookSink>,
     /// Concurrency cap for webhook fan-out tasks (see [`WEBHOOK_MAX_IN_FLIGHT`]).
     webhook_slots: Arc<Semaphore>,
+    /// Shared queue-depth counter; decremented after each append attempt so
+    /// the synchronous paths can observe a drained queue.
+    pending: Arc<AtomicUsize>,
     receiver: UnboundedReceiver<LifecycleEvent>,
 }
 
@@ -271,6 +395,9 @@ impl WriterState {
                     "lifecycle outbox write failed"
                 );
             }
+            // The append attempt is complete either way; the synchronous
+            // paths' drain wait observes the queue shrinking here.
+            self.pending.fetch_sub(1, Ordering::AcqRel);
         }
     }
 
@@ -353,9 +480,20 @@ fn append_event_under_lock(
         .create(true)
         .open(path)
         .with_context(|| format!("failed to open outbox {}", path.display()))?;
-    let seq = recover_last_seq(&mut file, path)?;
+    let envelope = build_envelope(&mut file, path, event)?;
+    let append_result = write_envelope_line(&mut file, path, &envelope);
+    Ok((envelope, append_result))
+}
 
-    let envelope = RuntimeEventEnvelope {
+/// Recover the next `seq` and build the envelope for `event`. The caller
+/// must hold the outbox's exclusive lock.
+fn build_envelope(
+    file: &mut std::fs::File,
+    path: &Path,
+    event: LifecycleEvent,
+) -> Result<RuntimeEventEnvelope> {
+    let seq = recover_last_seq(file, path)?;
+    Ok(RuntimeEventEnvelope {
         schema_version: RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION,
         seq,
         event: event.event,
@@ -367,19 +505,157 @@ fn append_event_under_lock(
         created_at: Some(Utc::now().to_rfc3339()),
         payload: event.payload,
         extra: Default::default(),
-    };
-    let line = serde_json::to_string(&envelope).context("failed to encode outbox event")?;
-    // Line + newline in a single `write_all`: with O_APPEND each `write`
-    // lands contiguously at EOF, and with the lock held no other writer can
-    // interleave a line or a seq between the recovery above and this append.
+    })
+}
+
+/// Serialize `envelope` and append it as one line. Line + newline in a
+/// single `write_all`: with O_APPEND each `write` lands contiguously at EOF,
+/// and the caller holds the outbox's exclusive lock, so no other writer can
+/// interleave a line between the seq recovery and this append.
+fn write_envelope_line(
+    file: &mut std::fs::File,
+    path: &Path,
+    envelope: &RuntimeEventEnvelope,
+) -> Result<()> {
+    let line = serde_json::to_string(envelope).context("failed to encode outbox event")?;
     let mut record = Vec::with_capacity(line.len() + 1);
     record.extend_from_slice(line.as_bytes());
     record.push(b'\n');
-    let append_result = file
-        .write_all(&record)
+    file.write_all(&record)
         .and_then(|()| file.flush())
-        .with_context(|| format!("failed to write outbox {}", path.display()));
-    Ok((envelope, append_result))
+        .with_context(|| format!("failed to write outbox {}", path.display()))
+}
+
+/// Boot/shutdown reconciliation core: under the outbox's exclusive lock,
+/// scan the file for `thread_id`'s `turn_start` lines lacking a matching
+/// `turn_end` and append one synthetic `turn_end` for each.
+///
+/// The scan and the appends share one lock acquisition: a second reconciler
+/// (or a reconciler racing another session's writer) is serialized behind
+/// this one, then sees the synthetic ends this one wrote and appends nothing.
+/// That is what makes the reconciliation idempotent — the session owns its
+/// events, and ownership is settled by file truth, not by in-memory state.
+///
+/// Only the canonical SIGKILL shape is repaired: exactly one `turn_start`
+/// and no `turn_end` for a turn. A turn with duplicate starts can never
+/// satisfy a 1:1 pairing consumer no matter what is appended, so it is left
+/// alone with a warning.
+fn reconcile_interrupted_turns_under_lock(
+    path: &Path,
+    thread_id: &str,
+    reason: &str,
+) -> Result<usize> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create outbox directory {}", parent.display()))?;
+    }
+    let _lock = OutboxFileLock::acquire(path)?;
+
+    // The lock excludes every cooperating writer, so this snapshot is stable
+    // for the whole scan + append sequence below.
+    let mut starts: std::collections::HashMap<String, usize> = Default::default();
+    let mut ends: std::collections::HashMap<String, usize> = Default::default();
+    let mut workspaces: std::collections::HashMap<String, Value> = Default::default();
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            for line in text.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let Ok(envelope) = serde_json::from_str::<RuntimeEventEnvelope>(line) else {
+                    // A torn trailing line from a crash mid-append. It cannot
+                    // pair with anything; skip it.
+                    tracing::debug!(
+                        target: "lifecycle_outbox",
+                        "skipping unparseable outbox line during reconciliation"
+                    );
+                    continue;
+                };
+                if envelope.thread_id != thread_id {
+                    continue;
+                }
+                let Some(turn_id) = envelope.turn_id.as_ref() else {
+                    continue;
+                };
+                match envelope.event.as_str() {
+                    "turn_start" => {
+                        *starts.entry(turn_id.clone()).or_default() += 1;
+                        if let Some(workspace) = envelope.payload.get("workspace") {
+                            workspaces
+                                .entry(turn_id.clone())
+                                .or_insert_with(|| workspace.clone());
+                        }
+                    }
+                    "turn_end" => {
+                        *ends.entry(turn_id.clone()).or_default() += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // No outbox yet: nothing to reconcile.
+            return Ok(0);
+        }
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "failed to read outbox {} during reconciliation: {error}",
+                path.display()
+            ));
+        }
+    }
+
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .open(path)
+        .with_context(|| format!("failed to open outbox {}", path.display()))?;
+
+    let mut reconciled = 0usize;
+    for (turn_id, starts) in starts {
+        let ends = ends.get(&turn_id).copied().unwrap_or(0);
+        if starts == 1 && ends == 0 {
+            let envelope = build_envelope(
+                &mut file,
+                path,
+                LifecycleEvent {
+                    event: "turn_end".to_string(),
+                    kind: "turn.interrupted".to_string(),
+                    thread_id: thread_id.to_string(),
+                    turn_id: Some(turn_id.clone()),
+                    item_id: None,
+                    payload: json!({
+                        "status": "interrupted",
+                        "reconciled": true,
+                        "reason": reason,
+                        "workspace": workspaces.get(&turn_id).cloned().unwrap_or(Value::Null),
+                    }),
+                },
+            )?;
+            write_envelope_line(&mut file, path, &envelope)?;
+            reconciled += 1;
+            tracing::info!(
+                target: "lifecycle_outbox",
+                %thread_id,
+                %turn_id,
+                seq = envelope.seq,
+                %reason,
+                "reconciled interrupted turn with a synthetic turn_end"
+            );
+        } else if starts > 1 {
+            tracing::warn!(
+                target: "lifecycle_outbox",
+                %thread_id,
+                %turn_id,
+                starts,
+                ends,
+                "turn has duplicate turn_start lines; reconciliation cannot restore 1:1 pairing"
+            );
+        }
+    }
+    Ok(reconciled)
 }
 
 /// The outbox's cross-process exclusive lock: an advisory lock on a
@@ -652,6 +928,7 @@ mod tests {
             path,
             webhook,
             webhook_slots: Arc::new(Semaphore::new(WEBHOOK_MAX_IN_FLIGHT)),
+            pending: Arc::new(AtomicUsize::new(0)),
             receiver: tokio::sync::mpsc::unbounded_channel().1,
         }
     }
@@ -664,6 +941,14 @@ mod tests {
 
     async fn read_lines(path: &Path) -> Vec<Value> {
         let text = tokio::fs::read_to_string(path).await.expect("read outbox");
+        text.lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("json line"))
+            .collect()
+    }
+
+    /// Synchronous [`read_lines`] for the runtime-free tests.
+    fn read_lines_blocking(path: &Path) -> Vec<Value> {
+        let text = std::fs::read_to_string(path).expect("read outbox");
         text.lines()
             .map(|line| serde_json::from_str::<Value>(line).expect("json line"))
             .collect()
@@ -967,6 +1252,232 @@ mod tests {
             seqs,
             (1..=total as u64).collect::<Vec<_>>(),
             "seqs must be unique and increasing in file order"
+        );
+    }
+
+    /// A synchronous append lands with the correct seq and no runtime: the
+    /// blocking primitive the terminating-signal path and offline fixture
+    /// generators rely on.
+    #[test]
+    fn emit_blocking_appends_without_a_tokio_runtime() {
+        let (_dir, path) = temp_outbox_path("blocking.jsonl");
+        let outbox = LifecycleOutbox::new(Some(path.clone()), None, None);
+        assert!(outbox.is_enabled());
+
+        let envelope = outbox
+            .emit_blocking(event("turn_start", "turn.started"))
+            .expect("blocking emit");
+        assert_eq!(envelope.seq, 1);
+        let envelope = outbox
+            .emit_blocking(event("turn_end", "turn.completed"))
+            .expect("blocking emit");
+        assert_eq!(envelope.seq, 2);
+
+        let lines = read_lines_blocking(&path);
+        let seqs: Vec<u64> = lines
+            .iter()
+            .map(|line| line["seq"].as_u64().expect("seq"))
+            .collect();
+        assert_eq!(seqs, vec![1, 2]);
+    }
+
+    #[test]
+    fn disabled_outbox_reconciles_nothing() {
+        let outbox = LifecycleOutbox::disabled();
+        assert_eq!(
+            outbox
+                .reconcile_interrupted_turns("session-1", "boot_reconciliation")
+                .expect("reconcile"),
+            0
+        );
+    }
+
+    #[test]
+    fn reconcile_pairs_this_sessions_unpaired_start_and_touches_nothing_else() {
+        let (_dir, path) = temp_outbox_path("reconcile.jsonl");
+        let outbox = LifecycleOutbox::new(Some(path.clone()), None, None);
+
+        // Healthy pair for session-1 (must be left alone).
+        outbox
+            .emit_blocking(LifecycleEvent {
+                event: "turn_start".to_string(),
+                kind: "turn.started".to_string(),
+                thread_id: "session-1".to_string(),
+                turn_id: Some("turn-done".to_string()),
+                item_id: None,
+                payload: json!({ "workspace": "/home/cw/session-1" }),
+            })
+            .expect("emit");
+        outbox
+            .emit_blocking(LifecycleEvent {
+                event: "turn_end".to_string(),
+                kind: "turn.completed".to_string(),
+                thread_id: "session-1".to_string(),
+                turn_id: Some("turn-done".to_string()),
+                item_id: None,
+                payload: json!({ "status": "completed" }),
+            })
+            .expect("emit");
+
+        // Unpaired start for session-1: the killed-mid-turn fixture.
+        outbox
+            .emit_blocking(LifecycleEvent {
+                event: "turn_start".to_string(),
+                kind: "turn.started".to_string(),
+                thread_id: "session-1".to_string(),
+                turn_id: Some("turn-killed".to_string()),
+                item_id: None,
+                payload: json!({ "workspace": "/home/cw/session-1" }),
+            })
+            .expect("emit");
+
+        // Unpaired start for a DIFFERENT session: not ours to own.
+        outbox
+            .emit_blocking(LifecycleEvent {
+                event: "turn_start".to_string(),
+                kind: "turn.started".to_string(),
+                thread_id: "session-2".to_string(),
+                turn_id: Some("turn-foreign".to_string()),
+                item_id: None,
+                payload: json!({ "workspace": "/home/cw/session-2" }),
+            })
+            .expect("emit");
+
+        let appended = outbox
+            .reconcile_interrupted_turns("session-1", "boot_reconciliation")
+            .expect("reconcile");
+        assert_eq!(appended, 1, "exactly the session-1 unpaired start");
+
+        let lines = read_lines_blocking(&path);
+        // Original 4 lines + 1 synthetic end, nothing else.
+        assert_eq!(lines.len(), 5);
+
+        let synthetic = lines
+            .iter()
+            .find(|line| line["event"] == "turn_end" && line["turn_id"] == "turn-killed")
+            .expect("synthetic turn_end");
+        assert_eq!(synthetic["kind"], "turn.interrupted");
+        assert_eq!(synthetic["thread_id"], "session-1");
+        assert_eq!(synthetic["payload"]["status"], "interrupted");
+        assert_eq!(synthetic["payload"]["reconciled"], true);
+        assert_eq!(synthetic["payload"]["reason"], "boot_reconciliation");
+        assert_eq!(
+            synthetic["payload"]["workspace"],
+            json!("/home/cw/session-1"),
+            "the synthetic end inherits the start's routing workspace"
+        );
+
+        // The foreign unpaired start is untouched (its own session owns it).
+        assert!(
+            lines
+                .iter()
+                .all(|line| { !(line["event"] == "turn_end" && line["thread_id"] == "session-2") }),
+            "session-2's start must stay unpaired here"
+        );
+
+        // Seq stays strictly monotonic in file order across the append.
+        let seqs: Vec<u64> = lines
+            .iter()
+            .map(|line| line["seq"].as_u64().expect("seq"))
+            .collect();
+        assert_eq!(seqs, vec![1, 2, 3, 4, 5]);
+
+        // The synthetic end is the LAST line (appended after the scan).
+        assert_eq!(lines.last().expect("last")["turn_id"], "turn-killed");
+    }
+
+    #[test]
+    fn reconcile_is_idempotent_and_leaves_healthy_files_alone() {
+        let (_dir, path) = temp_outbox_path("reconcile-idem.jsonl");
+        let outbox = LifecycleOutbox::new(Some(path.clone()), None, None);
+
+        outbox
+            .emit_blocking(LifecycleEvent {
+                event: "turn_start".to_string(),
+                kind: "turn.started".to_string(),
+                thread_id: "session-1".to_string(),
+                turn_id: Some("turn-killed".to_string()),
+                item_id: None,
+                payload: json!({ "workspace": "/home/cw/session-1" }),
+            })
+            .expect("emit");
+
+        assert_eq!(
+            outbox
+                .reconcile_interrupted_turns("session-1", "boot_reconciliation")
+                .expect("reconcile"),
+            1
+        );
+        // Second boot (or a racing reconciler behind the lock) appends nothing.
+        assert_eq!(
+            outbox
+                .reconcile_interrupted_turns("session-1", "boot_reconciliation")
+                .expect("reconcile"),
+            0
+        );
+        assert_eq!(read_lines_blocking(&path).len(), 2);
+
+        // A fully healthy thread needs nothing either.
+        let (_dir, healthy) = temp_outbox_path("reconcile-healthy.jsonl");
+        let outbox = LifecycleOutbox::new(Some(healthy.clone()), None, None);
+        outbox
+            .emit_blocking(event("turn_start", "turn.started"))
+            .expect("emit");
+        outbox
+            .emit_blocking(event("turn_end", "turn.completed"))
+            .expect("emit");
+        assert_eq!(
+            outbox
+                .reconcile_interrupted_turns("session-1", "boot_reconciliation")
+                .expect("reconcile"),
+            0
+        );
+        assert_eq!(read_lines_blocking(&healthy).len(), 2);
+    }
+
+    #[test]
+    fn reconcile_appends_nothing_when_the_outbox_does_not_exist() {
+        let (_dir, path) = temp_outbox_path("reconcile-missing.jsonl");
+        let outbox = LifecycleOutbox::new(Some(path.clone()), None, None);
+        assert_eq!(
+            outbox
+                .reconcile_interrupted_turns("session-1", "boot_reconciliation")
+                .expect("reconcile"),
+            0
+        );
+        assert!(
+            !path.exists(),
+            "reconciliation must not create an empty outbox"
+        );
+    }
+
+    /// Reconcile a file that ends in a torn trailing line (a crash
+    /// mid-append): the torn line is skipped, the complete lines before it
+    /// still reconcile.
+    #[test]
+    fn reconcile_skips_a_torn_trailing_line() {
+        let (_dir, path) = temp_outbox_path("reconcile-torn.jsonl");
+        let outbox = LifecycleOutbox::new(Some(path.clone()), None, None);
+        outbox
+            .emit_blocking(LifecycleEvent {
+                event: "turn_start".to_string(),
+                kind: "turn.started".to_string(),
+                thread_id: "session-1".to_string(),
+                turn_id: Some("turn-killed".to_string()),
+                item_id: None,
+                payload: json!({ "workspace": "/home/cw/session-1" }),
+            })
+            .expect("emit");
+        // Simulate the crash mid-append.
+        let mut bytes = std::fs::read(&path).expect("read");
+        bytes.extend_from_slice(b"{\"schema_version\":1,\"seq\":2,\"event\":\"turn_");
+        std::fs::write(&path, bytes).expect("write torn tail");
+
+        assert_eq!(
+            outbox
+                .reconcile_interrupted_turns("session-1", "boot_reconciliation")
+                .expect("reconcile"),
+            1
         );
     }
 
