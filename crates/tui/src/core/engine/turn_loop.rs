@@ -4223,28 +4223,12 @@ impl Engine {
         Some(snapshot)
     }
 
-    async fn goal_continuation_message_if_needed(
-        &self,
-        tool_registry: Option<&crate::tools::ToolRegistry>,
-        continuations_this_turn: &mut u32,
-        current_turn_usage: &Usage,
-    ) -> Option<String> {
-        let registry = tool_registry?;
-        if !registry.contains("update_goal") {
-            return None;
-        }
-
-        let mut snapshot = self.goal_snapshot_with_current_turn_usage(current_turn_usage)?;
-        let current_turn_tokens = u64::from(current_turn_usage.input_tokens)
-            .saturating_add(u64::from(current_turn_usage.output_tokens));
-
-        // Route the continuation decision through the goal-loop decision core.
-        // A goal runs until complete/blocked or the user pauses it; token/time
-        // accounting is telemetry (#5052). The configurable run-level backstop
-        // ([goal] max_continuations) only halts a pathological
-        // loop. The per-turn guard (`per_turn_max`) only bounds how many
-        // continuation passes happen *within* a single turn before yielding
-        // back to the engine.
+    /// Run the goal-loop decision core against the live goal state merged with
+    /// this turn's usage. `Some(snapshot)` means the goal is still active and
+    /// should continue; `None` means no continuation (inactive goal, terminal
+    /// status, or continuation backstop), after emitting the terminal status.
+    async fn goal_continuation_allowed(&self, current_turn_usage: &Usage) -> Option<GoalSnapshot> {
+        let snapshot = self.goal_snapshot_with_current_turn_usage(current_turn_usage)?;
         let decision = crate::goal_loop::decide_continuation(
             crate::goal_loop::GoalRunStatus::Active,
             crate::goal_loop::GoalProgress {
@@ -4263,6 +4247,67 @@ impl Engine {
             let _ = self.tx_event.send(Event::status(message)).await;
             return None;
         }
+        Some(snapshot)
+    }
+
+    async fn goal_continuation_message_if_needed(
+        &self,
+        tool_registry: Option<&crate::tools::ToolRegistry>,
+        continuations_this_turn: &mut u32,
+        current_turn_usage: &Usage,
+    ) -> Option<String> {
+        let registry = tool_registry?;
+        if !registry.contains("update_goal") {
+            return None;
+        }
+
+        // Decide first so a terminal goal never spends the quiet period —
+        // failures never continue (host-managed cadence).
+        self.goal_continuation_allowed(current_turn_usage)
+            .await
+            .as_ref()?;
+
+        // Host-managed turns have no cross-turn scheduler, so the configured
+        // between-continuation quiet period is awaited right here. The wait is
+        // cancellable: the cancel token (Esc) wins biased over the timer, and
+        // a pause/clear or terminal update_goal observed after the wait
+        // cancels the pending pass before anything is recorded or dispatched.
+        let wait = if self.host_managed_turns() {
+            crate::goal_loop::continuation_wait(self.config.goal_continuation_delay_seconds)
+        } else {
+            None
+        };
+        let was_delayed = wait.is_some();
+        if let Some(wait) = wait {
+            let _ = self
+                .tx_event
+                .send(Event::GoalContinuationWaiting {
+                    delay_seconds: wait.as_secs(),
+                })
+                .await;
+        }
+        if crate::goal_loop::await_continuation_wait(wait, &self.cancel_token).await
+            == crate::goal_loop::ContinuationWaitOutcome::Cancelled
+        {
+            let _ = self
+                .tx_event
+                .send(Event::GoalContinuationWaitEnded { interrupted: true })
+                .await;
+            return None;
+        }
+        if was_delayed {
+            let _ = self
+                .tx_event
+                .send(Event::GoalContinuationWaitEnded { interrupted: false })
+                .await;
+        }
+
+        // Re-decide on the live state after the quiet period: /goal pause,
+        // /goal clear, or a terminal update_goal during the wait cancels the
+        // pending pass instead of dispatching a provider request.
+        let mut snapshot = self.goal_continuation_allowed(current_turn_usage).await?;
+        let current_turn_tokens = u64::from(current_turn_usage.input_tokens)
+            .saturating_add(u64::from(current_turn_usage.output_tokens));
 
         *continuations_this_turn = (*continuations_this_turn).saturating_add(1);
         match self.config.goal_state.lock() {
