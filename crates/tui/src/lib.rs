@@ -5840,6 +5840,10 @@ fn print_doctor_setup_report(
         "  · runtime posture: {}",
         doctor_runtime_posture_line(config, workspace)
     );
+    println!(
+        "  · lifecycle outbox: {}",
+        doctor_lifecycle_outbox_posture_line(config)
+    );
     let consistency = doctor_setup_consistency(state, source);
     if consistency["status"] == "inconsistent" {
         let issues = consistency["issues"]
@@ -6050,6 +6054,23 @@ fn doctor_runtime_posture_line(config: &Config, workspace: &Path) -> String {
     format!(
         "default_mode={default_mode} ({default_mode_source}), permission_posture={permission_posture} ({permission_posture_source}), approval_policy={approval} ({approval_source}), allow_shell={allow_shell} ({allow_shell_source}), sandbox={sandbox} ({sandbox_source}), network.default={network} ({network_source}), telemetry={telemetry} ({telemetry_source}), trust={trust}"
     )
+}
+
+/// Observability posture row for the lifecycle outbox: the feature is opt-in
+/// via `[lifecycle_outbox].path` (unset/empty = off, the default). Truth and
+/// resilience theme: report the resolved state and, when enabled, the sink
+/// path the writer appends to.
+fn doctor_lifecycle_outbox_posture_line(config: &Config) -> String {
+    let path = config
+        .lifecycle_outbox
+        .as_ref()
+        .and_then(|outbox| outbox.path.as_deref())
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    if path.trim().is_empty() {
+        return "lifecycle_outbox=off (default)".to_string();
+    }
+    format!("lifecycle_outbox=on (path: {path})")
 }
 
 /// Resolved telemetry consent and where it came from (#5441).
@@ -13548,6 +13569,41 @@ mod doctor_setup_state_tests {
         let report = doctor_setup_report_json(&config, &workspace);
         assert_eq!(report["runtime_posture"]["telemetry"]["value"], false);
         assert_eq!(report["runtime_posture"]["telemetry"]["source"], "config");
+    }
+
+    /// The lifecycle outbox posture row: opt-in via `[lifecycle_outbox].path`;
+    /// off is the default and must be named, and an enabled config must show
+    /// the resolved sink path the writer appends to.
+    #[test]
+    fn doctor_reports_lifecycle_outbox_posture() {
+        let _guard = crate::test_support::lock_test_env();
+        let tmp = TempDir::new().expect("tempdir");
+        let (_home_guard, _codewhale_home) = prepare_env(&tmp);
+
+        // Nothing configured: the opt-in default applies and is named.
+        let config = Config::default();
+        assert!(config.lifecycle_outbox.is_none());
+        assert_eq!(
+            doctor_lifecycle_outbox_posture_line(&config),
+            "lifecycle_outbox=off (default)"
+        );
+
+        // A configured path is reported with the sink path.
+        let outbox_path = tmp.path().join("outbox.jsonl");
+        let config = Config {
+            lifecycle_outbox: Some(codewhale_config::LifecycleOutboxToml {
+                path: Some(outbox_path.clone()),
+                webhook_url: None,
+                webhook_token: None,
+            }),
+            ..Config::default()
+        };
+        let line = doctor_lifecycle_outbox_posture_line(&config);
+        assert!(line.starts_with("lifecycle_outbox=on (path: "), "{line}");
+        assert!(
+            line.contains(&outbox_path.display().to_string()),
+            "posture row must show the resolved sink path: {line}"
+        );
     }
 
     #[test]
