@@ -1055,6 +1055,52 @@ fn mark_active_turn_cancelled_locally(app: &mut App) {
     crate::tui::notifications::stop_title_animation_quietly();
 }
 
+/// The Esc-shaped "cancel the active turn" body, extracted verbatim from the
+/// event loop's `EscapeAction::CancelRequest` arm so the session control
+/// socket's `interrupt` verb and the Esc key cannot drift apart. Returns
+/// `true` when the caller should stop handling the event (compaction cancel
+/// or goal-continuation stop consumed it), `false` otherwise. The caller
+/// keeps its own Esc-specific state (backtrack reset) outside this body.
+pub(crate) fn escape_cancel_request(
+    app: &mut App,
+    engine_handle: &EngineHandle,
+    current_streaming_text: &mut String,
+    stream_display_clock: &mut StreamDisplayClock,
+) -> bool {
+    if try_cancel_compaction(app, engine_handle) {
+        return true;
+    }
+    if app.paused || app.paused_goal_objective.is_some() {
+        clear_paused_command_state(app, engine_handle);
+        if app.is_loading || matches!(app.runtime_turn_status.as_deref(), Some("in_progress")) {
+            engine_handle.cancel();
+            mark_active_turn_cancelled_locally(app);
+            current_streaming_text.clear();
+            stream_display_clock.reset();
+        }
+        app.active_allowed_tools = None;
+        app.goal.objective = None;
+        app.goal.tokens_used = 0;
+        app.goal.time_used_seconds = 0;
+        app.goal.continuation_count = 0;
+        app.status_message = Some(parent_stop_status(app, "Paused command cancelled"));
+        false
+    } else {
+        let was_waiting = app.goal_continuation_waiting;
+        engine_handle.cancel();
+        if was_waiting {
+            app.goal_continuation_waiting = false;
+            app.status_message = Some(app.tr(MessageId::GoalContinuationStopped).to_string());
+            return true;
+        }
+        mark_active_turn_cancelled_locally(app);
+        current_streaming_text.clear();
+        stream_display_clock.reset();
+        app.status_message = Some(parent_stop_status(app, "Request cancelled"));
+        false
+    }
+}
+
 fn suppress_engine_event_after_local_cancel(event: &EngineEvent) -> bool {
     matches!(
         event,

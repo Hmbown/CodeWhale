@@ -2541,6 +2541,49 @@ Delivery is best-effort: failures are logged and dropped, never retried
 into the agent loop, and a failing webhook never blocks the local file
 append.
 
+## Control Socket (`[control_socket]`)
+
+Per-session control surface for supervised operation: with the feature
+enabled, the interactive TUI binds one unix domain socket per *running*
+session at `<sessions-dir>/<session-id>/control.sock` (mode `0600`;
+`<sessions-dir>` is the same directory the session store uses, typically
+`~/.codewhale/sessions`). The socket is removed with the session's
+artifact directory, and a stale socket left by a crashed process is taken
+over by the next launch. Unset or `enabled = false` = the feature is
+**off** (the default) and behavior is unchanged. Unix-only; on other
+platforms the key parses but no socket is bound.
+
+```toml
+[control_socket]
+enabled = false # default: OFF
+```
+
+The socket speaks newline-framed JSON-RPC, one request per connection:
+write one request line, read one response line, close.
+
+```json
+{"id":"1","method":"message","params":{"text":"hello"}}
+{"id":"2","method":"interrupt","params":{}}
+{"id":"3","method":"relaunch","params":{}}
+{"id":"4","method":"status","params":{}}
+```
+
+- `message` — delivers `text` as a structured user message through the
+  ordinary composer dispatch path; dispatched immediately when idle,
+  queued when a turn is in flight (the response's `delivery` field says
+  which).
+- `interrupt` — the Esc-shaped cancel of the active turn; `cancelled`
+  reports whether active work was in flight.
+- `relaunch` — routed through the `/relaunch` slash-command path (same
+  save-and-resume handoff, no separate mechanics).
+- `status` — answers `turn_state` (`idle` / `in_progress` / `waiting`) and
+  `goal` (`objective`, `status`, `paused`).
+
+Success responses echo the request id with a `type`-tagged result;
+failures carry `error.code` (`invalid_request`, `command_error`,
+`timeout`, `server_unavailable`). Requests are bounded at 1 MiB per line
+and a handler that does not answer within 5 s is reported as `timeout`.
+
 ## Tool Catalog
 
 Codewhale loads a small core native tool catalog by default and leaves less

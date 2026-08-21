@@ -32,6 +32,7 @@ pub mod composer_chrome;
 pub mod composer_ui;
 pub mod context_inspector;
 pub mod context_menu;
+pub(crate) mod control_socket;
 pub(crate) mod coordination_detail;
 pub(crate) mod cursor_accent;
 pub mod diff_render;
