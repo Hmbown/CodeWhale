@@ -36,9 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guard happened to be live. Both tests now hold the env barrier and pin the
   variables (the route-budget test removes the overrides; the prompts test
   points `HOME`/`USERPROFILE` at a scratch dir). Assertions unchanged.
-  Four consecutive full `cargo test -p codewhale-tui --lib` runs green
-  (10891 passed / 0 failed / 13 ignored each), covering default and
-  `--test-threads=1` modes.
+  Full `cargo test --workspace --all-features --locked` on this branch:
+  13,126 passed / 0 failed.
 
 ## [0.9.10] - 2026-08-19
 
