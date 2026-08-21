@@ -234,7 +234,9 @@ fn record_audio() -> Option<(Vec<i16>, Duration)> {
         match reader.read_exact(&mut buf) {
             Ok(()) => {
                 let chunk: Vec<i16> = buf
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|b| i16::from_le_bytes([b[0], b[1]]))
                     .collect();
 
