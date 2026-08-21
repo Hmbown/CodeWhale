@@ -11870,13 +11870,21 @@ async fn run_exec_agent(
 
     // Lifecycle outbox (`[lifecycle_outbox]`): headless `codewhale exec`
     // gets the same turn boundaries as the interactive TUI. Disabled
-    // (all emits no-op) when the config has no path.
+    // (all emits no-op) when the config has no path. The path goes through
+    // the same `~`/env expansion as every other config path,
+    // so the documented `~/.codewhale/...` example resolves under $HOME
+    // instead of a literal `~` directory.
     let lifecycle_outbox = config
         .lifecycle_outbox
         .as_ref()
         .map(|outbox| {
             codewhale_hooks::LifecycleOutbox::new(
-                outbox.path.clone(),
+                outbox
+                    .path
+                    .as_ref()
+                    .and_then(|path| path.to_str())
+                    .map(crate::config::expand_path)
+                    .or_else(|| outbox.path.clone()),
                 outbox.webhook_url.clone(),
                 outbox.webhook_token.clone(),
             )

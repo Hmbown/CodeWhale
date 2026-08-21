@@ -1241,13 +1241,16 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # per event (RuntimeEventEnvelope schema), appended and flushed on every
 # emit; seq is monotonic per file and recovers from the last line on open.
 # UNCOMMENT `path` TO ENABLE — unset/empty = OFF = behavior unchanged.
+# `~` and env vars in `path` are expanded, like every other config path.
 # Fires for interactive TUI sessions AND headless `codewhale exec` runs.
 # See docs/CONFIGURATION.md → Lifecycle Outbox for the file contract.
 # [lifecycle_outbox]
 # path = "~/.codewhale/notifications/outbox.jsonl"
 # webhook_url = "https://example.com/hooks/codewhale" # optional: POST {"at", "event"} JSON per event
 # webhook_token = ""            # optional: sent as `Authorization: Bearer <token>`
-#                               # delivery is best-effort: failures are logged and dropped
+#                               # best-effort: bounded retries inside the sink;
+#                               # failures logged and dropped, never fed back
+#                               # into the agent loop; never blocks the append
 
 # Opt-in per-event sound cues (#4817): deterministic, terminal-bell level
 # (BEL bytes only — functional signals, platform-safe no-op when the terminal

@@ -2438,6 +2438,14 @@ idle/error, crash) also emits a folded `turn_end` with
 `kind: "turn.failed"` — every `turn_start` gets a matching `turn_end`,
 exactly like `codewhale exec`'s channel-closed guarantee.
 
+`turn_end` kinds are projected exhaustively from the terminal turn
+status: exactly `turn.completed`, `turn.failed`, or `turn.interrupted`.
+There is no unknown-status fallback kind — an earlier `turn.ended`
+fallback for degenerate states (a turn completion observed after a
+disconnect cleared the status) was removed when the turn-boundary emits
+moved into the engine — so consumers should only ever see the three
+listed kinds.
+
 ### File contract
 
 Each line is a `RuntimeEventEnvelope`:
@@ -2458,11 +2466,14 @@ Each line is a `RuntimeEventEnvelope`:
   sessions writing the same path interleave whole lines (never bytes
   mid-line) in seq order, so sharing one file across sessions is safe.
 - Parent directories are created lazily on the first event.
+- `path` is expanded like every other config path: `~` and environment
+  variables resolve before the file is opened, so the documented
+  `~/.codewhale/notifications/outbox.jsonl` example lands under `$HOME`.
 - Payloads are constructed from bounded, pre-redacted fields only — never
   raw tool arguments, environment, or full transcript text. Free-form
   fields (error messages, previews) are capped at the notification limits
   (80 headline / 120 detail / 200 preview characters) and stripped of
-  control bytes.
+  control characters and ANSI escape sequences.
 
 ### Webhook delivery
 
@@ -2472,7 +2483,10 @@ With `webhook_url` set, every event is additionally POSTed as
 Delivery uses bounded retries inside the sink (two retries with
 exponential back-off); failures are logged and dropped, never fed back
 into the agent loop, and a failing webhook never blocks the local file
-append.
+append. Each delivery runs on a detached task after its append, bounded
+to at most four in flight — a full backlog drops the newest delivery
+rather than queueing — so a consumer must not assume POST arrival order
+matches file `seq` order.
 
 ## Tool Catalog
 
