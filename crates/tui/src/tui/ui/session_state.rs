@@ -715,7 +715,7 @@ pub(crate) async fn switch_workspace(
 
     let _ = engine_handle.send(Op::Shutdown).await;
     let engine_config = build_engine_config(app, config);
-    *engine_handle = spawn_tui_engine(engine_config, config);
+    *engine_handle = spawn_tui_engine(engine_config, config, app.lifecycle_outbox.clone());
     if !app.api_messages.is_empty() {
         let _ = engine_handle
             .send(Op::SyncSession {

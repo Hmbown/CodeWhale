@@ -60,7 +60,7 @@ use crate::config::{
     revoke_external_credential_consent_for_at,
 };
 use crate::config_ui::{self, ConfigUiMode, WebConfigSession, WebConfigSessionEvent};
-use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
+use crate::core::engine::{Engine, EngineConfig, EngineHandle};
 use crate::core::events::Event as EngineEvent;
 use crate::core::ops::{Op, ProviderRuntimeStatus, USER_SHELL_TOOL_ID_PREFIX, UserInputProvenance};
 use crate::hooks::{HookEvent, HookExecutor, TurnEndPayloadInput, TurnEndTotals};
@@ -1389,12 +1389,28 @@ mod memory_quick_add_tests {
     }
 }
 
-fn spawn_tui_engine(config: EngineConfig, api_config: &Config) -> EngineHandle {
-    let handle = spawn_engine(config, api_config);
+fn spawn_tui_engine(
+    config: EngineConfig,
+    api_config: &Config,
+    lifecycle_outbox: codewhale_hooks::LifecycleOutbox,
+) -> EngineHandle {
+    let (mut engine, handle) = Engine::new(config, api_config);
+    // Turn-boundary outbox events are emitted engine-side (see
+    // `Engine::lifecycle_outbox`) so goal-continuation turns get the same
+    // `turn_start`/`turn_end` pair as user-dispatched turns. Disabled
+    // outboxes stay wired; `emit` no-ops on them.
+    engine.lifecycle_outbox = Some(lifecycle_outbox);
     // Prime durable agent + coordination state through the same engine event
     // used by later refreshes. All TUI engine replacements use this wrapper,
     // so workspace switches and provider recovery cannot retain stale Work.
     let _ = handle.try_send(Op::ListSubAgents);
+    crate::utils::spawn_supervised(
+        "engine-event-loop",
+        std::panic::Location::caller(),
+        async move {
+            engine.run().await;
+        },
+    );
     handle
 }
 
