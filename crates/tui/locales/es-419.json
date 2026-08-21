@@ -444,6 +444,7 @@
   "CmdQueueMissingIndex": "Índice faltante. Uso: /queue edit <n> o /queue drop <n>",
   "CmdQueueIndexPositive": "El índice debe ser un número positivo",
   "CmdQueueIndexMin": "El índice debe ser >= 1",
+  "CmdRelaunchDescription": "Guardar la sesión, reiniciar la app y reanudarla",
   "CmdRelayDescription": "Crear un relay de sesión (接力) para un hilo nuevo",
   "CmdRemoteControlDescription": "Reanudar esta sesión exacta desde tu cuenta web de Codewhale",
   "CmdRemoteEnvDescription": "Abrir un Work alojado nuevo desde la punta de una rama de GitHub o CNB",

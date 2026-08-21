@@ -1238,6 +1238,175 @@ async fn goal_continuation_preserves_goal_and_resolves_updated_authoritative_rou
     run_task.await.expect("engine task");
 }
 
+/// Lifecycle outbox: a synthetic goal-continuation turn — which never passes
+/// through the UI's user-message dispatch — must still produce a
+/// `turn_start`+`turn_end` pair in the outbox file, same envelope shape and
+/// same seq discipline as the user-dispatched turn before it.
+#[tokio::test]
+async fn goal_continuation_turn_emits_turn_start_and_turn_end_pair_to_the_outbox() {
+    let _lock = lock_test_env();
+    let dir = tempdir().expect("tempdir");
+    let outbox_path = dir.path().join("outbox.jsonl");
+    let outbox = codewhale_hooks::LifecycleOutbox::new(Some(outbox_path.clone()), None, None);
+
+    let second_request_entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release_second_request = std::sync::Arc::new(tokio::sync::Notify::new());
+    let model = std::sync::Arc::new(GatedGoalModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        requests: std::sync::Mutex::new(Vec::new()),
+        second_request_entered: std::sync::Arc::clone(&second_request_entered),
+        release_second_request: std::sync::Arc::clone(&release_second_request),
+        first_usage: None,
+    });
+    let mut custom = HashMap::new();
+    custom.insert(
+        "custom-a".to_string(),
+        crate::config::ProviderConfig {
+            kind: Some("openai-compatible".to_string()),
+            base_url: Some("http://127.0.0.1:18183/v1".to_string()),
+            model: Some("local-model".to_string()),
+            api_key: Some("local-test-key".to_string()),
+            ..crate::config::ProviderConfig::default()
+        },
+    );
+    let config = Config {
+        provider: Some("custom-a".to_string()),
+        providers: Some(crate::config::ProvidersConfig {
+            custom,
+            ..crate::config::ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+    let engine_config = EngineConfig {
+        max_steps: 1,
+        snapshots_enabled: false,
+        terminal_chrome_enabled: false,
+        workspace: dir.path().to_path_buf(),
+        goal_objective: Some("keep going".to_string()),
+        goal_token_budget: Some(50_000),
+        ..EngineConfig::default()
+    };
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let (mut engine, handle) = Engine::new_with_model_client(engine_config, &config, client);
+    // The interactive TUI wires its outbox handle at engine spawn
+    // (`spawn_tui_engine`); the test installs the equivalent seam directly.
+    engine.lifecycle_outbox = Some(outbox);
+
+    handle
+        .send(Op::SendMessage {
+            content: "first turn".to_string(),
+            mode: AppMode::Agent,
+            route: resolved_route_for_test(&config, "local-model"),
+            compaction: Box::new(CompactionConfig::default()),
+            goal_objective: Some("keep going".to_string()),
+            goal_token_budget: Some(50_000),
+            goal_status: crate::tools::goal::GoalStatus::Active,
+            reasoning_effort: None,
+            reasoning_effort_auto: false,
+            auto_model: false,
+            allow_shell: false,
+            trust_mode: false,
+            auto_approve: false,
+            approval_mode: crate::tui::approval::ApprovalMode::Suggest,
+            translation_enabled: false,
+            allowed_tools: None,
+            dynamic_tools: Vec::new(),
+            hook_executor: None,
+            verbosity: None,
+            provenance: UserInputProvenance::ExternalUser,
+        })
+        .await
+        .expect("send first goal turn");
+    let run_task = tokio::spawn(engine.run());
+
+    // Two turns must run: the user turn, then the synthetic continuation.
+    // During the continuation's model request, queue a goal pause so the
+    // FIFO control ordering deterministically stops any third turn.
+    let mut completes = 0;
+    while completes < 2 {
+        let event = tokio::time::timeout(Duration::from_secs(3), async {
+            handle.rx_event.write().await.recv().await
+        })
+        .await
+        .expect("goal engine event timeout")
+        .expect("goal engine event");
+        if let Event::TurnComplete { .. } = event {
+            completes += 1;
+            if completes == 1 {
+                tokio::time::timeout(Duration::from_secs(3), second_request_entered.notified())
+                    .await
+                    .expect("continuation model request was never entered");
+                handle
+                    .send(Op::SetGoalStatus {
+                        status: crate::tools::goal::GoalStatus::Paused,
+                        clear: false,
+                    })
+                    .await
+                    .expect("queue goal pause");
+                release_second_request.notify_one();
+            }
+        }
+    }
+    handle.send(Op::Shutdown).await.expect("queue shutdown");
+    run_task.await.expect("engine task");
+
+    // The outbox writer task drains asynchronously; wait for all four lines.
+    let mut lines = Vec::new();
+    for _ in 0..400 {
+        if let Ok(text) = tokio::fs::read_to_string(&outbox_path).await {
+            lines = text
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("json"))
+                .collect();
+            if lines.len() >= 4 {
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    assert_eq!(
+        lines.len(),
+        4,
+        "one turn_start/turn_end pair per turn (user, then continuation): {lines:#?}"
+    );
+    for (line, expected_event, expected_kind, expected_seq) in [
+        (&lines[0], "turn_start", "turn.started", 1u64),
+        (&lines[1], "turn_end", "turn.completed", 2u64),
+        (&lines[2], "turn_start", "turn.started", 3u64),
+        (&lines[3], "turn_end", "turn.completed", 4u64),
+    ] {
+        assert_eq!(line["event"], expected_event);
+        assert_eq!(line["kind"], expected_kind);
+        assert_eq!(line["schema_version"], 1);
+        assert_eq!(line["seq"].as_u64(), Some(expected_seq));
+        assert!(
+            line["thread_id"].as_str().is_some_and(|id| !id.is_empty()),
+            "every line must carry the thread id: {line:#?}"
+        );
+        assert!(
+            line["turn_id"].as_str().is_some_and(|id| !id.is_empty()),
+            "every line must carry its turn id: {line:#?}"
+        );
+        assert_eq!(
+            line["payload"]["workspace"],
+            serde_json::json!(dir.path().to_string_lossy().as_ref()),
+            "every payload must carry the workspace"
+        );
+    }
+    // The continuation turn gets its own correlated pair, distinct from the
+    // user turn's — a supervisor sees two complete turns, not one split pair.
+    assert_eq!(lines[0]["turn_id"], lines[1]["turn_id"]);
+    assert_eq!(lines[2]["turn_id"], lines[3]["turn_id"]);
+    assert_ne!(lines[0]["turn_id"], lines[2]["turn_id"]);
+    assert_eq!(lines[1]["payload"]["status"], "completed");
+    assert_eq!(lines[3]["payload"]["status"], "completed");
+    assert!(lines[1]["payload"]["duration_ms"].as_u64().is_some());
+    assert!(lines[3]["payload"]["duration_ms"].as_u64().is_some());
+    assert_eq!(lines[0]["payload"]["model"], "local-model");
+    assert_eq!(lines[2]["payload"]["model"], "local-model");
+}
+
 #[tokio::test]
 async fn saturated_mailbox_does_not_deadlock_goal_continuation_self_dispatch() {
     let request_entered = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -1877,6 +2046,239 @@ async fn goal_pause_during_configured_delay_cancels_pending_continuation() {
     tokio::time::timeout(model_turn_event_timeout(), run_task)
         .await
         .expect("engine did not shut down after pausing delayed goal")
+        .expect("engine task");
+}
+
+#[tokio::test]
+async fn host_injected_goal_continuation_waits_out_the_quiet_period() {
+    // Host-managed sessions never run the engine-owned scheduler
+    // (schedule_goal_continuation is gated on !host_managed_turns), so the
+    // host injects ContinueGoal with engine_schedule_id None and this arm is
+    // the only dispatch site. A positive configured delay must be awaited
+    // before the provider request starts.
+    let model = std::sync::Arc::new(FailingGoalModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        message: "the host-injected continuation must wait first".to_string(),
+    });
+    let config = goal_custom_route_config();
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let (engine, handle) = Engine::new_with_model_client(
+        EngineConfig {
+            model: "local-model".to_string(),
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            goal_objective: Some("wait out the cadence".to_string()),
+            goal_continuation_delay_seconds: 1,
+            ..EngineConfig::default()
+        },
+        &config,
+        client,
+    );
+    engine
+        .config
+        .goal_state
+        .lock()
+        .expect("goal lock")
+        .sync_from_host_status(
+            Some("wait out the cadence"),
+            None,
+            crate::tools::goal::GoalStatus::Active,
+        );
+    let run_task = tokio::spawn(engine.run());
+
+    let queued_at = Instant::now();
+    handle
+        .send(Op::ContinueGoal {
+            dynamic_tools: Vec::new(),
+            engine_schedule_id: None,
+        })
+        .await
+        .expect("queue host-injected continuation");
+    {
+        let mut events = handle.rx_event.write().await;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while let Some(event) = events.recv().await {
+                if matches!(event, Event::TurnStarted { .. }) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("host-injected continuation did not dispatch after the quiet period");
+    }
+    let elapsed = queued_at.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(900),
+        "dispatch must wait out the configured quiet period, dispatched after {elapsed:?}"
+    );
+
+    let _ = tokio::time::timeout(model_turn_event_timeout(), handle.get_session_snapshot())
+        .await
+        .expect("host-injected delayed turn did not settle")
+        .expect("session snapshot after delayed host-injected dispatch");
+    assert_eq!(
+        model.calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the host-injected token must dispatch exactly one provider request"
+    );
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    tokio::time::timeout(model_turn_event_timeout(), run_task)
+        .await
+        .expect("engine did not shut down after host-injected delay")
+        .expect("engine task");
+}
+
+#[tokio::test]
+async fn host_injected_goal_continuation_with_zero_delay_dispatches_immediately() {
+    let model = std::sync::Arc::new(FailingGoalModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        message: "zero-delay host-injected dispatch proof".to_string(),
+    });
+    let config = goal_custom_route_config();
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let (engine, handle) = Engine::new_with_model_client(
+        EngineConfig {
+            model: "local-model".to_string(),
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            goal_objective: Some("dispatch without a cadence".to_string()),
+            goal_continuation_delay_seconds: 0,
+            ..EngineConfig::default()
+        },
+        &config,
+        client,
+    );
+    engine
+        .config
+        .goal_state
+        .lock()
+        .expect("goal lock")
+        .sync_from_host_status(
+            Some("dispatch without a cadence"),
+            None,
+            crate::tools::goal::GoalStatus::Active,
+        );
+    let run_task = tokio::spawn(engine.run());
+
+    handle
+        .send(Op::ContinueGoal {
+            dynamic_tools: Vec::new(),
+            engine_schedule_id: None,
+        })
+        .await
+        .expect("queue zero-delay host-injected continuation");
+    {
+        let mut events = handle.rx_event.write().await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while let Some(event) = events.recv().await {
+                if matches!(event, Event::TurnStarted { .. }) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("a zero-delay host-injected continuation must dispatch immediately");
+    }
+
+    let _ = tokio::time::timeout(model_turn_event_timeout(), handle.get_session_snapshot())
+        .await
+        .expect("zero-delay host-injected turn did not settle")
+        .expect("session snapshot after zero-delay dispatch");
+    assert_eq!(
+        model.calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "zero delay must not suppress the host-injected dispatch"
+    );
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    tokio::time::timeout(model_turn_event_timeout(), run_task)
+        .await
+        .expect("engine did not shut down after zero-delay dispatch")
+        .expect("engine task");
+}
+
+#[tokio::test]
+async fn cancellation_during_host_injected_continuation_wait_never_dispatches() {
+    let model = std::sync::Arc::new(FailingGoalModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        message: "a cancelled host-injected wait must never start".to_string(),
+    });
+    let config = goal_custom_route_config();
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let (engine, handle) = Engine::new_with_model_client(
+        EngineConfig {
+            model: "local-model".to_string(),
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            goal_objective: Some("cancel mid-cadence".to_string()),
+            goal_continuation_delay_seconds: 1,
+            ..EngineConfig::default()
+        },
+        &config,
+        client,
+    );
+    engine
+        .config
+        .goal_state
+        .lock()
+        .expect("goal lock")
+        .sync_from_host_status(
+            Some("cancel mid-cadence"),
+            None,
+            crate::tools::goal::GoalStatus::Active,
+        );
+    let run_task = tokio::spawn(engine.run());
+
+    handle
+        .send(Op::ContinueGoal {
+            dynamic_tools: Vec::new(),
+            engine_schedule_id: None,
+        })
+        .await
+        .expect("queue host-injected continuation");
+    // Enter the quiet period, then cancel: the biased wait must drop the
+    // pending pass instead of dispatching when the period would have elapsed.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    handle.cancel();
+
+    // A dispatch bug would surface a TurnStarted once the 1s period expires;
+    // a correct cancellation settles back into the mailbox loop silently.
+    let dispatched = {
+        let mut events = handle.rx_event.write().await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let Some(event) = events.recv().await else {
+                    break false;
+                };
+                if matches!(event, Event::TurnStarted { .. }) {
+                    break true;
+                }
+            }
+        })
+        .await
+        .unwrap_or(false)
+    };
+    assert!(
+        !dispatched,
+        "cancellation during the host-injected quiet period must never dispatch"
+    );
+
+    // The engine must keep accepting controls after the cancelled wait.
+    let _ = tokio::time::timeout(model_turn_event_timeout(), handle.get_session_snapshot())
+        .await
+        .expect("engine did not accept controls after the cancelled wait")
+        .expect("session snapshot after cancelled wait");
+    assert_eq!(
+        model.calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the cancelled host-injected token must never reach the provider"
+    );
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    tokio::time::timeout(model_turn_event_timeout(), run_task)
+        .await
+        .expect("engine did not shut down after cancelled wait")
         .expect("engine task");
 }
 

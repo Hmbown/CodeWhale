@@ -1125,7 +1125,7 @@ impl std::error::Error for RetryError {
 }
 
 /// Result type for retry operations
-pub type RetryResult<T> = Result<T, RetryError>;
+pub type RetryResult<T> = Result<T, Box<RetryError>>;
 
 /// Callback type for retry notifications
 ///
@@ -1175,10 +1175,12 @@ where
 {
     // If retries are disabled, just run once
     if !config.enabled {
-        return operation().await.map_err(|e| RetryError {
-            last_error: e,
-            attempts: 1,
-            total_time: Duration::ZERO,
+        return operation().await.map_err(|e| {
+            Box::new(RetryError {
+                last_error: e,
+                attempts: 1,
+                total_time: Duration::ZERO,
+            })
         });
     }
 
@@ -1197,11 +1199,11 @@ where
         if let Some(timeout) = total_timeout
             && start_time.elapsed() >= timeout
         {
-            return Err(RetryError {
+            return Err(Box::new(RetryError {
                 last_error: last_error.unwrap_or(LlmError::Timeout(timeout)),
                 attempts: attempt,
                 total_time: start_time.elapsed(),
-            });
+            }));
         }
 
         match operation().await {
@@ -1209,20 +1211,20 @@ where
             Err(err) => {
                 // Non-retryable errors fail immediately
                 if !err.is_retryable() {
-                    return Err(RetryError {
+                    return Err(Box::new(RetryError {
                         last_error: err,
                         attempts: attempt + 1,
                         total_time: start_time.elapsed(),
-                    });
+                    }));
                 }
 
                 // Last attempt - no more retries
                 if attempt >= config.max_retries {
-                    return Err(RetryError {
+                    return Err(Box::new(RetryError {
                         last_error: err,
                         attempts: attempt + 1,
                         total_time: start_time.elapsed(),
-                    });
+                    }));
                 }
 
                 // Calculate delay
@@ -1248,11 +1250,11 @@ where
     }
 
     // Should not reach here, but handle gracefully
-    Err(RetryError {
+    Err(Box::new(RetryError {
         last_error: last_error.unwrap_or(LlmError::Other("Unknown retry error".to_string())),
         attempts: config.max_retries + 1,
         total_time: start_time.elapsed(),
-    })
+    }))
 }
 
 // === Utility Functions ===

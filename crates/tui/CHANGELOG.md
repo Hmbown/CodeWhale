@@ -22,6 +22,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restating it never changed anything. Shipped binaries were never affected;
   `release-artifacts.yml` builds `--profile dist` with fat LTO and
   `codegen-units = 1`.
+- Two unit tests no longer depend on process-global environment state that
+  sibling tests mutate concurrently.
+  `route_budget::tests::v4_trigger_uses_window_percent_when_it_fits_spendable_input`
+  asserted no-override output-budget values while reading
+  `CODEWHALE_MAX_OUTPUT_TOKENS` / `DEEPSEEK_MAX_OUTPUT_TOKENS` without
+  holding `lock_test_env()`, so a concurrent writer could flip the value
+  mid-assertion (the order-dependent full-suite flake).
+  `prompts::tests::system_prompt_prefix_never_leaks_private_content` read the
+  real home via `HOME`/`USERPROFILE`, so a machine with
+  `~/.codewhale/instructions.md` leaked its absolute path into the prompt and
+  failed the no-private-paths assertion unless a sibling's temporary `HOME`
+  guard happened to be live. Both tests now hold the env barrier and pin the
+  variables (the route-budget test removes the overrides; the prompts test
+  points `HOME`/`USERPROFILE` at a scratch dir). Assertions unchanged.
+  Full `cargo test --workspace --all-features --locked` on this branch:
+  13,126 passed / 0 failed.
 
 ## [0.9.10] - 2026-08-19
 

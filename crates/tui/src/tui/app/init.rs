@@ -604,6 +604,28 @@ impl App {
         );
         let hooks = HookExecutor::new(hooks_config, workspace.clone());
 
+        // Initialize the lifecycle event outbox (`[lifecycle_outbox]`).
+        // Disabled (all emits no-op) when the config has no path. The path
+        // goes through the same `~`/env expansion as every other config path
+        // so the documented `~/.codewhale/...` example
+        // resolves under $HOME instead of a literal `~` directory.
+        let lifecycle_outbox = config
+            .lifecycle_outbox
+            .as_ref()
+            .map(|outbox| {
+                codewhale_hooks::LifecycleOutbox::new(
+                    outbox
+                        .path
+                        .as_ref()
+                        .and_then(|path| path.to_str())
+                        .map(crate::config::expand_path)
+                        .or_else(|| outbox.path.clone()),
+                    outbox.webhook_url.clone(),
+                    outbox.webhook_token.clone(),
+                )
+            })
+            .unwrap_or_else(codewhale_hooks::LifecycleOutbox::disabled);
+
         // Initialize plan state
         let plan_state = new_shared_plan_state();
         let todos = new_shared_todo_list();
@@ -809,6 +831,7 @@ impl App {
             launch,
             pending_launch_action: None,
             pending_hotbar_slot: None,
+            pending_relaunch: None,
             synchronized_output_enabled,
             status_indicator,
             show_thinking,
@@ -879,6 +902,7 @@ impl App {
             onboarding_had_trust_step: !was_onboarded && needs_workspace_trust,
             api_key_env_only,
             hooks,
+            lifecycle_outbox,
             yolo: yolo_compat,
             yolo_compat_notified: false,
             startup_defaults: Default::default(),
@@ -1067,4 +1091,71 @@ impl App {
 /// path entirely, taking it only when a legacy file actually needs migrating.
 fn normalize_legacy_yolo_settings() -> anyhow::Result<()> {
     crate::settings::Settings::transact(|_normalized_on_load| Ok(()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::App;
+    use crate::config::Config;
+
+    /// Regression: `[lifecycle_outbox].path` goes through the
+    /// same `~`/env expansion as every other config path, so the documented
+    /// `~/.codewhale/notifications/outbox.jsonl` example resolves under
+    /// $HOME instead of minting a literal `~` directory under the CWD.
+    #[tokio::test]
+    async fn lifecycle_outbox_path_expands_tilde_to_home() {
+        let _env_lock = crate::test_support::lock_test_env();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let fake_home = tmp.path().join("home");
+        std::fs::create_dir_all(&fake_home).expect("fake home");
+        let _home = crate::test_support::EnvVarGuard::set("HOME", fake_home.as_os_str());
+
+        let config = Config {
+            lifecycle_outbox: Some(codewhale_config::LifecycleOutboxToml {
+                path: Some(PathBuf::from("~/.codewhale/notifications/outbox.jsonl")),
+                webhook_url: None,
+                webhook_token: None,
+            }),
+            ..Config::default()
+        };
+        let app = App::new(
+            crate::test_support::test_tui_options(PathBuf::from(".")),
+            &config,
+        );
+        assert!(
+            app.lifecycle_outbox.is_enabled(),
+            "a configured path must enable the outbox"
+        );
+        app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+            event: "turn_start".to_string(),
+            kind: "turn.started".to_string(),
+            thread_id: String::new(),
+            turn_id: None,
+            item_id: None,
+            payload: serde_json::json!({"workspace": "."}),
+        });
+
+        // The writer task drains asynchronously; wait for the line to land.
+        let expected = fake_home.join(".codewhale/notifications/outbox.jsonl");
+        for _ in 0..200 {
+            if tokio::fs::metadata(&expected).await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let content = tokio::fs::read_to_string(&expected)
+            .await
+            .expect("outbox must be written under $HOME");
+        assert!(
+            content.contains("\"turn_start\""),
+            "event must land in the expanded file: {content}"
+        );
+        // The pre-fix bug: a literal `~` directory relative to the CWD.
+        assert!(
+            !std::path::Path::new("~/.codewhale").exists(),
+            "no literal tilde directory may be created"
+        );
+    }
 }

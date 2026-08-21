@@ -198,6 +198,7 @@ pub(crate) fn key_to_message_id(key: &'static str) -> Option<MessageId> {
         "cmd_purge_description" => MessageId::CmdPurgeDescription,
         "cmd_queue_description" => MessageId::CmdQueueDescription,
         "cmd_relay_description" => MessageId::CmdRelayDescription,
+        "cmd_relaunch_description" => MessageId::CmdRelaunchDescription,
         "cmd_remote_control_description" => MessageId::CmdRemoteControlDescription,
         "cmd_remote_env_description" => MessageId::CmdRemoteEnvDescription,
         "cmd_rename_description" => MessageId::CmdRenameDescription,

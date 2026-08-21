@@ -60,7 +60,7 @@ use crate::config::{
     revoke_external_credential_consent_for_at,
 };
 use crate::config_ui::{self, ConfigUiMode, WebConfigSession, WebConfigSessionEvent};
-use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
+use crate::core::engine::{Engine, EngineConfig, EngineHandle};
 use crate::core::events::Event as EngineEvent;
 use crate::core::ops::{Op, ProviderRuntimeStatus, USER_SHELL_TOOL_ID_PREFIX, UserInputProvenance};
 use crate::hooks::{HookEvent, HookExecutor, TurnEndPayloadInput, TurnEndTotals};
@@ -1044,11 +1044,60 @@ fn execute_subagent_observer_hook(
     text_field: &str,
     text: &str,
 ) -> Result<(), String> {
+    let (preview, truncated) = bounded_subagent_hook_preview(text);
+
+    // Lifecycle outbox (`[lifecycle_outbox]`): fires even when no shell hook
+    // is configured for this event — the outbox is independent of the hook
+    // command list. Preview is bounded (preview ceiling) and only ever the
+    // preview text, never the raw prompt/result. No-op when disabled.
+    match &event {
+        HookEvent::SubagentSpawn => {
+            app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+                event: "subagent_spawn".to_string(),
+                kind: "subagent.spawned".to_string(),
+                thread_id: app.hooks.session_id().to_string(),
+                turn_id: app.runtime_turn_id.clone(),
+                item_id: None,
+                payload: serde_json::json!({
+                    "agent_id": agent_id,
+                    "subagent": agent_id,
+                    "workspace": app.workspace.display().to_string(),
+                    "prompt_preview": codewhale_hooks::bounded_text(
+                        &preview,
+                        codewhale_hooks::OUTBOX_PREVIEW_MAX_CHARS,
+                    ),
+                    "prompt_truncated": truncated,
+                }),
+            });
+        }
+        HookEvent::SubagentComplete => {
+            let status = subagent_completion_status(text).unwrap_or_else(|| "unknown".to_string());
+            app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+                event: "subagent_complete".to_string(),
+                kind: "subagent.completed".to_string(),
+                thread_id: app.hooks.session_id().to_string(),
+                turn_id: app.runtime_turn_id.clone(),
+                item_id: None,
+                payload: serde_json::json!({
+                    "agent_id": agent_id,
+                    "subagent": agent_id,
+                    "workspace": app.workspace.display().to_string(),
+                    "status": status,
+                    "result_preview": codewhale_hooks::bounded_text(
+                        &preview,
+                        codewhale_hooks::OUTBOX_PREVIEW_MAX_CHARS,
+                    ),
+                    "result_truncated": truncated,
+                }),
+            });
+        }
+        _ => {}
+    }
+
     if !app.hooks.has_hooks_for_event(event) {
         return Ok(());
     }
 
-    let (preview, truncated) = bounded_subagent_hook_preview(text);
     let context = app.base_hook_context().with_message(&preview);
     let mut payload = serde_json::json!({
         "event": event.as_str(),
@@ -1340,12 +1389,28 @@ mod memory_quick_add_tests {
     }
 }
 
-fn spawn_tui_engine(config: EngineConfig, api_config: &Config) -> EngineHandle {
-    let handle = spawn_engine(config, api_config);
+fn spawn_tui_engine(
+    config: EngineConfig,
+    api_config: &Config,
+    lifecycle_outbox: codewhale_hooks::LifecycleOutbox,
+) -> EngineHandle {
+    let (mut engine, handle) = Engine::new(config, api_config);
+    // Turn-boundary outbox events are emitted engine-side (see
+    // `Engine::lifecycle_outbox`) so goal-continuation turns get the same
+    // `turn_start`/`turn_end` pair as user-dispatched turns. Disabled
+    // outboxes stay wired; `emit` no-ops on them.
+    engine.lifecycle_outbox = Some(lifecycle_outbox);
     // Prime durable agent + coordination state through the same engine event
     // used by later refreshes. All TUI engine replacements use this wrapper,
     // so workspace switches and provider recovery cannot retain stale Work.
     let _ = handle.try_send(Op::ListSubAgents);
+    crate::utils::spawn_supervised(
+        "engine-event-loop",
+        std::panic::Location::caller(),
+        async move {
+            engine.run().await;
+        },
+    );
     handle
 }
 
@@ -2968,6 +3033,52 @@ fn mark_active_turn_cancelled_locally(app: &mut App) {
     crate::retry_status::clear();
     crate::tui::notifications::clear_taskbar_progress();
     crate::tui::notifications::stop_title_animation_quietly();
+}
+
+/// The Esc-shaped "cancel the active turn" body, extracted verbatim from the
+/// event loop's `EscapeAction::CancelRequest` arm so the session control
+/// socket's `interrupt` verb and the Esc key cannot drift apart. Returns
+/// `true` when the caller should stop handling the event (compaction cancel
+/// or goal-continuation stop consumed it), `false` otherwise. The caller
+/// keeps its own Esc-specific state (backtrack reset) outside this body.
+pub(crate) fn escape_cancel_request(
+    app: &mut App,
+    engine_handle: &EngineHandle,
+    current_streaming_text: &mut String,
+    stream_display_clock: &mut StreamDisplayClock,
+) -> bool {
+    if try_cancel_compaction(app, engine_handle) {
+        return true;
+    }
+    if app.paused || app.paused_goal_objective.is_some() {
+        clear_paused_command_state(app, engine_handle);
+        if app.is_loading || matches!(app.runtime_turn_status.as_deref(), Some("in_progress")) {
+            engine_handle.cancel();
+            mark_active_turn_cancelled_locally(app);
+            current_streaming_text.clear();
+            stream_display_clock.reset();
+        }
+        app.active_allowed_tools = None;
+        app.goal.objective = None;
+        app.goal.tokens_used = 0;
+        app.goal.time_used_seconds = 0;
+        app.goal.continuation_count = 0;
+        app.status_message = Some(parent_stop_status(app, "Paused command cancelled"));
+        false
+    } else {
+        let was_waiting = app.goal_continuation_waiting;
+        engine_handle.cancel();
+        if was_waiting {
+            app.goal_continuation_waiting = false;
+            app.status_message = Some(app.tr(MessageId::GoalContinuationStopped).to_string());
+            return true;
+        }
+        mark_active_turn_cancelled_locally(app);
+        current_streaming_text.clear();
+        stream_display_clock.reset();
+        app.status_message = Some(parent_stop_status(app, "Request cancelled"));
+        false
+    }
 }
 
 fn suppress_engine_event_after_local_cancel(event: &EngineEvent) -> bool {

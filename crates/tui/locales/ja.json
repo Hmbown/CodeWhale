@@ -444,6 +444,7 @@
   "CmdQueueMissingIndex": "インデックスが指定されていません。使用方法: /queue edit <n> または /queue drop <n>",
   "CmdQueueIndexPositive": "インデックスは正の数値である必要があります",
   "CmdQueueIndexMin": "インデックスは 1 以上である必要があります",
+  "CmdRelaunchDescription": "セッションを保存してアプリを再起動し、再開します",
   "CmdRelayDescription": "新しいスレッド用のセッションリレー（接力）を作成",
   "CmdRemoteControlDescription": "Codewhaleウェブアカウントからこのセッションを再開",
   "CmdRemoteEnvDescription": "GitHub または CNB のブランチ先端から新しいホスト型 Work を開く",

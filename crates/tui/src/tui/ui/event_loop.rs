@@ -6,6 +6,8 @@
 
 use super::*;
 
+use crate::tui::control_socket::SessionControl;
+
 pub(super) fn event_owner_is_active(
     current_session_id: Option<&str>,
     owner_session_id: &str,
@@ -452,7 +454,7 @@ pub async fn run_tui(
     let engine_config = build_engine_config(&app, config);
 
     // Spawn the Engine - it will handle all API communication
-    let engine_handle = spawn_tui_engine(engine_config, config);
+    let engine_handle = spawn_tui_engine(engine_config, config, app.lifecycle_outbox.clone());
     crate::startup_trace::mark("engine_spawned");
     // The translation client is optional: it never crashes the TUI on
     // startup, even when the API key is missing, the base URL is malformed,
@@ -490,9 +492,62 @@ pub async fn run_tui(
         Err(err) => tracing::warn!("could not mirror initial engine system prompt: {err:#}"),
     }
 
+    // Session ownership of outbox turn boundaries: before the first emit,
+    // reconcile any `turn_start` this session left unpaired when a previous
+    // process died mid-turn (SIGKILL, a closed pane — where no code could
+    // append the `turn_end`). The scan + appends run under the outbox's
+    // cross-process lock and are idempotent, so the synthetic ends land
+    // before `session_start` below and consumers see a fully paired file.
+    // No-op when the outbox is disabled or the file is healthy.
+    {
+        let reconcile_outbox = app.lifecycle_outbox.clone();
+        let reconcile_thread_id = app.hooks.session_id().to_string();
+        let reconcile_result = tokio::task::spawn_blocking(move || {
+            reconcile_outbox
+                .reconcile_interrupted_turns(&reconcile_thread_id, "boot_reconciliation")
+        })
+        .await;
+        match reconcile_result {
+            Ok(Ok(0)) => {}
+            Ok(Ok(reconciled)) => {
+                tracing::info!(
+                    target: "lifecycle_outbox",
+                    thread_id = %app.hooks.session_id(),
+                    reconciled,
+                    "boot reconciliation appended synthetic turn_end(s) for interrupted turns"
+                );
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    target: "lifecycle_outbox",
+                    thread_id = %app.hooks.session_id(),
+                    %error,
+                    "boot reconciliation failed"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "lifecycle_outbox",
+                    %error,
+                    "boot reconciliation task was lost"
+                );
+            }
+        }
+    }
+
     // Fire session start hook
     {
         let context = app.base_hook_context();
+        // Captured before the hook executor moves `context` into its blocking
+        // task; the outbox emit below needs the same session identity.
+        let outbox_thread_id = context.session_id.clone().unwrap_or_default();
+        // Register the session's outbox identity for the terminating-signal
+        // path: a SIGTERM/SIGHUP later in the session flushes the open turn
+        // through the same file-truth reconciliation as boot above.
+        crate::outbox_signal::register(app.lifecycle_outbox.clone(), outbox_thread_id.clone());
+        let outbox_mode = context.mode.clone();
+        let outbox_model = context.model.clone();
+        let outbox_workspace = context.workspace.clone();
         let hooks = app.hooks.clone();
         if let Err(error) =
             tokio::task::spawn_blocking(move || hooks.execute(HookEvent::SessionStart, &context))
@@ -501,6 +556,23 @@ pub async fn run_tui(
             tracing::error!(target: "hooks", %error, "session_start executor task was lost");
             app.status_message = Some("session_start hook executor did not run".to_string());
         }
+        // Lifecycle outbox (`[lifecycle_outbox]`): fires alongside the
+        // session_start hook, with the same session identity. No-op when
+        // the feature is disabled.
+        app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+            event: "session_start".to_string(),
+            kind: "session.started".to_string(),
+            thread_id: outbox_thread_id,
+            turn_id: None,
+            item_id: None,
+            payload: serde_json::json!({
+                "mode": outbox_mode,
+                "model": outbox_model,
+                "workspace": outbox_workspace
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+            }),
+        });
     }
 
     // Spawn the persistence actor so checkpoint/session-save I/O stays off
@@ -589,6 +661,22 @@ pub async fn run_tui(
     {
         let context = app.base_hook_context();
         let _ = app.execute_hooks(HookEvent::SessionEnd, &context);
+        // Lifecycle outbox (`[lifecycle_outbox]`): fires alongside the
+        // session_end hook, with the same session identity. No-op when
+        // the feature is disabled.
+        app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+            event: "session_end".to_string(),
+            kind: "session.ended".to_string(),
+            thread_id: context.session_id.clone().unwrap_or_default(),
+            turn_id: None,
+            item_id: None,
+            payload: serde_json::json!({
+                "workspace": context.workspace
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+                "total_tokens": context.total_tokens,
+            }),
+        });
     }
 
     // Flush the persistence actor: clear this session's checkpoint, collect
@@ -646,7 +734,24 @@ pub async fn run_tui(
         }
     }
 
-    if result.is_ok() && should_show_resume_hint(app.current_session_id.as_deref()) {
+    // `/relaunch` handoff: the event loop exited through the ordinary quit
+    // path, and the persistence actor above already flushed and saved the
+    // session. Hand the session id to the exec handoff — the next process
+    // image resumes it automatically, so the resume hint would be noise.
+    // Where there is no exec (Windows), the hint below is the relaunch
+    // instruction instead.
+    let relaunch = if result.is_ok() {
+        app.pending_relaunch.take()
+    } else {
+        None
+    };
+    if let Some(session_id) = &relaunch {
+        crate::relaunch::request(session_id);
+    }
+    let relaunching = relaunch.is_some() && cfg!(unix);
+
+    if result.is_ok() && should_show_resume_hint(app.current_session_id.as_deref()) && !relaunching
+    {
         // Printed AFTER `LeaveAlternateScreen` / `drop(terminal)` above,
         // so we're back on the primary screen — this is the one
         // legitimate stdout write in the TUI module tree. The
@@ -721,6 +826,15 @@ pub(crate) async fn run_event_loop(
     // Widgets request future animation frames here; the poll loop remains the
     // sole `terminal.draw` emitter (no competing animation loop).
     let mut frame_requester = FrameRequester::new();
+    // Per-session control socket (`[control_socket]`): disabled unless the
+    // config enables it; even then, nothing binds until the owned session id
+    // appears (see the per-iteration reconcile below).
+    let mut session_control = SessionControl::new(
+        config
+            .control_socket
+            .as_ref()
+            .is_some_and(|socket| socket.enabled),
+    );
     let mut web_config_session: Option<WebConfigSession> = None;
     let mut prev_input_snapshot = String::new();
     let mut terminal_paused_at: Option<Instant> = None;
@@ -793,6 +907,25 @@ pub(crate) async fn run_event_loop(
         // durable. Mailbox backpressure must therefore defer delivery, never
         // block keyboard input or silently drop the accepted control.
         flush_pending_goal_controls(app, &engine_handle);
+
+        // Per-session control socket: rebind when the owned session id
+        // changes, republish the `status` snapshot, and execute queued
+        // verbs on the UI thread. A verb that asks for quit (the `relaunch`
+        // seam) exits the loop through the ordinary `/exit` teardown.
+        session_control.reconcile(app.current_session_id.as_deref());
+        session_control.update_status(app);
+        if session_control
+            .drain(
+                app,
+                config,
+                &engine_handle,
+                &mut current_streaming_text,
+                &mut stream_display_clock,
+            )
+            .await
+        {
+            return Ok(());
+        }
 
         while let Some(completion) = app.clipboard.poll_write_completion() {
             if let Err(err) = completion {
@@ -1153,7 +1286,7 @@ pub(crate) async fn run_event_loop(
                         }
 
                         let thinking = app.last_reasoning.take();
-                        let tool_uses = app.pending_tool_uses.drain(..).collect::<Vec<_>>();
+                        let tool_uses = std::mem::take(&mut app.pending_tool_uses);
                         let history_index = completed_message_index;
 
                         if app.translation_enabled
@@ -1971,6 +2104,12 @@ pub(crate) async fn run_event_loop(
                         ) {
                             surface_observer_hook_submission_failure(app, error);
                         }
+
+                        // Lifecycle outbox: turn boundaries are emitted
+                        // engine-side (Engine::lifecycle_outbox), so the
+                        // synthetic goal-continuation turns that never pass
+                        // through this dispatch get the same turn pair as
+                        // user turns. This arm only updates UI state.
 
                         if queued_to_send.is_none() {
                             queued_to_send = app.pop_queued_message();
@@ -2930,7 +3069,7 @@ pub(crate) async fn run_event_loop(
         if let Some(rollback_warning) = respawn_after_provider_rollback {
             let _ = engine_handle.send(Op::Shutdown).await;
             let engine_config = build_engine_config(app, config);
-            engine_handle = spawn_tui_engine(engine_config, config);
+            engine_handle = spawn_tui_engine(engine_config, config, app.lifecycle_outbox.clone());
             if !app.api_messages.is_empty() {
                 let _ = engine_handle
                     .send(Op::SyncSession {
@@ -4672,44 +4811,13 @@ pub(crate) async fn run_event_loop(
                         }
                         EscapeAction::CancelRequest => {
                             app.backtrack.reset();
-                            if try_cancel_compaction(app, &engine_handle) {
+                            if escape_cancel_request(
+                                app,
+                                &engine_handle,
+                                &mut current_streaming_text,
+                                &mut stream_display_clock,
+                            ) {
                                 continue;
-                            }
-                            if app.paused || app.paused_goal_objective.is_some() {
-                                clear_paused_command_state(app, &engine_handle);
-                                if app.is_loading
-                                    || matches!(
-                                        app.runtime_turn_status.as_deref(),
-                                        Some("in_progress")
-                                    )
-                                {
-                                    engine_handle.cancel();
-                                    mark_active_turn_cancelled_locally(app);
-                                    current_streaming_text.clear();
-                                    stream_display_clock.reset();
-                                }
-                                app.active_allowed_tools = None;
-                                app.goal.objective = None;
-                                app.goal.tokens_used = 0;
-                                app.goal.time_used_seconds = 0;
-                                app.goal.continuation_count = 0;
-                                app.status_message =
-                                    Some(parent_stop_status(app, "Paused command cancelled"));
-                            } else {
-                                let was_waiting = app.goal_continuation_waiting;
-                                engine_handle.cancel();
-                                if was_waiting {
-                                    app.goal_continuation_waiting = false;
-                                    app.status_message = Some(
-                                        app.tr(MessageId::GoalContinuationStopped).to_string(),
-                                    );
-                                    continue;
-                                }
-                                mark_active_turn_cancelled_locally(app);
-                                current_streaming_text.clear();
-                                stream_display_clock.reset();
-                                app.status_message =
-                                    Some(parent_stop_status(app, "Request cancelled"));
                             }
                         }
                         EscapeAction::PauseCommand => {
@@ -5579,4 +5687,289 @@ async fn open_agents_register(app: &mut App, engine_handle: &EngineHandle) {
     }
     let _ = engine_handle.send(Op::ListSubAgents).await;
     app.needs_redraw = true;
+}
+
+#[cfg(test)]
+mod tests {
+    //! Lifecycle-outbox regression for the `TurnComplete` arm.
+    //!
+    //! Turn-boundary outbox events are emitted engine-side
+    //! (`Engine::lifecycle_outbox`, wired by `spawn_tui_engine`): `turn_start`
+    //! right after `TurnStarted` and `turn_end` only at the single terminal
+    //! outcome of `handle_send_message`. This arm updates UI state only.
+    //! The engine, however, also emits `TurnComplete` for manual compaction
+    //! and purge completions with **no preceding `TurnStarted`**. Those
+    //! completions must not mint a `turn_end` — a supervisor must see exactly
+    //! one `turn_start`/`turn_end` pair per dispatched turn, with no phantom
+    //! `turn_end` under a stale turn id (a gap from the outbox audit).
+
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+
+    use crate::compaction::CompactionConfig;
+    use crate::config::{ApiProvider, Config, ProviderConfig, ProvidersConfig};
+    use crate::core::engine::{Engine, EngineConfig};
+    use crate::core::events::{Event, TurnOutcomeStatus};
+    use crate::core::model_client::{ModelClient, SharedModelClient};
+    use crate::core::ops::{Op, UserInputProvenance};
+    use crate::llm_client::StreamEventBox;
+    use crate::models::{MessageRequest, MessageResponse};
+    use crate::route_runtime::resolve_runtime_route;
+    use crate::test_support::lock_test_env;
+    use crate::tools::goal::GoalStatus;
+    use crate::tui::app::AppMode;
+    use crate::tui::approval::ApprovalMode;
+
+    /// Deterministic injected model client for the single user turn. Gates the
+    /// streaming call so the test can queue the compaction op while the engine
+    /// is still inside the turn — reproducing the real TUI ordering where a
+    /// `/compact` cancellation lands before the engine claims the op
+    /// (cancel-before-start), which emits `TurnComplete { status: Interrupted
+    /// }` without any provider call and without a preceding `TurnStarted`.
+    struct GatedSingleTurnClient {
+        request_entered: Arc<tokio::sync::Notify>,
+        release_request: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl ModelClient for GatedSingleTurnClient {
+        fn provider_name(&self) -> &str {
+            "deterministic-compaction"
+        }
+
+        fn model(&self) -> &str {
+            "local-model"
+        }
+
+        async fn create_message(
+            &self,
+            _request: MessageRequest,
+        ) -> anyhow::Result<MessageResponse> {
+            anyhow::bail!("compaction regression uses the streaming model boundary")
+        }
+
+        async fn create_message_stream(
+            &self,
+            _request: MessageRequest,
+        ) -> anyhow::Result<StreamEventBox> {
+            self.request_entered.notify_one();
+            self.release_request.notified().await;
+            let events = crate::llm_client::mock::canned::simple_text_turn("turn done")
+                .into_iter()
+                .map(Ok);
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
+
+        async fn health_check(&self) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    /// Regression: a normal completion emits exactly one `turn_end`, and a
+    /// compaction `TurnComplete` with no in-progress turn writes nothing.
+    ///
+    /// Sequence: one real user turn completes (`turn_start` + `turn_end` in
+    /// the outbox), then a cancel-before-start compaction emits its
+    /// `TurnComplete { status: Interrupted }` with no preceding `TurnStarted`
+    /// — the exact shape that used to mint a phantom `turn_end` under the
+    /// stale turn id. The outbox must still contain exactly the one pair.
+    #[tokio::test]
+    async fn compaction_turn_complete_without_in_progress_turn_writes_no_phantom_turn_end() {
+        let _lock = lock_test_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outbox_path = dir.path().join("outbox.jsonl");
+        let outbox = codewhale_hooks::LifecycleOutbox::new(Some(outbox_path.clone()), None, None);
+
+        // Route config for a custom openai-compatible provider. The injected
+        // client below owns model I/O; the route only carries identity and
+        // limits. The loopback base URL never receives a request on the pass
+        // path (the cancellation lands before the compaction activates it).
+        let mut custom = HashMap::new();
+        custom.insert(
+            "custom-a".to_string(),
+            ProviderConfig {
+                kind: Some("openai-compatible".to_string()),
+                base_url: Some("http://127.0.0.1:18183/v1".to_string()),
+                model: Some("local-model".to_string()),
+                api_key: Some("test-key".to_string()),
+                ..ProviderConfig::default()
+            },
+        );
+        let config = Config {
+            provider: Some("custom-a".to_string()),
+            providers: Some(ProvidersConfig {
+                custom,
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        };
+        let engine_config = EngineConfig {
+            max_steps: 1,
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            workspace: dir.path().to_path_buf(),
+            ..EngineConfig::default()
+        };
+
+        let request_entered = Arc::new(tokio::sync::Notify::new());
+        let release_request = Arc::new(tokio::sync::Notify::new());
+        let client: SharedModelClient = Arc::new(GatedSingleTurnClient {
+            request_entered: Arc::clone(&request_entered),
+            release_request: Arc::clone(&release_request),
+        });
+        let (mut engine, handle) = Engine::new_with_model_client(engine_config, &config, client);
+        // The interactive TUI wires its outbox handle at engine spawn
+        // (`spawn_tui_engine`); the test installs the equivalent seam directly.
+        engine.lifecycle_outbox = Some(outbox);
+
+        handle
+            .send(Op::SendMessage {
+                content: "first turn".to_string(),
+                mode: AppMode::Agent,
+                route: Box::new(
+                    resolve_runtime_route(&config, ApiProvider::Custom, Some("local-model"))
+                        .expect("resolve user turn route"),
+                ),
+                compaction: Box::new(CompactionConfig::default()),
+                goal_objective: None,
+                goal_token_budget: None,
+                goal_status: GoalStatus::Active,
+                reasoning_effort: None,
+                reasoning_effort_auto: false,
+                auto_model: false,
+                allow_shell: false,
+                trust_mode: false,
+                auto_approve: false,
+                approval_mode: ApprovalMode::Suggest,
+                translation_enabled: false,
+                allowed_tools: None,
+                dynamic_tools: Vec::new(),
+                hook_executor: None,
+                verbosity: None,
+                provenance: UserInputProvenance::ExternalUser,
+            })
+            .await
+            .expect("send user turn");
+        let run_task = tokio::spawn(engine.run());
+
+        // Wait until the turn's model call is in flight, then queue the
+        // compaction while the engine cannot yet claim it, and cancel it
+        // before the op is claimed. The engine then settles the compaction
+        // with `TurnComplete { status: Interrupted }` and no provider call.
+        tokio::time::timeout(Duration::from_secs(5), request_entered.notified())
+            .await
+            .expect("model call was never entered");
+        handle
+            .send(Op::CompactContext {
+                id: "compaction".to_string(),
+                route: Box::new(
+                    resolve_runtime_route(&config, ApiProvider::Custom, Some("local-model"))
+                        .expect("resolve compaction route"),
+                ),
+                compaction: Box::new(CompactionConfig::default()),
+            })
+            .await
+            .expect("queue compaction");
+        handle
+            .cancel_compaction("compaction")
+            .expect("pre-start compaction cancellation accepted");
+        release_request.notify_one();
+
+        // Two `TurnComplete`s must arrive: the real turn, then the compaction
+        // that completed without a preceding `TurnStarted`.
+        let mut completes = Vec::new();
+        while completes.len() < 2 {
+            let event = tokio::time::timeout(Duration::from_secs(10), async {
+                handle.rx_event.write().await.recv().await
+            })
+            .await
+            .expect("timed out waiting for engine events")
+            .expect("engine event channel closed");
+            if let Event::TurnComplete { status, .. } = event {
+                completes.push(status);
+            }
+        }
+        assert_eq!(
+            completes[0],
+            TurnOutcomeStatus::Completed,
+            "the real turn must complete normally"
+        );
+        assert_eq!(
+            completes[1],
+            TurnOutcomeStatus::Interrupted,
+            "the compaction must settle via the no-preceding-turn path"
+        );
+
+        handle.send(Op::Shutdown).await.expect("queue shutdown");
+        run_task.await.expect("engine task");
+
+        // The outbox writer task drains asynchronously; wait for the pair,
+        // then give any phantom writer a grace window and re-read so a late
+        // third line cannot slip past the assertion.
+        let mut lines = Vec::new();
+        for _ in 0..200 {
+            if let Ok(text) = tokio::fs::read_to_string(&outbox_path).await {
+                lines = text
+                    .lines()
+                    .map(|line| {
+                        serde_json::from_str::<serde_json::Value>(line).expect("outbox json")
+                    })
+                    .collect();
+                if lines.len() >= 2 {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if let Ok(text) = tokio::fs::read_to_string(&outbox_path).await {
+            lines = text
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("outbox json"))
+                .collect();
+        }
+
+        assert_eq!(
+            lines.len(),
+            2,
+            "exactly one turn_start/turn_end pair; the compaction TurnComplete must write \
+             nothing: {lines:#?}"
+        );
+        assert_eq!(lines[0]["event"], "turn_start");
+        assert_eq!(lines[0]["kind"], "turn.started");
+        assert_eq!(lines[1]["event"], "turn_end");
+        assert_eq!(lines[1]["kind"], "turn.completed");
+        assert_eq!(lines[1]["schema_version"], 1);
+        assert_eq!(lines[1]["seq"], 2);
+        assert!(
+            lines[0]["turn_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty()),
+            "turn_start must carry the turn id: {lines:#?}"
+        );
+        assert_eq!(
+            lines[0]["turn_id"], lines[1]["turn_id"],
+            "the single turn_end must close the turn that started: {lines:#?}"
+        );
+        assert_eq!(lines[1]["payload"]["status"], "completed");
+        assert!(
+            lines[1]["payload"]["duration_ms"].as_u64().is_some(),
+            "the real turn_end must carry a duration: {lines:#?}"
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line["event"] == "turn_end")
+                .count(),
+            1,
+            "exactly one turn_end per turn: {lines:#?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line["kind"] == "turn.interrupted"),
+            "the cancelled compaction must not fabricate a turn_end: {lines:#?}"
+        );
+    }
 }

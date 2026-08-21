@@ -79,6 +79,7 @@ mod models_dev_live;
 mod native_memory;
 mod network_policy;
 mod oauth;
+mod outbox_signal;
 mod palette;
 mod plugins;
 mod prefix_cache;
@@ -91,6 +92,7 @@ mod provider_lake;
 mod provider_readiness;
 mod purge;
 mod regex_cache;
+mod relaunch;
 mod remote_control;
 mod remote_setup;
 pub mod repl;
@@ -707,6 +709,13 @@ fn spawn_signal_cleanup_task() {
             #[cfg(unix)]
             crate::tools::shell::abort_pending_persistent_process_groups_for_exit();
             crate::tui::ui::emergency_restore_terminal();
+            // Session-owned outbox events: append the missing `turn_end` for
+            // any turn this session left open before the process dies. The
+            // flush derives the open turn from the outbox *file* under the
+            // cross-process lock, so it cannot duplicate an end; a SIGKILL
+            // skips this path entirely and the next boot's reconciliation
+            // covers it. Best effort: it logs and proceeds on failure.
+            crate::outbox_signal::flush_open_turn_on_signal(signal_name(exit_code));
             // Nothing async survives the `exit` below, so this is the last
             // chance to say how the session ended. `record_blocking` is one
             // `O_APPEND` write with no lock: taking the compaction lock here
@@ -721,6 +730,17 @@ fn spawn_signal_cleanup_task() {
         }
         std::process::exit(exit_code);
     });
+}
+
+/// Human-readable signal name for the outbox's reconciliation reason, from
+/// the conventional `128 + signal` exit code the cleanup task computes.
+fn signal_name(exit_code: i32) -> &'static str {
+    match exit_code {
+        143 => "SIGTERM",
+        130 => "SIGINT",
+        129 => "SIGHUP",
+        _ => "SIGNAL",
+    }
 }
 
 /// When this process's armed telemetry session began. Set once, at arming, and
@@ -1955,6 +1975,35 @@ async fn run_async_main_inner(
     )
     .await;
     finish_telemetry(&outcome, surface).await;
+    // `/relaunch` handoff: the TUI saved the session, restored the terminal,
+    // and queued its session id before returning. Replace the process image
+    // only now — after telemetry has recorded and flushed the old session's
+    // `session_end` — so the resumed process is an ordinary fresh launch.
+    // On Unix this is an atomic `exec`; on failure the session is already
+    // saved, so we report and exit normally. Platforms without `exec` leave
+    // the resume hint printed at quit as the instruction.
+    if outcome.is_ok()
+        && let Some(session_id) = crate::relaunch::take_pending()
+    {
+        let exe = crate::relaunch::current_executable()
+            .unwrap_or_else(|| std::path::PathBuf::from("codewhale"));
+        #[cfg(unix)]
+        {
+            // `exec` never returns on success; reaching the next line means
+            // the replacement failed.
+            let error = crate::relaunch::exec_relaunch(&exe, &session_id);
+            eprintln!(
+                "codewhale: could not relaunch ({}): {error} — the session is saved; run `codewhale resume {session_id}` to continue.",
+                exe.display()
+            );
+        }
+        #[cfg(not(unix))]
+        {
+            // No exec primitive on this platform: the session is saved and
+            // the quit-time resume hint is the instruction.
+            let _ = (exe, session_id);
+        }
+    }
     outcome
 }
 
@@ -5840,6 +5889,14 @@ fn print_doctor_setup_report(
         "  · runtime posture: {}",
         doctor_runtime_posture_line(config, workspace)
     );
+    println!(
+        "  · lifecycle outbox: {}",
+        doctor_lifecycle_outbox_posture_line(config)
+    );
+    println!(
+        "  · control socket: {}",
+        doctor_control_socket_posture_line(config)
+    );
     let consistency = doctor_setup_consistency(state, source);
     if consistency["status"] == "inconsistent" {
         let issues = consistency["issues"]
@@ -6050,6 +6107,39 @@ fn doctor_runtime_posture_line(config: &Config, workspace: &Path) -> String {
     format!(
         "default_mode={default_mode} ({default_mode_source}), permission_posture={permission_posture} ({permission_posture_source}), approval_policy={approval} ({approval_source}), allow_shell={allow_shell} ({allow_shell_source}), sandbox={sandbox} ({sandbox_source}), network.default={network} ({network_source}), telemetry={telemetry} ({telemetry_source}), trust={trust}"
     )
+}
+
+/// Observability posture row for the lifecycle outbox: the feature is opt-in
+/// via `[lifecycle_outbox].path` (unset/empty = off, the default). Truth and
+/// resilience theme: report the resolved state and, when enabled, the sink
+/// path the writer appends to.
+fn doctor_lifecycle_outbox_posture_line(config: &Config) -> String {
+    let path = config
+        .lifecycle_outbox
+        .as_ref()
+        .and_then(|outbox| outbox.path.as_deref())
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    if path.trim().is_empty() {
+        return "lifecycle_outbox=off (default)".to_string();
+    }
+    format!("lifecycle_outbox=on (path: {path})")
+}
+
+/// Doctor posture for the per-session control socket, enabled via
+/// `[control_socket].enabled` (false = off, the default). Mirrors the
+/// lifecycle-outbox row: report the resolved state and, when enabled, where
+/// the socket appears for the running session.
+fn doctor_control_socket_posture_line(config: &Config) -> String {
+    let enabled = config
+        .control_socket
+        .as_ref()
+        .is_some_and(|socket| socket.enabled);
+    if enabled {
+        "control_socket=on (sessions/<id>/control.sock per running session)".to_string()
+    } else {
+        "control_socket=off (default)".to_string()
+    }
 }
 
 /// Resolved telemetry consent and where it came from (#5441).
@@ -11679,6 +11769,33 @@ async fn run_exec_agent(
         }
     }
 
+    // Lifecycle outbox (`[lifecycle_outbox]`): headless `codewhale exec`
+    // gets the same turn boundaries as the interactive TUI. Disabled
+    // (all emits no-op) when the config has no path. The path goes through
+    // the same `~`/env expansion as every other config path,
+    // so the documented `~/.codewhale/...` example resolves under $HOME
+    // instead of a literal `~` directory.
+    let lifecycle_outbox = config
+        .lifecycle_outbox
+        .as_ref()
+        .map(|outbox| {
+            codewhale_hooks::LifecycleOutbox::new(
+                outbox
+                    .path
+                    .as_ref()
+                    .and_then(|path| path.to_str())
+                    .map(crate::config::expand_path)
+                    .or_else(|| outbox.path.clone()),
+                outbox.webhook_url.clone(),
+                outbox.webhook_token.clone(),
+            )
+        })
+        .unwrap_or_else(codewhale_hooks::LifecycleOutbox::disabled);
+    // Wall clock for the outbox `turn_end` duration. `exec` never receives
+    // a TurnStarted engine event, so the start is marked at the same
+    // `Op::SendMessage` boundary where `turn_start` is emitted below.
+    let exec_turn_started_at = Instant::now();
+
     engine_handle
         .send(Op::SendMessage {
             content: prompt.to_string(),
@@ -11711,6 +11828,24 @@ async fn run_exec_agent(
             provenance: crate::core::ops::UserInputProvenance::ExternalUser,
         })
         .await?;
+
+    // Lifecycle outbox: the clean headless turn-start boundary. `exec` has
+    // no TurnStarted engine event; the message submission above is exactly
+    // where the engine begins the turn. No-op when the feature is disabled.
+    lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+        event: "turn_start".to_string(),
+        kind: "turn.started".to_string(),
+        thread_id: loaded_session_id.clone().unwrap_or_default(),
+        turn_id: None,
+        item_id: None,
+        payload: serde_json::json!({
+            "model": codewhale_hooks::bounded_text(
+                &effective_model,
+                codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
+            ),
+            "workspace": workspace.display().to_string(),
+        }),
+    });
 
     let mut summary = ExecSummary {
         mode: "agent".to_string(),
@@ -12094,6 +12229,37 @@ async fn run_exec_agent(
                             .to_string(),
                     );
                 }
+                // Lifecycle outbox: the clean headless turn-end boundary.
+                // `terminal_status` is authoritative here — persistent-service
+                // handoff failures above already demoted it to Failed, and
+                // `summary.error` includes the sandbox-denial augmentation.
+                // No-op when the feature is disabled.
+                {
+                    let outbox_status = format!("{terminal_status:?}").to_lowercase();
+                    let kind = match terminal_status {
+                        crate::core::events::TurnOutcomeStatus::Completed => "turn.completed",
+                        crate::core::events::TurnOutcomeStatus::Failed => "turn.failed",
+                        crate::core::events::TurnOutcomeStatus::Interrupted => "turn.interrupted",
+                    };
+                    lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+                        event: "turn_end".to_string(),
+                        kind: kind.to_string(),
+                        thread_id: latest_session_id.clone().unwrap_or_default(),
+                        turn_id: None,
+                        item_id: None,
+                        payload: serde_json::json!({
+                            "status": outbox_status,
+                            "duration_ms": exec_turn_started_at.elapsed().as_millis() as u64,
+                            "workspace": latest_workspace.display().to_string(),
+                            "error": summary.error.as_deref().map(|message| {
+                                codewhale_hooks::bounded_text(
+                                    message,
+                                    codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
+                                )
+                            }),
+                        }),
+                    });
+                }
                 if last_error_category.is_none() {
                     last_error_category = summary
                         .error
@@ -12268,6 +12434,26 @@ async fn run_exec_agent(
         summary.error_category = Some(category.to_string());
         summary.termination_reason = Some(termination_reason.as_str().to_string());
         summary.error = Some(error.clone());
+        // Lifecycle outbox: the engine channel closed before a terminal
+        // turn receipt. Every emitted `turn_start` still gets its matching
+        // `turn_end` so a supervisor never sees an orphaned in-progress
+        // turn. No-op when the feature is disabled.
+        lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+            event: "turn_end".to_string(),
+            kind: "turn.failed".to_string(),
+            thread_id: latest_session_id.clone().unwrap_or_default(),
+            turn_id: None,
+            item_id: None,
+            payload: serde_json::json!({
+                "status": "failed",
+                "duration_ms": exec_turn_started_at.elapsed().as_millis() as u64,
+                "workspace": latest_workspace.display().to_string(),
+                "error": codewhale_hooks::bounded_text(
+                    &error,
+                    codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
+                ),
+            }),
+        });
         if output_format == ExecOutputFormat::StreamJson {
             emit_exec_stream_event(&ExecStreamEvent::Error { error })?;
         }
@@ -13460,6 +13646,41 @@ mod doctor_setup_state_tests {
         let report = doctor_setup_report_json(&config, &workspace);
         assert_eq!(report["runtime_posture"]["telemetry"]["value"], false);
         assert_eq!(report["runtime_posture"]["telemetry"]["source"], "config");
+    }
+
+    /// The lifecycle outbox posture row: opt-in via `[lifecycle_outbox].path`;
+    /// off is the default and must be named, and an enabled config must show
+    /// the resolved sink path the writer appends to.
+    #[test]
+    fn doctor_reports_lifecycle_outbox_posture() {
+        let _guard = crate::test_support::lock_test_env();
+        let tmp = TempDir::new().expect("tempdir");
+        let (_home_guard, _codewhale_home) = prepare_env(&tmp);
+
+        // Nothing configured: the opt-in default applies and is named.
+        let config = Config::default();
+        assert!(config.lifecycle_outbox.is_none());
+        assert_eq!(
+            doctor_lifecycle_outbox_posture_line(&config),
+            "lifecycle_outbox=off (default)"
+        );
+
+        // A configured path is reported with the sink path.
+        let outbox_path = tmp.path().join("outbox.jsonl");
+        let config = Config {
+            lifecycle_outbox: Some(codewhale_config::LifecycleOutboxToml {
+                path: Some(outbox_path.clone()),
+                webhook_url: None,
+                webhook_token: None,
+            }),
+            ..Config::default()
+        };
+        let line = doctor_lifecycle_outbox_posture_line(&config);
+        assert!(line.starts_with("lifecycle_outbox=on (path: "), "{line}");
+        assert!(
+            line.contains(&outbox_path.display().to_string()),
+            "posture row must show the resolved sink path: {line}"
+        );
     }
 
     #[test]
