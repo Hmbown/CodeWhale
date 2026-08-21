@@ -563,6 +563,7 @@
   "KbSelectText": "Select text; add Ctrl/Alt to select by word",
   "KbSelectAllDraft": "Select the whole draft",
   "KbClearDraft": "Clear the current draft",
+  "KbInstallAvailableUpdate": "Install the available update (`/update install`)",
   "KbRestoreClearedDraft": "Restore the cleared draft",
   "KbStashDraft": "Stash the current draft (`/stash pop` to restore)",
   "KbSearchHistory": "Search prompt history and recover local drafts",

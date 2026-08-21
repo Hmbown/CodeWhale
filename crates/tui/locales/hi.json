@@ -546,6 +546,7 @@
   "KbSelectText": "टेक्स्ट चुनें; शब्द-दर-शब्द चुनने के लिए Ctrl/Alt जोड़ें",
   "KbSelectAllDraft": "पूरा मसौदा चुनें",
   "KbClearDraft": "वर्तमान मसौदा साफ़ करें",
+  "KbInstallAvailableUpdate": "उपलब्ध अपडेट इंस्टॉल करें (`/update install`)",
   "KbRestoreClearedDraft": "साफ़ किया मसौदा वापस लाएँ",
   "KbStashDraft": "वर्तमान मसौदा स्टैश करें (वापस लाने के लिए `/stash pop`)",
   "KbSearchHistory": "प्रॉम्प्ट इतिहास खोजें और लोकल मसौदे पुनर्प्राप्त करें",

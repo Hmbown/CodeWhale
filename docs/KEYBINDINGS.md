@@ -18,6 +18,7 @@ Global key chords are not yet user-configurable — tracked for a future release
 | `Shift+Tab`          | Cycle permission posture: Ask → Auto-Review → Full Access. Live regardless of composer contents or whether a turn is running (suppressed only while a modal other than Config is open) |
 | `Ctrl-T`             | Cycle reasoning effort for the active model. Walks the same ladder as `/model` and `/effort` (catalog or documented route dialect). Always-thinking models omit `off`; Grok 4.6 includes `xhigh`. |
 | `Ctrl-Shift-T`       | Toggle live transcript overlay (sticky-tail auto-scroll)                       |
+| `Ctrl-Shift-U`       | Install an available update (`/update install`). Active only when the header shows an update chip; otherwise the chord is a silent no-op. Terminals that cannot distinguish `Ctrl-Shift-U` from `Ctrl-U` keep clear-draft. `/update install` is the reliable path. |
 | `Ctrl-R`             | Open the resume-session picker                                 |
 | `Ctrl-L`             | Compact the conversation context (status line shows progress; no-op while a compaction is already running) |
 | `Ctrl-O`             | Open the reasoning detail for the selected or current turn, regardless of composer contents |

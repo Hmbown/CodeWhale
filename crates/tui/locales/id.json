@@ -546,6 +546,7 @@
   "KbSelectText": "Pilih teks; tambahkan Ctrl/Alt untuk memilih per kata",
   "KbSelectAllDraft": "Pilih seluruh draf",
   "KbClearDraft": "Bersihkan draf saat ini",
+  "KbInstallAvailableUpdate": "Pasang pembaruan yang tersedia (`/update install`)",
   "KbRestoreClearedDraft": "Pulihkan draf yang dibersihkan",
   "KbStashDraft": "Simpan sementara draf saat ini (`/stash pop` untuk memulihkan)",
   "KbSearchHistory": "Cari riwayat prompt dan pulihkan draf lokal",

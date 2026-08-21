@@ -546,6 +546,7 @@
   "KbSelectText": "Виділити текст; додайте Ctrl/Alt для виділення словами",
   "KbSelectAllDraft": "Виділити всю чернетку",
   "KbClearDraft": "Очистити поточну чернетку",
+  "KbInstallAvailableUpdate": "Встановити доступне оновлення (`/update install`)",
   "KbRestoreClearedDraft": "Відновити очищену чернетку",
   "KbStashDraft": "Сховати поточну чернетку (`/stash pop` — відновити)",
   "KbSearchHistory": "Пошук в історії промптів і відновлення локальних чернеток",

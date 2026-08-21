@@ -563,6 +563,7 @@
   "KbSelectText": "テキストを選択（Ctrl/Alt を加えると単語単位で選択）",
   "KbSelectAllDraft": "下書き全体を選択",
   "KbClearDraft": "現在の下書きをクリア",
+  "KbInstallAvailableUpdate": "利用可能なアップデートをインストール (`/update install`)",
   "KbRestoreClearedDraft": "クリアした下書きを復元",
   "KbStashDraft": "現在の下書きをスタッシュ（`/stash pop`で復元）",
   "KbSearchHistory": "プロンプト履歴を検索してローカル下書きを復元",

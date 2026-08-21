@@ -546,6 +546,7 @@
   "KbSelectText": "Text auswählen; mit Ctrl/Alt wortweise auswählen",
   "KbSelectAllDraft": "Gesamten Entwurf auswählen",
   "KbClearDraft": "Aktuellen Entwurf löschen",
+  "KbInstallAvailableUpdate": "Verfügbare Aktualisierung installieren (`/update install`)",
   "KbRestoreClearedDraft": "Gelöschten Entwurf wiederherstellen",
   "KbStashDraft": "Aktuellen Entwurf parken (`/stash pop` zum Wiederherstellen)",
   "KbSearchHistory": "Prompt-Verlauf durchsuchen und lokale Entwürfe wiederherstellen",

@@ -563,6 +563,7 @@
   "KbSelectText": "Selecionar texto; com Ctrl/Alt seleciona por palavra",
   "KbSelectAllDraft": "Selecionar todo o rascunho",
   "KbClearDraft": "Limpar rascunho atual",
+  "KbInstallAvailableUpdate": "Instalar a atualização disponível (`/update install`)",
   "KbRestoreClearedDraft": "Restaurar o rascunho apagado",
   "KbStashDraft": "Estacionar o rascunho atual (`/stash pop` restaura)",
   "KbSearchHistory": "Buscar histórico de prompts e recuperar rascunhos locais",

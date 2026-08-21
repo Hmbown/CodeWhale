@@ -169,6 +169,13 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Editing,
     },
     KeybindingEntry {
+        // `/update install` is the reliable path when a terminal cannot
+        // distinguish Ctrl+Shift+U from Ctrl+U (same as Ctrl+Shift+T).
+        chord: "/update install / Ctrl+Shift+U",
+        description_id: crate::localization::MessageId::KbInstallAvailableUpdate,
+        section: KeybindingSection::Submission,
+    },
+    KeybindingEntry {
         chord: "Ctrl+Z",
         description_id: crate::localization::MessageId::KbRestoreClearedDraft,
         section: KeybindingSection::Editing,
@@ -504,6 +511,26 @@ mod tests {
                 "wired transcript shortcut missing from help: {wired}"
             );
         }
+    }
+
+    #[test]
+    fn install_update_documents_command_before_shaky_chord() {
+        let install = KEYBINDINGS
+            .iter()
+            .find(|entry| {
+                entry.description_id == crate::localization::MessageId::KbInstallAvailableUpdate
+            })
+            .expect("install-update entry should be documented");
+
+        assert_eq!(install.chord, "/update install / Ctrl+Shift+U");
+        assert_eq!(
+            KEYBINDINGS
+                .iter()
+                .find(|entry| entry.chord == "Ctrl+U")
+                .expect("Ctrl+U remains documented")
+                .description_id,
+            crate::localization::MessageId::KbClearDraft
+        );
     }
 
     #[test]

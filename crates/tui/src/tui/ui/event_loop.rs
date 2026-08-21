@@ -4400,6 +4400,30 @@ pub(crate) async fn run_event_loop(
                 continue;
             }
 
+            // Ctrl+Shift+U installs only when the header chip has already
+            // advertised an update. A terminal that cannot report SHIFT
+            // never matches this predicate, so Ctrl+U stays clear-draft.
+            match classify_install_update_chord(app, &key) {
+                InstallUpdateChordAction::NotThisKey => {}
+                InstallUpdateChordAction::NoOp => continue,
+                InstallUpdateChordAction::RunInstall => {
+                    if execute_command_input(
+                        terminal,
+                        app,
+                        &mut engine_handle,
+                        &task_manager,
+                        config,
+                        &mut web_config_session,
+                        INSTALL_UPDATE_SLASH,
+                    )
+                    .await?
+                    {
+                        return Ok(());
+                    }
+                    continue;
+                }
+            }
+
             // A second, empty Enter after queueing is the portable steer
             // gesture. Handle it before transcript/detail Enter shortcuts so
             // it can never open an unrelated overlay instead (#382).
@@ -5318,7 +5342,10 @@ pub(crate) async fn run_event_loop(
                     let _ =
                         handle_composer_history_arrow(app, key, slash_menu_open, mention_menu_open);
                 }
-                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('u')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::SHIFT) =>
+                {
                     app.clear_input_recoverable();
                     let _ = app.maybe_show_behavioral_tip(
                         crate::tui::behavioral_tips::BehavioralTip::ClearedInputRestore,

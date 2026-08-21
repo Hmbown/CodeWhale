@@ -563,6 +563,7 @@
   "KbSelectText": "选择文本（加 Ctrl/Alt 按单词选择）",
   "KbSelectAllDraft": "全选当前草稿",
   "KbClearDraft": "清空当前草稿",
+  "KbInstallAvailableUpdate": "安装可用更新（`/update install`）",
   "KbRestoreClearedDraft": "恢复已清空的草稿",
   "KbStashDraft": "先发送排队的跟进内容；否则暂存当前草稿（用 `/stash pop` 恢复）",
   "KbSearchHistory": "搜索提示历史并恢复本地草稿",

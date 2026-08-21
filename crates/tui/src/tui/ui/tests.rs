@@ -12234,8 +12234,14 @@ fn update_notice_block_is_persistent_and_actionable() {
     );
 
     // The persistent header chip is quiet: version only, no action verb —
-    // the toast and this block carry the instructions (#14).
+    // the toast and this block carry the instructions (#14). The chord
+    // lives in this block and in `/help`; putting it on the chip would
+    // drop the chip in cramped headers.
     assert_eq!(notice.chip_label(), "↑ v0.8.47");
+    assert!(
+        block.contains("Ctrl+Shift+U"),
+        "install notice names the shifted chord: {block:?}"
+    );
 
     // A current release produces no notice at all (no toast, no transcript spam).
     let current = complete_release_json("v0.8.46");
@@ -12343,6 +12349,49 @@ fn startup_check_store_path_keeps_the_last_seen_version() {
         Some("0.9.11"),
         "a network-check write must not wipe the upgrade-notice cursor"
     );
+}
+
+#[test]
+fn ctrl_shift_u_installs_only_when_an_update_is_available() {
+    let mut app = create_test_app();
+    let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+    let ctrl_shift_u = KeyEvent::new(
+        KeyCode::Char('u'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+
+    assert_eq!(
+        classify_install_update_chord(&app, &ctrl_u),
+        InstallUpdateChordAction::NotThisKey
+    );
+    assert_eq!(
+        classify_install_update_chord(&app, &ctrl_shift_u),
+        InstallUpdateChordAction::NoOp,
+        "no advertised update: consume the chord silently"
+    );
+    assert!(app.update_available.is_none());
+    let toasts_before = app.status_toasts.len();
+    assert_eq!(
+        classify_install_update_chord(&app, &ctrl_shift_u),
+        InstallUpdateChordAction::NoOp
+    );
+    assert_eq!(
+        app.status_toasts.len(),
+        toasts_before,
+        "a silent no-op must not toast"
+    );
+
+    app.update_available = Some("↑ v0.9.12".to_string());
+    assert_eq!(
+        classify_install_update_chord(&app, &ctrl_shift_u),
+        InstallUpdateChordAction::RunInstall
+    );
+    assert_eq!(
+        classify_install_update_chord(&app, &ctrl_u),
+        InstallUpdateChordAction::NotThisKey,
+        "Ctrl+U stays clear-draft even when an update is advertised"
+    );
+    assert_eq!(INSTALL_UPDATE_SLASH, "/update install");
 }
 
 #[test]

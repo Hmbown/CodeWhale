@@ -546,6 +546,7 @@
   "KbSelectText": "Выделить текст; с Ctrl/Alt — по словам",
   "KbSelectAllDraft": "Выделить весь черновик",
   "KbClearDraft": "Очистить текущий черновик",
+  "KbInstallAvailableUpdate": "Установить доступное обновление (`/update install`)",
   "KbRestoreClearedDraft": "Восстановить очищенный черновик",
   "KbStashDraft": "Отложить текущий черновик (`/stash pop` — восстановить)",
   "KbSearchHistory": "Поиск по истории запросов и восстановление локальных черновиков",

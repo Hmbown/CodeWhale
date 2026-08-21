@@ -84,6 +84,35 @@ pub(crate) fn handle_voice_key(app: &mut App, key: &event::KeyEvent) -> bool {
     true
 }
 
+/// What `Ctrl+Shift+U` should do for this event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstallUpdateChordAction {
+    /// Not our chord; the event loop keeps looking.
+    NotThisKey,
+    /// Chord matched, but no update is advertised — consume it silently.
+    NoOp,
+    /// Chord matched and an update is advertised — run `/update install`.
+    RunInstall,
+}
+
+pub(crate) const INSTALL_UPDATE_SLASH: &str = "/update install";
+
+/// Classify `Ctrl+Shift+U` without running the updater, so tests can cover
+/// the gate without touching the network or the on-disk binary.
+pub(crate) fn classify_install_update_chord(
+    app: &App,
+    key: &event::KeyEvent,
+) -> InstallUpdateChordAction {
+    if !key_shortcuts::is_install_available_update_shortcut(key) {
+        return InstallUpdateChordAction::NotThisKey;
+    }
+    if app.update_available.is_some() {
+        InstallUpdateChordAction::RunInstall
+    } else {
+        InstallUpdateChordAction::NoOp
+    }
+}
+
 /// The event-loop seam for Ctrl+T. Keeping the `KeyEvent` predicate and App
 /// mutation together makes the real terminal route directly testable rather
 /// than testing `cycle_effort` in isolation.

@@ -138,6 +138,22 @@ pub(super) fn is_select_all_shortcut(key: &KeyEvent) -> bool {
     cmd_a || ctrl_shift_a
 }
 
+/// Install an available update: `Ctrl+Shift+U`.
+///
+/// `Ctrl+U` is readline kill-to-line-start (clear draft). The shifted chord
+/// follows `Ctrl+Shift+A` / `Ctrl+Shift+O` / `Ctrl+Shift+E`: it requires an
+/// enhanced keyboard protocol that reports SHIFT distinctly. A terminal that
+/// folds `Ctrl+Shift+U` into `Ctrl+U` keeps the unshifted meaning — it must
+/// never silently update. `/update install` is the reliable fallback.
+pub(super) fn is_install_available_update_shortcut(key: &KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('u') | KeyCode::Char('U'))
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && key.modifiers.contains(KeyModifiers::SHIFT)
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::ALT | KeyModifiers::SUPER)
+}
+
 /// Modifier predicate for the v0.8.30 family of `Alt+<key>` transcript-
 /// nav shortcuts (`Alt+G` / `Alt+[` / `Alt+]` / `Alt+?` / `Alt+L`). Requires
 /// `Alt` and disallows `Ctrl` / `Super` so the
@@ -295,6 +311,30 @@ mod tests {
         let plain_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
         assert!(!is_select_all_shortcut(&alt_a));
         assert!(!is_select_all_shortcut(&plain_a));
+    }
+
+    #[test]
+    fn ctrl_shift_u_requires_shift_so_folded_ctrl_u_stays_clear_draft() {
+        let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+        let ctrl_shift_u = KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        let ctrl_shift_u_upper = KeyEvent::new(
+            KeyCode::Char('U'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert!(
+            !is_install_available_update_shortcut(&ctrl_u),
+            "folded Ctrl+U must stay clear-draft"
+        );
+        assert!(is_install_available_update_shortcut(&ctrl_shift_u));
+        assert!(is_install_available_update_shortcut(&ctrl_shift_u_upper));
+        let ctrl_alt_shift_u = KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT | KeyModifiers::ALT,
+        );
+        assert!(!is_install_available_update_shortcut(&ctrl_alt_shift_u));
     }
 
     #[test]

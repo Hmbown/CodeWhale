@@ -916,6 +916,7 @@
   "KbCancelBackgroundShellJobs": "取消所有正在執行的後台 shell 作業（Activity 側邊欄）",
   "KbCancelOrExit": "取消請求，或閒置時退出",
   "KbClearDraft": "清空目前草稿",
+  "KbInstallAvailableUpdate": "安裝可用更新（`/update install`）",
   "KbCloseMenu": "關閉選單、取消請求、丟棄草稿或清空輸入",
   "KbCommandPalette": "開啟命令面板",
   "KbCompactInspector": "開啟壓縮會話上下文檢查器",

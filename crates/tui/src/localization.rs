@@ -716,6 +716,7 @@ pub enum MessageId {
     KbSelectText,
     KbSelectAllDraft,
     KbClearDraft,
+    KbInstallAvailableUpdate,
     KbRestoreClearedDraft,
     KbStashDraft,
     KbSearchHistory,
@@ -2420,6 +2421,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::KbSelectText,
     MessageId::KbSelectAllDraft,
     MessageId::KbClearDraft,
+    MessageId::KbInstallAvailableUpdate,
     MessageId::KbRestoreClearedDraft,
     MessageId::KbStashDraft,
     MessageId::KbSearchHistory,
@@ -4794,6 +4796,11 @@ mod tests {
         let en = tr(Locale::En, MessageId::StartupUpdatedNotice);
         assert!(en.contains("{version}"));
         assert!(en.contains("/change"));
+    }
+
+    #[test]
+    fn install_available_update_keybinding_is_translated() {
+        assert_translated_command_copy(MessageId::KbInstallAvailableUpdate, "/update install");
     }
 
     #[test]

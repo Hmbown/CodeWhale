@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per version; a first-ever run is not an update and stays silent. The
   last-seen version lives in `~/.codewhale/update-check.json` next to
   the existing update-check cache.
+- When an update is available, `Ctrl+Shift+U` runs `/update install`.
+  `Ctrl+U` remains readline clear-draft. Terminals that cannot
+  distinguish the shifted chord keep the unshifted meaning;
+  `/update install` is the reliable path. `/help` lists both.
 
 - xAI device login validated nothing about the URL it opened. The
   `verification_uri` from the device-code response went straight to

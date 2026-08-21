@@ -563,6 +563,7 @@
   "KbSelectText": "Seleccionar texto; con Ctrl/Alt selecciona por palabra",
   "KbSelectAllDraft": "Seleccionar todo el borrador",
   "KbClearDraft": "Limpiar borrador actual",
+  "KbInstallAvailableUpdate": "Instalar la actualización disponible (`/update install`)",
   "KbRestoreClearedDraft": "Restaurar el borrador borrado",
   "KbStashDraft": "Estacionar el borrador actual (`/stash pop` restaura)",
   "KbSearchHistory": "Buscar historial de prompts y recuperar borradores locales",

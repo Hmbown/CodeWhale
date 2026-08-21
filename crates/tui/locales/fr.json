@@ -546,6 +546,7 @@
   "KbSelectText": "Sélectionner du texte ; ajoutez Ctrl/Alt pour sélectionner par mot",
   "KbSelectAllDraft": "Sélectionner tout le brouillon",
   "KbClearDraft": "Effacer le brouillon actuel",
+  "KbInstallAvailableUpdate": "Installer la mise à jour disponible (`/update install`)",
   "KbRestoreClearedDraft": "Restaurer le brouillon effacé",
   "KbStashDraft": "Mettre de côté le brouillon actuel (`/stash pop` pour restaurer)",
   "KbSearchHistory": "Rechercher dans l'historique des prompts et récupérer les brouillons locaux",
