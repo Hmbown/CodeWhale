@@ -65,7 +65,7 @@ ratatui-core = "0.1"
 regex = "1.11"
 reqwest = { workspace = true, features = ["blocking", "stream", "form", "http2"] }
 rusqlite.workspace = true
-rmcp = { version = "2.2.0", default-features = false, features = ["auth", "client"] }
+rmcp = { version = "3.1.2", default-features = false, features = ["auth", "client"] }
 rustls.workspace = true
 qrcode = { version = "0.14", default-features = false }
 similar = "3"
