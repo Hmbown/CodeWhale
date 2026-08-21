@@ -2399,6 +2399,70 @@ iTerm2, WezTerm, Ghostty, and kitty are matched first and use their own
 notification protocols, and `method = "osc9"` / `"bel"` / `"off"` opt out
 of the `osascript` path explicitly.
 
+## Lifecycle Outbox (`[lifecycle_outbox]`)
+
+The lifecycle outbox is an opt-in, machine-readable stream of session,
+turn, and sub-agent lifecycle events. With a path configured, Codewhale
+appends one JSON line per event to that file — for interactive TUI
+sessions *and* headless `codewhale exec` runs — so a supervisor
+(terminal multiplexer wrapper, automation harness, alerting setup) can
+react to what happened without scraping the screen or installing per-hook
+shell commands. Unset or empty `path` = the feature is **off** and
+behavior is unchanged.
+
+```toml
+[lifecycle_outbox]
+path = "~/.codewhale/notifications/outbox.jsonl" # unset/empty = OFF
+webhook_url = ""     # optional; POSTs events as JSON when set
+webhook_token = ""   # optional bearer token for webhook_url
+```
+
+### Events emitted
+
+| Event | Kind | Fired at |
+|---|---|---|
+| `turn_start` | `turn.started` | a new turn begins (TUI TurnStarted; `exec` at message dispatch) |
+| `turn_end` | `turn.completed` / `turn.failed` / `turn.interrupted` | turn completion, kind projected from the turn status |
+| `turn_stalled` | `turn.stalled` | the stall watchdog recovers a wedged turn |
+| `subagent_spawn` | `subagent.spawned` | a sub-agent is spawned |
+| `subagent_complete` | `subagent.completed` | a sub-agent reaches a terminal state |
+| `session_start` | `session.started` | interactive session start |
+| `session_end` | `session.ended` | interactive session end |
+
+### File contract
+
+Each line is a `RuntimeEventEnvelope`:
+
+```json
+{"schema_version": 1, "seq": 3, "event": "turn_start", "kind": "turn.started",
+ "thread_id": "…", "turn_id": "…", "item_id": null, "timestamp": "…",
+ "created_at": "…", "payload": {…}}
+```
+
+- `seq` is monotonic per outbox file and recovers from the last written
+  line when a new process opens the file.
+- Lines are written one complete JSON line per append, serialized by an
+  internal writer task and flushed before the next event; concurrent
+  sessions writing the same path do not interleave bytes mid-line, but
+  separate processes each continue from their own recovered `seq`, so seqs
+  can repeat across processes sharing one file — prefer one file per
+  process for strict uniqueness.
+- Parent directories are created lazily on the first event.
+- Payloads are constructed from bounded, pre-redacted fields only — never
+  raw tool arguments, environment, or full transcript text. Free-form
+  fields (error messages, previews) are capped at the notification limits
+  (80 headline / 120 detail / 200 preview characters) and stripped of
+  control bytes.
+
+### Webhook delivery
+
+With `webhook_url` set, every event is additionally POSTed as
+`{"at": "<ISO 8601 timestamp>", "event": {…}}` with
+`Authorization: Bearer <webhook_token>` when a token is configured.
+Delivery is best-effort: failures are logged and dropped, never retried
+into the agent loop, and a failing webhook never blocks the local file
+append.
+
 ## Tool Catalog
 
 Codewhale loads a small core native tool catalog by default and leaves less

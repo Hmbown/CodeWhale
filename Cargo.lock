@@ -910,7 +910,10 @@ dependencies = [
  "reqwest 0.13.4",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]
@@ -1052,6 +1055,7 @@ dependencies = [
  "codewhale-config",
  "codewhale-core",
  "codewhale-execpolicy",
+ "codewhale-hooks",
  "codewhale-lane",
  "codewhale-paths",
  "codewhale-protocol",

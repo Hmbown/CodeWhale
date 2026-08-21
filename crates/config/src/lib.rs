@@ -853,6 +853,10 @@ pub struct ConfigToml {
     /// lifecycle `[hooks]` table so config rewrites preserve existing hooks.
     #[serde(default)]
     pub hook_sinks: Option<HookSinksToml>,
+    /// Lifecycle event outbox (`[lifecycle_outbox]`). Opt-in: an unset or
+    /// empty `path` disables the feature and leaves behavior unchanged.
+    #[serde(default)]
+    pub lifecycle_outbox: Option<LifecycleOutboxToml>,
     /// Agent Fleet trust and security policy (#3165). When absent, fleet
     /// workers inherit conservative Sandbox defaults.
     #[serde(default)]
@@ -1551,6 +1555,31 @@ pub struct HookSinksToml {
     /// shared `/tmp` default because socket ownership should be explicit.
     #[serde(default)]
     pub unix_socket_path: Option<PathBuf>,
+}
+
+/// On-disk schema for the `[lifecycle_outbox]` table.
+///
+/// Opt-in lifecycle event outbox: every emitted event is appended as one
+/// JSONL line to `path` in the `RuntimeEventEnvelope` shape
+/// (`schema_version, seq, event, kind, thread_id, turn_id, item_id,
+/// timestamp, payload`), and optionally POSTed to `webhook_url`. An unset or
+/// empty `path` disables the feature entirely — behavior is unchanged from a
+/// release without the table.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LifecycleOutboxToml {
+    /// Path to the JSONL outbox file. Parent directories are created lazily
+    /// on the first event. Unset or empty = feature OFF.
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    /// Optional webhook URL. Events are POSTed as `{"at", "event"}` JSON
+    /// only when this is set (in addition to, never instead of, `path`).
+    /// Delivery is best-effort: failures are logged and dropped.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    /// Optional bearer token sent as `Authorization: Bearer <token>` on
+    /// webhook POSTs. Ignored when `webhook_url` is unset.
+    #[serde(default)]
+    pub webhook_token: Option<String>,
 }
 
 /// On-disk schema for the `[skills]` table (#140). See `config.example.toml`

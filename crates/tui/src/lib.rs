@@ -11847,6 +11847,25 @@ async fn run_exec_agent(
         }
     }
 
+    // Lifecycle outbox (`[lifecycle_outbox]`): headless `codewhale exec`
+    // gets the same turn boundaries as the interactive TUI. Disabled
+    // (all emits no-op) when the config has no path.
+    let lifecycle_outbox = config
+        .lifecycle_outbox
+        .as_ref()
+        .map(|outbox| {
+            codewhale_hooks::LifecycleOutbox::new(
+                outbox.path.clone(),
+                outbox.webhook_url.clone(),
+                outbox.webhook_token.clone(),
+            )
+        })
+        .unwrap_or_else(codewhale_hooks::LifecycleOutbox::disabled);
+    // Wall clock for the outbox `turn_end` duration. `exec` never receives
+    // a TurnStarted engine event, so the start is marked at the same
+    // `Op::SendMessage` boundary where `turn_start` is emitted below.
+    let exec_turn_started_at = Instant::now();
+
     engine_handle
         .send(Op::SendMessage {
             content: prompt.to_string(),
@@ -11879,6 +11898,24 @@ async fn run_exec_agent(
             provenance: crate::core::ops::UserInputProvenance::ExternalUser,
         })
         .await?;
+
+    // Lifecycle outbox: the clean headless turn-start boundary. `exec` has
+    // no TurnStarted engine event; the message submission above is exactly
+    // where the engine begins the turn. No-op when the feature is disabled.
+    lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+        event: "turn_start".to_string(),
+        kind: "turn.started".to_string(),
+        thread_id: loaded_session_id.clone().unwrap_or_default(),
+        turn_id: None,
+        item_id: None,
+        payload: serde_json::json!({
+            "model": codewhale_hooks::bounded_text(
+                &effective_model,
+                codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
+            ),
+            "workspace": workspace.display().to_string(),
+        }),
+    });
 
     let mut summary = ExecSummary {
         mode: "agent".to_string(),
@@ -12262,6 +12299,36 @@ async fn run_exec_agent(
                             .to_string(),
                     );
                 }
+                // Lifecycle outbox: the clean headless turn-end boundary.
+                // `terminal_status` is authoritative here — persistent-service
+                // handoff failures above already demoted it to Failed, and
+                // `summary.error` includes the sandbox-denial augmentation.
+                // No-op when the feature is disabled.
+                {
+                    let outbox_status = format!("{terminal_status:?}").to_lowercase();
+                    let kind = match terminal_status {
+                        crate::core::events::TurnOutcomeStatus::Completed => "turn.completed",
+                        crate::core::events::TurnOutcomeStatus::Failed => "turn.failed",
+                        crate::core::events::TurnOutcomeStatus::Interrupted => "turn.interrupted",
+                    };
+                    lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+                        event: "turn_end".to_string(),
+                        kind: kind.to_string(),
+                        thread_id: latest_session_id.clone().unwrap_or_default(),
+                        turn_id: None,
+                        item_id: None,
+                        payload: serde_json::json!({
+                            "status": outbox_status,
+                            "duration_ms": exec_turn_started_at.elapsed().as_millis() as u64,
+                            "error": summary.error.as_deref().map(|message| {
+                                codewhale_hooks::bounded_text(
+                                    message,
+                                    codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
+                                )
+                            }),
+                        }),
+                    });
+                }
                 if last_error_category.is_none() {
                     last_error_category = summary
                         .error
@@ -12436,6 +12503,25 @@ async fn run_exec_agent(
         summary.error_category = Some(category.to_string());
         summary.termination_reason = Some(termination_reason.as_str().to_string());
         summary.error = Some(error.clone());
+        // Lifecycle outbox: the engine channel closed before a terminal
+        // turn receipt. Every emitted `turn_start` still gets its matching
+        // `turn_end` so a supervisor never sees an orphaned in-progress
+        // turn. No-op when the feature is disabled.
+        lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+            event: "turn_end".to_string(),
+            kind: "turn.failed".to_string(),
+            thread_id: latest_session_id.clone().unwrap_or_default(),
+            turn_id: None,
+            item_id: None,
+            payload: serde_json::json!({
+                "status": "failed",
+                "duration_ms": exec_turn_started_at.elapsed().as_millis() as u64,
+                "error": codewhale_hooks::bounded_text(
+                    &error,
+                    codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
+                ),
+            }),
+        });
         if output_format == ExecOutputFormat::StreamJson {
             emit_exec_stream_event(&ExecStreamEvent::Error { error })?;
         }

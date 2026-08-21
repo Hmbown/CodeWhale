@@ -1236,6 +1236,19 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # completion_sound = "beep"
 # sound_file = "E:\\google\\downloads\\notify.wav"
 
+# Lifecycle event outbox: opt-in JSONL stream of session/turn/subagent
+# lifecycle events for supervisors and automation harnesses. One JSON line
+# per event (RuntimeEventEnvelope schema), appended and flushed on every
+# emit; seq is monotonic per file and recovers from the last line on open.
+# UNCOMMENT `path` TO ENABLE — unset/empty = OFF = behavior unchanged.
+# Fires for interactive TUI sessions AND headless `codewhale exec` runs.
+# See docs/CONFIGURATION.md → Lifecycle Outbox for the file contract.
+# [lifecycle_outbox]
+# path = "~/.codewhale/notifications/outbox.jsonl"
+# webhook_url = "https://example.com/hooks/codewhale" # optional: POST {"at", "event"} JSON per event
+# webhook_token = ""            # optional: sent as `Authorization: Bearer <token>`
+#                               # delivery is best-effort: failures are logged and dropped
+
 # Opt-in per-event sound cues (#4817): deterministic, terminal-bell level
 # (BEL bytes only — functional signals, platform-safe no-op when the terminal
 # ignores BEL). Off by default. When completion_sound is active, turn-complete

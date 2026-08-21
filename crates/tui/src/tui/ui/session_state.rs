@@ -251,6 +251,10 @@ pub(crate) fn maybe_throttled_recovery_snapshot(
 }
 
 pub(crate) fn recover_stalled_runtime_turn(app: &mut App, message: &str, level: StatusToastLevel) {
+    // Capture the turn identity before the reset below clears it; the
+    // outbox event must name the turn that stalled.
+    let stalled_turn_id = app.runtime_turn_id.clone();
+    let stalled_session_id = app.hooks.session_id().to_string();
     // Finalize in-flight thinking / assistant / tool cells so the
     // transcript doesn't show permanent spinners after recovery.
     streaming_thinking::finalize_current(app);
@@ -279,6 +283,23 @@ pub(crate) fn recover_stalled_runtime_turn(app: &mut App, message: &str, level: 
     // Per-turn scroll lock — clear so the next turn auto-scrolls.
     app.user_scrolled_during_stream = false;
     app.push_status_toast(message, level, None);
+    // Lifecycle outbox (`[lifecycle_outbox]`): the first scriptable stall
+    // signal. Until now a wedged turn was only visible as this toast; with
+    // the outbox enabled a supervisor can react to the same moment.
+    // No-op when the feature is disabled.
+    app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+        event: "turn_stalled".to_string(),
+        kind: "turn.stalled".to_string(),
+        thread_id: stalled_session_id,
+        turn_id: stalled_turn_id,
+        item_id: None,
+        payload: serde_json::json!({
+            "message": codewhale_hooks::bounded_text(
+                message,
+                codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
+            ),
+        }),
+    });
 }
 
 pub(crate) fn recover_engine_event_disconnect(app: &mut App) -> bool {
@@ -1055,5 +1076,108 @@ mod derived_title_tests {
         );
         // Controls alone leave no title to derive.
         assert_eq!(derive_session_title(&[user("\u{1b}\u{7}\u{200b}")]), None);
+    }
+}
+
+#[cfg(test)]
+mod stall_outbox_tests {
+    use super::*;
+    use crate::tui::app::TuiOptions;
+
+    /// `recover_stalled_runtime_turn` must emit a `turn_stalled` lifecycle
+    /// outbox event naming the wedged turn — the first scriptable stall
+    /// signal. The outbox is opt-in, so the test enables it through config.
+    #[tokio::test]
+    async fn stalled_turn_emits_turn_stalled_outbox_event() {
+        let _lock = crate::test_support::lock_test_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outbox_path = dir.path().join("outbox.jsonl");
+
+        let config = Config {
+            lifecycle_outbox: Some(codewhale_config::LifecycleOutboxToml {
+                path: Some(outbox_path.clone()),
+                webhook_url: None,
+                webhook_token: None,
+            }),
+            ..Default::default()
+        };
+        let options = TuiOptions {
+            start_in_agent_mode: true,
+            ..crate::test_support::test_tui_options(dir.path())
+        };
+        let mut app = App::new(options, &config);
+        assert!(app.lifecycle_outbox.is_enabled());
+
+        app.runtime_turn_id = Some("turn-1".to_string());
+        app.runtime_turn_status = Some("in_progress".to_string());
+        app.is_loading = true;
+        recover_stalled_runtime_turn(
+            &mut app,
+            "Turn stalled — no completion signal received",
+            StatusToastLevel::Error,
+        );
+
+        // The outbox writer task drains asynchronously; wait for the line.
+        let mut lines = Vec::new();
+        for _ in 0..200 {
+            if let Ok(text) = tokio::fs::read_to_string(&outbox_path).await {
+                lines = text
+                    .lines()
+                    .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("json"))
+                    .collect();
+                if !lines.is_empty() {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(lines.len(), 1, "expected one turn_stalled outbox line");
+        let line = &lines[0];
+        assert_eq!(line["event"], "turn_stalled");
+        assert_eq!(line["kind"], "turn.stalled");
+        assert_eq!(line["turn_id"], "turn-1");
+        assert_eq!(line["schema_version"], 1);
+        assert_eq!(line["seq"], 1);
+        // The stall message is engine-authored and safe, but still bounded
+        // and never raw tool/environment content.
+        let message = line["payload"]["message"].as_str().expect("message");
+        assert!(message.contains("stalled"));
+        assert!(
+            message.chars().count() <= codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
+            "stall message must be bounded"
+        );
+    }
+
+    /// A disabled outbox (config without a path) must make stall recovery
+    /// behave exactly as before: the toast still lands, no file is written.
+    #[tokio::test]
+    async fn stalled_turn_without_outbox_config_writes_nothing() {
+        let _lock = crate::test_support::lock_test_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let options = TuiOptions {
+            start_in_agent_mode: true,
+            ..crate::test_support::test_tui_options(dir.path())
+        };
+        let mut app = App::new(options, &Config::default());
+        assert!(!app.lifecycle_outbox.is_enabled());
+
+        app.runtime_turn_id = Some("turn-1".to_string());
+        app.runtime_turn_status = Some("in_progress".to_string());
+        app.is_loading = true;
+        recover_stalled_runtime_turn(
+            &mut app,
+            "Turn stalled — no completion signal received",
+            StatusToastLevel::Error,
+        );
+
+        // Recovery still clears the wedged turn state and posts the toast.
+        assert!(app.runtime_turn_id.is_none());
+        assert!(!app.is_loading);
+        assert!(!app.status_toasts.is_empty());
+        assert!(
+            !dir.path().join("outbox.jsonl").exists(),
+            "no outbox file must be created when the feature is off"
+        );
     }
 }

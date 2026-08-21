@@ -9,6 +9,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
+mod lifecycle_outbox;
+
+pub use lifecycle_outbox::{
+    LifecycleEvent, LifecycleOutbox, OUTBOX_DETAIL_MAX_CHARS, OUTBOX_HEADLINE_MAX_CHARS,
+    OUTBOX_PREVIEW_MAX_CHARS, OUTBOX_TRUNCATION_MARKER, bounded_text,
+};
+
 /// All events that can be emitted through the hook system.
 ///
 /// Each variant represents a distinct lifecycle or streaming event. The enum is
@@ -196,16 +203,26 @@ impl HookSink for JsonlHookSink {
 /// The request body is `{"at": "<ISO 8601 timestamp>", "event": {...}}`.
 /// Failed requests are retried up to 2 times with exponential back-off
 /// (200 ms, 400 ms). After exhausting retries the error is propagated.
+#[derive(Clone)]
 pub struct WebhookHookSink {
     url: String,
+    /// Optional bearer token sent as `Authorization: Bearer <token>`.
+    bearer_token: Option<String>,
     client: reqwest::Client,
 }
 
 impl WebhookHookSink {
     /// Create a new sink that sends events to the given `url`.
     pub fn new(url: String) -> Self {
+        Self::new_with_token(url, None)
+    }
+
+    /// Create a new sink that sends events to the given `url`, attaching
+    /// `Authorization: Bearer <token>` when a token is provided.
+    pub fn new_with_token(url: String, bearer_token: Option<String>) -> Self {
         Self {
             url,
+            bearer_token,
             client: codewhale_release::platform_http_client_builder()
                 .timeout(std::time::Duration::from_secs(10))
                 .build()
@@ -216,22 +233,21 @@ impl WebhookHookSink {
                 }),
         }
     }
-}
 
-#[async_trait]
-impl HookSink for WebhookHookSink {
-    async fn emit(&self, event: &HookEvent) -> Result<()> {
+    /// POST an arbitrary JSON payload to the configured endpoint.
+    ///
+    /// This is the shared delivery path behind both [`HookSink::emit`] and
+    /// the lifecycle outbox fan-out. It is deliberately not part of the
+    /// [`HookSink`] trait: outbox events are runtime event envelopes, not
+    /// [`HookEvent`]s, and only the transport needs to be shared.
+    pub async fn post_payload(&self, payload: serde_json::Value) -> Result<()> {
         let mut retries = 0usize;
         loop {
-            let resp = self
-                .client
-                .post(&self.url)
-                .json(&json!({
-                    "at": Utc::now().to_rfc3339(),
-                    "event": event,
-                }))
-                .send()
-                .await;
+            let mut request = self.client.post(&self.url).json(&payload);
+            if let Some(token) = self.bearer_token.as_deref().filter(|t| !t.is_empty()) {
+                request = request.bearer_auth(token);
+            }
+            let resp = request.send().await;
             match resp {
                 Ok(response) if response.status().is_success() => return Ok(()),
                 Ok(response) => {
@@ -248,6 +264,17 @@ impl HookSink for WebhookHookSink {
             retries += 1;
             tokio::time::sleep(std::time::Duration::from_millis(200 * retries as u64)).await;
         }
+    }
+}
+
+#[async_trait]
+impl HookSink for WebhookHookSink {
+    async fn emit(&self, event: &HookEvent) -> Result<()> {
+        self.post_payload(json!({
+            "at": Utc::now().to_rfc3339(),
+            "event": event,
+        }))
+        .await
     }
 }
 

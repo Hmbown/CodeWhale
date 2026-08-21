@@ -1579,6 +1579,9 @@ pub struct App {
     pub api_key_env_only: bool,
     // Hooks system
     pub hooks: HookExecutor,
+    /// Lifecycle event outbox (`[lifecycle_outbox]` config). Disabled
+    /// (all emits no-ops) when no path is configured.
+    pub lifecycle_outbox: codewhale_hooks::LifecycleOutbox,
     #[allow(dead_code)]
     pub yolo: bool,
     /// One-shot YOLO→Act+Bypass migration notice for this session (#0.8.68 M6).

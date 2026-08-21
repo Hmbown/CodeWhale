@@ -745,6 +745,36 @@ web_search = true
 }
 
 #[test]
+fn tui_config_parses_lifecycle_outbox_table() {
+    let raw = r#"
+[lifecycle_outbox]
+path = "~/.codewhale/notifications/outbox.jsonl"
+webhook_url = "https://example.com/hooks/codewhale"
+webhook_token = "secret-token"
+"#;
+    let parsed: ConfigFile = toml::from_str(raw).expect("parse lifecycle_outbox config");
+
+    let outbox = parsed
+        .base
+        .lifecycle_outbox
+        .expect("lifecycle_outbox table should parse");
+    assert_eq!(
+        outbox.path,
+        Some(PathBuf::from("~/.codewhale/notifications/outbox.jsonl"))
+    );
+    assert_eq!(
+        outbox.webhook_url.as_deref(),
+        Some("https://example.com/hooks/codewhale")
+    );
+    assert_eq!(outbox.webhook_token.as_deref(), Some("secret-token"));
+
+    // Off by default: a config without the table leaves the feature off.
+    let absent: ConfigFile =
+        toml::from_str("model = \"demo\"").expect("parse config without outbox table");
+    assert!(absent.base.lifecycle_outbox.is_none());
+}
+
+#[test]
 fn tui_config_parses_hotbar_bindings() {
     let raw = r#"
 [[hotbar]]

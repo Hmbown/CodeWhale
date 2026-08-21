@@ -34,6 +34,7 @@ codewhale-config = { path = "../config", version = "0.9.11" }
 codewhale-command-contract = { path = "../command-contract", version = "0.9.11" }
 codewhale-core = { path = "../core", version = "0.9.11" }
 codewhale-execpolicy = { path = "../execpolicy", version = "0.9.11" }
+codewhale-hooks = { path = "../hooks", version = "0.9.11" }
 codewhale-lane = { path = "../lane", version = "0.9.11" }
 codewhale-paths = { path = "../paths", version = "0.9.11" }
 codewhale-protocol = { path = "../protocol", version = "0.9.11" }
