@@ -66,13 +66,46 @@ pub(crate) fn relaunch_argv(exe: &Path, session_id: &str) -> (PathBuf, Vec<Strin
     )
 }
 
-/// The current executable, falling back to `argv[0]` when the platform
-/// cannot resolve the image path (e.g. a deleted binary on Linux).
+/// The current executable for the relaunch handoff.
+///
+/// Resolves the platform image path and keeps it only when it names a live
+/// file; otherwise falls back to `argv[0]` (the invocation name, which the
+/// Unix `exec` resolves through `PATH`). The fallback covers both a
+/// resolution error and a dead resolved path: a missing file, or a Linux
+/// binary replaced by rename, which `/proc/self/exe` reports with a literal
+/// ` (deleted)` suffix.
 pub(crate) fn current_executable() -> Option<PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .or_else(|| std::env::args().next().map(PathBuf::from))
-        .filter(|path| !path.as_os_str().is_empty())
+    resolve_current_executable(
+        std::env::current_exe().ok(),
+        std::env::args().next().map(PathBuf::from),
+    )
+}
+
+/// Pick the executable to relaunch from a platform-resolved image path and
+/// `argv[0]`.
+///
+/// `resolved` is kept only when it is non-empty, exists, and is not marked
+/// ` (deleted)`; every other case — including a resolution error — falls
+/// back to `argv[0]`.
+pub(crate) fn resolve_current_executable(
+    resolved: Option<PathBuf>,
+    argv0: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let fallback = argv0.filter(|path| !path.as_os_str().is_empty());
+    match resolved {
+        Some(exe) if !exe.as_os_str().is_empty() && exe.exists() && !marked_deleted(&exe) => {
+            Some(exe)
+        }
+        _ => fallback,
+    }
+}
+
+/// True when the path's file name ends in the Linux `/proc/self/exe` marker
+/// for a binary replaced by rename.
+fn marked_deleted(exe: &Path) -> bool {
+    exe.file_name()
+        .map(|name| name.to_string_lossy().ends_with(" (deleted)"))
+        .unwrap_or(false)
 }
 
 /// Replace this process with `<exe> resume <session-id>`.
@@ -140,5 +173,54 @@ mod tests {
         request("session-1");
         request("session-2");
         assert_eq!(take_pending(), Some("session-2".to_string()));
+    }
+
+    #[test]
+    fn a_current_exe_marked_deleted_falls_back_to_argv0() {
+        let argv0 = PathBuf::from("codewhale");
+        assert_eq!(
+            resolve_current_executable(
+                Some(PathBuf::from("/x/codewhale (deleted)")),
+                Some(argv0.clone()),
+            ),
+            Some(argv0),
+        );
+    }
+
+    #[test]
+    fn a_missing_current_exe_falls_back_to_argv0() {
+        let argv0 = PathBuf::from("codewhale");
+        assert_eq!(
+            resolve_current_executable(
+                Some(PathBuf::from("/x/does/not/exist/codewhale")),
+                Some(argv0.clone()),
+            ),
+            Some(argv0),
+        );
+    }
+
+    #[test]
+    fn a_live_current_exe_is_kept_verbatim() {
+        let exe = std::env::current_exe().expect("test binary path");
+        assert!(exe.exists(), "the test binary itself is the live input");
+        assert_eq!(
+            resolve_current_executable(Some(exe.clone()), Some(PathBuf::from("codewhale"))),
+            Some(exe),
+        );
+    }
+
+    /// Pins the name check itself: `exists()` is true here, so only the
+    /// ` (deleted)` suffix can trigger the fallback.
+    #[test]
+    fn an_existing_file_named_deleted_is_rejected_by_name() {
+        let dir =
+            std::env::temp_dir().join(format!("codewhale-relaunch-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marked = dir.join("codewhale (deleted)");
+        std::fs::write(&marked, b"").unwrap();
+        let argv0 = PathBuf::from("codewhale");
+        let result = resolve_current_executable(Some(marked), Some(argv0.clone()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(result, Some(argv0));
     }
 }
