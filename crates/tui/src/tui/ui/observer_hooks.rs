@@ -28,6 +28,8 @@ pub(super) fn execute_subagent_observer_hook(
                 item_id: None,
                 payload: serde_json::json!({
                     "agent_id": agent_id,
+                    "subagent": agent_id,
+                    "workspace": app.workspace.display().to_string(),
                     "prompt_preview": codewhale_hooks::bounded_text(
                         &preview,
                         codewhale_hooks::OUTBOX_PREVIEW_MAX_CHARS,
@@ -46,6 +48,8 @@ pub(super) fn execute_subagent_observer_hook(
                 item_id: None,
                 payload: serde_json::json!({
                     "agent_id": agent_id,
+                    "subagent": agent_id,
+                    "workspace": app.workspace.display().to_string(),
                     "status": status,
                     "result_preview": codewhale_hooks::bounded_text(
                         &preview,

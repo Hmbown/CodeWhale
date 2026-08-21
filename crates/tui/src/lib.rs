@@ -12320,6 +12320,7 @@ async fn run_exec_agent(
                         payload: serde_json::json!({
                             "status": outbox_status,
                             "duration_ms": exec_turn_started_at.elapsed().as_millis() as u64,
+                            "workspace": latest_workspace.display().to_string(),
                             "error": summary.error.as_deref().map(|message| {
                                 codewhale_hooks::bounded_text(
                                     message,
@@ -12516,6 +12517,7 @@ async fn run_exec_agent(
             payload: serde_json::json!({
                 "status": "failed",
                 "duration_ms": exec_turn_started_at.elapsed().as_millis() as u64,
+                "workspace": latest_workspace.display().to_string(),
                 "error": codewhale_hooks::bounded_text(
                     &error,
                     codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
