@@ -13,6 +13,8 @@ use super::task_projection::{refresh_active_task_panel, refresh_shell_exec_live_
 use super::*;
 use crate::models::Role;
 
+use crate::tui::control_socket::SessionControl;
+
 pub(super) fn event_owner_is_active(
     current_session_id: Option<&str>,
     owner_session_id: &str,
@@ -729,6 +731,15 @@ pub(crate) async fn run_event_loop(
     // Widgets request future animation frames here; the poll loop remains the
     // sole `terminal.draw` emitter (no competing animation loop).
     let mut frame_requester = FrameRequester::new();
+    // Per-session control socket (`[control_socket]`): disabled unless the
+    // config enables it; even then, nothing binds until the owned session id
+    // appears (see the per-iteration reconcile below).
+    let mut session_control = SessionControl::new(
+        config
+            .control_socket
+            .as_ref()
+            .is_some_and(|socket| socket.enabled),
+    );
     let mut web_config_session: Option<WebConfigSession> = None;
     let mut prev_input_snapshot = String::new();
     let mut terminal_paused_at: Option<Instant> = None;
@@ -821,6 +832,25 @@ pub(crate) async fn run_event_loop(
         // durable. Mailbox backpressure must therefore defer delivery, never
         // block keyboard input or silently drop the accepted control.
         flush_pending_goal_controls(app, &engine_handle);
+
+        // Per-session control socket: rebind when the owned session id
+        // changes, republish the `status` snapshot, and execute queued
+        // verbs on the UI thread. A verb that asks for quit (the `relaunch`
+        // seam) exits the loop through the ordinary `/exit` teardown.
+        session_control.reconcile(app.current_session_id.as_deref());
+        session_control.update_status(app);
+        if session_control
+            .drain(
+                app,
+                config,
+                &engine_handle,
+                &mut current_streaming_text,
+                &mut stream_display_clock,
+            )
+            .await
+        {
+            return Ok(());
+        }
 
         while let Some(completion) = app.clipboard.poll_write_completion() {
             if let Err(err) = completion {
@@ -4765,44 +4795,13 @@ pub(crate) async fn run_event_loop(
                         }
                         EscapeAction::CancelRequest => {
                             app.backtrack.reset();
-                            if try_cancel_compaction(app, &engine_handle) {
+                            if escape_cancel_request(
+                                app,
+                                &engine_handle,
+                                &mut current_streaming_text,
+                                &mut stream_display_clock,
+                            ) {
                                 continue;
-                            }
-                            if app.paused || app.paused_goal_objective.is_some() {
-                                clear_paused_command_state(app, &engine_handle);
-                                if app.is_loading
-                                    || matches!(
-                                        app.runtime_turn_status.as_deref(),
-                                        Some("in_progress")
-                                    )
-                                {
-                                    engine_handle.cancel();
-                                    mark_active_turn_cancelled_locally(app);
-                                    current_streaming_text.clear();
-                                    stream_display_clock.reset();
-                                }
-                                app.active_allowed_tools = None;
-                                app.goal.objective = None;
-                                app.goal.tokens_used = 0;
-                                app.goal.time_used_seconds = 0;
-                                app.goal.continuation_count = 0;
-                                app.status_message =
-                                    Some(parent_stop_status(app, "Paused command cancelled"));
-                            } else {
-                                let was_waiting = app.goal_continuation_waiting;
-                                engine_handle.cancel();
-                                if was_waiting {
-                                    app.goal_continuation_waiting = false;
-                                    app.status_message = Some(
-                                        app.tr(MessageId::GoalContinuationStopped).to_string(),
-                                    );
-                                    continue;
-                                }
-                                mark_active_turn_cancelled_locally(app);
-                                current_streaming_text.clear();
-                                stream_display_clock.reset();
-                                app.status_message =
-                                    Some(parent_stop_status(app, "Request cancelled"));
                             }
                         }
                         EscapeAction::PauseCommand => {

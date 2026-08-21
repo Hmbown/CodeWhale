@@ -2961,6 +2961,13 @@ pub struct Config {
     #[serde(default)]
     pub hooks: Option<HooksConfig>,
 
+    /// Per-session control socket (`[control_socket]`). Opt-in: an absent
+    /// table or `enabled = false` (the default) leaves the feature off.
+    /// When enabled, the interactive TUI binds a unix socket per running
+    /// session (see `crate::tui::control_socket`).
+    #[serde(default)]
+    pub control_socket: Option<codewhale_config::ControlSocketToml>,
+
     /// Provider-specific credentials and defaults shared with the `codewhale` facade.
     #[serde(default)]
     pub providers: Option<ProvidersConfig>,
@@ -10124,6 +10131,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         tui: override_cfg.tui.or(base.tui),
         transcript: override_cfg.transcript.or(base.transcript),
         hooks: override_cfg.hooks.or(base.hooks),
+        control_socket: override_cfg.control_socket.or(base.control_socket),
         providers: merge_providers(base.providers, override_cfg.providers),
         features: merge_features(base.features, override_cfg.features),
         notifications: override_cfg.notifications.or(base.notifications),

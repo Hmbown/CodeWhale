@@ -853,6 +853,11 @@ pub struct ConfigToml {
     /// lifecycle `[hooks]` table so config rewrites preserve existing hooks.
     #[serde(default)]
     pub hook_sinks: Option<HookSinksToml>,
+    /// Per-session control socket (`[control_socket]`). Opt-in: an absent
+    /// table or `enabled = false` (the default) leaves the feature off and
+    /// behavior unchanged.
+    #[serde(default)]
+    pub control_socket: Option<ControlSocketToml>,
     /// Agent Fleet trust and security policy (#3165). When absent, fleet
     /// workers inherit conservative Sandbox defaults.
     #[serde(default)]
@@ -1551,6 +1556,21 @@ pub struct HookSinksToml {
     /// shared `/tmp` default because socket ownership should be explicit.
     #[serde(default)]
     pub unix_socket_path: Option<PathBuf>,
+}
+
+/// On-disk schema for the `[control_socket]` table.
+///
+/// Opt-in per-session control surface: when `enabled`, the interactive TUI
+/// binds a unix domain socket at `<sessions-dir>/<session-id>/control.sock`
+/// for the running session. The socket speaks newline-framed JSON-RPC with
+/// the verbs `message`, `interrupt`, `relaunch`, and `status`. An absent
+/// table, or `enabled = false` (the default), disables the feature entirely —
+/// behavior is unchanged from a release without the table.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ControlSocketToml {
+    /// Bind the per-session control socket. Default: false (OFF).
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 /// On-disk schema for the `[skills]` table (#140). See `config.example.toml`
