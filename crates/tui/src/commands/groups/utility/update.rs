@@ -13,10 +13,11 @@
 //!   Overwriting a binary Homebrew, npm, or cargo owns leaves the manager's
 //!   metadata describing a version that is no longer on disk, and the next
 //!   upgrade silently reverts the user.
-//! * **We do not relaunch.** This codebase has no self-exec/relaunch pattern,
-//!   and inventing one under a TUI holding the terminal is not a small change.
-//!   Telling the user to restart is the honest slice; that is also the only
-//!   possible answer on Windows, where the replaced image is the one running.
+//! * **We do not relaunch after an update.** `/relaunch`
+//!   (`crates/tui/src/relaunch.rs`) has its own exec-after-teardown pattern,
+//!   but chaining it onto a self-replace would exec the *new* binary while
+//!   the updater state is still torn down, and on Windows the replaced image
+//!   is the one running. Telling the user to restart is the honest slice.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -441,6 +441,7 @@
   "CmdQueueMissingIndex": "Indeks tidak ada. Penggunaan: /queue edit <n> atau /queue drop <n>",
   "CmdQueueIndexPositive": "Indeks harus berupa angka positif",
   "CmdQueueIndexMin": "Indeks harus >= 1",
+  "CmdRelaunchDescription": "Simpan sesi, mulai ulang aplikasi, lalu lanjutkan sesi",
   "CmdRelayDescription": "Buat relay sesi (接力) untuk thread baru",
   "CmdRemoteControlDescription": "Lanjutkan sesi persis ini dari akun web Codewhale Anda",
   "CmdRemoteEnvDescription": "Buka Work terhosting baru dari ujung branch GitHub atau CNB",

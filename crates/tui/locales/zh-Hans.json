@@ -444,6 +444,7 @@
   "CmdQueueMissingIndex": "缺少索引。用法: /queue edit <n> 或 /queue drop <n>",
   "CmdQueueIndexPositive": "索引必须为正数",
   "CmdQueueIndexMin": "索引必须 >= 1",
+  "CmdRelaunchDescription": "保存此会话，重启应用并恢复它",
   "CmdRelayDescription": "为新线程创建会话接力",
   "CmdRemoteControlDescription": "从 Codewhale 网页账户继续这个会话",
   "CmdRemoteEnvDescription": "从 GitHub 或 CNB 分支尖端打开新的托管 Work",
