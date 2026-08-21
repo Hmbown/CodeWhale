@@ -48,7 +48,7 @@ encoding_rs = "0.8.35"
 # Pinned to the jsonschema line schemaui 0.12 requires (^0.46) so the graph
 # carries one jsonschema/jsonschema-regex/referencing/fancy-regex stack.
 # Move both together when schemaui catches up (dependabot: keep in step).
-jsonschema = { version = "0.46", default-features = false }
+jsonschema = { version = "0.49", default-features = false }
 reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls-no-provider", "socks"] }
 # NOT "parallel": the Workflow VM stays single-threaded and bridges to the
 # multi-thread engine over channels (see crates/workflow-js).
