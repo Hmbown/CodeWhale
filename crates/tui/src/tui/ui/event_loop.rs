@@ -685,7 +685,24 @@ pub async fn run_tui(
         }
     }
 
-    if result.is_ok() && should_show_resume_hint(app.current_session_id.as_deref()) {
+    // `/relaunch` handoff: the event loop exited through the ordinary quit
+    // path, and the persistence actor above already flushed and saved the
+    // session. Hand the session id to the exec handoff — the next process
+    // image resumes it automatically, so the resume hint would be noise.
+    // Where there is no exec (Windows), the hint below is the relaunch
+    // instruction instead.
+    let relaunch = if result.is_ok() {
+        app.pending_relaunch.take()
+    } else {
+        None
+    };
+    if let Some(session_id) = &relaunch {
+        crate::relaunch::request(session_id);
+    }
+    let relaunching = relaunch.is_some() && cfg!(unix);
+
+    if result.is_ok() && should_show_resume_hint(app.current_session_id.as_deref()) && !relaunching
+    {
         // Printed AFTER `LeaveAlternateScreen` / `drop(terminal)` above,
         // so we're back on the primary screen — this is the one
         // legitimate stdout write in the TUI module tree. The

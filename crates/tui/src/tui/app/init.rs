@@ -823,6 +823,7 @@ impl App {
             launch,
             pending_launch_action: None,
             pending_hotbar_slot: None,
+            pending_relaunch: None,
             synchronized_output_enabled,
             status_indicator,
             show_thinking,

@@ -441,6 +441,7 @@
   "CmdQueueMissingIndex": "Не указан индекс. Использование: /queue edit <n> или /queue drop <n>",
   "CmdQueueIndexPositive": "Индекс должен быть положительным числом",
   "CmdQueueIndexMin": "Индекс должен быть >= 1",
+  "CmdRelaunchDescription": "Сохранить сессию, перезапустить приложение и возобновить её",
   "CmdRelayDescription": "Создать эстафету сессии (接力) для нового треда",
   "CmdRemoteControlDescription": "Продолжить именно этот сеанс из веб-аккаунта Codewhale",
   "CmdRemoteEnvDescription": "Открыть новый размещённый Work с вершины ветки GitHub или CNB",

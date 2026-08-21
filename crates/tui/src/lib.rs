@@ -91,6 +91,7 @@ mod provider_lake;
 mod provider_readiness;
 mod purge;
 mod regex_cache;
+mod relaunch;
 mod remote_control;
 mod remote_setup;
 pub mod repl;
@@ -1955,6 +1956,35 @@ async fn run_async_main_inner(
     )
     .await;
     finish_telemetry(&outcome, surface).await;
+    // `/relaunch` handoff: the TUI saved the session, restored the terminal,
+    // and queued its session id before returning. Replace the process image
+    // only now — after telemetry has recorded and flushed the old session's
+    // `session_end` — so the resumed process is an ordinary fresh launch.
+    // On Unix this is an atomic `exec`; on failure the session is already
+    // saved, so we report and exit normally. Platforms without `exec` leave
+    // the resume hint printed at quit as the instruction.
+    if outcome.is_ok()
+        && let Some(session_id) = crate::relaunch::take_pending()
+    {
+        let exe = crate::relaunch::current_executable()
+            .unwrap_or_else(|| std::path::PathBuf::from("codewhale"));
+        #[cfg(unix)]
+        {
+            // `exec` never returns on success; reaching the next line means
+            // the replacement failed.
+            let error = crate::relaunch::exec_relaunch(&exe, &session_id);
+            eprintln!(
+                "codewhale: could not relaunch ({}): {error} — the session is saved; run `codewhale resume {session_id}` to continue.",
+                exe.display()
+            );
+        }
+        #[cfg(not(unix))]
+        {
+            // No exec primitive on this platform: the session is saved and
+            // the quit-time resume hint is the instruction.
+            let _ = (exe, session_id);
+        }
+    }
     outcome
 }
 
