@@ -1,7 +1,6 @@
 # RFC: Lifecycle Event Outbox
 
-**Issue:** #1365 (provisional — the upstream issue is not filed yet; see the
-note at the end of the header)
+**Issue:** #5531
 **Status:** Implemented; pending upstream PR
 **Date:** 2026-08-20
 **Reference:** the shipped contract lives in
