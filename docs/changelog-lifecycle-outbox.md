@@ -5,7 +5,7 @@ PR). Feature-complete against the v0.9.9 baseline (`6f3850c3d`).
 
 > **Status (2026-08-20):** the upstream review artifact is now drafted — see
 > [docs/rfcs/1365-lifecycle-outbox.md](rfcs/1365-lifecycle-outbox.md) (issue
-> number provisional until the upstream issue is filed). This changelog is
+> #5531). This changelog is
 > the build log the RFC was mined from. The emit-site fixes below
 > (`workspace` on every event, the TUI failure-path `turn_end`, test guards,
 > the `codewhale doctor` posture row) are included in this branch.
