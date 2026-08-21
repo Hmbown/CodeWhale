@@ -3,6 +3,13 @@
 Changelog for the general lifecycle event outbox (target: upstream
 PR). Feature-complete against the v0.9.9 baseline (`6f3850c3d`).
 
+> **Status (2026-08-20):** the upstream review artifact is now drafted — see
+> [docs/rfcs/1365-lifecycle-outbox.md](rfcs/1365-lifecycle-outbox.md) (issue
+> number provisional until the upstream issue is filed). This changelog is
+> the build log the RFC was mined from. The emit-site fixes below
+> (`workspace` on every event, the TUI failure-path `turn_end`, test guards,
+> the `codewhale doctor` posture row) are included in this branch.
+
 ## Added
 
 - **Config**: new `[lifecycle_outbox]` table with three optional keys:
@@ -98,7 +105,7 @@ consumer can route each event to its project; sub-agent events
 
 ## Remaining / follow-ups
 
-Closed in this lane (gaps found by the bridge E2E / ecosystem audit):
+Carried into the RFC as design + review checkpoints:
 
 - **`payload.workspace` on every event** — previously only TUI
   `session_start` and exec `turn_start` carried the routing field and the
