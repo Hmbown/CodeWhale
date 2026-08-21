@@ -39,9 +39,12 @@
 //! concurrent writers sharing one file are serialized by the outbox's
 //! per-append exclusive lock. If no tokio runtime is available the event is
 //! dropped with a warning.
-//! Webhook POSTs (`{"at": …, "event": …}`) are attempted after the local
-//! append; failures are logged and dropped, never retried into the agent
-//! loop.
+//! Webhook POSTs (`{"at": …, "event": …}`) fan out after the local append,
+//! off the append path: delivery uses bounded retries inside the sink (two
+//! retries with exponential back-off) and failures are logged and dropped,
+//! never fed back into the agent loop. The fan-out is itself bounded — at
+//! most [`WEBHOOK_MAX_IN_FLIGHT`] deliveries run concurrently, and a full
+//! backlog drops the newest delivery instead of queueing it.
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -52,6 +55,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use codewhale_protocol::runtime::{RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION, RuntimeEventEnvelope};
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::WebhookHookSink;
@@ -70,6 +74,13 @@ pub const OUTBOX_TRUNCATION_MARKER: &str = "…";
 /// bounded (payload ceilings above plus envelope overhead), so a line can
 /// never approach this window and the last complete line is always inside it.
 const SEQ_RECOVERY_TAIL_BYTES: u64 = 64 * 1024;
+
+/// Upper bound on concurrently in-flight webhook fan-out tasks. Each
+/// delivery runs bounded retries inside the sink (≈ 30 s worst case against
+/// a dead endpoint), so the fan-out is capped: when all slots are busy the
+/// newest delivery is logged and dropped instead of queued unbounded. The
+/// local append path is never blocked either way.
+const WEBHOOK_MAX_IN_FLIGHT: usize = 4;
 
 /// One lifecycle event destined for the outbox.
 ///
@@ -114,6 +125,8 @@ impl LifecycleOutbox {
     /// best-effort); `webhook_token` is its optional bearer token. Webhook
     /// delivery is configured independently of the file: it only ever runs
     /// when `webhook_url` is set, and it never replaces the local append.
+    /// Deliveries run on detached, bounded tasks after the append, so a slow
+    /// or dead endpoint cannot stall the append of queued events.
     pub fn new(
         path: Option<PathBuf>,
         webhook_url: Option<String>,
@@ -137,6 +150,7 @@ impl LifecycleOutbox {
                 receiver: Mutex::new(Some(receiver)),
                 writer_spawned: AtomicBool::new(false),
                 spawn_lock: Mutex::new(()),
+                webhook_slots: Arc::new(Semaphore::new(WEBHOOK_MAX_IN_FLIGHT)),
             })),
         }
     }
@@ -178,6 +192,8 @@ struct OutboxInner {
     /// Serializes the lazy writer-task spawn so two racing first emits cannot
     /// start two writers.
     spawn_lock: Mutex<()>,
+    /// Concurrency cap for webhook fan-out tasks (see [`WEBHOOK_MAX_IN_FLIGHT`]).
+    webhook_slots: Arc<Semaphore>,
 }
 
 impl OutboxInner {
@@ -222,6 +238,7 @@ impl OutboxInner {
         let mut state = WriterState {
             path: self.path.clone(),
             webhook: self.webhook.clone(),
+            webhook_slots: self.webhook_slots.clone(),
             receiver,
         };
         self.writer_spawned.store(true, Ordering::Release);
@@ -237,6 +254,8 @@ impl OutboxInner {
 struct WriterState {
     path: PathBuf,
     webhook: Option<WebhookHookSink>,
+    /// Concurrency cap for webhook fan-out tasks (see [`WEBHOOK_MAX_IN_FLIGHT`]).
+    webhook_slots: Arc<Semaphore>,
     receiver: UnboundedReceiver<LifecycleEvent>,
 }
 
@@ -257,8 +276,10 @@ impl WriterState {
 
     /// Assign a seq, build the envelope, and append it to the outbox file —
     /// all under the outbox's cross-process exclusive lock, on the blocking
-    /// pool (acquiring the lock blocks on contention) — then fan out to the
-    /// webhook, independently of the append result.
+    /// pool (acquiring the lock blocks on contention) — then hand the
+    /// webhook POST to a detached fan-out task, independently of the append
+    /// result. The drain loop never awaits webhook delivery, so a slow or
+    /// dead endpoint cannot delay the local append of queued events.
     async fn deliver(&mut self, event: LifecycleEvent) -> Result<()> {
         let path = self.path.clone();
         let (envelope, append_result) =
@@ -273,6 +294,31 @@ impl WriterState {
                 "at": envelope.timestamp,
                 "event": envelope,
             });
+            self.fan_out_webhook(webhook.clone(), payload);
+        }
+
+        append_result
+    }
+
+    /// Hand the webhook POST to a detached task so the drain loop stays
+    /// append-only. Bounded: at most [`WEBHOOK_MAX_IN_FLIGHT`] deliveries run
+    /// concurrently (a full backlog drops the newest delivery with a warning
+    /// rather than queueing unbounded). The task holds its slot until the
+    /// POST and its bounded retries finish, logging its own failure.
+    fn fan_out_webhook(&self, webhook: WebhookHookSink, payload: Value) {
+        let permit = match self.webhook_slots.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                tracing::warn!(
+                    target: "lifecycle_outbox",
+                    "webhook fan-out backlog full; delivery dropped"
+                );
+                return;
+            }
+        };
+        tokio::spawn(async move {
+            // Held until the POST (including its bounded retries) finishes.
+            let _permit = permit;
             if let Err(error) = webhook.post_payload(payload).await {
                 tracing::warn!(
                     target: "lifecycle_outbox",
@@ -280,9 +326,7 @@ impl WriterState {
                     "lifecycle webhook delivery failed (dropped)"
                 );
             }
-        }
-
-        append_result
+        });
     }
 }
 
@@ -489,7 +533,7 @@ fn recover_last_seq(file: &mut std::fs::File, path: &Path) -> Result<u64> {
 }
 
 /// Bound free-form text to at most `max_chars` characters, stripping control
-/// bytes and ANSI escape sequences and collapsing whitespace runs first.
+/// characters and ANSI escape sequences and collapsing whitespace runs first.
 ///
 /// The limit counts Unicode scalar values, not bytes, so multi-byte text gets
 /// the same ceiling as ASCII. The result is safe to embed in an outbox
@@ -498,10 +542,7 @@ fn recover_last_seq(file: &mut std::fs::File, path: &Path) -> Result<u64> {
 /// arguments, environment, or full transcript text), the same discipline the
 /// desktop notification payloads enforce.
 pub fn bounded_text(text: &str, max_chars: usize) -> String {
-    let cleaned: String = text
-        .chars()
-        .filter(|ch| !ch.is_control())
-        .collect::<String>()
+    let cleaned: String = strip_ansi(text)
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
@@ -528,6 +569,63 @@ pub fn bounded_text(text: &str, max_chars: usize) -> String {
     out
 }
 
+/// Remove ANSI escape sequences and remaining control characters from
+/// `text`, leaving only the visible content.
+///
+/// Covers what terminal tooling actually emits into status lines: CSI
+/// (`ESC [` through the final byte in `0x40..=0x7E`), OSC (`ESC ]` through
+/// BEL or ST `ESC \`), DCS/SOS/PM/APC (`ESC P/X/^/_` through ST), and plain
+/// two-character escapes (`ESC c`). Unterminated sequences are dropped
+/// whole. [`bounded_text`] then applies whitespace collapse and truncation
+/// on top.
+fn strip_ansi(text: &str) -> String {
+    let mut chars = text.chars().peekable();
+    let mut out = String::with_capacity(text.len());
+    while let Some(ch) = chars.next() {
+        if ch != '\x1b' {
+            if !ch.is_control() {
+                out.push(ch);
+            }
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                // CSI: parameters/intermediates until the final byte.
+                for c in chars.by_ref() {
+                    if ('\x40'..='\x7e').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                // OSC: terminated by BEL or by ST (`ESC \`).
+                while let Some(c) = chars.next() {
+                    match c {
+                        '\x07' => break,
+                        '\x1b' if chars.next_if_eq(&'\\').is_some() => break,
+                        _ => {}
+                    }
+                }
+            }
+            Some('P' | 'X' | '^' | '_') => {
+                // DCS/SOS/PM/APC: terminated by ST (`ESC \`); drop whole if
+                // unterminated.
+                while let Some(c) = chars.next() {
+                    if c == '\x1b' && chars.next_if_eq(&'\\').is_some() {
+                        break;
+                    }
+                }
+            }
+            Some(_) => {
+                // Two-character escape (e.g. `ESC c`): the body byte is
+                // consumed above and dropped.
+            }
+            None => break,
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,6 +644,15 @@ mod tests {
             turn_id: Some("turn-1".to_string()),
             item_id: None,
             payload: json!({"status": "completed"}),
+        }
+    }
+
+    fn writer_state(path: PathBuf, webhook: Option<WebhookHookSink>) -> WriterState {
+        WriterState {
+            path,
+            webhook,
+            webhook_slots: Arc::new(Semaphore::new(WEBHOOK_MAX_IN_FLIGHT)),
+            receiver: tokio::sync::mpsc::unbounded_channel().1,
         }
     }
 
@@ -588,11 +695,7 @@ mod tests {
     #[tokio::test]
     async fn appends_one_jsonl_line_per_event_with_envelope_schema() {
         let (_dir, path) = temp_outbox_path("schema.jsonl");
-        let mut state = WriterState {
-            path: path.clone(),
-            webhook: None,
-            receiver: tokio::sync::mpsc::unbounded_channel().1,
-        };
+        let mut state = writer_state(path.clone(), None);
         deliver_all(&mut state, vec![event("turn_start", "turn.started")]).await;
 
         let lines = read_lines(&path).await;
@@ -616,11 +719,7 @@ mod tests {
     #[tokio::test]
     async fn payload_workspace_and_subagent_fields_survive_the_round_trip() {
         let (_dir, path) = temp_outbox_path("routing-fields.jsonl");
-        let mut state = WriterState {
-            path: path.clone(),
-            webhook: None,
-            receiver: tokio::sync::mpsc::unbounded_channel().1,
-        };
+        let mut state = writer_state(path.clone(), None);
         let workspace = "/home/cw/wt-lane";
         let subagent = "explore-1";
         let subagent_payload = json!({ "workspace": workspace, "subagent": subagent });
@@ -729,11 +828,7 @@ mod tests {
     #[tokio::test]
     async fn seq_is_monotonic_and_recovers_across_reopen() {
         let (_dir, path) = temp_outbox_path("seq.jsonl");
-        let mut state = WriterState {
-            path: path.clone(),
-            webhook: None,
-            receiver: tokio::sync::mpsc::unbounded_channel().1,
-        };
+        let mut state = writer_state(path.clone(), None);
         deliver_all(
             &mut state,
             vec![
@@ -745,11 +840,7 @@ mod tests {
         .await;
 
         // A fresh writer (new process, same file) continues the sequence.
-        let mut reopened = WriterState {
-            path: path.clone(),
-            webhook: None,
-            receiver: tokio::sync::mpsc::unbounded_channel().1,
-        };
+        let mut reopened = writer_state(path.clone(), None);
         deliver_all(&mut reopened, vec![event("turn_start", "turn.started")]).await;
 
         let lines = read_lines(&path).await;
@@ -918,10 +1009,31 @@ mod tests {
     fn bounded_text_strips_controls_and_collapses_whitespace() {
         assert_eq!(
             bounded_text("line\x1b[31m one\n\n  two\t", 80),
-            "line[31m one two"
+            "line one two"
         );
         assert_eq!(bounded_text("", 80), "");
         assert_eq!(bounded_text("   \n\t  ", 80), "");
+    }
+
+    #[test]
+    fn bounded_text_strips_full_ansi_escape_sequences() {
+        // CSI with parameters and an SGR reset: only visible text survives.
+        assert_eq!(bounded_text("\x1b[1;31mbold red\x1b[0m", 80), "bold red");
+        // OSC 8 hyperlink: the target URL is dropped, the label survives.
+        assert_eq!(
+            bounded_text("\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\", 80),
+            "link"
+        );
+        // BEL-terminated OSC (window title).
+        assert_eq!(bounded_text("\x1b]0;title\x07text", 80), "text");
+        // Two-character escape (`ESC c`): the `c` is consumed, the `b` stays.
+        assert_eq!(bounded_text("a\x1bcb", 80), "ab");
+        // Unterminated CSI is dropped whole.
+        assert_eq!(bounded_text("x\x1b[31", 80), "x");
+        // A trailing lone ESC byte is dropped.
+        assert_eq!(bounded_text("a\x1b", 80), "a");
+        // A two-character escape drops its body byte (`ESC b` → nothing).
+        assert_eq!(bounded_text("a\x1bb", 80), "a");
     }
 
     #[test]
@@ -979,5 +1091,118 @@ mod tests {
         let webhook = WebhookHookSink::new_with_token(format!("{}/hook", server.uri()), None);
         let result = webhook.post_payload(json!({})).await;
         assert!(result.is_err(), "expected the failure to be reported");
+    }
+
+    /// Regression: webhook delivery runs on a detached fan-out
+    /// task, so a slow endpoint must never delay the local append of events
+    /// queued behind it. Serialized delivery of three events against a 2 s
+    /// endpoint would take ≈ 6 s; the local lines must land almost
+    /// immediately, and the fan-out must still deliver all three POSTs.
+    #[tokio::test]
+    async fn slow_webhook_does_not_delay_local_appends() {
+        let (_dir, path) = temp_outbox_path("webhook-nonblocking.jsonl");
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(2)),
+            )
+            .mount(&server)
+            .await;
+
+        let outbox = LifecycleOutbox::new(
+            Some(path.clone()),
+            Some(format!("{}/hook", server.uri())),
+            None,
+        );
+        let started = std::time::Instant::now();
+        for _ in 0..3 {
+            outbox.emit(event("turn_start", "turn.started"));
+        }
+
+        // The writer task drains asynchronously; wait for the lines to land.
+        for _ in 0..200 {
+            if tokio::fs::metadata(&path)
+                .await
+                .is_ok_and(|meta| meta.len() > 0)
+                && read_lines_lenient(&path).await.len() >= 3
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let lines = read_lines(&path).await;
+        assert_eq!(lines.len(), 3, "all queued events must be written locally");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(1500),
+            "local appends must not wait on webhook deliveries (took {:?})",
+            started.elapsed()
+        );
+
+        // The fan-out tasks finish on their own; every POST must still land.
+        for _ in 0..100 {
+            if server.received_requests().await.expect("requests").len() >= 3 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 3, "every event must fan out to the webhook");
+    }
+
+    /// Regression: the fan-out is bounded — when all
+    /// [`WEBHOOK_MAX_IN_FLIGHT`] slots are busy on a stalled endpoint, newer
+    /// deliveries are dropped (logged) rather than queued unbounded, and the
+    /// local append of every event still proceeds.
+    #[tokio::test]
+    async fn full_webhook_backlog_drops_deliveries_but_not_local_appends() {
+        let (_dir, path) = temp_outbox_path("webhook-backlog.jsonl");
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(3)),
+            )
+            .mount(&server)
+            .await;
+
+        let outbox = LifecycleOutbox::new(
+            Some(path.clone()),
+            Some(format!("{}/hook", server.uri())),
+            None,
+        );
+        let total = WEBHOOK_MAX_IN_FLIGHT + 2;
+        for _ in 0..total {
+            outbox.emit(event("turn_start", "turn.started"));
+        }
+
+        for _ in 0..200 {
+            if tokio::fs::metadata(&path)
+                .await
+                .is_ok_and(|meta| meta.len() > 0)
+                && read_lines_lenient(&path).await.len() >= total
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let lines = read_lines(&path).await;
+        assert_eq!(
+            lines.len(),
+            total,
+            "every event must be appended locally even when the webhook backlog is full"
+        );
+
+        // The in-flight POSTs complete; the two backlogged deliveries are gone.
+        for _ in 0..100 {
+            if server.received_requests().await.expect("requests").len() >= WEBHOOK_MAX_IN_FLIGHT {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(
+            requests.len(),
+            WEBHOOK_MAX_IN_FLIGHT,
+            "only the in-flight slots may be delivered; the rest are dropped"
+        );
     }
 }
