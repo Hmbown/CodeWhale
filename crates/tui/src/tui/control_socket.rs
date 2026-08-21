@@ -86,7 +86,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::fs;
@@ -121,6 +121,15 @@ const RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a verb may wait for the event loop to handle it
 /// (`APP_RESPONSE_TIMEOUT`).
 const DISPATCH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Minimum pause between bind retries after a refused takeover, so another
+/// live process holding the socket cannot turn the per-frame reconcile into
+/// a connect-probe and warn-log flood. Shortened under `#[cfg(test)]` so the
+/// backoff itself is testable without sleeping for seconds.
+#[cfg(not(test))]
+const BIND_RETRY_BACKOFF: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const BIND_RETRY_BACKOFF: Duration = Duration::from_millis(200);
 
 // ── Protocol ────────────────────────────────────────────────────────────────
 
@@ -253,14 +262,24 @@ pub(crate) struct SessionControl {
     commands_tx: Option<mpsc::Sender<PendingCommand>>,
     commands_rx: mpsc::Receiver<PendingCommand>,
     status: Arc<Mutex<StatusSnapshot>>,
+    /// When the last bind attempt failed (e.g. another live process owns the
+    /// socket), retries for *that session* back off so a refused takeover
+    /// cannot become a per-frame connect-probe and log flood.
+    last_bind_failure: Option<(String, Instant)>,
 }
 
 impl SessionControl {
     pub(crate) fn new(enabled: bool) -> Self {
+        Self::new_with_sessions_dir(enabled, None)
+    }
+
+    /// Test seam: `sessions_dir` bypasses `SessionManager::default_location()`
+    /// so tests never touch the real `~/.codewhale/sessions`.
+    fn new_with_sessions_dir(enabled: bool, sessions_dir: Option<PathBuf>) -> Self {
         let (commands_tx, commands_rx) = mpsc::channel();
         Self {
             enabled,
-            sessions_dir: None,
+            sessions_dir,
             bound_session: None,
             socket: None,
             commands_tx: enabled.then_some(commands_tx),
@@ -273,6 +292,7 @@ impl SessionControl {
                     paused: false,
                 },
             })),
+            last_bind_failure: None,
         }
     }
 
@@ -294,6 +314,16 @@ impl SessionControl {
             return;
         };
         if self.bound_session.as_deref() == Some(id) {
+            return;
+        }
+        // A refused takeover must not retry every frame: back off so the
+        // connect probe and its warning log run at most every few seconds.
+        // Keyed on the session id so switching sessions is never delayed by
+        // another session's refusal.
+        if let Some((failed_id, failed_at)) = &self.last_bind_failure
+            && failed_id == id
+            && failed_at.elapsed() < BIND_RETRY_BACKOFF
+        {
             return;
         }
         // Session id changed: drop the old listener first so the socket file
@@ -328,9 +358,11 @@ impl SessionControl {
                 );
                 self.bound_session = Some(id.to_string());
                 self.socket = Some(handle);
+                self.last_bind_failure = None;
             }
             Err(error) => {
                 tracing::warn!(session = id, %error, "control socket: bind failed; session control unavailable");
+                self.last_bind_failure = Some((id.to_string(), Instant::now()));
             }
         }
     }
@@ -1152,5 +1184,45 @@ mod tests {
             !socket_path.exists(),
             "socket file must be unlinked after drop"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reconcile_backs_off_after_a_refused_takeover() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp.path().join("sessions");
+        let socket_path = sessions_dir.join("sess").join(SOCKET_FILE_NAME);
+        fs::create_dir_all(socket_path.parent().expect("parent")).expect("mkdir");
+
+        let mut control = SessionControl::new_with_sessions_dir(true, Some(sessions_dir.clone()));
+
+        // A live listener occupies the path: the takeover is refused.
+        let live = UnixListener::bind(&socket_path).expect("bind live listener");
+        control.reconcile(Some("sess"));
+        assert!(
+            control.bound_session.is_none(),
+            "refused bind must not claim"
+        );
+
+        // The other process goes away, but the backoff still holds.
+        drop(live);
+        let _ = fs::remove_file(&socket_path);
+        control.reconcile(Some("sess"));
+        assert!(
+            control.bound_session.is_none(),
+            "backoff must suppress an immediate rebind"
+        );
+
+        // After the backoff window, the same session binds successfully.
+        std::thread::sleep(BIND_RETRY_BACKOFF + Duration::from_millis(50));
+        control.reconcile(Some("sess"));
+        assert_eq!(control.bound_session.as_deref(), Some("sess"));
+
+        // Reconcile with the same id is a no-op; a different id rebinds.
+        control.reconcile(Some("sess"));
+        assert_eq!(control.bound_session.as_deref(), Some("sess"));
+        control.reconcile(Some("other"));
+        assert_eq!(control.bound_session.as_deref(), Some("other"));
+        drop(control);
     }
 }
