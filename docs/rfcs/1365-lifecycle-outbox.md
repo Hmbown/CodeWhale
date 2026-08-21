@@ -32,7 +32,7 @@ Verified against the tree:
 | Item | Status | Where |
 | --- | --- | --- |
 | `[lifecycle_outbox]` config table | implemented | `crates/config/src/lib.rs:1553-1575`, wired in `crates/tui/src/tui/app/init.rs:574-586` |
-| JSONL writer (seq recovery, bounded payloads) | implemented | `crates/hooks/src/lifecycle_outbox.rs` (whole module) |
+| JSONL writer (locked seq assignment, seq recovery, bounded payloads) | implemented | `crates/hooks/src/lifecycle_outbox.rs` (whole module) |
 | `WebhookHookSink` bearer-token transport | implemented | `crates/hooks/src/lib.rs:207-277` |
 | TUI emit sites (7 events) | implemented | §4.6 table |
 | `exec` emit sites (turn pair + failure pair) | implemented | `crates/tui/src/lib.rs:11673,12082,12279` |
@@ -193,25 +193,38 @@ Each line is one complete envelope
   (`crates/protocol/src/runtime/mod.rs:7`), the same envelope the runtime
   event store and `/v1` replay API already use — the outbox introduces no
   second model.
-- **`seq` recovery.** Monotonic per file, assigned by the writer in drain
-  order (`crates/hooks/src/lifecycle_outbox.rs:264-273`). On first write
-  the writer recovers the last complete line's `seq` from a **bounded
-  64 KiB tail scan** (`recover_last_seq`,
-  `crates/hooks/src/lifecycle_outbox.rs:336-389`): outbox lines are
-  bounded far below that window, so the last complete line is always
-  inside it, and a torn trailing line from a crash mid-write is ignored
-  (the previous newline-terminated line wins).
-- **Single writer.** `emit` never blocks the caller: it enqueues on an
-  unbounded channel and a single lazily-spawned writer task serializes
-  appends in order (`crates/hooks/src/lifecycle_outbox.rs:156-169`,
-  `ensure_writer_spawned` at `:188-227`). Appends use O_APPEND with line +
-  newline in a single write, mirroring `JsonlHookSink`; two processes
-  sharing one file can interleave *lines* but never splice one. With no
-  tokio runtime available (or after the writer task is gone) events are
-  dropped with a warning — the outbox is observability, not control flow.
-- **Cross-process caveat.** Seq uniqueness is per process recovery, so
-  processes sharing one file can repeat seq values — use one file per
-  process for strict uniqueness.
+- **`seq` assignment is atomic across processes.** Every append holds an
+  exclusive advisory lock on a `<outbox-path>.lock` sidecar file —
+  `flock` on Unix, `LockFileEx` on Windows
+  (`OutboxFileLock`/`lock_file_exclusive`,
+  `crates/hooks/src/lifecycle_outbox.rs:344-441`) — across the
+  **bounded 64 KiB tail-scan recovery** of the last complete line's
+  `seq` (`recover_last_seq`, `crates/hooks/src/lifecycle_outbox.rs:451`)
+  **and** the O_APPEND write itself, so `seq` is unique and
+  file-order-increasing across concurrent writers sharing one file — the
+  machine-wide outbox pattern, where a read-then-append race produced
+  duplicate seqs and out-of-order appends. Recovery is unchanged
+  otherwise: outbox lines are bounded far below the tail window, so the
+  last complete line is always inside it, and a torn trailing line from a
+  crash mid-write is ignored (the previous newline-terminated line wins).
+- **Single writer per process.** `emit` never blocks the caller: it
+  enqueues on an unbounded channel and a single lazily-spawned writer
+  task serializes appends in order (`ensure_writer_spawned` at
+  `crates/hooks/src/lifecycle_outbox.rs:196-227`; `deliver` at `:262`).
+  The locked read + append runs on the blocking pool, so the lock never
+  stalls an async worker. Appends use O_APPEND with line + newline in a
+  single write, mirroring `JsonlHookSink`; within one process the queue
+  orders events and across processes the sidecar lock orders appends, so
+  writers can interleave *lines* but never splice one and never duplicate
+  or reorder a `seq`. With no tokio runtime available (or after the
+  writer task is gone) events are dropped with a warning — the outbox is
+  observability, not control flow.
+- **Cross-process sharing is supported.** The `<path>.lock` sidecar is a
+  zero-byte file created next to the outbox (`outbox_lock_path` at
+  `crates/hooks/src/lifecycle_outbox.rs:371`); the lock is advisory, so
+  only cooperating outbox writers respect it and downstream readers of
+  the outbox file are unaffected. It is released on descriptor close,
+  even on crash, so no stale-lock recovery exists.
 
 ### 4.3 Bounded payloads
 
@@ -273,6 +286,7 @@ shared between the shell-hook sinks and the outbox fan-out:
 | `subagent_complete` | `subagent.completed` | observer site `crates/tui/src/tui/ui.rs:1037` |
 | `session_start` | `session.started` | hook fire site `crates/tui/src/tui/ui/event_loop.rs:479` |
 | `session_end` | `session.ended` | hook fire site `crates/tui/src/tui/ui/event_loop.rs:596` |
+| `turn_end` (reconciled) | `turn.interrupted` | `LifecycleOutbox::reconcile_interrupted_turns` — boot (`event_loop.rs:495`) and terminating-signal flush (`crates/tui/src/outbox_signal.rs`); payload `status: "interrupted"`, `reconciled: true`, `reason` |
 
 Guarantees both surfaces uphold: **every `turn_start` has a matching
 `turn_end`.** A turn killed mid-flight by a disconnected engine (stream
@@ -282,12 +296,56 @@ failure path — the TUI from `handle_turn_orphan`-style recovery in
 `crates/tui/src/lib.rs:12279`. A supervisor never sees an orphaned
 in-progress turn.
 
+### 4.7 Session ownership of turn boundaries (boot + shutdown reconciliation)
+
+A session **owns** its turn events: the process that starts a turn is the
+one that ends it — except when it cannot. A session killed mid-turn
+(SIGKILL, a closed pane, a crashed host) dies between the `turn_start`
+and `turn_end` appends and cannot run the emit. Ownership is recovered by
+a single reconciliation mechanism that both surviving paths share:
+
+- **Graceful shutdown.** The TUI's terminating-signal cleanup task
+  (`spawn_signal_cleanup_task`, `crates/tui/src/lib.rs:699`) calls
+  `LifecycleOutbox::reconcile_interrupted_turns` (via
+  `crates/tui/src/outbox_signal.rs`) for SIGTERM/SIGINT/SIGHUP before the
+  process exits, appending a synthetic `turn_end` for every turn this
+  session left open.
+- **Boot reconciliation.** SIGKILL runs no code, so nothing can be
+  appended at death. On the next session start the TUI reconciles *before*
+  its first emit (`crates/tui/src/tui/ui/event_loop.rs:507`), and the same
+  scan pairs anything the killed process left behind.
+
+Both paths derive the open turn from the **file** (a `turn_start` with no
+matching `turn_end` for the same `thread_id`), never from in-memory state:
+the flush waits (bounded) for the process's own queued events to drain,
+then scans the whole file and appends under the outbox's cross-process
+exclusive lock — one lock acquisition across scan + appends — so a
+reconciler racing another session's writer (or a second reconciler)
+serializes and never double-appends.
+
+The synthetic line is an ordinary envelope:
+
+```json
+{"schema_version": 1, "seq": 9, "event": "turn_end",
+ "kind": "turn.interrupted", "thread_id": "sess_…", "turn_id": "…",
+ "item_id": null, "timestamp": "…", "created_at": "…",
+ "payload": {"status": "interrupted", "reconciled": true,
+             "reason": "boot_reconciliation" | "signal:SIGTERM",
+             "workspace": "…"}}
+```
+
+Only the canonical kill shape is repaired — exactly one `turn_start` and
+no `turn_end` for a turn. A turn with duplicate starts cannot satisfy a
+1:1 pairing consumer no matter what is appended, so it is left alone with
+a warning. The synthetic end inherits the start's `payload.workspace` so
+workspace-routed consumers keep seeing the same routing field.
+
 ## 5. Known limitations
 
 - **`turn_stalled` vs the client stream-idle clock race.** The stall
   watchdog fires only when a turn outlives the stall threshold, but the
   client's stream-idle timeout can terminate a silent turn first —
-  observed in the bridge E2E harness (§9.4 of the field report): the idle
+  observed in the bridge E2E harness: the idle
   timeout always won and `turn_stalled` was not triggerable live; the
   signal was proven via its emit-site test instead. If stall detection is
   a hard product requirement, the watchdog threshold and the client idle
@@ -301,10 +359,23 @@ in-progress turn.
   consumer tails it is the consumer's contract. A consumer that keeps its
   cursor only in memory and the outbox file being deleted + recreated can
   skip events below the stale cursor (observed in the bridge E2E harness,
-  §8.5.4 of the field report) — the recovery is restart-replay, or the
+  of the live-supervisor run) — the recovery is restart-replay, or the
   consumer should reset its cursor on `NotFound` / detect a seq rewind.
-- **Cross-process seq uniqueness** (§4.2): per-process recovery means one
-  file per process for strict `seq` uniqueness.
+- **Cross-process seq uniqueness** (§4.2): every append re-locks the
+  `<path>.lock` sidecar and re-recovers the tail, so one shared file
+  yields unique, increasing seqs across sessions; the sidecar file is the
+  only new on-disk artifact.
+- **SIGKILL reconciliation depends on a stable thread id across the
+  restart** (§4.7): boot reconciliation scans for the *current* session's
+  `thread_id`, so it pairs a killed process's unpaired start only when the
+  relaunched session emits under the same id (resumed sessions that key
+  the outbox on the persisted session id; a fresh hook-session id does
+  not). The file format and the reconciliation mechanism are id-stable;
+  the deployment chooses the id policy.
+- **Graceful-shutdown flush is best effort**: it waits a bounded 2 s for
+  the session's own queued events to drain and appends under the outbox
+  lock, but a wedged writer (or a second fatal signal) can still exit
+  before the line lands — the next boot's reconciliation is the backstop.
 - **Fresh `exec` runs have an empty `thread_id` on `turn_start`.** The
   session id is minted only at persistence time; a supervisor correlating
   runs can key on process + file.
@@ -317,8 +388,10 @@ in-progress turn.
 - With `[lifecycle_outbox]` unset or empty `path`, zero behavior change:
   the handle is a disabled no-op and no file or HTTP request is ever made
   (`LifecycleOutbox::disabled`, `crates/hooks/src/lifecycle_outbox.rs:140-144`).
-- No new runtime dependencies (JSONL append uses tokio fs; the webhook
-  reuses the sink's existing `reqwest` client).
+- No new third-party runtime dependencies: the append uses std fs on the
+  blocking pool under an advisory lock from in-tree `rustix`/`windows-sys`
+  (already workspace dependencies), and the webhook reuses the sink's
+  existing `reqwest` client.
 - No change to the hook system: shell hooks keep their config shape,
   payloads, and TUI-only scope; the outbox rides alongside the existing
   hook fire sites without altering them.
@@ -330,9 +403,12 @@ in-progress turn.
 Unit (in-module `#[cfg(test)]`), config, and integration harness layers,
 matching upstream's test layout:
 
-- **`crates/hooks`** — `crates/hooks/src/lifecycle_outbox.rs:423+`:
+- **`crates/hooks`** — `crates/hooks/src/lifecycle_outbox.rs:531+`:
   append/schema shape; seq recovery across reopen; missing/empty file;
   torn trailing line ignored; emit ordering under the writer task;
+  concurrent writers sharing one file (unique, increasing seqs, no lost
+  lines — `concurrent_writers_share_one_file_with_unique_increasing_seqs`,
+  `:714`);
   disabled-outbox no-ops (incl. webhook-only-without-path);
   `bounded_text` ceilings incl. UTF-8 boundaries and control-byte strip;
   the routing-field contract surviving the envelope round trip
@@ -366,8 +442,10 @@ matching upstream's test layout:
 PR 1 is accepted only if:
 
 - unset/empty `path` leaves the feature off with a no-op handle (tested)
-- seq recovery is bounded (tail scan, not full re-read) and torn trailing
-  lines are ignored (tested)
+- seq recovery is bounded (tail scan, not full re-read), torn trailing
+  lines are ignored, and cross-process seq assignment is atomic under the
+  outbox's exclusive sidecar lock — concurrent writers sharing one file
+  get unique, increasing seqs with no lost lines (tested)
 - `emit` never blocks the caller and ordering is preserved under the
   writer task (tested)
 - payload bounds are character-counted and UTF-8 safe, with the

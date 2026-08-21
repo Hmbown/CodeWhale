@@ -498,12 +498,59 @@ pub async fn run_tui(
         Err(err) => tracing::warn!("could not mirror initial engine system prompt: {err:#}"),
     }
 
+    // Session ownership of outbox turn boundaries: before the first emit,
+    // reconcile any `turn_start` this session left unpaired when a previous
+    // process died mid-turn (SIGKILL, a closed pane — where no code could
+    // append the `turn_end`). The scan + appends run under the outbox's
+    // cross-process lock and are idempotent, so the synthetic ends land
+    // before `session_start` below and consumers see a fully paired file.
+    // No-op when the outbox is disabled or the file is healthy.
+    {
+        let reconcile_outbox = app.lifecycle_outbox.clone();
+        let reconcile_thread_id = app.hooks.session_id().to_string();
+        let reconcile_result = tokio::task::spawn_blocking(move || {
+            reconcile_outbox
+                .reconcile_interrupted_turns(&reconcile_thread_id, "boot_reconciliation")
+        })
+        .await;
+        match reconcile_result {
+            Ok(Ok(0)) => {}
+            Ok(Ok(reconciled)) => {
+                tracing::info!(
+                    target: "lifecycle_outbox",
+                    thread_id = %app.hooks.session_id(),
+                    reconciled,
+                    "boot reconciliation appended synthetic turn_end(s) for interrupted turns"
+                );
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    target: "lifecycle_outbox",
+                    thread_id = %app.hooks.session_id(),
+                    %error,
+                    "boot reconciliation failed"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "lifecycle_outbox",
+                    %error,
+                    "boot reconciliation task was lost"
+                );
+            }
+        }
+    }
+
     // Fire session start hook
     {
         let context = app.base_hook_context();
         // Captured before the hook executor moves `context` into its blocking
         // task; the outbox emit below needs the same session identity.
         let outbox_thread_id = context.session_id.clone().unwrap_or_default();
+        // Register the session's outbox identity for the terminating-signal
+        // path: a SIGTERM/SIGHUP later in the session flushes the open turn
+        // through the same file-truth reconciliation as boot above.
+        crate::outbox_signal::register(app.lifecycle_outbox.clone(), outbox_thread_id.clone());
         let outbox_mode = context.mode.clone();
         let outbox_model = context.model.clone();
         let outbox_workspace = context.workspace.clone();
