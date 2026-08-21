@@ -236,6 +236,7 @@
   "CmdChangeDescription": "顯示最新的更新日誌",
   "CmdChangeHeader": "最新更新日誌",
   "CmdChangePreviousVersion": "上一個版本: {version} —— 輸入 `/change {version}` 檢視",
+  "StartupUpdatedNotice": "已更新至 {version} — `/change` 可查看新內容。",
   "CmdChangeTranslationQueued": "下面顯示英文發布說明。接下來會請求模型翻譯；如果目前提供商無法使用，這段英文內容就是備用結果。",
   "CmdChangeTranslationUnavailable": "下面顯示英文發布說明。目前工作階段沒有 API Key 或處於離線狀態，無法翻譯。",
   "CmdClearDescription": "清除對話歷史",

@@ -308,6 +308,7 @@
   "CmdChangeTranslationQueued": "아래는 영어 릴리스 노트입니다. 이어서 번역본을 요청합니다. 프로바이더를 사용할 수 없는 경우 이 영어 텍스트가 대체본으로 표시됩니다.",
   "CmdChangeTranslationUnavailable": "아래는 영어 릴리스 노트입니다. 현재 세션에 API 키가 없거나 오프라인 상태라 번역을 사용할 수 없습니다.",
   "CmdChangePreviousVersion": "이전 버전: {version} — `/change {version}`으로 확인하세요",
+  "StartupUpdatedNotice": "{version}(으)로 업데이트됨 — `/change`에서 새로운 내용을 확인하세요.",
   "CmdBalanceDescription": "현재 프로바이더 계정 잔액을 확인합니다",
   "CmdClearDescription": "대화 기록을 지웁니다",
   "CmdCompactDescription": "컨텍스트 압축을 실행해 공간을 확보합니다",

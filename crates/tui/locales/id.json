@@ -305,6 +305,7 @@
   "CmdChangeTranslationQueued": "Catatan rilis bahasa Inggris ditampilkan di bawah. Versi terjemahan akan diminta berikutnya; jika penyedia tidak tersedia, teks bahasa Inggris ini menjadi cadangan.",
   "CmdChangeTranslationUnavailable": "Catatan rilis bahasa Inggris ditampilkan di bawah. Terjemahan tidak tersedia karena sesi ini tidak memiliki kunci API atau sedang offline.",
   "CmdChangePreviousVersion": "Versi sebelumnya: {version} — jalankan `/change {version}` untuk melihatnya",
+  "StartupUpdatedNotice": "Diperbarui ke {version} — `/change` menampilkan yang baru.",
   "CmdBalanceDescription": "Periksa saldo akun penyedia aktif",
   "CmdClearDescription": "Hapus riwayat percakapan",
   "CmdCompactDescription": "Picu pemadatan konteks untuk mengosongkan ruang",

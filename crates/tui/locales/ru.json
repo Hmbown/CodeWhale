@@ -305,6 +305,7 @@
   "CmdChangeTranslationQueued": "Ниже показаны английские заметки о выпуске. Перевод будет запрошен далее; если провайдер недоступен, останется этот английский текст.",
   "CmdChangeTranslationUnavailable": "Ниже показаны английские заметки о выпуске. Перевод недоступен: в текущей сессии нет API-ключа или нет сети.",
   "CmdChangePreviousVersion": "Предыдущая версия: {version} — выполните `/change {version}`, чтобы посмотреть",
+  "StartupUpdatedNotice": "Обновлено до {version} — `/change` показывает, что нового.",
   "CmdBalanceDescription": "Проверить баланс счёта активного провайдера",
   "CmdClearDescription": "Очистить историю диалога",
   "CmdCompactDescription": "Запустить сжатие контекста, чтобы освободить место",

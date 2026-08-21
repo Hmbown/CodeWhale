@@ -308,6 +308,7 @@
   "CmdChangeTranslationQueued": "下面显示英文发布说明。接下来会请求模型翻译；如果当前提供商不可用，这段英文内容就是备用结果。",
   "CmdChangeTranslationUnavailable": "下面显示英文发布说明。当前会话没有 API Key 或处于离线状态，无法翻译。",
   "CmdChangePreviousVersion": "上一个版本: {version} —— 输入 `/change {version}` 查看",
+  "StartupUpdatedNotice": "已更新到 {version} — `/change` 可查看新内容。",
   "CmdBalanceDescription": "查看当前提供商账户余额",
   "CmdClearDescription": "清除对话历史",
   "CmdCompactDescription": "触发上下文压缩以释放空间",

@@ -305,6 +305,7 @@
   "CmdChangeTranslationQueued": "Unten stehen die englischen Release Notes. Eine Übersetzung wird als Nächstes angefragt; ist der Provider nicht verfügbar, dient dieser englische Text als Fallback.",
   "CmdChangeTranslationUnavailable": "Unten stehen die englischen Release Notes. Übersetzung nicht verfügbar, da die aktuelle Sitzung keinen API-Schlüssel hat oder offline ist.",
   "CmdChangePreviousVersion": "Vorherige Version: {version} — `/change {version}` zum Anzeigen ausführen",
+  "StartupUpdatedNotice": "Aktualisiert auf {version} — `/change` zeigt, was neu ist.",
   "CmdBalanceDescription": "Kontostand des aktiven Providers prüfen",
   "CmdClearDescription": "Gesprächsverlauf löschen",
   "CmdCompactDescription": "Kontextkomprimierung auslösen, um Platz freizugeben",

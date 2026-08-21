@@ -12242,6 +12242,109 @@ fn update_notice_block_is_persistent_and_actionable() {
     assert!(version_hint_from_release_json(&current, "0.8.46").is_none());
 }
 
+fn system_notice_contents(app: &App) -> Vec<String> {
+    app.history
+        .iter()
+        .filter_map(|cell| match cell {
+            HistoryCell::System { content } => Some(content.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn local_upgrade_notice_is_silent_on_first_run_and_once_per_version() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = codewhale_release::check::cache_path_in(dir.path());
+    let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::En;
+
+    maybe_push_local_upgrade_notice(&mut app, &cache, "0.9.11");
+    assert!(
+        system_notice_contents(&app)
+            .iter()
+            .all(|content| !content.contains("/change")),
+        "first run is not an update: {:?}",
+        system_notice_contents(&app)
+    );
+    assert_eq!(
+        codewhale_release::UpdateCheckCache::load(&cache)
+            .expect("first run still records the version")
+            .last_seen_version
+            .as_deref(),
+        Some("0.9.11")
+    );
+
+    maybe_push_local_upgrade_notice(&mut app, &cache, "0.9.11");
+    assert!(
+        system_notice_contents(&app)
+            .iter()
+            .all(|content| !content.contains("/change")),
+        "the same version must not fire on the next launch"
+    );
+
+    let mut stored = codewhale_release::UpdateCheckCache::load(&cache).expect("load");
+    stored.last_seen_version = Some("0.9.10".to_string());
+    stored.store(&cache).expect("seed previous version");
+
+    maybe_push_local_upgrade_notice(&mut app, &cache, "0.9.11");
+    let notices: Vec<_> = system_notice_contents(&app)
+        .into_iter()
+        .filter(|content| content.contains("/change"))
+        .collect();
+    assert_eq!(notices.len(), 1, "upgrade notice fires once: {notices:?}");
+    assert!(
+        notices[0].contains("0.9.11"),
+        "names the new version: {}",
+        notices[0]
+    );
+    assert_eq!(
+        crate::localization::tr(
+            crate::localization::Locale::En,
+            crate::localization::MessageId::StartupUpdatedNotice,
+        )
+        .replace("{version}", "0.9.11"),
+        notices[0]
+    );
+
+    maybe_push_local_upgrade_notice(&mut app, &cache, "0.9.11");
+    let notices: Vec<_> = system_notice_contents(&app)
+        .into_iter()
+        .filter(|content| content.contains("/change"))
+        .collect();
+    assert_eq!(
+        notices.len(),
+        1,
+        "the same version must not append a second notice: {notices:?}"
+    );
+}
+
+#[test]
+fn startup_check_store_path_keeps_the_last_seen_version() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = codewhale_release::check::cache_path_in(dir.path());
+    codewhale_release::UpdateCheckCache {
+        checked_at_unix: 1,
+        latest_tag: Some("v0.9.10".to_string()),
+        last_seen_version: Some("0.9.11".to_string()),
+    }
+    .store(&cache)
+    .expect("seed last-seen");
+
+    // Same store shape `cached_version_hint` uses after a completed fetch.
+    codewhale_release::UpdateCheckCache::now(Some("v0.9.12".to_string()))
+        .merging_last_seen_from_disk(&cache)
+        .store(&cache)
+        .expect("store");
+    let stored = codewhale_release::UpdateCheckCache::load(&cache).expect("load");
+    assert_eq!(stored.latest_tag.as_deref(), Some("v0.9.12"));
+    assert_eq!(
+        stored.last_seen_version.as_deref(),
+        Some("0.9.11"),
+        "a network-check write must not wipe the upgrade-notice cursor"
+    );
+}
+
 #[test]
 #[cfg(any(unix, windows))]
 fn external_url_launcher_does_not_wait_for_browser_process() {

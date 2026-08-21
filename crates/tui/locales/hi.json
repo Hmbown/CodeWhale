@@ -305,6 +305,7 @@
   "CmdChangeTranslationQueued": "English रिलीज़ नोट्स नीचे दिखाए गए हैं। अनुवादित संस्करण अगला माँगा जाएगा; प्रोवाइडर अनुपलब्ध होने पर यह English टेक्स्ट फ़ॉलबैक है।",
   "CmdChangeTranslationUnavailable": "English रिलीज़ नोट्स नीचे दिखाए गए हैं। वर्तमान सत्र में API कुंजी न होने या ऑफ़लाइन होने के कारण अनुवाद अनुपलब्ध है।",
   "CmdChangePreviousVersion": "पिछला संस्करण: {version} — देखने के लिए `/change {version}` चलाएँ",
+  "StartupUpdatedNotice": "{version} पर अपडेट हुआ — `/change` बताता है क्या नया है।",
   "CmdBalanceDescription": "सक्रिय प्रोवाइडर खाता शेष जाँचें",
   "CmdClearDescription": "वार्तालाप इतिहास साफ़ करें",
   "CmdCompactDescription": "जगह खाली करने के लिए संदर्भ कॉम्पैक्शन चलाएँ",

@@ -308,6 +308,7 @@
   "CmdChangeTranslationQueued": "Ghi chú phát hành bằng tiếng Anh hiển thị bên dưới. Bản dịch sẽ được yêu cầu tiếp theo; nếu nhà cung cấp không khả dụng, văn bản tiếng Anh này sẽ được dùng làm dự phòng.",
   "CmdChangeTranslationUnavailable": "Ghi chú phát hành bằng tiếng Anh hiển thị bên dưới. Bản dịch không khả dụng vì phiên hiện tại không có mã khóa API hoặc đang ngoại tuyến.",
   "CmdChangePreviousVersion": "Phiên bản trước: {version} — chạy `/change {version}` để xem",
+  "StartupUpdatedNotice": "Đã cập nhật lên {version} — `/change` cho biết có gì mới.",
   "CmdBalanceDescription": "Kiểm tra số dư tài khoản của nhà cung cấp dịch vụ đang hoạt động",
   "CmdClearDescription": "Xóa lịch sử trò chuyện",
   "CmdCompactDescription": "Kích hoạt nén ngữ cảnh để giải phóng không gian",

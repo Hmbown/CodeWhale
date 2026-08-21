@@ -353,6 +353,7 @@ pub enum MessageId {
     CmdChangeTranslationQueued,
     CmdChangeTranslationUnavailable,
     CmdChangePreviousVersion,
+    StartupUpdatedNotice,
     CmdBalanceDescription,
     CmdClearDescription,
     CmdCompactDescription,
@@ -2367,6 +2368,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdChangeTranslationQueued,
     MessageId::CmdChangeTranslationUnavailable,
     MessageId::CmdChangePreviousVersion,
+    MessageId::StartupUpdatedNotice,
     MessageId::CmdCostReport,
     MessageId::CmdCostReportSubtotal,
     MessageId::CmdCostReportUnknown,
@@ -4749,6 +4751,49 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn assert_translated_command_copy(id: MessageId, command_token: &str) {
+        let english = raw_locale_messages(Locale::En);
+        let key = format!("{id:?}");
+        let english_value = english
+            .get(&key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_else(|| panic!("English pack is missing {key}"));
+        for locale in Locale::shipped_complete() {
+            let pack = raw_locale_messages(*locale);
+            let translated = pack
+                .get(&key)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_else(|| panic!("{} is missing {key}", locale.tag()));
+            assert_eq!(
+                message_placeholders(translated),
+                message_placeholders(english_value),
+                "{} changed placeholders for {key}",
+                locale.tag()
+            );
+            assert!(
+                translated.contains(command_token),
+                "{} dropped {command_token} in {key}: {translated}",
+                locale.tag()
+            );
+            if *locale != Locale::En {
+                assert_ne!(
+                    translated,
+                    english_value,
+                    "{} must translate {key} instead of copying English",
+                    locale.tag()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn startup_updated_notice_is_translated() {
+        assert_translated_command_copy(MessageId::StartupUpdatedNotice, "/change");
+        let en = tr(Locale::En, MessageId::StartupUpdatedNotice);
+        assert!(en.contains("{version}"));
+        assert!(en.contains("/change"));
     }
 
     #[test]

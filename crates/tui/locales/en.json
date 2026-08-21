@@ -308,6 +308,7 @@
   "CmdChangeTranslationQueued": "English release notes are shown below. A translated version will be requested next; if the provider is unavailable, this English text is the fallback.",
   "CmdChangeTranslationUnavailable": "English release notes are shown below. Translation is unavailable because the current session has no API key or is offline.",
   "CmdChangePreviousVersion": "Previous version: {version} — run `/change {version}` to view it",
+  "StartupUpdatedNotice": "Updated to {version} — `/change` shows what is new.",
   "CmdBalanceDescription": "Check the active provider account balance",
   "CmdClearDescription": "Clear conversation history",
   "CmdCompactDescription": "Trigger context compaction to free up space",

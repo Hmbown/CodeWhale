@@ -94,7 +94,9 @@ pub(crate) async fn cached_version_hint(
     // whole day.
     if let Some(path) = cache_path
         && latest_tag.is_some()
-        && let Err(err) = codewhale_release::UpdateCheckCache::now(latest_tag.clone()).store(path)
+        && let Err(err) = codewhale_release::UpdateCheckCache::now(latest_tag.clone())
+            .merging_last_seen_from_disk(path)
+            .store(path)
     {
         tracing::debug!(error = %err, "failed to persist update-check cache");
     }
@@ -261,4 +263,25 @@ pub(crate) fn parse_semver(v: &str) -> Option<(u32, u32, u32)> {
     let minor = parts.next()?.parse::<u32>().ok()?;
     let patch = parts.next().unwrap_or("0").parse::<u32>().ok()?;
     Some((major, minor, patch))
+}
+
+/// One quiet transcript line when this launch is running a newer version
+/// than the last one recorded in `update-check.json`. First run (no stored
+/// version) is not an update and yields `None`.
+pub(crate) fn maybe_push_local_upgrade_notice(app: &mut App, path: &Path, current: &str) {
+    let Some(version) = codewhale_release::UpdateCheckCache::take_upgrade_to_current(path, current)
+    else {
+        return;
+    };
+    let line = tr(app.ui_locale, MessageId::StartupUpdatedNotice).replace("{version}", &version);
+    app.add_message(HistoryCell::System { content: line });
+}
+
+/// Resolve the cache and, if this launch is an upgrade, push the `/change`
+/// pointer. Missing home is a no-op: we cannot record that we showed it.
+pub(crate) fn apply_local_upgrade_notice(app: &mut App) {
+    let Some(path) = update_check_cache_path() else {
+        return;
+    };
+    maybe_push_local_upgrade_notice(app, &path, env!("CARGO_PKG_VERSION"));
 }

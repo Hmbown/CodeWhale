@@ -747,6 +747,10 @@ pub(crate) async fn run_event_loop(
         crate::telemetry_notice::PendingTelemetryNotice,
     > = None;
 
+    // Record the running version before the background network check can
+    // rewrite the cache, so last-seen cannot be wiped by a stale load.
+    apply_local_upgrade_notice(app);
+
     // Fire-and-forget version check — runs once per session in the
     // background. On success, a short status toast advertises the update
     // without replacing the user's configured footer/status-line chips.

@@ -632,7 +632,8 @@ check_for_updates = false
 The answer is cached in `~/.codewhale/update-check.json` and reused for
 `check_interval_hours` (default `1`). Only the *network request* is throttled —
 the notice still appears on every launch while an update is outstanding. Set `0`
-to check on every launch.
+to check on every launch. The same file records the last-seen running version
+so a post-update `/change` pointer can fire once.
 
 ```toml
 [update]

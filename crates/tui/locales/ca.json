@@ -305,6 +305,7 @@
   "CmdChangeTranslationQueued": "Les notes de la versió en anglès es mostren a sota. Es demanarà una versió traduïda a continuació; si el proveïdor no està disponible, aquest text en anglès és l'alternativa.",
   "CmdChangeTranslationUnavailable": "Les notes de la versió en anglès es mostren a sota. La traducció no està disponible perquè la sessió actual no té clau d'API o està fora de línia.",
   "CmdChangePreviousVersion": "Versió anterior: {version} — executa `/change {version}` per veure-la",
+  "StartupUpdatedNotice": "Actualitzat a {version} — `/change` mostra què hi ha de nou.",
   "CmdBalanceDescription": "Consulta el saldo del compte del proveïdor actiu",
   "CmdClearDescription": "Esborra l'historial de la conversació",
   "CmdCompactDescription": "Dispara la compactació del context per alliberar espai",

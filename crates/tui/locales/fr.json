@@ -305,6 +305,7 @@
   "CmdChangeTranslationQueued": "Les notes de version anglaises sont affichées ci-dessous. Une version traduite sera demandée ensuite ; si le fournisseur est indisponible, ce texte anglais fait office de repli.",
   "CmdChangeTranslationUnavailable": "Les notes de version anglaises sont affichées ci-dessous. La traduction est indisponible car la session en cours n'a pas de clé API ou est hors ligne.",
   "CmdChangePreviousVersion": "Version précédente : {version} — exécutez `/change {version}` pour la voir",
+  "StartupUpdatedNotice": "Mis à jour vers {version} — `/change` montre les nouveautés.",
   "CmdBalanceDescription": "Vérifier le solde du compte du fournisseur actif",
   "CmdClearDescription": "Effacer l'historique de la conversation",
   "CmdCompactDescription": "Déclencher la compaction du contexte pour libérer de l'espace",

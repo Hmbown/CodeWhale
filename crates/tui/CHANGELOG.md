@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- After CodeWhale updates, the next launch shows one quiet transcript
+  line pointing at `/change` so you can read what landed. It fires once
+  per version; a first-ever run is not an update and stays silent. The
+  last-seen version lives in `~/.codewhale/update-check.json` next to
+  the existing update-check cache.
+
 - xAI device login validated nothing about the URL it opened. The
   `verification_uri` from the device-code response went straight to
   `webbrowser::open` with no parse, no scheme check and no credential check, so a
