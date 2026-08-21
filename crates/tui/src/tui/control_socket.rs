@@ -691,6 +691,14 @@ fn serve(
     while !stop.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((stream, _)) => {
+                // The listener is nonblocking, and on BSD-family platforms
+                // (macOS, FreeBSD) an accepted socket *inherits* O_NONBLOCK
+                // from the listener — Linux does not. The per-connection
+                // handler expects blocking reads/writes (bounded by request
+                // caps and timeouts), so make that explicit: without it, a
+                // read on macOS returns EAGAIN mid-frame on a large request
+                // and the connection dies with a broken pipe on the client.
+                let _ = stream.set_nonblocking(false);
                 // One thread per connection: a silent client
                 // must not stall other clients or the stop check.
                 let tx = commands_tx.clone();
