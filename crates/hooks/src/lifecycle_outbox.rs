@@ -619,8 +619,6 @@ mod tests {
         let mut state = WriterState {
             path: path.clone(),
             webhook: None,
-            next_seq: 0,
-            recovered: false,
             receiver: tokio::sync::mpsc::unbounded_channel().1,
         };
         let workspace = "/home/cw/wt-lane";
