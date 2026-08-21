@@ -110,8 +110,9 @@ fn preserve_host_env(command: &mut Command) {
 /// Run `codewhale exec` against the mock provider with the given
 /// `[lifecycle_outbox]` config block (already TOML-formatted, may be empty).
 /// Any `__OUTBOX_PATH__` token in it is replaced with the isolated home's
-/// absolute outbox path. Returns the isolated home dir.
-fn run_exec_with_outbox_config(server: &MockServer, outbox_toml: &str) -> TempDir {
+/// absolute outbox path. Returns the isolated home and workspace dirs (the
+/// latter so callers can assert the outbox `payload.workspace` exactly).
+fn run_exec_with_outbox_config(server: &MockServer, outbox_toml: &str) -> (TempDir, TempDir) {
     let workspace = TempDir::new().expect("workspace tempdir");
     let home = TempDir::new().expect("home tempdir");
     let outbox_path = home_outbox_path(&home);
@@ -190,7 +191,7 @@ fn run_exec_with_outbox_config(server: &MockServer, outbox_toml: &str) -> TempDi
         String::from_utf8_lossy(&stderr)
     );
 
-    home
+    (home, workspace)
 }
 
 fn read_pipe_in_background<R>(mut reader: R) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>>
@@ -250,7 +251,7 @@ fn home_outbox_path(home: &TempDir) -> PathBuf {
 #[tokio::test(flavor = "multi_thread")]
 async fn exec_emits_turn_start_and_turn_end_to_the_configured_outbox() {
     let server = start_mock_llm().await;
-    let home = run_exec_with_outbox_config(
+    let (home, workspace) = run_exec_with_outbox_config(
         &server,
         &format!("[lifecycle_outbox]\npath = {}\n", json!(OUTBOX_PATH_TOKEN)),
     );
@@ -275,6 +276,13 @@ async fn exec_emits_turn_start_and_turn_end_to_the_configured_outbox() {
     assert!(start["turn_id"].is_null());
     // The model field is bounded and never the raw prompt.
     assert_eq!(start["payload"]["model"], TEST_MODEL);
+    // Every payload carries the workspace for consumer-side routing; exec
+    // runs with `--workspace <dir>`, so the emitted path must match it.
+    assert_eq!(
+        start["payload"]["workspace"],
+        json!(workspace.path().to_string_lossy().as_ref()),
+        "turn_start must carry the workspace"
+    );
 
     let end = &lines[1];
     assert_eq!(end["event"], "turn_end");
@@ -283,12 +291,17 @@ async fn exec_emits_turn_start_and_turn_end_to_the_configured_outbox() {
     assert_eq!(end["payload"]["status"], "completed");
     assert!(end["payload"]["error"].is_null());
     assert!(end["payload"]["duration_ms"].as_u64().is_some());
+    assert_eq!(
+        end["payload"]["workspace"],
+        json!(workspace.path().to_string_lossy().as_ref()),
+        "turn_end must carry the workspace"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn exec_without_outbox_config_writes_no_file() {
     let server = start_mock_llm().await;
-    let home = run_exec_with_outbox_config(&server, "");
+    let (home, _workspace) = run_exec_with_outbox_config(&server, "");
 
     assert!(
         !home_outbox_path(&home).exists(),
@@ -301,14 +314,14 @@ async fn outbox_seq_recovers_across_processes() {
     let server = start_mock_llm().await;
 
     // First run writes seq 1 (turn_start) and 2 (turn_end).
-    let home = run_exec_with_outbox_config(
+    let (home, _workspace) = run_exec_with_outbox_config(
         &server,
         &format!("[lifecycle_outbox]\npath = {}\n", json!(OUTBOX_PATH_TOKEN)),
     );
     let shared_outbox = home_outbox_path(&home);
 
     // Second process, pointing at the SAME file: seq must continue at 3.
-    let _second_home = run_exec_with_outbox_config(
+    let (_second_home, _second_workspace) = run_exec_with_outbox_config(
         &server,
         &format!(
             "[lifecycle_outbox]\npath = {}\n",

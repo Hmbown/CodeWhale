@@ -298,6 +298,7 @@ pub(crate) fn recover_stalled_runtime_turn(app: &mut App, message: &str, level: 
                 message,
                 codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
             ),
+            "workspace": app.workspace.display().to_string(),
         }),
     });
 }
@@ -1143,6 +1144,7 @@ mod stall_outbox_tests {
         };
         let mut app = App::new(options, &config);
         assert!(app.lifecycle_outbox.is_enabled());
+        let expected_workspace = app.workspace.display().to_string();
 
         app.runtime_turn_id = Some("turn-1".to_string());
         app.runtime_turn_status = Some("in_progress".to_string());
@@ -1175,6 +1177,11 @@ mod stall_outbox_tests {
         assert_eq!(line["turn_id"], "turn-1");
         assert_eq!(line["schema_version"], 1);
         assert_eq!(line["seq"], 1);
+        // Every payload carries the workspace for consumer-side routing.
+        assert_eq!(
+            line["payload"]["workspace"],
+            serde_json::json!(expected_workspace)
+        );
         // The stall message is engine-authored and safe, but still bounded
         // and never raw tool/environment content.
         let message = line["payload"]["message"].as_str().expect("message");

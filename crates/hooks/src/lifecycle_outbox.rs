@@ -479,6 +479,125 @@ mod tests {
         assert!(line["payload"]["status"].as_str() == Some("completed"));
     }
 
+    /// Every emit site now carries `payload.workspace` (and subagent events
+    /// additionally `payload.subagent`) for consumer-side routing. The writer
+    /// must preserve those fields verbatim through the envelope round trip
+    /// for every event type.
+    #[tokio::test]
+    async fn payload_workspace_and_subagent_fields_survive_the_round_trip() {
+        let (_dir, path) = temp_outbox_path("routing-fields.jsonl");
+        let mut state = WriterState {
+            path: path.clone(),
+            webhook: None,
+            next_seq: 0,
+            recovered: false,
+            receiver: tokio::sync::mpsc::unbounded_channel().1,
+        };
+        let workspace = "/home/cw/wt-lane";
+        let subagent = "explore-1";
+        let subagent_payload = json!({ "workspace": workspace, "subagent": subagent });
+        deliver_all(
+            &mut state,
+            vec![
+                LifecycleEvent {
+                    event: "session_start".to_string(),
+                    kind: "session.started".to_string(),
+                    thread_id: "session-1".to_string(),
+                    turn_id: None,
+                    item_id: None,
+                    payload: json!({ "workspace": workspace }),
+                },
+                LifecycleEvent {
+                    event: "turn_start".to_string(),
+                    kind: "turn.started".to_string(),
+                    thread_id: "session-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    item_id: None,
+                    payload: json!({ "workspace": workspace }),
+                },
+                LifecycleEvent {
+                    event: "turn_end".to_string(),
+                    kind: "turn.completed".to_string(),
+                    thread_id: "session-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    item_id: None,
+                    payload: json!({ "workspace": workspace }),
+                },
+                LifecycleEvent {
+                    event: "turn_stalled".to_string(),
+                    kind: "turn.stalled".to_string(),
+                    thread_id: "session-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    item_id: None,
+                    payload: json!({ "workspace": workspace }),
+                },
+                LifecycleEvent {
+                    event: "subagent_spawn".to_string(),
+                    kind: "subagent.spawned".to_string(),
+                    thread_id: "session-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    item_id: None,
+                    payload: subagent_payload.clone(),
+                },
+                LifecycleEvent {
+                    event: "subagent_complete".to_string(),
+                    kind: "subagent.completed".to_string(),
+                    thread_id: "session-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    item_id: None,
+                    payload: subagent_payload.clone(),
+                },
+                LifecycleEvent {
+                    event: "session_end".to_string(),
+                    kind: "session.ended".to_string(),
+                    thread_id: "session-1".to_string(),
+                    turn_id: None,
+                    item_id: None,
+                    payload: json!({ "workspace": workspace }),
+                },
+            ],
+        )
+        .await;
+
+        let lines = read_lines(&path).await;
+        let events: Vec<&str> = lines
+            .iter()
+            .map(|line| line["event"].as_str().expect("event"))
+            .collect();
+        assert_eq!(
+            events,
+            vec![
+                "session_start",
+                "turn_start",
+                "turn_end",
+                "turn_stalled",
+                "subagent_spawn",
+                "subagent_complete",
+                "session_end",
+            ],
+            "the routing-field contract must cover every lifecycle event type"
+        );
+        for line in &lines {
+            assert_eq!(
+                line["payload"]["workspace"],
+                json!(workspace),
+                "workspace must survive the round trip for event {}",
+                line["event"]
+            );
+        }
+        for event in ["subagent_spawn", "subagent_complete"] {
+            let line = lines
+                .iter()
+                .find(|line| line["event"] == event)
+                .expect(event);
+            assert_eq!(
+                line["payload"]["subagent"],
+                json!(subagent),
+                "subagent must survive the round trip for event {event}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn seq_is_monotonic_and_recovers_across_reopen() {
         let (_dir, path) = temp_outbox_path("seq.jsonl");

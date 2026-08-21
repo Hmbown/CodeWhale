@@ -622,6 +622,9 @@ pub async fn run_tui(
             turn_id: None,
             item_id: None,
             payload: serde_json::json!({
+                "workspace": context.workspace
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
                 "total_tokens": context.total_tokens,
             }),
         });
@@ -1519,6 +1522,7 @@ pub(crate) async fn run_event_loop(
                                     &app.model,
                                     codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
                                 ),
+                                "workspace": app.workspace.display().to_string(),
                             }),
                         });
                     }
@@ -2048,6 +2052,7 @@ pub(crate) async fn run_event_loop(
                                 payload: serde_json::json!({
                                     "status": outbox_status,
                                     "duration_ms": turn_elapsed.as_millis() as u64,
+                                    "workspace": app.workspace.display().to_string(),
                                     "error": error
                                         .as_deref()
                                         .map(|message| codewhale_hooks::bounded_text(
