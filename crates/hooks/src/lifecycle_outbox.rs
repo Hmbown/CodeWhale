@@ -956,9 +956,15 @@ mod tests {
 
     /// Like [`read_lines`], but drops a torn trailing line instead of
     /// failing: the concurrent test polls mid-append, when the file can end
-    /// in a half-written record.
+    /// in a half-written record. A missing file is an empty poll, not an
+    /// error: the first append creates the file, and on a busy runner the
+    /// writer tasks may not have reached it yet.
     async fn read_lines_lenient(path: &Path) -> Vec<Value> {
-        let text = tokio::fs::read_to_string(path).await.expect("read outbox");
+        let text = match tokio::fs::read_to_string(path).await {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(error) => panic!("read outbox: {error}"),
+        };
         text.lines()
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
             .collect()
