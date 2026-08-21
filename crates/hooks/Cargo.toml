@@ -19,6 +19,12 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
+
 [dev-dependencies]
 tempfile.workspace = true
 wiremock = "0.6"
