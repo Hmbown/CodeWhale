@@ -908,11 +908,13 @@ dependencies = [
  "codewhale-protocol",
  "codewhale-release",
  "reqwest 0.13.4",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+ "windows-sys 0.61.2",
  "wiremock",
 ]
 

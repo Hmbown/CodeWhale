@@ -2448,14 +2448,15 @@ Each line is a `RuntimeEventEnvelope`:
  "created_at": "…", "payload": {…}}
 ```
 
-- `seq` is monotonic per outbox file and recovers from the last written
-  line when a new process opens the file.
+- `seq` is unique and monotonic per outbox file: every append holds an
+  exclusive advisory lock on a `<path>.lock` sidecar file across the
+  tail-scan recovery of the last written line and the append itself, so
+  concurrent sessions sharing one path get unique, increasing seqs — no
+  duplicates, no out-of-order appends.
 - Lines are written one complete JSON line per append, serialized by an
   internal writer task and flushed before the next event; concurrent
-  sessions writing the same path do not interleave bytes mid-line, but
-  separate processes each continue from their own recovered `seq`, so seqs
-  can repeat across processes sharing one file — prefer one file per
-  process for strict uniqueness.
+  sessions writing the same path interleave whole lines (never bytes
+  mid-line) in seq order, so sharing one file across sessions is safe.
 - Parent directories are created lazily on the first event.
 - Payloads are constructed from bounded, pre-redacted fields only — never
   raw tool arguments, environment, or full transcript text. Free-form

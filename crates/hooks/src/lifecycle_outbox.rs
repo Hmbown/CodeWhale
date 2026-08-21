@@ -17,10 +17,13 @@
 //!  "created_at": "…", "payload": {…}}
 //! ```
 //!
-//! - `seq` is monotonic per outbox file. On the first write the writer
-//!   recovers the `seq` of the file's last complete line (bounded tail scan,
-//   so an outbox that grows unbounded is never re-read in full) and continues
-//!   from `last + 1`.
+//! - `seq` is unique and monotonic per outbox file. Every append takes an
+//!   exclusive advisory lock on a `<path>.lock` sidecar file (`flock` on
+//!   Unix, `LockFileEx` on Windows) and holds it across the recovery of the
+//!   last complete line's `seq` (bounded tail scan, so an outbox that grows
+//!   unbounded is never re-read in full) and the append itself — concurrent
+//!   writers sharing one file (many codewhale sessions on one machine)
+//!   cannot duplicate seqs or append them out of order.
 //! - `event` is the snake-case lifecycle name (`turn_start`, `turn_end`, …);
 //!   `kind` is the dotted kind (`turn.started`, `turn.failed`, …).
 //! - Payloads are constructed by the emit sites from bounded, pre-redacted
@@ -32,12 +35,15 @@
 //! # Delivery model
 //!
 //! [`LifecycleOutbox::emit`] never blocks the caller: it enqueues the event
-//! on an internal channel and a single writer task appends lines in order.
-//! If no tokio runtime is available the event is dropped with a warning.
+//! on an internal channel and a single writer task appends lines in order;
+//! concurrent writers sharing one file are serialized by the outbox's
+//! per-append exclusive lock. If no tokio runtime is available the event is
+//! dropped with a warning.
 //! Webhook POSTs (`{"at": …, "event": …}`) are attempted after the local
 //! append; failures are logged and dropped, never retried into the agent
 //! loop.
 
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -46,7 +52,6 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use codewhale_protocol::runtime::{RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION, RuntimeEventEnvelope};
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::WebhookHookSink;
@@ -217,8 +222,6 @@ impl OutboxInner {
         let mut state = WriterState {
             path: self.path.clone(),
             webhook: self.webhook.clone(),
-            next_seq: 0,
-            recovered: false,
             receiver,
         };
         self.writer_spawned.store(true, Ordering::Release);
@@ -228,13 +231,12 @@ impl OutboxInner {
     }
 }
 
-/// The outbox writer: owns the file state and the event queue drain loop.
+/// The outbox writer: owns the file path, the webhook sink, and the event
+/// queue drain loop. Seq assignment is stateless: every append re-recovers
+/// the last written seq under the outbox's cross-process lock.
 struct WriterState {
     path: PathBuf,
     webhook: Option<WebhookHookSink>,
-    /// Next seq to assign; filled in by [`Self::recover_seq`] on first use.
-    next_seq: u64,
-    recovered: bool,
     receiver: UnboundedReceiver<LifecycleEvent>,
 }
 
@@ -253,32 +255,18 @@ impl WriterState {
         }
     }
 
-    /// Assign a seq, build the envelope, append it to the outbox file, then
-    /// fan out to the webhook (independently of the append result).
+    /// Assign a seq, build the envelope, and append it to the outbox file —
+    /// all under the outbox's cross-process exclusive lock, on the blocking
+    /// pool (acquiring the lock blocks on contention) — then fan out to the
+    /// webhook, independently of the append result.
     async fn deliver(&mut self, event: LifecycleEvent) -> Result<()> {
-        if !self.recovered {
-            self.next_seq = recover_last_seq(&self.path).await?;
-            self.recovered = true;
-        }
-        let seq = self.next_seq;
-        self.next_seq = self.next_seq.saturating_add(1);
-
-        let envelope = RuntimeEventEnvelope {
-            schema_version: RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION,
-            seq,
-            event: event.event,
-            kind: event.kind,
-            thread_id: event.thread_id,
-            turn_id: event.turn_id,
-            item_id: event.item_id,
-            timestamp: Utc::now().to_rfc3339(),
-            created_at: Some(Utc::now().to_rfc3339()),
-            payload: event.payload,
-            extra: Default::default(),
-        };
-        let line = serde_json::to_string(&envelope).context("failed to encode outbox event")?;
-
-        let append_result = self.append_line(&line).await;
+        let path = self.path.clone();
+        let (envelope, append_result) =
+            tokio::task::spawn_blocking(move || append_event_under_lock(&path, event))
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!("lifecycle outbox writer task panicked: {error}")
+                })??;
 
         if let Some(webhook) = &self.webhook {
             let payload = json!({
@@ -296,63 +284,184 @@ impl WriterState {
 
         append_result
     }
+}
 
-    /// Append one complete JSONL line, mirroring [`crate::JsonlHookSink`]:
-    /// lazy parent directories, append mode, flush before returning. The
-    /// writer task is the only appender for this outbox, so no extra lock is
-    /// needed here; the queue already serializes.
-    async fn append_line(&mut self, line: &str) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            tokio::fs::create_dir_all(parent).await.with_context(|| {
-                format!("failed to create outbox directory {}", parent.display())
-            })?;
+/// Serialize one event under the outbox's cross-process lock: recover the
+/// next `seq` from the file tail, build the envelope, and append the line —
+/// all while holding an exclusive lock, so a concurrent writer in another
+/// process (or another outbox instance) cannot assign the same `seq` or
+/// interleave the recovery read with the append. The envelope is returned
+/// even when the append fails: the webhook fan-out needs it.
+fn append_event_under_lock(
+    path: &Path,
+    event: LifecycleEvent,
+) -> Result<(RuntimeEventEnvelope, Result<()>)> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create outbox directory {}", parent.display()))?;
+    }
+    // The guard holds the lock from here through the append below; dropping
+    // it releases the lock.
+    let _lock = OutboxFileLock::acquire(path)?;
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .open(path)
+        .with_context(|| format!("failed to open outbox {}", path.display()))?;
+    let seq = recover_last_seq(&mut file, path)?;
+
+    let envelope = RuntimeEventEnvelope {
+        schema_version: RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION,
+        seq,
+        event: event.event,
+        kind: event.kind,
+        thread_id: event.thread_id,
+        turn_id: event.turn_id,
+        item_id: event.item_id,
+        timestamp: Utc::now().to_rfc3339(),
+        created_at: Some(Utc::now().to_rfc3339()),
+        payload: event.payload,
+        extra: Default::default(),
+    };
+    let line = serde_json::to_string(&envelope).context("failed to encode outbox event")?;
+    // Line + newline in a single `write_all`: with O_APPEND each `write`
+    // lands contiguously at EOF, and with the lock held no other writer can
+    // interleave a line or a seq between the recovery above and this append.
+    let mut record = Vec::with_capacity(line.len() + 1);
+    record.extend_from_slice(line.as_bytes());
+    record.push(b'\n');
+    let append_result = file
+        .write_all(&record)
+        .and_then(|()| file.flush())
+        .with_context(|| format!("failed to write outbox {}", path.display()));
+    Ok((envelope, append_result))
+}
+
+/// The outbox's cross-process exclusive lock: an advisory lock on a
+/// `<outbox>.lock` sidecar file. Advisory means only cooperating outbox
+/// writers respect it; downstream readers of the outbox file are unaffected.
+struct OutboxFileLock {
+    /// Kept open for the lock's lifetime; closing the descriptor releases it.
+    _file: std::fs::File,
+}
+
+impl OutboxFileLock {
+    fn acquire(outbox_path: &Path) -> Result<Self> {
+        let lock_path = outbox_lock_path(outbox_path);
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .await
-            .with_context(|| format!("failed to open outbox {}", self.path.display()))?;
-        // Line + newline in a single `write_all`: with O_APPEND each `write`
-        // lands contiguously, so even a second process appending to the same
-        // file can interleave lines but can never splice one mid-line.
-        let mut record = Vec::with_capacity(line.len() + 1);
-        record.extend_from_slice(line.as_bytes());
-        record.push(b'\n');
-        file.write_all(&record)
-            .await
-            .context("failed to write outbox event")?;
-        file.flush().await.context("failed to flush outbox event")
+        let file = options
+            .open(&lock_path)
+            .with_context(|| format!("failed to open outbox lock {}", lock_path.display()))?;
+        lock_file_exclusive(&file)
+            .with_context(|| format!("failed to lock outbox {}", lock_path.display()))?;
+        Ok(Self { _file: file })
+    }
+}
+
+/// `<outbox>.lock` — a sibling sidecar that holds no data. It is never
+/// truncated or rotated with the outbox, so the lock survives outbox file
+/// churn.
+fn outbox_lock_path(outbox_path: &Path) -> PathBuf {
+    let mut name = outbox_path.as_os_str().to_owned();
+    name.push(".lock");
+    PathBuf::from(name)
+}
+
+/// Block until this process holds an exclusive advisory lock on `file`.
+/// Runs on the blocking pool; the critical section it protects is a bounded
+/// tail read plus one line append, so contention is momentary.
+#[cfg(unix)]
+fn lock_file_exclusive(file: &std::fs::File) -> std::io::Result<()> {
+    use rustix::fs::{FlockOperation, flock};
+    use rustix::io::Errno;
+    use std::os::unix::io::AsFd;
+
+    loop {
+        // flock(2) is per open-file-description: released when this fd is
+        // closed, even if the process crashes, so no stale-lock recovery is
+        // ever needed. It excludes other flock holders of the same file,
+        // including other outbox instances in this same process. (rustix is
+        // compiled without its `std` feature in this tree, so its errors are
+        // `Errno` here.)
+        match flock(file.as_fd(), FlockOperation::LockExclusive) {
+            Ok(()) => return Ok(()),
+            Err(Errno::INTR) => continue,
+            Err(error) => {
+                return Err(std::io::Error::from_raw_os_error(error.raw_os_error()));
+            }
+        }
+    }
+}
+
+/// Block until this process holds an exclusive byte-range lock on `file`.
+/// Runs on the blocking pool; the critical section it protects is a bounded
+/// tail read plus one line append, so contention is momentary.
+#[cfg(windows)]
+fn lock_file_exclusive(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION;
+    use windows_sys::Win32::Storage::FileSystem::{LOCKFILE_EXCLUSIVE_LOCK, LockFileEx};
+
+    loop {
+        // A std file handle is synchronous (no FILE_FLAG_OVERLAPPED), so
+        // LockFileEx waits for the range on contention; the explicit
+        // ERROR_LOCK_VIOLATION retry below also covers a platform where it
+        // returns instead. `u32::MAX` byte pairs lock the whole file
+        // including future growth; the lock dies with the handle on close,
+        // even if the process crashes.
+        let mut overlapped =
+            std::mem::MaybeUninit::<windows_sys::Win32::System::IO::OVERLAPPED>::zeroed();
+        let result = unsafe {
+            LockFileEx(
+                file.as_raw_handle() as _,
+                LOCKFILE_EXCLUSIVE_LOCK,
+                0,
+                u32::MAX,
+                u32::MAX,
+                overlapped.as_mut_ptr(),
+            )
+        };
+        if result != 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(ERROR_LOCK_VIOLATION as i32) {
+            return Err(error);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 
 /// Recover the seq to continue from: the `seq` of the outbox file's last
-/// complete line, plus 1 — or 1 for a missing/empty file.
+/// complete line, plus 1 — or 1 for an empty file.
 ///
 /// Only the tail of the file is read (bounded by [`SEQ_RECOVERY_TAIL_BYTES`]);
 /// outbox lines are bounded far below that window, so the last complete line
 /// is always within it. A partial trailing line from a crash mid-write is
-/// ignored (the previous newline-terminated line wins).
-async fn recover_last_seq(path: &Path) -> Result<u64> {
-    let mut file = match tokio::fs::File::open(path).await {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(1),
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to open outbox {}", path.display()));
-        }
-    };
+/// ignored (the previous newline-terminated line wins). The caller must hold
+/// the outbox's exclusive lock, so the read cannot race another writer's
+/// append.
+fn recover_last_seq(file: &mut std::fs::File, path: &Path) -> Result<u64> {
     let len = file
         .metadata()
-        .await
         .with_context(|| format!("failed to stat outbox {}", path.display()))?
         .len();
     if len == 0 {
         return Ok(1);
     }
     let start = len.saturating_sub(SEQ_RECOVERY_TAIL_BYTES);
-    file.seek(std::io::SeekFrom::Start(start)).await?;
+    file.seek(SeekFrom::Start(start))
+        .with_context(|| format!("failed to seek outbox {}", path.display()))?;
     let mut tail = vec![0u8; (len - start) as usize];
-    file.read_exact(&mut tail).await?;
+    file.read_exact(&mut tail)
+        .with_context(|| format!("failed to read outbox {}", path.display()))?;
 
     let line = match tail.iter().rposition(|byte| *byte == b'\n') {
         // The bytes after the final newline are a torn trailing line from a
@@ -453,14 +562,35 @@ mod tests {
             .collect()
     }
 
+    /// Like [`read_lines`], but drops a torn trailing line instead of
+    /// failing: the concurrent test polls mid-append, when the file can end
+    /// in a half-written record.
+    async fn read_lines_lenient(path: &Path) -> Vec<Value> {
+        let text = tokio::fs::read_to_string(path).await.expect("read outbox");
+        text.lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .collect()
+    }
+
+    /// Open `path` for recovery the way the writer does (creating it when
+    /// missing) and return the seq recovery would continue from.
+    fn recover_last_seq_from(path: &Path) -> u64 {
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .expect("open outbox");
+        recover_last_seq(&mut file, path).expect("recover")
+    }
+
     #[tokio::test]
     async fn appends_one_jsonl_line_per_event_with_envelope_schema() {
         let (_dir, path) = temp_outbox_path("schema.jsonl");
         let mut state = WriterState {
             path: path.clone(),
             webhook: None,
-            next_seq: 0,
-            recovered: false,
             receiver: tokio::sync::mpsc::unbounded_channel().1,
         };
         deliver_all(&mut state, vec![event("turn_start", "turn.started")]).await;
@@ -604,8 +734,6 @@ mod tests {
         let mut state = WriterState {
             path: path.clone(),
             webhook: None,
-            next_seq: 0,
-            recovered: false,
             receiver: tokio::sync::mpsc::unbounded_channel().1,
         };
         deliver_all(
@@ -622,8 +750,6 @@ mod tests {
         let mut reopened = WriterState {
             path: path.clone(),
             webhook: None,
-            next_seq: 0,
-            recovered: false,
             receiver: tokio::sync::mpsc::unbounded_channel().1,
         };
         deliver_all(&mut reopened, vec![event("turn_start", "turn.started")]).await;
@@ -636,19 +762,19 @@ mod tests {
         assert_eq!(seqs, vec![1, 2, 3, 4]);
     }
 
-    #[tokio::test]
-    async fn missing_and_empty_files_start_at_seq_1() {
+    #[test]
+    fn missing_and_empty_files_start_at_seq_1() {
         let (_dir, path) = temp_outbox_path("empty.jsonl");
-        assert_eq!(recover_last_seq(&path).await.expect("missing file"), 1);
+        assert_eq!(recover_last_seq_from(&path), 1);
 
-        tokio::fs::write(&path, "").await.expect("empty file");
-        assert_eq!(recover_last_seq(&path).await.expect("empty file"), 1);
+        std::fs::write(&path, "").expect("empty file");
+        assert_eq!(recover_last_seq_from(&path), 1);
     }
 
-    #[tokio::test]
-    async fn partial_trailing_line_is_ignored_during_recovery() {
+    #[test]
+    fn partial_trailing_line_is_ignored_during_recovery() {
         let (_dir, path) = temp_outbox_path("partial.jsonl");
-        tokio::fs::write(
+        std::fs::write(
             &path,
             format!(
                 "{}\n{}\n{{\"schema_version\":1,\"seq\":3,\"event\":\"turn_",
@@ -656,11 +782,11 @@ mod tests {
                 r#"{"schema_version":1,"seq":2,"event":"turn_start","kind":"turn.started","thread_id":"s","turn_id":null,"item_id":null,"timestamp":"t","payload":{}}"#,
             ),
         )
-        .await
         .expect("write partial outbox");
         // The torn trailing line is not a complete record; recovery continues
         // from the last complete line's seq (2) → next seq 3.
-        assert_eq!(recover_last_seq(&path).await.expect("recover"), 3);
+        let mut file = std::fs::File::open(&path).expect("open outbox");
+        assert_eq!(recover_last_seq(&mut file, &path).expect("recover"), 3);
     }
 
     #[tokio::test]
@@ -696,6 +822,63 @@ mod tests {
             .map(|line| line["seq"].as_u64().expect("seq"))
             .collect();
         assert_eq!(seqs, vec![1, 2, 3], "seq must be assigned in emit order");
+    }
+
+    /// Multiple outbox instances (as concurrent codewhale sessions on one
+    /// machine do) sharing one file must produce unique, increasing seqs with
+    /// no lost lines: the exclusive sidecar lock makes tail-recovery +
+    /// append atomic, where the live bug produced duplicate seqs (10×2, …)
+    /// and out-of-order appends.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_writers_share_one_file_with_unique_increasing_seqs() {
+        let (_dir, path) = temp_outbox_path("concurrent.jsonl");
+        const WRITERS: usize = 4;
+        const EVENTS_PER_WRITER: usize = 40;
+        let total = WRITERS * EVENTS_PER_WRITER;
+
+        let mut emitters = Vec::with_capacity(WRITERS);
+        for writer in 0..WRITERS {
+            let outbox = LifecycleOutbox::new(Some(path.clone()), None, None);
+            emitters.push(tokio::spawn(async move {
+                for i in 0..EVENTS_PER_WRITER {
+                    outbox.emit(LifecycleEvent {
+                        event: "turn_start".to_string(),
+                        kind: "turn.started".to_string(),
+                        thread_id: format!("session-{writer}"),
+                        turn_id: Some(format!("turn-{writer}-{i}")),
+                        item_id: None,
+                        payload: json!({"writer": writer, "event_index": i}),
+                    });
+                }
+                // Dropping the handle drops this writer's sender; its writer
+                // task drains the remaining queue and exits.
+                drop(outbox);
+            }));
+        }
+        for emitter in emitters {
+            emitter.await.expect("emitter task");
+        }
+
+        // Writer tasks drain asynchronously; wait for every line to land.
+        let mut lines = Vec::new();
+        for _ in 0..500 {
+            let current = read_lines_lenient(&path).await;
+            if current.len() >= total {
+                lines = current;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(lines.len(), total, "no line may be lost or duplicated");
+        let seqs: Vec<u64> = lines
+            .iter()
+            .map(|line| line["seq"].as_u64().expect("seq"))
+            .collect();
+        assert_eq!(
+            seqs,
+            (1..=total as u64).collect::<Vec<_>>(),
+            "seqs must be unique and increasing in file order"
+        );
     }
 
     #[test]
