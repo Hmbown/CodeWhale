@@ -2934,6 +2934,13 @@ pub struct Config {
     #[serde(default)]
     pub lifecycle_outbox: Option<codewhale_config::LifecycleOutboxToml>,
 
+    /// Per-session control socket (`[control_socket]`). Opt-in: an absent
+    /// table or `enabled = false` (the default) leaves the feature off.
+    /// When enabled, the interactive TUI binds a unix socket per running
+    /// session (see `crate::tui::control_socket`).
+    #[serde(default)]
+    pub control_socket: Option<codewhale_config::ControlSocketToml>,
+
     /// Provider-specific credentials and defaults shared with the `codewhale` facade.
     #[serde(default)]
     pub providers: Option<ProvidersConfig>,
@@ -10074,6 +10081,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         transcript: override_cfg.transcript.or(base.transcript),
         hooks: override_cfg.hooks.or(base.hooks),
         lifecycle_outbox: override_cfg.lifecycle_outbox.or(base.lifecycle_outbox),
+        control_socket: override_cfg.control_socket.or(base.control_socket),
         providers: merge_providers(base.providers, override_cfg.providers),
         features: merge_features(base.features, override_cfg.features),
         notifications: override_cfg.notifications.or(base.notifications),

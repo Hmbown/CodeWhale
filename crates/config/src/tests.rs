@@ -132,6 +132,48 @@ fn lifecycle_outbox_toml_webhook_is_optional() {
 }
 
 #[test]
+fn control_socket_toml_is_off_by_default_and_parses_when_enabled() {
+    // Unset = feature OFF: the table is absent and the field is None.
+    let absent: ConfigToml = toml::from_str("model = \"demo\"\n").expect("minimal config");
+    assert!(
+        absent.control_socket.is_none(),
+        "unset [control_socket] must leave the feature off"
+    );
+
+    // An empty table is also off: enabled defaults to false.
+    let empty: ConfigToml =
+        toml::from_str("[control_socket]\n").expect("empty control_socket table");
+    let socket = empty.control_socket.expect("table should parse");
+    assert!(!socket.enabled, "empty table must leave the socket off");
+
+    // Explicit enable.
+    let enabled: ConfigToml = toml::from_str(
+        r#"
+        [control_socket]
+        enabled = true
+        "#,
+    )
+    .expect("enabled control_socket table");
+    assert!(
+        enabled.control_socket.expect("table should parse").enabled,
+        "enabled = true must turn the socket on"
+    );
+
+    // Explicit disable stays off.
+    let disabled: ConfigToml = toml::from_str(
+        r#"
+        [control_socket]
+        enabled = false
+        "#,
+    )
+    .expect("disabled control_socket table");
+    assert!(
+        !disabled.control_socket.expect("table should parse").enabled,
+        "enabled = false must keep the socket off"
+    );
+}
+
+#[test]
 fn permissions_toml_deserializes_typed_ask_rules() {
     let permissions: PermissionsToml = toml::from_str(
         r#"
