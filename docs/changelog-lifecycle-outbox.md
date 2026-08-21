@@ -26,16 +26,17 @@ PR). Feature-complete against the v0.9.9 baseline (`6f3850c3d`).
   preview ≤ 200 chars) and stripped of control bytes.
 - **Webhook**: `WebhookHookSink` (previously dead code with no config
   surface) now supports an optional bearer token and is wired to outbox
-  events when `webhook_url` is set — POST `{"at", "event"}`. Delivery is
-  best-effort: failures are logged and dropped, never retried into the
-  agent loop, and a failing webhook never blocks the local append.
+  events when `webhook_url` is set — POST `{"at", "event"}`. Delivery uses
+  bounded retries inside the sink; failures are logged and dropped, never
+  fed back into the agent loop, and a failing webhook never blocks the
+  local append.
 
 ## Events emitted
 
 | Event | Kind | Site |
 |---|---|---|
 | `turn_start` | `turn.started` | TUI `EngineEvent::TurnStarted`; headless `exec` at `Op::SendMessage` |
-| `turn_end` | `turn.completed` / `turn.failed` / `turn.interrupted` | TUI `TurnComplete` processing; headless `exec` `TurnComplete` (kind projected from status) |
+| `turn_end` | `turn.completed` / `turn.failed` / `turn.interrupted` | TUI `TurnComplete` processing **and** the TUI engine-disconnect failure path (folded `turn.failed`); headless `exec` `TurnComplete` (kind projected from status) |
 | `turn_stalled` | `turn.stalled` | `recover_stalled_runtime_turn` — the first scriptable stall signal |
 | `subagent_spawn` | `subagent.spawned` | subagent observer site (fires even with no hooks configured) |
 | `subagent_complete` | `subagent.completed` | subagent observer site (fires even with no hooks configured) |
@@ -46,9 +47,17 @@ Headless `codewhale exec` coverage: `turn_start` at message dispatch and
 `turn_end` at the terminal `TurnComplete` — **and** at the "engine channel
 closed before a terminal receipt" path, so every emitted `turn_start` has a
 matching `turn_end` and a supervisor never sees an orphaned in-progress
-turn. `exec` has no TurnStarted engine event, so `turn_id` is absent there;
-`thread_id` is the resumed session id when `--continue` was used, empty for
-fresh runs (the session id is only minted at persistence time).
+turn. The TUI has the same guarantee: a turn killed mid-flight by a
+disconnected engine (stream idle/error, crash) emits the folded `turn_end`
+(`turn.failed`) from the engine-disconnect recovery path. `exec` has no
+TurnStarted engine event, so `turn_id` is absent there; `thread_id` is the
+resumed session id when `--continue` was used, empty for fresh runs (the
+session id is only minted at persistence time).
+
+Every payload carries `"workspace"` (the resolved workspace path) so a
+consumer can route each event to its project; sub-agent events
+(`subagent_spawn`, `subagent_complete`) additionally carry `"subagent"`
+(the sub-agent id, alongside `"agent_id"`).
 
 ## File contract
 
@@ -66,12 +75,19 @@ fresh runs (the session id is only minted at persistence time).
 
 - `crates/hooks`: append/schema shape, seq recovery across reopen, missing/
   empty file, torn trailing line, emit ordering under the writer task,
-  disabled-outbox no-ops, `bounded_text` ceilings (incl. UTF-8 boundaries).
+  disabled-outbox no-ops, `bounded_text` ceilings (incl. UTF-8 boundaries),
+  and the routing-field contract (`workspace` on every event type,
+  `subagent` on sub-agent events) surviving the envelope round trip.
 - `crates/config`: `[lifecycle_outbox]` off-by-default, webhook optional,
   full-table parse.
 - `crates/tui`: TUI config parse of the table; stall-recovery emit-site
   tests (enabled outbox writes one `turn_stalled` line naming the wedged
-  turn; disabled outbox writes nothing and recovery behavior is unchanged).
+  turn; disabled outbox writes nothing and recovery behavior is unchanged);
+  engine-disconnect tests (an in-progress turn gets the folded
+  `turn.failed` `turn_end`; a disconnect with no in-progress turn
+  fabricates nothing).
+- `crates/tui` exec integration: `turn_start`/`turn_end` now assert
+  `payload.workspace` equals the `--workspace` directory end to end.
 
 ## Not changed
 
@@ -81,6 +97,20 @@ fresh runs (the session id is only minted at persistence time).
   the existing `reqwest` client builder).
 
 ## Remaining / follow-ups
+
+Closed in this lane (gaps found by the bridge E2E / ecosystem audit):
+
+- **`payload.workspace` on every event** — previously only TUI
+  `session_start` and exec `turn_start` carried the routing field and the
+  consumer dropped everything else fail-closed. Every emit site now
+  carries `"workspace"`, and sub-agent events additionally carry
+  `"subagent"` alongside `"agent_id"`.
+- **TUI failure-path `turn_end`** — a turn killed mid-flight by a
+  disconnected engine now emits the folded `turn_end` (`turn.failed`), so
+  no `turn_start` stays orphaned (mirrors the exec channel-closed
+  guarantee).
+
+Still open:
 
 - Session ids for fresh headless `exec` runs are empty on `turn_start`
   (minted only when the run is persisted); a supervisor correlating runs

@@ -2386,6 +2386,15 @@ webhook_token = ""   # optional bearer token for webhook_url
 | `session_start` | `session.started` | interactive session start |
 | `session_end` | `session.ended` | interactive session end |
 
+Every payload carries `"workspace"` (the resolved workspace path) so a
+consumer can route the event to the right project without guessing;
+sub-agent events (`subagent_spawn`, `subagent_complete`) additionally
+carry `"subagent"` (the sub-agent id, alongside `"agent_id"`). On the TUI
+failure path, a turn killed mid-flight by a disconnected engine (stream
+idle/error, crash) also emits a folded `turn_end` with
+`kind: "turn.failed"` — every `turn_start` gets a matching `turn_end`,
+exactly like `codewhale exec`'s channel-closed guarantee.
+
 ### File contract
 
 Each line is a `RuntimeEventEnvelope`:
@@ -2416,7 +2425,8 @@ Each line is a `RuntimeEventEnvelope`:
 With `webhook_url` set, every event is additionally POSTed as
 `{"at": "<ISO 8601 timestamp>", "event": {…}}` with
 `Authorization: Bearer <webhook_token>` when a token is configured.
-Delivery is best-effort: failures are logged and dropped, never retried
+Delivery uses bounded retries inside the sink (two retries with
+exponential back-off); failures are logged and dropped, never fed back
 into the agent loop, and a failing webhook never blocks the local file
 append.
 
