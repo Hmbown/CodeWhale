@@ -604,6 +604,20 @@ impl App {
         );
         let hooks = HookExecutor::new(hooks_config, workspace.clone());
 
+        // Initialize the lifecycle event outbox (`[lifecycle_outbox]`).
+        // Disabled (all emits no-op) when the config has no path.
+        let lifecycle_outbox = config
+            .lifecycle_outbox
+            .as_ref()
+            .map(|outbox| {
+                codewhale_hooks::LifecycleOutbox::new(
+                    outbox.path.clone(),
+                    outbox.webhook_url.clone(),
+                    outbox.webhook_token.clone(),
+                )
+            })
+            .unwrap_or_else(codewhale_hooks::LifecycleOutbox::disabled);
+
         // Initialize plan state
         let plan_state = new_shared_plan_state();
         let todos = new_shared_todo_list();
@@ -879,6 +893,7 @@ impl App {
             onboarding_had_trust_step: !was_onboarded && needs_workspace_trust,
             api_key_env_only,
             hooks,
+            lifecycle_outbox,
             yolo: yolo_compat,
             yolo_compat_notified: false,
             startup_defaults: Default::default(),

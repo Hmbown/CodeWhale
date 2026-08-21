@@ -493,6 +493,12 @@ pub async fn run_tui(
     // Fire session start hook
     {
         let context = app.base_hook_context();
+        // Captured before the hook executor moves `context` into its blocking
+        // task; the outbox emit below needs the same session identity.
+        let outbox_thread_id = context.session_id.clone().unwrap_or_default();
+        let outbox_mode = context.mode.clone();
+        let outbox_model = context.model.clone();
+        let outbox_workspace = context.workspace.clone();
         let hooks = app.hooks.clone();
         if let Err(error) =
             tokio::task::spawn_blocking(move || hooks.execute(HookEvent::SessionStart, &context))
@@ -501,6 +507,23 @@ pub async fn run_tui(
             tracing::error!(target: "hooks", %error, "session_start executor task was lost");
             app.status_message = Some("session_start hook executor did not run".to_string());
         }
+        // Lifecycle outbox (`[lifecycle_outbox]`): fires alongside the
+        // session_start hook, with the same session identity. No-op when
+        // the feature is disabled.
+        app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+            event: "session_start".to_string(),
+            kind: "session.started".to_string(),
+            thread_id: outbox_thread_id,
+            turn_id: None,
+            item_id: None,
+            payload: serde_json::json!({
+                "mode": outbox_mode,
+                "model": outbox_model,
+                "workspace": outbox_workspace
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+            }),
+        });
     }
 
     // Spawn the persistence actor so checkpoint/session-save I/O stays off
@@ -589,6 +612,19 @@ pub async fn run_tui(
     {
         let context = app.base_hook_context();
         let _ = app.execute_hooks(HookEvent::SessionEnd, &context);
+        // Lifecycle outbox (`[lifecycle_outbox]`): fires alongside the
+        // session_end hook, with the same session identity. No-op when
+        // the feature is disabled.
+        app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+            event: "session_end".to_string(),
+            kind: "session.ended".to_string(),
+            thread_id: context.session_id.clone().unwrap_or_default(),
+            turn_id: None,
+            item_id: None,
+            payload: serde_json::json!({
+                "total_tokens": context.total_tokens,
+            }),
+        });
     }
 
     // Flush the persistence actor: clear this session's checkpoint, collect
@@ -1469,6 +1505,22 @@ pub(crate) async fn run_event_loop(
                         app.last_reasoning = None;
                         app.pending_tool_uses.clear();
                         last_status_frame = Instant::now();
+                        // Lifecycle outbox (`[lifecycle_outbox]`): the turn
+                        // boundary the shell-hook system deliberately lacks.
+                        // No-op when the feature is disabled.
+                        app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+                            event: "turn_start".to_string(),
+                            kind: "turn.started".to_string(),
+                            thread_id: app.hooks.session_id().to_string(),
+                            turn_id: app.runtime_turn_id.clone(),
+                            item_id: None,
+                            payload: serde_json::json!({
+                                "model": codewhale_hooks::bounded_text(
+                                    &app.model,
+                                    codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
+                                ),
+                            }),
+                        });
                     }
                     EngineEvent::ToolRequestSnapshot { snapshot } => {
                         app.session.last_tool_request_snapshot = Some(snapshot);
@@ -1970,6 +2022,40 @@ pub(crate) async fn run_event_loop(
                             error.as_deref(),
                         ) {
                             surface_observer_hook_submission_failure(app, error);
+                        }
+
+                        // Lifecycle outbox (`[lifecycle_outbox]`): one
+                        // `turn_end` event per completed turn, with the kind
+                        // projected from the turn status — `turn.failed` for
+                        // failed turns, `turn.completed` for completed ones,
+                        // `turn.interrupted` for locally cancelled ones.
+                        // No-op when the feature is disabled.
+                        {
+                            let outbox_status =
+                                app.runtime_turn_status.as_deref().unwrap_or("unknown");
+                            let kind = match outbox_status {
+                                "completed" => "turn.completed",
+                                "failed" => "turn.failed",
+                                "interrupted" => "turn.interrupted",
+                                _ => "turn.ended",
+                            };
+                            app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+                                event: "turn_end".to_string(),
+                                kind: kind.to_string(),
+                                thread_id: app.hooks.session_id().to_string(),
+                                turn_id: app.runtime_turn_id.clone(),
+                                item_id: None,
+                                payload: serde_json::json!({
+                                    "status": outbox_status,
+                                    "duration_ms": turn_elapsed.as_millis() as u64,
+                                    "error": error
+                                        .as_deref()
+                                        .map(|message| codewhale_hooks::bounded_text(
+                                            message,
+                                            codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
+                                        )),
+                                }),
+                            });
                         }
 
                         if queued_to_send.is_none() {

@@ -102,6 +102,7 @@ mod exec_persistent_service;
 mod exec_stream_drop_acceptance;
 mod exec_turn_usage;
 mod integration_mock_llm;
+mod lifecycle_outbox_exec;
 mod palette_audit;
 mod protocol_recovery;
 mod reasoning_content_replayed_after_tool_call;

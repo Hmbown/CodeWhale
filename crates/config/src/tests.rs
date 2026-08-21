@@ -60,6 +60,78 @@ fn verifier_config_rejects_unknown_verdict_policy() {
 }
 
 #[test]
+fn lifecycle_outbox_toml_is_off_by_default_and_parses_when_configured() {
+    // Unset = feature OFF: the table is absent and the field is None.
+    let absent: ConfigToml = toml::from_str("model = \"demo\"\n").expect("minimal config");
+    assert!(
+        absent.lifecycle_outbox.is_none(),
+        "unset [lifecycle_outbox] must leave the feature off"
+    );
+
+    // An empty table is also off: no path means no outbox file.
+    let empty: ConfigToml =
+        toml::from_str("[lifecycle_outbox]\n").expect("empty lifecycle_outbox table");
+    let outbox = empty.lifecycle_outbox.expect("table should parse");
+    assert!(outbox.path.is_none());
+    assert!(outbox.webhook_url.is_none());
+    assert!(outbox.webhook_token.is_none());
+
+    // Full configuration: path plus optional webhook url and token.
+    let full: ConfigToml = toml::from_str(
+        r#"
+        [lifecycle_outbox]
+        path = "~/.codewhale/notifications/outbox.jsonl"
+        webhook_url = "https://example.com/hooks/codewhale"
+        webhook_token = "secret-token"
+        "#,
+    )
+    .expect("full lifecycle_outbox table");
+    let outbox = full.lifecycle_outbox.expect("table should parse");
+    assert_eq!(
+        outbox.path,
+        Some(PathBuf::from("~/.codewhale/notifications/outbox.jsonl"))
+    );
+    assert_eq!(
+        outbox.webhook_url.as_deref(),
+        Some("https://example.com/hooks/codewhale")
+    );
+    assert_eq!(outbox.webhook_token.as_deref(), Some("secret-token"));
+}
+
+#[test]
+fn lifecycle_outbox_toml_webhook_is_optional() {
+    // `path` alone enables the file outbox without any webhook.
+    let file_only: ConfigToml = toml::from_str(
+        r#"
+        [lifecycle_outbox]
+        path = "/tmp/outbox.jsonl"
+        "#,
+    )
+    .expect("file-only lifecycle_outbox table");
+    let outbox = file_only.lifecycle_outbox.expect("table should parse");
+    assert_eq!(outbox.path, Some(PathBuf::from("/tmp/outbox.jsonl")));
+    assert!(outbox.webhook_url.is_none());
+
+    // A webhook url without a path does not enable a file outbox; the
+    // consumer decides whether webhook-only delivery is meaningful, but the
+    // parse must stay lossless either way.
+    let webhook_only: ConfigToml = toml::from_str(
+        r#"
+        [lifecycle_outbox]
+        webhook_url = "https://example.com/hooks/codewhale"
+        "#,
+    )
+    .expect("webhook-only lifecycle_outbox table");
+    let outbox = webhook_only.lifecycle_outbox.expect("table should parse");
+    assert!(outbox.path.is_none());
+    assert_eq!(
+        outbox.webhook_url.as_deref(),
+        Some("https://example.com/hooks/codewhale")
+    );
+    assert!(outbox.webhook_token.is_none());
+}
+
+#[test]
 fn permissions_toml_deserializes_typed_ask_rules() {
     let permissions: PermissionsToml = toml::from_str(
         r#"
