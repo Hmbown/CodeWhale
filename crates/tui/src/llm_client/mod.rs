@@ -1164,6 +1164,7 @@ pub type RetryCallback = Box<dyn Fn(&LlmError, u32, Duration) + Send + Sync>;
 ///     })),
 /// ).await;
 /// ```
+#[allow(clippy::result_large_err)]
 pub async fn with_retry<F, Fut, T>(
     config: &RetryConfig,
     mut operation: F,

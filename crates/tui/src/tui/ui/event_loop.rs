@@ -1153,7 +1153,7 @@ pub(crate) async fn run_event_loop(
                         }
 
                         let thinking = app.last_reasoning.take();
-                        let tool_uses = app.pending_tool_uses.drain(..).collect::<Vec<_>>();
+                        let tool_uses = std::mem::take(&mut app.pending_tool_uses);
                         let history_index = completed_message_index;
 
                         if app.translation_enabled

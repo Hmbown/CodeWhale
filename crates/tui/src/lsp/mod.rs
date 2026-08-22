@@ -121,6 +121,26 @@ impl LspConfig {
     }
 }
 
+/// Outcome of one bounded diagnostics poll. Distinguishes an honest
+/// server-reported empty result from a degraded poll (server error or
+/// timeout) so callers never render a failure as a clean file.
+pub(crate) enum DiagnosticsPoll {
+    /// At least one diagnostic survived filtering. The bool records whether
+    /// `[lsp] max_diagnostics_per_file` cut items from this poll.
+    Ready(DiagnosticBlock, bool),
+    /// The poll completed and nothing survived the severity filter.
+    CleanEmpty,
+    /// The poll could not complete; the reason is actionable.
+    Unavailable(String),
+}
+
+/// Per-file result of [`LspManager::diagnostics_for_paths`].
+pub(crate) struct FileLints {
+    pub block: DiagnosticBlock,
+    pub unavailable: Option<String>,
+    pub truncated: bool,
+}
+
 /// The LspManager holds a lazily populated map of `Language -> Transport`.
 /// One transport is reused across files of the same language for the
 /// session's lifetime.
@@ -207,32 +227,39 @@ impl LspManager {
             None => return None,
         };
 
-        self.poll_diagnostics(file, &text, transport).await
+        match self.poll_diagnostics(file, &text, transport).await {
+            DiagnosticsPoll::Ready(block, _) => Some(block),
+            _ => None,
+        }
     }
 
     /// Shared diagnostics polling: send didOpen/didChange, wait, filter,
-    /// sort, and truncate.
+    /// sort, and truncate. The outcome keeps degraded polls (server error,
+    /// timeout) distinct from an honest server-reported empty result.
     async fn poll_diagnostics(
         &self,
         file: &Path,
         text: &str,
         transport: Arc<dyn LspTransport>,
-    ) -> Option<DiagnosticBlock> {
+    ) -> DiagnosticsPoll {
         let wait = Duration::from_millis(self.config.poll_after_edit_ms);
         let inner_wait = wait;
         let raw = match timeout(wait, transport.diagnostics_for(file, text, inner_wait)).await {
             Ok(Ok(items)) => items,
             Ok(Err(err)) => {
                 tracing::debug!(?err, file = %file.display(), "lsp: diagnostics call failed");
-                return None;
+                return DiagnosticsPoll::Unavailable(format!("language server error: {err}"));
             }
             Err(_) => {
                 tracing::debug!(file = %file.display(), "lsp: diagnostics timed out");
-                return None;
+                return DiagnosticsPoll::Unavailable(format!(
+                    "timed out after {}ms waiting for diagnostics",
+                    wait.as_millis()
+                ));
             }
         };
 
-        // Filter, sort, and truncate.
+        // Filter and sort by severity.
         let include_warnings = self.config.include_warnings;
         let mut items: Vec<Diagnostic> = raw
             .into_iter()
@@ -248,15 +275,16 @@ impl LspManager {
             Severity::Information => 2u8,
             Severity::Hint => 3u8,
         });
+        let truncated = items.len() > self.config.max_diagnostics_per_file;
         let mut block = DiagnosticBlock {
             file: relative_to_workspace(&self.workspace, file),
             items,
         };
         block.truncate(self.config.max_diagnostics_per_file);
         if block.items.is_empty() {
-            None
+            DiagnosticsPoll::CleanEmpty
         } else {
-            Some(block)
+            DiagnosticsPoll::Ready(block, truncated)
         }
     }
 
@@ -278,7 +306,10 @@ impl LspManager {
             Some(t) => t,
             None => return None,
         };
-        self.poll_diagnostics(file, &text, transport).await
+        match self.poll_diagnostics(file, &text, transport).await {
+            DiagnosticsPoll::Ready(block, _) => Some(block),
+            _ => None,
+        }
     }
 
     /// Lazy-spawn a custom LSP server for an extension.
@@ -499,6 +530,100 @@ impl LspManager {
                 "unknown LSP operation '{other}'; use diagnostics, symbols, definition, or references"
             )),
         }
+    }
+
+    /// Read lints for several existing files through the shared transport
+    /// pool. Unlike the post-edit hook, every failure mode stays visible to
+    /// the caller: per-file `unavailable` notes cover missing servers,
+    /// unreadable files, server errors, and timed-out polls, and `truncated`
+    /// flags `[lsp] max_diagnostics_per_file` cuts so a capped list is never
+    /// mistaken for a complete one. Returns `(include_warnings, reports)`.
+    pub async fn diagnostics_for_paths(
+        &self,
+        files: &[PathBuf],
+    ) -> Result<(bool, Vec<FileLints>), String> {
+        if !self.config.enabled {
+            return Err("LSP is disabled ([lsp] enabled = false)".to_string());
+        }
+
+        let mut reports = Vec::with_capacity(files.len());
+        for file in files {
+            let lang = registry::detect_language(file);
+            let custom = if lang == Language::Other {
+                self.config.custom_for_extension(file)
+            } else {
+                None
+            };
+            let transport = if let Some(custom) = custom {
+                let ext = file
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(str::to_ascii_lowercase);
+                match ext {
+                    Some(ext) => self.transport_for_custom(&ext, custom).await,
+                    None => None,
+                }
+            } else if lang == Language::Other {
+                None
+            } else {
+                self.transport_for(lang).await
+            };
+            let Some(transport) = transport else {
+                reports.push(FileLints {
+                    block: DiagnosticBlock {
+                        file: relative_to_workspace(&self.workspace, file),
+                        items: Vec::new(),
+                    },
+                    unavailable: Some(format!(
+                        "no language server is configured for {}",
+                        relative_to_workspace(&self.workspace, file).display()
+                    )),
+                    truncated: false,
+                });
+                continue;
+            };
+
+            let text = match tokio::fs::read_to_string(file).await {
+                Ok(text) => text,
+                Err(err) => {
+                    tracing::debug!(?err, file = %file.display(), "lsp: read file failed");
+                    reports.push(FileLints {
+                        block: DiagnosticBlock {
+                            file: relative_to_workspace(&self.workspace, file),
+                            items: Vec::new(),
+                        },
+                        unavailable: Some(format!("could not read file: {err}")),
+                        truncated: false,
+                    });
+                    continue;
+                }
+            };
+
+            reports.push(match self.poll_diagnostics(file, &text, transport).await {
+                DiagnosticsPoll::Ready(block, truncated) => FileLints {
+                    block,
+                    unavailable: None,
+                    truncated,
+                },
+                DiagnosticsPoll::CleanEmpty => FileLints {
+                    block: DiagnosticBlock {
+                        file: relative_to_workspace(&self.workspace, file),
+                        items: Vec::new(),
+                    },
+                    unavailable: None,
+                    truncated: false,
+                },
+                DiagnosticsPoll::Unavailable(note) => FileLints {
+                    block: DiagnosticBlock {
+                        file: relative_to_workspace(&self.workspace, file),
+                        items: Vec::new(),
+                    },
+                    unavailable: Some(note),
+                    truncated: false,
+                },
+            });
+        }
+        Ok((self.config.include_warnings, reports))
     }
 
     /// Best-effort shutdown of every spawned transport. Called when the

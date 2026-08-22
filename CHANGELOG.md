@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `release-artifacts.yml` builds `--profile dist` with fat LTO and
   `codegen-units = 1`.
 
+### Added
+
+- The model-facing `lsp` tool now supports a bounded `read_lints` operation for
+  multi-file, workspace-relative LSP diagnostics without adding another tool
+  catalog entry (#4070).
+
 ## [0.9.10] - 2026-08-19
 
 - Show the full slash-command or `/model` completion row in a bounded, wrapping hover popover whenever narrow terminals truncate it, closing the remaining scoped gap from [#998](https://github.com/Hmbown/CodeWhale/issues/998). Thanks [@AiurArtanis](https://github.com/AiurArtanis) and [@formp3](https://github.com/formp3) for identifying the affected surfaces.
