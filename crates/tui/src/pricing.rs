@@ -5,7 +5,7 @@
 //! Plan usage is credit/quota based and is intentionally left unknown until a
 //! reliable balance endpoint exists.
 
-use chrono::{DateTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, FixedOffset, TimeZone, Timelike, Utc, Weekday};
 use codewhale_config::pricing::{
     Currency, LIVE_PRICING_MAX_AGE_SECS, LivePricingDefect, OfferingPricing, PricingProvenance,
     TokenClass, TokenUsage,
@@ -877,15 +877,50 @@ fn claude_sonnet_5_pricing(_now: DateTime<Utc>) -> ModelPricing {
 /// Peak/off-peak tiers (verified against
 /// <https://api-docs.deepseek.com/quick_start/pricing> on 2026-08-17):
 /// off-peak rates are half the peak rates, and peak hours are 01:00–04:00
-/// and 06:00–10:00 UTC (half-open). Each turn resolves its tier from its own
-/// recorded time, mirroring `claude_sonnet_5_pricing`'s time-aware precedent.
+/// and 06:00–10:00 UTC (half-open). From 00:00 Beijing time on 2026-08-23 the
+/// whole of Saturday and Sunday bills off-peak, peak hours included. Each turn
+/// resolves its tier from its own recorded time, mirroring
+/// `claude_sonnet_5_pricing`'s time-aware precedent.
 fn deepseek_peak_hour(hour_utc: u32) -> bool {
     (1..4).contains(&hour_utc) || (6..10).contains(&hour_utc)
 }
 
-/// Whether a turn recorded at `now` falls in DeepSeek's UTC peak window.
+/// Beijing time, the zone DeepSeek states its weekend rule in. China has run a
+/// fixed UTC+08:00 with no daylight saving since 1991, so a fixed offset is
+/// exact here and needs no tzdata on the host.
+fn deepseek_billing_offset() -> FixedOffset {
+    FixedOffset::east_opt(8 * 3600).expect("+08:00 is a valid UTC offset")
+}
+
+/// The instant the weekend-wide off-peak rule takes effect: 00:00 Beijing time
+/// on Sunday 2026-08-23, which is 2026-08-22T16:00Z.
+fn deepseek_weekend_off_peak_from() -> DateTime<Utc> {
+    deepseek_billing_offset()
+        .with_ymd_and_hms(2026, 8, 23, 0, 0, 0)
+        .single()
+        .expect("2026-08-23 00:00 exists in a fixed offset")
+        .with_timezone(&Utc)
+}
+
+/// Whether `now` falls on a Beijing-time Saturday or Sunday with the weekend-wide
+/// off-peak rule already in force.
+///
+/// The weekend is bounded in Beijing time, so it runs 16:00Z Friday to 16:00Z
+/// Sunday; `now.weekday()` taken in UTC covers a different 48 hours. Both
+/// spellings agree on today's tiers, because the peak windows sit entirely
+/// outside the 16 hours they disagree over. This one keeps agreeing if the
+/// windows move.
+fn deepseek_weekend_off_peak(now: DateTime<Utc>) -> bool {
+    now >= deepseek_weekend_off_peak_from()
+        && matches!(
+            now.with_timezone(&deepseek_billing_offset()).weekday(),
+            Weekday::Sat | Weekday::Sun
+        )
+}
+
+/// Whether a turn recorded at `now` is billed at DeepSeek's peak tier.
 fn deepseek_is_peak(now: DateTime<Utc>) -> bool {
-    deepseek_peak_hour(now.hour())
+    !deepseek_weekend_off_peak(now) && deepseek_peak_hour(now.hour())
 }
 
 fn deepseek_v4_pro_pricing(now: DateTime<Utc>) -> ModelPricing {
@@ -4054,6 +4089,48 @@ mod tests {
             for (at, peak) in boundaries {
                 assert_deepseek_tier(model, at, peak);
             }
+        }
+    }
+
+    fn utc_ymd_h(year: i32, month: u32, day: u32, hour: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(year, month, day, hour, 0, 0)
+            .single()
+            .unwrap()
+    }
+
+    #[test]
+    fn deepseek_v4_bills_beijing_weekends_off_peak_from_the_published_date() {
+        // 2026-08-22T16:00Z is 00:00 Beijing on Sunday 2026-08-23, when the rule
+        // starts. Times are UTC; the Beijing day is in the comment.
+        let cases = [
+            (utc_ymd_h(2026, 8, 22, 6), true), // Sat 14:00 Beijing, rule not yet live
+            (utc_ymd_h(2026, 8, 23, 1), false), // Sun 09:00 Beijing, first window it changes
+            (utc_ymd_h(2026, 8, 23, 9), false), // Sun 17:00 Beijing
+            (utc_ymd_h(2026, 8, 24, 1), true), // Mon 09:00 Beijing
+            (utc_ymd_h(2026, 8, 28, 6), true), // Fri 14:00 Beijing
+            (utc_ymd_h(2026, 8, 29, 6), false), // Sat 14:00 Beijing
+        ];
+        for (at, peak) in cases {
+            assert_eq!(deepseek_is_peak(at), peak, "peak tier at {at}");
+            for model in ["deepseek-v4-pro", "deepseek-v4-flash"] {
+                assert_deepseek_tier(model, at, peak);
+            }
+        }
+    }
+
+    #[test]
+    fn deepseek_weekend_edges_are_bounded_in_beijing_time_not_utc() {
+        // All four instants are off-peak by the hour, so `deepseek_is_peak`
+        // cannot tell them apart today. Pinning the predicate keeps the 16:00Z
+        // edges right if the peak windows ever move.
+        let cases = [
+            (utc_ymd_h(2026, 8, 28, 15), false), // Fri 23:00 Beijing
+            (utc_ymd_h(2026, 8, 28, 16), true),  // Sat 00:00 Beijing
+            (utc_ymd_h(2026, 8, 30, 15), true),  // Sun 23:00 Beijing
+            (utc_ymd_h(2026, 8, 30, 16), false), // Mon 00:00 Beijing
+        ];
+        for (at, weekend) in cases {
+            assert_eq!(deepseek_weekend_off_peak(at), weekend, "weekend at {at}");
         }
     }
 
