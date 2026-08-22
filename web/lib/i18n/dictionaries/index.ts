@@ -19,10 +19,12 @@ import type {
   DocsFleetDict,
   DocsGuideDict,
   DocsHooksDict,
+  DocsMcpDict,
   DocsRuntimeApiDict,
   DocsSandboxDict,
   DocsShellDict,
   DocsModesDict,
+  DocsSubagentsDict,
   DocsTroubleshootingDict,
   DocsWebDict,
   HomeDict,
@@ -43,12 +45,16 @@ import { docsConstitution as enDocsConstitution } from "./en/docs-constitution";
 import { docsConstitution as zhDocsConstitution } from "./zh/docs-constitution";
 import { docsFleet as enDocsFleet } from "./en/docs-fleet";
 import { docsFleet as zhDocsFleet } from "./zh/docs-fleet";
+import { docsMcp as enDocsMcp } from "./en/docs-mcp";
+import { docsMcp as zhDocsMcp } from "./zh/docs-mcp";
 import { docsModes as enDocsModes } from "./en/docs-modes";
 import { docsModes as zhDocsModes } from "./zh/docs-modes";
 import { docsRuntimeApi as enDocsRuntimeApi } from "./en/docs-runtime-api";
 import { docsRuntimeApi as zhDocsRuntimeApi } from "./zh/docs-runtime-api";
 import { docsSandbox as enDocsSandbox } from "./en/docs-sandbox";
 import { docsSandbox as zhDocsSandbox } from "./zh/docs-sandbox";
+import { docsSubagents as enDocsSubagents } from "./en/docs-subagents";
+import { docsSubagents as zhDocsSubagents } from "./zh/docs-subagents";
 import { docsWeb as enDocsWeb } from "./en/docs-web";
 import { docsWeb as zhDocsWeb } from "./zh/docs-web";
 import { chrome as zhChrome } from "./zh/chrome";
@@ -180,6 +186,10 @@ const DOCS_FLEET: Record<string, DocsFleetDict> = {
   zh: zhDocsFleet,
 };
 
+const DOCS_MCP: Record<string, DocsMcpDict> = {
+  zh: zhDocsMcp,
+};
+
 const DOCS_MODES: Record<string, DocsModesDict> = {
   zh: zhDocsModes,
 };
@@ -190,6 +200,10 @@ const DOCS_RUNTIME_API: Record<string, DocsRuntimeApiDict> = {
 
 const DOCS_SANDBOX: Record<string, DocsSandboxDict> = {
   zh: zhDocsSandbox,
+};
+
+const DOCS_SUBAGENTS: Record<string, DocsSubagentsDict> = {
+  zh: zhDocsSubagents,
 };
 
 const DOCS_WEB: Record<string, DocsWebDict> = {
@@ -232,6 +246,10 @@ export function getDocsFleet(locale: string): DocsFleetDict {
   return DOCS_FLEET[locale] ?? enDocsFleet;
 }
 
+export function getDocsMcp(locale: string): DocsMcpDict {
+  return DOCS_MCP[locale] ?? enDocsMcp;
+}
+
 export function getDocsModes(locale: string): DocsModesDict {
   return DOCS_MODES[locale] ?? enDocsModes;
 }
@@ -242,6 +260,10 @@ export function getDocsRuntimeApi(locale: string): DocsRuntimeApiDict {
 
 export function getDocsSandbox(locale: string): DocsSandboxDict {
   return DOCS_SANDBOX[locale] ?? enDocsSandbox;
+}
+
+export function getDocsSubagents(locale: string): DocsSubagentsDict {
+  return DOCS_SUBAGENTS[locale] ?? enDocsSubagents;
 }
 
 export function getDocsWeb(locale: string): DocsWebDict {
@@ -269,9 +291,11 @@ export const EN_DOCS_TROUBLESHOOTING = enDocsTroubleshooting;
 export const EN_DOCS_CONFIGURATION = enDocsConfiguration;
 export const EN_DOCS_CONSTITUTION = enDocsConstitution;
 export const EN_DOCS_FLEET = enDocsFleet;
+export const EN_DOCS_MCP = enDocsMcp;
 export const EN_DOCS_MODES = enDocsModes;
 export const EN_DOCS_RUNTIME_API = enDocsRuntimeApi;
 export const EN_DOCS_SANDBOX = enDocsSandbox;
+export const EN_DOCS_SUBAGENTS = enDocsSubagents;
 export const EN_DOCS_WEB = enDocsWeb;
 
 /** Interpolate `{name}` tokens in a dictionary template. Unknown tokens are

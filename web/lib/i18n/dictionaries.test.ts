@@ -5,8 +5,10 @@ import {
   EN_DOCS_GUIDE,
   EN_DOCS_CONSTITUTION,
   EN_DOCS_HOOKS,
+  EN_DOCS_MCP,
   EN_DOCS_RUNTIME_API,
   EN_DOCS_SANDBOX,
+  EN_DOCS_SUBAGENTS,
   EN_DOCS_WEB,
   EN_DOCS_SHELL,
   EN_DOCS_TROUBLESHOOTING,
@@ -16,8 +18,10 @@ import {
   getDocsGuide,
   getDocsConstitution,
   getDocsHooks,
+  getDocsMcp,
   getDocsRuntimeApi,
   getDocsSandbox,
+  getDocsSubagents,
   getDocsWeb,
   getDocsShell,
   getDocsTroubleshooting,
@@ -246,20 +250,28 @@ describe("website dictionaries", () => {
   });
 
   it("holds the docs page-body dictionaries to the same contract (#5337)", () => {
-    for (const [label, get, reference] of [
-      ["docs-hooks", getDocsHooks, EN_DOCS_HOOKS],
-      ["docs-troubleshooting", getDocsTroubleshooting, EN_DOCS_TROUBLESHOOTING],
-      ["docs-constitution", getDocsConstitution, EN_DOCS_CONSTITUTION],
-      ["docs-runtime-api", getDocsRuntimeApi, EN_DOCS_RUNTIME_API],
-      ["docs-sandbox", getDocsSandbox, EN_DOCS_SANDBOX],
-      ["docs-web", getDocsWeb, EN_DOCS_WEB],
+    // The probe is the key checked for a real zh translation. It is
+    // `overviewTitle` everywhere except docs/mcp, whose heading is the
+    // code-owned literal `MCP` and stays in the page.
+    for (const [label, get, reference, probe] of [
+      ["docs-hooks", getDocsHooks, EN_DOCS_HOOKS, "overviewTitle"],
+      ["docs-troubleshooting", getDocsTroubleshooting, EN_DOCS_TROUBLESHOOTING, "overviewTitle"],
+      ["docs-constitution", getDocsConstitution, EN_DOCS_CONSTITUTION, "overviewTitle"],
+      ["docs-runtime-api", getDocsRuntimeApi, EN_DOCS_RUNTIME_API, "overviewTitle"],
+      ["docs-sandbox", getDocsSandbox, EN_DOCS_SANDBOX, "overviewTitle"],
+      ["docs-subagents", getDocsSubagents, EN_DOCS_SUBAGENTS, "overviewTitle"],
+      ["docs-mcp", getDocsMcp, EN_DOCS_MCP, "metaTitle"],
+      ["docs-web", getDocsWeb, EN_DOCS_WEB, "overviewTitle"],
     ] as const) {
       const enKeys = Object.keys(reference).sort();
       for (const locale of [...DICTIONARY_LOCALES, "fr", "und"]) {
         expect(Object.keys(get(locale)).sort(), `${locale} ${label} keys`).toEqual(enKeys);
       }
       // zh ships a real translation, not an English pass-through.
-      expect(get("zh").overviewTitle, `zh ${label}`).not.toBe(reference.overviewTitle);
+      expect(
+        (get("zh") as Record<string, unknown>)[probe],
+        `zh ${label} ${probe}`,
+      ).not.toBe((reference as Record<string, unknown>)[probe]);
       // Every other locale renders English today, exactly as the `isZh`
       // ternaries in the page did before the move.
       for (const locale of ["ja", "fr", "ar", "und"]) {
@@ -286,6 +298,21 @@ describe("website dictionaries", () => {
       // The platform rows are keyed by their own translated name rather than a
       // code-owned key, so only the count is comparable across locales.
       expect(getDocsSandbox(locale).platforms, `${locale} sandbox platforms`).toHaveLength(4);
+      // Role names are identifiers the page owns, so the keys are comparable
+      // across locales rather than only the count.
+      expect(
+        getDocsSubagents(locale).roles.map(([key]) => key),
+        `${locale} subagent roles`,
+      ).toEqual([
+        "worker",
+        "scout",
+        "planner",
+        "reviewer",
+        "builder",
+        "verifier",
+        "consultant",
+        "custom",
+      ]);
     }
   });
 
@@ -322,6 +349,51 @@ describe("website dictionaries", () => {
         "legacyTokenEnv",
         "insecureFlag",
         "mobileFlag",
+      ]);
+    }
+  });
+
+  it("carries every code-span token through the subagents and mcp copy", () => {
+    const tokensOf = (template: string) =>
+      splitTokens(template).flatMap((part) => ("token" in part ? [part.token] : []));
+    for (const locale of [...DICTIONARY_LOCALES, "und"]) {
+      const subagents = getDocsSubagents(locale);
+      expect(tokensOf(subagents.forkLead), `${locale} forkLead`).toEqual([
+        "agentTool",
+        "forkContext",
+      ]);
+      expect(tokensOf(subagents.worktreeLead), `${locale} worktreeLead`).toEqual([
+        "worktreeFlag",
+        "branchPattern",
+        "worktreeDir",
+        "writeAuthority",
+        "writeRoots",
+        "exactFiles",
+        "coordinationContracts",
+      ]);
+      const mcp = getDocsMcp(locale);
+      expect(tokensOf(mcp.overviewConfig), `${locale} mcp overviewConfig`).toEqual([
+        "configPath",
+        "legacyConfigPath",
+        "configPathOption",
+        "configEnvVar",
+        "serversKey",
+      ]);
+      expect(tokensOf(mcp.setupLead), `${locale} mcp setupLead`).toEqual([
+        "initCommand",
+        "mcpCommand",
+      ]);
+      expect(tokensOf(mcp.toolsLead), `${locale} mcp toolsLead`).toEqual([
+        "toolNamePattern",
+        "gitServer",
+        "statusTool",
+        "gitStatusTool",
+      ]);
+      expect(tokensOf(mcp.serverLead), `${locale} mcp serverLead`).toEqual([
+        "serveMcp",
+        "mcpServerCommand",
+        "addSelfCommand",
+        "serveHttp",
       ]);
     }
   });
