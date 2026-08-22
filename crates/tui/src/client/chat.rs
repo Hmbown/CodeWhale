@@ -45,12 +45,15 @@ use crate::models::{
     model_is_openai_reasoning_family, model_supports_reasoning,
 };
 
+use super::prepared::WireDialect;
+use super::role_placement::{RolePlacement, role_placement};
 use super::{
     DeepSeekClient, ERROR_BODY_MAX_BYTES, SSE_BACKPRESSURE_HIGH_WATERMARK,
     SSE_BACKPRESSURE_SLEEP_MS, SSE_MAX_LINES_PER_CHUNK, acquire_stream_buffer,
     apply_reasoning_effort, bounded_error_text, from_api_tool_name, parse_usage,
     release_stream_buffer, system_to_instructions, to_api_tool_name,
 };
+use crate::models::Role;
 
 fn apply_provider_token_limit(
     body: &mut Value,
@@ -1292,6 +1295,14 @@ impl DeepSeekClient {
             // Set when a `[DONE]` sentinel was seen, so the post-loop flush does
             // not re-process trailing post-DONE bytes.
             let mut saw_done = false;
+            // A number of OpenAI-compatible providers omit `[DONE]` but send a
+            // terminal `finish_reason`. Either is valid terminal proof. A raw
+            // HTTP EOF with neither is not: treating that as MessageStop turns
+            // a truncated provider response into a successful empty turn.
+            let mut saw_finish_reason = false;
+            // Once an error has been emitted, do not follow it with a synthetic
+            // MessageStop (or a second, less-specific premature-EOF error).
+            let mut stream_failed = false;
             // Set when a complete line or unterminated flush failed UTF-8.
             // Skip further data-frame parsing so U+FFFD cannot enter the transcript.
             let mut decode_failed = false;
@@ -1301,6 +1312,7 @@ impl DeepSeekClient {
                     Ok(Some(result)) => result,
                     Ok(None) => break, // Stream ended normally
                     Err(_elapsed) => {
+                        stream_failed = true;
                         yield Err(anyhow::anyhow!(stream_idle_timeout_message(
                             idle,
                             bytes_received,
@@ -1313,6 +1325,7 @@ impl DeepSeekClient {
                 let chunk = match chunk_result {
                     Ok(bytes) => bytes,
                     Err(e) => {
+                        stream_failed = true;
                         // Walk the error source chain so reqwest's underlying
                         // hyper / h2 / io error is visible — without this the
                         // outer "error decoding response body" message tells
@@ -1344,6 +1357,7 @@ impl DeepSeekClient {
                 // Guard against unbounded buffer growth (e.g., malformed stream without newlines)
                 const MAX_SSE_BUF: usize = 10 * 1024 * 1024; // 10 MB
                 if byte_buf.len() > MAX_SSE_BUF {
+                    stream_failed = true;
                     yield Err(anyhow::anyhow!("SSE buffer exceeded {MAX_SSE_BUF} bytes — aborting stream"));
                     break;
                 }
@@ -1362,6 +1376,7 @@ impl DeepSeekClient {
                         Ok(None) => break,
                         Err(err) => {
                             decode_failed = true;
+                            stream_failed = true;
                             yield Err(anyhow::anyhow!("{err}"));
                             break 'stream;
                         }
@@ -1387,6 +1402,11 @@ impl DeepSeekClient {
                                 }
                                 SseDataFrame::Events(events) => {
                                     for mut event in events {
+                                        saw_finish_reason |= matches!(
+                                            &event,
+                                            StreamEvent::MessageDelta { delta, .. }
+                                                if delta.stop_reason.as_deref().is_some_and(|reason| !reason.trim().is_empty())
+                                        );
                                         // Stamp the client-side replay-token estimate
                                         // onto the final usage so the UI can surface
                                         // it (#30). We compute it pre-request and
@@ -1422,8 +1442,15 @@ impl DeepSeekClient {
 
                     lines_processed = lines_processed.saturating_add(1);
                     if lines_processed >= SSE_MAX_LINES_PER_CHUNK {
-                        // Yield backpressure relief to avoid starving downstream consumers.
-                        break;
+                        // Backpressure relief: hand the executor a turn so a
+                        // slow consumer is not starved. Keep draining after
+                        // that — leaving complete lines buffered would strand
+                        // them, because the outer loop only resumes draining
+                        // once ANOTHER chunk arrives and the end-of-stream
+                        // flush treats the whole remainder as a single
+                        // unterminated line.
+                        lines_processed = 0;
+                        tokio::task::yield_now().await;
                     }
                 }
             }
@@ -1447,12 +1474,13 @@ impl DeepSeekClient {
                     Ok(None) => {}
                     Err(err) => {
                         decode_failed = true;
+                        stream_failed = true;
                         yield Err(anyhow::anyhow!("{err}"));
                     }
                 }
                 if !decode_failed && !line_buf.is_empty() {
                     let data = std::mem::take(&mut line_buf);
-                    if let SseDataFrame::Events(events) = parse_sse_data_frame(
+                    match parse_sse_data_frame(
                         &data,
                         &mut content_index,
                         &mut text_started,
@@ -1462,15 +1490,23 @@ impl DeepSeekClient {
                         &mut inline_reasoning_tags,
                         reasoning_stream_style,
                     ) {
-                        for mut event in events {
-                            if let Some(tokens) = replay_input_tokens
-                                && let StreamEvent::MessageDelta {
-                                    usage: Some(usage), ..
-                                } = &mut event
-                            {
-                                usage.reasoning_replay_tokens = Some(tokens);
+                        SseDataFrame::Done => saw_done = true,
+                        SseDataFrame::Events(events) => {
+                            for mut event in events {
+                                saw_finish_reason |= matches!(
+                                    &event,
+                                    StreamEvent::MessageDelta { delta, .. }
+                                        if delta.stop_reason.as_deref().is_some_and(|reason| !reason.trim().is_empty())
+                                );
+                                if let Some(tokens) = replay_input_tokens
+                                    && let StreamEvent::MessageDelta {
+                                        usage: Some(usage), ..
+                                    } = &mut event
+                                {
+                                    usage.reasoning_replay_tokens = Some(tokens);
+                                }
+                                yield Ok(event);
                             }
-                            yield Ok(event);
                         }
                     }
                 }
@@ -1484,7 +1520,13 @@ impl DeepSeekClient {
             }
 
             release_stream_buffer(byte_buf);
-            yield Ok(StreamEvent::MessageStop);
+            if !stream_failed && (saw_done || saw_finish_reason) {
+                yield Ok(StreamEvent::MessageStop);
+            } else if !stream_failed {
+                yield Err(anyhow::anyhow!(
+                    "Chat Completions stream closed before [DONE] or finish_reason"
+                ));
+            }
         };
 
         Ok(Pin::from(Box::new(stream)
@@ -1625,7 +1667,7 @@ impl<'a> PromptBuilder<'a> {
             .map(<[Tool]>::to_vec);
         let tool_choice = tools.as_ref().map(|_| json!("none"));
         messages.push(Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: CACHE_WARMUP_USER_TAIL.to_string(),
                 cache_control: None,
@@ -2433,7 +2475,9 @@ fn build_chat_messages_with_reasoning(
     }
 
     for (message_index, message) in messages.iter().enumerate() {
-        let role = message.role.as_str();
+        // Which wire channel this message belongs in is decided by the shared
+        // placement table, not by an `if` chain local to this adapter.
+        let placement = role_placement(&message.role, WireDialect::ChatCompletions);
         let mut text_parts = Vec::new();
         let mut image_parts = Vec::new();
         let mut thinking_parts = Vec::new();
@@ -2517,8 +2561,8 @@ fn build_chat_messages_with_reasoning(
             }
         }
 
-        if role == "assistant" || role == crate::models::INTERRUPTED_ASSISTANT_ROLE {
-            let content = if role == crate::models::INTERRUPTED_ASSISTANT_ROLE {
+        if placement.is_assistant_channel() {
+            let content = if placement == RolePlacement::InterruptedAssistant {
                 format!(
                     "{}{}",
                     crate::models::INTERRUPTED_ASSISTANT_CONTEXT_PREFIX,
@@ -2578,11 +2622,15 @@ fn build_chat_messages_with_reasoning(
                 pending_tool_calls.clear();
             }
             out.push(msg);
-        } else if role == "system" {
+        } else if matches!(placement, RolePlacement::System | RolePlacement::Developer) {
             let content = text_parts.join("\n");
             if !content.trim().is_empty() {
                 let mut msg = json!({
-                    "role": "system",
+                    "role": if placement == RolePlacement::Developer {
+                        "developer"
+                    } else {
+                        "system"
+                    },
                     "content": content,
                 });
                 if include_tool_budget_metadata && let Some(turn_meta) = &turn_meta_budget {
@@ -2590,7 +2638,7 @@ fn build_chat_messages_with_reasoning(
                 }
                 out.push(msg);
             }
-        } else if role == "user" {
+        } else if placement == RolePlacement::User {
             let content = text_parts.join("\n");
             let has_text = !content.trim().is_empty();
             let has_images = !image_parts.is_empty();
@@ -2677,7 +2725,7 @@ fn build_chat_messages_with_reasoning(
                     out.push(json!({ "role": "user", "content": tool_result_images }));
                 }
             }
-        } else if role != "assistant" && role != crate::models::INTERRUPTED_ASSISTANT_ROLE {
+        } else if !placement.is_assistant_channel() {
             pending_tool_calls.clear();
         }
     }
@@ -4252,13 +4300,14 @@ mod minimax_reasoning_replay_tests {
         ApiProvider, DEFAULT_KIMI_CODE_BASE_URL, DEFAULT_MINIMAX_MODEL,
         DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL, DEFAULT_MOONSHOT_BASE_URL, KIMI_CODE_K3_MODEL,
     };
+    use crate::models::Role;
     use crate::models::{ContentBlock, Message, MessageRequest};
 
     fn request_with_assistant_thinking() -> MessageRequest {
         MessageRequest {
             model: DEFAULT_MINIMAX_MODEL.to_string(),
             messages: vec![Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![
                     ContentBlock::Thinking {
                         thinking: "Inspect tool state".to_string(),
@@ -4350,14 +4399,14 @@ mod minimax_reasoning_replay_tests {
         request.model = "qwen3.8-max".to_string();
         request.messages = vec![
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "HANDOFF-SENTINEL: fix the widget.".to_string(),
                     cache_control: None,
                 }],
             },
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![
                     ContentBlock::Thinking {
                         thinking: "stale thinking from the prior turn".to_string(),
@@ -4378,7 +4427,7 @@ mod minimax_reasoning_replay_tests {
                 ],
             },
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: "call_qwen38_001".to_string(),
                     content: "widget.rs: struct Widget { .. }".to_string(),
@@ -5864,6 +5913,7 @@ mod image_block_wire_tests {
     //! message whose `content` is an array of parts, with the image as
     //! `{"type":"image_url","image_url":{"url":…}}`.
     use super::{ApiProvider, build_chat_wire_body};
+    use crate::models::Role;
     use crate::models::{ContentBlock, ImageUrlContent, Message, MessageRequest};
 
     const DATA_URL: &str = "data:image/png;base64,QUJD";
@@ -5872,7 +5922,7 @@ mod image_block_wire_tests {
         MessageRequest {
             model: "gpt-4o".to_string(),
             messages: vec![Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![
                     ContentBlock::Text {
                         text: "what is in this screenshot?".to_string(),
@@ -5937,6 +5987,39 @@ mod image_block_wire_tests {
     }
 
     #[test]
+    fn deepseek_vision_exp_uses_chat_image_url_request_shape() {
+        let mut request = request_with_image();
+        request.model = "deepseek-v4-flash-vision-exp".to_string();
+
+        let body = build_chat_wire_body(
+            &request,
+            ApiProvider::Deepseek,
+            "https://api.deepseek.com/beta",
+            false,
+        )
+        .expect("DeepSeek vision wire body");
+
+        assert_eq!(body.body["model"], "deepseek-v4-flash-vision-exp");
+        let messages = body.body["messages"].as_array().expect("messages");
+        let user = messages
+            .iter()
+            .find(|message| message["role"] == "user")
+            .expect("a user message");
+        let parts = user["content"]
+            .as_array()
+            .expect("DeepSeek vision content must use multimodal parts");
+
+        assert!(parts.iter().any(|part| {
+            part["type"] == "text" && part["text"] == "what is in this screenshot?"
+        }));
+        assert!(
+            parts.iter().any(|part| {
+                part["type"] == "image_url" && part["image_url"]["url"] == DATA_URL
+            })
+        );
+    }
+
+    #[test]
     fn a_message_with_no_image_keeps_its_plain_string_content() {
         // Promoting every user turn to a parts array would change the request
         // bytes for every text-only route, and with them the prompt-cache
@@ -5970,7 +6053,7 @@ mod image_block_wire_tests {
         let mut request = request_with_image();
         request.messages = vec![
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::ToolUse {
                     id: "call_image_1".to_string(),
                     name: "read".to_string(),
@@ -5980,7 +6063,7 @@ mod image_block_wire_tests {
                 }],
             },
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: "call_image_1".to_string(),
                     content: "screenshot captured".to_string(),
@@ -6031,7 +6114,7 @@ mod mistral_reasoning_tests {
             model: "mistral-medium-latest".to_string(),
             messages: vec![
                 Message {
-                    role: "assistant".to_string(),
+                    role: Role::Assistant,
                     content: vec![
                         ContentBlock::Thinking {
                             thinking: "Inspect the current state before calling the tool."
@@ -6053,7 +6136,7 @@ mod mistral_reasoning_tests {
                     ],
                 },
                 Message {
-                    role: "user".to_string(),
+                    role: Role::User,
                     content: vec![ContentBlock::ToolResult {
                         tool_use_id: "call-1".to_string(),
                         content: "contents".to_string(),
@@ -6447,14 +6530,14 @@ mod google_thought_signature_tests {
             model: "gemini-3.1-pro-preview".to_string(),
             messages: vec![
                 Message {
-                    role: "user".to_string(),
+                    role: Role::User,
                     content: vec![ContentBlock::Text {
                         text: "Read the config.".to_string(),
                         cache_control: None,
                     }],
                 },
                 Message {
-                    role: "assistant".to_string(),
+                    role: Role::Assistant,
                     content: vec![
                         ContentBlock::Text {
                             text: "Reading now.".to_string(),
@@ -6470,7 +6553,7 @@ mod google_thought_signature_tests {
                     ],
                 },
                 Message {
-                    role: "user".to_string(),
+                    role: Role::User,
                     content: vec![ContentBlock::ToolResult {
                         tool_use_id: "call-g-1".to_string(),
                         content: "key = \"value\"".to_string(),

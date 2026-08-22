@@ -12,7 +12,11 @@ if grep -En 'YOLO|Multitask|/mode yolo|--yolo|Bypass' $docs; then
   exit 1
 fi
 
-if grep -En 'YOLO|Multitask|Bypass' crates/tui/locales/*.json; then
+# Locale message identifiers are internal compatibility names and may still
+# contain retired terms (for example `PermissionsPostureBypass`). Inspect only
+# the serialized user-facing value so the check enforces the contract above
+# without flagging an allowed key.
+if grep -En '": "[^"]*(YOLO|Multitask|Bypass)' crates/tui/locales/*.json; then
   printf '%s\n' 'retired TUI vocabulary remains in localized product copy' >&2
   exit 1
 fi
@@ -28,8 +32,7 @@ if grep -En \
   exit 1
 fi
 
-if grep -Ein 'bypass approvals|Act \+ bypass' \
-  crates/tui/src/tui/plan_prompt.rs crates/tui/src/tui/ui.rs; then
+if grep -Ein 'bypass approvals|Act \+ bypass' crates/tui/src/tui/ui.rs; then
   printf '%s\n' 'retired permission wording remains in live Plan UI' >&2
   exit 1
 fi

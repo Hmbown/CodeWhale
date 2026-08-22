@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
-    <meta name="theme-color" content="#0e1729">
+    <meta name="theme-color" content="#020711">
     <title>Codewhale</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/assets/codewhale-web.css">
@@ -31,7 +31,7 @@
           <input id="thread-search" type="search" autocomplete="off" placeholder="Search threads">
         </label>
 
-        <nav class="thread-list" id="thread-list" aria-label="Recent threads"></nav>
+        <nav class="thread-list" id="thread-list" aria-label="Live threads"></nav>
 
         <!-- Read-only peek for a selected saved session. Bounded and redacted
              server-side by GET /v1/sessions/{id}?peek=true; this pane never
@@ -93,7 +93,7 @@
             <label class="sr-only" for="composer-input">Message Codewhale</label>
             <textarea id="composer-input" rows="1" placeholder="Ask Codewhale to work in this repository…" disabled></textarea>
             <div class="composer-bar">
-              <span class="composer-hint">⌘↵ send</span>
+              <span class="composer-hint">Enter send · Shift+Enter newline</span>
               <div class="composer-actions">
                 <button class="quiet-button" id="interrupt-turn" type="button" hidden>Stop</button>
                 <button class="send-button" id="send-message" type="submit" disabled>Send</button>
@@ -103,6 +103,37 @@
         </footer>
       </main>
     </div>
+
+    <dialog class="rename-dialog new-thread-dialog" id="new-thread-dialog" tabindex="-1" aria-labelledby="new-thread-title" aria-describedby="new-thread-help">
+      <form id="new-thread-form">
+        <p class="eyebrow">New thread</p>
+        <h2 id="new-thread-title">Choose a provider and model</h2>
+        <p class="dialog-copy" id="new-thread-help">This choice applies only to the new thread. It does not change your Runtime defaults.</p>
+
+        <label class="dialog-field">
+          <span class="dialog-label">Provider</span>
+          <select id="new-thread-provider" required disabled></select>
+        </label>
+
+        <label class="dialog-field" id="new-thread-model-select-field">
+          <span class="dialog-label">Model</span>
+          <select id="new-thread-model" required disabled></select>
+        </label>
+
+        <label class="dialog-field" id="new-thread-model-input-field" hidden>
+          <span class="dialog-label">Model</span>
+          <input id="new-thread-model-input" type="text" autocomplete="off" spellcheck="false" required disabled>
+        </label>
+
+        <p class="model-capability" id="new-thread-capability" data-state="unknown" aria-live="polite"></p>
+        <p class="dialog-status" id="new-thread-status" role="status" aria-live="polite"></p>
+
+        <div class="dialog-actions">
+          <button class="quiet-button" id="new-thread-cancel" type="button" autofocus>Cancel</button>
+          <button class="primary-button" id="new-thread-create" type="submit" disabled>Create thread</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog class="rename-dialog" id="rename-dialog">
       <form method="dialog" id="rename-form">

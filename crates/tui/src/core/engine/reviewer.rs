@@ -13,6 +13,7 @@
 use std::time::Duration;
 
 use crate::core::model_client::ModelClient;
+use crate::models::Role;
 use crate::models::{
     ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt, Usage,
     is_incomplete_stop_reason,
@@ -120,7 +121,7 @@ pub(crate) async fn consult_reviewer(
     let request = MessageRequest {
         model: client.model().to_string(),
         messages: vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: context_text.to_string(),
                 cache_control: None,

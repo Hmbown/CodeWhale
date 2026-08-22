@@ -1232,16 +1232,19 @@ pub struct FleetTaskReceipt {
     pub member_id: String,
     /// Fixed **semantic** member role — what gates, handoffs, and records use.
     pub member_role: String,
-    /// The **runtime permission posture** the member's clamped ceiling resolved
-    /// to, when it is not the same string as the semantic role.
+    /// The **Runtime permission posture** selected after member resolution,
+    /// when it is not the same string as the semantic role.
     ///
     /// These are two different facts and a receipt must not collapse them. The
     /// semantic role (`auditor`, `implementer`) is what an operator named and
-    /// what gates key on; the posture (`scout`, `builder`, `verifier`) is which
-    /// built-in tool surface and system prompt the clamped ceiling actually
-    /// permits. Displaying the posture where the role belongs renames the
-    /// operator's member; enforcing the role where the posture belongs would
-    /// hand an arbitrary role name a surface nobody granted it.
+    /// what gates key on; the posture (`scout`, `builder`, `verifier`,
+    /// `custom`) is the Runtime role whose baseline policy was requested after
+    /// selection. The live parent may narrow that baseline further, so the
+    /// posture is not a claim about the final individual capabilities; the
+    /// separately checked authority fingerprint records those. Displaying the
+    /// posture where the role belongs renames the operator's member; enforcing
+    /// an arbitrary semantic role as a Runtime policy would grant a surface
+    /// nobody selected.
     ///
     /// `None` means the two coincide, so an unchanged receipt stays unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1393,8 +1396,8 @@ impl FleetTaskReceipt {
         }
     }
 
-    /// Record the runtime permission posture this member's clamped ceiling
-    /// resolved to, alongside — never instead of — its semantic role.
+    /// Record the Runtime permission posture chosen after member resolution,
+    /// alongside — never instead of — its semantic role.
     ///
     /// A posture equal to the role is dropped: there is nothing to disclose
     /// when the two coincide, and storing it would make the field noise.

@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   docTopicHaystack,
   filterDocTopics,
+  highlightSpan,
   normalizeQuery,
   matches,
 } from "./search-utils";
@@ -127,5 +129,51 @@ describe("filterDocTopics", () => {
     const result = filterDocTopics(DOC_TOPICS, "安装");
     const ids = result.map((i) => DOC_TOPICS[i].id);
     expect(ids).toContain("install");
+  });
+});
+
+describe("highlightSpan", () => {
+  const webRoot = new URL("../", import.meta.url);
+  const read = (p: string) => readFileSync(new URL(p, webRoot), "utf8");
+
+  it("splits a plain match into three reassembling pieces", () => {
+    const span = highlightSpan("Install Guide", "install")!;
+    expect(span).toEqual({ before: "", match: "Install", after: " Guide" });
+    expect(span.before + span.match + span.after).toBe("Install Guide");
+  });
+
+  it("returns null for an empty query or no match", () => {
+    expect(highlightSpan("Install", "")).toBeNull();
+    expect(highlightSpan("Install", "   ")).toBeNull();
+    expect(highlightSpan("Install", "docker")).toBeNull();
+    expect(highlightSpan("", "install")).toBeNull();
+  });
+
+  it("keeps indices in the source string when lowercasing changes length", () => {
+    // "İ".toLowerCase() is two code units, so a lowercased copy of this
+    // string is one longer than the string itself. Index arithmetic done on
+    // the copy highlighted "tanbul " instead of "stanbul".
+    const text = "İstanbul kurulumu";
+    expect(text.toLowerCase().length).toBe(text.length + 1);
+    const span = highlightSpan(text, "stanbul")!;
+    expect(span.match).toBe("stanbul");
+    expect(span.before).toBe("İ");
+    expect(span.after).toBe(" kurulumu");
+    expect(span.before + span.match + span.after).toBe(text);
+  });
+
+  it("never claims half of a source character", () => {
+    const span = highlightSpan("İstanbul", "i")!;
+    expect(span.match).toBe("İ");
+    expect(span.before + span.match + span.after).toBe("İstanbul");
+  });
+
+  it("is the one match rule both search surfaces use", () => {
+    for (const file of ["components/docs-search.tsx", "components/faq-search.tsx"]) {
+      const source = read(file);
+      expect(source, file).toContain("highlightSpan(text, query)");
+      expect(source, file).not.toContain("text.toLowerCase()");
+      expect(source, file).not.toContain("text.slice(");
+    }
   });
 });

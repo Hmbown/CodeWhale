@@ -8,7 +8,8 @@
 //!   *explicitly detectable* rather than inferred from a missing table.
 //! - **Exact** (`schema = "exact"`). Every member owns a stable member id/role,
 //!   an exact configured provider id, an exact model id, a requested reasoning
-//!   policy, and a permission ceiling.
+//!   policy. Authority is deliberately absent: Runtime derives the effective
+//!   child posture from the selected member's Runtime role and the live parent.
 //!
 //! The exact form deliberately has **no** late-binding selectors. `inherit`,
 //! `faster`/fast siblings, model-strength classes, and `model = "auto"` are
@@ -222,28 +223,32 @@ impl ShellCeiling {
     }
 }
 
-/// The most a member is allowed to do. This is a *ceiling*, never a grant:
-/// [`PermissionCeiling::clamp_to`] can only ever narrow against the active
-/// session posture, so a saved Fleet can never raise live authority.
+/// A Runtime child-authority envelope.
+///
+/// This type is intentionally not part of [`ExactMember`]. Exact Fleet files
+/// choose identity, route, and reasoning; Runtime intersects its role posture
+/// with the live parent after member selection. Keeping the envelope as a
+/// separate type lets receipts describe the authority that Runtime actually
+/// installed without turning a saved Fleet into a trust boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PermissionCeiling {
     pub write: bool,
-    /// Whether the member may be handed a **model-visible network tool**
+    /// Whether the Runtime child may be handed a **model-visible network tool**
     /// (fetch, browse, HTTP).
     ///
     /// This is deliberately *not* a statement about transport. Host-owned
     /// provider inference — the ordinary API call CodeWhale makes on the
     /// member's behalf — always happens over the network and is not governed
-    /// by this field. A member with `network_tool = false` still runs on a
+    /// by this field. A child with `network_tool = false` still runs on a
     /// remote model; it simply has no tool with which to reach the network
     /// itself. Receipts disclose that distinction rather than implying an
     /// air-gap.
     #[serde(alias = "network")]
     pub network_tool: bool,
     pub shell: ShellCeiling,
-    /// Nested-delegation budget this member may consume.
+    /// Nested-delegation budget the Runtime child may consume.
     pub delegation_depth: u32,
-    /// Whether the member may be handed tools at all.
+    /// Whether the Runtime child may be handed tools at all.
     pub tools: bool,
 }
 
@@ -261,7 +266,10 @@ impl PermissionCeiling {
         tools: false,
     };
 
-    /// Named presets accepted by `permissions = "<preset>"`.
+    /// Legacy named presets retained for Runtime compatibility and tests.
+    ///
+    /// The exact Fleet parser accepts a historic `permissions` key only as
+    /// ignored input; no preset selected here is projected onto a member.
     pub fn preset(name: &str) -> Option<Self> {
         let base = |write, network_tool, shell, delegation_depth| Self {
             write,
@@ -323,8 +331,6 @@ pub struct ExactMember {
     pub model: String,
     /// Requested reasoning policy for this member.
     pub reasoning: RequestedReasoning,
-    /// Permission ceiling/default for this member.
-    pub permissions: PermissionCeiling,
 }
 
 impl ExactMember {
@@ -606,9 +612,6 @@ impl ExactFleet {
                     if router.is_some() {
                         return Err(ExactFleetError::MultipleRouters);
                     }
-                    if raw.permissions.is_some() {
-                        return Err(ExactFleetError::RouterPermissionsDeclared { id });
-                    }
                     if raw.role.is_some() {
                         return Err(ExactFleetError::RouterRoleDeclared { id });
                     }
@@ -644,22 +647,12 @@ impl ExactFleet {
                             }
                         })?,
                     };
-                    let permissions = match raw.permissions.as_deref() {
-                        None => PermissionCeiling::default(),
-                        Some(preset) => PermissionCeiling::preset(preset).ok_or_else(|| {
-                            ExactFleetError::UnknownPermissionPreset {
-                                id: id.clone(),
-                                preset: preset.trim().to_string(),
-                            }
-                        })?,
-                    };
                     members.push(ExactMember {
                         id,
                         role,
                         provider,
                         model,
                         reasoning,
-                        permissions,
                     });
                 }
                 other => {
@@ -755,8 +748,13 @@ struct ExactMemberToml {
     model: String,
     #[serde(default)]
     reasoning: Option<String>,
-    #[serde(default)]
-    permissions: Option<String>,
+    /// Compatibility-only input from the prototype exact-Fleet schema.
+    ///
+    /// It is intentionally a generic TOML value and intentionally unread:
+    /// old files and replays remain loadable, while no spelling can influence
+    /// active identity, snapshots, selection, or Runtime authority.
+    #[serde(default, rename = "permissions")]
+    _legacy_permissions: Option<toml::Value>,
 }
 
 const fn default_schema_revision() -> u32 {
@@ -874,10 +872,6 @@ pub enum ExactFleetError {
         "member `{id}` has invalid reasoning `{value}`; expected off, low, medium, high, max, or auto"
     )]
     InvalidReasoning { id: String, value: String },
-    #[error("member `{id}` has unknown permission preset `{preset}`")]
-    UnknownPermissionPreset { id: String, preset: String },
-    #[error("router member `{id}` may not declare permissions; a router gets none by construction")]
-    RouterPermissionsDeclared { id: String },
     #[error(
         "router member `{id}` may not declare a role; a router is never dispatched as a worker"
     )]
@@ -975,7 +969,6 @@ permissions = "analyst"
             provider: "zai".to_string(),
             model: "glm-5".to_string(),
             reasoning: RequestedReasoning::Off,
-            permissions: PermissionCeiling::default(),
         };
         let fleet = ExactFleet {
             name: "counsel".to_string(),
@@ -1006,7 +999,6 @@ permissions = "analyst"
                 provider: "zai".to_string(),
                 model: "glm-5".to_string(),
                 reasoning: RequestedReasoning::Off,
-                permissions: PermissionCeiling::default(),
             }],
             reasoning_router: None,
             router: None,
@@ -1091,8 +1083,11 @@ reasoning = "auto"
         assert_eq!(member.provider, "zai");
         assert_eq!(member.model, "glm-5");
         assert_eq!(member.reasoning, RequestedReasoning::Auto);
-        assert!(member.permissions.write);
-        assert!(!member.permissions.network_tool);
+        let serialized = serde_json::to_value(member).expect("serialize member");
+        assert!(
+            serialized.get("permissions").is_none(),
+            "exact member identity must not carry authority: {serialized}"
+        );
 
         let router = fleet.legacy_inline_router().expect("inline router");
         assert_eq!(router.provider, "zai");
@@ -1267,7 +1262,29 @@ model = "glm-5"
     }
 
     #[test]
-    fn router_rejects_auth_permissions_role_and_auto_reasoning() {
+    fn legacy_permissions_are_accepted_as_ignored_input_only() {
+        let text = r#"
+name = "f"
+schema = "exact"
+
+[[members]]
+id = "w"
+role = "builder"
+provider = "zai"
+model = "glm-5"
+permissions = "a-value-no-current-preset-recognizes"
+"#;
+        let fleet = ExactFleet::parse(text).expect("legacy permissions must remain loadable");
+        let member = fleet.member("w").expect("member");
+        let encoded = serde_json::to_value(member).expect("serialize current member identity");
+
+        assert!(encoded.get("permissions").is_none(), "{encoded}");
+        assert_eq!(member.role, "builder");
+        assert_eq!(member.frozen_route().model, "glm-5");
+    }
+
+    #[test]
+    fn router_ignores_legacy_permissions_but_rejects_role_and_auto_reasoning() {
         let base = r#"
 name = "f"
 schema = "exact"
@@ -1284,10 +1301,8 @@ provider = "zai"
 model = "glm-5-turbo"
 "#;
         let permissions = format!("{base}permissions = \"full\"\n");
-        assert!(matches!(
-            ExactFleet::parse(&permissions).expect_err("permissions rejected"),
-            ExactFleetError::RouterPermissionsDeclared { .. }
-        ));
+        let parsed = ExactFleet::parse(&permissions).expect("legacy permissions are ignored");
+        assert!(parsed.legacy_inline_router().is_some());
 
         let role = format!("{base}role = \"builder\"\n");
         assert!(matches!(
@@ -1433,7 +1448,6 @@ model = "glm-5"
             provider: "zai".to_string(),
             model: "glm-5".to_string(),
             reasoning: RequestedReasoning::Off,
-            permissions: PermissionCeiling::default(),
         };
 
         let valid = ExactFleet {

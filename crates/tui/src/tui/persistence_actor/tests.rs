@@ -3,6 +3,7 @@
 use super::*;
 use std::time::{Duration, Instant};
 
+use crate::models::Role;
 use crate::models::{ContentBlock, Message};
 
 const BACKLOG_RECEIPT_PATH_ENV: &str = "CODEWHALE_TEST_PERSISTENCE_BACKLOG_RECEIPT_PATH";
@@ -109,7 +110,7 @@ fn current_process_rss_bytes() -> Option<u64> {
 
 fn backlog_session(workspace: &std::path::Path, index: usize) -> SavedSession {
     let messages = [Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![ContentBlock::Text {
             text: "x".repeat(BACKLOG_CONTENT_BYTES_PER_REQUEST),
             cache_control: None,

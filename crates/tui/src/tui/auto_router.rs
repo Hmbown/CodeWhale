@@ -86,10 +86,11 @@ fn truncate_for_auto_router(text: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use crate::models::ContentBlock;
+    use crate::models::Role;
 
     fn make_msg(role: &str, text: &str) -> Message {
         Message {
-            role: role.to_string(),
+            role: Role::from(role),
             content: vec![ContentBlock::Text {
                 text: text.to_string(),
                 cache_control: None,
@@ -135,7 +136,7 @@ mod tests {
     fn recent_auto_router_context_excludes_hidden_thinking() {
         let msgs = vec![
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![
                     ContentBlock::Thinking {
                         signature: None,

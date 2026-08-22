@@ -603,6 +603,7 @@ fn human_bytes(bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Role;
     use tempfile::tempdir;
 
     fn create_test_png(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
@@ -1062,7 +1063,7 @@ mod tests {
         // 3. Check Chat Completions provider request body wiring
         let messages = vec![
             crate::models::Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![crate::models::ContentBlock::ToolUse {
                     id: "call_read_media".to_string(),
                     name: "read_media".to_string(),
@@ -1072,7 +1073,7 @@ mod tests {
                 }],
             },
             crate::models::Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![crate::models::ContentBlock::ToolResult {
                     tool_use_id: "call_read_media".to_string(),
                     content: rich.content.clone(),

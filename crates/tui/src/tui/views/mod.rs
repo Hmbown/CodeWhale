@@ -919,13 +919,13 @@ pub enum ViewEvent {
         reasoning_effort: Option<String>,
         locale: crate::localization::Locale,
     },
-    /// Emitted by the `/fleet` roster view (`s` / Enter) to hand off to the
-    /// setup wizard for authoring or overriding a roster member. The roster
-    /// view itself never writes anything.
+    /// Emitted by the `/fleet` roster view (`s` / Enter) to edit a member.
+    /// The host routes a selected v2 Fleet to its exact editor and uses the
+    /// legacy profile wizard only when no named Fleet is selected.
     FleetRosterOpenSetupRequested {
-        /// Canonical Fleet role carried from the selected roster member so
-        /// setup can continue at model selection without asking twice.
-        role: String,
+        /// Exact Fleet member id; roles are not unique and therefore cannot
+        /// identify which row the operator selected.
+        member_id: String,
     },
     /// Open the live workers tab from the unified Fleet surface.
     FleetRosterOpenWorkersRequested,
@@ -1078,6 +1078,13 @@ pub trait ModalView: std::any::Any {
     /// access from outside the trait so it can refresh its snapshot of the
     /// app's transcript state right before render).
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+
+    /// The approval tool id this view decides, when this view is an approval
+    /// card. Enables identity-aware dismissal: a remote decision must close
+    /// its own card, not whichever approval happens to be on top.
+    fn approval_request_id(&self) -> Option<&str> {
+        None
+    }
 }
 
 #[derive(Default)]
@@ -1114,6 +1121,15 @@ impl ViewStack {
 
     pub fn top_kind(&self) -> Option<ModalKind> {
         self.views.last().map(|view| view.kind())
+    }
+
+    /// Whether the top view is the approval card deciding exactly `gate`.
+    /// Identity-aware: a web-mirror dismissal closes its own card, never an
+    /// unrelated approval that happens to be on top.
+    pub fn top_matches_approval_gate(&self, gate: &str) -> bool {
+        self.views.last().is_some_and(|view| {
+            crate::remote_control::view_is_approval_for_gate(view.as_ref(), gate)
+        })
     }
 
     pub fn contains_kind(&self, kind: ModalKind) -> bool {

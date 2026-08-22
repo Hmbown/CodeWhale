@@ -9,10 +9,10 @@
 //! `[fleet.profiles]` config < `$CODEWHALE_HOME/agents/*.toml` personal <
 //! `.codewhale/agents/*.toml` project members)
 //! as a scrollable list with a detail pane for the selected row. The view
-//! never writes anything; `s` / Enter on a member hands off to the
-//! `/fleet setup` wizard for authoring and overrides (the operator row is
-//! display-only — its route changes via `/model` or `/provider`). Switch
-//! named Fleets with `/fleet fleets`.
+//! never writes anything; `s` / Enter on a selected-v2 member opens that
+//! Fleet's exact editor, while the legacy profile wizard is used only when no
+//! named Fleet is selected (the operator row is display-only). Switch named
+//! Fleets with `/fleet fleets`.
 //!
 //! NOTE: like `fleet_setup.rs`, the copy below is intentionally English for
 //! now (#3167 reworks Fleet UI localization); the command entry
@@ -112,6 +112,8 @@ pub struct FleetRosterView {
     shadowed: Vec<crate::fleet::roster::ShadowedProfile>,
     /// Selected named Fleet + scope, when one is active for this session.
     selected_fleet: Option<SelectedFleetSummary>,
+    /// A selected Fleet existed but could not become the runtime roster.
+    load_error: Option<String>,
     /// Selected row: 0 is the pinned operator row, members follow at 1..
     selected: usize,
     detail_scroll: usize,
@@ -129,10 +131,10 @@ impl FleetRosterView {
             });
         let mut view = Self::from_parts(
             OperatorInfo::from_app(app),
-            FleetRoster::load_with_plugins(
+            crate::fleet::identity::load_effective_roster(
                 &config.fleet_config(),
                 &app.workspace,
-                app.plugin_registry.as_ref(),
+                Some(app.plugin_registry.as_ref()),
             ),
             selected_fleet,
         );
@@ -145,6 +147,7 @@ impl FleetRosterView {
         roster: FleetRoster,
         selected_fleet: Option<SelectedFleetSummary>,
     ) -> Self {
+        let load_error = roster.load_error().map(str::to_string);
         Self {
             operator,
             // The operator is pinned as its own row 0 (the live session route),
@@ -160,6 +163,7 @@ impl FleetRosterView {
                 .collect(),
             shadowed: roster.shadowed().to_vec(),
             selected_fleet,
+            load_error,
             selected: 0,
             detail_scroll: 0,
             locale: Locale::En,
@@ -193,9 +197,14 @@ impl FleetRosterView {
     }
 
     fn footer_hints(&self) -> Vec<ActionHint> {
+        let edit_label = if self.selected_fleet.is_some() {
+            "edit Fleet"
+        } else {
+            "setup profile"
+        };
         vec![
             ActionHint::new("↑/↓", "move"),
-            ActionHint::new("s/Enter", "setup"),
+            ActionHint::new("s/Enter", edit_label),
             ActionHint::new("f", "saved Fleets"),
             ActionHint::new("w", tr(self.locale, MessageId::FleetRosterWorkers)),
             ActionHint::new("PgUp/PgDn", "scroll detail"),
@@ -226,11 +235,11 @@ impl ModalView for FleetRosterView {
             }
             KeyCode::Enter | KeyCode::Char('s') => {
                 if let Some(member) = self.selected_member() {
-                    let role = member.profile.role.name.clone();
-                    // Carry the role the operator already chose. The setup
-                    // wizard can still step back to Role when they want to
-                    // change it, but does not force a duplicate selection.
-                    ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenSetupRequested { role })
+                    let member_id = member.id.clone();
+                    // Carry the exact member the operator already chose. The host
+                    // focuses it in the selected v2 Fleet editor, or starts
+                    // legacy setup from its member id when no Fleet is selected.
+                    ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenSetupRequested { member_id })
                 } else {
                     // The operator is not a wizard-authored profile; its
                     // route changes via /model or /provider (the detail pane
@@ -334,9 +343,12 @@ impl ModalView for FleetRosterView {
 impl FleetRosterView {
     /// Scope-explicit selected Fleet line. Paths stay out — receipts name them.
     fn selected_fleet_line(&self) -> String {
+        if let Some(error) = &self.load_error {
+            return format!("Fleet selection error — {error}");
+        }
         match &self.selected_fleet {
             Some(sel) => format!("Fleet `{}` · {}", sel.name, sel.scope.long_label()),
-            None => "no saved Fleet selected · legacy roster".to_string(),
+            None => "No Fleet selected — built-in team".to_string(),
         }
     }
 
@@ -406,9 +418,18 @@ impl FleetRosterView {
                 // glance even before the detail pane opens.
                 let species = member_species(member);
                 let badge_cells = whales::BADGE_WIDTH + 1;
+                let member_name = member
+                    .display_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case(&member.id))
+                    .map_or_else(
+                        || member.id.clone(),
+                        |name| format!("{name} ({})", member.id),
+                    );
                 let text = format!(
                     "{pointer}{mark} {}{}  {}",
-                    member.id,
+                    member_name,
                     shadow_badge.as_deref().unwrap_or(""),
                     member_routing(member)
                 );
@@ -572,10 +593,10 @@ fn operator_detail_lines(operator: &OperatorInfo) -> Vec<Line<'static>> {
     detail_field(
         &mut lines,
         "Role",
-        "operator · Fleet leader (session route)".to_string(),
+        "Coordinator — this session's model leads the Fleet".to_string(),
     );
-    detail_field(&mut lines, "Origin", "session".to_string());
-    detail_field(&mut lines, "Posture", "full session authority".to_string());
+    detail_field(&mut lines, "Saved for", "this session only".to_string());
+    detail_field(&mut lines, "Access", "full session access".to_string());
     detail_field(&mut lines, "Provider", operator.provider.clone());
     detail_field(&mut lines, "Model", operator.model.clone());
     // Session-route capability badges (#5038). Use the exact route key rather
@@ -591,10 +612,9 @@ fn operator_detail_lines(operator: &OperatorInfo) -> Vec<Line<'static>> {
     detail_field(
         &mut lines,
         "Description",
-        "The operator is the Fleet leader — your main session model. Every member \
-         below works for this route. It dispatches workers via `agent` profile \
-         spawns and Workflow task({profile}). Change its route with /model or \
-         /provider; persist with /fleet save."
+        "The Coordinator is this Fleet's leader — your main session model. Every \
+         member below works for it. Change the model with /model or /provider; \
+         persist with /fleet save."
             .to_string(),
     );
     lines
@@ -603,28 +623,35 @@ fn operator_detail_lines(operator: &OperatorInfo) -> Vec<Line<'static>> {
 /// The resolved worker posture for a roster member: what the runtime would
 /// actually grant when this member is dispatched (role posture, not the
 /// profile's requested permissions).
-fn member_posture(member: &AgentProfile) -> String {
+/// Plain-Access summary for a roster member: what it may do, derived from the
+/// same runtime profile dispatch would grant. No internal role/posture words.
+fn member_access_summary(member: &AgentProfile) -> String {
     let agent_type = roster_member_agent_type(member);
     let runtime = WorkerRuntimeProfile::for_role(agent_type.clone());
     let write = if runtime.permissions.write {
-        "write"
+        "can edit files"
     } else {
-        "read-only"
+        "read-only files"
     };
     let shell = match runtime.shell {
-        ShellPolicy::None => "shell none",
-        ShellPolicy::ReadOnly => "shell read-only",
-        ShellPolicy::Full => "shell full",
+        ShellPolicy::None => "cannot run commands",
+        ShellPolicy::ReadOnly => "read-only commands",
+        ShellPolicy::Full => "can run commands",
     };
-    format!("{} worker · {write} · {shell}", agent_type.as_str())
+    let network = if runtime.permissions.network {
+        "network"
+    } else {
+        "no network"
+    };
+    format!("{write} · {shell} · {network}")
 }
 
-/// The routing truth for a member: explicit model pin, else route preset, else
-/// same-route inheritance. `[subagents]` overrides still win at dispatch.
+/// The model truth for a member: explicit model choice, else saved model set,
+/// else the session's model. `[subagents]` overrides still win at dispatch.
 ///
-/// When the loadout is `fast`, show that the runtime resolves the **fast
-/// sibling of the active session model** — not a stale on-disk profile name —
-/// so the roster matches what Fleet will actually launch.
+/// When the loadout is `fast`, show that the runtime picks the **fast sibling
+/// of the active session model** — not a stale on-disk profile name — so the
+/// roster matches what Fleet will actually launch.
 fn member_routing(member: &AgentProfile) -> String {
     member_routing_with_session(member, None)
 }
@@ -637,15 +664,24 @@ fn member_routing_with_session(member: &AgentProfile, session_model: Option<&str
         .map(str::trim)
         .filter(|model| !model.is_empty())
     {
-        return format!("model {model} (pinned)");
+        if let Some(provider) = member
+            .profile
+            .provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|provider| !provider.is_empty())
+        {
+            return format!("model {provider}/{model}");
+        }
+        return format!("model {model}");
     }
     match member.profile.loadout.as_str() {
-        "inherit" => "inherit session route".to_string(),
+        "inherit" => "same model as this session".to_string(),
         "fast" => match session_model.map(str::trim).filter(|m| !m.is_empty()) {
-            Some(session) => format!("fast sibling of {session} (resolved)"),
-            None => "route preset fast (resolved at launch)".to_string(),
+            Some(session) => format!("fast model for {session}"),
+            None => "fast model, picked at launch".to_string(),
         },
-        loadout => format!("route preset {loadout}"),
+        loadout => format!("saved model set {loadout}"),
     }
 }
 
@@ -700,9 +736,15 @@ fn member_detail_lines_with_session(
     detail_field(&mut lines, "Member", name);
     detail_field(
         &mut lines,
-        "Origin",
+        "Role",
+        member.profile.role.name.trim().to_string(),
+    );
+    detail_field(
+        &mut lines,
+        "Saved for",
         match member.origin {
-            ProfileOrigin::BuiltIn => "built-in (default party)".to_string(),
+            ProfileOrigin::BuiltIn => "all projects (built-in team)".to_string(),
+            ProfileOrigin::Workspace => "this project".to_string(),
             _ => format!("{} · {}", member.origin, member.source.display()),
         },
     );
@@ -722,12 +764,29 @@ fn member_detail_lines_with_session(
             body,
         );
     }
-    detail_field(&mut lines, "Slot", member.profile.slot.as_str().to_string());
-    detail_field(&mut lines, "Posture", member_posture(member));
+    // Slot is internal dispatch vocabulary and duplicates Role — never shown.
+    detail_field(&mut lines, "Access", member_access_summary(member));
+    if let Some(provider) = member
+        .profile
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())
+    {
+        detail_field(&mut lines, "Provider", provider.to_string());
+    }
     detail_field(
         &mut lines,
-        "Routing",
-        member_routing_with_session(member, session_model),
+        "Model",
+        match (
+            member.profile.model.as_deref(),
+            crate::fleet::identity::friendly_model_name(member),
+        ) {
+            (Some(model), Some(name)) if !name.eq_ignore_ascii_case(model.trim()) => {
+                format!("{name} ({})", model.trim())
+            }
+            _ => member_routing_with_session(member, session_model),
+        },
     );
 
     // Capability badges for a pinned model, from the shared Fleet resolver

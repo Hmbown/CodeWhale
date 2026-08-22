@@ -482,7 +482,21 @@ impl LlmError {
             400 => {
                 // Classify 400 errors by examining the response body
                 let body_lower = body.to_lowercase();
-                if body_lower.contains("context_length")
+                // An "unsupported parameter" 400 names the offending field
+                // (often `max_output_tokens` or another *token* field), which
+                // the generic keyword rules below would misread as a context
+                // window overflow. Parameter shape errors are invalid
+                // requests, not prompt-size errors, so they get their own
+                // branch ahead of the heuristic.
+                if body_lower.contains("unsupported parameter")
+                    || body_lower.contains("invalid_request_error")
+                        && body_lower.contains("parameter")
+                {
+                    LlmError::InvalidRequest {
+                        status,
+                        message: body.to_string(),
+                    }
+                } else if body_lower.contains("context_length")
                     || body_lower.contains("token")
                     || body_lower.contains("too long")
                     || body_lower.contains("maximum")
@@ -1164,6 +1178,10 @@ pub type RetryCallback = Box<dyn Fn(&LlmError, u32, Duration) + Send + Sync>;
 ///     })),
 /// ).await;
 /// ```
+// Keep the structured error inline: this is a public compatibility surface and
+// boxing it in a patch release would force every caller to change ownership
+// handling for `last_error`.
+#[allow(clippy::result_large_err)]
 pub async fn with_retry<F, Fut, T>(
     config: &RetryConfig,
     mut operation: F,

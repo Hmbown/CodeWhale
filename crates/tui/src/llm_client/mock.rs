@@ -55,6 +55,7 @@ use crate::models::{
 };
 
 use super::{LlmClient, StreamEventBox};
+use crate::models::Role;
 
 /// A pre-recorded "turn" the mock will replay on the next streaming call.
 ///
@@ -482,7 +483,7 @@ mod tests {
         MessageRequest {
             model: "mock-model".to_string(),
             messages: vec![Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![],
             }],
             max_tokens: 1024,

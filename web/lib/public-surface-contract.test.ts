@@ -533,10 +533,10 @@ done
     const footer = text("web/components/footer.tsx");
 
     expect(matrix.product.terminology).toEqual({
-      Fleet: "who does the work",
+      Fleet: "who is in the roster and which member is selected",
       Workflow: "what order the work follows",
       Lane: "one running Workflow instance",
-      Runtime: "where and how a Lane executes",
+      Runtime: "where, how, and with what authority selected work executes",
     });
     for (const [term, definition] of Object.entries(matrix.product.terminology)) {
       expect(fleet).toContain(`**${term}** = ${definition}`);

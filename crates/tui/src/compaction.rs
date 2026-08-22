@@ -8,6 +8,7 @@ use std::time::Duration;
 use crate::config::DEFAULT_TEXT_MODEL;
 use crate::core::model_client::ModelClient;
 use crate::logging;
+use crate::models::Role;
 use crate::models::{
     CacheControl, ContentBlock, Message, MessageRequest, SystemBlock, SystemPrompt,
 };
@@ -269,7 +270,7 @@ pub fn summary_prompt_text(prompt: &SystemPrompt) -> String {
 #[must_use]
 pub(crate) fn compaction_checkpoint_message(prompt: &SystemPrompt) -> Message {
     Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: summary_prompt_text(prompt),
             cache_control: None,
@@ -1016,7 +1017,7 @@ fn retained_user_messages(messages: &[Message], max_tokens: usize) -> Vec<Messag
             truncate_chars(&text, budget_chars).to_string()
         };
         selected.push(Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text,
                 cache_control: None,
@@ -1194,7 +1195,7 @@ async fn create_summary(
         ));
     }
     request_messages.push(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: compact_prompt(config.focus.as_deref()),
             cache_control: None,
@@ -1364,7 +1365,7 @@ mod tests {
     #[test]
     fn inline_image_estimates_nonzero_tokens() {
         let msg = Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::ImageUrl {
                 image_url: ImageUrlContent {
                     url: "data:image/png;base64,AAAA".to_string(),
@@ -1382,7 +1383,7 @@ mod tests {
 
     fn msg(role: &str, text: &str) -> Message {
         Message {
-            role: role.to_string(),
+            role: Role::from(role),
             content: vec![ContentBlock::Text {
                 text: text.to_string(),
                 cache_control: None,
@@ -1396,7 +1397,7 @@ mod tests {
 
     fn tool_use(id: &str, name: &str, input: serde_json::Value) -> Message {
         Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -1409,7 +1410,7 @@ mod tests {
 
     fn tool_result(id: &str, content: &str) -> Message {
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: id.to_string(),
                 content: content.to_string(),
@@ -2146,7 +2147,7 @@ mod tests {
     #[test]
     fn estimate_tokens_with_text() {
         let messages = vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "Hello, world!".to_string(), // 13 chars = ~3 tokens
                 cache_control: None,
@@ -2165,14 +2166,14 @@ mod tests {
         let thinking = "reasoning ".repeat(800);
         let current_messages = vec![
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "Use a tool".to_string(),
                     cache_control: None,
                 }],
             },
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![
                     ContentBlock::Thinking {
                         signature: None,
@@ -2189,7 +2190,7 @@ mod tests {
                 ],
             },
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: "tool-1".to_string(),
                     content: "manifest".to_string(),
@@ -2201,14 +2202,14 @@ mod tests {
         let historical_messages = {
             let mut messages = current_messages.clone();
             messages.push(Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::Text {
                     text: "Done.".to_string(),
                     cache_control: None,
                 }],
             });
             messages.push(Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "Next question.".to_string(),
                     cache_control: None,
@@ -2219,7 +2220,7 @@ mod tests {
         let completed_messages = {
             let mut messages = current_messages.clone();
             messages.push(Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::Text {
                     text: "Done.".to_string(),
                     cache_control: None,
@@ -2243,7 +2244,7 @@ mod tests {
         // Even with many messages, disabled compaction should return false
         let messages: Vec<Message> = (0..100)
             .map(|_| Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "test".to_string(),
                     cache_control: None,
@@ -2269,7 +2270,7 @@ mod tests {
         // 200 tiny messages, well above the prior message threshold.
         let many_messages: Vec<Message> = (0..200)
             .map(|_| Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "x".to_string(),
                     cache_control: None,

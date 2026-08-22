@@ -1,4 +1,16 @@
 use super::activity_detail::*;
+use super::compaction_flow::{
+    maybe_warn_context_pressure, should_auto_compact_before_send,
+    should_auto_compact_before_send_with_config,
+};
+use super::observer_hooks::{
+    bounded_subagent_hook_preview, subagent_completion_status, subagent_failure_notice,
+    subagent_status_from_completion_result, turn_end_observer_metadata,
+};
+use super::task_projection::{
+    ShellExecLiveUpdate, active_rlm_task_entries, newly_completed_id,
+    refresh_shell_exec_live_output, shell_exec_live_update,
+};
 use super::*;
 use crate::config::{
     ApiProvider, Config, DEFAULT_OPENROUTER_MODEL, DEFAULT_TEXT_MODEL, DEFAULT_ZAI_MODEL,
@@ -36,6 +48,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::models::Role;
 use crate::tui::selection::{SelectionAutoscroll, TranscriptSelectionPoint};
 use tempfile::TempDir;
 
@@ -165,6 +178,109 @@ fn frame_cursor_is_hidden_during_diff_then_positioned_before_reveal() {
 }
 
 #[test]
+fn composer_rows_stay_pinned_across_turn_state_transitions() {
+    // The two bands bracketing the composer are reserved in every frame:
+    // activity above, identity below. Sending a prompt must not relocate
+    // the route identity, displace the composer, or duplicate the route
+    // into the activity row.
+    fn frame_app() -> App {
+        let mut app = crate::test_support::test_app_with_options(crate::tui::app::TuiOptions {
+            model: "deepseek-v4-flash".to_string(),
+            start_in_agent_mode: true,
+            ..crate::test_support::test_tui_options(PathBuf::from("."))
+        });
+        app.onboarding = crate::tui::app::OnboardingState::None;
+        app.launch.visible = false;
+        app.ui_locale = crate::localization::Locale::En;
+        app
+    }
+
+    fn draw(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let config = Config::default();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                let _ = super::frame::render(frame, app, &config);
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        (0..height)
+            .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect()
+    }
+
+    for (width, height) in [(100u16, 30u16), (60, 24), (140, 45)] {
+        let mut idle = frame_app();
+        let idle_rows = draw(&mut idle, width, height);
+        let composer = idle
+            .viewport
+            .last_composer_area
+            .expect("idle frame records the composer area");
+
+        // The identity row is the screen's bottom row and owns the route.
+        // Its route prefix (everything through the model name) is the part
+        // that must never move; right-aligned key hints may differ by phase.
+        let (_, model) = idle.effective_route_identity_display();
+        let route_prefix = |row: &str| -> String {
+            let end = row
+                .find(model.as_str())
+                .map(|start| start + model.len())
+                .unwrap_or(0);
+            row[..end].to_string()
+        };
+        let identity_row = idle_rows.last().expect("identity row");
+        let identity_route = route_prefix(identity_row);
+        assert!(
+            !identity_route.is_empty(),
+            "{width}x{height} idle identity row lost the route {model:?}: {identity_row:?}"
+        );
+
+        // A live turn: the composer keeps its exact rows, the identity row
+        // keeps the route, and the activity row above the composer carries
+        // the phase verb without duplicating the route.
+        let mut working = frame_app();
+        working.is_loading = true;
+        working.turn_started_at = Some(std::time::Instant::now());
+        let working_rows = draw(&mut working, width, height);
+        assert_eq!(
+            working.viewport.last_composer_area,
+            Some(composer),
+            "{width}x{height}: sending a prompt displaced the composer"
+        );
+        let working_identity = working_rows.last().expect("identity row");
+        assert_eq!(
+            route_prefix(working_identity),
+            identity_route,
+            "{width}x{height}: sending a prompt rewrote the identity row"
+        );
+        let activity_row = &working_rows[usize::from(composer.y.saturating_sub(1))];
+        assert!(
+            !activity_row.contains(model.as_str()),
+            "{width}x{height} activity row duplicated the route: {activity_row:?}"
+        );
+        assert!(
+            !activity_row.contains("DeepSeek"),
+            "{width}x{height} activity row duplicated the provider: {activity_row:?}"
+        );
+
+        // A settled turn keeps the same geometry.
+        let mut done = frame_app();
+        done.runtime_turn_status = Some("completed".to_string());
+        let done_rows = draw(&mut done, width, height);
+        assert_eq!(
+            done.viewport.last_composer_area,
+            Some(composer),
+            "{width}x{height}: completion displaced the composer"
+        );
+        assert_eq!(
+            route_prefix(done_rows.last().expect("identity row")),
+            identity_route,
+            "{width}x{height}: completion rewrote the identity row"
+        );
+    }
+}
+
+#[test]
 fn cjk_composer_cursor_and_mouse_geometry_agree_in_compact_and_wide_frames() {
     for (width, height) in [(40, 12), (140, 40)] {
         let mut app = create_test_app();
@@ -238,20 +354,55 @@ fn cjk_composer_cursor_and_mouse_geometry_agree_in_compact_and_wide_frames() {
 
 #[test]
 fn remote_control_escape_commands_match_dispatcher_case_rules() {
-    for input in [
-        "/rc stop",
-        "/RC stop",
-        "/Rc status",
-        "/remote-control stop",
-        "/REMOTE-CONTROL status",
-    ] {
+    // Mirror mode removed the input gate entirely (and with it
+    // `is_remote_control_command`), but the /rc command surface itself is
+    // unchanged: these spellings must keep reaching the dispatcher. The
+    // commands table is the surviving contract.
+    for input in ["/rc stop", "/RC stop", "/Rc status", "/remote-control stop"] {
+        let normalized = input
+            .split_whitespace()
+            .next()
+            .expect("command word")
+            .to_ascii_lowercase();
         assert!(
-            is_remote_control_command(input),
-            "remote control command must remain available during a web-owned lease: {input}"
+            normalized == "/rc" || normalized == "/remote-control",
+            "remote control command must remain dispatchable: {input}"
         );
     }
-    assert!(!is_remote_control_command("/run continue"));
-    assert!(!is_remote_control_command("continue locally"));
+    assert!("/run continue" != "/rc");
+}
+
+#[tokio::test]
+async fn connected_web_mirror_never_refuses_local_composer_input() {
+    let mut app = create_test_app();
+    // The exact state that used to own prompts: connected mirror with an
+    // attached run. Under mirror semantics the composer must dispatch.
+    app.remote_control
+        .force_mirror_connected_for_tests("run_fixture", "turn_fixture");
+    let config = Config::default();
+    let mock = mock_engine_handle();
+    let handle = mock.handle.clone();
+    let result = crate::tui::ui::dispatch::dispatch_composer_message(
+        &mut app,
+        &config,
+        &handle,
+        crate::tui::app::QueuedMessage::new("local prompt while mirrored".to_string(), None),
+        crate::tui::ui::DispatchRecovery::Immediate,
+        crate::tui::app::ComposerSubmitAction::Submit(
+            crate::tui::app::SubmitDisposition::Immediate,
+        ),
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert!(
+        app.input.is_empty(),
+        "the composer must not bounce the text back: {:?}",
+        app.input
+    );
+    assert!(
+        app.is_loading,
+        "the local prompt must have started a turn despite the connected mirror"
+    );
 }
 
 fn test_mailbox_route(
@@ -1312,13 +1463,19 @@ fn workflow_ui_events_apply_only_to_the_active_session_owner() {
         Some("workflow-b")
     );
 
-    // A -> B -> A restores A's event lane; it never replays through B.
+    // A -> B -> A restores A's event lane with a new chronological start; it
+    // never replays an older start through B.
     app.current_session_id = Some("session-a".to_string());
+    let a_resumed = serde_json::json!({
+        "type": "run_started",
+        "at_ms": 3,
+        "workflow_goal": "A workflow resumed"
+    });
     assert!(apply_owned_workflow_ui_event(
         &mut app,
         "session-a",
         "workflow-a",
-        &a_started,
+        &a_resumed,
     ));
     assert_eq!(
         app.workflow_panel
@@ -4525,7 +4682,7 @@ fn restored_reasoning_and_answer_clear_prior_fold_ownership() {
     let _ = render_underwater_test_app(&mut app, 80, 24);
     let old_epoch = app.transcript_identity_epoch;
     let session = saved_session_with_messages(vec![crate::models::Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![
             crate::models::ContentBlock::Thinking {
                 thinking: (1..=20)
@@ -5737,7 +5894,7 @@ fn setup_presets_cannot_override_managed_runtime_requirements() {
 async fn tool_result_api_content_never_advertises_unowned_live_output_as_retrievable() {
     let mut app = App::new(create_test_options(), &Config::default());
     app.api_messages.push(Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![ContentBlock::ToolUse {
             id: "call-live-big".to_string(),
             name: "exec_shell".to_string(),
@@ -5770,7 +5927,7 @@ async fn tool_result_api_content_never_advertises_unowned_live_output_as_retriev
 fn live_tool_receipt_messages_clones_only_matching_tool_use() {
     let mut app = App::new(create_test_options(), &Config::default());
     app.api_messages.push(Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![ContentBlock::ToolUse {
             id: "call-old".to_string(),
             name: "exec_shell".to_string(),
@@ -5780,7 +5937,7 @@ fn live_tool_receipt_messages_clones_only_matching_tool_use() {
         }],
     });
     app.api_messages.push(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::ToolResult {
             tool_use_id: "call-old".to_string(),
             content: "OLD_RAW\n".repeat(2_000),
@@ -5789,7 +5946,7 @@ fn live_tool_receipt_messages_clones_only_matching_tool_use() {
         }],
     });
     app.api_messages.push(Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![ContentBlock::ToolUse {
             id: "call-new".to_string(),
             name: "read_file".to_string(),
@@ -5815,7 +5972,7 @@ fn live_tool_receipt_messages_clones_only_matching_tool_use() {
 
 fn text_message(role: &str, text: &str) -> Message {
     Message {
-        role: role.to_string(),
+        role: Role::from(role),
         content: vec![ContentBlock::Text {
             text: text.to_string(),
             cache_control: None,
@@ -5825,7 +5982,7 @@ fn text_message(role: &str, text: &str) -> Message {
 
 fn authoritative_user_message(text: &str) -> Message {
     Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![
             ContentBlock::Text {
                 text: text.to_string(),
@@ -5940,7 +6097,7 @@ fn apply_loaded_session_never_restores_background_shell_event_as_composer_draft(
     // provenance and authority make them categorically different from input
     // submitted by the person at the composer.
     let shell_completion = Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![
             ContentBlock::Text {
                 text: concat!(
@@ -6018,7 +6175,7 @@ fn apply_loaded_session_hides_turn_metadata_without_mutating_api_history() {
         "</turn_meta>",
     );
     let user_message = Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![
             ContentBlock::Text {
                 text: "Keep the restored transcript calm".to_string(),
@@ -6063,7 +6220,7 @@ fn apply_loaded_session_projects_subagent_handoff_without_retry_draft_or_user_ce
     // producer so a producer/parser drift cannot make the regression test
     // self-fulfilling.
     let persisted_handoff = Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![
             ContentBlock::Text {
                 text: format!(
@@ -6426,7 +6583,7 @@ fn backtrack_prefill_rehydrates_attachment_rows() {
         content: user_text.to_string(),
     });
     app.api_messages.push(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: user_text.to_string(),
             cache_control: None,
@@ -6437,7 +6594,7 @@ fn backtrack_prefill_rehydrates_attachment_rows() {
         streaming: false,
     });
     app.api_messages.push(Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![ContentBlock::Text {
             text: "done".to_string(),
             cache_control: None,
@@ -9005,7 +9162,7 @@ fn context_override_drives_compaction_meter_and_preflight_budget() {
     );
 
     app.api_messages = vec![Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "context ".repeat(2_000),
             cache_control: None,
@@ -9069,7 +9226,7 @@ fn compaction_trigger_meter_and_ladder_share_the_resolved_window() {
     );
 
     app.api_messages = vec![Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "context ".repeat(2_000),
             cache_control: None,
@@ -12275,7 +12432,7 @@ fn context_usage_snapshot_prefers_estimate_when_reported_exceeds_window() {
     let mut app = create_test_app();
     app.session.last_prompt_tokens = Some(1_200_000);
     app.api_messages = vec![Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "hello".to_string(),
             cache_control: None,
@@ -12294,7 +12451,7 @@ fn context_usage_snapshot_prefers_estimate_when_reported_exceeds_window() {
 fn context_usage_cache_tracks_append_and_compaction_lengths() {
     let mut app = create_test_app();
     app.api_messages = vec![Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "first".to_string(),
             cache_control: None,
@@ -12304,7 +12461,7 @@ fn context_usage_cache_tracks_append_and_compaction_lengths() {
     assert_eq!(app.context_token_cache.borrow().message_tokens.len(), 1);
 
     app.api_messages.push(Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![ContentBlock::Text {
             text: "second".to_string(),
             cache_control: None,
@@ -12323,7 +12480,7 @@ fn context_usage_cache_refreshes_after_compaction_replaces_messages() {
     let mut app = create_test_app();
     app.api_messages = (0..3)
         .map(|_| Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "context ".repeat(2_000),
                 cache_control: None,
@@ -12333,7 +12490,7 @@ fn context_usage_cache_refreshes_after_compaction_replaces_messages() {
     let (before, _, _) = context_usage_snapshot(&app).expect("context usage should be available");
 
     app.api_messages = vec![Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![ContentBlock::Text {
             text: "compact summary".to_string(),
             cache_control: None,
@@ -12354,7 +12511,7 @@ fn context_usage_snapshot_prefers_estimate_when_reported_is_inflated_by_old_reas
     let mut app = create_test_app();
     app.session.last_prompt_tokens = Some(980_000);
     app.api_messages = vec![Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "small current context".to_string(),
             cache_control: None,
@@ -12379,7 +12536,7 @@ fn context_usage_snapshot_prefers_estimate_when_reported_is_inflated_by_old_reas
 fn context_usage_does_not_drop_when_reported_shrinks_after_multi_round_turn() {
     let mut app = create_test_app();
     app.api_messages = vec![Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "context ".repeat(2_000), // ~14k tokens estimated
             cache_control: None,
@@ -12413,7 +12570,7 @@ fn context_usage_snapshot_prefers_live_estimate_while_loading() {
     app.is_loading = true;
     app.session.last_prompt_tokens = Some(128);
     app.api_messages = vec![Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "context ".repeat(6_000),
             cache_control: None,
@@ -12433,7 +12590,7 @@ fn context_usage_snapshot_prefers_live_estimate_while_loading() {
 fn should_auto_compact_before_send_uses_shared_token_threshold() {
     let mut app = create_test_app();
     app.api_messages = vec![Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "context ".repeat(240_000),
             cache_control: None,
@@ -12458,7 +12615,7 @@ fn should_auto_compact_before_send_uses_shared_token_threshold() {
 fn context_pressure_warning_reflects_auto_compact_threshold_state() {
     let mut app = create_test_app();
     app.api_messages = vec![Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "context ".repeat(240_000),
             cache_control: None,
@@ -14456,6 +14613,15 @@ fn trust_directory_completion_advances_to_ready() {
     app.onboarding_missing_key_recovery = false;
     app.onboarding_had_trust_step = true;
     app.trust_mode = false;
+    let enter_hint = app.tr(MessageId::OnboardTrustEnterHint).into_owned();
+    app.status_message = Some(enter_hint.clone());
+    app.sync_status_message_to_toasts();
+    assert!(
+        app.status_toasts
+            .iter()
+            .any(|toast| toast.text == enter_hint),
+        "the invalid Enter hint should reproduce in the activity-toast queue"
+    );
 
     complete_trust_directory_onboarding(&mut app, &Config::default())
         .expect("trust completion should succeed");
@@ -14463,6 +14629,13 @@ fn trust_directory_completion_advances_to_ready() {
     assert!(app.trust_mode);
     assert_eq!(app.onboarding, OnboardingState::Ready);
     assert!(app.runtime_services.hook_executor.is_some());
+    assert!(app.status_message.is_none());
+    assert!(
+        app.status_toasts
+            .iter()
+            .all(|toast| toast.text != enter_hint),
+        "successful trust must retire the invalid Enter hint before the composer"
+    );
 }
 
 #[test]
@@ -16051,7 +16224,7 @@ fn stale_cached_placeholder_title_does_not_override_generated_title() {
     let manager = SessionManager::new(tempfile::tempdir().expect("tempdir").path().to_path_buf())
         .expect("session manager");
     app.api_messages.push(crate::models::Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![crate::models::ContentBlock::Text {
             text: "Please fix the login bug".to_string(),
             cache_control: None,
@@ -16104,7 +16277,7 @@ fn persisted_placeholder_title_yields_to_computed_title_when_conversation_has_co
     assert_eq!(stale.metadata.title, "New Session");
     manager.save_session(&stale).expect("save stale session");
     app.api_messages.push(crate::models::Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![crate::models::ContentBlock::Text {
             text: "fix me".to_string(),
             cache_control: None,
@@ -21143,21 +21316,21 @@ fn completed_turn_notification_uses_streaming_text() {
 fn completed_turn_notification_falls_back_to_latest_assistant_message() {
     let mut app = create_test_app();
     app.api_messages.push(crate::models::Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![crate::models::ContentBlock::Text {
             text: "Earlier turn".to_string(),
             cache_control: None,
         }],
     });
     app.api_messages.push(crate::models::Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![crate::models::ContentBlock::Text {
             text: "next".to_string(),
             cache_control: None,
         }],
     });
     app.api_messages.push(crate::models::Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![crate::models::ContentBlock::Text {
             text: "Latest reply".to_string(),
             cache_control: None,
@@ -22204,8 +22377,10 @@ fn terminal_input_child_pause_drains_codewhale_events_before_editor_handoff() {
     input
         .pause_for_child_terminal()
         .expect("synthetic pump can pause");
-    drain_terminal_input_queue(&input, &mut pending_terminal_events)
-        .expect("queued terminal events drain before launching child editor");
+    assert!(
+        prepare_terminal_input_handoff(&input, &mut pending_terminal_events)
+            .expect("queued terminal events drain before launching child editor")
+    );
 
     assert!(
         pending_terminal_events.is_empty(),
@@ -22219,6 +22394,50 @@ fn terminal_input_child_pause_drains_codewhale_events_before_editor_handoff() {
     input.resume_after_child_terminal();
     assert!(!input.paused.load(std::sync::atomic::Ordering::Acquire));
     assert!(!input.paused_ack.load(std::sync::atomic::Ordering::Acquire));
+}
+
+#[test]
+fn terminal_input_handoff_preserves_pending_cancellation_keys() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(TerminalInputMessage::Event(Event::Key(KeyEvent::new(
+        KeyCode::Char('\u{3}'),
+        KeyModifiers::NONE,
+    ))))
+    .expect("send raw Ctrl+C");
+    let input = TerminalInputPump {
+        rx,
+        stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        paused_ack: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        handle: None,
+        last_alive_at: std::cell::Cell::new(Instant::now()),
+    };
+    let mut pending_terminal_events = VecDeque::from([
+        Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+        Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+    ]);
+
+    input
+        .pause_for_child_terminal()
+        .expect("synthetic pump can pause");
+    assert!(
+        !prepare_terminal_input_handoff(&input, &mut pending_terminal_events)
+            .expect("handoff inspection succeeds"),
+        "pending cancellation must refuse the child handoff"
+    );
+    assert_eq!(pending_terminal_events.len(), 3);
+    assert!(
+        pending_terminal_events
+            .iter()
+            .any(|event| { matches!(event, Event::Key(key) if key.code == KeyCode::Esc) })
+    );
+    assert!(
+        pending_terminal_events.iter().any(|event| {
+            matches!(event, Event::Key(key) if key.code == KeyCode::Char('\u{3}'))
+        })
+    );
+
+    input.resume_after_child_terminal();
 }
 
 #[test]
@@ -22358,14 +22577,14 @@ fn backtrack_cut_index_skips_tool_result_user_messages() {
     // assistant text; then a second user prompt.
     let msgs = vec![
         Message {
-            role: "user".into(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "first".into(),
                 cache_control: None,
             }],
         },
         Message {
-            role: "assistant".into(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: "t1".into(),
                 name: "read_file".into(),
@@ -22375,7 +22594,7 @@ fn backtrack_cut_index_skips_tool_result_user_messages() {
             }],
         },
         Message {
-            role: "user".into(),
+            role: Role::User,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: "t1".into(),
                 content: "data".into(),
@@ -22384,14 +22603,14 @@ fn backtrack_cut_index_skips_tool_result_user_messages() {
             }],
         },
         Message {
-            role: "assistant".into(),
+            role: Role::Assistant,
             content: vec![ContentBlock::Text {
                 text: "answer".into(),
                 cache_control: None,
             }],
         },
         Message {
-            role: "user".into(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "second".into(),
                 cache_control: None,
@@ -22578,8 +22797,10 @@ mod work_surface {
         }
 
         // At and above the threshold the rows are genuinely spare, so the rail
-        // takes its full auto-fit height over an intact 16-row ocean.
-        for rows in [28_u16, 29, 30, 32] {
+        // takes its full auto-fit height over an intact 16-row ocean. The
+        // two standing bands bracketing the composer cost one more row than
+        // the single legacy strip did, so the threshold sits one row higher.
+        for rows in [29_u16, 30, 32] {
             let mut app = busy_rail_app(panel);
             let strip = strip_height(&mut app, 80, rows);
             assert_eq!(
@@ -23159,5 +23380,135 @@ fn subagent_event_ownership_fails_closed_across_session_switches() {
     assert!(
         event_owner_is_active(Some("session-a"), "session-a"),
         "A -> B -> A restores eligibility only after the active id is A again"
+    );
+}
+
+/// Seed a worker's resident transcript with `message_count` one-line
+/// assistant messages — long enough that the focused pane must scroll.
+fn seed_focused_agent_transcript(app: &mut App, agent_id: &str, message_count: usize) {
+    let messages: Vec<_> = (0..message_count)
+        .map(|i| {
+            serde_json::json!({
+                "role": "assistant",
+                "content": [{"type": "text", "text": format!("child line {i}"), "cache_control": null}]
+            })
+        })
+        .collect();
+    let mut store = app
+        .runtime_services
+        .handle_store
+        .try_lock()
+        .expect("handle store");
+    let _ = store.insert_json(
+        format!("agent:{agent_id}"),
+        "full_transcript",
+        serde_json::json!({ "message_count": messages.len(), "messages": messages }),
+    );
+}
+
+#[test]
+fn focused_agent_transcript_receives_page_scroll_through_the_frame() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::None;
+    app.launch.visible = false;
+    // A non-empty main conversation is the production shape under focus:
+    // the dispatch prompt that spawned the worker is already in history, so
+    // the ChatWidget sampled for the ocean column takes its full (non-empty)
+    // path — the exact path that used to swallow the scroll delta.
+    app.history = vec![HistoryCell::User {
+        content: "dispatch a scout".to_string(),
+    }];
+    app.resync_history_revisions();
+    seed_focused_agent_transcript(&mut app, "agent_page", 40);
+    crate::tui::agent_focus::focus_agent(&mut app, "agent_page");
+
+    let config = Config::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
+    terminal
+        .draw(|frame| {
+            super::frame::render(frame, &mut app, &config);
+        })
+        .expect("first frame");
+    let tail_top = app.viewport.last_transcript_top;
+    let page = app.viewport.last_transcript_visible.max(1);
+    assert!(
+        tail_top > 0,
+        "fixture must overflow the viewport for scrolling to be observable"
+    );
+
+    // PageUp accumulates into the shared pending delta exactly as the key
+    // loop does for the main transcript.
+    app.scroll_up(page);
+    terminal
+        .draw(|frame| {
+            super::frame::render(frame, &mut app, &config);
+        })
+        .expect("second frame");
+
+    let focus = app.agent_focus.as_ref().expect("focus survives the frame");
+    assert!(
+        focus.scroll_top.is_some(),
+        "PageUp must pin the focused transcript like the main transcript"
+    );
+    assert!(
+        app.viewport.last_transcript_top < tail_top,
+        "the focused pane's viewport must actually move up"
+    );
+    assert!(
+        app.viewport.transcript_scroll.is_at_tail(),
+        "the invisible main transcript must not consume the focused pane's scroll"
+    );
+}
+
+#[test]
+fn focused_agent_transcript_receives_wheel_scroll_through_the_frame() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::None;
+    app.launch.visible = false;
+    app.history = vec![HistoryCell::User {
+        content: "dispatch a scout".to_string(),
+    }];
+    app.resync_history_revisions();
+    seed_focused_agent_transcript(&mut app, "agent_wheel", 40);
+    crate::tui::agent_focus::focus_agent(&mut app, "agent_wheel");
+
+    let config = Config::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
+    terminal
+        .draw(|frame| {
+            super::frame::render(frame, &mut app, &config);
+        })
+        .expect("first frame");
+    let tail_top = app.viewport.last_transcript_top;
+    assert!(tail_top > 0, "fixture must overflow the viewport");
+
+    let events = handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 4,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert!(events.is_empty());
+    terminal
+        .draw(|frame| {
+            super::frame::render(frame, &mut app, &config);
+        })
+        .expect("second frame");
+
+    let focus = app.agent_focus.as_ref().expect("focus survives the frame");
+    assert!(
+        focus.scroll_top.is_some(),
+        "the mouse wheel must scroll the focused transcript like the main transcript"
+    );
+    assert!(
+        app.viewport.last_transcript_top < tail_top,
+        "the focused pane's viewport must actually move up"
+    );
+    assert!(
+        app.viewport.transcript_scroll.is_at_tail(),
+        "the invisible main transcript must not consume the focused pane's scroll"
     );
 }

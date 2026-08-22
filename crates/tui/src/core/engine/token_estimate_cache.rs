@@ -166,11 +166,12 @@ fn fingerprint_system_prompt(system: Option<&SystemPrompt>) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Role;
     use crate::models::{ContentBlock, SystemBlock};
 
     fn user_text(s: &str) -> Message {
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: s.to_string(),
                 cache_control: None,

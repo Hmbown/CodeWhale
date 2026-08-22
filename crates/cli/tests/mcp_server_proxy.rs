@@ -28,13 +28,19 @@ while IFS= read -r line; do
   fi
   case "$method" in
     initialize)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"fake-mcp","version":"0"}}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{},"resources":{}},"serverInfo":{"name":"fake-mcp","version":"0"}}}\n' "$id"
       ;;
     tools/list)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"whoami","description":"report the spawned process"}]}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"whoami","description":"report the spawned process","inputSchema":{"type":"object","properties":{}}}]}}\n' "$id"
       ;;
     tools/call)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"spawned-child"}]}}\n' "$id"
+      ;;
+    resources/list)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resources":[{"uri":"file:///fake/readme.txt","name":"Fake readme","description":"resource from the spawned process","mimeType":"text/plain","size":16,"annotations":{"audience":["assistant"],"priority":0.75}}]}}\n' "$id"
+      ;;
+    resources/read)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"file:///fake/readme.txt","mimeType":"text/plain","text":"spawned-resource"}]}}\n' "$id"
       ;;
     *)
       printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"unsupported method"}}\n' "$id"
@@ -145,7 +151,63 @@ fn response_for(responses: &[Value], id: i64) -> &Value {
 }
 
 #[test]
-fn mcp_server_proxies_tools_from_the_configured_child_process() {
+fn mcp_server_enforces_jsonrpc_identity_and_initialize_lifecycle() {
+    let fixture = Fixture::new();
+    let (responses, stderr) = fixture.run_mcp_server(&[
+        json!({"id": 1, "method": "ping"}),
+        json!({"jsonrpc": "2.0", "id": null, "method": "ping"}),
+        json!({"jsonrpc": "2", "id": 2, "method": "ping"}),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "clientInfo": {"name": "lifecycle-test", "version": "1"},
+                "capabilities": {}
+            }
+        }),
+        json!({"jsonrpc": "2.0", "id": 5, "method": "resources/list"}),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({"jsonrpc": "2.0", "method": "ping"}),
+        json!({"jsonrpc": "2.0", "id": 6, "method": "tools/list"}),
+        json!({"jsonrpc": "2.0", "id": 7, "method": "shutdown"}),
+    ]);
+
+    let null_id_responses: Vec<&Value> = responses
+        .iter()
+        .filter(|response| response["id"].is_null())
+        .collect();
+    assert_eq!(
+        null_id_responses.len(),
+        2,
+        "missing id must be a notification while explicit null receives a response: {responses:?}"
+    );
+    assert_eq!(null_id_responses[0]["error"]["code"], -32600);
+    assert!(null_id_responses[1]["result"].is_object());
+
+    assert_eq!(response_for(&responses, 2)["error"]["code"], -32600);
+    assert_eq!(response_for(&responses, 3)["error"]["code"], -32600);
+    assert!(
+        response_for(&responses, 3)["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("completed initialize"))
+    );
+    assert_eq!(
+        response_for(&responses, 4)["result"]["protocolVersion"],
+        "2024-11-05"
+    );
+    assert_eq!(response_for(&responses, 5)["error"]["code"], -32600);
+    assert_eq!(response_for(&responses, 6)["result"]["tools"], json!([]));
+    assert!(
+        stderr.contains("codewhale mcp-server: stdio server exited"),
+        "missing clean shutdown receipt:\n{stderr}"
+    );
+}
+
+#[test]
+fn mcp_server_proxies_tools_and_resources_from_the_configured_child_process() {
     let fixture = Fixture::new();
     let script = fixture.write_fake_server();
     fixture.configure_servers(json!([{
@@ -157,6 +219,17 @@ fn mcp_server_proxies_tools_from_the_configured_child_process() {
     }]));
 
     let (responses, stderr) = fixture.run_mcp_server(&[
+        json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "clientInfo": {"name": "proxy-test", "version": "1"},
+                "capabilities": {}
+            }
+        }),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
         json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
         json!({
             "jsonrpc": "2.0",
@@ -164,8 +237,24 @@ fn mcp_server_proxies_tools_from_the_configured_child_process() {
             "method": "tools/call",
             "params": {"name": "mcp__fake__whoami", "arguments": {}}
         }),
-        json!({"jsonrpc": "2.0", "id": 3, "method": "shutdown"}),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "resources/list"}),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "resources/read",
+            "params": {"uri": "file:///fake/readme.txt"}
+        }),
+        json!({"jsonrpc": "2.0", "id": 5, "method": "shutdown"}),
     ]);
+
+    let initialize = response_for(&responses, 0);
+    assert_eq!(initialize["result"]["protocolVersion"], "2024-11-05");
+    assert_eq!(
+        initialize["result"]["serverInfo"]["name"],
+        "codewhale-mcp-server"
+    );
+    assert!(initialize["result"]["capabilities"]["tools"].is_object());
+    assert!(initialize["result"]["capabilities"]["resources"].is_object());
 
     let tools = response_for(&responses, 1)["result"]["tools"]
         .as_array()
@@ -173,19 +262,55 @@ fn mcp_server_proxies_tools_from_the_configured_child_process() {
         .clone();
     let names: Vec<&str> = tools
         .iter()
-        .filter_map(|tool| tool["tool_name"].as_str())
+        .filter_map(|tool| tool["name"].as_str())
         .collect();
     assert_eq!(
         names,
-        vec!["whoami"],
+        vec!["mcp__fake__whoami"],
         "only the child's real tools may be exposed; the stub's fabricated \
          `health`/`capabilities` must be gone. stderr:\n{stderr}"
     );
+    assert_eq!(tools[0]["tool_name"], "whoami");
+    assert!(tools[0]["inputSchema"].is_object());
 
     let call = response_for(&responses, 2);
     assert_eq!(
+        call["result"]["content"][0]["text"], "spawned-child",
+        "the standard MCP result must come from the spawned process: {call}"
+    );
+    assert_eq!(
         call["result"]["result"]["content"][0]["text"], "spawned-child",
-        "the tool result must come from the spawned process: {call}"
+        "the legacy nested result must remain available: {call}"
+    );
+
+    let resources = response_for(&responses, 3)["result"]["resources"]
+        .as_array()
+        .unwrap_or_else(|| panic!("resources/list returned no array; stderr:\n{stderr}"));
+    assert_eq!(resources.len(), 1);
+    assert_eq!(resources[0]["uri"], "file:///fake/readme.txt");
+    assert_eq!(resources[0]["name"], "Fake readme");
+    assert_eq!(resources[0]["mimeType"], "text/plain");
+    assert_eq!(resources[0]["size"], 16);
+    assert_eq!(
+        resources[0]["annotations"]["audience"],
+        json!(["assistant"])
+    );
+    assert_eq!(resources[0]["annotations"]["priority"], 0.75);
+    assert_eq!(resources[0]["server_name"], "fake");
+
+    let read = response_for(&responses, 4);
+    assert_eq!(read["result"]["contents"][0]["text"], "spawned-resource");
+    assert_eq!(
+        read["result"]["resource"]["contents"][0]["text"], "spawned-resource",
+        "the legacy nested resource must remain available: {read}"
+    );
+    assert!(
+        !stderr.contains("deepseek-mcp"),
+        "stale identity in stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("codewhale mcp-server: stdio server exited"),
+        "missing Codewhale shutdown identity in stderr:\n{stderr}"
     );
 }
 
@@ -201,6 +326,17 @@ fn mcp_server_reports_a_server_it_could_not_spawn() {
 
     let (responses, stderr) = fixture.run_mcp_server(&[
         json!({"jsonrpc": "2.0", "id": 1, "method": "server/list"}),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "clientInfo": {"name": "failure-test", "version": "1"},
+                "capabilities": {}
+            }
+        }),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
         json!({
             "jsonrpc": "2.0",
             "id": 2,

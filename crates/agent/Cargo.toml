@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "Model/provider registry and fallback strategy for Codewhale"
 
+[lints]
+workspace = true
+
 [dependencies]
-codewhale-config = { path = "../config", version = "0.9.10" }
+codewhale-config = { path = "../config", version = "0.9.11" }
 serde.workspace = true

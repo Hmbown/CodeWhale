@@ -161,12 +161,19 @@ pub const DEFAULT_DEEPSEEKCN_BASE_URL: &str = DEFAULT_DEEPSEEK_BASE_URL;
 pub const COMMON_DEEPSEEK_MODELS: &[&str] = &[
     "deepseek-v4-pro",
     "deepseek-v4-flash",
+    "deepseek-v4-flash-vision-exp",
     "deepseek-ai/deepseek-v4-pro",
     "deepseek-ai/deepseek-v4-flash",
     "deepseek/deepseek-v4-pro",
     "deepseek/deepseek-v4-flash",
 ];
-pub const OFFICIAL_DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-v4-flash"];
+pub const OFFICIAL_DEEPSEEK_MODELS: &[&str] = &[
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+    // Vision-experimental sibling of v4-flash; verified live on
+    // api.deepseek.com /models 2026-08-21. Same family aliases apply.
+    "deepseek-v4-flash-vision-exp",
+];
 // GLM-5.3 is live on the Z.ai Coding Plan (2026-08-13) and is the default
 // for new Z.ai routes. Limits and reasoning options still inherit from
 // glm-5.2 until Z.ai publishes distinct 5.3 numbers; no USD price is

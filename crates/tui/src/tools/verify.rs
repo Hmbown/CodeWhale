@@ -55,6 +55,7 @@ use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
     optional_str, required_str,
 };
+use crate::models::Role;
 
 /// Total evidence budget handed to the critic. Kept well under a turn so the
 /// critic has room to reason. Large diffs/files are truncated with a marker.
@@ -536,7 +537,7 @@ fn build_critic_request(
     MessageRequest {
         model: model.to_string(),
         messages: vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: prompt,
                 cache_control: None,

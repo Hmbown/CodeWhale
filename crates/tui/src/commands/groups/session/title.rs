@@ -192,6 +192,7 @@ pub(crate) fn set_window_title_with_manager(
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::models::Role;
     use crate::session_manager::{SessionManager, create_saved_session_with_mode};
     use crate::tui::app::{App, TuiOptions};
     use tempfile::TempDir;
@@ -380,7 +381,7 @@ mod tests {
 
     fn user_message(text: &str) -> crate::models::Message {
         crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![crate::models::ContentBlock::Text {
                 text: text.to_string(),
                 cache_control: None,

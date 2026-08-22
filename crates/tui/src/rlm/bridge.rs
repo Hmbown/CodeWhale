@@ -20,6 +20,7 @@ use futures_util::future::join_all;
 use tokio::sync::Mutex;
 
 use crate::llm_client::LlmClient;
+use crate::models::Role;
 use crate::models::{
     ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt, Usage,
     is_incomplete_stop_reason, stop_reason_detail,
@@ -164,7 +165,7 @@ impl RlmBridge {
             // cannot silently upgrade cheap fanout work to an expensive model.
             model: self.child_model.clone(),
             messages: vec![Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: prompt,
                     cache_control: None,

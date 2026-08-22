@@ -7,6 +7,715 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.11] - 2026-08-22
+
+Codewhale v0.9.11 tightens the long-running agent loop, makes workflow
+failures visible instead of successful-looking, adds an experimental
+vision-capable DeepSeek route, and prepares reproducible Codewhale-versus-Pi
+evaluation without publishing a result before a real run. The complete
+item-level change record is retained below the categorized release highlights.
+
+### Added
+
+- Added first-party `deepseek-v4-flash-vision-exp` discovery and selection for
+  DeepSeek, including the `flash-vision` alias, bundled offline metadata,
+  registry and picker entries, and image-input capability on the chat route.
+  Context and output limits inherit from V4 Flash until DeepSeek publishes
+  distinct values; pricing remains unknown rather than guessed.
+- Added a provider-controlled Codewhale-versus-Pi parity harness with three
+  hermetic coding tasks, route and reasoning-effort receipts, doctor/dry-run
+  modes, and bounded result artifacts. The repository ships the harness, not a
+  benchmark verdict; comparable real runs remain an acceptance gate.
+- Added portable, secret-free config export/import with a reviewable plan,
+  explicit headless consent, backup and rollback, and idempotent re-import.
+- Added bounded multi-file diagnostics through the existing model-facing `lsp`
+  tool without increasing the tool-catalog count. Thanks to **Isabel Wu
+  ([@wuisabel-gif](https://github.com/wuisabel-gif))** for PR #5524.
+- Added portable presentation, media-attachment, and operation-digest facets to
+  the command contract, then moved all seven utility handlers onto the
+  contract-backed dispatch path. Thanks to **Paulo Aboim Pinto
+  ([@aboimpinto](https://github.com/aboimpinto))** for PR #5525.
+
+### Changed
+
+- Sub-agent, Fleet-worker, workflow-task, and thread-runtime model turns no
+  longer inherit a hidden role-based step ceiling. An omitted or zero
+  `max_steps` is unbounded; a positive user/config value remains an explicit
+  cap and is still clamped to the runtime safety ceiling. Wall-clock, provider,
+  heartbeat, cancellation, and admission safeguards are unchanged.
+- `/rc` now mirrors one shared session rather than transferring terminal
+  ownership: local and web prompts remain available while idle, approvals use
+  first-decision-wins semantics, and transport/integrity failures remain
+  fail-closed.
+- The terminal status rows around the composer are now two stable bands:
+  `provider · model · thinking level` is the persistent identity row below
+  the composer in every phase, and a separate activity row above the
+  composer carries the live phase, notices, and cost/metrics. Sending a
+  prompt no longer relocates the route identity above the composer, and
+  neither row ever duplicates it.
+- The embedded local Web client now uses the current CWC Ocean hierarchy and
+  readable control sizing, follows the shared Enter/Shift+Enter composer
+  grammar, and chooses a provider plus model per new thread without mutating
+  Runtime defaults. Exact image-input capability is labelled honestly; a
+  vision-capable route does not imply that browser attachments exist.
+- The runtime now has one authoritative model-turn loop. The placeholder
+  `crates/core` engine tree is gone, while the active TUI loop and its extracted
+  tool-call stages retain existing policy, hook, cancellation, and budget
+  behavior. Thanks to **Sun Zhenyuan
+  ([@bistack](https://github.com/bistack))** for PR #5523.
+
+### Fixed
+
+- Chat Completions streams now require terminal proof from `[DONE]` or a
+  non-empty `finish_reason`. Protocol-only frames no longer count as answer
+  content or time-to-first-token, and a provider continuation that ends after
+  tool results with no answer or tool call fails durably instead of producing
+  a false `Completed` receipt.
+- A selected v2 Fleet now drives one bounded, deterministic Agent roster across
+  terminal and runtime surfaces. Fleet operator/member/explicit-route
+  precedence, resolved member identity, and exact `vision` requirement
+  admission now fail visibly instead of silently falling back, first-matching,
+  or rerouting.
+- A workflow whose `task()` dispatch was rejected no longer loses that failure
+  inside a `parallel()` null slot or presents a successful-looking run. Rejected
+  dispatches now fail the run, persist as typed bounded receipts with an exact
+  count, and appear in transcript, activity detail, and workflow-panel views.
+- Provider readiness, credential-source explanations, focused-agent scrolling,
+  compact `/status` and `/help` rendering, shell/web output bounds, MCP
+  lifecycle reporting, and narrow-terminal onboarding received the detailed
+  fixes recorded below.
+- Localized READMEs again match the English install and third-party-notice
+  surface, including shell-completion guidance in all 18 translations.
+
+### Security
+
+- Unified OAuth device-code polling now validates verification URLs before
+  opening them, redacts token-bearing types, honors server slowdown intervals,
+  and keeps credential save/logout mutations serialized.
+- Project instructions, rules-directory traversal, secret-shaped config data,
+  URL fingerprints, and shell network authority now retain the explicit bounds
+  and fail-closed behavior described in the detailed record.
+
+### Contributors
+
+- **Sun Zhenyuan ([@bistack](https://github.com/bistack))** — tool-call stage
+  extraction with the existing execution and policy contracts preserved
+  (#5523).
+- **Isabel Wu ([@wuisabel-gif](https://github.com/wuisabel-gif))** — bounded
+  multi-file `read_lints` support (#5524), plus independently reviewed
+  completion-routing overlap in #5530.
+- **Lstarsky0 ([@Lstarsky0](https://github.com/Lstarsky0))** — maintainer review
+  hardening for truthful per-file states and truncation metadata in #5524.
+- **Paulo Aboim Pinto ([@aboimpinto](https://github.com/aboimpinto))** — portable
+  presentation/media/digest facets and the seven utility-handler migrations
+  (#5525).
+- **RepentStar ([@RepentStar](https://github.com/RepentStar))** — reported and
+  reproduced the stale completion-generator path and missing `codew`
+  registration fixed for #5526.
+
+### Detailed change record
+
+The notes below are preserved in full so the categorized highlights do not
+erase behavior, migration, security, compatibility, or verification details.
+
+- Provider completion is now evidence-based. A Chat Completions stream reaches
+  `MessageStop` only after `[DONE]` or a non-empty `finish_reason`; raw EOF
+  without either is a typed failure. Message-start, ping, usage/terminal
+  deltas, block-stop, and message-stop frames do not count as productive
+  content or mint time-to-first-token. After tool results, a terminal provider
+  step with no answer or tool call now emits a durable failed turn and never
+  fabricates an empty assistant message.
+
+- A selected v2 Fleet is the single effective Agent roster across terminal,
+  Runtime threads, direct Workflow, Fleet execution, doctor, and
+  setup/readiness; legacy profile layers are consulted only when no Fleet is
+  selected, and invalid selections fail visibly with bounded, redacted errors.
+  Member references resolve exact id first and otherwise require a unique
+  display name, role, pinned model, offline model name, or provider/model route;
+  `agent action=roster` exposes that same bounded roster. The Fleet operator
+  supplies fresh-root and inherited-member routing unless an explicit launch
+  route or member pin wins, the resolved member is shown separately from the
+  requested alias, and `requires = ["vision"]` is admitted only on an exact
+  route with verified offline `image_input` support—never by silent rerouting
+  or custom-proxy inference. Fleet selection remains an explicit user/folder
+  contract independent of legacy project-profile loading.
+
+- **Breaking (app-server):** `/prompt`, `prompt/request` and `prompt/run` now
+  execute a real model turn instead of reporting success for work they never
+  did. `Runtime::handle_prompt` called no model: it resolved config, ran a
+  local `ModelRegistry` lookup, emitted three canned hook events
+  (`ResponseDelta` was literally the string `model-selected`), and returned
+  HTTP 200 with `output` set to a stringified JSON echo of the caller's own
+  routing metadata — the prompt included. Worse, when a `thread_id` was
+  supplied it appended a real user row, flipped the thread to `Running`, and
+  then wrote that echo into durable history as an **assistant message** plus a
+  `prompt_response` checkpoint. Nothing marked the row synthetic and nothing
+  ever moved the thread out of `Running`. All three endpoints now route
+  through the same `RuntimeBridge` that stdio `thread/message` has always
+  used, so `output` is the model's streamed text, `model` is what the runtime
+  reports for the thread that ran the turn, and `events` are the real
+  streaming frames. `Runtime::handle_prompt` and its synthetic history write
+  are gone.
+
+- **Breaking (app-server):** a failed prompt is now a typed failure rather
+  than a success-shaped body. `POST /prompt` returns
+  `{"error":{"code":...,"message":...}}` with `400` (invalid request), `404`
+  (thread not found), `503` (`runtime_unavailable`) or `500`, instead of HTTP
+  500 carrying a `PromptResponse` with the error text stuffed into `output`
+  where model text belongs. The stdio surface gained JSON-RPC `-32005`
+  `runtime_unavailable` for "the turn engine could not be reached, so nothing
+  ran" — distinct from `-32603`, and retryable. There is no configuration in
+  which a prompt silently echoes instead of running.
+
+- **Breaking (app-server):** `POST /thread` with a `Message` body runs the
+  turn. It previously replied `status: "accepted"` with a
+  `ResponseDelta("queued")` frame while starting no worker and calling no
+  bridge — the stdio path for the same request has always done real work, so
+  the two transports disagreed about what `accepted` meant. HTTP now replies
+  `status: "completed"` once the turn reaches a terminal state, with the
+  streamed frames in `events` and the turn id in `data`. `Runtime::handle_thread`
+  no longer accepts `ThreadRequest::Message` at all: it owns thread
+  bookkeeping, not the turn engine, and returns an error naming
+  `POST /v1/threads/{id}/turns` rather than a canned acceptance.
+
+- **Breaking (app-server):** `AppRequest::SubmitUserInput` now refuses
+  explicitly (`ok: false`, `error: "user_input_reply_unsupported"`) instead of
+  returning `resolved: true` and filing the answers in a map that had no
+  reader anywhere in the crate — every answer submitted was silently
+  discarded. It cannot be made to work on this transport: while a turn
+  streams, the stdio loop executes only `thread/interrupt` and queues
+  everything else, so an answer sent there would wait on the very turn
+  waiting for it. The refusal names the surface that does accept it,
+  `POST /v1/user-input/{thread_id}/{request_id}` on the runtime API. The
+  client-visible refusal is whitespace-clean, and the `/tool` path that mints
+  the `UserInputRequest` is unchanged and still genuine.
+- Split the coordination ledger out of `tools/subagent/coord.rs` into
+  `tools/subagent/coord/ledger.rs`. The file held two unrelated things: the
+  model-facing `agents/*` tool wrappers, and the durable decision/claim/
+  contention records those wrappers happen to write — records whose consumers
+  are mostly *not* in the tool layer (`tui::coordination_detail`,
+  `tui::work_surface`, `tui::ui::tests`, `core::engine::tests` all name these
+  types). At 3.8k lines, reading either one started by scrolling past the
+  other. A pure move with a glob re-export from `coord`, so every
+  `crate::tools::subagent::coord::{…}` path still resolves and no consumer file
+  was edited; the only content change the move required is one constant going
+  from private to `pub(super)` because its caller stayed behind. `coord.rs` is
+  now 2.3k lines and `ledger.rs` 1.6k.
+
+- `agent` is now the only sub-agent tool the model can see. `AGENTS.md` has
+  said "the model-facing sub-agent surface is `agent` only" since the lifecycle
+  tools were removed, but six more were reachable: `agents/list`,
+  `agents/message`, `agents/followup`, `agents/interrupt`, `agents/coordinate`,
+  and `agents/wait` all defaulted to model-visible, so they shipped in the
+  catalog and `tool_search` could load any of them — and the `agent`
+  description told the model they existed. They now declare
+  `model_visible() -> false`, the same shape `rlm` and `exec_shell` use: still
+  registered, still executable by name so a persisted transcript replays
+  against the same implementation, never advertised and never returned by
+  either `tool_search` matcher.
+
+  Five of the six were already duplicates of an `agent` action. The sixth was
+  not: `agents/coordinate action=claim` was the *only* way to widen a write
+  claim, and write enforcement fails closed, so hiding it would have left a
+  refusal ("expand it first with…") pointing at a tool the model could no
+  longer call. `agent` gains one action, `claim`, taking the write scope
+  vocabulary `action=start` already uses (`write_roots`, plus parse-accepted
+  `exact_files` and `coordination_contracts`). It keeps `agents/coordinate`'s
+  `Auto` approval — gating it deadlocks autonomous fan-in — and it can only
+  widen the caller's own scope; peer contention still fails. A scopeless claim
+  is refused rather than reported as granted, because `expand_write_claim`
+  returns the unchanged claim with `Ok` when every list is empty.
+
+  Collapsing six tools into one action set also collapses the gating: `agent`
+  is deliberately exempt from both name-keyed gates (`posture_permits_tool`
+  short-circuits it so delegation depth governs spawning, and
+  `execution_envelope` classifies it `Bounded` so a read-only member can fan
+  out read-only work), so a capability folded into it inherits no gate. `claim`
+  is therefore gated per action, reproducing the envelope check that kept
+  `agents/coordinate` off a read-only role's catalog — in the catalog and again
+  at dispatch, since catalog shaping is not an authority boundary. The other
+  actions keep exactly the visibility they had.
+- One placement table now decides which wire channel a message role belongs
+  in, and unrepresentable role/dialect pairs are refused at the outbound seam
+  (`DeepSeekClient::prepare_outbound_request`) instead of at the provider.
+  Chat Completions and OpenAI Responses used to drop an unfamiliar role
+  silently, Anthropic Messages forwarded `message.role` verbatim and took an
+  opaque provider 400 for it, and Google cloud-code was alone in failing
+  closed. Positioned `system` and `developer` history — including compaction
+  and branch summaries — is carried natively by Chat Completions and Responses
+  and projected, in place, onto Anthropic's user channel. It is neither
+  hoisted nor dropped. Genuinely unknown roles keep the previous
+  dialect-specific fail-closed/omit behavior, now decided in one table. The
+  dead `"tool"` arm in the Responses adapter is gone — nothing constructs that
+  role.
+
+- Message roles are a closed `Role` enum (`crates/core/src/role.rs`) instead of
+  a free-form `String` on `Message`. Four wire adapters each decided
+  independently what an unfamiliar role meant, and a typo in a role string was
+  a silent transcript edit rather than a compile error. `Role` keeps an
+  `Unrecognized(String)` variant and serializes via `as_str()`, so a saved
+  session's bytes are unchanged, a transcript written by a newer build still
+  loads here, and `assistant_interrupted` stays a distinct session item — no
+  session schema bump and no migration ladder.
+
+- Portable config bundles: `codewhale config export --portable` writes a
+  deterministic, secret-free bundle (credential and machine-specific keys
+  dropped), and `codewhale config import <FILE|URL|->` applies one with a
+  strict versioned envelope, a printed added/changed/skipped/conflicting/
+  rejected plan, consent gating (`--yes` required headless), a timestamped
+  backup with rollback, and idempotent re-import. Credential-shaped entries
+  are rejected by key name and value shape — rejections name the field,
+  never the value. Remote imports revalidate the HTTPS-or-loopback-HTTP policy
+  on every same-scheme redirect hop, and duplicate keys across applicable
+  section labels fail before any backup or write instead of silently resolving
+  by section order.
+
+- `/rc` is now a shared-session mirror instead of a terminal takeover.
+  Attaching the web app no longer locks the local composer or hides
+  approvals: both surfaces can prompt while idle (one turn runs at a
+  time), approval cards stay visible in the terminal and are shared with
+  the web with first-decision-wins semantics (the losing side is told, a
+  web decision dismisses the local card), and structured questions are
+  answered locally instead of cancelled. Fail-closed behavior survives —
+  the post-failure reconnect lockout, integrity-gated `/rc stop`, and the
+  fail-closed shared-approval channel on transport loss are unchanged.
+  The takeover vocabulary ("web owns prompts and approvals") is gone from
+  every surface.
+
+- Auto-mode provider readiness no longer reports "key saved · not checked"
+  forever. Readiness checks are recorded against the concrete model the
+  router ran, but auto-mode reads resolved against the literal `auto`
+  identity, which never matched any recorded check — so the setup receipt,
+  model picker, and fleet setup view showed an eternal unchecked badge
+  even after hundreds of successful turns. The read now falls back to the
+  most recent check on the same route (provider + endpoint + auth class);
+  concrete-model reads keep exact per-model scoping.
+
+- The focused sub-agent transcript now scrolls like the main transcript.
+  The frame renderer sampled the ocean column through a `ChatWidget` whose
+  constructor consumed `pending_scroll_delta` — every PageUp/PageDown and
+  wheel event was swallowed by an invisible widget before the focused pane
+  could read it. The delta is now parked across the sample; the pane pins
+  on user scroll-up, follows new child activity at tail, and
+  jump-to-bottom releases the pin.
+
+- Every Codex OAuth Responses request carried `max_output_tokens`, a parameter
+  that endpoint rejects outright ("Unsupported parameter: max_output_tokens"),
+  so every gpt-5.6-sol turn — including every sub-agent on that route — failed
+  at the first request. Codex Responses bodies now ship without a client-side
+  output cap; the backend applies its own. Every other Responses route keeps
+  the central cap on the wire, exactly as before.
+
+- The model-facing `lsp` tool now supports a bounded `read_lints` operation
+  for multi-file, workspace-relative LSP diagnostics without adding another
+  tool catalog entry (#4070).
+
+- HTTP 400 classification no longer calls an unsupported-parameter error a
+  context-window overflow. Responses shape errors such as "Unsupported
+  parameter: max_output_tokens" name a token-shaped field, which the generic
+  keyword rules read as prompt-size exhaustion and pointed users at compaction
+  that could never help. Such responses now classify as invalid requests.
+
+- xAI device login validated nothing about the URL it opened. The
+  `verification_uri` from the device-code response went straight to
+  `webbrowser::open` with no parse, no scheme check and no credential check, so a
+  spoofed or compromised issuer could hand the platform's "open this" call a
+  `file:` path, a custom application scheme (`vscode://`, `slack://`), or a
+  credential-bearing URL. The shared primitive now refuses anything that is not a
+  web page before the URI is printed or opened. **Behaviour change:** a
+  non-loopback plain-`http:` verification URI now aborts login where it
+  previously opened; `http:` on a loopback host is still allowed, because local
+  runtimes legitimately use it.
+- The xAI OAuth types no longer print bearer material through `Debug`. Five types
+  holding tokens (`GrokAuthEntry`, `TokenResponse`, `DeviceCodeResponse`,
+  `DeviceCodeGrant` and the poll outcome) either redact or no longer derive
+  `Debug` at all, so a token has no printable path through a `{:?}` on any
+  surrounding struct. The shared `DevicePollOutcome` derives nothing, which the
+  compiler enforces.
+- **Behaviour change:** an `interval` of `0` from the authorization server now
+  falls back to RFC 8628's five-second default rather than a one-second floor,
+  in both the xAI and account device flows.
+
+- OAuth device-code login is now one implementation. xAI/Grok device login and
+  Codewhale account login each carried their own hand-rolled RFC 8628 polling
+  loop with nothing shared between them; both now call a single primitive
+  (`codewhale-config`'s `device_code`), ported from pi. Three fixes come with
+  it. `slow_down` now honours a server-supplied `interval` instead of always
+  adding five seconds, which is what stops polling from running early forever
+  under WSL and VM clock drift. Timing out after a `slow_down` now says so and
+  names clock drift, rather than reading as a plain timeout. And the xAI
+  verification URI is validated before it is handed to the browser opener —
+  Codewhale previously opened whatever the device-code response said, so a
+  spoofed or compromised issuer could point the platform "open this" call at a
+  `file:` path or a custom application scheme. It must now be `https:`, or
+  `http:` on a loopback host for self-hosted issuers. Stored credential files
+  are unchanged and existing logins keep working. MCP OAuth is untouched: it
+  delegates to `rmcp`/`oauth2` and was never hand-rolled.
+- Shell output truncation now stays inside its own budget. A truncated shell
+  result keeps a 6 KB head, a 24 KB tail, and any high-signal lines rescued
+  from the omitted middle — but that rescued block was bounded only by a line
+  count. One rustc `error:` line carrying a long inferred type or a minified
+  bundler frame is routinely hundreds of kilobytes, so a "30 KB" result could
+  arrive at 430 KB with the omitted line pasted back in whole. Each rescued
+  line is now clipped and the block has a 4 KiB ceiling; the signal survives,
+  the payload does not.
+
+- Fetched web pages in non-Latin scripts no longer arrive half-read. Page text
+  was reflowed against a column budget measured in bytes, so Cyrillic and Greek
+  wrapped at roughly half the intended width and CJK at two thirds — and since
+  the page view is delivered by line count, the surplus lines pushed real
+  content off the end of the window. A Russian or Japanese URL returned a
+  fraction of the text an English one did, for the same call. Wrapping now
+  measures display width.
+
+- The `bash` tool no longer tells the model it has no default timeout when it
+  does. An omitted timeout has always been bounded at 120 seconds and the
+  command killed there, but the tool description and its `timeout` field both
+  claimed otherwise — steering the model away from the one parameter that
+  would have saved a longer build. Both now name the real bound.
+- MCP servers no longer restart because an unrelated setting was saved. The
+  lazy config reload re-reads every watched source whenever one of their
+  mtimes moves and keeps the live connections only when the content hash
+  matches — but the hash was taken over `serde_json` bytes produced straight
+  from the config's `HashMap`s, and two `HashMap`s with identical contents do
+  not iterate in the same order. Any touch of any watched file therefore hashed
+  differently, tore down every connection, and SIGTERMed and respawned every
+  stdio child. Keys are now sorted before hashing.
+
+- An MCP server marked `required` now still tells you *why* it failed to start.
+  `connect_all` appended a generic "required MCP server failed to initialize"
+  entry after the real per-server error, and the snapshot folds those pairs into
+  a map keyed by server name — so the contentless entry replaced the diagnosis
+  and /mcp showed the marker instead of "No such file or directory". The marker
+  is now only synthesized when nothing else reported a cause.
+
+- A crashed stdio MCP server is now rebuilt instead of being handed back dead.
+  A failed transport *read* disconnected the connection; a failed *write* did
+  not, so after the child exited the connection stayed `Ready`, the pool reused
+  it on every later tool call, and /mcp kept listing the server as connected.
+
+- An MCP response carrying neither `result` nor `error` is now an error rather
+  than an empty success. It previously reached the model as a successful tool
+  call with a `null` payload, indistinguishable from a tool that did nothing.
+  An explicit `"result": null` is still a valid empty success.
+- Stdio MCP server requests are answered while the client is idle instead of
+  blocking behind the zero-capacity response rendezvous until an unrelated
+  client call. `ping` receives its prompt empty result, unsupported methods
+  receive JSON-RPC `-32601`, and the reader keeps only a weak stdin handle so
+  dropping the client still delivers graceful EOF.
+- `base_url_fingerprint` is a persisted-key change for two input shapes.
+  The digest is serde-serialized into `ProviderCatalogCache` and
+  `LiveOffering`, pricing defect receipts, and
+  `TurnRecord.routed_usage_source_ids` — it is not an in-memory-only cache
+  label. Empty or whitespace-only values (and scheme-less query-only strings
+  that strip to an empty authority) now hash the invalid-or-secret-bearing
+  sentinel instead of SHA-256 of the empty string. Scheme-less URLs that
+  contain `@` now strip `userinfo` before hashing, matching the
+  scheme-bearing branch, so a typed `user:pass@host/v1` no longer embeds the
+  password in a stored digest. `routed_usage_source_fingerprint` feeds
+  arbitrary scheme-less source ids into the same function, so a turn
+  rehydrated from an older build can fail to dedupe one routed-usage row.
+  Recovery is a cache miss and a re-fetch, not corruption. Empty input was
+  not restored to the old digest: an empty authority is not a usable
+  endpoint, and mapping it to the same sentinel the scheme branch already
+  uses for an empty host keeps invalid inputs from minting a unique cache
+  scope.
+
+- Diagnostic lines that mention token *counts* are no longer swallowed by
+  secret redaction. A stream error such as `max tokens = 8192 but budget =
+  4096` was matching the `token` hint as a substring of the English word
+  `tokens`, and the spaced-assignment pass then dropped the rest of the
+  line, leaving `max tokens = [redacted]`. Token counts are not credentials;
+  the hint now matches a credential identifier (`token`, `api_token`) rather
+  than an English word, so the numbers survive while `token = Bearer …` is
+  still redacted.
+- Dashboard thread search no longer loads every thread's transcript to decide
+  whether the row matches. `GET /v1/threads/summary?search=` walked the full
+  thread list and called `get_thread_detail` on each row before matching, and
+  that detail read is itself a whole-store walk of every turn JSON and every
+  item JSON. A non-matching keystroke was therefore
+  O(threads × (all_turns + all_items)) file reads — on the order of 10^8 JSON
+  parses at a few thousand threads. Search now matches `id`, title, and model
+  from the thread record (and, when the title is unset, the single latest-turn
+  file that supplies the displayed title) and loads detail only for matches, so
+  preview stays a display field rather than a search key. Session summary
+  already refused to search last-message text for the same reason.
+
+- Silent `#[allow(dead_code)]` suppressions on the modules AGENTS.md warns
+  auditors not to delete — prompt zones, context budget, the route seam —
+  and on the next-largest holders (palette tokens, hotbar actions, core
+  events) are now `#[expect(dead_code)]`, or gone where the lint was already
+  stale. A suppression that stops matching the lint fails the `-Dwarnings`
+  gate instead of sitting quiet. The same gate is recorded in
+  `[workspace.lints]` so member crates inherit it from the manifest rather
+  than only from CI `RUSTFLAGS`.
+- "missing key" now says where it looked. The provider picker reported
+  credential readiness as the bare strings `missing key` / `key:not-set`,
+  which named no source at all — so a home whose secret store held a working
+  DeepSeek key could show `DeepSeek  missing key` in the picker while a real
+  turn from that same home completed, and nothing on screen said which layer
+  disagreed. Every row now resolves through one sourced resolver and states
+  the place its credential came from ("OPENROUTER_API_KEY", `secret store
+  "deepseek"`, `[providers.x] api_key`, "xAI OAuth", a consented external CLI
+  file); a row without a credential lists the places that were probed, in
+  precedence order, and the command that fixes the first of them. Where a
+  durable slot is deliberately *not* read — an inactive provider whose config
+  table carries no api-key marker — the row says so rather than implying an
+  empty slot.
+
+- Provider credential precedence is now stated once, in a doc comment beside
+  the single resolver that enforces it, instead of being implied by a
+  150-line cascade of provider special cases. No precedence decision changed:
+  `has_api_key_for` is now a wrapper over that resolver, and a test asserts
+  the two agree for every provider.
+
+- Credential saves and logouts no longer interleave. Both took a snapshot of
+  the durable slot, wrote it, mutated the config document, and rolled back on
+  failure, with no lock held across the sequence — so a save racing a logout
+  on the same slot could leave the secret store and the config file
+  disagreeing. Both now hold that provider's credential write lock for the
+  whole read-modify-write.
+
+  Design ported from pi-mono (MIT, Copyright (c) 2025 Mario Zechner); see
+  `docs/THIRD_PARTY_NOTICES.md`.
+
+- Enumerating stored credentials no longer fails closed on one bad slot.
+  Listing used to propagate a backend read error, so a single unreadable
+  secret-store entry made `/provider` and logout treat every other stored
+  credential as missing. Enumeration now skips the unreadable slot and
+  continues, matching the probe loop it replaced.
+
+- The first screen of first run no longer cuts its own headline. The welcome
+  and ready titles, and the provider-step heading, were emitted as single
+  unwrapped lines while the sentence beneath them wrapped, so at 40 columns
+  German read "Codewhale arbeitet mit dir in diesem O", Russian lost its final
+  stop, and Japanese lost "します。". Headings are prose and now wrap like it,
+  in every shipped locale.
+
+- The workspace-trust screen no longer cuts its own question in half on a small
+  terminal. The question, the prompt-injection risk hint, and the trust-effect
+  hint were each pushed as one unwrapped line, so at 40 columns the screen read
+  "Should Codewhale work with the instruc" — severed mid-word with nothing
+  marking the cut, while the workspace path directly beneath it wrapped
+  correctly. Asking someone to grant filesystem trust while the question itself
+  is truncated is the worst place in the product for that to happen. All three
+  now wrap through the same helper the rest of onboarding uses, which also
+  means they wrap correctly in Japanese and Chinese. Verified across all
+  fifteen shipped locales at 40, 60, 80 and 120 columns.
+- `codewhale completions <shell>` generated a script for the wrong program.
+  The subcommand forwarded to the in-tree `codewhale-tui` binary, which
+  rendered completions from *its own* clap tree under *its own* name, so the
+  output ended in `complete -F _codewhale__tui ... codewhale-tui` (bash),
+  `#compdef codewhale-tui` (zsh), and
+  `Register-ArgumentCompleter -Native -CommandName 'codewhale-tui'`
+  (PowerShell). Sourcing it registered nothing for `codewhale` or `codew` —
+  the two commands current installers expose — so tab completion appeared to
+  do nothing. The forwarded tree was also stale against the real CLI: it offered
+  `pr`, `scorecard`, and `session-diagnostics`, which `codewhale` does not
+  have, and omitted `run`, `rc`, `config`, `model`, `thread`, `lane`,
+  `workflow`, `web`, `account`, `app-server`, `mcp-server`, `metrics`,
+  `update`, `cloud`, `completion`, and `lane-log-proxy`, which it does.
+  Completions are now rendered in-process from the CLI's own command tree,
+  and `completions` is an alias of the existing
+  `completion` subcommand rather than a second, divergent path. Regenerate any
+  script you installed from an earlier release. Reported by **RepentStar**
+  (#5526); part of the `deepseek-tui`-era identifier retirement in #5443.
+
+- Completion scripts now fire for the `codew` shorthand as well as
+  `codewhale`. Releases publish `codew` as a byte-identical copy of the
+  `codewhale` binary, so a script bound to only one of the two names was half
+  installed for anyone who types the short one. Each shell gets its own
+  idiomatic hook rather than a second copy of the script: bash re-binds the
+  generated function, zsh widens the `#compdef` tag line to
+  `#compdef codewhale codew`, fish adds `complete -c codew -w codewhale`,
+  PowerShell registers `-CommandName 'codewhale','codew'`, and Elvish aliases
+  the completer with
+  `set edit:completion:arg-completer[codew] = $edit:completion:arg-completer[codewhale]`.
+
+- Documented shell completions. `docs/INSTALL.md` § 8 now gives the generate
+  and install commands for bash, zsh, fish, PowerShell, and Elvish, with a
+  note to regenerate after upgrading and to delete scripts produced by
+  v0.9.10 or earlier. There was previously no completion documentation
+  anywhere in the repository, which is how #5526 was reported as three
+  problems instead of one.
+- `/status` was 31 rows. On an 80x24 terminal the transcript viewport is 18, so
+  typing `/status` landed you on the *tail* of the report: the version, route,
+  directory, mode and sandbox rows had already scrolled past, and what stayed on
+  screen was five `not reported` rows and a `$0.0000`. The report is 18 rows on a
+  fresh session — `Window override:` is present unless the value is already
+  configured. That is the viewport's height, so once `/status` itself occupies a
+  history cell the title row still scrolls off; it does not fit that terminal
+  whole. Provider, model and reasoning effort are one `Route:` lockup, the way
+  the header rail already writes them. Mode and its permissions are one statement
+  of posture. `Rate limits:` is gone — it was a `push_row` of a string literal
+  and could never say anything but "not available from provider telemetry". The
+  per-turn token ledger is gone too, because `/tokens` is that ledger's whole
+  subject and `/status` was printing six rows of it at the same weight as the
+  sandbox policy; the two facts that lived nowhere else, the cumulative in/out
+  split and the cumulative cache totals, survive on one `Session tokens:` row.
+  `Footer items:` no longer prints ten internal config keys across the full
+  width — `/statusline` owns them, and the report now points there in the same
+  row that points at `/tokens`. Two blank gutters do the grouping; the
+  `===================` rule under the title is gone.
+
+- The `/status` window-override key has its own labelled row. It used to be
+  parenthesised onto the end of the provenance row, which pushed
+  `context_window in config.toml` past the right edge at 80 columns and wrapped
+  the sentence. `Window source:` states the provenance and `Window override:`
+  names the exact key — and the override row is omitted entirely when the value
+  is already configured, rather than advising you to set what you have set.
+
+- `/help` no longer truncates anything. Every label and description used to run
+  through a `truncate_to_width` that appended `…`, which in a two-hundred-row
+  list promises text no keystroke can reveal and lands mid-token:
+  `(aliases: /qin…` left the parenthesis hanging open. Descriptions now shed
+  whole fields — the alias parenthetical first, then trailing clauses at their
+  own joints, and only where there is no joint at all, the sentence's short form
+  on a whole word with no mark, keeping the head noun of a simple verb +
+  modifier + noun phrase rather than the adjectives that qualified it. The
+  focused row's description is restated under the filter at the panel's full
+  width, *only when the row itself could not hold it*, so a wide terminal does
+  not say the same sentence twice. At 60 columns that restatement is itself
+  shed — the `/advisor` detail stops before `session` — so the detail is longer
+  than the row, not a copy of the original sentence.
+
+- The `/help` label column is measured instead of assumed. It was a flat 28
+  columns at every terminal size, so at 60 columns twenty blank cells sat
+  between `/advisor` and a description cut down to 21. Each group now sizes its
+  column to the labels it actually holds, which nearly doubles the description
+  column on a narrow terminal, and the label — the string you have to type —
+  reads one step brighter than the description that qualifies it.
+
+- `/help` stopped spending rows on itself. The match count moved onto the filter
+  row it describes, the blank spacer under it is gone, and the footer no longer
+  repeats `type to filter` while the filter box says `Type to filter` two lines
+  above — at 60 columns that duplicate was what pushed the footer onto a second
+  row. A group header also stopped printing `▸ ▾`: the selection cursor and the
+  collapsed chevron are the same glyph, and a focused collapsed group was
+  showing it twice for two different facts. Help now opens focused on the first
+  entry rather than the header above it.
+
+- The bottom status rail is no longer one run-on sentence. At 120 columns it
+  read `▌· idle · Ollama · deepseek-v4-flash · max · Anonymous usage counts are
+  on. … ⌥V:output · /context:context · fn+F1:keys` — live state, route
+  identity, a telemetry consent notice, and keyboard hints all strung together
+  by the same middle dot in the same ink, so nothing was grouped and the eye
+  had nothing to skim by. At 80 columns it simply stopped mid-notice, and at 60
+  the row overflowed and was clipped by the terminal mid-word. The rail now
+  divides its groups with a blank gutter instead of another dot (the dot is
+  kept for peers *inside* a group), the model name reads one step brighter than
+  the qualifiers that narrow it, and `Esc to interrupt` reads in the same hint
+  weight as the right-hand chords rather than in the separator weight.
+
+- Nothing on the status rail is ever truncated now. A notice sheds whole
+  sentences to fit, and if one sentence is still too long it sheds at the inner
+  joints — a colon, a semicolon — with the trailing mark cut so the phrase that
+  survives does not itself advertise that more was coming. Route identity sheds
+  the provider, then the reasoning effort, rather than rendering
+  `deepseek-v4-flash-prev…`; a clipped model name is worse than no model name
+  because routes share prefixes. Clauses rejoin without a Latin space after a
+  full-width stop, so the Japanese receipt reads as Japanese.
+
+- A notice now stands the standing facts down instead of queueing behind them.
+  Route identity and the ledger chips are still there in ten seconds; the
+  notice is not, so it takes the row and the key hints yield last. This is what
+  makes the telemetry receipt readable at 80 columns, where it used to be
+  simultaneously always present and never legible.
+
+- The status rail no longer advertises `/context:context`. It was spending
+  eighteen columns of a 24-row screen to name a slash command that announces
+  itself the moment you type `/`; the rail advertises chords you cannot
+  discover any other way. The rail now reads the same at 80 columns as at 200.
+
+- The idle screen no longer has an absolute path stretched across it. The
+  workspace caption between the wordmark and "What do you want to accomplish?"
+  was composed at full length and then truncated to the lane width, which made
+  the centering inset `(width - caption.width()) / 2` evaluate to zero — so a
+  line that was written to be centered rendered flush-left and full-bleed,
+  cutting the centered whale/wordmark/prompt composition in half. The clipping
+  also destroyed the information it was supposed to carry: at 80 columns the
+  line read `/private/tmp/claude-501/-Volumes-.../34267917-11f4-4d15-911a-…`,
+  which tells the reader nothing about where they are. The caption now sheds
+  detail instead of being cut — MCP count first, then branch, then leading path
+  components — so it always fits with room to center, and the folder you are
+  standing in is the last thing to go. Elisions land on a path separator rather
+  than mid-directory.
+
+- Removed the placeholder engine tree in `crates/core/src/engine/`. Its
+  `Engine::run` accepted `Op::SendMessage`, appended to a journal, and emitted
+  `TurnComplete { status: "completed" }` without ever contacting a model, and
+  `TurnExecutor` was a struct with a field-copy constructor and a
+  `step < max_steps` comparison. Nothing in the workspace referenced any of it —
+  the only mention of `codewhale_core::engine` anywhere was a doc comment inside
+  the tree itself — but its comments ("the real turn loop is wired here in the
+  next slice") were what `docs/ARCHITECTURE.md` leaned on to claim that
+  `crates/core` owns the agent loop. There is now exactly one turn loop in the
+  workspace, `Engine::run_turn`, and a guard test fails if a second one appears.
+  `docs/ARCHITECTURE.md` and `AGENTS.md` now say where it actually lives.
+
+- First-run onboarding no longer silently truncates its explanation in
+  languages that do not put spaces between words. `wrap_words` split on
+  whitespace, so a Japanese sentence arrived as a single token, the
+  line-break check (which only fires once a line is non-empty) never
+  triggered, and the over-wide line was clipped by the terminal. At 80
+  columns the provider screen read
+  "Hosted providers need a key, but loca" and stopped — losing exactly the
+  half that tells the reader local runtimes need no key, on the screen where
+  they choose a provider. Space-less scripts now break by display width on
+  grapheme clusters, and a line may not begin with closing punctuation
+  (`。`, `、`, `」`, `）` and friends). Wrapping for languages that do use
+  spaces is unchanged.
+
+- Project instructions are bounded by one budget and no longer treat other
+  agents' files as law by default. Previously `.claude/instructions.md` and
+  `CLAUDE.md` sat at ranks 2 and 3 of the canonical instruction list — *above*
+  Codewhale's own `.codewhale/instructions.md` — `.claude/rules/` was an
+  auto-discovered rules directory, and `.cursorrules`, `.cursor/rules`,
+  `.clinerules`, `.windsurf/rules`, `.gemini`, `.github/copilot-instructions.md`
+  and `.github/muse-instructions.md` were all imported into the system prompt
+  with no opt-in. Dropping a `CLAUDE.md` written for a different tool into a
+  repository silently made it standing authority here, which is an injection
+  surface rather than a convenience. Codewhale now reads `AGENTS.md`, the
+  cross-agent `.agents/AGENTS.md`, and its own instruction files by default;
+  every other agent's format is opt-in by name through
+  `project_instruction_imports` (env `CODEWHALE_PROJECT_INSTRUCTION_IMPORTS`),
+  imported files rank *below* Codewhale's own, and a workspace that contains an
+  un-imported format says so in a warning naming the exact setting.
+- Separately, a symlinked candidate rules directory — `.cursor/rules`,
+  `.windsurf/rules`, or `.gemini` pointing outside the workspace — was
+  traversed and its contents imported as instruction authority, because the
+  directory check followed the link while only the files inside it were
+  checked. The two instruction loaders now apply the same no-follow rule that
+  `.codewhale/rules/` already had.
+- The three separate ceilings on standing instructions (200 KiB for the
+  root->workspace chain, 500 KiB for the rules block, 40 KiB for imported
+  fragments, and a global layer that was merged in after the chain budget had
+  already closed and so counted against nothing) are replaced by a single
+  48 KiB aggregate budget covering all of them together. Instructions claim it
+  before rules, and are trimmed from the broadest scope inward so the
+  nearest-scope file is the last thing dropped rather than the first thing
+  stranded. Truncation still leaves an explicit marker.
+
+- Editing the workspace no longer grants the shell outbound network access.
+  `workspace-write` sandboxes are created network-restricted; `curl`, package
+  installs, and `git fetch` inside a sandboxed shell are denied by the OS
+  sandbox unless network is granted explicitly. This closes a real gap rather
+  than tightening a working boundary: the elevation added in #273 was justified
+  by the application-level `NetworkPolicy` remaining "the only outbound
+  boundary", but that policy governs `fetch_url`, `web_search`, and MCP HTTP
+  and never constrained shell subprocesses, so workspace-write turns had
+  unrestricted egress with nothing enforcing anything. Network now comes from
+  one of three explicit places: the new `sandbox_network_access` config key
+  (also `CODEWHALE_SANDBOX_NETWORK_ACCESS`), a `danger-full-access` posture, or
+  the existing post-denial elevation prompt that grants network for a single
+  call. Yolo and `--yolo`/Bypass are unchanged — they resolve to
+  `danger-full-access`, which applies no sandbox at all. `external-sandbox`
+  reports the network it was actually granted instead of hardcoding `true`, and
+  `/status` reads the flag instead of printing "network on" for every
+  workspace-write policy. Platforms with no sandbox backend (default Linux
+  without bubblewrap, and Windows) still enforce nothing, and both `/status`
+  and `doctor` continue to say so.
+
 - The nightly Windows ARM64 artifact build works again. Every nightly from
   2026-08-16 failed while compiling `codewhale-tui`, deterministically on the
   same codegen unit across all three build attempts, with
@@ -23,6 +732,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `release-artifacts.yml` builds `--profile dist` with fat LTO and
   `codegen-units = 1`.
 
+- Test debt: the transcript history-cell suite has been rebuilt. It was 123
+  tests across 3,964 lines, and about a third of it pinned the current skin
+  rather than any behavior -- `assert_eq!(spans[1], "⣤")` for the
+  reduced-motion marker, `title_span.style.fg == theme.tool_title_color`,
+  `visible[1] == "▏ done: scan repo"`, four separate tests each asserting one
+  shape of fenced code never takes the transcript rail, and one test whose
+  only assertion was `!text.is_empty()` under a name promising it checked the
+  rendered tool id. Assertions like those break on every legitimate visual
+  change and catch nothing a reader of the transcript would notice, which is
+  the liability `d64b9429b` named. The replacement is 40 tests, each named
+  for the property it protects and asserting the property instead of the
+  token: reduced motion is checked by rendering the same running card at two
+  different elapsed times and requiring the frames to match -- which also
+  catches an animation leak the glyph constant missed -- and a frozen marker
+  must stay visible rather than landing on the spinner's invisible blank
+  (U+2800). Severity colors are checked by requiring warning not to read as
+  error rather than by naming a palette entry. A streaming assistant glyph
+  must actually pulse when motion is allowed, checked against
+  `pulse_brightness` rather than by sleeping on the 2s sine. Each of the
+  invariants claimed was verified to fail the new suite when deliberately
+  broken in the renderer.
 ## [0.9.10] - 2026-08-19
 
 - Show the full slash-command or `/model` completion row in a bounded, wrapping hover popover whenever narrow terminals truncate it, closing the remaining scoped gap from [#998](https://github.com/Hmbown/CodeWhale/issues/998). Thanks [@AiurArtanis](https://github.com/AiurArtanis) and [@formp3](https://github.com/formp3) for identifying the affected surfaces.
@@ -1302,9 +2032,9 @@ could end productive work without a final assistant response.
 
 - `codewhale-cli` now contains the terminal runtime directly. Release installers
   expose byte-identical `codewhale` and `codew` commands without a separate TUI
-  executable. The v0.9.5 asset set alone retains deprecated
-  `codewhale-tui-*` filenames as byte-identical compatibility copies so
-  installed v0.9.4 clients can discover and complete this upgrade.
+  executable. v0.9.5 introduced deprecated `codewhale-tui-*` release filenames
+  as byte-identical compatibility copies; later releases retain those filenames
+  while installed v0.9.4 clients remain supported upgrade sources.
 - Startup release checks cache successful lookups for one hour. The updater
   downloads and verifies the primary runtime once, then refreshes any existing
   `codew` or legacy `codewhale-tui` command paths from the same bytes.
@@ -6554,7 +7284,8 @@ overflow report and `/theme` picker edge-wrapping patch in #1814.
 
 Older releases (v0.8.39 and earlier) are archived in [docs/CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md).
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.9.9...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.9.11...HEAD
+[0.9.11]: https://github.com/Hmbown/CodeWhale/compare/v0.9.10...v0.9.11
 [0.9.10]: https://github.com/Hmbown/CodeWhale/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/Hmbown/CodeWhale/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/Hmbown/CodeWhale/compare/v0.9.7...v0.9.8

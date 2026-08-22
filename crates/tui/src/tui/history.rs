@@ -818,10 +818,16 @@ impl ToolCell {
                     .entries
                     .iter()
                     .any(|entry| entry.status == ToolStatus::Failed);
+                let has_warning = cell
+                    .entries
+                    .iter()
+                    .any(|entry| entry.status == ToolStatus::Warning);
                 Some(if has_running {
                     ToolStatus::Running
                 } else if has_failed {
                     ToolStatus::Failed
+                } else if has_warning {
+                    ToolStatus::Warning
                 } else {
                     ToolStatus::Success
                 })
@@ -936,6 +942,8 @@ pub enum ToolStatus {
     Running,
     Success,
     Hydrated,
+    /// Terminal result with usable output that still needs attention.
+    Warning,
     Failed,
 }
 
@@ -1179,8 +1187,14 @@ impl ExploringCell {
             .entries
             .iter()
             .any(|entry| entry.status == ToolStatus::Hydrated);
+        let any_warning = self
+            .entries
+            .iter()
+            .any(|entry| entry.status == ToolStatus::Warning);
         let status = if all_done {
-            if any_hydrated {
+            if any_warning {
+                ToolStatus::Warning
+            } else if any_hydrated {
                 ToolStatus::Hydrated
             } else {
                 ToolStatus::Success
@@ -1223,6 +1237,7 @@ impl ExploringCell {
                     .iter()
                     .fold((0usize, 0usize, 0usize), |(d, r, f), e| match e.status {
                         ToolStatus::Success | ToolStatus::Hydrated => (d + 1, r, f),
+                        ToolStatus::Warning => (d, r, f + 1),
                         ToolStatus::Running => (d, r + 1, f),
                         ToolStatus::Failed => (d, r, f + 1),
                     });
@@ -1231,6 +1246,7 @@ impl ExploringCell {
                 .iter()
                 .map(|e| match e.status {
                     ToolStatus::Success | ToolStatus::Hydrated => "\u{25CF}",
+                    ToolStatus::Warning => "!",
                     ToolStatus::Running => "\u{25D0}",
                     ToolStatus::Failed => "\u{2715}",
                 })
@@ -1262,6 +1278,7 @@ impl ExploringCell {
                     ToolStatus::Running => "live",
                     ToolStatus::Success => "done",
                     ToolStatus::Hydrated => "loaded",
+                    ToolStatus::Warning => "issue",
                     ToolStatus::Failed => "issue",
                 };
                 lines.extend(render_compact_kv(
@@ -2008,6 +2025,9 @@ impl GenericToolCell {
             crate::tui::widgets::workflow_panel::WorkflowPanelLifecycle::Succeeded => {
                 ToolStatus::Success
             }
+            crate::tui::widgets::workflow_panel::WorkflowPanelLifecycle::Degraded => {
+                ToolStatus::Warning
+            }
             crate::tui::widgets::workflow_panel::WorkflowPanelLifecycle::Pending
             | crate::tui::widgets::workflow_panel::WorkflowPanelLifecycle::Running => {
                 if self.status == ToolStatus::Failed {
@@ -2273,6 +2293,7 @@ fn is_tool_status_glyph(text: &str) -> bool {
             '\u{2713}' // ✓
                 | '\u{2715}' // ✕
                 | '\u{00B7}' // ·
+                | '!' // terminal warning
                 | '\u{203A}' // › static still-mode marker
                 | '\u{2800}'..='\u{28FF}' // braille spinner frames
         )
@@ -2365,6 +2386,7 @@ fn status_symbol(
             crate::tui::spinner::braille_spinner_frame(started_at, low_motion).to_string()
         }
         ToolStatus::Success | ToolStatus::Hydrated => TOOL_DONE_SYMBOL.to_string(),
+        ToolStatus::Warning => "!".to_string(),
         ToolStatus::Failed => TOOL_FAILED_SYMBOL.to_string(),
     }
 }
@@ -2667,6 +2689,7 @@ fn tool_status_label(status: ToolStatus) -> &'static str {
         ToolStatus::Running => "running",
         ToolStatus::Success => "done",
         ToolStatus::Hydrated => "tool loaded - retry required",
+        ToolStatus::Warning => "issue",
         ToolStatus::Failed => "issue",
     }
 }

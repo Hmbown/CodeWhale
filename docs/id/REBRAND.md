@@ -17,7 +17,6 @@ cargo uninstall deepseek-tui 2>/dev/null || true
 # 2. Pasang dengan nama baru.
 npm install -g codewhale            # atau:
 cargo install codewhale-cli --locked
-cargo install codewhale-tui --locked
 
 # 3. Jalankan perintah baru.
 codewhale doctor
@@ -32,11 +31,10 @@ Berkas dan direktori Anda yang ada seperti `~/.deepseek/config.toml`, `~/.deepse
 
 | Komponen | Sebelum | Sesudah |
 |---|---|---|
-| Biner CLI Dispatcher | `deepseek` | `codewhale` |
-| Biner TUI Runtime | `deepseek-tui` | `codewhale-tui` |
+| Perintah Terpasang | `deepseek` / `deepseek-tui` | `codewhale` / `codew` |
 | Paket Wrapper npm | `deepseek-tui` | `codewhale` |
 | Crate Crates.io | `deepseek-tui-cli` / `deepseek-tui` | `codewhale-cli` / `codewhale-tui` |
-| Aset Rilis | `deepseek-<platform>` / `deepseek-tui-<platform>` | `codewhale-<platform>` / `codew-<platform>` / `codewhale-tui-<platform>` |
+| Aset Rilis | `deepseek-<platform>` / `deepseek-tui-<platform>` | `codewhale-<platform>` / `codew-<platform>`; `codewhale-tui-<platform>` hanya nama kompatibilitas |
 | Manifest Checksum | `deepseek-artifacts-sha256.txt` | `codewhale-artifacts-sha256.txt` |
 
 ---

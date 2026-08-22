@@ -128,9 +128,10 @@ pub fn now_rfc3339() -> String {
 /// The build sha of a release-CI binary, or `None`.
 ///
 /// Sourced from `CODEWHALE_RELEASE_BUILD_SHA`, a rustc-env this crate's build
-/// script emits **only** when `DEEPSEEK_BUILD_SHA` or `GITHUB_SHA` was present
-/// in the build environment. `null` for every locally built binary,
-/// unconditionally, with no runtime lookup of any kind.
+/// script emits **only** when `CODEWHALE_BUILD_SHA`, its legacy build-only
+/// alias, or `GITHUB_SHA` was present in the build environment. `null` for
+/// every locally built binary, unconditionally, with no runtime lookup of any
+/// kind.
 ///
 /// Never `CODEWHALE_BUILD_COMMIT` — that falls back to the builder's own `HEAD`
 /// on a local build. Never `Thread.git_sha` — that is the *user's* workspace

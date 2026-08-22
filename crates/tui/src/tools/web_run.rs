@@ -24,6 +24,7 @@ use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
+use unicode_width::UnicodeWidthStr;
 
 use parking_lot::{RwLock, RwLockWriteGuard};
 
@@ -1503,21 +1504,37 @@ fn normalize_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Reflow one line to `width` terminal columns.
+///
+/// `width` is a column budget, so every measurement here is a display width.
+/// Measuring `str::len()` instead made the budget script-dependent: Cyrillic
+/// and Greek are two bytes per single-column character and CJK three bytes per
+/// double-column character, so a Russian page wrapped at half the requested
+/// width and a Japanese one at two thirds. That is not only ragged output —
+/// `render_view` pages these lines by count, so the extra lines pushed real
+/// content past `ResponseLength::view_lines()` and the model saw a fraction of
+/// the page an English URL would have returned. Widths equal byte lengths for
+/// ASCII, so Latin-script wrapping is unchanged.
 fn wrap_line(text: &str, width: usize) -> Vec<String> {
-    if text.len() <= width {
+    if UnicodeWidthStr::width(text) <= width {
         return vec![text.to_string()];
     }
     let mut lines = Vec::new();
     let mut current = String::new();
+    let mut current_width = 0usize;
     for word in text.split_whitespace() {
+        let word_width = UnicodeWidthStr::width(word);
         if current.is_empty() {
             current.push_str(word);
-        } else if current.len() + word.len() < width {
+            current_width = word_width;
+        } else if current_width + word_width < width {
             current.push(' ');
             current.push_str(word);
+            current_width += 1 + word_width;
         } else {
-            lines.push(current);
-            current = word.to_string();
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+            current_width = word_width;
         }
     }
     if !current.is_empty() {
@@ -1639,6 +1656,29 @@ mod tests {
             serde_json::from_str::<Value>(&full).unwrap()["warnings"][0],
             output.warnings[0]
         );
+    }
+
+    #[test]
+    fn wrap_line_measures_display_width_not_bytes() {
+        // Same shape, two scripts: twelve four-character words. Cyrillic is two
+        // bytes per single-column character, so measuring `len()` wrapped the
+        // Russian text at half the requested column budget and handed
+        // `render_view` twice as many lines to page through.
+        let latin = ["abcd"; 12].join(" ");
+        let cyrillic = ["абвг"; 12].join(" ");
+        assert_eq!(
+            wrap_line(&cyrillic, 20).len(),
+            wrap_line(&latin, 20).len(),
+            "cyrillic: {:?}\nlatin: {:?}",
+            wrap_line(&cyrillic, 20),
+            wrap_line(&latin, 20)
+        );
+        for line in wrap_line(&cyrillic, 20) {
+            assert!(
+                UnicodeWidthStr::width(line.as_str()) <= 20,
+                "wrapped past the column budget: {line:?}"
+            );
+        }
     }
 
     #[test]

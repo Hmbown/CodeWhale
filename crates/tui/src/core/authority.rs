@@ -220,12 +220,14 @@ impl TurnAuthority {
         &self,
         workspace: &Path,
         configured_mode: Option<&str>,
+        network_access: SandboxNetworkAccess,
     ) -> SandboxPolicy {
         sandbox_policy_for_turn(
             self.mode,
             self.approval_mode_for_session(),
             configured_mode,
             workspace,
+            network_access,
         )
     }
 }
@@ -339,13 +341,14 @@ pub(crate) fn sandbox_policy_for_turn(
     approval_mode: ApprovalMode,
     configured_mode: Option<&str>,
     workspace: &Path,
+    network_access: SandboxNetworkAccess,
 ) -> SandboxPolicy {
     let default = if mode == AppMode::Plan {
         SandboxPolicy::ReadOnly
     } else if mode == AppMode::Yolo || approval_mode == ApprovalMode::Bypass {
         SandboxPolicy::DangerFullAccess
     } else {
-        workspace_write_policy(workspace)
+        workspace_write_policy(workspace, network_access)
     };
 
     // The effective Config has already applied managed/project precedence.
@@ -354,21 +357,54 @@ pub(crate) fn sandbox_policy_for_turn(
     match (default, configured_mode) {
         (SandboxPolicy::ReadOnly, _) | (_, Some("read-only")) => SandboxPolicy::ReadOnly,
         (SandboxPolicy::DangerFullAccess, Some("workspace-write")) => {
-            workspace_write_policy(workspace)
+            workspace_write_policy(workspace, network_access)
         }
         (SandboxPolicy::DangerFullAccess, Some("external-sandbox")) => {
             SandboxPolicy::ExternalSandbox {
-                network_access: true,
+                network_access: network_access.is_allowed(),
             }
         }
         (policy, _) => policy,
     }
 }
 
-fn workspace_write_policy(workspace: &Path) -> SandboxPolicy {
+/// Whether a sandboxed turn may open outbound connections.
+///
+/// Typed rather than a bare `bool` so the two call-site meanings — "the user
+/// asked for network" and "some caller passed true" — cannot be transposed
+/// silently, and so the default is spelled at the type instead of at each of
+/// the seven resolver call sites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SandboxNetworkAccess {
+    /// No outbound network inside the sandbox. Editing the workspace does not
+    /// imply reaching the internet.
+    #[default]
+    Restricted,
+    /// Outbound network explicitly granted by config, policy, or an approved
+    /// elevation.
+    Allowed,
+}
+
+impl SandboxNetworkAccess {
+    #[must_use]
+    pub(crate) fn from_config(configured: Option<bool>) -> Self {
+        if configured.unwrap_or(false) {
+            Self::Allowed
+        } else {
+            Self::Restricted
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn is_allowed(self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+}
+
+fn workspace_write_policy(workspace: &Path, network_access: SandboxNetworkAccess) -> SandboxPolicy {
     SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![workspace.to_path_buf()],
-        network_access: true,
+        network_access: network_access.is_allowed(),
         exclude_tmpdir: false,
         exclude_slash_tmp: false,
     }
@@ -809,24 +845,112 @@ mod tests {
         let full_access = authority(AppMode::Agent, true, ApprovalMode::Bypass);
 
         assert_eq!(
-            full_access.sandbox_policy(workspace, None),
+            full_access.sandbox_policy(workspace, None, SandboxNetworkAccess::Restricted),
             SandboxPolicy::DangerFullAccess
         );
+        // Clamping full-access down to workspace-write must land on the same
+        // restricted posture an ordinary Agent turn gets, not on a wider one.
         assert!(matches!(
-            full_access.sandbox_policy(workspace, Some("workspace-write")),
-            SandboxPolicy::WorkspaceWrite { writable_roots, .. }
-                if writable_roots == vec![workspace.to_path_buf()]
+            full_access.sandbox_policy(
+                workspace,
+                Some("workspace-write"),
+                SandboxNetworkAccess::Restricted
+            ),
+            SandboxPolicy::WorkspaceWrite { writable_roots, network_access, .. }
+                if writable_roots == vec![workspace.to_path_buf()] && !network_access
         ));
         assert_eq!(
-            full_access.sandbox_policy(workspace, Some("read-only")),
+            full_access.sandbox_policy(
+                workspace,
+                Some("read-only"),
+                SandboxNetworkAccess::Restricted
+            ),
             SandboxPolicy::ReadOnly
         );
+        // The external sandbox no longer claims network unconditionally; it
+        // reports what was actually granted.
         assert!(matches!(
-            full_access.sandbox_policy(workspace, Some("external-sandbox")),
+            full_access.sandbox_policy(
+                workspace,
+                Some("external-sandbox"),
+                SandboxNetworkAccess::Restricted
+            ),
+            SandboxPolicy::ExternalSandbox {
+                network_access: false
+            }
+        ));
+        assert!(matches!(
+            full_access.sandbox_policy(
+                workspace,
+                Some("external-sandbox"),
+                SandboxNetworkAccess::Allowed
+            ),
             SandboxPolicy::ExternalSandbox {
                 network_access: true
             }
         ));
+    }
+
+    #[test]
+    fn workspace_write_never_grants_network_without_an_explicit_opt_in() {
+        let workspace = Path::new("/work");
+        // Every non-Yolo posture, with and without a configured sandbox mode.
+        for approval_mode in [
+            ApprovalMode::Suggest,
+            ApprovalMode::Auto,
+            ApprovalMode::Never,
+        ] {
+            for configured in [None, Some("workspace-write"), Some("danger-full-access")] {
+                let auth = authority(AppMode::Agent, false, approval_mode);
+                let policy =
+                    auth.sandbox_policy(workspace, configured, SandboxNetworkAccess::Restricted);
+                assert!(
+                    !policy.has_network_access(),
+                    "{approval_mode:?}/{configured:?} leaked network: {policy:?}"
+                );
+            }
+        }
+
+        // Yolo/Bypass is deliberately unsandboxed and keeps its semantics:
+        // DangerFullAccess reports network regardless of this key, because it
+        // applies no sandbox at all.
+        let yolo = authority(AppMode::Yolo, true, ApprovalMode::Bypass);
+        let policy = yolo.sandbox_policy(workspace, None, SandboxNetworkAccess::Restricted);
+        assert_eq!(policy, SandboxPolicy::DangerFullAccess);
+        assert!(policy.has_network_access());
+
+        // Plan is read-only and denies network under either setting.
+        let plan = authority(AppMode::Plan, false, ApprovalMode::Suggest);
+        for access in [
+            SandboxNetworkAccess::Restricted,
+            SandboxNetworkAccess::Allowed,
+        ] {
+            assert!(
+                !plan
+                    .sandbox_policy(workspace, None, access)
+                    .has_network_access()
+            );
+        }
+    }
+
+    #[test]
+    fn sandbox_network_access_defaults_to_restricted() {
+        assert_eq!(
+            SandboxNetworkAccess::default(),
+            SandboxNetworkAccess::Restricted
+        );
+        assert_eq!(
+            SandboxNetworkAccess::from_config(None),
+            SandboxNetworkAccess::Restricted
+        );
+        assert_eq!(
+            SandboxNetworkAccess::from_config(Some(false)),
+            SandboxNetworkAccess::Restricted
+        );
+        assert_eq!(
+            SandboxNetworkAccess::from_config(Some(true)),
+            SandboxNetworkAccess::Allowed
+        );
     }
 
     #[test]
@@ -835,14 +959,22 @@ mod tests {
         for approval_mode in [ApprovalMode::Suggest, ApprovalMode::Auto] {
             let authority = authority(AppMode::Agent, false, approval_mode);
             assert!(matches!(
-                authority.sandbox_policy(workspace, Some("danger-full-access")),
+                authority.sandbox_policy(
+                    workspace,
+                    Some("danger-full-access"),
+                    SandboxNetworkAccess::Restricted
+                ),
                 SandboxPolicy::WorkspaceWrite { .. }
             ));
         }
 
         let plan = authority(AppMode::Plan, true, ApprovalMode::Bypass);
         assert_eq!(
-            plan.sandbox_policy(workspace, Some("danger-full-access")),
+            plan.sandbox_policy(
+                workspace,
+                Some("danger-full-access"),
+                SandboxNetworkAccess::Restricted
+            ),
             SandboxPolicy::ReadOnly
         );
     }

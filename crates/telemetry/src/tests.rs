@@ -527,10 +527,11 @@ fn panic_site_reduces_dependency_frames() {
 #[test]
 fn git_sha_is_null_without_release_env() {
     // The build script emits `CODEWHALE_RELEASE_BUILD_SHA` only when
-    // `DEEPSEEK_BUILD_SHA` or `GITHUB_SHA` was in the build environment, so on
-    // a developer machine this is `None` and on release CI it is twelve hex
-    // characters. Both are asserted, because the test has to pass in both
-    // places and neither shape may ever be a path, a version, or a full sha.
+    // `CODEWHALE_BUILD_SHA` (or a build-only compatibility alias) was in the
+    // build environment, so on a developer machine this is `None` and on
+    // release CI it is twelve hex characters. Both are asserted, because the
+    // test has to pass in both places and neither shape may ever be a path, a
+    // version, or a full sha.
     // The rule that produces it lives in `codewhale-build-support` and is
     // tested there against an injected environment; what is asserted here is
     // that whatever reaches the payload is `null` or twelve lowercase hex

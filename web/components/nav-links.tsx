@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { ChromeLink } from "@/lib/i18n/links";
+import { currentNavHref, type ChromeLink } from "@/lib/i18n/links";
 
 /**
  * Desktop primary navigation. Labels come from the locale's chrome
@@ -26,11 +26,13 @@ export function NavLinks({
   primaryAria: string;
 }) {
   const pathname = usePathname();
+  // One link is the page; ancestors are not. See currentNavHref.
+  const current = currentNavHref(links, pathname);
 
   return (
     <nav className="hidden xl:flex min-w-0 shrink items-center gap-x-5 gap-y-1 flex-wrap" aria-label={primaryAria}>
       {links.map((l) => {
-        const isActive = pathname === l.href || pathname.startsWith(`${l.href}/`);
+        const isActive = l.href === current;
         return (
           <Link key={l.href} href={l.href} className="nav-link group inline-flex items-baseline" aria-current={isActive ? "page" : undefined}>
             <span className="leading-none">{l.label}</span>

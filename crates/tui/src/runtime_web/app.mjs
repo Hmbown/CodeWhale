@@ -415,6 +415,9 @@ export function streamCursor(state, { gap = false, connected = true } = {}) {
 export function receiptPresentation(item = {}) {
   const detail = String(item.detail || item.summary || "");
   const raw = String(item.summary || detail || humanize(item.kind));
+  const fullRaw = detail && detail !== raw ? `${raw}\n\n${detail}` : raw;
+  const workflow = workflowReceiptPresentation(item, detail, fullRaw);
+  if (workflow) return workflow;
   const mcpFailure = raw.match(/Failed to connect MCP server ['"]?([^'":\s]+)['"]?/i);
   if (mcpFailure) {
     const server = mcpFailure[1] || "server";
@@ -429,8 +432,45 @@ export function receiptPresentation(item = {}) {
   return {
     label: `${humanize(item.kind)} · ${humanize(item.status)}`,
     summary: raw,
-    raw: detail && detail !== raw ? `${raw}\n\n${detail}` : raw,
+    raw: fullRaw,
     failed,
+  };
+}
+
+function workflowReceiptPresentation(item, detail, raw) {
+  const metadata = item?.metadata && typeof item.metadata === "object"
+    ? item.metadata
+    : {};
+  let payload = null;
+  try {
+    const parsed = JSON.parse(detail);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) payload = parsed;
+  } catch (_error) {
+    // Non-JSON tool receipts continue through the ordinary presentation path.
+  }
+  const looksLikeWorkflow = /^workflow(?:\s|:)/i.test(String(item?.summary || ""))
+    || Object.hasOwn(metadata, "dispatch_failure_count")
+    || Boolean(payload && Object.hasOwn(payload, "dispatch_failure_count"));
+  if (!looksLikeWorkflow) return null;
+
+  const status = String(metadata.status || payload?.status || "").toLowerCase();
+  const countValue = metadata.dispatch_failure_count ?? payload?.dispatch_failure_count;
+  const count = Number(countValue);
+  const rejected = Number.isSafeInteger(count) && count > 0 ? count : 0;
+  if (rejected === 0 && status !== "degraded" && status !== "failed") return null;
+
+  const summary = rejected === 1
+    ? "1 task dispatch was rejected"
+    : rejected > 1
+      ? `${rejected} task dispatches were rejected`
+      : status === "failed"
+        ? "The workflow did not complete"
+        : "The workflow completed with degraded results";
+  return {
+    label: status === "failed" ? "Workflow · Failed" : "Workflow · Needs attention",
+    summary,
+    raw,
+    failed: true,
   };
 }
 
@@ -446,6 +486,109 @@ export function saveDraft(drafts, threadId, value) {
 
 export function restoreDraft(drafts, threadId) {
   return drafts.get(threadId) || "";
+}
+
+export function pendingAttentionCount(summary) {
+  const count = Number(summary?.pending_attention_count);
+  return Number.isSafeInteger(count) && count > 0 ? count : 0;
+}
+
+// Preserve the Runtime's newest-first order within each group. The server's
+// typed pending-request count is the only attention authority; status prose
+// and turn lifecycle strings deliberately do not participate.
+export function groupThreadSummaries(summaries) {
+  const groups = { needsYou: [], recent: [] };
+  for (const summary of Array.isArray(summaries) ? summaries : []) {
+    const group = pendingAttentionCount(summary) > 0 ? groups.needsYou : groups.recent;
+    group.push(summary);
+  }
+  return groups;
+}
+
+export function pendingAttentionLabel(summary) {
+  const count = pendingAttentionCount(summary);
+  return count === 1
+    ? "1 item needs your attention"
+    : `${count} items need your attention`;
+}
+
+// Match the CWC composer grammar while keeping the embedded client free of a
+// framework dependency: Enter sends, Shift+Enter inserts a newline, and an
+// active IME composition is never interrupted.
+export function isComposerSubmitKey({ key, shiftKey = false, isComposing = false } = {}) {
+  return key === "Enter" && !shiftKey && !isComposing;
+}
+
+export function newThreadDefaults(catalog) {
+  const providers = Array.isArray(catalog?.providers)
+    ? catalog.providers.filter((provider) => String(provider?.id || "").trim())
+    : [];
+  const current = String(catalog?.current || "").trim();
+  const provider = providers.find((entry) => entry.id === current) || providers[0] || null;
+  return {
+    providerId: String(provider?.id || "").trim(),
+    modelProviderId: String(provider?.model_provider_id || "").trim(),
+    model: String(provider?.default_model || "").trim(),
+  };
+}
+
+export function imageInputPresentation(value) {
+  if (value === "supported") {
+    return {
+      state: "supported",
+      label: "Vision",
+      description: "This exact provider route supports image input. Browser attachments are not enabled yet.",
+    };
+  }
+  if (value === "unsupported") {
+    return {
+      state: "unsupported",
+      label: "Text only",
+      description: "This exact provider route does not support image input.",
+    };
+  }
+  return {
+    state: "unknown",
+    label: "Image support unverified",
+    description: "Image-input support is not verified for this exact provider route.",
+  };
+}
+
+export function modelOptionLabel(model) {
+  const id = String(model?.id || "").trim();
+  return model?.image_input === "supported" ? `${id} · Vision` : id;
+}
+
+export function providerOptionLabel(provider) {
+  const id = String(provider?.id || "").trim();
+  const displayName = String(provider?.display_name || id).trim();
+  const exactId = String(provider?.model_provider_id || "").trim();
+  return exactId && exactId !== id ? `${displayName} · ${exactId}` : displayName;
+}
+
+export function buildCreateThreadRequest(providerId, model, modelProviderId = "") {
+  const modelProvider = String(providerId || "").trim();
+  const exactProviderId = String(modelProviderId || "").trim();
+  const selectedModel = String(model || "").trim();
+  if (!modelProvider || !selectedModel) {
+    throw new Error("Choose both a provider and a model.");
+  }
+  const request = { model_provider: modelProvider, model: selectedModel };
+  if (exactProviderId) request.model_provider_id = exactProviderId;
+  return request;
+}
+
+export function threadProviderLabel(thread) {
+  const exact = String(thread?.model_provider_id || "").trim();
+  const generic = String(thread?.model_provider || "").trim();
+  return exact || generic;
+}
+
+export function claimInFlight(inFlight, key) {
+  const action = String(key || "").trim();
+  if (!(inFlight instanceof Set) || !action || inFlight.has(action)) return false;
+  inFlight.add(action);
+  return true;
 }
 
 export function setSafeText(element, value) {
@@ -499,6 +642,17 @@ function startBrowserClient() {
     search: document.querySelector("#thread-search"),
     threadList: document.querySelector("#thread-list"),
     newThread: document.querySelector("#new-thread"),
+    newThreadDialog: document.querySelector("#new-thread-dialog"),
+    newThreadForm: document.querySelector("#new-thread-form"),
+    newThreadProvider: document.querySelector("#new-thread-provider"),
+    newThreadModel: document.querySelector("#new-thread-model"),
+    newThreadModelSelectField: document.querySelector("#new-thread-model-select-field"),
+    newThreadModelInput: document.querySelector("#new-thread-model-input"),
+    newThreadModelInputField: document.querySelector("#new-thread-model-input-field"),
+    newThreadCapability: document.querySelector("#new-thread-capability"),
+    newThreadStatus: document.querySelector("#new-thread-status"),
+    newThreadCancel: document.querySelector("#new-thread-cancel"),
+    newThreadCreate: document.querySelector("#new-thread-create"),
     connectionDot: document.querySelector("#connection-dot"),
     connectionLabel: document.querySelector("#connection-label"),
     runtimeProvenance: document.querySelector("#runtime-provenance"),
@@ -545,10 +699,16 @@ function startBrowserClient() {
     generation: 0,
     searchTimer: null,
     railReturnFocus: null,
-    pendingAttentionFocus: "",
+    inFlightActions: new Set(),
+    providerCatalog: null,
+    newThreadModels: [],
+    newThreadGeneration: 0,
+    newThreadLoading: false,
+    creatingThread: false,
   };
 
   const narrowRail = globalThis.matchMedia("(max-width: 800px)");
+  const composerSendAction = "composer-send";
 
   function element(tag, className, text) {
     const created = document.createElement(tag);
@@ -616,11 +776,6 @@ function startBrowserClient() {
     if (restoreFocus) returnTarget.focus({ preventScroll: true });
     applyClosedMobileRailAccessibility();
     app.railReturnFocus = null;
-
-    if (app.pendingAttentionFocus) {
-      const pendingKey = app.pendingAttentionFocus;
-      requestAnimationFrame(() => focusPendingAttention(pendingKey));
-    }
   }
 
   function syncRailAccessibility() {
@@ -655,30 +810,43 @@ function startBrowserClient() {
     dom.shell.style.setProperty("--visual-viewport-offset-top", `${Math.max(0, Math.round(offsetTop))}px`);
   }
 
+  function focusableWithin(container) {
+    return [...container.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    )].filter((node) => !node.closest("[hidden]") && node.getAttribute("aria-hidden") !== "true");
+  }
+
+  function trapFocusWithin(event, container) {
+    if (event.key !== "Tab") return false;
+    const focusable = focusableWithin(container);
+    if (focusable.length === 0) {
+      event.preventDefault();
+      container.focus({ preventScroll: true });
+      return true;
+    }
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !container.contains(active))) {
+      event.preventDefault();
+      last.focus({ preventScroll: true });
+      return true;
+    }
+    if (!event.shiftKey && (active === last || !container.contains(active))) {
+      event.preventDefault();
+      first.focus({ preventScroll: true });
+      return true;
+    }
+    return false;
+  }
+
   function trapRailFocus(event) {
     if (
       event.key !== "Tab"
       || !narrowRail.matches
       || !dom.shell.classList.contains("rail-visible")
     ) return false;
-    const focusable = [...dom.rail.querySelectorAll(
-      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
-    )].filter((node) => !node.hidden && node.getAttribute("aria-hidden") !== "true");
-    if (focusable.length === 0) return false;
-    const first = focusable[0];
-    const last = focusable.at(-1);
-    const active = document.activeElement;
-    if (event.shiftKey && (active === first || !dom.rail.contains(active))) {
-      event.preventDefault();
-      last.focus({ preventScroll: true });
-      return true;
-    }
-    if (!event.shiftKey && (active === last || !dom.rail.contains(active))) {
-      event.preventDefault();
-      first.focus({ preventScroll: true });
-      return true;
-    }
-    return false;
+    return trapFocusWithin(event, dom.rail);
   }
 
   function setConnection(kind, message) {
@@ -728,23 +896,50 @@ function startBrowserClient() {
       dom.threadList.append(empty);
       return;
     }
-    for (const summary of app.summaries) {
+
+    const groups = groupThreadSummaries(app.summaries);
+    if (groups.needsYou.length > 0) {
+      appendThreadGroup("Needs you", "needs-you", groups.needsYou);
+    }
+    if (groups.recent.length > 0) {
+      appendThreadGroup("Recent", "recent", groups.recent);
+    }
+  }
+
+  function appendThreadGroup(label, idSuffix, summaries) {
+    const group = element("section", `thread-group thread-group-${idSuffix}`);
+    const headingId = `thread-group-${idSuffix}-title`;
+    const heading = element("h2", "rail-section-title thread-group-title", label);
+    heading.id = headingId;
+    group.setAttribute("aria-labelledby", headingId);
+    group.append(heading);
+
+    for (const summary of summaries) {
       const row = element("button", "thread-row");
       row.type = "button";
       row.dataset.threadId = summary.id;
       row.setAttribute("aria-current", summary.id === app.selectedThreadId ? "true" : "false");
       const titleRow = element("span", "thread-title-row");
       titleRow.append(element("span", "thread-title", summary.title || "New thread"));
+      const indicators = element("span", "thread-row-indicators");
+      const attentionCount = pendingAttentionCount(summary);
+      if (attentionCount > 0) {
+        const attention = element("span", "thread-attention-count", String(attentionCount));
+        attention.setAttribute("aria-label", pendingAttentionLabel(summary));
+        indicators.append(attention);
+      }
       const status = element("span", `status-pip ${summary.latest_turn_status === "inprogress" || summary.latest_turn_status === "in_progress" ? "running" : summary.latest_turn_status === "failed" ? "failed" : ""}`);
       status.setAttribute("aria-label", summary.latest_turn_status || "idle");
-      titleRow.append(status);
+      indicators.append(status);
+      titleRow.append(indicators);
       row.append(titleRow);
       row.append(element("span", "thread-preview", summary.preview || "No messages yet"));
       const branch = summary.branch || basename(summary.workspace) || "local";
       row.append(element("span", "thread-meta", `${branch} · ${relativeTime(summary.updated_at)}`));
       row.addEventListener("click", () => selectThread(summary.id));
-      dom.threadList.append(row);
+      group.append(row);
     }
+    dom.threadList.append(group);
   }
 
   async function loadThreads(search = dom.search.value.trim()) {
@@ -1002,7 +1197,16 @@ function startBrowserClient() {
         }
         if (!applyRuntimeEvent(app.threadState, envelope)) return;
         renderAll(true);
-        if (envelope.event === "turn.completed" || envelope.event === "thread.updated") {
+        if (
+          envelope.event === "turn.completed"
+          || envelope.event === "thread.updated"
+          || envelope.event === "approval.required"
+          || envelope.event === "approval.decided"
+          || envelope.event === "approval.timeout"
+          || envelope.event === "user_input.required"
+          || envelope.event === "user_input.answered"
+          || envelope.event === "user_input.canceled"
+        ) {
           loadThreads().catch((error) => showStatus(error.message));
         }
       } catch (error) {
@@ -1109,6 +1313,8 @@ function startBrowserClient() {
     const branch = summary?.branch || app.workspace?.branch;
     dom.facts.append(factChip("Workspace", basename(workspace) || "local"));
     if (branch) dom.facts.append(factChip("Branch", branch));
+    const provider = threadProviderLabel(thread);
+    if (provider) dom.facts.append(factChip("Provider", provider));
     dom.facts.append(factChip("Model", thread.model || "Runtime default"));
     dom.facts.append(factChip("Mode", modeLabel(thread.mode)));
     dom.facts.append(factChip("Permission", permissionLabel(thread)));
@@ -1352,47 +1558,40 @@ function startBrowserClient() {
         .map((node) => [node.dataset.attentionKey, node]),
     );
     const desired = [];
-    const added = [];
     for (const [approvalId, approval] of app.threadState.approvals) {
       const key = `approval:${approvalId}`;
       const card = existing.get(key) || renderApproval(approvalId, approval);
       card.dataset.attentionKey = key;
+      setAttentionCardBusyNode(card, app.inFlightActions.has(key));
       desired.push(card);
-      if (!existing.has(key)) added.push(card);
     }
     for (const [inputId, input] of app.threadState.userInputs) {
       const key = `input:${inputId}`;
       const card = existing.get(key) || renderUserInput(inputId, input);
       card.dataset.attentionKey = key;
+      setAttentionCardBusyNode(card, app.inFlightActions.has(key));
       desired.push(card);
-      if (!existing.has(key)) added.push(card);
     }
     reconcileChildren(dom.attention, desired);
     dom.attention.hidden = desired.length === 0;
-    if (added[0]) {
-      app.pendingAttentionFocus = added[0].dataset.attentionKey;
-      requestAnimationFrame(() => focusPendingAttention(app.pendingAttentionFocus));
-    } else if (desired.length === 0) {
-      app.pendingAttentionFocus = "";
-    }
   }
 
-  function focusPendingAttention(key) {
-    if (!key || dom.session.inert) return;
+  function setAttentionCardBusy(key, busy) {
     const card = [...dom.attention.children]
       .find((node) => node.dataset.attentionKey === key);
-    if (!card) {
-      if (app.pendingAttentionFocus === key) app.pendingAttentionFocus = "";
-      return;
+    if (card) setAttentionCardBusyNode(card, busy);
+  }
+
+  function setAttentionCardBusyNode(card, busy) {
+    card.setAttribute("aria-busy", busy ? "true" : "false");
+    for (const control of card.querySelectorAll("button, input, textarea, select")) {
+      control.disabled = busy;
     }
-    card.focus({ preventScroll: false });
-    if (app.pendingAttentionFocus === key) app.pendingAttentionFocus = "";
   }
 
   function renderApproval(approvalId, approval) {
     const card = element("article", "attention-card");
     const titleId = `attention-approval-${safeDomId(approvalId)}`;
-    card.tabIndex = -1;
     card.setAttribute("role", "group");
     card.setAttribute("aria-labelledby", titleId);
     card.append(element("p", "eyebrow", "Approval required"));
@@ -1427,22 +1626,28 @@ function startBrowserClient() {
       renderAttention();
       return;
     }
+    const action = `approval:${approvalId}`;
+    if (!claimInFlight(app.inFlightActions, action)) return;
+    setAttentionCardBusy(action, true);
     try {
       await api(`/v1/approvals/${encodeURIComponent(resolved.approvalId)}`, {
         method: "POST",
         body: JSON.stringify({ decision, remember }),
       });
       app.threadState.approvals.delete(approvalId);
+      showStatus("");
       renderAttention();
     } catch (error) {
       showStatus(error.message);
+    } finally {
+      app.inFlightActions.delete(action);
+      setAttentionCardBusy(action, false);
     }
   }
 
   function renderUserInput(inputId, envelope) {
     const card = element("form", "attention-card");
     const titleId = `attention-input-${safeDomId(inputId)}`;
-    card.tabIndex = -1;
     card.setAttribute("role", "group");
     card.setAttribute("aria-labelledby", titleId);
     card.append(element("p", "eyebrow", "Input required"));
@@ -1524,6 +1729,9 @@ function startBrowserClient() {
         showStatus(message);
         return;
       }
+      const action = `input:${inputId}`;
+      if (!claimInFlight(app.inFlightActions, action)) return;
+      setAttentionCardBusy(action, true);
       try {
         await api(`/v1/user-input/${encodeURIComponent(resolved.threadId)}/${encodeURIComponent(resolved.inputId)}`, {
           method: "POST",
@@ -1534,6 +1742,9 @@ function startBrowserClient() {
         renderAttention();
       } catch (error) {
         showStatus(error.message);
+      } finally {
+        app.inFlightActions.delete(action);
+        setAttentionCardBusy(action, false);
       }
     });
     return card;
@@ -1556,22 +1767,226 @@ function startBrowserClient() {
   function renderComposer() {
     const ready = Boolean(app.threadState.thread);
     const active = activeTurn();
-    dom.composerInput.disabled = !ready;
-    dom.send.disabled = !ready || !dom.composerInput.value.trim();
+    const sending = app.inFlightActions.has(composerSendAction);
+    dom.composerInput.disabled = sending || !ready;
+    dom.send.disabled = sending || !ready || !dom.composerInput.value.trim();
+    dom.composer.setAttribute("aria-busy", sending ? "true" : "false");
     dom.interrupt.hidden = !active;
-    setSafeText(dom.send, active ? "Steer" : "Send");
+    setSafeText(dom.send, sending ? (active ? "Steering…" : "Sending…") : active ? "Steer" : "Send");
   }
 
-  async function createThread() {
-    showStatus("");
+  function selectedNewThreadProvider() {
+    const providerId = dom.newThreadProvider.value;
+    return app.providerCatalog?.providers?.find((provider) => provider.id === providerId) || null;
+  }
+
+  function selectedNewThreadModel() {
+    const provider = selectedNewThreadProvider();
+    return provider?.has_model_catalog
+      ? dom.newThreadModel.value
+      : dom.newThreadModelInput.value.trim();
+  }
+
+  function setNewThreadStatus(message, state = "") {
+    setSafeText(dom.newThreadStatus, message || "");
+    dom.newThreadStatus.dataset.state = state;
+  }
+
+  function renderNewThreadCapability() {
+    const provider = selectedNewThreadProvider();
+    const modelId = selectedNewThreadModel();
+    if (!provider || !modelId) {
+      setSafeText(dom.newThreadCapability, "");
+      dom.newThreadCapability.dataset.state = "unknown";
+      return;
+    }
+    const model = provider.has_model_catalog
+      ? app.newThreadModels.find((entry) => entry.id === modelId)
+      : null;
+    const presentation = imageInputPresentation(model?.image_input);
+    dom.newThreadCapability.dataset.state = presentation.state;
+    setSafeText(
+      dom.newThreadCapability,
+      `${presentation.label} — ${presentation.description}`,
+    );
+  }
+
+  function syncNewThreadControls() {
+    const provider = selectedNewThreadProvider();
+    const hasCatalog = Boolean(provider?.has_model_catalog);
+    const busy = app.newThreadLoading || app.creatingThread;
+    dom.newThreadProvider.disabled = app.creatingThread || !app.providerCatalog?.providers?.length;
+    dom.newThreadModel.disabled = busy || !hasCatalog || app.newThreadModels.length === 0;
+    dom.newThreadModelInput.disabled = busy || !provider || hasCatalog;
+    dom.newThreadCancel.disabled = app.creatingThread;
+    dom.newThreadCreate.disabled = busy || !provider || !selectedNewThreadModel();
+    renderNewThreadCapability();
+  }
+
+  function setNewThreadModelSurface(provider) {
+    const hasCatalog = Boolean(provider?.has_model_catalog);
+    dom.newThreadModelSelectField.hidden = !hasCatalog;
+    dom.newThreadModelInputField.hidden = hasCatalog;
+  }
+
+  async function loadNewThreadModels(providerId, preferredModel, generation) {
+    if (generation !== app.newThreadGeneration || !dom.newThreadDialog.open) return;
+    const provider = app.providerCatalog?.providers?.find((entry) => entry.id === providerId);
+    app.newThreadModels = [];
+    dom.newThreadModel.replaceChildren();
+    dom.newThreadModelInput.value = "";
+    setNewThreadModelSurface(provider);
+    if (!provider) {
+      app.newThreadLoading = false;
+      setNewThreadStatus("Choose a provider.", "error");
+      syncNewThreadControls();
+      return;
+    }
+
+    const modelDefault = String(preferredModel || provider.default_model || "").trim();
+    if (!provider.has_model_catalog) {
+      dom.newThreadModelInput.value = modelDefault;
+      app.newThreadLoading = false;
+      setNewThreadStatus("");
+      syncNewThreadControls();
+      return;
+    }
+
+    app.newThreadLoading = true;
+    setNewThreadStatus("Loading models…");
+    syncNewThreadControls();
     try {
-      const thread = await api("/v1/threads", { method: "POST", body: "{}" });
+      const response = await api(`/v1/providers/${encodeURIComponent(provider.id)}/models`);
+      if (generation !== app.newThreadGeneration || !dom.newThreadDialog.open) return;
+      const seen = new Set();
+      const models = [];
+      for (const entry of Array.isArray(response?.models) ? response.models : []) {
+        const id = String(entry?.id || "").trim();
+        const key = id.toLowerCase();
+        if (!id || seen.has(key)) continue;
+        seen.add(key);
+        models.push({
+          id,
+          image_input: ["supported", "unsupported", "unknown"].includes(entry?.image_input)
+            ? entry.image_input
+            : "unknown",
+        });
+      }
+      if (modelDefault && !seen.has(modelDefault.toLowerCase())) {
+        models.unshift({ id: modelDefault, image_input: "unknown" });
+      }
+      app.newThreadModels = models;
+      for (const model of models) {
+        const option = document.createElement("option");
+        option.value = model.id;
+        setSafeText(option, modelOptionLabel(model));
+        dom.newThreadModel.append(option);
+      }
+      const selectedDefault = models.find(
+        (model) => model.id.toLowerCase() === modelDefault.toLowerCase(),
+      );
+      if (selectedDefault) dom.newThreadModel.value = selectedDefault.id;
+      app.newThreadLoading = false;
+      setNewThreadStatus(
+        models.length ? "" : "No models are available for this provider.",
+        models.length ? "" : "error",
+      );
+      syncNewThreadControls();
+    } catch (error) {
+      if (generation !== app.newThreadGeneration || !dom.newThreadDialog.open) return;
+      app.newThreadLoading = false;
+      setNewThreadStatus(`Could not load models: ${error.message}`, "error");
+      syncNewThreadControls();
+    }
+  }
+
+  async function openNewThreadDialog() {
+    if (dom.newThreadDialog.open || app.creatingThread) return;
+    dom.newThreadDialog.showModal();
+    dom.newThreadCancel.focus({ preventScroll: true });
+    const generation = ++app.newThreadGeneration;
+    app.providerCatalog = null;
+    app.newThreadModels = [];
+    app.newThreadLoading = true;
+    dom.newThreadProvider.replaceChildren();
+    dom.newThreadModel.replaceChildren();
+    dom.newThreadModelInput.value = "";
+    setNewThreadStatus("Loading providers…");
+    renderNewThreadCapability();
+    syncNewThreadControls();
+    try {
+      const catalog = await api("/v1/providers");
+      if (generation !== app.newThreadGeneration || !dom.newThreadDialog.open) return;
+      const providers = Array.isArray(catalog?.providers)
+        ? catalog.providers.filter((provider) => String(provider?.id || "").trim())
+        : [];
+      if (providers.length === 0) throw new Error("The Runtime returned no providers.");
+      app.providerCatalog = { ...catalog, providers };
+      for (const provider of providers) {
+        const option = document.createElement("option");
+        option.value = provider.id;
+        setSafeText(option, providerOptionLabel(provider));
+        dom.newThreadProvider.append(option);
+      }
+      const defaults = newThreadDefaults(app.providerCatalog);
+      dom.newThreadProvider.value = defaults.providerId;
+      dom.newThreadProvider.disabled = false;
+      dom.newThreadProvider.focus({ preventScroll: true });
+      await loadNewThreadModels(defaults.providerId, defaults.model, generation);
+    } catch (error) {
+      if (generation !== app.newThreadGeneration || !dom.newThreadDialog.open) return;
+      app.newThreadLoading = false;
+      setNewThreadStatus(`Could not load providers: ${error.message}`, "error");
+      syncNewThreadControls();
+    }
+  }
+
+  async function submitNewThread(event) {
+    event.preventDefault();
+    const provider = selectedNewThreadProvider();
+    let request;
+    try {
+      request = buildCreateThreadRequest(
+        dom.newThreadProvider.value,
+        selectedNewThreadModel(),
+        provider?.model_provider_id,
+      );
+    } catch (error) {
+      setNewThreadStatus(error.message, "error");
+      return;
+    }
+    app.creatingThread = true;
+    setNewThreadStatus("Creating thread…");
+    dom.newThreadDialog.focus({ preventScroll: true });
+    syncNewThreadControls();
+    const thread = await createThread(
+      request,
+      (message) => setNewThreadStatus(message, message ? "error" : ""),
+    );
+    app.creatingThread = false;
+    if (thread) {
+      dom.newThreadDialog.close();
+      dom.composerInput.focus();
+      return;
+    }
+    syncNewThreadControls();
+    dom.newThreadProvider.focus({ preventScroll: true });
+  }
+
+  async function createThread(request = {}, reportError = showStatus) {
+    showStatus("");
+    reportError("");
+    try {
+      const thread = await api("/v1/threads", {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
       await loadThreads("");
       await selectThread(thread.id);
       dom.composerInput.focus();
       return thread;
     } catch (error) {
-      showStatus(error.message);
+      reportError(error.message);
       return null;
     }
   }
@@ -1586,22 +2001,23 @@ function startBrowserClient() {
       showStatus(refusalMessage("session-not-live"));
       return;
     }
-    let threadId = app.selectedThreadId;
-    if (!threadId) {
-      const thread = await createThread();
-      if (!thread) return;
-      threadId = thread.id;
-    }
-    const resolved = resolveReplyTarget(threadTarget(threadId), app.threadState);
-    if (!resolved.ok) {
-      showStatus(refusalMessage(resolved.reason));
-      return;
-    }
-    threadId = resolved.threadId;
-    const turn = activeTurn();
-    dom.send.disabled = true;
+    if (!claimInFlight(app.inFlightActions, composerSendAction)) return;
+    renderComposer();
     showStatus("");
     try {
+      let threadId = app.selectedThreadId;
+      if (!threadId) {
+        const thread = await createThread();
+        if (!thread) return;
+        threadId = thread.id;
+      }
+      const resolved = resolveReplyTarget(threadTarget(threadId), app.threadState);
+      if (!resolved.ok) {
+        showStatus(refusalMessage(resolved.reason));
+        return;
+      }
+      threadId = resolved.threadId;
+      const turn = activeTurn();
       if (turn) {
         await api(`/v1/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turn.id)}/steer`, {
           method: "POST",
@@ -1620,6 +2036,8 @@ function startBrowserClient() {
       loadThreads().catch((error) => showStatus(error.message));
     } catch (error) {
       showStatus(error.message);
+    } finally {
+      app.inFlightActions.delete(composerSendAction);
       renderComposer();
     }
   }
@@ -1690,7 +2108,7 @@ function startBrowserClient() {
 
   function resizeComposer() {
     dom.composerInput.style.height = "auto";
-    dom.composerInput.style.height = `${Math.min(dom.composerInput.scrollHeight, 180)}px`;
+    dom.composerInput.style.height = `${Math.min(dom.composerInput.scrollHeight, 220)}px`;
   }
 
   function closeRailIfNarrow() {
@@ -1700,7 +2118,33 @@ function startBrowserClient() {
   dom.railOpen.addEventListener("click", openRail);
   dom.railClose.addEventListener("click", closeRail);
   dom.railScrim.addEventListener("click", closeRail);
-  dom.newThread.addEventListener("click", createThread);
+  dom.newThread.addEventListener("click", () => void openNewThreadDialog());
+  dom.newThreadForm.addEventListener("submit", submitNewThread);
+  dom.newThreadProvider.addEventListener("change", () => {
+    const provider = selectedNewThreadProvider();
+    const generation = ++app.newThreadGeneration;
+    void loadNewThreadModels(
+      provider?.id || "",
+      provider?.default_model || "",
+      generation,
+    );
+  });
+  dom.newThreadModel.addEventListener("change", syncNewThreadControls);
+  dom.newThreadModelInput.addEventListener("input", syncNewThreadControls);
+  dom.newThreadCancel.addEventListener("click", () => {
+    if (!app.creatingThread) dom.newThreadDialog.close();
+  });
+  dom.newThreadDialog.addEventListener("cancel", (event) => {
+    if (app.creatingThread) event.preventDefault();
+  });
+  dom.newThreadDialog.addEventListener("keydown", (event) => {
+    trapFocusWithin(event, dom.newThreadDialog);
+  });
+  dom.newThreadDialog.addEventListener("close", () => {
+    app.newThreadGeneration += 1;
+    app.newThreadLoading = false;
+    setNewThreadStatus("");
+  });
   dom.rename.addEventListener("click", openRenameDialog);
   dom.archive.addEventListener("click", archiveThread);
   dom.renameForm.addEventListener("submit", submitRename);
@@ -1715,10 +2159,9 @@ function startBrowserClient() {
     renderComposer();
   });
   dom.composerInput.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-      event.preventDefault();
-      sendMessage();
-    }
+    if (!isComposerSubmitKey(event)) return;
+    event.preventDefault();
+    sendMessage();
   });
   dom.search.addEventListener("input", () => {
     if (app.searchTimer) clearTimeout(app.searchTimer);
@@ -1728,6 +2171,7 @@ function startBrowserClient() {
     }, 180);
   });
   document.addEventListener("keydown", (event) => {
+    if (dom.newThreadDialog.open) return;
     if (trapRailFocus(event)) return;
     if (event.key === "Escape" && narrowRail.matches && dom.shell.classList.contains("rail-visible")) {
       event.preventDefault();

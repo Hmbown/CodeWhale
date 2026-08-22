@@ -719,6 +719,44 @@ mod existing_tests {
     }
 
     #[test]
+    fn seatbelt_profile_grants_network_only_when_the_policy_does() {
+        // The OS layer and the application-level policy must agree. The
+        // seatbelt base profile is `(deny default)` with no network rules, so
+        // absence of SEATBELT_NETWORK_POLICY is a real denial, not a gap.
+        let cwd = Path::new("/tmp/test");
+
+        let restricted = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![cwd.to_path_buf()],
+            network_access: false,
+            exclude_tmpdir: false,
+            exclude_slash_tmp: false,
+        };
+        let text = generate_policy(&restricted, cwd);
+        assert!(
+            !text.contains("network-outbound"),
+            "a network-restricted policy must not emit outbound rules:\n{text}"
+        );
+        assert!(!text.contains("network-inbound"));
+        assert!(!text.contains("network-bind"));
+
+        let allowed = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![cwd.to_path_buf()],
+            network_access: true,
+            exclude_tmpdir: false,
+            exclude_slash_tmp: false,
+        };
+        let text = generate_policy(&allowed, cwd);
+        assert!(
+            text.contains("network-outbound"),
+            "an explicitly granted policy must emit outbound rules:\n{text}"
+        );
+
+        // Default construction is restricted, so the shipped default profile
+        // carries no network rules.
+        assert!(!generate_policy(&SandboxPolicy::default(), cwd).contains("network-outbound"));
+    }
+
+    #[test]
     fn test_create_seatbelt_args() {
         let policy = SandboxPolicy::default();
         let cwd = Path::new("/tmp/test");

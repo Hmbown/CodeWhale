@@ -138,6 +138,24 @@ pub(super) fn is_select_all_shortcut(key: &KeyEvent) -> bool {
     cmd_a || ctrl_shift_a
 }
 
+/// Run `/update install` without leaving the TUI: `Ctrl+Shift+U`.
+///
+/// Distinct from readline `Ctrl+U` (clear the composer line) exactly the
+/// way `Ctrl+Shift+A` / `Ctrl+Shift+E` / `Ctrl+Shift+O` are distinct from
+/// their unshifted forms, and like them requires an enhanced-keyboard
+/// terminal to report the Shift modifier. On macOS the event loop's
+/// modifier normalization maps `Cmd+Shift+U` onto this chord; the predicate
+/// itself still rejects a raw SUPER modifier so Linux/Windows meta chords
+/// never collide with window-management shortcuts.
+pub(super) fn is_update_install_shortcut(key: &KeyEvent) -> bool {
+    let is_u = matches!(key.code, KeyCode::Char('u') | KeyCode::Char('U'));
+    is_u && key.modifiers.contains(KeyModifiers::CONTROL)
+        && key.modifiers.contains(KeyModifiers::SHIFT)
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::ALT | KeyModifiers::SUPER)
+}
+
 /// Modifier predicate for the v0.8.30 family of `Alt+<key>` transcript-
 /// nav shortcuts (`Alt+G` / `Alt+[` / `Alt+]` / `Alt+?` / `Alt+L`). Requires
 /// `Alt` and disallows `Ctrl` / `Super` so the
@@ -270,6 +288,39 @@ mod tests {
         );
         assert!(!is_turn_inspector_shortcut(&alt_o));
         assert!(!is_turn_inspector_shortcut(&ctrl_shift_o));
+    }
+
+    #[test]
+    fn ctrl_shift_u_routes_to_update_install_not_readline_clear() {
+        let ctrl_shift_lower = KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        let ctrl_shift_upper = KeyEvent::new(
+            KeyCode::Char('U'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert!(is_update_install_shortcut(&ctrl_shift_lower));
+        assert!(is_update_install_shortcut(&ctrl_shift_upper));
+
+        // Readline Ctrl+U stays readline Ctrl+U (clear the composer line).
+        let readline_ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+        assert!(!is_update_install_shortcut(&readline_ctrl_u));
+        // Bare Shift+U, plain `u`, and meta combos never install an update.
+        let shift_u = KeyEvent::new(KeyCode::Char('U'), KeyModifiers::SHIFT);
+        let plain_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE);
+        let ctrl_alt_u = KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT,
+        );
+        let super_shift_u = KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::SUPER | KeyModifiers::SHIFT,
+        );
+        assert!(!is_update_install_shortcut(&shift_u));
+        assert!(!is_update_install_shortcut(&plain_u));
+        assert!(!is_update_install_shortcut(&ctrl_alt_u));
+        assert!(!is_update_install_shortcut(&super_shift_u));
     }
 
     #[test]

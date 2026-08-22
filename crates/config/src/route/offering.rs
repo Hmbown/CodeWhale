@@ -232,13 +232,30 @@ pub fn bundled_offerings() -> Vec<ProviderModelOffering> {
             pricing: PricingSku::UnknownOrStale,
         },
         ProviderModelOffering {
-            provider: deepseek,
+            provider: deepseek.clone(),
             canonical_model: Some(ModelId::from("deepseek-v4-flash")),
             wire_model_id: WireModelId::from("deepseek-v4-flash"),
             endpoint_key: "responses".to_string(),
             default_for_provider: false,
             limits: documented_limits,
             capabilities: documented_capabilities,
+            pricing: PricingSku::UnknownOrStale,
+        },
+        // Vision-experimental sibling of v4-flash, verified live on
+        // api.deepseek.com /models (2026-08-21). Image input is the one
+        // documented difference; limits inherit the v4-flash row until
+        // DeepSeek publishes distinct numbers.
+        ProviderModelOffering {
+            provider: deepseek,
+            canonical_model: Some(ModelId::from("deepseek-v4-flash-vision-exp")),
+            wire_model_id: WireModelId::from("deepseek-v4-flash-vision-exp"),
+            endpoint_key: "chat".to_string(),
+            default_for_provider: false,
+            limits: documented_limits,
+            capabilities: RouteCapabilities {
+                image_input: CapabilityState::Supported,
+                ..documented_capabilities
+            },
             pricing: PricingSku::UnknownOrStale,
         },
     ];

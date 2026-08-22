@@ -6,6 +6,7 @@ pub mod control;
 pub mod exact;
 pub mod executor;
 pub mod host;
+pub mod identity;
 pub mod ledger;
 pub mod manager;
 pub mod profile;

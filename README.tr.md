@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:b092c34e8ca3 -->
+<!-- source: README.md sha256:a56bca473dbd -->
 # Codewhale
 
 Codewhale, terminaliniz için Rust ile geliştirilmiş ve kullanıcılarıyla birlikte açık biçimde iyileştirilen açık kaynaklı bir kodlama ajanıdır.
@@ -20,6 +20,8 @@ codewhale
 ```
 
 Codewhale ilk çalıştırmada bir sağlayıcıya bağlanmanıza veya çevrimdışı kalmanıza yardımcı olur. Cargo, Docker, Nix, Scoop, önceden derlenmiş arşivler, Android/Termux ve CNB aynasını da destekler. [Kurulum kılavuzuna](docs/INSTALL.md) bakın.
+
+Her kabukta Tab tamamlama tek bir komutla etkinleştirilir — `codewhale completion bash|zsh|fish|powershell|elvish`. [Kabuk tamamlamalarına](docs/INSTALL.md#8-shell-completions) bakın.
 
 ## Kullanım
 
@@ -74,4 +76,4 @@ Projeyi büyütmeye yardımcı olan tüm katkıcılara ve açık kaynak topluluk
 
 ## Lisans
 
-[MIT](LICENSE)
+[MIT](LICENSE). Diğer açık kaynak projelerinden uyarlanan bölümler [üçüncü taraf bildirimlerinde](docs/THIRD_PARTY_NOTICES.md) kayıtlıdır.

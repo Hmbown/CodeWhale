@@ -2133,10 +2133,17 @@ impl McpConnection {
             ));
         }
 
-        Ok(response
-            .get("result")
-            .cloned()
-            .unwrap_or(serde_json::json!(null)))
+        // JSON-RPC requires exactly one of `result` / `error`. Treating a
+        // response carrying neither as an empty success handed the model a
+        // `null` tool result that is indistinguishable from a tool that
+        // genuinely returned nothing. An explicit `"result": null` is still a
+        // valid empty success and passes through unchanged.
+        response.get("result").cloned().with_context(|| {
+            format!(
+                "MCP response from server '{}' for '{method}' contained neither a result nor an error",
+                self.name
+            )
+        })
     }
 
     /// Get discovered tools
@@ -2187,14 +2194,23 @@ impl McpConnection {
 
     async fn send(&mut self, msg: serde_json::Value) -> Result<()> {
         let bytes = serde_json::to_vec(&msg).context("Failed to serialize MCP JSON-RPC message")?;
-        tokio::select! {
+        let cancel_token = self.cancel_token.clone();
+        let name = self.name.clone();
+        let result = tokio::select! {
             biased;
-            _ = self.cancel_token.cancelled() => {
-                self.state = ConnectionState::Disconnected;
-                anyhow::bail!("MCP connection '{}' was cancelled", self.name)
+            _ = cancel_token.cancelled() => {
+                Err(anyhow::anyhow!("MCP connection '{name}' was cancelled"))
             }
             result = self.transport.send(bytes) => result,
+        };
+        if result.is_err() {
+            // A dead write side is as fatal as a dead read side: the pool
+            // reuses any connection whose `is_ready()` is true, so leaving
+            // this one in `Ready` would hand the same broken transport back
+            // on every later call instead of rebuilding it.
+            self.state = ConnectionState::Disconnected;
         }
+        result
     }
 
     async fn recv(&mut self, expected_id: String) -> Result<serde_json::Value> {
@@ -2733,12 +2749,18 @@ impl McpPool {
         }
 
         for (name, server_cfg) in &self.config.servers {
+            // Only stand in for a missing diagnosis. When the connect attempt
+            // above already reported why this server failed, appending a
+            // second, contentless entry for the same name buries it: callers
+            // fold these pairs into a `HashMap<name, message>`, so the later
+            // generic string silently replaced the real cause.
             if server_cfg.required
                 && server_cfg.is_enabled()
                 && !self
                     .connections
                     .get(name)
                     .is_some_and(McpConnection::is_ready)
+                && !errors.iter().any(|(failed, _)| failed == name)
             {
                 errors.push((
                     name.clone(),
@@ -3937,15 +3959,50 @@ fn paths_refer_to_same_config(left: &Path, right: &Path) -> bool {
     }
 }
 
+/// Rebuild a JSON value with every object's keys in sorted order.
+///
+/// [`McpConfig`] is full of `HashMap`s (`servers`, and per-server `env`,
+/// `headers`, `env_headers`), and `serde_json` is built here with
+/// `preserve_order`, so a serialization inherits whatever order the source
+/// `HashMap` happened to iterate in. Two `HashMap`s built separately in one
+/// process do *not* share an iteration order — `RandomState` re-seeds per map
+/// — so the raw serialization of two structurally identical configs differs.
+/// Sorting first makes the byte form depend only on content. The value tree
+/// here is the fixed `McpConfig` shape, so the recursion depth is bounded by
+/// that struct, not by untrusted input.
+fn canonicalize_json_keys(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<(String, serde_json::Value)> = map.into_iter().collect();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, canonicalize_json_keys(value)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(canonicalize_json_keys).collect())
+        }
+        other => other,
+    }
+}
+
 /// 64-bit content hash of an [`McpConfig`]. Used by [`McpPool`] to decide
 /// whether a freshly-read config differs from the one currently driving the
 /// live connections. Hashing the JSON serialization avoids forcing every
 /// nested config type to derive `Hash` (the timeouts struct, network policy
-/// stubs, etc.). The hash is stable across runs of the same Rust toolchain
-/// for byte-identical input.
+/// stubs, etc.); the serialization is key-sorted first so the hash depends on
+/// content alone and not on per-`HashMap` iteration order. The hash is stable
+/// within a process for structurally identical configs, and across runs of the
+/// same Rust toolchain for byte-identical input.
 fn hash_mcp_config(config: &McpConfig) -> u64 {
     use std::hash::{Hash, Hasher};
-    let bytes = serde_json::to_vec(config).unwrap_or_default();
+    let canonical = serde_json::to_value(config)
+        .map(canonicalize_json_keys)
+        .unwrap_or(serde_json::Value::Null);
+    let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
     hasher.finish()

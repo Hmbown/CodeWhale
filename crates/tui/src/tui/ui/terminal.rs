@@ -27,13 +27,43 @@ pub(crate) fn try_next_terminal_event(
     input.try_recv()
 }
 
-pub(crate) fn drain_terminal_input_queue(
+/// Drain input that Codewhale already read before releasing the terminal.
+///
+/// Ordinary buffered input is discarded so it cannot leak into the child.
+/// Escape and Ctrl+C are different: they are cancellation authority. If one
+/// is pending, preserve the complete input sequence and refuse the handoff so
+/// the normal event loop can process it.
+pub(crate) fn prepare_terminal_input_handoff(
     input: &TerminalInputPump,
     pending: &mut VecDeque<Event>,
-) -> io::Result<()> {
+) -> io::Result<bool> {
+    let mut drained = VecDeque::new();
+    while let Some(event) = input.try_recv()? {
+        drained.push_back(event);
+    }
+    let interrupted = pending
+        .iter()
+        .chain(drained.iter())
+        .any(terminal_event_interrupts_child_handoff);
+    if interrupted {
+        pending.extend(drained);
+        return Ok(false);
+    }
     pending.clear();
-    while input.try_recv()?.is_some() {}
-    Ok(())
+    Ok(true)
+}
+
+fn terminal_event_interrupts_child_handoff(event: &Event) -> bool {
+    let Event::Key(key) = event else {
+        return false;
+    };
+    if key.kind == KeyEventKind::Release {
+        return false;
+    }
+    let mut key = *key;
+    normalize_raw_ctrl_c(&mut key);
+    matches!(key.code, KeyCode::Esc)
+        || matches!(key.code, KeyCode::Char('c')) && key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
 pub(crate) fn collect_pending_terminal_events(
@@ -59,6 +89,48 @@ pub(crate) fn require_interactive_terminal(stdin_is_tty: bool, stdout_is_tty: bo
          Open a real terminal (Terminal.app, iTerm, Windows Terminal, …) and run `codew` \
          or `codewhale` there — not from a pipe, cron job, or non-TTY launcher.\n\
          For headless prompts use `codewhale exec \"…\"` instead."
+    ))
+}
+
+/// Refuse to enter terminal modes from a background Unix process group.
+///
+/// A TTY can still report `isatty(3) == true` after a shell has suspended the
+/// process. Reading from that background group triggers `SIGTTIN`; enabling
+/// mouse or keyboard protocols before that stop poisons the shell with raw
+/// escape reports. Check foreground ownership before the first mode change.
+#[cfg(unix)]
+pub(crate) fn require_foreground_terminal_owner() -> Result<()> {
+    // SAFETY: both calls are read-only process/terminal queries on the
+    // controlling stdin descriptor and require no borrowed memory.
+    let (terminal_pgid, process_pgid) =
+        unsafe { (libc::tcgetpgrp(libc::STDIN_FILENO), libc::getpgrp()) };
+    if terminal_pgid < 0 {
+        return Err(anyhow::anyhow!(
+            "Codewhale TUI could not verify foreground terminal ownership: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    validate_foreground_process_group(terminal_pgid, process_pgid)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn require_foreground_terminal_owner() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+pub(crate) fn validate_foreground_process_group(
+    terminal_pgid: libc::pid_t,
+    process_pgid: libc::pid_t,
+) -> Result<()> {
+    if terminal_pgid == process_pgid {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "Codewhale TUI cannot start from a background or suspended terminal job \
+         (terminal foreground process group {terminal_pgid}, Codewhale process group {process_pgid}).\n\
+         Run `fg` to foreground the job or launch `codew` in a new terminal. \
+         For automated prompts use `codewhale exec \"…\"` instead."
     ))
 }
 

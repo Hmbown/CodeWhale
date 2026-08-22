@@ -321,7 +321,12 @@ fn collect_candidate_files(workspace: &Path, candidates: &[&str]) -> Vec<PathBuf
     let mut files = Vec::new();
     for candidate in candidates {
         let path = workspace.join(candidate);
-        if path.is_dir() {
+        // `is_dir()` follows symlinks, so a symlinked `.cursor/rules` pointing
+        // outside the workspace used to be traversed: every file behind it is a
+        // real file, so the per-entry symlink checks below all passed and the
+        // escape succeeded. `project_context.rs` already refuses symlinked
+        // rules directories for exactly this reason; the two loaders now agree.
+        if path.is_dir() && !is_symlink(&path) {
             let mut dir_files = Vec::new();
             if let Ok(entries) = std::fs::read_dir(&path) {
                 for e in entries.flatten() {
@@ -404,11 +409,29 @@ pub fn load_project_instruction_fragment(workspace: &Path) -> Option<BoundedFrag
 /// Load only instruction formats that the canonical TUI project-context path
 /// does not already render. This prevents duplicate authority while retaining
 /// the broader compatibility import added by the bounded fragment system.
+///
+/// Prefer [`load_selected_project_instruction_fragment`]: importing every
+/// foreign format unconditionally makes another tool's instruction file
+/// standing authority here without anyone asking for it.
 pub fn load_additional_project_instruction_fragment(workspace: &Path) -> Option<BoundedFragment> {
     load_project_instruction_fragment_from_candidates(
         workspace,
         ADDITIONAL_PROJECT_INSTRUCTION_CANDIDATES,
     )
+}
+
+/// Load exactly the instruction candidates the caller names.
+///
+/// The caller owns the opt-in decision; an empty list imports nothing and
+/// yields `None` rather than silently falling back to the full candidate set.
+pub fn load_selected_project_instruction_fragment(
+    workspace: &Path,
+    candidates: &[&str],
+) -> Option<BoundedFragment> {
+    if candidates.is_empty() {
+        return None;
+    }
+    load_project_instruction_fragment_from_candidates(workspace, candidates)
 }
 
 pub fn project_instructions_from_sources(
@@ -572,6 +595,45 @@ mod tests {
         let err = validate_fragment_set(&too_many).expect_err("one over cap must fail");
         assert!(matches!(err, FragmentCapError::TooManyFragments { .. }));
     }
+    #[test]
+    #[cfg(unix)]
+    fn symlinked_candidate_directory_cannot_escape_the_workspace() {
+        // `Path::is_dir()` follows symlinks, so a symlinked candidate dir used
+        // to be traversed: every file behind it is a real file, so the
+        // per-entry symlink checks passed and content outside the workspace was
+        // imported as project instruction authority.
+        let outside = tempdir().expect("outside");
+        fs::write(outside.path().join("leaked.md"), "SECRET-OUTSIDE-WORKSPACE")
+            .expect("write outside");
+
+        let dir = tempdir().expect("workspace");
+        let ws = dir.path();
+        fs::create_dir_all(ws.join(".cursor")).expect("mkdir .cursor");
+        std::os::unix::fs::symlink(outside.path(), ws.join(".cursor").join("rules"))
+            .expect("symlink rules dir");
+
+        let fragment = load_selected_project_instruction_fragment(ws, &[".cursor/rules"]);
+        assert!(
+            fragment.is_none(),
+            "a symlinked candidate directory must not be traversed: {fragment:?}"
+        );
+    }
+
+    #[test]
+    fn selected_candidates_import_nothing_when_the_list_is_empty() {
+        let dir = tempdir().expect("tempdir");
+        let ws = dir.path();
+        fs::write(ws.join(".cursorrules"), "cursor: always use tabs").expect("write cursor");
+        assert!(
+            load_selected_project_instruction_fragment(ws, &[]).is_none(),
+            "an empty opt-in list must import nothing, not fall back to every format"
+        );
+        assert!(
+            load_selected_project_instruction_fragment(ws, &[".cursorrules"]).is_some(),
+            "an explicitly named candidate is still imported"
+        );
+    }
+
     #[test]
     fn project_instruction_import_is_a_typed_fragment() {
         let dir = tempdir().expect("tempdir");

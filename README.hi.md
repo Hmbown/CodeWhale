@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:b092c34e8ca3 -->
+<!-- source: README.md sha256:a56bca473dbd -->
 # Codewhale
 
 Codewhale आपके टर्मिनल के लिए Rust में बना एक ओपन सोर्स कोडिंग एजेंट है, जिसे इसके उपयोगकर्ताओं के साथ सार्वजनिक रूप से बेहतर बनाया जाता है।
@@ -20,6 +20,8 @@ codewhale
 ```
 
 पहली बार चलाने पर Codewhale आपको किसी प्रोवाइडर से जुड़ने या ऑफ़लाइन बने रहने में मदद करता है। यह Cargo, Docker, Nix, Scoop, पहले से बने आर्काइव, Android/Termux और CNB मिरर का भी समर्थन करता है। [इंस्टॉलेशन गाइड](docs/INSTALL.md) देखें।
+
+हर शेल में Tab completion के लिए केवल एक कमांड चाहिए — `codewhale completion bash|zsh|fish|powershell|elvish`। [शेल कंप्लीशन](docs/INSTALL.md#8-shell-completions) देखें।
 
 ## उपयोग
 
@@ -74,4 +76,4 @@ Codewhale की शुरुआत `deepseek-tui` के रूप में �
 
 ## लाइसेंस
 
-[MIT](LICENSE)
+[MIT](LICENSE)। अन्य ओपन सोर्स प्रोजेक्ट से लिए और अनुकूलित किए गए हिस्से [थर्ड-पार्टी नोटिस](docs/THIRD_PARTY_NOTICES.md) में दर्ज हैं।

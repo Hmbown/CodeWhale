@@ -333,6 +333,10 @@ struct ThreadSummary {
     updated_at: chrono::DateTime<Utc>,
     latest_turn_id: Option<String>,
     latest_turn_status: Option<String>,
+    /// Pending approvals plus pending user-input requests in the canonical
+    /// thread snapshot. Clients use this typed fact for attention grouping;
+    /// lifecycle prose and turn-status strings are not an authority signal.
+    pending_attention_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -1346,14 +1350,35 @@ async fn list_threads_summary(
     let limit = query.limit.unwrap_or(50).clamp(1, 500);
     let search = query.search.as_deref().map(str::to_ascii_lowercase);
     let filter = resolve_thread_filter(query.include_archived, query.archived_only);
+    // `limit` bounds the rows this route returns, not how far a search looks.
+    // Passing it to the store read as well matched only inside the newest
+    // `limit` threads, so any older match — the row the caller typed the query
+    // to find — was invisible. Unsearched listings keep the cheap bounded read;
+    // a search scans in newest-first order and stops at `limit` matches.
+    //
+    // Match on the thread record *before* `get_thread_detail`. Detail is a
+    // whole-store turns+items walk, so loading it for every thread made a
+    // non-matching dashboard keystroke O(threads × (all_turns + all_items))
+    // JSON reads. Preview is filled only for matches; it is not a search key.
+    let scan_limit = if search.is_some() { None } else { Some(limit) };
     let threads = state
         .runtime_threads
-        .list_threads(filter, Some(limit))
+        .list_threads(filter, scan_limit)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut summaries = Vec::new();
     for thread in threads {
+        if summaries.len() >= limit {
+            break;
+        }
+        if let Some(search) = &search
+            && !state
+                .runtime_threads
+                .thread_matches_summary_search(&thread, search)
+        {
+            continue;
+        }
         let detail = state
             .runtime_threads
             .get_thread_detail(&thread.id)
@@ -1362,6 +1387,10 @@ async fn list_threads_summary(
         let latest_turn = detail.turns.last();
         let latest_status =
             latest_turn.map(|turn| format!("{:?}", turn.status).to_ascii_lowercase());
+        let pending_attention_count = detail
+            .pending_approvals
+            .len()
+            .saturating_add(detail.pending_user_inputs.len());
 
         let title = thread
             .title
@@ -1398,19 +1427,6 @@ async fn list_threads_summary(
             })
             .unwrap_or_else(|| title.clone());
 
-        if let Some(search) = &search {
-            let haystack = format!(
-                "{} {} {} {}",
-                thread.id.to_ascii_lowercase(),
-                title.to_ascii_lowercase(),
-                preview.to_ascii_lowercase(),
-                thread.model.to_ascii_lowercase()
-            );
-            if !haystack.contains(search) {
-                continue;
-            }
-        }
-
         let workspace_git = collect_workspace_git_metadata(&thread.workspace);
         summaries.push(ThreadSummary {
             id: thread.id,
@@ -1426,11 +1442,8 @@ async fn list_threads_summary(
             updated_at: thread.updated_at,
             latest_turn_id: thread.latest_turn_id,
             latest_turn_status: latest_status,
+            pending_attention_count,
         });
-    }
-
-    if summaries.len() > limit {
-        summaries.truncate(limit);
     }
 
     Ok(Json(summaries))
@@ -1669,6 +1682,13 @@ fn reject_parallel_write_collisions(tasks: &[FleetTaskSpec]) -> Result<(), ApiEr
 }
 
 fn managed_paths_overlap(left: &str, right: &str) -> bool {
+    // `normalize_fleet_relative_path` collapses the workspace root to ".", so
+    // a task claiming the whole tree presents as "." rather than as a textual
+    // prefix of its siblings. String containment alone never matched it, and
+    // two workers could be admitted to write the same tree in parallel.
+    if left == "." || right == "." {
+        return true;
+    }
     left == right
         || left
             .strip_prefix(right)
@@ -5300,14 +5320,21 @@ fn snapshot_entries_for_workspace(
 ///
 /// Exposes the static provider registry so the GUI can render a dynamic
 /// provider picker instead of hard-coding `deepseek` only. The `id` matches
-/// `ApiProvider::as_str()` and is the value the GUI should send back via
-/// `POST /v1/config { key: "provider", value: <id> }`.
+/// `ApiProvider::as_str()`; callers must also preserve `model_provider_id`
+/// when present. Both can be pinned to one new thread via `POST /v1/threads`
+/// without mutating the runtime's global provider configuration.
 #[derive(Debug, Clone, Serialize)]
 struct ProviderEntry {
-    /// Stable identifier — matches `ApiProvider::as_str()` and the TOML
-    /// `provider = "<id>"` key. Use this as the canonical value when
-    /// persisting or comparing.
+    /// Stable generic provider kind — matches `ApiProvider::as_str()` and is
+    /// suitable for `CreateThreadRequest.model_provider`. This is not always
+    /// the exact configured route id: named custom routes also require
+    /// `model_provider_id` below.
     id: String,
+    /// Exact configured provider key for the active route, when one exists.
+    /// A named custom route such as `lm-studio` is represented as generic
+    /// `id = "custom"` plus `model_provider_id = "lm-studio"` so a new
+    /// thread never collapses back to the legacy root custom route.
+    model_provider_id: Option<String>,
     /// Human-friendly name for picker UIs (e.g. "DeepSeek", "OpenAI").
     display_name: String,
     /// Default base URL for this provider ( informational; the live base URL
@@ -5335,9 +5362,12 @@ struct ProvidersResponse {
 /// Entry in `GET /v1/providers/{id}/models`.
 #[derive(Debug, Clone, Serialize)]
 struct ProviderModelEntry {
-    /// Canonical model id (suitable for `default_text_model` or
-    /// `POST /v1/threads/{id}` `model` field).
+    /// Canonical model id suitable for `POST /v1/threads`'s `model` field.
     id: String,
+    /// Image-input support reported by the exact resolved provider/model
+    /// offering. Unknown stays unknown: the API never guesses from a model
+    /// name or transport protocol.
+    image_input: codewhale_config::route::CapabilityState,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5357,17 +5387,8 @@ fn push_unique_model(models: &mut Vec<String>, model: &str) {
     }
 }
 
-fn normalize_api_base_url(base_url: &str) -> String {
-    base_url.trim().trim_end_matches('/').to_ascii_lowercase()
-}
-
 fn provider_uses_custom_route_for_api(config: &Config, provider: ApiProvider) -> bool {
-    config
-        .provider_config_for(provider)
-        .and_then(|entry| entry.base_url.as_deref())
-        .is_some_and(|base_url| {
-            normalize_api_base_url(base_url) != normalize_api_base_url(provider.default_base_url())
-        })
+    config.provider_uses_custom_endpoint(provider)
 }
 
 fn provider_models_for_api(
@@ -5400,6 +5421,16 @@ fn provider_models_for_api(
     models
 }
 
+fn provider_model_image_input_for_api(
+    config: &Config,
+    provider: ApiProvider,
+    model: &str,
+) -> codewhale_config::route::CapabilityState {
+    crate::route_runtime::resolve_runtime_route(config, provider, Some(model))
+        .map(|route| route.candidate.capabilities().image_input)
+        .unwrap_or_default()
+}
+
 fn provider_default_model_for_api(
     config: &Config,
     active_provider: ApiProvider,
@@ -5419,6 +5450,9 @@ async fn list_providers(
 ) -> Result<Json<ProvidersResponse>, ApiError> {
     let config = state.config.read().clone();
     let active_provider = config.api_provider();
+    let active_identity = config
+        .active_provider_identity(active_provider)
+        .map_err(ApiError::bad_request)?;
     let current = active_provider.as_str().to_string();
     let mut providers = Vec::new();
     for api_provider in ApiProvider::sorted_for_display() {
@@ -5427,6 +5461,9 @@ async fn list_providers(
             !crate::provider_lake::all_catalog_models_for_provider(api_provider).is_empty();
         providers.push(ProviderEntry {
             id: api_provider.as_str().to_string(),
+            model_provider_id: (api_provider == active_provider)
+                .then(|| active_identity.persisted_id().map(str::to_string))
+                .flatten(),
             display_name: api_provider.display_name().to_string(),
             default_base_url: api_provider.default_base_url().to_string(),
             default_model,
@@ -5469,7 +5506,10 @@ async fn list_provider_models(
     }
     let models = provider_models_for_api(&config, active_provider, api_provider)
         .into_iter()
-        .map(|id| ProviderModelEntry { id: id.to_string() })
+        .map(|id| ProviderModelEntry {
+            image_input: provider_model_image_input_for_api(&config, api_provider, &id),
+            id,
+        })
         .collect();
     Ok(Json(ProviderModelsResponse {
         provider: api_provider.as_str().to_string(),

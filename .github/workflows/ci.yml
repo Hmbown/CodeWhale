@@ -135,7 +135,7 @@ jobs:
                 workflow=true
                 ;;
             esac
-            # Mobile runtime surface: the `codewhale-tui serve --mobile`
+            # Mobile runtime surface: the `codewhale serve --mobile`
             # HTTP/SSE stack that scripts/mobile-smoke.sh exercises. Pull
             # requests run the smoke only when one of these changes; every
             # push to main still runs it unconditionally as the pre-release

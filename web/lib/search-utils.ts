@@ -64,3 +64,60 @@ export function matches(haystack: string, query: string): boolean {
   if (!q) return true;
   return haystack.toLowerCase().includes(q);
 }
+
+/** The three pieces a highlighted match splits a string into. */
+export interface HighlightSpan {
+  before: string;
+  match: string;
+  after: string;
+}
+
+/**
+ * Locate `query` inside `text`, case-insensitively, in `text`'s own indices.
+ *
+ * The obvious form — `text.toLowerCase().indexOf(q)`, then slicing `text`
+ * with that index — assumes lowercasing preserves length. It does not:
+ * `"İ".toLowerCase()` is two code units, so every index after a dotted
+ * capital I in the haystack is off by one and the highlight lands on the
+ * wrong characters. Turkish is a routed locale, so this is reachable the
+ * moment localized copy enters the search haystack.
+ *
+ * Lowercasing character by character and keeping a position map costs one
+ * pass and keeps the three returned pieces exactly reassembling `text`.
+ * Returns null when there is no match (including an empty query).
+ */
+export function highlightSpan(text: string, query: string): HighlightSpan | null {
+  const q = normalizeQuery(query);
+  if (!q) return null;
+
+  let lower = "";
+  // For each code unit of `lower`: where its source character starts and ends.
+  const sourceStart: number[] = [];
+  const sourceEnd: number[] = [];
+  for (let i = 0; i < text.length; ) {
+    const char = String.fromCodePoint(text.codePointAt(i)!);
+    const next = i + char.length;
+    const folded = char.toLowerCase();
+    for (let k = 0; k < folded.length; k++) {
+      sourceStart.push(i);
+      sourceEnd.push(next);
+    }
+    lower += folded;
+    i = next;
+  }
+
+  const idx = lower.indexOf(q);
+  if (idx === -1) return null;
+
+  const start = sourceStart[idx];
+  const stop = idx + q.length;
+  // A match ending inside one source character's expansion cannot claim half
+  // of that character; take the whole character rather than nothing.
+  const end = stop < lower.length ? Math.max(sourceStart[stop], sourceEnd[idx]) : text.length;
+
+  return {
+    before: text.slice(0, start),
+    match: text.slice(start, end),
+    after: text.slice(end),
+  };
+}

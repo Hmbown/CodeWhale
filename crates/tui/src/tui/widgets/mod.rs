@@ -145,6 +145,8 @@ impl ChatWidget {
             .map(|started| started.elapsed().as_millis());
         let completion_elapsed_ms = completion_life_clock
             .filter(|elapsed| *elapsed < crate::tui::ocean::COMPLETION_BREATH_MS);
+        let completion_life_active = completion_life_clock
+            .is_some_and(|elapsed| elapsed < crate::tui::ocean::COMPLETION_SETTLE_MS);
         let render_empty_state = should_render_empty_state(app);
         let phase = ShellPhase::from_app(app);
         // Keep the water alive while a turn is doing work, even after the
@@ -620,7 +622,8 @@ impl ChatWidget {
             // legible while the ocean remains playful when scrolling upward.
             ambient_life: !app.attention_hold_active()
                 && (browsing_history
-                    || matches!(phase, ShellPhase::Working | ShellPhase::Verifying)),
+                    || matches!(phase, ShellPhase::Working | ShellPhase::Verifying)
+                    || completion_life_active),
             scroll_track,
             scroll_thumb,
             jump_border,
@@ -968,11 +971,19 @@ impl ChatWidget {
         if self.ambient_life
             && let Some(inks) = self.ambient_inks
         {
+            // The scatter has a centre. It used to be column 0 with a row in
+            // the middle of the field, which is neither where the school
+            // swims nor anywhere the eye is: the flee proximity test
+            // (|dy| < 6) could not even fire on a tall field, and when it did
+            // every fish was to the right of the anchor so the whole school
+            // slid the same way. Anchored on the composer's centre line and
+            // the school's own band, a turn beginning reads as the shoal
+            // parting around the thing that just happened.
             let cursor = crate::tui::ambient_life::AmbientCursor {
-                // Pointer column is refined by hover_layer when available; row
-                // participates in vertical flee proximity.
-                column: 0,
-                row: area.y.saturating_add(area.height / 2),
+                column: area.x.saturating_add(area.width / 2),
+                row: area
+                    .y
+                    .saturating_add(crate::tui::ambient_life::school_band_row(area)),
                 flee_elapsed_ms: self.fish_flee_elapsed_ms,
             };
             // Whale cameo rides the completion breath clock when present.
@@ -6702,18 +6713,23 @@ mod tests {
         let mut header = Buffer::empty(header_area);
         crate::tui::underwater::render_header(header_area, &mut header, &app);
 
-        // Footer while working carries the braille state marker.
+        // Activity band while working carries the braille state marker;
+        // the identity band below the composer carries the route.
         app.is_loading = true;
-        let footer_area = Rect::new(0, 0, 100, 1);
-        let mut footer = Buffer::empty(footer_area);
-        crate::tui::underwater::render_footer(footer_area, &mut footer, &mut app);
+        let activity_area = Rect::new(0, 0, 100, 1);
+        let mut activity = Buffer::empty(activity_area);
+        crate::tui::phase_strip::render_activity(activity_area, &mut activity, &mut app);
+        let identity_area = Rect::new(0, 0, 100, 1);
+        let mut identity = Buffer::empty(identity_area);
+        crate::tui::phase_strip::render_identity(identity_area, &mut identity, &mut app);
         app.is_loading = false;
 
         for (surface, buf, rect) in [
             ("idle transcript", &transcript, transcript_area),
             ("launch", &launch, launch_area),
             ("header", &header, header_area),
-            ("footer", &footer, footer_area),
+            ("activity band", &activity, activity_area),
+            ("identity band", &identity, identity_area),
         ] {
             for y in rect.y..rect.bottom() {
                 for x in rect.x..rect.right() {
@@ -6891,12 +6907,12 @@ mod tests {
         assert!(!fish_heading(74, 73, 72, true));
     }
 
-    #[test]
-    fn browsing_history_keeps_fish_in_available_water() {
+    /// Render a chat field carrying `rows` of history and return its rows.
+    fn history_field_rows(rows: usize) -> Vec<String> {
         let mut app = create_test_app();
         app.low_motion = false;
         app.fancy_animations = true;
-        for index in 0..30 {
+        for index in 0..rows {
             app.add_message(HistoryCell::Assistant {
                 content: format!("history row {index}"),
                 streaming: false,
@@ -6907,13 +6923,110 @@ mod tests {
         let widget = ChatWidget::new(&mut app, area);
         assert!(widget.ambient_life);
         assert!(widget.ocean_animated);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        buffer_text(&buf, area)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
 
+    #[test]
+    fn browsing_history_keeps_fish_in_available_water() {
+        // Short transcript rows own their text plus a quiet gutter, not the
+        // entire width. Browsing still holds the school in the clear water.
+        let rows = history_field_rows(4);
+        let rendered = rows.join("\n");
+        assert!(
+            rendered.contains("><>") || rendered.contains("<><"),
+            "open water below the transcript should hold fish:\n{rendered}"
+        );
+        for index in 0..4 {
+            assert!(
+                rendered.contains(&format!("history row {index}")),
+                "ambient life damaged history row {index}:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn active_tail_keeps_fish_after_message_submit() {
+        let mut app = create_test_app();
+        app.low_motion = false;
+        app.fancy_animations = true;
+        for index in 0..18 {
+            app.add_message(HistoryCell::Assistant {
+                content: format!("release check {index:02}"),
+                streaming: false,
+            });
+        }
+        app.is_loading = true;
+        app.runtime_turn_status = Some("in_progress".to_string());
+        app.turn_started_at = Some(
+            Instant::now()
+                .checked_sub(std::time::Duration::from_millis(900))
+                .expect("recent turn start"),
+        );
+        let area = Rect::new(0, 0, 80, 24);
+        let widget = ChatWidget::new_with_ocean_elapsed(&mut app, area, 0);
+        assert!(widget.ambient_life);
+        assert!(widget.ocean_animated);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
         let rendered = buffer_text(&buf, area);
         assert!(
-            rendered.contains("><>") || rendered.contains("<><"),
-            "scrollback should keep fish in collision-free cells:\n{rendered}"
+            rendered.contains("><") || rendered.contains("<o"),
+            "submitting a message must not empty the ocean:\n{rendered}"
+        );
+        assert!(rendered.contains("release check 17"), "{rendered}");
+    }
+
+    #[test]
+    fn completed_turn_keeps_bounded_ocean_settle() {
+        let mut app = create_test_app();
+        app.low_motion = false;
+        app.fancy_animations = true;
+        app.add_message(HistoryCell::Assistant {
+            content: "release receipt".to_string(),
+            streaming: false,
+        });
+        app.runtime_turn_status = Some("completed".to_string());
+        app.ocean_completion_started_at = Some(Instant::now());
+        let area = Rect::new(0, 0, 80, 24);
+        let widget = ChatWidget::new_with_ocean_elapsed(&mut app, area, 0);
+        assert!(widget.ambient_life);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let rendered = buffer_text(&buf, area);
+        assert!(
+            rendered.contains("><") || rendered.contains("<o"),
+            "the completion settle must not snap the ocean empty:\n{rendered}"
+        );
+        assert!(rendered.contains("release receipt"), "{rendered}");
+    }
+
+    #[test]
+    fn a_field_full_of_transcript_holds_no_fish() {
+        // Full-width prose really does claim the whole field; short status
+        // lines no longer impersonate this fixture.
+        let mut app = create_test_app();
+        app.low_motion = false;
+        app.fancy_animations = true;
+        for _ in 0..30 {
+            app.add_message(HistoryCell::Assistant {
+                content: "X".repeat(100),
+                streaming: false,
+            });
+        }
+        app.viewport.transcript_scroll = TranscriptScroll::at_line(0);
+        let area = Rect::new(0, 0, 100, 20);
+        let widget = ChatWidget::new_with_ocean_elapsed(&mut app, area, 0);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let rendered = buffer_text(&buf, area);
+        assert!(
+            !rendered.contains("><>") && !rendered.contains("<><"),
+            "a full transcript is not an aquarium:\n{rendered}"
         );
     }
 

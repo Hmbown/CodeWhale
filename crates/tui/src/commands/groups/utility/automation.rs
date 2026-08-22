@@ -1,30 +1,44 @@
 //! Operator controls for durable scheduled automations.
 
+use codewhale_command_contract::facets::CommandPresentationContext;
+use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
+
 use crate::commands::CommandResult;
-use crate::commands::traits::{CommandInfo, RegisterCommand};
-use crate::localization::{Locale, MessageId, tr};
-use crate::tui::app::{App, AppAction, AutomationAction};
+use crate::tui::app::{AppAction, AutomationAction};
 
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "automation",
     aliases: &["automations", "scheduled"],
     usage: "/automation [list|show <id>|pause <id>|resume <id>|delete <id> [--confirm <token>]|run <id>]",
-    description_id: MessageId::CmdAutomationDescription,
+    description_key: "cmd_automation_description",
 };
 
 pub(in crate::commands) struct AutomationCmd;
 
-impl RegisterCommand for AutomationCmd {
+impl RegisterCommand<CommandResult> for AutomationCmd {
     fn info() -> &'static CommandInfo {
         &COMMAND_INFO
     }
 
-    fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
-        automation(app.ui_locale, arg)
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Contextual(automation_contextual)
     }
 }
 
-fn automation(locale: Locale, args: Option<&str>) -> CommandResult {
+fn automation_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
+    let mut parts = contexts.into_parts();
+    let presentation = parts
+        .presentation
+        .as_deref_mut()
+        .expect("presentation facet");
+    automation(presentation, arg)
+}
+
+fn automation(
+    presentation: &mut dyn CommandPresentationContext,
+    args: Option<&str>,
+) -> CommandResult {
     let raw = args.unwrap_or("").trim();
     if raw.is_empty() || raw.eq_ignore_ascii_case("list") {
         return action(AutomationAction::List);
@@ -34,39 +48,42 @@ fn automation(locale: Locale, args: Option<&str>) -> CommandResult {
     let verb = parts.next().unwrap_or("").to_ascii_lowercase();
 
     match verb.as_str() {
-        "show" | "status" => single_id(locale, &mut parts, AutomationAction::Show),
-        "pause" => single_id(locale, &mut parts, AutomationAction::Pause),
-        "resume" => single_id(locale, &mut parts, AutomationAction::Resume),
-        "delete" | "remove" | "rm" => delete(locale, &mut parts),
-        "run" | "trigger" => single_id(locale, &mut parts, AutomationAction::Run),
-        _ => usage_error(locale),
+        "show" | "status" => single_id(presentation, &mut parts, AutomationAction::Show),
+        "pause" => single_id(presentation, &mut parts, AutomationAction::Pause),
+        "resume" => single_id(presentation, &mut parts, AutomationAction::Resume),
+        "delete" | "remove" | "rm" => delete(presentation, &mut parts),
+        "run" | "trigger" => single_id(presentation, &mut parts, AutomationAction::Run),
+        _ => usage_error(presentation),
     }
 }
 
 fn single_id<'a>(
-    locale: Locale,
+    presentation: &mut dyn CommandPresentationContext,
     parts: &mut impl Iterator<Item = &'a str>,
     make_action: fn(String) -> AutomationAction,
 ) -> CommandResult {
     let Some(id) = parts.next() else {
-        return usage_error(locale);
+        return usage_error(presentation);
     };
     if parts.next().is_some() {
-        return usage_error(locale);
+        return usage_error(presentation);
     }
     action(make_action(id.to_string()))
 }
 
-fn delete<'a>(locale: Locale, parts: &mut impl Iterator<Item = &'a str>) -> CommandResult {
+fn delete<'a>(
+    presentation: &mut dyn CommandPresentationContext,
+    parts: &mut impl Iterator<Item = &'a str>,
+) -> CommandResult {
     let Some(id) = parts.next() else {
-        return usage_error(locale);
+        return usage_error(presentation);
     };
     let confirmation = match (parts.next(), parts.next(), parts.next()) {
         (None, None, None) => None,
         (Some(flag), Some(token), None) if flag.eq_ignore_ascii_case("--confirm") => {
             Some(token.to_string())
         }
-        _ => return usage_error(locale),
+        _ => return usage_error(presentation),
     };
     action(AutomationAction::Delete {
         id: id.to_string(),
@@ -74,8 +91,15 @@ fn delete<'a>(locale: Locale, parts: &mut impl Iterator<Item = &'a str>) -> Comm
     })
 }
 
-fn usage_error(locale: Locale) -> CommandResult {
-    CommandResult::error(tr(locale, MessageId::AutomationUsage).into_owned())
+fn usage_error(presentation: &mut dyn CommandPresentationContext) -> CommandResult {
+    match presentation.translate("automation_usage", &[]) {
+        Ok(text) => CommandResult::error(text),
+        // The key is catalog-known; a translation failure must still fail
+        // safely without exposing a raw lookup key (D3).
+        Err(_) => CommandResult::error(
+            "Usage: /automation [list|show <id>|pause <id>|resume <id>|delete <id> [--confirm <token>]|run <id>]",
+        ),
+    }
 }
 
 fn action(action: AutomationAction) -> CommandResult {
@@ -86,8 +110,19 @@ fn action(action: AutomationAction) -> CommandResult {
 mod tests {
     use super::*;
 
+    struct FakePresentation;
+    impl CommandPresentationContext for FakePresentation {
+        fn translate(&self, key: &str, _r: &[(&str, &str)]) -> Result<String, String> {
+            if key == "automation_usage" {
+                Ok("Usage: /automation [list|show <id>|pause <id>|resume <id>|delete <id> [--confirm <token>]|run <id>]".to_string())
+            } else {
+                Err("unknown translation key".to_string())
+            }
+        }
+    }
+
     fn parsed(args: Option<&str>) -> Option<AutomationAction> {
-        match automation(Locale::En, args).action {
+        match automation(&mut FakePresentation, args).action {
             Some(AppAction::Automation(action)) => Some(action),
             _ => None,
         }
@@ -144,7 +179,7 @@ mod tests {
     #[test]
     fn validates_missing_ids_and_unknown_actions() {
         for verb in ["show", "pause", "resume", "delete", "run", "unknown"] {
-            let result = automation(Locale::En, Some(verb));
+            let result = automation(&mut FakePresentation, Some(verb));
             assert!(result.message.is_some(), "{verb} should show usage");
             assert!(result.action.is_none());
         }
@@ -164,9 +199,22 @@ mod tests {
             "delete auto_1 receipt",
             "delete auto_1 --confirm receipt extra",
         ] {
-            let result = automation(Locale::En, Some(invalid));
+            let result = automation(&mut FakePresentation, Some(invalid));
             assert!(result.is_error, "{invalid} should be rejected");
             assert!(result.action.is_none());
         }
+    }
+
+    #[test]
+    fn handler_is_contextual_and_requests_presentation_facet() {
+        assert!(matches!(
+            AutomationCmd::handler(),
+            CommandHandler::Contextual(_)
+        ));
+        assert_eq!(
+            AutomationCmd::info().description_key,
+            "cmd_automation_description"
+        );
+        assert_eq!(AutomationCmd::info().aliases, &["automations", "scheduled"]);
     }
 }

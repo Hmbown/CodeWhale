@@ -233,11 +233,15 @@ impl RouteResolver {
             }
         }
         if custom_endpoint {
-            // A documented first-party server tool is an endpoint-owned fact.
-            // Reusing a provider enum/model id against a custom compatible
-            // endpoint cannot carry that fact across the authority boundary.
-            selected.capabilities.server_side_web_search =
-                super::capabilities::CapabilityState::Unknown;
+            // Capabilities and pricing belong to the exact provider endpoint
+            // offering that reported them. Reusing a provider enum and a
+            // first-party model id against a custom compatible endpoint does
+            // not prove that proxy serves the same modality, tool, reasoning,
+            // or billing contract. Keep the caller's model id and Chat
+            // pass-through above, but clear every unowned offering fact at the
+            // authority boundary instead of presenting it as verified.
+            selected.capabilities = RouteCapabilities::default();
+            selected.pricing = PricingSku::UnknownOrStale;
         }
 
         let protocol = descriptor

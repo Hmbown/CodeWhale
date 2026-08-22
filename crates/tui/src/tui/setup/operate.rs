@@ -66,8 +66,11 @@ impl SetupOperateFacts {
             )
         };
 
-        let roster =
-            crate::fleet::roster::FleetRoster::load(&config.fleet_config(), &app.workspace);
+        let roster = crate::fleet::identity::load_effective_roster(
+            &config.fleet_config(),
+            &app.workspace,
+            Some(app.plugin_registry.as_ref()),
+        );
         let roster_members = roster.members().len();
         let origin_count = |origin| {
             roster
@@ -80,8 +83,10 @@ impl SetupOperateFacts {
         let personal_members = origin_count(crate::fleet::roster::ProfileOrigin::Personal);
         let project_members = origin_count(crate::fleet::roster::ProfileOrigin::Workspace);
         let custom_roster_members = config_members + personal_members + project_members;
-        let roster_ready = roster_members > 0;
-        let roster_result = if custom_roster_members > 0 {
+        let roster_ready = roster.load_error().is_none() && roster_members > 0;
+        let roster_result = if let Some(error) = roster.load_error() {
+            error.to_string()
+        } else if custom_roster_members > 0 {
             let origins = [
                 ("config", config_members),
                 ("personal", personal_members),

@@ -90,6 +90,16 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "deepseek-v4-flash-vision-exp".to_string(),
+                provider: ProviderKind::Deepseek,
+                aliases: vec![
+                    "flash-vision".to_string(),
+                    "deepseek-v4flashvisionexp".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "deepseek-ai/deepseek-v4-pro".to_string(),
                 provider: ProviderKind::NvidiaNim,
                 aliases: vec![
@@ -1660,6 +1670,36 @@ mod tests {
 
         assert_eq!(resolved.resolved.provider, ProviderKind::Deepseek);
         assert_eq!(resolved.resolved.id, "deepseek-v4-pro");
+    }
+
+    #[test]
+    fn deepseek_vision_model_lists_and_resolves_with_aliases() {
+        let registry = ModelRegistry::default();
+        let listed = registry.list();
+
+        assert!(listed.iter().any(|model| {
+            model.provider == ProviderKind::Deepseek
+                && model.id == "deepseek-v4-flash-vision-exp"
+                && model.aliases
+                    == [
+                        "flash-vision".to_string(),
+                        "deepseek-v4flashvisionexp".to_string(),
+                    ]
+        }));
+
+        for selector in [
+            "deepseek-v4-flash-vision-exp",
+            "flash-vision",
+            "deepseek-v4flashvisionexp",
+        ] {
+            let resolved = registry.resolve(Some(selector), Some(ProviderKind::Deepseek));
+            assert_eq!(
+                resolved.resolved.id, "deepseek-v4-flash-vision-exp",
+                "{selector} must resolve to the experimental vision model"
+            );
+            assert_eq!(resolved.resolved.provider, ProviderKind::Deepseek);
+            assert!(!resolved.used_fallback, "{selector} must not fall back");
+        }
     }
 
     #[test]

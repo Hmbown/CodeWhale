@@ -77,7 +77,7 @@ main:
               . "$HOME/.cargo/env"
               cd /opt/whalebro/codewhale
               cargo install --path crates/cli --locked --force
-              cargo install --path crates/tui --locked --force
+              ln -sf codewhale "$HOME/.cargo/bin/codew"
             '
 
             sudo bash scripts/tencent-lighthouse/install-services.sh

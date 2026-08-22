@@ -45,6 +45,7 @@ fn view_with_overrides() -> FleetRosterView {
         members,
         shadowed: Vec::new(),
         selected_fleet: None,
+        load_error: None,
         selected: 0,
         detail_scroll: 0,
         locale: Locale::En,
@@ -97,7 +98,7 @@ fn operator_row_is_pinned_first_with_the_session_model() {
     // selected on open) shows the live session route.
     let operator_row = rows
         .iter()
-        .position(|row| row.contains("operator"))
+        .position(|row| row.contains("Coordinator"))
         .expect("operator row rendered");
     let first_member_row = rows
         .iter()
@@ -107,9 +108,12 @@ fn operator_row_is_pinned_first_with_the_session_model() {
         operator_row < first_member_row,
         "operator must render above the first member"
     );
-    assert!(text.contains("▸ @ operator"), "operator selected on open");
+    assert!(
+        text.contains("▸ @ Coordinator"),
+        "operator selected on open"
+    );
     assert!(text.contains("deepseek-v4-pro"), "session model shown");
-    assert!(text.contains("full session authority"), "{text}");
+    assert!(text.contains("full session access"), "{text}");
 }
 
 #[test]
@@ -163,11 +167,12 @@ fn enter_and_s_open_the_setup_wizard_for_members_only() {
         // Member row: hands off to the setup wizard.
         view.handle_key(key(KeyCode::Down));
         let action = view.handle_key(key(code));
-        let ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenSetupRequested { role }) = action
+        let ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenSetupRequested { member_id }) =
+            action
         else {
             panic!("{code:?} should hand off to the setup wizard");
         };
-        assert_eq!(role, "manager");
+        assert_eq!(member_id, "manager");
     }
 }
 
@@ -214,44 +219,31 @@ fn built_in_party_lists_all_members_in_canonical_order() {
 }
 
 #[test]
-fn detail_shows_posture_routing_and_origin() {
-    // Built-in reviewer: read-only review worker with the read-only inspection posture
-    // (network + bounded verification surface; raw shell still requires
-    // write), inherits the session route.
+fn detail_shows_access_model_and_saved_for() {
+    // Built-in reviewer: read-only files, full shell for its bounded
+    // verification surface, network on. Inherits the session model.
     let reviewer = FleetRoster::built_ins_only()
         .get("reviewer")
         .unwrap()
         .clone();
-    assert_eq!(
-        member_posture(&reviewer),
-        "reviewer worker · read-only · shell full"
-    );
-    assert_eq!(member_routing(&reviewer), "inherit session route");
+    assert!(member_access_summary(&reviewer).contains("read-only files"));
+    assert_eq!(member_routing(&reviewer), "same model as this session");
 
-    // Built-in scout: no setup means the session route, just like every
-    // other built-in role; read-only inspection posture reports full shell authority
-    // (bounded verification surface, raw shell still write-gated).
+    // Built-in scout: same Access shape as reviewer.
     let scout = FleetRoster::built_ins_only().get("scout").unwrap().clone();
-    assert_eq!(
-        member_posture(&scout),
-        "scout worker · read-only · shell full"
-    );
-    assert_eq!(member_routing(&scout), "inherit session route");
+    assert!(member_access_summary(&scout).contains("read-only files"));
 
-    // Builder writes with full shell.
+    // Builder can edit files and run commands.
     let builder = FleetRoster::built_ins_only()
         .get("builder")
         .unwrap()
         .clone();
-    assert_eq!(
-        member_posture(&builder),
-        "builder worker · write · shell full"
-    );
+    assert!(member_access_summary(&builder).contains("can edit files"));
 
-    // A pinned model beats the route preset label.
+    // An explicit model beats the saved-set label, with no "(pinned)" jargon.
     let mut pinned = reviewer.clone();
     pinned.profile.model = Some("glm-5.2".to_string());
-    assert_eq!(member_routing(&pinned), "model glm-5.2 (pinned)");
+    assert_eq!(member_routing(&pinned), "model glm-5.2");
 }
 
 include!("../fleet_roster_capability_tests.rs");
@@ -275,7 +267,7 @@ fn detail_lines_carry_overlay_source_for_project_members() {
         text.contains("custom overlay (.codewhale/agents/reviewer.toml)"),
         "{text}"
     );
-    assert!(text.contains("model glm-5.2 (pinned)"), "{text}");
+    assert!(text.contains("model glm-5.2"), "{text}");
     assert!(text.contains("spawn depth 1"), "{text}");
 }
 
@@ -308,10 +300,7 @@ fn roster_loads_config_members_through_the_shared_merge() {
         FleetRosterView::from_parts(operator(), FleetRoster::load(&config, tmp.path()), None);
     let extra = view.members.iter().find(|m| m.id == "docs-writer").unwrap();
     assert_eq!(extra.origin, ProfileOrigin::Config);
-    assert_eq!(
-        member_routing(extra),
-        "route preset fast (resolved at launch)"
-    );
+    assert_eq!(member_routing(extra), "fast model, picked at launch");
 }
 
 #[test]
@@ -339,15 +328,15 @@ fn detail_pane_reports_shadowed_lower_layers() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        text.contains("Layers"),
+        text.contains("Saved for"),
         "detail lists every layer for the id: {text}"
     );
     assert!(
-        text.contains("project · .codewhale/agents/reviewer.toml (wins)"),
+        text.contains("project · .codewhale/agents/reviewer.toml (active)"),
         "detail names the winning layer: {text}"
     );
     assert!(
-        text.contains("personal · /home/op/.codewhale/agents/reviewer.toml (ignored)"),
+        text.contains("personal · /home/op/.codewhale/agents/reviewer.toml (ignored copy)"),
         "detail names the ignored file: {text}"
     );
 }
@@ -373,7 +362,7 @@ fn roster_row_badges_personal_copy_ignored() {
     );
     let text = rows.join("\n");
     assert!(
-        text.contains("personal copy ignored"),
+        text.contains("saved copy ignored"),
         "shadowed reviewer row is badged: {text}"
     );
 }
@@ -405,12 +394,12 @@ fn fleet_roster_is_usable_and_opaque_at_blocker_sizes() {
             assert!(text.contains("close"), "{label} {w}x{h}: missing footer");
             // The first impression names Fleet as the worker/orchestration surface.
             assert!(
-                text.contains("fleet") && text.contains("workers"),
+                text.contains("fleet") && text.contains("runs"),
                 "{label} {w}x{h}: missing framing"
             );
             // The selected row's detail is on screen.
             assert!(
-                text.contains("Posture"),
+                text.contains("Access"),
                 "{label} {w}x{h}: missing detail pane"
             );
             // No row overflows the frame width.

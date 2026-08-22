@@ -1,81 +1,84 @@
 # The CodeWhale Agent Runtime — one durable substrate, familiar launchers
 
-This document explains how sub-agents, the headless `exec` path, and Agent Fleet
-relate. It exists because these had drifted into *two* parallel "worker"
-systems, and the fix is to make the **fleet-backed worker run** the durable
-primitive. "Sub-agent" remains useful product vocabulary for a nested role, but
-it must not imply a separate execution substrate with weaker lifecycle
-semantics. It also answers the open direction question in #2972 ("how much
-Claude Code convergence is right?").
+This document explains how sub-agents, the headless `exec` path, Agent Fleet,
+and Runtime relate. These concepts had drifted into *two* parallel "worker"
+systems. The fix is to make the **Runtime worker run** the durable execution
+primitive: Fleet owns Agent identity, membership, and selection; Runtime owns
+execution, authority, and lifecycle. "Sub-agent" remains useful product
+vocabulary for a nested role, but it must not imply a separate execution
+substrate with weaker lifecycle semantics. It also answers the open direction
+question in #2972 ("how much Claude Code convergence is right?").
 
 ## The core idea
 
-There is exactly **one** thing that runs detached agent work: a **headless agent
-runtime** wrapped in a durable worker lifecycle. It is a model loop with the
-full (policy-gated) tool surface that can, in turn, delegate child work through
-the same lifecycle. Everything else is just a different way to *launch* that one
-runtime, or a different way to *observe* it.
+There is exactly **one** thing that runs detached Agent work: a **headless
+Runtime worker** with a durable execution lifecycle. It is a model loop with
+the full, authority-gated tool surface that can, in turn, delegate child work
+through the same lifecycle. Everything else is a way to select, launch, or
+observe that one Runtime.
 
 ```
                          ┌───────────────────────────────┐
-                         │     headless agent runtime     │
-                         │  (full tools + can sub-spawn)  │
+                         │       headless Runtime         │
+                         │ (execution + authority +       │
+                         │  lifecycle; can sub-spawn)     │
                          └───────────────────────────────┘
                             ▲             ▲             ▲
             launches │              │              │ launches
                      │              │              │
         ┌────────────┴───┐  ┌───────┴────────┐  ┌──┴───────────────────┐
         │   TUI turn     │  │ `codewhale     │  │   Agent Fleet         │
-        │  (interactive, │  │   exec`        │  │  (durable: ledger,    │
-        │   in-process)  │  │  (headless CLI,│  │   scheduler, SSH,     │
-        │                │  │   anyone/any-  │  │   alerts) — launches   │
-        │                │  │   time)        │  │   `codewhale exec`     │
-        └────────────────┘  └────────────────┘  │   per worker          │
+        │  (interactive, │  │   exec`        │  │  (identity, member-   │
+        │   in-process)  │  │  (headless CLI,│  │   ship, selection) —  │
+        │                │  │   anyone/any-  │  │   requests Runtime    │
+        │                │  │   time)        │  │   execution for a     │
+        └────────────────┘  └────────────────┘  │   selected Agent      │
                                                  └───────────────────────┘
 ```
 
 - A **sub-agent** is the user-facing name for a *nested assignment* with a role
   (`explore`, `review`, `implementer`, `verifier`, ...). It should be backed by
-  the same worker run lifecycle as fleet. `agent` is the model-facing launcher,
-  not a second runtime.
+  the same Runtime worker lifecycle used for a Fleet-selected Agent. `agent` is
+  the model-facing launcher, not a second runtime.
 - **`codewhale exec`** is the headless front door: usable by anyone at any time
   (CI, scripts, another agent), full tools, emits a `stream-json` event stream,
   and can spawn sub-agents. It is *the* runtime with a CLI on it.
-- A **fleet worker** *is* a `codewhale exec` run that the fleet launches and
-  tracks durably — locally as a subprocess, or remotely as
-  `ssh host … codewhale exec …`. The fleet does not re-implement execution; it
-  adds **orchestration** (durable ledger, scheduling/leasing/retry, host
-  transport, alert escalation) *over* the one runtime.
+- A **Fleet-selected Agent** executes as a Runtime `codewhale exec` run. Fleet
+  supplies identity, membership, and selection; it does not re-implement
+  execution. Runtime owns the durable ledger, scheduling/leasing/retry,
+  authority, local or SSH transport, and terminal lifecycle.
 
-So "fleet vs sub-agent" is not two categories. It is **the same headless run**:
-Fleet is the durable control plane, while sub-agent is the role/UX vocabulary
-for a nested worker.
+So "Fleet vs sub-agent" is not a choice between execution substrates. Fleet
+answers **who** is eligible and selected, Runtime answers **how and where** the
+authorized work executes, and sub-agent remains the role/UX vocabulary for a
+nested assignment.
 
 ## The cutover rule
 
 If a detached `agent` child can fail on a one-off provider timeout with no
-retry while an equivalent fleet worker would retry and preserve ledger evidence,
-then the cutover is incomplete. Treat that as a CodeWhale runtime gap, not as
-normal "sub-agent behavior".
+retry while an equivalent Runtime worker would retry and preserve ledger
+evidence, then the cutover is incomplete. Treat that as a Codewhale Runtime
+gap, not as normal "sub-agent behavior".
 
 The compatibility `agent` runtime now retries transient provider header,
 stream, and timeout failures with backoff before marking a worker interrupted;
 when retries are exhausted it preserves a checkpoint and returns a continuation
 handle. The remaining convergence work is to keep that lifecycle durable across
-process restarts, remote execution, and full fleet-ledger scheduling.
+process restarts, remote execution, and full Runtime-ledger scheduling.
 
 The target rule is:
 
-- durable or long-running work goes through the fleet worker lifecycle;
+- durable or long-running work goes through the Runtime worker lifecycle;
 - `agent` should enqueue
-  or observe a fleet-backed worker run instead of owning an independent
+  or observe a Runtime worker run instead of owning an independent
   lifecycle;
 - in-process children are allowed only as a small compatibility/latency
   optimization, and they must expose the same terminal states, retry semantics,
-  receipts, and inspection handles as the fleet path.
+  receipts, and inspection handles as the durable Runtime path.
 
 In product language it is fine to say "open a sub-agent". In architecture
-language that means "start a nested fleet worker with this role".
+language that means "start a nested Runtime worker with this role", optionally
+using a member selected from Fleet.
 
 ## Why this shape (and why it fixes the lag)
 
@@ -99,44 +102,53 @@ in-process. It is **isolation + a compact event stream**:
 spawn sub-agents.
 
 When the work also needs to be **durable** (survive the TUI closing, a laptop
-sleeping) or **remote** (SSH), the fleet runs the worker out-of-process as
-`codewhale exec`. The heavy construction then lives in another process entirely,
-so the orchestrator stays smooth regardless of fanout, and the run survives
-restarts — the day-scale autonomy goal of #3154.
+sleeping) or **remote** (SSH), Runtime runs the worker out-of-process as
+`codewhale exec`. Fleet may supply the selected Agent identity, but Runtime
+retains execution authority and lifecycle ownership. The heavy construction
+then lives in another process entirely, so the orchestrator stays smooth
+regardless of fanout, and the run survives restarts — the day-scale autonomy
+goal of #3154.
 
 ## One recursion axis
 
 A worker runs at `spawn_depth = 0` and may spawn children while
 `spawn_depth + 1 ≤ max_spawn_depth`, so a budget of `N` affords `N` nested
-delegation levels. Sub-agents and fleet workers share **one** axis, sourced from
-`codewhale_config`:
+delegation levels. Sub-agents and Fleet-selected Runtime workers share **one**
+axis, sourced from `codewhale_config`:
 
 - `DEFAULT_SPAWN_DEPTH = 3` — the default budget for both standalone sub-agents
-  and fleet workers (so they cannot drift into "two moving targets");
-- `MAX_SPAWN_DEPTH_CEILING = 8` — the opt-in cap that every configured value
-  (fleet `max_spawn_depth`, `agent`'s `max_depth`) clamps to.
+  and Fleet-selected Runtime workers (so they cannot drift into "two moving
+  targets");
+- `MAX_SPAWN_DEPTH_CEILING = 8` — the opt-in cap that every configured Runtime
+  value, including Fleet execution `max_spawn_depth`, clamps to.
 
-Note the parser and the advertised schema do not agree on `agent`'s `max_depth`:
-the parser clamps to 8 (`tools/subagent/mod.rs:10601-10617`) while the JSON
-schema the model is shown declares `"maximum": 3` (`mod.rs:6845-6848`). A model
-therefore cannot request a depth the runtime would honour. Tracked here as a
-code discrepancy, not a doc one.
+The model-facing `agent` schema intentionally omits `max_depth`. The parser
+still accepts `max_depth`, `maxDepth`, and `max_spawn_depth` for saved
+transcripts, ACP/MCP clients, and internal compatibility callers, and rejects
+values above 8. Current model-authored calls inherit the Runtime configuration
+instead of negotiating recursion depth in the tool schema.
+
+Workflow IR has a separate structural validation limit of five nested nodes.
+That limit constrains the orchestration document's shape; it does not grant or
+consume Runtime child-delegation depth.
 
 The root worker always runs even at budget 0; the budget gates *child*
 delegation. The default affords at least three nested levels.
 
 ## Event vocabulary
 
-The fleet ledger persists the worker's own event stream rather than a separate,
-simulated taxonomy. `codewhale exec --output-format stream-json` emits
+The Runtime execution ledger persists the worker's own event stream rather than
+a separate, simulated taxonomy. Compatibility APIs and types still expose this
+through the `Fleet...` prefix. `codewhale exec --output-format stream-json`
+emits
 `{"type": "content" | "tool_use" | "tool_result" | "sandbox_denied" |
 "workflow_event" | "session_capture" | "turn_usage" | "metadata" | "done" |
-"error"}` lines, which map onto the fleet ledger's
+"error"}` lines, which map onto the Runtime ledger's compatibility type
 `FleetWorkerEventPayload` (`RunningTool`, `WorkflowEvent`, `Running`,
 `Completed`, `Failed`, …). `workflow_event` carries the typed
 run/phase/task/gate receipt while a Workflow is in flight and is retained as a
-typed `WorkflowEvent` in the Fleet ledger; the enclosing worker still owns the
-terminal `done` or `error`. One vocabulary, two surfaces.
+typed `WorkflowEvent` in the Runtime execution ledger; the enclosing Runtime
+worker still owns the terminal `done` or `error`. One vocabulary, two surfaces.
 
 `turn_usage` is the per-model-call usage receipt, emitted once per model
 request (turn-step) when the provider reported usage for that call:
@@ -175,13 +187,14 @@ CodeWhale should converge with Claude Code on **shape**, not on branding:
   fanout projection; capability/role tool profiles; the skills ecosystem
   (#2743); structured run receipts.
 - **Keep distinct**: CodeWhale branding and first-class DeepSeek/GLM/MiniMax/
-  multi-provider support; the local-first **Agent Fleet** (durable, SSH-capable
-  orchestration) as CodeWhale's own layer above the shared runtime; Workflow as
-  the orchestration overlay.
+  multi-provider support; the local-first **Agent Fleet** as the identity,
+  membership, and selection layer; durable local/SSH execution and authority in
+  Runtime; Workflow as the ordering overlay.
 - **Do not** fork execution semantics per surface. The TUI, `agent`,
-  `exec`, the Runtime API, and the fleet must all drive the *same* runtime and
-  observe the *same* event stream — divergence there is what produced the "two
-  moving targets" this document exists to prevent.
+  `exec`, and the Runtime API must all drive the *same* Runtime and observe the
+  *same* event stream. Fleet selections are passed to that Runtime rather than
+  creating a second execution path — divergence there is what produced the
+  "two moving targets" this document exists to prevent.
 
 The litmus test for any new agent surface: *does it launch and observe the one
 runtime, or does it invent a second one?* Only the former is allowed.
@@ -204,8 +217,9 @@ remaining work belongs to later releases:
    receipt reconciliation.
 3. **Flow control** — real WIP limits and visible queues (#4015, #4016),
    reconciled with the shipped 16-concurrent/1k-run access model (#4292).
-4. **Fleet/Workflow convergence residuals** — live tmux/verifier-gate dogfood
-   closing #4175/#4177/#4178/#4179; Fleet consuming canonical AgentProfiles;
+4. **Fleet identity and Runtime/Workflow convergence residuals** — live
+   tmux/verifier-gate dogfood closing #4175/#4177/#4178/#4179; Fleet consuming
+   canonical AgentProfiles and selecting members while Runtime owns execution;
    Conductor/topology (#4010, #4012) as stretch.
 5. **TTC design implementation** (design doc in `codewhale-ops`) — approved and now unblocked after v0.9.0.
 6. **HarnessProfile completion** — the status/UX display lane
@@ -297,7 +311,8 @@ is the provider-free acceptance lock for this contract.
 
 Actually adding CodeWhale as a built-in harness lives in the external Verifiers
 repository; the public, immutable CodeWhale GitHub Releases with checksum
-manifests it needs have existed since v0.9.1 (current release line is v0.9.9).
+manifests it needs have existed since v0.9.1 (latest published release is
+v0.9.10; the workspace source candidate is v0.9.11).
 That upstream change is expected to be limited to a new
 `verifiers/v1/harnesses/codewhale/` package plus its test-matrix and docs
 registration, with `CodewhaleHarnessConfig` pinning the target release,

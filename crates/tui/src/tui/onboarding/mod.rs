@@ -169,21 +169,25 @@ fn screen_lines(app: &App, width: usize, height: usize) -> Vec<Line<'static>> {
 }
 
 fn provider_lines(app: &App, width: usize) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        heading(app, MessageId::OnboardProviderTitle),
-        Line::from(""),
-    ];
+    let mut lines = Vec::new();
+    heading(&mut lines, app, MessageId::OnboardProviderTitle, width);
+    lines.push(Line::from(""));
     wrap_body(&mut lines, app, MessageId::OnboardProviderBlurb, width);
     lines
 }
 
-fn heading(app: &App, id: MessageId) -> Line<'static> {
-    Line::from(Span::styled(
-        app.tr(id).to_string(),
-        Style::default()
-            .fg(palette::WHALE_INFO)
-            .add_modifier(Modifier::BOLD),
-    ))
+/// Same rule as the welcome headline: a heading is prose and wraps. Today's
+/// provider title happens to fit at 40 columns in every shipped locale, but it
+/// fit by luck rather than by construction.
+fn heading(out: &mut Vec<Line<'static>>, app: &App, id: MessageId, width: usize) {
+    for segment in wrap_words(&app.tr(id), width) {
+        out.push(Line::from(Span::styled(
+            segment,
+            Style::default()
+                .fg(palette::WHALE_INFO)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
 }
 
 /// Append a body sentence word-wrapped to `width` in the muted body lane.
@@ -197,6 +201,58 @@ fn wrap_body(lines: &mut Vec<Line<'static>>, app: &App, id: MessageId, width: us
     }
 }
 
+/// Characters that may not begin a line in Japanese and Chinese typography
+/// (a small, uncontroversial kinsoku set: closing brackets, sentence-final
+/// punctuation, and the sound-extension mark). When a width break would strand
+/// one of these at the start of a line, one more cluster is pulled back.
+const NO_LINE_START: &[char] = &[
+    '。', '、', '．', '，', '，', '。', '」', '』', '）', '］', '｝', '〕', '〉', '》', '”', '’',
+    '！', '？', '：', '；', 'ー', '々', '·', '…', '!', '?', ',', '.', ':', ';', ')', ']', '}',
+];
+
+/// Break one unbreakable token into lines of at most `width` display columns.
+///
+/// Japanese, Chinese, and Thai do not separate words with spaces, so an entire
+/// sentence arrives as a single token. Breaking on grapheme clusters by display
+/// width is the conventional behaviour for those scripts and is the only way to
+/// show the text at all; the alternative is the clip this replaces.
+fn break_by_display_width(text: &str, width: usize) -> Vec<String> {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+
+    let mut out: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+
+    for cluster in text.graphemes(true) {
+        let cluster_width = UnicodeWidthStr::width(cluster);
+        if current_width + cluster_width > width && !current.is_empty() {
+            let starts_forbidden = cluster
+                .chars()
+                .next()
+                .is_some_and(|c| NO_LINE_START.contains(&c));
+            if starts_forbidden {
+                // Keep the punctuation with the text it belongs to. The line
+                // runs one column over only if that is unavoidable, which is
+                // still better than opening the next line with `。`.
+                current.push_str(cluster);
+                out.push(std::mem::take(&mut current));
+                current_width = 0;
+                continue;
+            }
+            out.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+        current.push_str(cluster);
+        current_width += cluster_width;
+    }
+
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
 /// Word wrap by display width so the composed row count is exact and no
 /// paragraph re-wrap can clip a locale with longer sentences.
 pub(crate) fn wrap_words(text: &str, width: usize) -> Vec<String> {
@@ -207,6 +263,26 @@ pub(crate) fn wrap_words(text: &str, width: usize) -> Vec<String> {
     let mut current_width = 0usize;
     for word in text.split_whitespace() {
         let word_width = UnicodeWidthStr::width(word);
+
+        // A token wider than the whole lane cannot fit on any line. Scripts
+        // that do not delimit words produce exactly one such token per
+        // sentence, and the word-only path below never breaks it — it appended
+        // the token whole and the terminal clipped the tail, silently dropping
+        // the second half of every long Japanese string.
+        if word_width > width {
+            if !current.is_empty() {
+                out.push(std::mem::take(&mut current));
+                current_width = 0;
+            }
+            let mut chunks = break_by_display_width(word, width);
+            if let Some(last) = chunks.pop() {
+                out.extend(chunks);
+                current_width = UnicodeWidthStr::width(last.as_str());
+                current = last;
+            }
+            continue;
+        }
+
         let needed = if current.is_empty() {
             word_width
         } else {
@@ -877,6 +953,74 @@ mod tests {
         assert!(
             rail.contains(tr(Locale::En, MessageId::OnboardProviderOffline).as_ref()),
             "offline exit needs its translated label: {rail}"
+        );
+    }
+
+    #[test]
+    fn wrap_words_breaks_scripts_that_have_no_spaces() {
+        use unicode_width::UnicodeWidthStr;
+        // The real ja provider blurb. `split_whitespace` yields one token, so
+        // the word-only wrapper emitted a single 110-column line and an 80-column
+        // terminal clipped everything after "ローカ" — the half of the sentence
+        // that tells the user local runtimes need no key.
+        let ja = "モデルの実行先を選びます。ホステッドプロバイダーにはキーが必要ですが、ローカルランタイムはキーなしで続行できます。";
+        assert!(
+            ja.split_whitespace().count() == 1,
+            "fixture must be a single whitespace-delimited token"
+        );
+
+        let lines = wrap_words(ja, 76);
+        assert!(
+            lines.len() > 1,
+            "space-less text must wrap, not clip: {lines:?}"
+        );
+        for line in &lines {
+            assert!(
+                UnicodeWidthStr::width(line.as_str()) <= 77,
+                "line exceeds the lane: {:?} ({} cols)",
+                line,
+                UnicodeWidthStr::width(line.as_str())
+            );
+        }
+        // Nothing may be dropped: the rejoined lines must reproduce the source.
+        assert_eq!(lines.concat(), ja, "wrapping must not lose characters");
+    }
+
+    #[test]
+    fn wrap_words_keeps_latin_wrapping_unchanged() {
+        let text = "Pick where your model runs. Hosted providers need a key; local runtimes can continue without one.";
+        let lines = wrap_words(text, 60);
+        assert!(lines.len() >= 2);
+        for line in &lines {
+            assert!(line.len() <= 60, "{line:?}");
+            assert!(!line.starts_with(' ') && !line.ends_with(' '), "{line:?}");
+        }
+        assert_eq!(lines.join(" "), text, "word wrapping must round-trip");
+    }
+
+    #[test]
+    fn wrap_words_does_not_open_a_line_with_japanese_closing_punctuation() {
+        // Kinsoku: 。、」） and friends may not begin a line.
+        let text = "あいうえおかきくけこさしすせそたちつてと。";
+        for width in 4..=20 {
+            for line in wrap_words(text, width) {
+                let first = line.chars().next().unwrap();
+                assert!(
+                    !NO_LINE_START.contains(&first),
+                    "width {width}: line starts with {first:?} in {line:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wrap_words_handles_mixed_latin_and_cjk() {
+        let text = "Codewhale はこのフォルダーで一緒に作業します。";
+        let lines = wrap_words(text, 20);
+        assert_eq!(
+            lines.join("").replace(' ', ""),
+            text.replace(' ', ""),
+            "mixed-script text must not lose characters: {lines:?}"
         );
     }
 }

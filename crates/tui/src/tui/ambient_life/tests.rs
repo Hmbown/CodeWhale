@@ -55,6 +55,7 @@ fn frame_at(t: u128) -> FrameMarks {
         area,
         t,
         LifeDensity::from_area(area),
+        &[],
         AmbientCursor::default(),
         WhaleCameo::default(),
         &mut stats,
@@ -145,7 +146,7 @@ fn ambient_glyphs_are_ascii_or_have_fallbacks() {
 #[test]
 fn jellyfish_reads_as_dome_with_lagging_tentacles() {
     // Find a frame where a full jelly is on-screen and assert its
-    // structure: a two-row dome at least four cells wide, exactly three
+    // structure: a two-row dome at least four cells wide, exactly two
     // tentacle columns one row below the skirt, and both dome and
     // tentacles holding their brightness floors.
     let mut seen = false;
@@ -178,7 +179,7 @@ fn jellyfish_reads_as_dome_with_lagging_tentacles() {
             .collect();
         assert_eq!(
             tentacles.len(),
-            3,
+            JELLY_TENTACLE_COLUMNS,
             "visible jellyfish must keep all tentacles: {frame:?}"
         );
         let dome_glow = top.brightness.expect("dome pulses");
@@ -200,7 +201,8 @@ fn jellyfish_tentacles_sway_out_of_phase_and_dome_pulses() {
     // frames, and the trio is not always in lockstep (per-column phase
     // offset — the lag is what sells "jellyfish").
     let mut dome_frames = std::collections::BTreeSet::new();
-    let mut column_frames: [std::collections::BTreeSet<&str>; 3] = Default::default();
+    let mut column_frames: [std::collections::BTreeSet<&str>; JELLY_TENTACLE_COLUMNS] =
+        Default::default();
     let mut saw_desync = false;
     for probe in 0..480u128 {
         let frame = frame_at(probe * 100);
@@ -212,20 +214,20 @@ fn jellyfish_tentacles_sway_out_of_phase_and_dome_pulses() {
             continue;
         };
         dome_frames.insert(top.glyph);
-        let mut trio = [""; 3];
+        let mut pair = [""; JELLY_TENTACLE_COLUMNS];
         let mut found = 0usize;
-        for (col, slot) in trio.iter_mut().enumerate() {
+        for (col, slot) in pair.iter_mut().enumerate() {
             if let Some(tentacle) = frame.marks.iter().find(|mark| {
                 JELLY_TENTACLE_FRAMES.contains(&mark.glyph)
                     && mark.y == top.y + 2
-                    && mark.x == top.x + 1 + col as u16
+                    && mark.x == top.x + 1 + 2 * col as u16
             }) {
                 *slot = tentacle.glyph;
                 column_frames[col].insert(tentacle.glyph);
                 found += 1;
             }
         }
-        if found == 3 && !(trio[0] == trio[1] && trio[1] == trio[2]) {
+        if found == JELLY_TENTACLE_COLUMNS && pair.iter().any(|glyph| *glyph != pair[0]) {
             saw_desync = true;
         }
     }
@@ -238,6 +240,114 @@ fn jellyfish_tentacles_sway_out_of_phase_and_dome_pulses() {
         assert!(set.len() > 1, "tentacle column {col} never swayed");
     }
     assert!(saw_desync, "tentacle columns strobed in lockstep");
+}
+
+/// Tentacle columns hanging from the full-size bell. Named so the structural
+/// assertions read as one decision rather than a repeated magic number.
+const JELLY_TENTACLE_COLUMNS: usize = 2;
+
+#[test]
+fn short_transcript_rows_leave_a_safe_ocean_corridor() {
+    // The active transcript commonly puts short status/tool lines on every
+    // visible row. They own their cells and a one-column gutter, not the whole
+    // terminal width: fish and the t=0 jellyfish remain eligible in the clear
+    // right-hand water without touching a single transcript cell.
+    let area = Rect::new(0, 0, 80, 24);
+    let lines: Vec<Line<'static>> = (0..usize::from(area.height))
+        .map(|row| Line::from(Span::raw(format!("status row {row:02}"))))
+        .collect();
+    let mut buf = Buffer::empty(area);
+    for (row, line) in lines.iter().enumerate() {
+        buf.set_line(area.x, area.y + row as u16, line, area.width);
+    }
+
+    let stats = render_ambient_life(
+        area,
+        &mut buf,
+        (Color::Cyan, Color::Blue),
+        &lines,
+        0,
+        1.0,
+        AmbientCursor::default(),
+        WhaleCameo::default(),
+    );
+    let rendered: String = (0..area.height)
+        .map(|row| {
+            (0..area.width)
+                .map(|column| buf[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("><") || rendered.contains("<o"),
+        "short active rows should leave room for fish:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(JELLY_DOME_TOP_FRAMES[0]) || rendered.contains(JELLY_DOME_TOP_FRAMES[1]),
+        "the right corridor should keep the rare visitor eligible at t=0:\n{rendered}"
+    );
+    assert!(stats.marks_painted > 0, "{stats:?}");
+    for (row, line) in lines.iter().enumerate() {
+        let text = line.spans[0].content.as_ref();
+        for (column, ch) in text.chars().enumerate() {
+            assert_eq!(
+                buf[(column as u16, row as u16)].symbol(),
+                ch.to_string(),
+                "ambient life overwrote transcript cell ({column},{row})"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_jellyfish_needs_water_deep_enough_to_hold_it_and_the_school() {
+    // Deep-water budget: with the composition sitting where the 80x24 idle
+    // screen puts it there are four rows of water left, which is the school's
+    // band and nothing else. The jellyfish does not come up into it.
+    let area = Rect::new(0, 0, 80, 18);
+    let mut lines: Vec<Line<'static>> = vec![Line::default(); usize::from(area.height)];
+    for row in [9usize, 10, 12] {
+        lines[row] = Line::from(Span::raw("X".repeat(75)));
+    }
+    let jelly_lane = area.width.saturating_mul(5) / 6;
+    assert!(deep_water_rows(area, &lines, jelly_lane, 5) < JELLY_MIN_DEEP_ROWS);
+    let mut saw_fish = false;
+    for probe in 0..600u128 {
+        let mut stats = AmbientFrameStats::default();
+        let frame = build_frame_marks(
+            area,
+            probe * 250,
+            LifeDensity::from_area(area),
+            &lines,
+            AmbientCursor::default(),
+            WhaleCameo::default(),
+            &mut stats,
+        );
+        for mark in &frame.marks {
+            assert!(
+                !JELLY_DOME_TOP_FRAMES.contains(&mark.glyph)
+                    && !JELLY_DOME_SKIRT_FRAMES.contains(&mark.glyph)
+                    && !JELLY_TENTACLE_FRAMES.contains(&mark.glyph),
+                "shallow water surfaced a jellyfish: {mark:?}"
+            );
+            saw_fish |= mark.glyph.contains("><");
+        }
+    }
+    assert!(saw_fish, "the school should still hold its band");
+}
+
+#[test]
+fn bubbles_grow_as_they_rise_and_dissolve_before_the_top() {
+    // Size and brightness are functions of height risen, not of the clock:
+    // the old table swapped glyph every 320 ms in place, which is a flicker
+    // rather than a rise, and the old clamp parked a spent bubble as an
+    // unattached speck at the top of the field.
+    assert_eq!(bubble_glyph(0), "·");
+    assert_eq!(bubble_glyph(BUBBLE_MAX_RISE_ROWS), "°");
+    assert!(bubble_dissolve(0) > bubble_dissolve(BUBBLE_MAX_RISE_ROWS));
+    assert!((bubble_dissolve(0) - 1.0).abs() < f32::EPSILON);
+    assert!(bubble_dissolve(BUBBLE_MAX_RISE_ROWS) <= BUBBLE_DISSOLVE_CEIL + f32::EPSILON);
 }
 
 #[test]
@@ -255,6 +365,7 @@ fn sparse_water_gets_a_compact_jellyfish() {
             area,
             probe * 500,
             LifeDensity::from_area(area),
+            &[],
             AmbientCursor::default(),
             WhaleCameo::default(),
             &mut stats,
@@ -308,6 +419,7 @@ fn motion_is_a_deterministic_function_of_elapsed_time() {
             area,
             0,
             LifeDensity::from_area(area),
+            &[],
             AmbientCursor::default(),
             WhaleCameo::default(),
             &mut stats,
@@ -344,7 +456,10 @@ fn motion_is_a_deterministic_function_of_elapsed_time() {
         .iter()
         .filter(|mark| JELLY_TENTACLE_FRAMES.contains(&mark.glyph) && mark.y == top.y + 2)
         .count();
-    assert!(tentacles >= 3, "jellyfish lost its tentacles at t=0");
+    assert!(
+        tentacles >= JELLY_TENTACLE_COLUMNS,
+        "jellyfish lost its tentacles at t=0"
+    );
 }
 
 #[test]
@@ -428,14 +543,19 @@ fn frame_stats_stay_within_the_render_budget() {
 fn frame_stats_never_overwrite_text() {
     // Property: on a text-covered field, colliding marks are charged to
     // marks_skipped_text and no transcript cell is overwritten.
+    //
+    // Two stages guard this and they answer different questions. The build
+    // stage keeps ambient life out of the composition's rows entirely
+    // (`is_open_water`) — a design decision about where the aquarium lives.
+    // The paint stage refuses to write over text whatever the build stage
+    // decided — a correctness backstop, and the one this test exercises,
+    // using the whale cameo: the cameo is an event fired at a deliberate
+    // anchor, so it is the one mark that is allowed to aim at occupied water
+    // and must therefore be withheld here rather than painted.
     let area = Rect::new(0, 0, 100, 30);
     let mut buf = Buffer::empty(area);
     let lines: Vec<Line<'static>> = (0..usize::from(area.height))
-        .map(|i| {
-            Line::from(Span::raw(format!(
-                "transcript row {i:02} occupies the water"
-            )))
-        })
+        .map(|_| Line::from(Span::raw("X".repeat(usize::from(area.width)))))
         .collect();
     for (i, line) in lines.iter().enumerate() {
         buf.set_line(area.x, area.y + i as u16, line, area.width);
@@ -448,11 +568,19 @@ fn frame_stats_never_overwrite_text() {
         12_000,
         1.0,
         AmbientCursor::default(),
-        WhaleCameo::default(),
+        WhaleCameo {
+            elapsed_ms: Some(500),
+            anchor_x: 10,
+            anchor_y: 20,
+        },
     );
     assert!(
         stats.marks_skipped_text > 0,
-        "text-covered water should skip some marks: {stats:?}"
+        "full-width text should skip colliding marks: {stats:?}"
+    );
+    assert_eq!(
+        stats.marks_painted, 0,
+        "a fully composed field is not water: {stats:?}"
     );
     assert_eq!(
         stats.marks_built,

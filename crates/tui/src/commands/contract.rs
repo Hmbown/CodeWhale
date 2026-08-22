@@ -26,17 +26,19 @@
 //! FEAT-015 intentionally wires no production contextual command. Some bridge
 //! helpers remain production-dead until the first slice migrates (FEAT-018+),
 //! so this transitional module keeps a bounded dead-code allow.
-#![allow(dead_code)]
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use codewhale_command_contract::facets::{
-    CommandCostContext, CommandModePolicyContext, CommandModelContext, CommandSessionContext,
-    CommandSkillsContext, CommandSystemPromptContext, CommandWorkspaceContext,
+    CommandCostContext, CommandMediaContext, CommandModePolicyContext, CommandModelContext,
+    CommandPresentationContext, CommandSessionContext, CommandSkillsContext,
+    CommandSystemPromptContext, CommandWorkspaceContext, MediaAttachmentReceipt,
 };
-use codewhale_command_contract::handler::{CommandContexts, ContextParts};
+use codewhale_command_contract::handler::CommandContexts;
+#[cfg(test)]
+use codewhale_command_contract::handler::ContextParts;
 use codewhale_command_contract::types::{
     CommandApprovalMode, CommandCurrency, CommandMode, CommandProviderId, CommandReasoningEffort,
 };
@@ -44,7 +46,7 @@ use codewhale_config::AppMode;
 use codewhale_core::request::{Message, SystemPrompt};
 use codewhale_execpolicy::ApprovalMode;
 
-use crate::localization::MessageId;
+use crate::localization::{MessageId, tr};
 use crate::pricing::CostCurrency;
 use crate::tui::app::{App, ReasoningEffort};
 
@@ -56,8 +58,13 @@ use crate::tui::app::{App, ReasoningEffort};
 /// handlers. This is the TUI-visible projection of the checked-in migration
 /// topology (`scripts/command-migration-topology.json`); the CI gate performs
 /// the authoritative bidirectional source scan against that artifact.
+///
+/// Not referenced by production dispatch code — the fail-closed Python gate
+/// (`scripts/check-command-migration-manifest.py`) reads this exact
+/// declaration by source regex and the Rust frontier tests assert it.
+#[allow(dead_code)]
 pub(crate) const PENDING_GROUPS: &[&str] = &[
-    "config", "core", "debug", "memory", "plugins", "project", "session", "skills", "utility",
+    "config", "core", "debug", "memory", "plugins", "project", "session", "skills",
 ];
 
 // ---------------------------------------------------------------------------
@@ -481,6 +488,139 @@ impl CommandWorkspaceContext for WorkspaceAdapter<'_> {
             state.and_then(|state| crate::todo_snapshot::todo_snapshot_body(&state.todos))
         })
     }
+
+    fn operation_digest(&mut self) -> Result<String, String> {
+        let app = self.host.app.borrow();
+        let Some(work) = app.runtime_services.work.as_ref() else {
+            return Ok("No active operations or to-do items.".to_string());
+        };
+        match work.capture(app.current_session_id.as_deref()) {
+            Ok(snapshot) => Ok(crate::work_graph::format_operation_digest(
+                snapshot.as_ref(),
+            )),
+            Err(error) => Err(format!(
+                "Operation digest is temporarily unavailable: {error}"
+            )),
+        }
+    }
+}
+
+/// Stable-key translation adapter (FEAT-018 D3).
+///
+/// Maps stable snake_case utility message keys to the current catalog and
+/// preserves the existing English fallback for intentionally incomplete locale
+/// packs. Unknown keys and invalid replacement contracts fail safely; a raw
+/// lookup key is never exposed.
+pub(crate) struct PresentationAdapter<'a> {
+    host: SharedCommandHost<'a>,
+}
+
+impl CommandPresentationContext for PresentationAdapter<'_> {
+    fn translate(&self, key: &str, replacements: &[(&str, &str)]) -> Result<String, String> {
+        let Some(message_id) = key_to_utility_message_id(key) else {
+            return Err("unknown translation key".to_string());
+        };
+        let locale = self.host.app.borrow().ui_locale;
+        let template = tr(locale, message_id);
+        apply_named_replacements(&template, replacements)
+            .ok_or_else(|| "invalid translation replacement contract".to_string())
+    }
+}
+
+/// Resolve a stable utility message key to the current catalog id.
+fn key_to_utility_message_id(key: &str) -> Option<MessageId> {
+    Some(match key {
+        "automation_usage" => MessageId::AutomationUsage,
+        "mcp_recommended_unknown_id" => MessageId::McpRecommendedUnknownId,
+        "mcp_recommendations_heading" => MessageId::McpRecommendationsHeading,
+        "mcp_recommendations_safety" => MessageId::McpRecommendationsSafety,
+        "mcp_recommendation_github" => MessageId::McpRecommendationGithub,
+        "mcp_recommendation_chrome" => MessageId::McpRecommendationChrome,
+        "mcp_recommendation_playwright" => MessageId::McpRecommendationPlaywright,
+        "mcp_recommendation_cua" => MessageId::McpRecommendationCua,
+        "mcp_recommendation_container_use" => MessageId::McpRecommendationContainerUse,
+        _ => return None,
+    })
+}
+
+/// Replace `{name}` placeholders with the supplied named values.
+///
+/// Returns `None` when the replacement set does not exactly cover every
+/// placeholder in the template (missing, extra, or duplicate names).
+fn apply_named_replacements(template: &str, replacements: &[(&str, &str)]) -> Option<String> {
+    let supplied: std::collections::BTreeMap<&str, &str> = replacements.iter().copied().collect();
+    if supplied.len() != replacements.len() {
+        return None; // duplicate replacement name
+    }
+    let mut placeholders = std::collections::BTreeSet::new();
+    let mut cursor = 0usize;
+    while let Some(start) = template[cursor..].find('{') {
+        let start = cursor + start;
+        let Some(end) = template[start + 1..].find('}') else {
+            break;
+        };
+        let end = start + 1 + end;
+        let name = &template[start + 1..end];
+        if !name.is_empty() {
+            placeholders.insert(name);
+        }
+        cursor = end + 1;
+    }
+    if placeholders != supplied.keys().copied().collect() {
+        return None;
+    }
+    let mut out = template.to_string();
+    for (name, value) in replacements {
+        out = out.replace(&format!("{{{name}}}"), value);
+    }
+    Some(out)
+}
+
+/// Atomic composer/media adapter (FEAT-018 D4).
+///
+/// Performs media validation and composer insertion as one host operation by
+/// delegating to the authoritative image-validation and attachment behavior.
+pub(crate) struct MediaAdapter<'a> {
+    host: SharedCommandHost<'a>,
+}
+
+impl CommandMediaContext for MediaAdapter<'_> {
+    fn attach_media(&mut self, resolved_path: &Path) -> Result<MediaAttachmentReceipt, String> {
+        let Ok(path) = resolved_path.canonicalize() else {
+            return Err(format!("Attachment not found: {}", resolved_path.display()));
+        };
+        if !path.is_file() {
+            return Err(format!("Attachment is not a file: {}", path.display()));
+        }
+        let Some(kind) = media_kind(&path) else {
+            return Err(
+                "Unsupported attachment type. /attach is for image/video paths; use @path for \
+                 text files or directories."
+                    .to_string(),
+            );
+        };
+        if kind == "image"
+            && let Err(error) = crate::image_attach::attach_image_from_path(&path)
+        {
+            return Err(error.to_string());
+        }
+        let mut app = self.host.app.borrow_mut();
+        app.insert_media_attachment(kind, &path, None);
+        Ok(MediaAttachmentReceipt {
+            kind: kind.to_string(),
+            path,
+        })
+    }
+}
+
+/// Classify a media path by extension (image or video).
+fn media_kind(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" | "ppm" => Some("image"),
+        "mp4" | "mov" | "m4v" | "webm" | "avi" | "mkv" => Some("video"),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -500,6 +640,8 @@ pub(crate) struct CommandContextBundle<'a> {
     system_prompt: SystemPromptAdapter<'a>,
     skills: SkillsAdapter<'a>,
     workspace: WorkspaceAdapter<'a>,
+    presentation: PresentationAdapter<'a>,
+    media: MediaAdapter<'a>,
 }
 
 impl<'a> CommandContextBundle<'a> {
@@ -512,8 +654,12 @@ impl<'a> CommandContextBundle<'a> {
             .with_system_prompt(&mut self.system_prompt)
             .with_skills(&mut self.skills)
             .with_workspace(&mut self.workspace)
+            .with_presentation(&mut self.presentation)
+            .with_media(&mut self.media)
     }
 
+    /// Test-only: consume the bundle into independent facet parts.
+    #[cfg(test)]
     pub(crate) fn parts(&mut self) -> ContextParts<'_> {
         self.contexts().into_parts()
     }
@@ -533,7 +679,9 @@ impl App {
             mode_policy: ModePolicyAdapter { host: host.clone() },
             system_prompt: SystemPromptAdapter { host: host.clone() },
             skills: SkillsAdapter { host: host.clone() },
-            workspace: WorkspaceAdapter { host },
+            workspace: WorkspaceAdapter { host: host.clone() },
+            presentation: PresentationAdapter { host: host.clone() },
+            media: MediaAdapter { host },
         }
     }
 }
@@ -541,12 +689,23 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::localization::Locale;
+    use crate::models::Role;
 
     fn test_app() -> App {
         crate::test_support::test_app_with_options(crate::test_support::test_tui_options(
             PathBuf::from("."),
         ))
     }
+
+    /// A 1x1 PNG for media adapter tests.
+    const PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
 
     #[test]
     fn pending_groups_is_sorted_unique_and_matches_checked_in_frontier() {
@@ -672,7 +831,7 @@ mod tests {
             let session = parts.session.as_mut().expect("session facet");
             assert_eq!(session.session_id().as_deref(), Some("s1"));
             session.add_message(Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![],
             });
             assert_eq!(session.api_messages().len(), 1);
@@ -754,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn envelope_exposes_all_seven_facets_without_app_in_handler_surface() {
+    fn envelope_exposes_all_facets_without_app_in_handler_surface() {
         let mut app = test_app();
         let mut bundle = app.command_contexts();
         let parts = bundle.parts();
@@ -765,5 +924,232 @@ mod tests {
         assert!(parts.system_prompt.is_some());
         assert!(parts.skills.is_some());
         assert!(parts.workspace.is_some());
+        assert!(parts.presentation.is_some());
+        assert!(parts.media.is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // FEAT-018 adapter tests: presentation (D3), media (D4), digest (D5)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn presentation_adapter_resolves_utility_keys_with_english_fallback() {
+        let mut app = test_app();
+        app.ui_locale = Locale::En;
+        let mut bundle = app.command_contexts();
+        let mut parts = bundle.parts();
+        let presentation = parts.presentation.as_mut().expect("presentation facet");
+
+        // automation_usage has no placeholders.
+        let usage = presentation
+            .translate("automation_usage", &[])
+            .expect("automation usage key");
+        assert!(
+            usage.contains("/automation"),
+            "expected usage text, got {usage}"
+        );
+
+        // mcp_recommended_unknown_id needs {recommendations_command}.
+        let unknown = presentation
+            .translate(
+                "mcp_recommended_unknown_id",
+                &[("recommendations_command", "/mcp recommendations")],
+            )
+            .expect("mcp unknown-id key");
+        assert!(
+            unknown.contains("/mcp recommendations"),
+            "expected replacement text, got {unknown}"
+        );
+
+        // mcp_recommendation_github needs {endpoint}, {login_command}, {add_command}.
+        let github = presentation
+            .translate(
+                "mcp_recommendation_github",
+                &[
+                    ("endpoint", "https://api.githubcopilot.com/mcp/"),
+                    ("login_command", "/mcp login github"),
+                    ("add_command", "/mcp add recommended github"),
+                ],
+            )
+            .expect("github recommendation key");
+        assert!(
+            github.contains("https://api.githubcopilot.com/mcp/"),
+            "{github}"
+        );
+        assert!(
+            !github.contains("{endpoint}"),
+            "placeholder must be replaced"
+        );
+    }
+
+    #[test]
+    fn presentation_adapter_rejects_unknown_keys_and_invalid_replacements() {
+        let mut app = test_app();
+        app.ui_locale = Locale::En;
+        let mut bundle = app.command_contexts();
+        let mut parts = bundle.parts();
+        let presentation = parts.presentation.as_mut().expect("presentation facet");
+
+        let unknown = presentation.translate("no_such_key", &[]);
+        assert!(unknown.is_err(), "unknown key must fail safely");
+        let err = unknown.unwrap_err();
+        assert!(
+            !err.contains("no_such_key"),
+            "no raw lookup key exposure (D3): {err}"
+        );
+
+        // Missing required replacement.
+        assert!(
+            presentation
+                .translate("mcp_recommendation_github", &[])
+                .is_err()
+        );
+        // Extra replacement not present in the template.
+        assert!(
+            presentation
+                .translate("automation_usage", &[("no_such_placeholder", "value")],)
+                .is_err()
+        );
+        // Duplicate replacement names.
+        assert!(
+            presentation
+                .translate(
+                    "mcp_recommendation_github",
+                    &[
+                        ("endpoint", "a"),
+                        ("endpoint", "b"),
+                        ("login_command", "c"),
+                        ("add_command", "d"),
+                    ],
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn media_adapter_attaches_valid_image_and_preserves_confirm() {
+        let tmpdir = tempfile::TempDir::new().expect("tempdir");
+        let image_path = tmpdir.path().join("photo.png");
+        std::fs::write(&image_path, PNG_1X1).expect("write image fixture");
+
+        let mut app = test_app();
+        let mut bundle = app.command_contexts();
+        let mut parts = bundle.parts();
+        let media = parts.media.as_mut().expect("media facet");
+        let receipt = media
+            .attach_media(&image_path)
+            .expect("valid image attaches");
+        assert_eq!(receipt.kind, "image");
+        assert_eq!(receipt.path, image_path.canonicalize().expect("canonical"));
+        assert!(
+            app.input.contains("[Attached image:"),
+            "composer must contain the attachment reference"
+        );
+    }
+
+    #[test]
+    fn media_adapter_rejects_invalid_media_atomically() {
+        let tmpdir = tempfile::TempDir::new().expect("tempdir");
+
+        // Missing path.
+        let mut app = test_app();
+        {
+            let mut bundle = app.command_contexts();
+            let mut parts = bundle.parts();
+            let media = parts.media.as_mut().expect("media facet");
+            let missing = tmpdir.path().join("missing.png");
+            let err = media.attach_media(&missing).unwrap_err();
+            assert!(err.contains("Attachment not found"), "{err}");
+        }
+        assert!(
+            app.input.is_empty(),
+            "refused attachment must not reach composer"
+        );
+
+        // Directory is not a file.
+        {
+            let mut bundle = app.command_contexts();
+            let mut parts = bundle.parts();
+            let media = parts.media.as_mut().expect("media facet");
+            let dir = tmpdir.path().to_path_buf();
+            let err = media.attach_media(&dir).unwrap_err();
+            assert!(err.contains("Attachment is not a file"), "{err}");
+        }
+        assert!(app.input.is_empty());
+
+        // Unsupported extension.
+        std::fs::write(tmpdir.path().join("notes.txt"), b"text").expect("write fixture");
+        {
+            let mut bundle = app.command_contexts();
+            let mut parts = bundle.parts();
+            let media = parts.media.as_mut().expect("media facet");
+            let err = media
+                .attach_media(&tmpdir.path().join("notes.txt"))
+                .unwrap_err();
+            assert!(err.contains("Unsupported attachment type"), "{err}");
+        }
+        assert!(app.input.is_empty());
+
+        // Corrupt image with a valid extension.
+        std::fs::write(tmpdir.path().join("bad.png"), b"not an image").expect("write fixture");
+        {
+            let mut bundle = app.command_contexts();
+            let mut parts = bundle.parts();
+            let media = parts.media.as_mut().expect("media facet");
+            let err = media
+                .attach_media(&tmpdir.path().join("bad.png"))
+                .unwrap_err();
+            assert!(!err.is_empty(), "corrupt image must fail");
+        }
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn media_adapter_attaches_valid_video_reference() {
+        // A real (non-image) media file with a video extension passes the
+        // extension gate without byte validation, matching baseline /attach.
+        let tmpdir = tempfile::TempDir::new().expect("tempdir");
+        let video_path = tmpdir.path().join("clip.mp4");
+        std::fs::write(&video_path, b"not a real mp4 but extension-gated").expect("write");
+
+        let mut app = test_app();
+        let mut bundle = app.command_contexts();
+        let mut parts = bundle.parts();
+        let media = parts.media.as_mut().expect("media facet");
+        let receipt = media
+            .attach_media(&video_path)
+            .expect("video path attaches by extension");
+        assert_eq!(receipt.kind, "video");
+        assert!(app.input.contains("[Attached video:"), "{}", app.input);
+    }
+
+    #[test]
+    fn workspace_digest_adapter_preserves_no_active_and_failure_semantics() {
+        let mut app = test_app();
+        app.runtime_services.work = None;
+        {
+            let mut bundle = app.command_contexts();
+            let mut parts = bundle.parts();
+            let workspace = parts.workspace.as_mut().expect("workspace facet");
+            assert_eq!(
+                workspace.operation_digest().expect("no-runtime digest"),
+                "No active operations or to-do items."
+            );
+        }
+    }
+
+    #[test]
+    fn bundle_construction_performs_no_eager_work() {
+        let mut app = test_app();
+        let input_before = app.input.clone();
+        {
+            let mut bundle = app.command_contexts();
+            let parts = bundle.parts();
+            // Merely constructing the bundle must not mutate composer state or
+            // perform capability work; the adapters only run on method calls.
+            let _ = parts.media.is_some();
+            let _ = parts.presentation.is_some();
+        }
+        assert_eq!(app.input, input_before, "no eager composer mutation");
     }
 }

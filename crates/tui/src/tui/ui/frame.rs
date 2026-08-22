@@ -4,6 +4,7 @@
 //! Moved verbatim out of `ui.rs`.
 
 use super::*;
+use crate::models::Role;
 
 /// Map the host terminal rect onto the session shell canvas.
 ///
@@ -257,10 +258,10 @@ pub(crate) fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             .map(crate::config::LspConfigToml::into_runtime),
         runtime_services: app.runtime_services.clone(),
         subagent_model_overrides: config.subagent_model_overrides(),
-        fleet_roster: std::sync::Arc::new(crate::fleet::roster::FleetRoster::load_with_plugins(
+        fleet_roster: std::sync::Arc::new(crate::fleet::identity::load_effective_roster(
             &config.fleet_config(),
             &app.workspace,
-            app.plugin_registry.as_ref(),
+            Some(app.plugin_registry.as_ref()),
         )),
         subagent_api_timeout: Duration::from_secs(
             config.subagent_api_timeout_secs_for_provider(provider),
@@ -595,7 +596,7 @@ pub(crate) fn live_tool_receipt_messages(
         messages.push(tool_use_msg.clone());
     }
     messages.push(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::ToolResult {
             tool_use_id: id.to_string(),
             content: raw.to_string(),
@@ -748,10 +749,42 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     } else {
         header_height_for(size.height)
     };
+    // Evaluate the fully-idle predicate exactly once per frame. It decides
+    // how many rows the rail may reserve, whether the activity band yields
+    // its row on the shortest terminals, and whether the idle ocean draws
+    // its brand mark (in ChatWidget); calling it twice would let the
+    // reservation and the render disagree inside a single frame.
+    let idle_empty = crate::tui::widgets::should_render_empty_state(app);
     let footer_height = if mini && !mini_cfg.keep_footer {
         0
     } else {
         crate::tui::phase_strip::height()
+    };
+    // The activity band is footer chrome too: it hides with the identity
+    // row in mini mode, never with the composer. It also yields its row on
+    // the shortest terminals while the shell is fully idle — the same rule
+    // the work rail follows (`rail_row_budget`): decorative water outranks
+    // standing chrome nobody is reading, so the idle ocean keeps its
+    // sixteen-row floor. The moment there is live work the band is back;
+    // `rail_row_budget` then charges both bands, so the work rail yields
+    // first and the transcript never funds the chrome.
+    let activity_height = if mini && !mini_cfg.keep_footer {
+        0
+    } else {
+        let ambient_mark_can_draw =
+            idle_empty && shell_area.width >= crate::tui::underwater::AMBIENT_MIN_CHAT_WIDTH;
+        let chat_floor = if ambient_mark_can_draw {
+            crate::tui::underwater::AMBIENT_MIN_CHAT_HEIGHT
+        } else {
+            MIN_CHAT_HEIGHT
+        };
+        let composer_floor = MIN_COMPOSER_HEIGHT.saturating_add(u16::from(app.composer_border));
+        let fixed_chrome = header_height
+            .saturating_add(crate::tui::phase_strip::height())
+            .saturating_add(crate::tui::phase_strip::activity_height())
+            .saturating_add(composer_floor)
+            .saturating_add(chat_floor);
+        u16::from(shell_area.height >= fixed_chrome)
     };
     let slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
     let mention_menu_limit = app.mention_menu_limit;
@@ -760,11 +793,6 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     if !mention_menu_entries.is_empty() && app.mention_menu_selected >= mention_menu_entries.len() {
         app.mention_menu_selected = mention_menu_entries.len().saturating_sub(1);
     }
-    // Evaluate the fully-idle predicate exactly once per frame. It decides
-    // both how many rows the rail may reserve (here) and whether the idle
-    // ocean draws its brand mark (in ChatWidget); calling it twice would let
-    // the reservation and the render disagree inside a single frame.
-    let idle_empty = crate::tui::widgets::should_render_empty_state(app);
     let rail_budget = rail_row_budget(app, shell_area.width, shell_area.height, idle_empty);
     let top_work_strip_height = if mini && !mini_cfg.keep_todo {
         // Mini mode hides the strip; when the side rail is also hidden (the
@@ -796,7 +824,12 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
 
     let body_height = body_area.height;
     let composer_max_height = body_height
-        .saturating_sub(MIN_CHAT_HEIGHT + footer_height + top_work_strip_height)
+        .saturating_sub(
+            MIN_CHAT_HEIGHT
+                .saturating_add(footer_height)
+                .saturating_add(activity_height)
+                .saturating_add(top_work_strip_height),
+        )
         .max(MIN_COMPOSER_HEIGHT);
     let composer_height = if mini && !mini_cfg.keep_input {
         0
@@ -858,7 +891,8 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             top_work_strip_height
                 .saturating_add(MIN_CHAT_HEIGHT)
                 .saturating_add(composer_height)
-                .saturating_add(footer_height),
+                .saturating_add(footer_height)
+                .saturating_add(activity_height),
         )
         .saturating_sub(indicator_height);
     // Queued-only previews author the direct controls in row two (and fall
@@ -869,35 +903,14 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     let workflow_panel_height =
         desired_workflow_panel_height.min(auxiliary_budget.saturating_sub(preview_height));
 
-    // Ocean live phases put the phase strip above the composer so activity
-    // stays attached to the transcript and the prompt is the final bottom
-    // object. Idle/typing keep a quiet phase under the prompt.
-    let phase = crate::tui::underwater::ShellPhase::from_app(app);
-    let phase_above =
-        crate::tui::phase_strip::PhaseStripPlacement::for_phase(phase).is_above_composer();
-    // The indicator row sits directly above the composer (and above the
-    // footer when the phase strip is above), so background work stays pinned
-    // beside the prompt even when the transcript scrolls (#5286).
-    let (composer_slot, footer_slot, tail_constraints) = if phase_above {
-        (
-            6,
-            5,
-            [
-                Constraint::Length(footer_height),
-                Constraint::Length(composer_height),
-            ],
-        )
-    } else {
-        (
-            5,
-            6,
-            [
-                Constraint::Length(composer_height),
-                Constraint::Length(footer_height),
-            ],
-        )
-    };
-
+    // Two pinned bands bracket the composer and never trade places with
+    // it: the activity band (transient phase pulse, notices, and the
+    // cost/metrics ledger) sits directly above the composer, and the
+    // identity band (provider · model · thinking level) is the persistent
+    // row below it. Both rows are reserved in every phase, so a turn moving
+    // between idle, thinking, tool use, approval, completion, failure, and
+    // cancellation rewrites text inside fixed rows — the composer is never
+    // displaced and the route identity never migrates above the prompt.
     let body_chunks = Layout::default()
         .direction(Direction::Vertical)
         .flex(ratatui::layout::Flex::Start)
@@ -907,10 +920,14 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             Constraint::Length(workflow_panel_height), // Workflow panel (#4121)
             Constraint::Length(preview_height),        // Pending input preview (0 if empty)
             Constraint::Length(indicator_height),      // Background-work chip (#5286, 0 if idle)
-            tail_constraints[0],
-            tail_constraints[1],
+            Constraint::Length(activity_height),       // Activity band above the composer
+            Constraint::Length(composer_height),       // Composer
+            Constraint::Length(footer_height),         // Identity band below the composer
         ])
         .split(body_area);
+    let activity_slot = 5;
+    let composer_slot = 6;
+    let footer_slot = 7;
 
     let (work_chat_area, side_work_area) = if mini && !mini_cfg.keep_sidebar {
         // Mini mode without the side rail: the transcript takes the whole
@@ -970,10 +987,21 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         if app.agent_focus.is_some() {
             // A focused worker's full transcript owns the conversation area;
             // the ocean column and every other shell surface stay as they are.
+            //
+            // The widget below is built only to sample the ocean column, but
+            // its constructor also consumes `pending_scroll_delta` into the
+            // (invisible) main-transcript scroll state — which would starve
+            // the focused transcript of every PageUp/PageDown and wheel
+            // event. Park the delta across the sample so `render_focus`
+            // receives it and the focused pane scrolls exactly like the main
+            // transcript.
+            let parked_scroll_delta = app.viewport.pending_scroll_delta;
+            app.viewport.pending_scroll_delta = 0;
             {
                 let chat_widget = ChatWidget::new(app, chat_area).with_ocean_viewport(size);
                 shell_ocean = chat_widget.ocean_column();
             }
+            app.viewport.pending_scroll_delta = parked_scroll_delta;
             crate::tui::agent_focus::refresh_focus(app);
             let buf = f.buffer_mut();
             crate::tui::agent_focus::render_focus(app, chat_area, buf);
@@ -1016,6 +1044,14 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     if indicator_height > 0 {
         let buf = f.buffer_mut();
         crate::tui::background_indicator::render(body_chunks[4], buf, app, &pending_work);
+    }
+
+    // Render the pinned activity band (transient phase pulse, notices,
+    // cost/metrics ledger). Its row is fixed above the composer in every
+    // phase; only the text inside it changes.
+    if activity_height > 0 {
+        let buf = f.buffer_mut();
+        crate::tui::phase_strip::render_activity(body_chunks[activity_slot], buf, app);
     }
 
     // Render composer
@@ -1090,6 +1126,9 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         app.viewport.last_composer_scroll_offset = scroll_offset;
         app.viewport.last_composer_top_padding = top_padding;
     }
+    // The identity band below the composer is the persistent route row:
+    // provider · model · thinking level, before, during, and after a
+    // prompt.
     crate::tui::underwater::render_footer(body_chunks[footer_slot], f.buffer_mut(), app);
 
     // The underwater shell is one water column, not a stack of independently
@@ -1114,16 +1153,25 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         column.paint_matching(work_chat_area, f.buffer_mut(), app.ui_theme.surface_bg);
         column.paint_matching(body_chunks[2], f.buffer_mut(), app.ui_theme.surface_bg);
         column.paint_matching(body_chunks[3], f.buffer_mut(), app.ui_theme.surface_bg);
+        if activity_height > 0 {
+            column.paint_matching(
+                body_chunks[activity_slot],
+                f.buffer_mut(),
+                app.ui_theme.footer_bg,
+            );
+        }
         column.paint_matching(
             body_chunks[composer_slot],
             f.buffer_mut(),
             app.ui_theme.composer_bg,
         );
-        column.paint_matching(
-            body_chunks[footer_slot],
-            f.buffer_mut(),
-            app.ui_theme.footer_bg,
-        );
+        if footer_height > 0 {
+            column.paint_matching(
+                body_chunks[footer_slot],
+                f.buffer_mut(),
+                app.ui_theme.footer_bg,
+            );
+        }
     }
     crate::tui::hover_layer::apply_resolved_effects(
         f.buffer_mut(),

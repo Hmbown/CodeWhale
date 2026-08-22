@@ -233,23 +233,13 @@ impl Command for FunctionCommand {
 /// builds this type is only referenced through the trait; the test fixture
 /// (D6) constructs it under `#[cfg(test)]`. The allow is removed once a
 /// production group migrates (FEAT-018+).
-#[allow(dead_code)]
 pub(crate) struct ContextualCommand {
     info: &'static CommandInfo,
     handler: Option<codewhale_command_contract::handler::CommandHandler<CommandResult>>,
     legacy: Option<CommandHandler>,
 }
 
-#[allow(dead_code)]
 impl ContextualCommand {
-    pub(crate) const fn legacy(info: &'static CommandInfo, legacy: CommandHandler) -> Self {
-        Self {
-            info,
-            handler: None,
-            legacy: Some(legacy),
-        }
-    }
-
     pub(crate) const fn contextual(
         info: &'static CommandInfo,
         handler: codewhale_command_contract::handler::CommandHandler<CommandResult>,
@@ -285,18 +275,6 @@ impl ContextualCommand {
             description_id,
         }));
         Ok(Self::contextual(info, C::handler()))
-    }
-
-    /// The capability-scoped handler, if this entry is migrated.
-    pub(crate) fn command_handler(
-        &self,
-    ) -> Option<codewhale_command_contract::handler::CommandHandler<CommandResult>> {
-        self.handler.clone()
-    }
-
-    /// Whether this entry still uses the legacy concrete-App path.
-    pub(crate) fn is_legacy(&self) -> bool {
-        self.handler.is_none()
     }
 }
 impl Command for ContextualCommand {

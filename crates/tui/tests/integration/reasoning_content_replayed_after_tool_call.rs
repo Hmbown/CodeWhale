@@ -2,11 +2,12 @@ use futures_util::StreamExt;
 
 use crate::llm_client::LlmClient;
 use crate::llm_client::mock::{MockLlmClient, canned};
+use crate::models::Role;
 use crate::models::{ContentBlock, Message, MessageRequest};
 
 fn user_message(text: &str) -> Message {
     Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: text.to_string(),
             cache_control: None,
@@ -21,7 +22,7 @@ fn assistant_thinking_tool_call(
     input: serde_json::Value,
 ) -> Message {
     Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![
             ContentBlock::Thinking {
                 thinking: thinking.to_string(),
@@ -41,7 +42,7 @@ fn assistant_thinking_tool_call(
 
 fn tool_result_message(tool_use_id: &str, content: &str) -> Message {
     Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::ToolResult {
             tool_use_id: tool_use_id.to_string(),
             content: content.to_string(),

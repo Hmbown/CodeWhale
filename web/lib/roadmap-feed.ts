@@ -12,6 +12,8 @@
  * Categories that come back empty fall through to the page's static items —
  * the maintainer can adopt label-driven roadmap incrementally.
  */
+import { truncateChars } from "./truncate";
+
 const REPO = process.env.GITHUB_REPO ?? "Hmbown/CodeWhale";
 const KV_KEY = "roadmap:feed";
 const KV_TTL = 60 * 30;
@@ -77,9 +79,9 @@ function summarizeReleaseBody(body: string | null): string {
   const lines = body.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const candidate = lines.find((l) => !l.startsWith("#") && !l.startsWith("---") && l.length > 8);
   if (!candidate) return "";
-  // Strip bullets, trailing emoji, links, and cap length
+  // Strip bullets and links, then cap length without splitting a character
   const stripped = candidate.replace(/^[*\-•]\s+/, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").trim();
-  return stripped.length > 140 ? stripped.slice(0, 137) + "…" : stripped;
+  return truncateChars(stripped, 140, 137);
 }
 
 function summarizeIssueBody(body: string | null): string {
@@ -91,7 +93,7 @@ function summarizeIssueBody(body: string | null): string {
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
-  return stripped.length > 140 ? stripped.slice(0, 137) + "…" : stripped;
+  return truncateChars(stripped, 140, 137);
 }
 
 async function fetchByLabel(label: string, ghToken?: string, state: "open" | "closed" | "all" = "open"): Promise<RoadmapItem[]> {

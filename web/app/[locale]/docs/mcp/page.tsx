@@ -56,24 +56,24 @@ export default async function McpPage({ params }: { params: Promise<{ locale: st
         <p className={`${bodyClass} mt-3`}>
           {isZh ? (
             <>
-              用 <code className="inline">codewhale-tui mcp init</code> 生成初始配置；TUI 内的{" "}
+              用 <code className="inline">codewhale mcp init</code> 生成初始配置；TUI 内的{" "}
               <code className="inline">/mcp</code>{" "}
               打开紧凑管理器，显示每个服务器的启用状态、传输方式、命令或 URL、超时和连接错误。常用命令：
             </>
           ) : (
             <>
-              Bootstrap a starter config with <code className="inline">codewhale-tui mcp init</code>;
+              Bootstrap a starter config with <code className="inline">codewhale mcp init</code>;
               inside the TUI, <code className="inline">/mcp</code> opens a compact manager showing each
               server's enabled state, transport, command or URL, timeouts, and connection errors. Common
               commands:
             </>
           )}
         </p>
-        <pre className="code-block mt-4">{`codewhale-tui mcp add <name> --command "<cmd>" --arg "<arg>"
-codewhale-tui mcp add <name> --url "https://example.com/mcp" --bearer-token-env-var MCP_TOKEN
-codewhale-tui mcp login <name>      # OAuth for remote servers
-codewhale-tui mcp list
-codewhale-tui mcp validate`}</pre>
+        <pre className="code-block mt-4">{`codewhale mcp add <name> --command "<cmd>" --arg "<arg>"
+codewhale mcp add <name> --url "https://example.com/mcp" --bearer-token-env-var MCP_TOKEN
+codewhale mcp login <name>      # OAuth for remote servers
+codewhale mcp list
+codewhale mcp validate`}</pre>
         <p className={`${bodyClass} mt-3`}>
           {isZh
             ? "在 TUI 里做的配置编辑会立即写盘，但模型可见的 MCP 工具池不会热加载——管理器会把它标记为需要重启。/mcp validate 和 /mcp reload 会重新连接以刷新界面快照。"
@@ -128,19 +128,19 @@ codewhale-tui mcp validate`}</pre>
         <p className={`${bodyClass} mt-3`}>
           {isZh ? (
             <>
-              <code className="inline">codewhale-tui serve --mcp</code> 会把 Codewhale
+              <code className="inline">codewhale serve --mcp</code> 会把 Codewhale
               作为 stdio MCP 服务器运行，让其他会话（或任何 MCP 客户端）调用它的工具；
               <code className="inline">codewhale mcp-server</code> 是 dispatcher
-              暴露的等价入口。<code className="inline">codewhale-tui mcp add-self</code>{" "}
+              暴露的等价入口。<code className="inline">codewhale mcp add-self</code>{" "}
               会自动解析当前二进制路径并把服务器写进你的 MCP 配置。注意区分：
               <code className="inline">serve --http</code> 是运行时 HTTP/SSE API，是另一种模式。
             </>
           ) : (
             <>
-              <code className="inline">codewhale-tui serve --mcp</code> runs Codewhale as an stdio MCP
+              <code className="inline">codewhale serve --mcp</code> runs Codewhale as an stdio MCP
               server so other sessions (or any MCP client) can call its tools;{" "}
               <code className="inline">codewhale mcp-server</code> is the equivalent dispatcher
-              entrypoint. <code className="inline">codewhale-tui mcp add-self</code> resolves the current
+              entrypoint. <code className="inline">codewhale mcp add-self</code> resolves the current
               binary path and writes the server into your MCP config. Keep the modes distinct:{" "}
               <code className="inline">serve --http</code> is the runtime HTTP/SSE API, a separate
               surface.

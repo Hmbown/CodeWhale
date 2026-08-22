@@ -1364,11 +1364,18 @@ fn agent_rows(app: &App) -> Vec<RankedWorkRow> {
                 .map(|activity| current_activity_status_bucket(activity.status))
                 .or_else(|| agent.worker_status.map(worker_status_bucket))
                 .unwrap_or_else(|| subagent_status_bucket(&agent.status));
-            let role = agent
-                .assignment
-                .role
-                .as_deref()
-                .filter(|role| !role.trim().is_empty())
+            let resolved_profile = agent
+                .child_route
+                .as_ref()
+                .and_then(|route| route.resolved_profile_id.as_deref())
+                .map(str::trim)
+                .filter(|profile| !profile.is_empty());
+            let role = resolved_profile
+                .or(agent
+                    .assignment
+                    .role
+                    .as_deref()
+                    .filter(|role| !role.trim().is_empty()))
                 .unwrap_or_else(|| agent.agent_type.as_str())
                 .to_string();
             // The dispatch name leads (#5287); a nickname or stable label
@@ -1377,6 +1384,7 @@ fn agent_rows(app: &App) -> Vec<RankedWorkRow> {
             // column falls back to the role.
             let name = crate::tui::sidebar::dispatched_agent_name(agent)
                 .map(str::to_string)
+                .or_else(|| resolved_profile.map(str::to_string))
                 .or_else(|| {
                     agent
                         .nickname
@@ -2550,6 +2558,38 @@ mod tests {
         };
         assert_eq!(label("agent_named_lane"), "branch-triage");
         assert_eq!(label("agent_plain_lane"), "Blue Whale");
+    }
+
+    #[test]
+    fn agent_identity_column_prefers_resolved_profile_over_generated_whale() {
+        let mut app = test_app();
+        let mut agent = running_agent("agent_flash_lane");
+        agent.child_route = Some(crate::tools::subagent::ChildRouteReceipt {
+            requested_type: "custom".to_string(),
+            requested_profile: Some("DeepSeek V4 Flash".to_string()),
+            resolved_profile_id: Some("flash-scout".to_string()),
+            profile_origin: Some("fleet:release".to_string()),
+            canonical_role: "scout".to_string(),
+            provider_id: "deepseek".to_string(),
+            model_id: "deepseek-v4-flash-vision-exp".to_string(),
+            route_source: "fleet".to_string(),
+            requested_reasoning: "inherit".to_string(),
+            effective_reasoning: None,
+            runtime_version: "test".to_string(),
+            runtime_build_sha: "unknown".to_string(),
+        });
+        app.subagent_cache.push(agent);
+
+        let row = agent_rows(&app)
+            .into_iter()
+            .find(|ranked| ranked.row.id.0 == "worker:agent_flash_lane")
+            .expect("resolved Fleet row")
+            .row;
+        assert_eq!(row.label, "flash-scout");
+        assert_eq!(
+            row.agent.as_ref().map(|facts| facts.role_label.as_str()),
+            Some("flash-scout")
+        );
     }
 
     /// After the recent-only TTL suppresses transient receipts, the live

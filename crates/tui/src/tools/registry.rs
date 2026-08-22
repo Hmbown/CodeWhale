@@ -1152,9 +1152,9 @@ impl ToolRegistryBuilder {
             .with_tool(Arc::new(MemoryGetTool))
     }
 
-    /// Include the model-facing `lsp` intelligence tool. Reuses the session
-    /// [`crate::lsp::LspManager`] attached to `ToolContext` — never spawns a
-    /// second server lifecycle.
+    /// Include the model-facing LSP intelligence tools. They reuse the
+    /// session [`crate::lsp::LspManager`] attached to `ToolContext` and never
+    /// spawn a second server lifecycle.
     #[must_use]
     pub fn with_lsp_tool(self) -> Self {
         use super::lsp::LspTool;

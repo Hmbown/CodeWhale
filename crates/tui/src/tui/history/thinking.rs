@@ -351,6 +351,6 @@ fn thinking_state_accent(state: ThinkingVisualState) -> Color {
 /// `COLORTERM` / `TERM` env vars on every frame.
 static COLOR_DEPTH: std::sync::OnceLock<palette::ColorDepth> = std::sync::OnceLock::new();
 
-fn cached_color_depth() -> palette::ColorDepth {
+pub(super) fn cached_color_depth() -> palette::ColorDepth {
     *COLOR_DEPTH.get_or_init(palette::ColorDepth::detect)
 }

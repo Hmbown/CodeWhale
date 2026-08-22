@@ -2525,6 +2525,21 @@ impl McpTransport for ScriptedThenHangingTransport {
     }
 }
 
+/// A transport whose write side is gone — the shape a crashed or exited
+/// stdio MCP child leaves behind (EPIPE on the next `write_all`).
+struct FailingSendTransport;
+
+#[async_trait::async_trait]
+impl McpTransport for FailingSendTransport {
+    async fn send(&mut self, _msg: Vec<u8>) -> Result<()> {
+        anyhow::bail!("Broken pipe (os error 32)")
+    }
+
+    async fn recv(&mut self) -> Result<Vec<u8>> {
+        std::future::pending().await
+    }
+}
+
 struct DropCountingTransport {
     drops: Arc<AtomicUsize>,
 }
@@ -2694,6 +2709,138 @@ async fn call_method_times_out_while_waiting_for_response() {
         "unexpected error: {err:#}"
     );
     assert_eq!(sent.lock().unwrap().len(), 1);
+}
+
+/// JSON-RPC requires exactly one of `result` / `error` on a response. A
+/// response carrying neither is a broken server, and reporting it as a
+/// successful call with a `null` payload is a fake success: the tool result
+/// reaches the model as `ToolResult::success("null")`, indistinguishable from
+/// a tool that genuinely did nothing.
+#[tokio::test]
+async fn call_method_rejects_a_response_with_neither_result_nor_error() {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let transport = ScriptedValueTransport {
+        sent: Arc::clone(&sent),
+        responses: VecDeque::from([json_frame(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1
+        }))]),
+    };
+    let mut conn = test_connection(Box::new(transport));
+
+    let err = conn
+        .call_method("tools/call", serde_json::json!({"name": "echo"}), 1)
+        .await
+        .expect_err("a result-less, error-less response is not a successful call");
+    let rendered = format!("{err:#}");
+    assert!(
+        rendered.contains("neither a result nor an error"),
+        "unexpected error: {rendered}"
+    );
+    assert!(
+        rendered.contains("tools/call"),
+        "unexpected error: {rendered}"
+    );
+}
+
+/// …while an *explicit* `"result": null` is a well-formed empty success and
+/// must keep flowing through unchanged.
+#[tokio::test]
+async fn call_method_preserves_an_explicit_null_result() {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let transport = ScriptedValueTransport {
+        sent: Arc::clone(&sent),
+        responses: VecDeque::from([json_frame(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": null
+        }))]),
+    };
+    let mut conn = test_connection(Box::new(transport));
+
+    let result = conn
+        .call_method("tools/call", serde_json::json!({"name": "echo"}), 1)
+        .await
+        .expect("an explicit null result is a valid response");
+    assert_eq!(result, serde_json::Value::Null);
+}
+
+/// A failed *write* has to disconnect the connection, exactly like a failed
+/// read does. `McpPool::get_or_connect` reuses any connection whose
+/// `is_ready()` is true, so a connection left in `Ready` after its transport
+/// write side died is never rebuilt — the pool hands the same dead child back
+/// on every later tool call and the server stays broken for the rest of the
+/// session even though a reconnect would fix it.
+#[tokio::test]
+async fn call_method_disconnects_when_the_transport_write_side_is_gone() {
+    let mut conn = test_connection(Box::new(FailingSendTransport));
+
+    let err = conn
+        .call_method("tools/call", serde_json::json!({"name": "echo"}), 1)
+        .await
+        .expect_err("a dead write side must fail the call");
+    assert!(
+        format!("{err:#}").contains("Broken pipe"),
+        "unexpected error: {err:#}"
+    );
+    assert_eq!(conn.state(), ConnectionState::Disconnected);
+    assert!(
+        !conn.is_ready(),
+        "a connection whose write side died must not be reused"
+    );
+}
+
+/// The pool-level consequence of the same defect: `/mcp` (and every
+/// `connected_servers` caller) reported a server with a dead write side as
+/// still connected, and `get_or_connect` handed the dead connection back
+/// instead of rebuilding it.
+#[tokio::test]
+async fn pool_stops_advertising_a_server_whose_write_side_died() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+    fs::write(
+        &path,
+        r#"{
+            "mcpServers": {
+                "mock": {
+                    "command": "codewhale-tui-test-this-binary-does-not-exist-9f8e7d6c5b4a",
+                    "args": []
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+    let mut pool = McpPool::from_config_path(&path).unwrap();
+    let mut conn = test_connection(Box::new(FailingSendTransport));
+    conn.tools.push(McpTool {
+        name: "echo".to_string(),
+        description: None,
+        input_schema: serde_json::json!({"type": "object"}),
+    });
+    pool.connections.insert("mock".to_string(), conn);
+    assert_eq!(pool.connected_servers(), vec!["mock"]);
+
+    let err = pool
+        .call_tool("mcp_mock_echo", serde_json::json!({}))
+        .await
+        .expect_err("a dead write side must fail the call");
+    assert!(
+        format!("{err:#}").contains("Broken pipe"),
+        "unexpected error: {err:#}"
+    );
+
+    assert!(
+        pool.connected_servers().is_empty(),
+        "a server whose write side died must not report as connected"
+    );
+    let reconnect = match pool.get_or_connect("mock").await {
+        Ok(_) => panic!("the pool must rebuild rather than reuse the dead connection"),
+        Err(error) => error,
+    };
+    assert!(
+        format!("{reconnect:#}").contains("spawn failed"),
+        "expected a fresh spawn attempt, got: {reconnect:#}"
+    );
 }
 
 #[tokio::test]
@@ -2967,6 +3114,71 @@ fn hash_mcp_config_is_stable_and_change_sensitive() {
         hash_mcp_config(&a),
         hash_mcp_config(&c),
         "hash must change when servers map changes"
+    );
+}
+
+/// #1267 part 2: `hash_mcp_config` is the *only* thing standing between a
+/// touched-but-unchanged config file and a full teardown of every live MCP
+/// connection (stdio children included). `McpConfig::servers`, `env`,
+/// `headers`, and `env_headers` are all `HashMap`s, and two `HashMap`s built
+/// separately in one process iterate in different orders — so hashing the
+/// config's `serde_json` bytes straight from the struct is not
+/// content-addressed once a map holds more than one entry. Parse the same
+/// bytes repeatedly and require one hash.
+#[test]
+fn hash_mcp_config_is_order_independent_across_identical_parses() {
+    let raw = r#"{
+        "servers": {
+            "alpha":   { "command": "a", "env": { "A": "1", "B": "2", "C": "3", "D": "4" } },
+            "bravo":   { "command": "b" },
+            "charlie": { "command": "c" },
+            "delta":   { "command": "d" },
+            "echo":    { "command": "e" },
+            "foxtrot": { "command": "f" },
+            "golf":    { "command": "g" },
+            "hotel":   { "command": "h" },
+            "india":   { "command": "i" },
+            "juliett": { "command": "j" }
+        }
+    }"#;
+    let hashes: HashSet<u64> = (0..16)
+        .map(|_| {
+            let parsed: McpConfig = serde_json::from_str(raw).expect("fixture parses");
+            hash_mcp_config(&parsed)
+        })
+        .collect();
+    assert_eq!(
+        hashes.len(),
+        1,
+        "byte-identical MCP config must hash identically; got {} distinct hashes",
+        hashes.len()
+    );
+}
+
+/// The same invariant for the nested per-server maps: an unchanged server
+/// whose `env` / `headers` hold several entries must not look changed.
+#[test]
+fn hash_mcp_config_is_order_independent_for_nested_server_maps() {
+    let raw = r#"{
+        "servers": {
+            "only": {
+                "url": "https://example.invalid/mcp",
+                "headers": { "H1": "1", "H2": "2", "H3": "3", "H4": "4", "H5": "5", "H6": "6" },
+                "env_headers": { "E1": "V1", "E2": "V2", "E3": "V3", "E4": "V4" }
+            }
+        }
+    }"#;
+    let hashes: HashSet<u64> = (0..16)
+        .map(|_| {
+            let parsed: McpConfig = serde_json::from_str(raw).expect("fixture parses");
+            hash_mcp_config(&parsed)
+        })
+        .collect();
+    assert_eq!(
+        hashes.len(),
+        1,
+        "byte-identical MCP config must hash identically; got {} distinct hashes",
+        hashes.len()
     );
 }
 
@@ -3727,6 +3939,89 @@ async fn discover_snapshot_includes_underlying_spawn_error_in_chain() {
             || lowered.contains("not found")
             || lowered.contains("no such"),
         "expected underlying spawn error in chain, got: {err}"
+    );
+}
+
+/// The same guarantee for a server the user marked `required`. `connect_all`
+/// appends a generic "required MCP server failed to initialize" entry after
+/// the real per-server connect error, and every snapshot path folds the
+/// returned pairs into a `HashMap<name, message>` — so the later, contentless
+/// entry overwrites the diagnosis. Marking a server required must not blind
+/// the user to *why* it did not start.
+#[tokio::test]
+async fn required_server_snapshot_keeps_the_real_spawn_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+    fs::write(
+        &path,
+        r#"{
+            "mcpServers": {
+                "broken": {
+                    "command": "codewhale-tui-test-this-binary-does-not-exist-9f8e7d6c5b4a",
+                    "args": [],
+                    "required": true
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let snapshot = discover_manager_snapshot(&path, None, false).await.unwrap();
+    let server = snapshot
+        .servers
+        .iter()
+        .find(|s| s.name == "broken")
+        .expect("broken server should appear in snapshot");
+    let err = server
+        .error
+        .as_deref()
+        .expect("broken server should have an error");
+    let lowered = err.to_lowercase();
+    assert!(
+        lowered.contains("os error")
+            || lowered.contains("not found")
+            || lowered.contains("no such"),
+        "required server must still report why it failed, got: {err}"
+    );
+}
+
+/// `connect_all` must report one error per failed server. A `required`
+/// server that already failed to connect got a second, contentless entry
+/// appended for the same name.
+#[tokio::test]
+async fn connect_all_reports_one_error_per_failed_required_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+    fs::write(
+        &path,
+        r#"{
+            "mcpServers": {
+                "broken": {
+                    "command": "codewhale-tui-test-this-binary-does-not-exist-9f8e7d6c5b4a",
+                    "args": [],
+                    "required": true
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let mut pool = McpPool::from_config_path(&path).unwrap();
+    let errors = pool.connect_all().await;
+    let for_broken: Vec<_> = errors.iter().filter(|(name, _)| name == "broken").collect();
+    assert_eq!(
+        for_broken.len(),
+        1,
+        "expected exactly one error for 'broken', got: {:?}",
+        errors
+            .iter()
+            .map(|(name, err)| format!("{name}: {err:#}"))
+            .collect::<Vec<_>>()
+    );
+    let rendered = format!("{:#}", for_broken[0].1).to_lowercase();
+    assert!(
+        rendered.contains("spawn failed"),
+        "the single error must be the real cause, got: {rendered}"
     );
 }
 

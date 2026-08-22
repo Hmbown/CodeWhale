@@ -28,6 +28,43 @@ notes, and relevant issue/PR comments.
 ## Contributors by time
 
 <details open>
+<summary><strong>v0.9.11 — portable command surfaces and turn-loop structure</strong></summary>
+
+**Merged or adapted contributions**
+
+- **[Sun Zhenyuan / bistack](https://github.com/bistack)** — extracted tool-call
+  planning, execution, and result processing from the turn loop while preserving
+  the existing sandbox-policy, hook, budget, and batch-execution behavior
+  (#5523)
+- **[Isabel Wu / wuisabel-gif](https://github.com/wuisabel-gif)** — added
+  bounded, workspace-relative multi-file diagnostics to the existing model-
+  visible `lsp` tool, reusing the shared transport pool without expanding the
+  75-tool catalog (#5524)
+- **[Paulo Aboim Pinto / aboimpinto](https://github.com/aboimpinto)** — added
+  portable presentation, media-attachment, and operation-digest facets to the
+  command contract, then moved all seven utility command handlers onto the
+  contract-backed dispatch path (#5525)
+
+**Reviewed overlap**
+
+- **[Lstarsky0](https://github.com/Lstarsky0)** — reviewed #5524 and identified
+  the closed-channel, severity-filtering, and truncation-receipt gaps covered by
+  the maintainer hardening pass.
+- Isabel Wu's PR #5530 independently routed the legacy plural completion
+  command through the public CLI generator. Equivalent behavior, including the
+  published `codew` alias registration, had already landed in the integration
+  lane, so the PR is recorded here as reviewed project work rather than counted
+  as a second merged contribution.
+
+**Reports and reproductions**
+
+- **[RepentStar](https://github.com/RepentStar)** — reported the stale shell-
+  completion generator and missing `codew` registration that led to the
+  completion fixes and upgrade guidance in #5526.
+
+</details>
+
+<details>
 <summary><strong>v0.9.10 — retention, identity, and durable approvals</strong></summary>
 
 **Merged or adapted contributions**

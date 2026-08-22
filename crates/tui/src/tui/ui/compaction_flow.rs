@@ -1,0 +1,473 @@
+//! Compaction UI state: manual/automatic compaction queueing, settlement,
+//! receipts, and cancel behavior (TUI_MODULARIZATION.md slice 7). The engine
+//! owns the actual summarization; this module projects its lifecycle into the
+//! UI and never awaits the bounded engine mailbox from the event loop.
+
+use super::*;
+
+/// Queue a live compaction update without waiting on the engine mailbox.
+///
+/// Config edits are valid while a turn is streaming, but awaiting a bounded
+/// engine mailbox from the UI event loop can make the whole TUI appear frozen
+/// when the turn is busy. A dropped refresh is safe: the next turn rebuilds
+/// its compaction config from `App`, and the status message tells the user
+/// whether the update was queued or deferred.
+pub(crate) fn try_apply_model_and_compaction_update(
+    engine_handle: &EngineHandle,
+    compaction: crate::compaction::CompactionConfig,
+    mode: AppMode,
+    route_limits: Option<codewhale_config::route::RouteLimits>,
+) -> bool {
+    if engine_handle
+        .try_send(Op::SetModel {
+            model: compaction.model.clone(),
+            mode,
+            route_limits,
+        })
+        .is_err()
+    {
+        return false;
+    }
+    engine_handle
+        .try_send(Op::SetCompaction { config: compaction })
+        .is_ok()
+}
+
+pub(crate) fn set_explicit_compaction_status(
+    app: &mut App,
+    text: String,
+    level: StatusToastLevel,
+    sticky: bool,
+) {
+    app.status_message = Some(text.clone());
+    // This lifecycle reducer assigns the semantic level explicitly. Mark the
+    // legacy status bridge as synchronized so it cannot add a second,
+    // keyword-classified toast with a different level on the next frame.
+    app.last_status_message_seen = Some(text.clone());
+    if sticky {
+        app.set_sticky_status(text, level, Some(App::STICKY_ERROR_TTL_MS));
+    } else {
+        app.push_status_toast(text, level, Some(5_000));
+    }
+}
+
+/// Queue manual compaction without ever awaiting the bounded engine mailbox
+/// from the terminal event loop.
+///
+/// During an active turn, a successful send is intentionally deferred until
+/// the engine returns to its outer operation loop. Full and closed mailboxes
+/// are rejected immediately with an actionable receipt, so `/compact` cannot
+/// freeze keyboard input or rendering.
+pub(crate) fn try_queue_manual_compaction(
+    app: &mut App,
+    config: &Config,
+    engine_handle: &EngineHandle,
+    focus: Option<String>,
+) {
+    if app.is_compacting || app.manual_compaction_queued {
+        let text = app
+            .tr(MessageId::ContextCompactionAlreadyRunning)
+            .into_owned();
+        add_compaction_receipt(app, &text);
+        set_explicit_compaction_status(app, text, StatusToastLevel::Warning, false);
+        return;
+    }
+
+    let route = match validated_app_runtime_route(app, config) {
+        Ok(route) => route,
+        Err(error) => {
+            let text = app
+                .tr(MessageId::ContextCompactionRouteInvalid)
+                .replace("{error}", &error.to_string());
+            add_compaction_receipt(app, &text);
+            set_explicit_compaction_status(app, text, StatusToastLevel::Error, true);
+            return;
+        }
+    };
+    let mut compaction = compaction_for_validated_route(app, &route);
+    compaction.focus = focus.clone();
+    let request_id = format!("compact_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let op = Op::CompactContext {
+        id: request_id.clone(),
+        route: Box::new(route.into_resolved()),
+        compaction: Box::new(compaction),
+    };
+
+    match engine_handle.try_send(op) {
+        Ok(()) => {
+            app.manual_compaction_queued = true;
+            app.manual_compaction_id = Some(request_id);
+            let id = if app.is_loading {
+                MessageId::ContextCompactionQueued
+            } else {
+                MessageId::ContextManualCompacting
+            };
+            let text = app.tr(id).into_owned();
+            // Queued-behind-a-turn is a state the user must be able to find
+            // again after the 5s toast: leave it in the transcript too.
+            if app.is_loading {
+                add_compaction_receipt(app, &text);
+            }
+            set_explicit_compaction_status(app, text, StatusToastLevel::Info, false);
+        }
+        Err(error) => {
+            let full = error
+                .downcast_ref::<tokio::sync::mpsc::error::TrySendError<Op>>()
+                .is_some_and(|send_error| {
+                    matches!(send_error, tokio::sync::mpsc::error::TrySendError::Full(_))
+                });
+            if full {
+                // A saturated mailbox is a timing accident of the active turn,
+                // not a user error. Queue client-side and let the event loop
+                // retry once the engine drains a slot; the user sees the same
+                // queued receipt as the ordinary behind-a-turn path.
+                app.manual_compaction_queued = true;
+                app.manual_compaction_id = Some(request_id);
+                app.deferred_manual_compaction = Some(focus);
+                let text = app.tr(MessageId::ContextCompactionQueued).into_owned();
+                add_compaction_receipt(app, &text);
+                set_explicit_compaction_status(app, text, StatusToastLevel::Info, false);
+            } else {
+                let text = app.tr(MessageId::ContextCompactionQueueClosed).into_owned();
+                add_compaction_receipt(app, &text);
+                set_explicit_compaction_status(app, text, StatusToastLevel::Error, true);
+            }
+        }
+    }
+}
+
+/// Retry a manual compaction that was deferred by a full engine mailbox.
+///
+/// Called once per event-loop iteration. Silent by design: the queued receipt
+/// was already written when the request was deferred, a still-full mailbox
+/// just waits for the next iteration, and a compaction that started or
+/// settled in the meantime supersedes the request entirely (handled by
+/// `apply_compaction_started`/`settle_compaction`).
+pub(crate) fn flush_deferred_manual_compaction(
+    app: &mut App,
+    config: &Config,
+    engine_handle: &EngineHandle,
+) {
+    if app.deferred_manual_compaction.is_none() || app.is_compacting {
+        return;
+    }
+    let route = match validated_app_runtime_route(app, config) {
+        Ok(route) => route,
+        Err(error) => {
+            app.deferred_manual_compaction = None;
+            app.manual_compaction_queued = false;
+            app.manual_compaction_id = None;
+            let text = app
+                .tr(MessageId::ContextCompactionRouteInvalid)
+                .replace("{error}", &error.to_string());
+            add_compaction_receipt(app, &text);
+            set_explicit_compaction_status(app, text, StatusToastLevel::Error, true);
+            return;
+        }
+    };
+    let focus = app.deferred_manual_compaction.clone().unwrap_or_default();
+    let Some(request_id) = app.manual_compaction_id.clone() else {
+        app.deferred_manual_compaction = None;
+        app.manual_compaction_queued = false;
+        return;
+    };
+    let mut compaction = compaction_for_validated_route(app, &route);
+    compaction.focus = focus;
+    let op = Op::CompactContext {
+        id: request_id,
+        route: Box::new(route.into_resolved()),
+        compaction: Box::new(compaction),
+    };
+    match engine_handle.try_send(op) {
+        Ok(()) => {
+            app.deferred_manual_compaction = None;
+        }
+        Err(error) => {
+            let full = error
+                .downcast_ref::<tokio::sync::mpsc::error::TrySendError<Op>>()
+                .is_some_and(|send_error| {
+                    matches!(send_error, tokio::sync::mpsc::error::TrySendError::Full(_))
+                });
+            if !full {
+                app.deferred_manual_compaction = None;
+                app.manual_compaction_queued = false;
+                app.manual_compaction_id = None;
+                let text = app.tr(MessageId::ContextCompactionQueueClosed).into_owned();
+                add_compaction_receipt(app, &text);
+                set_explicit_compaction_status(app, text, StatusToastLevel::Error, true);
+            }
+        }
+    }
+}
+
+pub(crate) fn apply_compaction_started(app: &mut App, id: String, auto: bool) {
+    if !auto {
+        app.manual_compaction_queued = false;
+        if app.manual_compaction_id.as_deref() == Some(id.as_str()) {
+            app.manual_compaction_id = None;
+        }
+    }
+    // A compaction is running; a deferred manual request is now redundant.
+    // Dropping it must also release the queued flag when the running pass is
+    // automatic, or `/compact` would report "already in progress" forever.
+    if app.deferred_manual_compaction.take().is_some() && auto {
+        app.manual_compaction_queued = false;
+        app.manual_compaction_id = None;
+    }
+    app.active_compaction = Some(ActiveCompaction { id, auto });
+    app.is_compacting = true;
+    let message_id = if auto {
+        MessageId::ContextAutoCompacting
+    } else {
+        MessageId::ContextManualCompacting
+    };
+    let text = app.tr(message_id).into_owned();
+    set_explicit_compaction_status(app, text, StatusToastLevel::Info, false);
+}
+
+/// Clear the compaction-in-flight state for a terminal lifecycle event.
+///
+/// An exact id match clears normally. A terminal event with NO tracked
+/// compaction is still authoritative (the started event can be lost to a
+/// dropped drain or session switch): without this, `is_compacting`/
+/// `manual_compaction_queued` stayed latched and every later `/compact` was
+/// silently rejected as "already in progress". A stale event while a NEWER
+/// compaction is live must not clear it (or report anything) — that live
+/// pass gets its own terminal event. Returns whether the event settled.
+pub(crate) fn settle_compaction(app: &mut App, id: &str, auto: bool) -> bool {
+    if app
+        .active_compaction
+        .as_ref()
+        .is_some_and(|active| active.id != id || active.auto != auto)
+    {
+        return false;
+    }
+    app.active_compaction = None;
+    app.is_compacting = false;
+    if !auto {
+        app.manual_compaction_queued = false;
+        app.manual_compaction_id = None;
+    }
+    // A settled pass makes a still-deferred manual request redundant (the
+    // context was just compacted). Dropping it releases the queued flag so a
+    // later `/compact` is not rejected as "already in progress".
+    if app.deferred_manual_compaction.take().is_some() {
+        app.manual_compaction_queued = false;
+        app.manual_compaction_id = None;
+    }
+    true
+}
+
+/// Durable transcript receipt for a compaction outcome.
+///
+/// Outcome feedback used to be toast-only, and the engine emits
+/// `TurnComplete` immediately after the compaction event — both land in the
+/// same UI drain batch, so the turn's "done" status replaced the completion
+/// toast before a single frame was drawn. `/compact` looked like a no-op
+/// even when the summary committed (the v0.9.6 release blocker).
+pub(crate) fn add_compaction_receipt(app: &mut App, message: &str) {
+    app.add_message(HistoryCell::System {
+        content: message.to_string(),
+    });
+}
+
+pub(crate) fn apply_compaction_completed(app: &mut App, id: &str, auto: bool, message: String) {
+    if settle_compaction(app, id, auto) {
+        add_compaction_receipt(app, &message);
+        set_explicit_compaction_status(app, message, StatusToastLevel::Success, false);
+    }
+}
+
+pub(crate) fn apply_compaction_failed(app: &mut App, id: &str, auto: bool, message: String) {
+    if settle_compaction(app, id, auto) {
+        add_compaction_receipt(app, &message);
+        set_explicit_compaction_status(app, message, StatusToastLevel::Error, true);
+    }
+}
+
+pub(crate) fn apply_compaction_cancelled(app: &mut App, id: &str, auto: bool, message: String) {
+    if settle_compaction(app, id, auto) {
+        add_compaction_receipt(app, &message);
+        set_explicit_compaction_status(app, message, StatusToastLevel::Info, false);
+    }
+}
+
+/// Cancel the exact queued or running pass without cancelling an unrelated
+/// model turn. A locally deferred request has never entered the engine, so it
+/// can settle synchronously with no provider call; all dispatched requests
+/// wait for the authoritative typed terminal event.
+pub(crate) fn try_cancel_compaction(app: &mut App, engine_handle: &EngineHandle) -> bool {
+    if !app.is_compacting && !app.manual_compaction_queued {
+        return false;
+    }
+
+    if !app.is_compacting && app.deferred_manual_compaction.take().is_some() {
+        app.manual_compaction_queued = false;
+        app.manual_compaction_id = None;
+        let message = "Context compaction canceled before it started".to_string();
+        add_compaction_receipt(app, &message);
+        set_explicit_compaction_status(app, message, StatusToastLevel::Info, false);
+        return true;
+    }
+
+    let id = app
+        .active_compaction
+        .as_ref()
+        .map(|active| active.id.clone())
+        .or_else(|| app.manual_compaction_id.clone());
+    let Some(id) = id else {
+        return false;
+    };
+
+    match engine_handle.cancel_compaction(id) {
+        Ok(()) => {
+            set_explicit_compaction_status(
+                app,
+                "Canceling context compaction…".to_string(),
+                StatusToastLevel::Info,
+                false,
+            );
+        }
+        Err(error) => {
+            let message = format!("Could not cancel context compaction: {error}");
+            add_compaction_receipt(app, &message);
+            set_explicit_compaction_status(app, message, StatusToastLevel::Error, true);
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+pub(crate) fn maybe_warn_context_pressure(app: &mut App) {
+    let config = app.compaction_config();
+    maybe_warn_context_pressure_for_config(app, &config);
+}
+
+pub(crate) fn maybe_warn_context_pressure_for_config(
+    app: &mut App,
+    config: &crate::compaction::CompactionConfig,
+) {
+    let max = config.effective_context_window.unwrap_or_else(|| {
+        crate::route_budget::route_context_window_tokens(
+            app.api_provider,
+            app.effective_model_for_budget(),
+            app.active_route_limits,
+        )
+    });
+    let Some((used, max, percent)) = context_usage_snapshot_for_window(app, max) else {
+        return;
+    };
+
+    let configured_threshold = app.auto_compact_threshold_percent.clamp(10.0, 100.0);
+    let warning_threshold = CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT.min(configured_threshold);
+    let will_auto_compact = config.enabled && used.max(0) as usize >= config.token_threshold;
+    if percent < warning_threshold && !will_auto_compact {
+        return;
+    }
+
+    // #5239: the meter drives real budgets off this window, so an unverified
+    // one must say so next to the numbers that depend on it.
+    let window_note = if app.active_context_window_source.is_verified() {
+        ""
+    } else {
+        ", unverified window"
+    };
+
+    let recommendation = if !config.enabled {
+        "Consider enabling auto_compact or use /compact."
+    } else if will_auto_compact {
+        "Auto-compaction will run before the next send."
+    } else {
+        "Auto-compaction is enabled."
+    };
+
+    if percent >= CONTEXT_CRITICAL_THRESHOLD_PERCENT {
+        app.status_message = Some(format!(
+            "Context critical: {percent:.0}% ({used}/{max} tokens{window_note}). {recommendation}"
+        ));
+        return;
+    }
+
+    if app.status_message.is_none() {
+        let status_prefix = if percent >= CONTEXT_WARNING_THRESHOLD_PERCENT {
+            "Context high"
+        } else {
+            "Context building"
+        };
+        app.status_message = Some(format!(
+            "{status_prefix}: {percent:.0}% ({used}/{max} tokens{window_note}). {recommendation}"
+        ));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn should_auto_compact_before_send(app: &App) -> bool {
+    let config = app.compaction_config();
+    should_auto_compact_before_send_with_config(app, &config)
+}
+
+#[cfg(test)]
+pub(crate) fn should_auto_compact_before_send_with_config(
+    app: &App,
+    config: &crate::compaction::CompactionConfig,
+) -> bool {
+    if !config.enabled {
+        return false;
+    }
+    // Use the same ceiling-anchored token threshold as the engine. Comparing
+    // against a raw percentage of the input-plus-output window can delay this
+    // gate until after the spendable input budget has already been exhausted.
+    let max = config.effective_context_window.unwrap_or_else(|| {
+        crate::route_budget::route_context_window_tokens(
+            app.api_provider,
+            app.effective_model_for_budget(),
+            app.active_route_limits,
+        )
+    });
+    context_usage_snapshot_for_window(app, max)
+        .map(|(used, _, _)| used.max(0) as usize >= config.token_threshold)
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod config_update_tests {
+    use super::*;
+    use crate::core::engine::mock_engine_handle;
+    use crate::core::ops::Op;
+
+    #[tokio::test]
+    async fn live_compaction_update_queues_without_waiting_on_engine() {
+        let mut mock = mock_engine_handle();
+        let compaction = crate::compaction::CompactionConfig {
+            enabled: false,
+            token_threshold: 123,
+            model: "deepseek-v4-flash".to_string(),
+            effective_context_window: Some(128_000),
+            cache_summary: true,
+            focus: None,
+            runtime_cost_owner: None,
+            workspace: None,
+            image_input: crate::model_profile::SupportState::Unknown,
+        };
+
+        assert!(try_apply_model_and_compaction_update(
+            &mock.handle,
+            compaction.clone(),
+            AppMode::Agent,
+            None,
+        ));
+
+        assert!(matches!(
+            mock.rx_op.recv().await,
+            Some(Op::SetModel {
+                model,
+                mode: AppMode::Agent,
+                route_limits: None,
+            }) if model == compaction.model
+        ));
+        assert!(matches!(
+            mock.rx_op.recv().await,
+            Some(Op::SetCompaction { config }) if config == compaction
+        ));
+    }
+}

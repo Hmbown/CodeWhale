@@ -55,7 +55,7 @@ New-Item -ItemType Directory -Force -Path $binDir
 # 2. Download binaries (adjust URL to your mirror or release tag)
 $tag = (Invoke-RestMethod -Uri "https://api.github.com/repos/Hmbown/CodeWhale/releases/latest").tag_name
 Invoke-WebRequest -Uri "https://github.com/Hmbown/CodeWhale/releases/download/$tag/codewhale-windows-x64.exe"     -OutFile "$binDir\codewhale.exe"
-Invoke-WebRequest -Uri "https://github.com/Hmbown/CodeWhale/releases/download/$tag/codewhale-tui-windows-x64.exe" -OutFile "$binDir\codewhale-tui.exe"
+Invoke-WebRequest -Uri "https://github.com/Hmbown/CodeWhale/releases/download/$tag/codew-windows-x64.exe"         -OutFile "$binDir\codew.exe"
 
 # 3. Add to user PATH (persistent)
 $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -79,7 +79,7 @@ Run these on **each machine** (or spot-check a sample):
 |---|---------|-----------------|-------|
 | 1 | `codewhale --version` | Prints version string | ☐ |
 | 2 | `codewhale doctor` | Prints the offline structural report; live checks remain not probed | ☐ |
-| 3 | `codewhale-tui --version` | Prints version string | ☐ |
+| 3 | `codew --version` | Prints the same version string | ☐ |
 
 If `codewhale` is not found, the user may need to open a **new** terminal window for PATH changes to take effect.
 
@@ -157,7 +157,7 @@ $newPath = ($currentPath -split ";" | Where-Object { $_ -and ($_ -ne $binDir) })
 | Symptom | Fix |
 |---------|-----|
 | `codewhale` not found after install | Open a **new** terminal. If still missing, check PATH: `echo $env:Path` |
-| `MISSING_COMPANION_BINARY` | Ensure both `codewhale.exe` and `codewhale-tui.exe` are in the same directory |
+| Missing `codew` short command | Ensure both `codewhale.exe` and `codew.exe` are in the same directory |
 | `TLS handshake` errors | Check proxy settings or use the CNB mirror (see [INSTALL.md](INSTALL.md)) |
 | Antivirus quarantines binaries | Add the install directory to AV exclusions |
 | `codewhale doctor` reports credential availability as `unknown`/`not_probed`/`unavailable` | This is the safe offline result. A declared environment, external-auth, OAuth, consent, or secret-store source is not proof of availability and does not certify Setup/Fleet readiness. `unavailable` means the route declared the legacy store sentinel but is not allowed to use that shared store. Use `codewhale doctor --probe-api` only on an approved connected machine when a live check is required. |

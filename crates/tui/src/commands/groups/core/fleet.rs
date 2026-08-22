@@ -27,7 +27,7 @@ use super::CommandResult;
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "fleet",
     aliases: &["loadout", "party"],
-    usage: "/fleet [roster|setup|fleets|list|status|workers|interrupt <worker-id>|resume <run-id>]",
+    usage: "/fleet [members|setup|fleets|list|status|runs|interrupt <worker-id>|resume <run-id>]",
     description_id: MessageId::CmdFleetDescription,
 };
 
@@ -35,9 +35,9 @@ pub(in crate::commands) struct FleetCmd;
 
 fn help_text() -> String {
     let mut out = String::from(
-        "Usage: /fleet [roster|setup|fleets|list|status|workers|interrupt <worker-id>|resume <run-id>]\n\n\
-         Fleet is who. /fleet (or /fleet roster) opens Fleet workers and orchestration state — \
-         each member's posture, routing, and origin. /fleet setup opens the authoring wizard. \
+        "Usage: /fleet [members|setup|fleets|list|status|runs|interrupt <worker-id>|resume <run-id>]\n\n\
+         Fleet is who. /fleet (or /fleet members) opens the Fleet member list and orchestration state — \
+         each member's role, model, and access. /fleet setup opens the authoring wizard. \
          /fleet fleets (or saved/manage) switches between named saved Fleets.\n\n\
          /fleet list, status, interrupt, and resume act on the durable .codewhale/fleet.jsonl \
          ledger for this workspace — the same records `codewhale fleet` reads and writes. \
@@ -271,7 +271,7 @@ mod tests {
         assert!(result.action.is_none());
         let message = result.message.as_deref().unwrap_or_default();
         for surface in [
-            "/fleet roster",
+            "/fleet members",
             "/fleet setup",
             "/fleet fleets",
             "/fleet status",

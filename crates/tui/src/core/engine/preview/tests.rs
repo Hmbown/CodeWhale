@@ -37,7 +37,7 @@ fn active_catalog_hash_tracks_membership_order_and_schema() {
 #[test]
 fn preview_and_production_share_one_input_estimate_and_send_decision() {
     let messages = vec![Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "near the context ceiling".to_string(),
             cache_control: None,
@@ -250,7 +250,7 @@ fn turn_metadata_uses_planned_cross_route_limits_not_installed_limits() {
     // Large enough to be critical for the installed 4K route, but safely
     // below the warning threshold for the planned 123K route.
     engine.session.messages.push(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "x".repeat(20_000),
             cache_control: None,
@@ -341,7 +341,11 @@ async fn compaction_preview_uses_the_planned_routes_system_prompt() {
 
     let messages: Vec<Message> = (0..30)
         .map(|index| Message {
-            role: if index % 2 == 0 { "user" } else { "assistant" }.to_string(),
+            role: if index % 2 == 0 {
+                Role::User
+            } else {
+                Role::Assistant
+            },
             content: vec![ContentBlock::Text {
                 text: "x".repeat(10_000),
                 cache_control: None,
@@ -2044,7 +2048,7 @@ async fn building_a_manifest_writes_no_engine_state() {
     engine.config.features.disable(Feature::Mcp);
     engine.config.allowed_tools = Some(vec!["Bash".to_string()]);
     engine.session.add_message(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "an earlier turn".to_string(),
             cache_control: None,

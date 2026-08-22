@@ -153,7 +153,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            DEEPSEEK_BUILD_SHA=${{ needs.resolve.outputs.sha }}
+            CODEWHALE_BUILD_SHA=${{ needs.resolve.outputs.sha }}
           tags: |
             ${{ steps.image.outputs.name }}:${{ needs.resolve.outputs.tag }}
             ${{ steps.image.outputs.name }}:${{ needs.resolve.outputs.version }}

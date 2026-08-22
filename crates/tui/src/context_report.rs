@@ -948,6 +948,7 @@ pub fn prompt_context_json(context: &PromptContext) -> String {
 mod tests {
     use super::*;
     use crate::config::{ApiProvider, Config};
+    use crate::models::Role;
     use crate::models::Tool;
     use crate::route_runtime::{ContextWindowResolution, ContextWindowSource};
     use codewhale_config::route::RouteLimits;
@@ -958,14 +959,14 @@ mod tests {
     fn context_report_json_contains_sources_and_tool_results() {
         let messages = vec![
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "read src/lib.rs".to_string(),
                     cache_control: None,
                 }],
             },
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: "call_1".to_string(),
                     content: "large tool output".repeat(40),

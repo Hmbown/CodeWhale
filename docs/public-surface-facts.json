@@ -6,10 +6,10 @@
     "positioning": "Terminal-native, model/provider-neutral, local-first coding agent",
     "license": "MIT",
     "terminology": {
-      "Fleet": "who does the work",
+      "Fleet": "who is in the roster and which member is selected",
       "Workflow": "what order the work follows",
       "Lane": "one running Workflow instance",
-      "Runtime": "where and how a Lane executes"
+      "Runtime": "where, how, and with what authority selected work executes"
     },
     "sources": [
       "Cargo.toml",
@@ -20,7 +20,7 @@
     ]
   },
   "sourceCandidate": {
-    "version": "0.9.10",
+    "version": "0.9.11",
     "providerCount": 45,
     "toolCount": 75,
     "sandboxBackends": [
@@ -35,10 +35,10 @@
     ]
   },
   "latestPublishedRelease": {
-    "tag": "v0.9.9",
-    "version": "0.9.9",
-    "publishedAt": "2026-08-18T14:09:17Z",
-    "url": "https://github.com/Hmbown/CodeWhale/releases/tag/v0.9.9",
+    "tag": "v0.9.10",
+    "version": "0.9.10",
+    "publishedAt": "2026-08-20T09:58:55Z",
+    "url": "https://github.com/Hmbown/CodeWhale/releases/tag/v0.9.10",
     "sources": [
       "web/data/latest-published-release.json"
     ]
@@ -221,12 +221,10 @@
       "web/lib/release-credits.ts"
     ],
     "requiredCandidateCredits": [
-      "@cyq1017",
+      "@bistack",
       "@aboimpinto",
       "@wuisabel-gif",
-      "@SparkofSpike",
-      "@Lstarsky0",
-      "@thejayjetson"
+      "@RepentStar"
     ]
   },
   "screenshot": {

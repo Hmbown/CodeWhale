@@ -253,6 +253,12 @@ fn tool_status_for_activity(tool: &ToolCell) -> Option<ToolStatus> {
             } else if cell
                 .entries
                 .iter()
+                .any(|entry| entry.status == ToolStatus::Warning)
+            {
+                Some(ToolStatus::Warning)
+            } else if cell
+                .entries
+                .iter()
                 .any(|entry| entry.status == ToolStatus::Hydrated)
             {
                 Some(ToolStatus::Hydrated)
@@ -291,6 +297,7 @@ fn activity_status_label(status: ToolStatus) -> &'static str {
         ToolStatus::Running => "running",
         ToolStatus::Success => "done",
         ToolStatus::Hydrated => "tool loaded - retry required",
+        ToolStatus::Warning => "issue",
         ToolStatus::Failed => "failed",
     }
 }

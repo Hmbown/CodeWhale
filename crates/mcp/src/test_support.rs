@@ -19,10 +19,10 @@ while IFS= read -r line; do
   fi
   case "$method" in
     initialize)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"fake-mcp","version":"0"}}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{},"resources":{}},"serverInfo":{"name":"fake-mcp","version":"0"}}}\n' "$id"
       ;;
     tools/list)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"add","description":"add two numbers"}]}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"add","description":"add two numbers","inputSchema":{"type":"object","properties":{"a":{"type":"number"},"b":{"type":"number"}},"required":["a","b"]}}]}}\n' "$id"
       ;;
     tools/call)
       name=$(printf '%s' "$line" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
@@ -31,6 +31,12 @@ while IFS= read -r line; do
       else
         printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"unknown tool: '"$name"'"}}\n' "$id"
       fi
+      ;;
+    resources/list)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resources":[{"uri":"file:///fake/readme.txt","name":"Fake readme","description":"resource from the spawned process","mimeType":"text/plain","size":16,"annotations":{"audience":["assistant"],"priority":0.75}}]}}\n' "$id"
+      ;;
+    resources/read)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"file:///fake/readme.txt","mimeType":"text/plain","text":"spawned-resource"}]}}\n' "$id"
       ;;
     *)
       printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"unsupported method"}}\n' "$id"

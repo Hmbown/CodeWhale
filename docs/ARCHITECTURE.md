@@ -92,11 +92,18 @@ boundary has held since v0.9.1):
 
 - **`crates/tools`** - Shared tool invocation primitives, including tool result/error/capability types used by the TUI runtime.
 - **`crates/agent`** - Model/provider registry (ModelRegistry) for resolving model IDs to provider endpoints.
-- **`crates/app-server`** - HTTP/SSE + JSON-RPC app server transport for headless agent workflows.
+- **`crates/app-server`** - HTTP/SSE + JSON-RPC app server transport for
+  headless agent workflows. Note that `app-server --http`/`--mobile` delegate
+  to the TUI binary, which is where the runtime API actually lives.
 - **`crates/config`** - Config loading, profiles, environment variable precedence, CLI runtime overrides.
-- **`crates/core`** - Agent loop, session management, turn orchestration. (The
-  "capacity flow guardrails" once listed here were part of the removed capacity
-  system; no `capacity` symbol remains in this crate.)
+- **`crates/core`** - Provider-neutral request construction (`request.rs`),
+  bounded context fragments, the tool-call parser, and thread/session types.
+  It does **not** own the agent loop: the live turn loop is
+  `Engine::run_turn` in `crates/tui/src/core/engine/turn_loop.rs`, and
+  `crates/tui/src/core/` is a module inside the TUI crate, not this crate. A
+  placeholder `engine/` tree here once suggested otherwise — it had no callers
+  and emitted `TurnComplete` without contacting a model — and was removed in
+  v0.9.11 so there is exactly one turn loop in the workspace.
 - **`crates/execpolicy`** - Approval/sandbox policy engine for tool execution decisions.
 - **`crates/hooks`** - Lifecycle hooks (stdout, jsonl, webhook) for pre/post tool events.
 - **`crates/mcp`** - MCP client + stdio server for Model Context Protocol tool servers.

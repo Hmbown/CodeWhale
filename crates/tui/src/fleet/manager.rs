@@ -282,10 +282,11 @@ impl FleetManager {
         self
     }
 
-    /// Merged agent roster (built-ins + `[fleet.profiles]` + workspace files)
-    /// used everywhere a task references an `agent_profile` id.
+    /// Effective session roster used everywhere a task references an
+    /// `agent_profile` id. A selected v2 Fleet is authoritative; the merged
+    /// legacy profile layers remain the fallback only when no Fleet is selected.
     fn agent_roster(&self) -> crate::fleet::roster::FleetRoster {
-        crate::fleet::roster::FleetRoster::load(&self.fleet_config, &self.workspace)
+        crate::fleet::identity::load_effective_roster(&self.fleet_config, &self.workspace, None)
     }
 
     /// Attach a sub-agent manager so fleet workers can spawn real headless agents.
@@ -367,13 +368,15 @@ impl FleetManager {
         descriptor: ManagedFleetRunDescriptor,
     ) -> Result<FleetRunReport> {
         validate_task_spec_document(&doc)?;
-        // The single funnel: `create_run` and `create_queued_run` both land
-        // here, so counting at either of those would double-count a plain
-        // `fleet run`. Counted after validation, so a rejected spec is not a
-        // dispatch.
-        codewhale_telemetry::session_counters().bump(codewhale_telemetry::Counter::FleetDispatch);
-        worker_runtime::canonicalize_fleet_task_roles(&mut doc.tasks);
         let roster = self.agent_roster();
+        if let Some(error) = roster.load_error() {
+            bail!("cannot create Fleet run: {error}");
+        }
+        worker_runtime::freeze_fleet_task_members(
+            &mut doc.tasks,
+            roster.members(),
+            roster.is_exact_selection(),
+        )?;
         worker_runtime::validate_task_agent_profiles(&doc.tasks, roster.members())?;
         worker_runtime::validate_fleet_task_routes(
             &doc.tasks,
@@ -381,6 +384,11 @@ impl FleetManager {
             self.session_model(),
             self.route_config.as_ref(),
         )?;
+        // The single funnel: `create_run` and `create_queued_run` both land
+        // here, so counting at either of those would double-count a plain
+        // `fleet run`. Count only after author input, member selection, and
+        // route validation succeed; a rejected spec is not a dispatch.
+        codewhale_telemetry::session_counters().bump(codewhale_telemetry::Counter::FleetDispatch);
         let warnings = doc
             .tasks
             .iter()
@@ -2030,7 +2038,9 @@ fn default_local_worker_with_name(worker_id: &str, index: usize) -> FleetWorkerS
         id: worker_id.to_string(),
         name: format!("Local worker {index}"),
         host: FleetHostSpec::Local,
-        trust_level: Some(FleetTrustLevel::Local),
+        // Legacy ledgers may carry `trust_level`; new Fleet workers leave
+        // execution authority entirely to Runtime policy.
+        trust_level: None,
         labels: BTreeMap::new(),
         capabilities: vec!["local".to_string()],
         max_concurrent_tasks: Some(1),
@@ -2042,7 +2052,7 @@ fn default_local_worker(worker_id: &str) -> FleetWorkerSpec {
         id: worker_id.to_string(),
         name: worker_id.to_string(),
         host: FleetHostSpec::Local,
-        trust_level: Some(FleetTrustLevel::Local),
+        trust_level: None,
         labels: BTreeMap::new(),
         capabilities: vec!["local".to_string()],
         max_concurrent_tasks: Some(1),
@@ -2447,6 +2457,27 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::TempDir;
+
+    fn select_test_fleet(workspace: &Path, members: &[(&str, &str)]) {
+        use crate::fleet::store::{FleetFile, FleetMember, FleetScope, save_fleet, set_selected};
+
+        let mut fleet = FleetFile::new("Manager Test Fleet".to_string(), None).unwrap();
+        fleet.members = members
+            .iter()
+            .map(|(id, role)| FleetMember {
+                id: (*id).to_string(),
+                display_name: None,
+                role: (*role).to_string(),
+                model: None,
+                provider: None,
+                reasoning: None,
+                instructions: None,
+                requires: Vec::new(),
+            })
+            .collect();
+        save_fleet(&fleet, FleetScope::Workspace, workspace).unwrap();
+        set_selected(&fleet.name, FleetScope::Workspace, workspace).unwrap();
+    }
 
     fn task(id: &str) -> FleetTaskSpec {
         FleetTaskSpec {
@@ -3378,6 +3409,7 @@ mod tests {
     #[test]
     fn fleet_manager_rejects_unknown_agent_profile_before_run_creation() {
         let tmp = TempDir::new().unwrap();
+        select_test_fleet(tmp.path(), &[("reviewer", "reviewer")]);
         let manager = FleetManager::open(tmp.path()).unwrap();
         let mut task = task("task-a");
         task.worker = Some(FleetTaskWorkerProfile {
@@ -3404,7 +3436,7 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("references unknown agent profile \"missing\"")
+                .contains("references unknown agent profile selector \"missing\"")
         );
         assert!(manager.ledger.rebuild_state().unwrap().runs.is_empty());
     }
@@ -3438,6 +3470,7 @@ mod tests {
     fn fleet_manager_inspect_canonicalizes_advisory_role_aliases() {
         for alias in ["oracle", "advisor"] {
             let tmp = TempDir::new().unwrap();
+            select_test_fleet(tmp.path(), &[(alias, alias)]);
             let manager = FleetManager::open(tmp.path()).unwrap();
             let path = task_spec_file(&tmp, vec![role_task_with_retry("advice", alias, 1)]);
             let report = manager.create_run_from_task_spec_path(&path, 1).unwrap();
@@ -4216,7 +4249,7 @@ esac
                         image: "fake".to_string(),
                         args: Vec::new(),
                     },
-                    trust_level: Some(FleetTrustLevel::Sandbox),
+                    trust_level: None,
                     labels: BTreeMap::new(),
                     capabilities: vec![],
                     max_concurrent_tasks: Some(1),
@@ -4240,6 +4273,7 @@ esac
     #[test]
     fn remote_terminal_route_x_wins_manager_config_y_and_receipt_is_secret_free() {
         let tmp = TempDir::new().unwrap();
+        select_test_fleet(tmp.path(), &[("reviewer", "reviewer")]);
         let manager_config = Config {
             provider: Some("manager-y".to_string()),
             providers: Some(crate::config::ProvidersConfig {
@@ -4318,6 +4352,7 @@ printf '%s\n' '{"type":"done"}'
     #[test]
     fn headless_terminal_with_invalid_route_metadata_does_not_fall_back_to_manager_config() {
         let tmp = TempDir::new().unwrap();
+        select_test_fleet(tmp.path(), &[("reviewer", "reviewer")]);
         let manager = FleetManager::open(tmp.path())
             .unwrap()
             .with_session_model("manager-model-y")
@@ -4476,10 +4511,7 @@ esac
                 FleetTaskSpecDocument {
                     name: Some("fleet route parity smoke".to_string()),
                     labels: BTreeMap::from([("issue".to_string(), "3166".to_string())]),
-                    security_policy: Some(FleetSecurityPolicy {
-                        default_trust_level: FleetTrustLevel::Local,
-                        ..Default::default()
-                    }),
+                    security_policy: None,
                     workers: vec![],
                     tasks,
                 },
@@ -4769,6 +4801,10 @@ esac
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path().join("repo");
         std::fs::create_dir_all(&workspace).unwrap();
+        select_test_fleet(
+            &workspace,
+            &[("release-checker", "reviewer"), ("reviewer", "reviewer")],
+        );
         // Create a minimal Cargo.toml so the cargo-check task can succeed.
         std::fs::write(
             workspace.join("Cargo.toml"),
@@ -4869,10 +4905,7 @@ esac
                 FleetTaskSpecDocument {
                     name: Some("dogfood smoke".to_string()),
                     labels: BTreeMap::new(),
-                    security_policy: Some(FleetSecurityPolicy {
-                        default_trust_level: FleetTrustLevel::Local,
-                        ..Default::default()
-                    }),
+                    security_policy: None,
                     workers: vec![],
                     tasks,
                 },
@@ -4890,7 +4923,7 @@ esac
     }
 
     #[test]
-    fn fleet_security_policy_propagates_from_task_spec_document_to_run() {
+    fn fleet_security_policy_is_rejected_for_new_runs() {
         let tmp = TempDir::new().unwrap();
         let manager = FleetManager::open(tmp.path()).unwrap();
         // Rewrite the spec file with a security_policy block.
@@ -4913,17 +4946,49 @@ esac
         let spec_path = tmp.path().join("secure-tasks.json");
         std::fs::write(&spec_path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
 
-        let report = manager
+        let error = manager
             .create_run_from_task_spec_path(&spec_path, 1)
-            .unwrap();
+            .unwrap_err()
+            .to_string();
 
-        let state = manager.ledger.rebuild_state().unwrap();
-        let run = state.runs.get(&report.run_id.0).unwrap();
-        let policy = run.security_policy.as_ref().unwrap();
-        assert_eq!(policy.default_trust_level, FleetTrustLevel::Local);
-        assert_eq!(policy.allowed_secrets.len(), 1);
-        assert_eq!(policy.allowed_secrets[0].key, "GH_TOKEN");
-        assert_eq!(policy.max_trust_level, FleetTrustLevel::RemoteVerified);
-        assert!(policy.require_identity_verification);
+        assert!(
+            error.contains("security_policy is a legacy compatibility field"),
+            "unexpected error: {error}"
+        );
+        assert!(manager.ledger.rebuild_state().unwrap().runs.is_empty());
+    }
+
+    #[test]
+    fn invalid_explicit_fleet_selection_blocks_run_creation() {
+        let tmp = TempDir::new().unwrap();
+        let fleets = tmp.path().join(".codewhale/fleets");
+        std::fs::create_dir_all(&fleets).unwrap();
+        std::fs::write(fleets.join("selected"), "Broken\n").unwrap();
+        std::fs::write(
+            fleets.join("broken.toml"),
+            "schema = \"fleet\"\nschema_revision = 2\nname = \"Broken\"\n[[members]]\nid = \"scout\"\nprovider = \"deepseek\"\n",
+        )
+        .unwrap();
+        let manager = FleetManager::open(tmp.path()).unwrap();
+        let error = manager
+            .create_queued_run(
+                FleetTaskSpecDocument {
+                    name: Some("must not fall back".to_string()),
+                    labels: BTreeMap::new(),
+                    security_policy: None,
+                    workers: Vec::new(),
+                    tasks: vec![task("task-a")],
+                },
+                1,
+            )
+            .expect_err("a broken explicit Fleet must block dispatch");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Selected folder Fleet `Broken` is invalid or unreadable"),
+            "{error:#}"
+        );
+        assert!(manager.rebuild_state().unwrap().runs.is_empty());
     }
 }

@@ -7,6 +7,7 @@ use futures_util::StreamExt;
 
 use crate::config::{Config, ProviderConfig, ProvidersConfig, RetryConfig};
 use crate::models::Message;
+use crate::models::Role;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -52,7 +53,7 @@ fn minimal_responses_request() -> MessageRequest {
     MessageRequest {
         model: "gpt-5.5".to_string(),
         messages: vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "hello".to_string(),
                 cache_control: None,
@@ -118,7 +119,10 @@ async fn responses_stream_retries_rate_limited_request() {
     let prepared = client
         .prepare_outbound_request(request, true)
         .expect("responses request prepares");
-    assert_eq!(prepared.body["max_output_tokens"], json!(4_096));
+    // The Codex OAuth Responses endpoint rejects `max_output_tokens`
+    // ("Unsupported parameter"), so the prepared body must omit it even
+    // though the resolved request envelope carries a cap.
+    assert!(prepared.body.get("max_output_tokens").is_none());
     let mut stream = client.handle_responses_stream(&prepared).await.unwrap();
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -137,7 +141,10 @@ async fn responses_stream_retries_rate_limited_request() {
     assert_eq!(requests.len(), 2);
     for request in requests {
         let body: Value = serde_json::from_slice(&request.body).expect("Responses JSON");
-        assert_eq!(body["max_output_tokens"], json!(4_096));
+        assert!(
+            body.get("max_output_tokens").is_none(),
+            "Codex Responses body must not name the unsupported output cap: {body}"
+        );
     }
 }
 
@@ -540,7 +547,7 @@ fn deepseek_flash_responses_body_uses_stateless_0731_contract() {
     request.messages.insert(
         0,
         Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::Thinking {
                 thinking: "preserve this tool-loop reasoning".to_string(),
                 signature: None,
@@ -574,6 +581,29 @@ fn deepseek_flash_responses_body_uses_stateless_0731_contract() {
 }
 
 #[test]
+fn codex_responses_body_omits_the_output_cap_the_backend_rejects() {
+    // The Codex OAuth Responses endpoint answers `max_output_tokens` with
+    // "Unsupported parameter: max_output_tokens", which killed every
+    // gpt-5.6-sol sub-agent turn. The omission must be route-specific:
+    // other Responses providers keep the central cap on the wire.
+    let mut request = minimal_responses_request();
+    request.max_tokens = 4_096;
+
+    let codex = build_responses_body_for_provider(&request, ApiProvider::OpenaiCodex);
+    assert!(
+        codex.get("max_output_tokens").is_none(),
+        "Codex Responses body names a parameter its backend rejects: {codex}"
+    );
+    assert!(
+        codex.get("max_tokens").is_none() && codex.get("max_completion_tokens").is_none(),
+        "no alternate output-cap spelling may sneak onto the Codex wire: {codex}"
+    );
+
+    let deepseek = build_responses_body_for_provider(&request, ApiProvider::Deepseek);
+    assert_eq!(deepseek["max_output_tokens"], json!(4_096));
+}
+
+#[test]
 fn codex_replays_only_exact_model_opaque_reasoning_state() {
     const SENTINEL: &str = "readable private reasoning must not be replayed";
     let state = OpaqueReasoningState {
@@ -587,7 +617,7 @@ fn codex_replays_only_exact_model_opaque_reasoning_state() {
     request.messages.insert(
         0,
         Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::Thinking {
                 thinking: SENTINEL.to_string(),
                 signature: None,
@@ -703,7 +733,7 @@ fn codex_responses_body_uses_responses_reasoning_not_deepseek_thinking() {
     let request = MessageRequest {
         model: "gpt-5.5".to_string(),
         messages: vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "hello".to_string(),
                 cache_control: None,
@@ -941,7 +971,7 @@ fn responses_input_includes_user_role_tool_results() {
         model: "gpt-5.5".to_string(),
         messages: vec![
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::ToolUse {
                     id: "call_abc|fc_123".to_string(),
                     name: "checklist_write".to_string(),
@@ -951,7 +981,7 @@ fn responses_input_includes_user_role_tool_results() {
                 }],
             },
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: "call_abc|fc_123".to_string(),
                     content: "<6 items>".to_string(),
@@ -987,7 +1017,7 @@ fn responses_input_encodes_tool_call_names() {
     let request = MessageRequest {
         model: "gpt-5.5".to_string(),
         messages: vec![Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: "call_abc|fc_123".to_string(),
                 name: "web.run".to_string(),
@@ -1163,7 +1193,7 @@ fn tool_result_image_becomes_native_function_output_content() {
     let mut request = minimal_responses_request();
     request.messages = vec![
         Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: "call_image_1".to_string(),
                 name: "read".to_string(),
@@ -1173,7 +1203,7 @@ fn tool_result_image_becomes_native_function_output_content() {
             }],
         },
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: "call_image_1".to_string(),
                 content: "screenshot captured".to_string(),
@@ -1203,4 +1233,40 @@ fn tool_result_image_becomes_native_function_output_content() {
     );
     assert_eq!(content[1]["type"], "input_image");
     assert_eq!(content[1]["image_url"], "data:image/png;base64,QUJD");
+}
+
+/// A `system`-role history message — the shape a compaction summary, a branch
+/// summary, or an imported journal `system` entry takes once it reaches
+/// `MessageRequest::messages` — must survive the Responses conversion. The
+/// Chat Completions adapter already keeps it
+/// (`request_builder_preserves_internal_system_messages`); dropping it here
+/// silently deletes the only record of everything the compaction replaced.
+#[test]
+fn responses_input_keeps_system_role_history_messages() {
+    let mut request = minimal_responses_request();
+    request.messages.insert(
+        0,
+        Message {
+            role: Role::System,
+            content: vec![ContentBlock::Text {
+                text: "[compaction summary] the user is porting the parser".to_string(),
+                cache_control: None,
+            }],
+        },
+    );
+
+    let items = convert_messages_to_responses_input(&request, ApiProvider::OpenaiCodex);
+
+    let system = items
+        .iter()
+        .find(|item| item["role"] == "system")
+        .expect("system-role history message survives conversion");
+    assert_eq!(system["type"], "message");
+    assert_eq!(
+        system["content"][0],
+        serde_json::json!({
+            "type": "input_text",
+            "text": "[compaction summary] the user is porting the parser",
+        })
+    );
 }

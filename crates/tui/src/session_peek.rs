@@ -300,6 +300,7 @@ fn mask_assignment(token: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::models::Message;
+    use crate::models::Role;
     use crate::session_manager::create_saved_session_with_id_and_mode;
 
     fn text_block(text: &str) -> ContentBlock {
@@ -323,7 +324,7 @@ mod tests {
 
     fn user(text: &str) -> Message {
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![text_block(text)],
         }
     }
@@ -398,7 +399,7 @@ mod tests {
     #[test]
     fn tool_payloads_are_summarised_never_inlined() {
         let message = Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![
                 ContentBlock::ToolUse {
                     id: "call-1".to_string(),
@@ -530,7 +531,7 @@ mod tests {
         let pastes = [
             user(question),
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![
                     text_block(question),
                     text_block(concat!(

@@ -26,6 +26,8 @@ pub struct FleetTaskSpecDocument {
     pub labels: BTreeMap<String, String>,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Legacy replay/input compatibility only. New run validation rejects it;
+    /// Runtime policy owns execution authority.
     pub security_policy: Option<FleetSecurityPolicy>,
     #[serde(default, alias = "worker_specs")]
     pub workers: Vec<FleetWorkerSpec>,
@@ -112,6 +114,11 @@ pub fn load_task_spec_document(path: &Path) -> Result<FleetTaskSpecDocument> {
 }
 
 pub fn validate_task_spec_document(doc: &FleetTaskSpecDocument) -> Result<()> {
+    if doc.security_policy.is_some() {
+        bail!(
+            "fleet task spec security_policy is a legacy compatibility field, not executable Fleet identity; configure trust, secrets, approvals, sandboxing, and tool authority through Runtime policy"
+        );
+    }
     if doc.tasks.is_empty() {
         bail!("fleet task spec must include at least one task");
     }
@@ -131,6 +138,16 @@ pub fn validate_task_spec_document(doc: &FleetTaskSpecDocument) -> Result<()> {
             bail!("fleet task {} objective cannot be empty", task.id);
         }
         validate_worker_profile(&task.id, task.worker.as_ref())?;
+        if task
+            .metadata
+            .contains_key(super::worker_runtime::FROZEN_FLEET_MEMBER_METADATA_KEY)
+        {
+            bail!(
+                "fleet task {} metadata key {} is reserved for the durable Runtime selection receipt",
+                task.id,
+                super::worker_runtime::FROZEN_FLEET_MEMBER_METADATA_KEY
+            );
+        }
         validate_tags(&task.id, &task.tags)?;
         validate_workspace_requirements(task)?;
     }
@@ -141,6 +158,12 @@ pub fn validate_task_spec_document(doc: &FleetTaskSpecDocument) -> Result<()> {
             bail!("duplicate fleet worker id {}", worker.id);
         }
         validate_fleet_name(&format!("worker {} name", worker.id), &worker.name)?;
+        if worker.trust_level.is_some() {
+            bail!(
+                "fleet worker {} trust_level is a legacy compatibility field, not Fleet identity; configure execution authority through Runtime policy",
+                worker.id
+            );
+        }
     }
     Ok(())
 }
@@ -173,7 +196,7 @@ fn validate_worker_profile(task_id: &str, worker: Option<&FleetTaskWorkerProfile
     let Some(worker) = worker else {
         return Ok(());
     };
-    validate_worker_token(
+    validate_worker_selector(
         task_id,
         "worker.agent_profile",
         worker.agent_profile.as_deref(),
@@ -181,6 +204,23 @@ fn validate_worker_profile(task_id: &str, worker: Option<&FleetTaskWorkerProfile
     validate_worker_token(task_id, "worker.loadout", worker.loadout.as_deref())?;
     validate_worker_token(task_id, "worker.model_class", worker.model_class.as_deref())?;
     validate_worker_model(task_id, worker.model.as_deref())?;
+    Ok(())
+}
+
+fn validate_worker_selector(task_id: &str, field: &str, value: Option<&str>) -> Result<()> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("fleet task {task_id} {field} cannot be empty");
+    }
+    if trimmed != value || value.len() > MAX_FLEET_NAME_BYTES || value.chars().any(char::is_control)
+    {
+        bail!(
+            "fleet task {task_id} {field} must be one printable selector no longer than {MAX_FLEET_NAME_BYTES} bytes"
+        );
+    }
     Ok(())
 }
 
@@ -688,6 +728,7 @@ mod tests {
             context: vec!["fleet verifier test".to_string()],
             budget: Some(FleetTaskBudget {
                 max_tokens: Some(4000),
+                max_steps: None,
                 max_tool_calls: Some(12),
                 max_seconds: Some(120),
             }),
@@ -741,7 +782,7 @@ mod tests {
                 "name": "review",
                 "instructions": "review the patch",
                 "worker": {
-                    "profile": "adversarial_reviewer",
+                    "profile": "DeepSeek V4 Flash",
                     "role": "reviewer",
                     "loadout": "auto",
                     "model_class": "balanced",
@@ -757,10 +798,7 @@ mod tests {
         let parsed = load_task_spec_document(&path).unwrap();
         let worker = parsed.tasks[0].worker.as_ref().unwrap();
 
-        assert_eq!(
-            worker.agent_profile.as_deref(),
-            Some("adversarial_reviewer")
-        );
+        assert_eq!(worker.agent_profile.as_deref(), Some("DeepSeek V4 Flash"));
         assert_eq!(worker.role.as_deref(), Some("reviewer"));
         assert_eq!(worker.loadout.as_deref(), Some("auto"));
         assert_eq!(worker.model_class.as_deref(), Some("balanced"));
@@ -778,7 +816,7 @@ mod tests {
                 "name": "review",
                 "instructions": "review the patch",
                 "worker": {
-                    "profile": "../secrets",
+                    "profile": "reviewer\n../../secrets",
                     "loadout": "openrouter/deepseek",
                     "model_class": "",
                     "model": "deepseek/deepseek-v4-pro"
@@ -790,7 +828,7 @@ mod tests {
         let err = load_task_spec_document(&path).unwrap_err().to_string();
 
         assert!(
-            err.contains("worker.agent_profile must be a simple token"),
+            err.contains("worker.agent_profile must be one printable selector"),
             "unexpected error: {err}"
         );
     }
@@ -857,6 +895,42 @@ mod tests {
         assert!(
             err.contains("task id must be a simple ASCII token"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn fleet_task_spec_rejects_runtime_authority_fields_for_new_runs() {
+        let mut security_doc = FleetTaskSpecDocument {
+            name: None,
+            labels: BTreeMap::new(),
+            security_policy: Some(FleetSecurityPolicy::default()),
+            workers: Vec::new(),
+            tasks: vec![task("review", None)],
+        };
+        let error = validate_task_spec_document(&security_doc)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("security_policy is a legacy compatibility field"),
+            "unexpected error: {error}"
+        );
+
+        security_doc.security_policy = None;
+        security_doc.workers.push(FleetWorkerSpec {
+            id: "worker-1".to_string(),
+            name: "Worker 1".to_string(),
+            host: FleetHostSpec::Local,
+            trust_level: Some(FleetTrustLevel::Local),
+            labels: BTreeMap::new(),
+            capabilities: vec!["local".to_string()],
+            max_concurrent_tasks: Some(1),
+        });
+        let error = validate_task_spec_document(&security_doc)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("trust_level is a legacy compatibility field"),
+            "unexpected error: {error}"
         );
     }
 

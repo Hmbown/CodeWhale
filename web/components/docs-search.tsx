@@ -8,7 +8,7 @@ import {
   docTopicIsExternal,
   type DocTopic,
 } from "@/lib/docs-map";
-import { docTopicHaystack } from "@/lib/search-utils";
+import { docTopicHaystack, highlightSpan } from "@/lib/search-utils";
 
 /* ------------------------------------------------------------------ */
 /*  Locale-aware strings                                              */
@@ -43,16 +43,16 @@ const topicHaystack = docTopicHaystack;
 /* ------------------------------------------------------------------ */
 
 function highlight(text: string, query: string): React.ReactNode {
-  const q = query.trim().toLowerCase();
-  if (!q) return text;
-  const lower = text.toLowerCase();
-  const idx = lower.indexOf(q);
-  if (idx === -1) return text;
+  // Index arithmetic lives in search-utils: lowercasing can change a
+  // string's length, so `text` cannot be sliced with indices taken from
+  // its lowercased copy.
+  const span = highlightSpan(text, query);
+  if (!span) return text;
   return (
     <>
-      {text.slice(0, idx)}
-      <mark className="search-highlight">{text.slice(idx, idx + q.length)}</mark>
-      {text.slice(idx + q.length)}
+      {span.before}
+      <mark className="search-highlight">{span.match}</mark>
+      {span.after}
     </>
   );
 }

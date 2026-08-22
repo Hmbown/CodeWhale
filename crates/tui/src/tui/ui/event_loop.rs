@@ -4,7 +4,14 @@
 //! owns terminal setup and teardown; `run_event_loop` is the frame, input, and
 //! engine-event pump it drives.
 
+use super::clamp_event_poll_timeout;
+use super::observer_hooks::{
+    execute_turn_end_observer_hook, subagent_failure_notice,
+    subagent_status_from_completion_result, surface_observer_hook_submission_failure,
+};
+use super::task_projection::{refresh_active_task_panel, refresh_shell_exec_live_output};
 use super::*;
+use crate::models::Role;
 
 pub(super) fn event_owner_is_active(
     current_session_id: Option<&str>,
@@ -157,6 +164,7 @@ pub async fn run_tui(
     // with opaque "Device not configured" / "Input/output error" and some
     // terminal hosts surface only "[Process completed]".
     require_interactive_terminal(io::stdin().is_terminal(), io::stdout().is_terminal())?;
+    require_foreground_terminal_owner()?;
 
     // Terminal probe with timeout to prevent hanging on unresponsive terminals.
     //
@@ -753,6 +761,26 @@ pub(crate) async fn run_event_loop(
     let mut version_check: Option<tokio::task::JoinHandle<Option<UpdateNotice>>> =
         spawn_startup_version_check(config.update_config());
 
+    // Startup version-change hint: once per version, never on first run.
+    // `record_launch` owns the semantics (strict semver forward move, corrupt
+    // record = silent rewrite, downgrade records without hinting); this only
+    // renders the outcome. Local bookkeeping — independent of the network
+    // update check, and skipped entirely when home cannot be resolved.
+    if let Ok(home) = codewhale_config::codewhale_home() {
+        let outcome = codewhale_release::record_launch(&home, env!("CARGO_PKG_VERSION"));
+        if let Some(record_error) = outcome.record_error {
+            tracing::debug!(error = %record_error, "could not persist the last-launch record");
+        }
+        if let Some(change) = outcome.change {
+            let content = app
+                .tr(MessageId::UpdateChangedHint)
+                .replace("{previous}", &change.previous)
+                .replace("{current}", &change.current);
+            app.add_message(HistoryCell::System { content });
+            app.needs_redraw = true;
+        }
+    }
+
     // Fire a one-shot initial balance fetch for DeepSeek providers
     // so the footer chip shows balance on the first frame without
     // waiting for a turn to complete.
@@ -1153,7 +1181,7 @@ pub(crate) async fn run_event_loop(
                         }
 
                         let thinking = app.last_reasoning.take();
-                        let tool_uses = app.pending_tool_uses.drain(..).collect::<Vec<_>>();
+                        let tool_uses = std::mem::take(&mut app.pending_tool_uses);
                         let history_index = completed_message_index;
 
                         if app.translation_enabled
@@ -1343,7 +1371,7 @@ pub(crate) async fn run_event_loop(
                                 Err(err) => sanitize_stream_chunk(&format!("Error: {err}")),
                             };
                             app.api_messages.push(Message {
-                                role: "user".to_string(),
+                                role: Role::User,
                                 content: vec![ContentBlock::ToolResult {
                                     tool_use_id: id.clone(),
                                     content: tool_content,
@@ -2202,12 +2230,92 @@ pub(crate) async fn run_event_loop(
                     }
                     EngineEvent::PauseEvents { ack } => {
                         if !event_broker.is_paused() {
-                            pause_terminal(
+                            let input_handoff =
+                                terminal_input.pause_for_child_terminal().and_then(|()| {
+                                    prepare_terminal_input_handoff(
+                                        &terminal_input,
+                                        &mut pending_terminal_events,
+                                    )
+                                });
+                            match input_handoff {
+                                Ok(true) => {}
+                                Ok(false) => {
+                                    terminal_input.resume_after_child_terminal();
+                                    tracing::debug!(
+                                        "refusing interactive child because cancellation input is pending"
+                                    );
+                                    // Preserve Esc/Ctrl+C for the ordinary
+                                    // key path and withhold the ack so the
+                                    // child cannot race ahead of cancellation.
+                                    continue;
+                                }
+                                Err(err) => {
+                                    terminal_input.resume_after_child_terminal();
+                                    tracing::warn!(
+                                        error = %err,
+                                        "refusing interactive child after terminal input handoff failed"
+                                    );
+                                    let recovery = match terminal_input.restart_detached() {
+                                        Ok(()) => "Terminal input recovered.".to_string(),
+                                        Err(restart_err) => {
+                                            tracing::warn!(
+                                                error = %restart_err,
+                                                "failed to restart terminal input after handoff refusal"
+                                            );
+                                            format!(
+                                                "Terminal input recovery also failed ({restart_err}); restart Codewhale if keys stop responding."
+                                            )
+                                        }
+                                    };
+                                    app.push_status_toast(
+                                        format!(
+                                            "Interactive terminal handoff refused ({err}). {recovery}"
+                                        ),
+                                        StatusToastLevel::Error,
+                                        None,
+                                    );
+                                    app.needs_redraw = true;
+                                    last_terminal_input_recovery = Instant::now();
+                                    // Do not acknowledge the pause. The
+                                    // engine guard times out, refuses the
+                                    // child, and queues a harmless resume.
+                                    continue;
+                                }
+                            }
+                            if let Err(err) = pause_terminal(
                                 terminal,
                                 app.use_alt_screen,
                                 app.use_mouse_capture,
                                 app.use_bracketed_paste,
-                            )?;
+                            ) {
+                                terminal_input.resume_after_child_terminal();
+                                tracing::warn!(
+                                    error = %err,
+                                    "refusing interactive child after terminal mode handoff failed"
+                                );
+                                resume_terminal(
+                                    terminal,
+                                    app.use_alt_screen,
+                                    app.use_mouse_capture,
+                                    app.use_bracketed_paste,
+                                    app.synchronized_output_enabled,
+                                )
+                                .with_context(|| {
+                                    format!(
+                                        "terminal handoff failed ({err}) and Codewhale could not restore terminal controls"
+                                    )
+                                })?;
+                                app.push_status_toast(
+                                    format!("Interactive terminal handoff refused ({err})."),
+                                    StatusToastLevel::Error,
+                                    None,
+                                );
+                                app.needs_redraw = true;
+                                force_terminal_repaint = true;
+                                // As above, withholding the acknowledgement
+                                // keeps the child from launching.
+                                continue;
+                            }
                             event_broker.pause_events();
                             terminal_paused_at = Some(Instant::now());
                         }
@@ -2225,6 +2333,7 @@ pub(crate) async fn run_event_loop(
                                 app.synchronized_output_enabled,
                             )?;
                             event_broker.resume_events();
+                            terminal_input.resume_after_child_terminal();
                             terminal_paused_at = None;
                         }
                     }
@@ -2418,6 +2527,7 @@ pub(crate) async fn run_event_loop(
                                 app.synchronized_output_enabled,
                             )?;
                             event_broker.resume_events();
+                            terminal_input.resume_after_child_terminal();
                             terminal_paused_at = None;
                             app.needs_redraw = true;
                         }
@@ -2563,8 +2673,13 @@ pub(crate) async fn run_event_loop(
                         // user- or model-authored strings.
                         codewhale_telemetry::session_counters()
                             .bump(codewhale_telemetry::Counter::ApprovalModalShown);
-                        if app.remote_control.web_owns_turn_input() {
-                            let gate = app.remote_control.record_remote_approval(
+                        // Mirror semantics: the approval is always shown
+                        // locally. When the web mirror is attached to this
+                        // turn, ALSO record it so the web can answer; the
+                        // first decision wins (`resolve_pending_approval`
+                        // vs `take_pending_approval`).
+                        let shared_with_web = if app.remote_control.can_share_approval_with_web() {
+                            app.remote_control.record_remote_approval(
                                 &id,
                                 &tool_name,
                                 &description,
@@ -2572,18 +2687,10 @@ pub(crate) async fn run_event_loop(
                                 &approval_key,
                                 intent_summary.as_deref(),
                             );
-                            app.status_message = Some(format!(
-                                "Remote approval required for '{tool_name}' ({gate}); decide in the web session."
-                            ));
-                            app.sticky_status = Some(StatusToast::new(
-                                format!(
-                                    "REMOTE CONTROL · approval waiting in web · {tool_name} · /rc stop"
-                                ),
-                                StatusToastLevel::Warning,
-                                None,
-                            ));
-                            continue;
-                        }
+                            true
+                        } else {
+                            false
+                        };
                         use crate::core::authority::ApprovalRequestDisposition;
                         // One disposition path for every ApprovalRequired (#4412):
                         // session denial, Full Access policy hold, session/FA
@@ -2719,33 +2826,18 @@ pub(crate) async fn run_event_loop(
                                     );
                                 }
                                 app.status_message = Some(format!(
-                                    "Approval required for '{tool_name}': {description}"
+                                    "Approval required for '{tool_name}': {description}{}",
+                                    if shared_with_web {
+                                        " — decide here or on the web"
+                                    } else {
+                                        ""
+                                    }
                                 ));
                             }
                         }
                     }
                     EngineEvent::UserInputRequired { id, request } => {
-                        if app.remote_control.web_owns_turn_input() {
-                            // Remote-control v1 deliberately admits only prompts, approval
-                            // decisions, and run control. Do not leak a second controller
-                            // through a local structured-question modal.
-                            log_sensitive_event(
-                                "tool.user_input.cancelled_remote_control",
-                                serde_json::json!({
-                                    "tool_id": id.clone(),
-                                    "session_id": app.current_session_id,
-                                }),
-                            );
-                            let _ = engine_handle.cancel_user_input(id).await;
-                            app.pending_user_input_prompt = None;
-                            let notice = "A structured question was cancelled because the web owns input; ask it as a normal web prompt instead.".to_string();
-                            app.push_status_toast(
-                                notice.clone(),
-                                StatusToastLevel::Warning,
-                                Some(8_000),
-                            );
-                            app.status_message = Some(notice);
-                        } else if should_suppress_user_input_prompt(app) {
+                        if should_suppress_user_input_prompt(app) {
                             // A question may have been planned just before the
                             // user switched to Auto-Review. Cancel the stale
                             // request instead of opening a modal under an Auto
@@ -3178,6 +3270,7 @@ pub(crate) async fn run_event_loop(
                 app.synchronized_output_enabled,
             )?;
             event_broker.resume_events();
+            terminal_input.resume_after_child_terminal();
             terminal_paused_at = None;
             app.status_message = Some("Terminal controls restored".to_string());
             app.needs_redraw = true;
@@ -4966,9 +5059,6 @@ pub(crate) async fn run_event_loop(
                 _ if is_forced_submit_key(key) => {
                     let action = app.decide_composer_submit(ComposerSubmitChord::CtrlEnter);
                     if let Some(input) = app.submit_input() {
-                        if reject_local_input_while_remote(app, &input) {
-                            continue;
-                        }
                         if handle_bang_shell_input(app, &engine_handle, &input).await? {
                             continue;
                         }
@@ -5023,9 +5113,6 @@ pub(crate) async fn run_event_loop(
                         }
                     }
                     if let Some(input) = app.handle_composer_enter() {
-                        if reject_local_input_while_remote(app, &input) {
-                            continue;
-                        }
                         // `# foo` quick-add (#492) — when memory is enabled,
                         // a single line starting with `#` (but not `##` /
                         // `#!` shebangs / Markdown headings the user might
@@ -5262,18 +5349,25 @@ pub(crate) async fn run_event_loop(
                     // editing the buffer never disturbs in-flight work.
                     let seed = app.input.clone();
                     let editor_result = terminal_input.pause_for_child_terminal().and_then(|()| {
-                        let result = drain_terminal_input_queue(
+                        let result = prepare_terminal_input_handoff(
                             &terminal_input,
                             &mut pending_terminal_events,
                         )
-                        .and_then(|()| {
-                            crate::tui::external_editor::spawn_editor_for_input(
-                                terminal,
-                                app.use_alt_screen,
-                                app.use_mouse_capture,
-                                app.use_bracketed_paste,
-                                &seed,
-                            )
+                        .and_then(|ready| {
+                            if ready {
+                                crate::tui::external_editor::spawn_editor_for_input(
+                                    terminal,
+                                    app.use_alt_screen,
+                                    app.use_mouse_capture,
+                                    app.use_bracketed_paste,
+                                    &seed,
+                                )
+                            } else {
+                                Err(io::Error::new(
+                                    io::ErrorKind::Interrupted,
+                                    "editor handoff cancelled by pending terminal input",
+                                ))
+                            }
                         });
                         terminal_input.resume_after_child_terminal();
                         force_terminal_repaint = true;
@@ -5313,6 +5407,28 @@ pub(crate) async fn run_event_loop(
                 KeyCode::Down => {
                     let _ =
                         handle_composer_history_arrow(app, key, slash_menu_open, mention_menu_open);
+                }
+                // Ctrl+Shift+U is the shifted-Ctrl chord for `/update install`
+                // (same family as Ctrl+Shift+A/E/O). It routes through the
+                // exact typed-command path, so the managed-install gate and
+                // the "already up to date" outcome are inherited from
+                // `commands::update` rather than reimplemented here. Placed
+                // above the readline Ctrl+U arm so the shifted chord is never
+                // swallowed by clear-input.
+                _ if key_shortcuts::is_update_install_shortcut(&key) => {
+                    if execute_command_input(
+                        terminal,
+                        app,
+                        &mut engine_handle,
+                        &task_manager,
+                        config,
+                        &mut web_config_session,
+                        "/update install",
+                    )
+                    .await?
+                    {
+                        return Ok(());
+                    }
                 }
                 KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.clear_input_recoverable();

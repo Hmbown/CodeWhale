@@ -4,8 +4,8 @@
 # Build:  docker buildx build --platform linux/amd64,linux/arm64 -t codewhale:latest .
 # Run:    docker run --rm -it -e DEEPSEEK_API_KEY -v codewhale-home:/home/codewhale/.codewhale codewhale
 #
-# The image ships the canonical binaries (`codewhale`, `codew`, and
-# `codewhale`) in a minimal runtime layer.
+# The image ships the canonical `codewhale` and `codew` command names in a
+# minimal runtime layer.
 #
 # API keys MUST be passed at runtime (never baked into the image):
 #   docker run --rm -it -e DEEPSEEK_API_KEY codewhale
@@ -19,13 +19,13 @@ FROM --platform=$BUILDPLATFORM rust:${RUST_VERSION}-slim-bookworm AS builder
 ARG TARGETPLATFORM
 ARG TARGETARCH
 ARG BUILDPLATFORM
-ARG DEEPSEEK_BUILD_SHA
+ARG CODEWHALE_BUILD_SHA
 
 ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
     PKG_CONFIG_ALLOW_CROSS=1 \
     PKG_CONFIG_LIBDIR_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
-    DEEPSEEK_BUILD_SHA=${DEEPSEEK_BUILD_SHA}
+    CODEWHALE_BUILD_SHA=${CODEWHALE_BUILD_SHA}
 
 RUN if [ "${TARGETARCH}" = "arm64" ] && [ "${BUILDPLATFORM}" != "${TARGETPLATFORM}" ]; then \
       dpkg --add-architecture arm64; \

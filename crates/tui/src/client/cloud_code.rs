@@ -15,6 +15,8 @@ use crate::models::{
 };
 
 use super::PreparedOutboundRequest;
+use super::prepared::WireDialect;
+use super::role_placement::{RolePlacement, role_placement};
 use super::stream_entry;
 
 /// Model id advertised only after a live cloud-code turn succeeds.
@@ -60,10 +62,22 @@ pub fn build_generate_content_body(request: &MessageRequest) -> Result<Value> {
     }
     let mut contents = Vec::new();
     for message in &request.messages {
-        let role = match message.role.as_str() {
-            "user" => "user",
-            "assistant" | "model" => "model",
-            other => bail!("Antigravity cloud-code does not accept role {other:?}"),
+        // Fail closed, as this wire always has: the shared placement table
+        // says only user and assistant output are representable here, and
+        // anything else is refused rather than guessed at or dropped.
+        let role = match role_placement(&message.role, WireDialect::GoogleCloudCode) {
+            RolePlacement::User => "user",
+            RolePlacement::Assistant => "model",
+            // Listed rather than caught by `_` so a new placement forces a
+            // decision here instead of silently becoming a hard error.
+            RolePlacement::InterruptedAssistant
+            | RolePlacement::System
+            | RolePlacement::Developer
+            | RolePlacement::Omitted
+            | RolePlacement::Rejected => bail!(
+                "Antigravity cloud-code does not accept role {:?}",
+                message.role.as_str()
+            ),
         };
         let mut parts = Vec::new();
         for block in &message.content {
@@ -280,13 +294,14 @@ impl super::DeepSeekClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Role;
     use crate::models::{Message, MessageRequest, SystemBlock, SystemPrompt};
 
     fn text_request(model: &str, prompt: &str) -> MessageRequest {
         MessageRequest {
             model: model.to_string(),
             messages: vec![Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: prompt.to_string(),
                     cache_control: None,

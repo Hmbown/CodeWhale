@@ -281,7 +281,11 @@ async fn emergency_compaction_cancellation_drops_provider_and_never_mutates_cont
     let (mut engine, handle) = Engine::new(EngineConfig::default(), &route_config);
     engine.session.messages = (0..8)
         .map(|index| Message {
-            role: if index % 2 == 0 { "user" } else { "assistant" }.to_string(),
+            role: if index % 2 == 0 {
+                Role::User
+            } else {
+                Role::Assistant
+            },
             content: vec![ContentBlock::Text {
                 text: format!("preserve emergency context item {index}"),
                 cache_control: None,
@@ -356,6 +360,12 @@ async fn emergency_compaction_cancellation_drops_provider_and_never_mutates_cont
     );
 }
 const REPRESENTATIVE_HANDOFF_RELAY: &str = "REPRESENTATIVE_HANDOFF_RELAY";
+
+#[test]
+fn ordinary_engine_default_has_no_hidden_step_budget() {
+    assert_eq!(UNBOUNDED_MODEL_STEPS, u32::MAX);
+    assert_eq!(EngineConfig::default().max_steps, UNBOUNDED_MODEL_STEPS);
+}
 
 #[test]
 fn registry_first_policy_is_in_the_initial_prompt_only_when_mcp_is_enabled() {
@@ -4991,7 +5001,7 @@ async fn normal_repl_kernel_persists_across_user_turns() {
     let selected_model = engine.session.model.clone();
 
     engine.session.add_message(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "Prime the working kernel.".to_string(),
             cache_control: None,
@@ -5022,7 +5032,7 @@ async fn normal_repl_kernel_persists_across_user_turns() {
     assert_eq!(child_usage_event.output_tokens, 11);
 
     engine.session.add_message(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "Use the state from the prior turn.".to_string(),
             cache_control: None,
@@ -5163,6 +5173,70 @@ async fn request_snapshots_advance_to_the_latest_tool_step() {
     assert_eq!(snapshots[0].step, 0);
     assert_eq!(snapshots[1].step, 1);
     assert_eq!(snapshots[1].turn_id.value, turn.id);
+}
+
+#[tokio::test]
+async fn tool_result_followed_by_terminal_empty_assistant_fails_turn() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    fs::write(workspace.path().join("README.md"), "fixture\n").expect("write fixture");
+    let empty_terminal_turn = vec![
+        canned::message_start("mock_empty_after_tool"),
+        canned::message_delta("stop", None),
+        canned::message_stop(),
+    ];
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![
+        canned::tool_call_turn("call-read", "read_file", r#"{"path":"README.md"}"#),
+        empty_terminal_turn,
+    ]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let (mut engine, handle) = Engine::new_with_model_client(
+        deterministic_engine_config(workspace.path()),
+        &Config::default(),
+        client,
+    );
+    let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+    let mut registry = crate::tools::ToolRegistry::new(context);
+    registry.register(std::sync::Arc::new(crate::tools::file::ReadFileTool));
+    let tools = Some(registry.to_api_tools_with_cache(true));
+    let surface = test_tool_surface(&engine, registry, tools, AppMode::Agent);
+    let mut turn = crate::core::turn::TurnContext::new(4);
+
+    let (status, error) = engine.run_turn(&mut turn, surface, None).await;
+    assert_eq!(status, TurnOutcomeStatus::Failed);
+    assert_eq!(mock.call_count(), 2, "tool step then empty provider step");
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|message| message.contains("terminal stop reason `stop`")),
+        "terminal empty response must produce a precise failure: {error:?}"
+    );
+
+    let mut events = handle.rx_event.write().await;
+    let events = std::iter::from_fn(|| events.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::ToolCallComplete { id, result, .. }
+                if id == "call-read" && result.is_ok()
+        )),
+        "the successful tool result must remain durable: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::Error { .. })),
+        "the empty provider response must be visible as an error: {events:?}"
+    );
+    assert!(
+        engine
+            .session
+            .messages
+            .iter()
+            .all(|message| { message.role != Role::Assistant || !message.content.is_empty() }),
+        "the engine must not fabricate an empty assistant message"
+    );
 }
 
 #[tokio::test]
@@ -12075,7 +12149,9 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
                     "{}",
                     case.name
                 );
-                assert!(*network_access, "{}", case.name);
+                // Workspace-write grants writes, not egress. Network is a
+                // separate, explicit grant in every mode that reaches here.
+                assert!(!*network_access, "{}", case.name);
             }
             (ExpectedSandbox::DangerFullAccess, SandboxPolicy::DangerFullAccess) => {}
             _ => panic!("{}: unexpected sandbox policy {sandbox:?}", case.name),
@@ -12429,12 +12505,17 @@ fn turn_tool_context_uses_planned_authority_and_route_not_installed_session() {
 }
 
 #[test]
-fn agent_and_yolo_modes_elevate_shell_sandbox_to_allow_network() {
-    // Regression for #273: the seatbelt-default policy denies all outbound
-    // network (including DNS), which broke `curl`, `yt-dlp`, package managers,
-    // and similar shell commands in Agent mode. Elevation must include
-    // network access so the application-level NetworkPolicy stays the only
-    // outbound boundary.
+fn agent_mode_elevates_writes_without_granting_network() {
+    // #273 elevated Agent mode's sandbox so `curl`, package managers, and
+    // similar shell commands worked, and justified it by saying the
+    // application-level NetworkPolicy would remain "the only outbound
+    // boundary". That premise did not hold: NetworkPolicy governs
+    // fetch_url/web_search/MCP HTTP and never constrained shell subprocesses,
+    // so workspace-write turns had unrestricted egress with no boundary at
+    // all. Writing to the workspace is now decoupled from reaching the
+    // network: the write elevation stays, the network grant does not.
+    // Network comes from `sandbox_network_access`, from a danger-full-access
+    // posture, or from the post-denial elevation prompt.
     let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
 
     let agent_ctx = engine.build_tool_context(AppMode::Agent, false);
@@ -12443,8 +12524,14 @@ fn agent_and_yolo_modes_elevate_shell_sandbox_to_allow_network() {
         .as_ref()
         .expect("Agent mode should elevate the sandbox policy");
     assert!(
-        agent_policy.has_network_access(),
-        "Agent mode must allow shell network access; got {agent_policy:?}",
+        !agent_policy.has_network_access(),
+        "Agent mode must not grant shell network access by default; got {agent_policy:?}",
+    );
+    assert!(
+        !agent_policy
+            .get_writable_roots(&std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+            .is_empty(),
+        "Agent mode must still elevate workspace writes; got {agent_policy:?}",
     );
 
     let yolo_ctx = engine.build_tool_context(AppMode::Yolo, false);
@@ -12498,7 +12585,7 @@ fn agent_and_yolo_modes_elevate_shell_sandbox_to_allow_network() {
 
 #[test]
 fn sandbox_policy_for_turn_returns_correct_default_policy_per_mode() {
-    use crate::core::authority::sandbox_policy_for_turn;
+    use crate::core::authority::{SandboxNetworkAccess, sandbox_policy_for_turn};
     use crate::sandbox::SandboxPolicy;
     use crate::tui::approval::ApprovalMode;
 
@@ -12506,26 +12593,64 @@ fn sandbox_policy_for_turn_returns_correct_default_policy_per_mode() {
 
     // Plan: ReadOnly. The whole point of #1077.
     assert!(matches!(
-        sandbox_policy_for_turn(AppMode::Plan, ApprovalMode::Suggest, None, &workspace,),
+        sandbox_policy_for_turn(
+            AppMode::Plan,
+            ApprovalMode::Suggest,
+            None,
+            &workspace,
+            SandboxNetworkAccess::Restricted,
+        ),
         SandboxPolicy::ReadOnly
     ));
 
-    // Agent: WorkspaceWrite with workspace as writable root, network on.
-    match sandbox_policy_for_turn(AppMode::Agent, ApprovalMode::Suggest, None, &workspace) {
+    // Agent: WorkspaceWrite with workspace as writable root, network OFF.
+    match sandbox_policy_for_turn(
+        AppMode::Agent,
+        ApprovalMode::Suggest,
+        None,
+        &workspace,
+        SandboxNetworkAccess::Restricted,
+    ) {
         SandboxPolicy::WorkspaceWrite {
             writable_roots,
             network_access,
             ..
         } => {
             assert_eq!(writable_roots, vec![workspace.clone()]);
-            assert!(network_access, "Agent mode must allow shell network access");
+            assert!(
+                !network_access,
+                "workspace-write must not imply shell network access"
+            );
+        }
+        other => panic!("Agent mode should be WorkspaceWrite; got {other:?}"),
+    }
+
+    // Agent with the explicit opt-in: same posture, network on.
+    match sandbox_policy_for_turn(
+        AppMode::Agent,
+        ApprovalMode::Suggest,
+        None,
+        &workspace,
+        SandboxNetworkAccess::Allowed,
+    ) {
+        SandboxPolicy::WorkspaceWrite { network_access, .. } => {
+            assert!(
+                network_access,
+                "sandbox_network_access = true must grant shell network access"
+            );
         }
         other => panic!("Agent mode should be WorkspaceWrite; got {other:?}"),
     }
 
     // YOLO: DangerFullAccess.
     assert!(matches!(
-        sandbox_policy_for_turn(AppMode::Yolo, ApprovalMode::Suggest, None, &workspace,),
+        sandbox_policy_for_turn(
+            AppMode::Yolo,
+            ApprovalMode::Suggest,
+            None,
+            &workspace,
+            SandboxNetworkAccess::Restricted,
+        ),
         SandboxPolicy::DangerFullAccess
     ));
 }
@@ -12534,7 +12659,7 @@ fn sandbox_policy_for_turn_returns_correct_default_policy_per_mode() {
 async fn session_update_preserves_reasoning_tool_only_turn() {
     let (mut engine, handle) = Engine::new(EngineConfig::default(), &Config::default());
     let assistant = Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![
             ContentBlock::Thinking {
                 signature: None,
@@ -12712,7 +12837,7 @@ async fn live_runtime_authority_applies_latest_posture_and_sandbox_before_tools(
             None,
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![tmp.path().to_path_buf()],
-                network_access: true,
+                network_access: false,
                 exclude_tmpdir: false,
                 exclude_slash_tmp: false,
             },
@@ -12773,7 +12898,7 @@ fn messages_with_turn_metadata_returns_stored_session_messages() {
     engine.current_mode = AppMode::Plan;
     engine.session.approval_mode = ApprovalMode::Suggest;
     engine.session.messages = vec![Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "summary after compaction".to_string(),
             cache_control: None,
@@ -12825,7 +12950,7 @@ fn todo_engine() -> (
     };
     let (mut engine, handle) = Engine::new(config, &Config::default());
     engine.session.messages = vec![Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "land the To-do seam".to_string(),
             cache_control: None,
@@ -13698,7 +13823,7 @@ async fn sync_session_projects_persisted_subagent_handoff_for_headless_restore()
     );
     let messages = vec![
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "Keep the original task".to_string(),
                 cache_control: None,
@@ -13829,14 +13954,14 @@ async fn edit_last_turn_preserves_current_mode() {
     let run = tokio::spawn(engine.run());
     let seeded_messages = vec![
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "draft the plan".to_string(),
                 cache_control: None,
             }],
         },
         Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::Text {
                 text: "initial response".to_string(),
                 cache_control: None,
@@ -14953,7 +15078,7 @@ fn turn_metadata_is_byte_identical_across_identical_consecutive_turns() {
     // Use explicit route limits so the fixture exercises the critical band
     // without depending on a model catalog entry or provider default.
     engine.session.messages.push(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "x".repeat(100_000),
             cache_control: None,
@@ -15708,7 +15833,7 @@ fn messages_with_turn_metadata_preserves_stored_messages_for_prefix_cache() {
     );
 
     engine.session.add_message(Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![ContentBlock::Text {
             text: "I inspected it.".to_string(),
             cache_control: None,
@@ -15756,7 +15881,7 @@ fn turn_metadata_skips_tool_result_messages() {
     engine.session.add_message(user_msg);
     // Assistant tool-call.
     engine.session.add_message(Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![ContentBlock::ToolUse {
             id: "call_42".to_string(),
             name: "read_file".to_string(),
@@ -15767,7 +15892,7 @@ fn turn_metadata_skips_tool_result_messages() {
     });
     // Tool result, stored as role="user" internally.
     engine.session.add_message(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::ToolResult {
             tool_use_id: "call_42".to_string(),
             content: "pub fn sample() {}".to_string(),
@@ -15868,7 +15993,7 @@ fn turn_metadata_skips_when_only_tool_results_trail() {
     // but a tool-result is still pending. We must not retroactively
     // inject.
     engine.session.add_message(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::ToolResult {
             tool_use_id: "call_42".to_string(),
             content: "pub fn sample() {}".to_string(),
@@ -16081,7 +16206,7 @@ async fn submitted_turn_appends_context_update_before_the_user_message() {
     // but only after history is assembled) and inspect the order.
     let update = engine.refresh_pinned_header_for_turn(&context).unwrap();
     engine.session.add_message(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: update,
             cache_control: None,
@@ -19081,7 +19206,7 @@ async fn cacheable_prefix_is_byte_stable_across_unchanged_turns() {
 
     engine.session.add_message(first);
     engine.session.add_message(Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![ContentBlock::Text {
             text: "first reply".to_string(),
             cache_control: None,

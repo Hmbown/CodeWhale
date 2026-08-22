@@ -15,6 +15,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::models::Role;
 use crate::models::{ContentBlock, Message};
 use crate::session_manager::{
     SavedSession, SessionListFilter, SessionManager, SessionMutator,
@@ -229,14 +230,14 @@ mod tests {
     fn saved(id: &str, title: &str, workspace: &Path) -> SavedSession {
         let messages = vec![
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: format!("prompt for {title}"),
                     cache_control: None,
                 }],
             },
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::Text {
                     text: format!("reply for {title}"),
                     cache_control: None,

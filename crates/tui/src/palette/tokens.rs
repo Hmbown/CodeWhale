@@ -13,14 +13,13 @@ pub const WHALE_TEXT_BODY_RGB: (u8, u8, u8) = (246, 242, 232); // #F6F2E8 Whale 
 pub const WHALE_TEXT_SOFT_RGB: (u8, u8, u8) = (182, 192, 212); // #B6C0D4
 pub const WHALE_TEXT_MUTED_RGB: (u8, u8, u8) = (147, 160, 184); // #93A0B8
 pub const WHALE_TEXT_HINT_RGB: (u8, u8, u8) = (138, 153, 179); // #8A99B3 — nudged +0.4 contrast for AA hint on #03070D
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const WHALE_TEXT_DIM_RGB: (u8, u8, u8) = (105, 119, 145); // #697791
 pub const WHALE_ACTION_RGB: (u8, u8, u8) = (106, 174, 242); // #6AAEF2 Blue — owns interaction on dark
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const WHALE_COBALT_RGB: (u8, u8, u8) = (49, 95, 216); // #315FD8 Cobalt — light-mode action
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const WHALE_ICE_RGB: (u8, u8, u8) = (209, 235, 244); // #D1EBF4 Ice — structure on dark
-#[allow(dead_code)]
 pub const WHALE_CYAN_RGB: (u8, u8, u8) = (72, 215, 255); // #48D7FF Cyan — bounded accents only
 pub const WHALE_ACCENT_SECONDARY_RGB: (u8, u8, u8) = (79, 209, 197); // #4FD1C5 Seafoam
 // Whale Teams (Signal Cut, CWC 2026-08-15) identity accents. These two brand
@@ -35,7 +34,7 @@ pub const WHALE_HUMAN_RGB: (u8, u8, u8) = (246, 196, 83); // #F6C453 Signal Gold
 /// ([`WHALE_HUMAN_RGB`]), never for general interaction.
 pub const WHALE_ACCENT_PRIMARY_RGB: (u8, u8, u8) = WHALE_ACTION_RGB;
 pub const WHALE_WORKING_GREEN_RGB: (u8, u8, u8) = (155, 214, 111); // #9BD66F Working Green
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const WHALE_ACCENT_ACTION_RGB: (u8, u8, u8) = WHALE_ACTION_RGB;
 pub const WHALE_ERROR_RGB: (u8, u8, u8) = (255, 134, 178); // #FF86B2 Rose danger
 pub const WHALE_ERROR_HOVER_RGB: (u8, u8, u8) = (255, 156, 194); // #FF9CC2
@@ -57,7 +56,7 @@ pub const SOLARIZED_BASE01_RGB: (u8, u8, u8) = (0x52, 0x66, 0x6D); // lifted for
 pub const SOLARIZED_BASE00_RGB: (u8, u8, u8) = (0x65, 0x7B, 0x83);
 pub const SOLARIZED_BASE0_RGB: (u8, u8, u8) = (0x72, 0x81, 0x82); // lifted for 3:1 hint text
 pub const SOLARIZED_BASE1_RGB: (u8, u8, u8) = (0x93, 0xA1, 0xA1);
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const SOLARIZED_BASE2_RGB: (u8, u8, u8) = (0xEE, 0xE8, 0xD5);
 pub const SOLARIZED_BASE3_RGB: (u8, u8, u8) = (0xFD, 0xF6, 0xE3);
 pub const SOLARIZED_YELLOW_RGB: (u8, u8, u8) = (0xB4, 0x88, 0x00); // lifted for 3:1 on ivory
@@ -71,7 +70,7 @@ pub const SOLARIZED_ELEVATED_RGB: (u8, u8, u8) = (0xE4, 0xDF, 0xCF);
 pub const SOLARIZED_SELECT_RGB: (u8, u8, u8) = (0xD6, 0xD2, 0xC9);
 
 pub const WHALE_DIFF_ADDED_RGB: (u8, u8, u8) = (87, 199, 133); // #57C785
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const WHALE_DIFF_DELETED_RGB: (u8, u8, u8) = WHALE_ERROR_RGB;
 pub const WHALE_DIFF_ADDED_BG_RGB: (u8, u8, u8) = (18, 42, 34); // #122A22
 // Raw colors that are remapped by equality must remain distinct across roles.
@@ -451,26 +450,23 @@ pub const LIGHT_USER_BODY: Color = LIGHT_SUCCESS_FG;
 // Compatibility semantic colors for UI theming
 pub const BORDER_COLOR: Color =
     Color::Rgb(BORDER_COLOR_RGB.0, BORDER_COLOR_RGB.1, BORDER_COLOR_RGB.2);
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const ACCENT_PRIMARY: Color = Color::Rgb(
     WHALE_ACCENT_PRIMARY_RGB.0,
     WHALE_ACCENT_PRIMARY_RGB.1,
     WHALE_ACCENT_PRIMARY_RGB.2,
 );
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const ACCENT_SECONDARY: Color = Color::Rgb(
     WHALE_ACCENT_SECONDARY_RGB.0,
     WHALE_ACCENT_SECONDARY_RGB.1,
     WHALE_ACCENT_SECONDARY_RGB.2,
 );
-#[allow(dead_code)]
 pub const BACKGROUND_DARK: Color = Color::Rgb(WHALE_BG_RGB.0, WHALE_BG_RGB.1, WHALE_BG_RGB.2);
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const STATUS_NEUTRAL: Color = TEXT_MUTED;
-#[allow(dead_code)]
 pub const SURFACE_PANEL: Color =
     Color::Rgb(WHALE_PANEL_RGB.0, WHALE_PANEL_RGB.1, WHALE_PANEL_RGB.2);
-#[allow(dead_code)]
 pub const SURFACE_ELEVATED: Color = Color::Rgb(
     WHALE_ELEVATED_RGB.0,
     WHALE_ELEVATED_RGB.1,
@@ -486,9 +482,7 @@ pub const SURFACE_REASONING_TINT: Color = Color::Rgb(
     WHALE_REASONING_TINT_RGB.1,
     WHALE_REASONING_TINT_RGB.2,
 );
-#[allow(dead_code)]
 pub const SURFACE_REASONING_ACTIVE: Color = Color::Rgb(58, 46, 32);
-#[allow(dead_code)]
 pub const SURFACE_TOOL: Color = Color::Rgb(
     WHALE_TOOL_SURFACE_RGB.0,
     WHALE_TOOL_SURFACE_RGB.1,
@@ -499,9 +493,7 @@ pub const SURFACE_TOOL_ACTIVE: Color = Color::Rgb(
     WHALE_TOOL_ACTIVE_RGB.1,
     WHALE_TOOL_ACTIVE_RGB.2,
 );
-#[allow(dead_code)]
 pub const SURFACE_SUCCESS: Color = Color::Rgb(18, 42, 37); // dark teal tint
-#[allow(dead_code)]
 pub const SURFACE_ERROR: Color = Color::Rgb(
     WHALE_ERROR_SURFACE_RGB.0,
     WHALE_ERROR_SURFACE_RGB.1,
@@ -555,7 +547,6 @@ pub const STATUS_WARNING: Color = Color::Rgb(
     WHALE_WARNING_RGB.2,
 );
 pub const STATUS_ERROR: Color = Color::Rgb(WHALE_ERROR_RGB.0, WHALE_ERROR_RGB.1, WHALE_ERROR_RGB.2);
-#[allow(dead_code)]
 pub const STATUS_INFO: Color = Color::Rgb(WHALE_INFO_RGB.0, WHALE_INFO_RGB.1, WHALE_INFO_RGB.2);
 
 // Mode-specific accent colors for mode badges
@@ -585,5 +576,4 @@ pub const SELECTION_BG: Color = Color::Rgb(
     WHALE_SELECTION_RGB.1,
     WHALE_SELECTION_RGB.2,
 );
-#[allow(dead_code)]
 pub const COMPOSER_BG: Color = WHALE_COMPOSER;

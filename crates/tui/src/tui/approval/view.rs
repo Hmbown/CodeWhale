@@ -270,6 +270,10 @@ impl ModalView for ApprovalView {
         ModalKind::Approval
     }
 
+    fn approval_request_id(&self) -> Option<&str> {
+        Some(&self.request.id)
+    }
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }

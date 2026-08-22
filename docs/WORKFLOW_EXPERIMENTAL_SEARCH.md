@@ -1,12 +1,14 @@
 # Workflow Experimental Search
 
 Experimental search is an option for **Workflow**, not a fourth mode and not a
-second scheduler. Fleet still owns workers, routes, concurrency, leases, and
-receipts. Workflow owns the frozen order: independent generation, evaluation,
-selection, repair, and verification.
+second scheduler. Fleet owns the roster and deterministic member selection.
+Runtime owns execution routes, concurrency, leases, and receipts. Workflow owns
+the frozen order: independent generation, evaluation, selection, repair, and
+verification.
 
-The product vocabulary is Fleet (who), Workflow (what order), Lane (one running
-Workflow), Runtime (where/how), and Operate (the mode). Do not introduce
+The product vocabulary is Fleet (roster and selected member), Workflow (what
+order), Lane (one running Workflow), Runtime (where/how/authority), and Operate
+(the mode). Do not introduce
 "WhaleFlow" as a current synonym.
 
 ## Current foundation
@@ -65,7 +67,7 @@ the candidate id last. Preliminary scouts can use lower effort while promoted
 implementers/finalists use high or max effort.
 
 Record both the requested API model id and the resolved provider version.
-Provider account concurrency is not Fleet concurrency: the runtime keeps its
+Provider account concurrency is not Runtime worker concurrency: the runtime keeps its
 16-live-worker ceiling, handles 429 responses and keep-alives outside the
 deterministic VM, and stops new admissions when the shared budget is exhausted.
 

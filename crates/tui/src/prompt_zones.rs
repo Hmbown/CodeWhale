@@ -21,15 +21,14 @@
 //! `AppendLog` / `TurnScratch` / `ThreeZoneRequest` are type scaffolding
 //! for future phases — not yet wired into the request path.
 
+use crate::models::Role;
 use crate::models::{Message, SystemPrompt, Tool};
 // ── helpers ────────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
 fn sha256_hex(bytes: &[u8]) -> String {
     crate::hashing::sha256_hex(bytes)
 }
 
-#[allow(dead_code)]
 fn system_text(system: Option<&SystemPrompt>) -> String {
     match system {
         Some(SystemPrompt::Text(text)) => text.clone(),
@@ -46,7 +45,6 @@ fn system_text(system: Option<&SystemPrompt>) -> String {
 }
 
 /// Serialize tools to a deterministic, sorted JSON string for hashing.
-#[allow(dead_code)]
 fn tool_catalog_digest(tools: &[Tool]) -> String {
     let mut serialized: Vec<String> = tools
         .iter()
@@ -56,7 +54,6 @@ fn tool_catalog_digest(tools: &[Tool]) -> String {
     serialized.join("\n")
 }
 
-#[allow(dead_code)]
 fn combined_hash(system_text: &str, tools: &[Tool]) -> String {
     let system_sha = sha256_hex(system_text.as_bytes());
     let tools_digest = tool_catalog_digest(tools);
@@ -73,14 +70,12 @@ fn combined_hash(system_text: &str, tools: &[Tool]) -> String {
 ///
 /// Use [`PinnedPrefix::freeze`] to produce one.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub struct FrozenPrefix {
     pub(crate) system_text: String,
     pub(crate) tool_catalog: String,
     pub(crate) combined_sha256: String,
 }
 
-#[allow(dead_code)]
 impl FrozenPrefix {
     /// Verify that `current_system_text` and `current_tools` match the frozen
     /// prefix. Returns `Ok(())` when stable, `Err(PrefixDrift)` on mismatch.
@@ -130,13 +125,11 @@ impl FrozenPrefix {
 /// A mutable prefix builder. Construct from the system prompt and tool
 /// catalog, then call [`freeze`](Self::freeze) to produce a [`FrozenPrefix`].
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct PinnedPrefix {
     system_text: String,
     tools: Vec<Tool>,
 }
 
-#[allow(dead_code)]
 impl PinnedPrefix {
     #[must_use]
     pub fn new(system: Option<&SystemPrompt>, tools: Vec<Tool>) -> Self {
@@ -164,7 +157,6 @@ impl PinnedPrefix {
 
 /// Describes how the current prefix differs from the frozen baseline.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub struct PrefixDrift {
     pub system_changed: bool,
     pub tools_changed: bool,
@@ -294,14 +286,14 @@ impl std::ops::Deref for AppendLog {
 /// Per-turn ephemeral data. Cleared at every turn boundary.
 ///
 /// **Phase 1 scaffolding** — not yet wired into the engine request path.
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code))]
 #[derive(Debug, Clone, Default)]
 pub struct TurnScratch {
     pub working_set: Vec<String>,
     pub user_message: Option<Message>,
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code))]
 impl TurnScratch {
     pub fn new() -> Self {
         Self::default()
@@ -324,7 +316,7 @@ impl TurnScratch {
 ///
 /// **Phase 1 scaffolding** — not yet wired into the engine request path.
 /// Currently the engine continues to use `MessageRequest` directly.
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ThreeZoneRequest<'a> {
     pub prefix: &'a FrozenPrefix,
@@ -343,7 +335,7 @@ pub struct ThreeZoneRequest<'a> {
     pub metadata: Option<serde_json::Value>,
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code))]
 impl<'a> ThreeZoneRequest<'a> {
     /// Build the full message list from system prompt, append-log messages,
     /// and scratch user message. The returned vector is serialized as the
@@ -355,7 +347,7 @@ impl<'a> ThreeZoneRequest<'a> {
         match self.system.as_ref() {
             Some(SystemPrompt::Text(text)) => {
                 messages.push(Message {
-                    role: "system".to_string(),
+                    role: Role::System,
                     content: vec![crate::models::ContentBlock::Text {
                         text: text.clone(),
                         cache_control: None,
@@ -371,7 +363,7 @@ impl<'a> ThreeZoneRequest<'a> {
                     })
                     .collect();
                 messages.push(Message {
-                    role: "system".to_string(),
+                    role: Role::System,
                     content,
                 });
             }
@@ -424,7 +416,7 @@ mod tests {
 
     fn make_message(role: &str, text: &str) -> Message {
         Message {
-            role: role.to_string(),
+            role: Role::from(role),
             content: vec![ContentBlock::Text {
                 text: text.to_string(),
                 cache_control: None,

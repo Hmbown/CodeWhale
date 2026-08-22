@@ -3,7 +3,8 @@
 //! A saved Fleet is editable; a *running* Workflow is not. At start we capture
 //! a secret-free, durable value containing the qualified Fleet identity, the
 //! schema kind/revision/hash, the exact members, the exact routes, the
-//! reasoning policies, and the permission ceilings. Editing the saved file
+//! reasoning policies. Authority is absent by design: Runtime derives it from
+//! the selected member's Runtime role and the live parent. Editing the saved file
 //! afterwards changes only future runs — the snapshot in flight is unaffected,
 //! because it owns copies and exposes no mutators.
 //!
@@ -55,7 +56,19 @@ pub struct FleetSnapshotMember {
     /// The reasoning policy the member requested (not the effective tier —
     /// that is resolved per run and recorded on the receipt).
     pub requested_reasoning: RequestedReasoning,
-    pub permissions: PermissionCeiling,
+    /// Prototype snapshot compatibility only.
+    ///
+    /// New captures leave this absent. Old replay snapshots need the historic
+    /// value solely to verify their original content hash; selection and
+    /// Runtime authority never read it. Re-serializing a verified old snapshot
+    /// preserves the field so its evidence remains round-trippable, while a
+    /// fresh recapture emits the canonical authority-free shape.
+    #[serde(
+        default,
+        rename = "permissions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    legacy_permissions: Option<PermissionCeiling>,
 }
 
 /// The Reasoning Router service a snapshot is attached to.
@@ -164,7 +177,25 @@ impl FleetSnapshot {
     /// between a tampered or migrated snapshot and a receipt that vouches for
     /// it.
     pub fn verify_content_hash(&self) -> Result<(), ExactFleetError> {
-        let recomputed = self.compute_content_hash();
+        let recomputed = if self
+            .members
+            .iter()
+            .any(|member| member.legacy_permissions.is_some())
+        {
+            // Once an old authority-bearing field is present, it must be
+            // covered by the historic hash. Accepting the new canonical hash
+            // here would let arbitrary compatibility bytes hitchhike on an
+            // otherwise valid snapshot without verification.
+            self.compute_legacy_content_hash().ok_or_else(|| {
+                ExactFleetError::ContentHashMismatch {
+                    fleet: self.fleet.qualified(),
+                    recorded: self.content_hash.clone(),
+                    recomputed: "unverifiable mixed legacy-permissions shape".to_string(),
+                }
+            })?
+        } else {
+            self.compute_content_hash()
+        };
         if recomputed == self.content_hash {
             return Ok(());
         }
@@ -189,12 +220,19 @@ impl FleetSnapshot {
         // Hash only the captured shape, not the timestamp: two Workflows
         // started from the same saved Fleet must agree.
         #[derive(Serialize)]
+        struct CanonicalMember<'a> {
+            id: &'a str,
+            role: &'a str,
+            route: &'a FrozenRoute,
+            requested_reasoning: RequestedReasoning,
+        }
+        #[derive(Serialize)]
         struct Shape<'a> {
             fleet: &'a QualifiedFleetId,
             schema_kind: &'a str,
             schema_revision: u32,
             schema_hash: &'a str,
-            members: &'a [FleetSnapshotMember],
+            members: Vec<CanonicalMember<'a>>,
             router: &'a Option<FleetSnapshotRouter>,
             legacy_roles: &'a [FleetSnapshotLegacyRole],
         }
@@ -204,12 +242,77 @@ impl FleetSnapshot {
             schema_kind: &self.schema_kind,
             schema_revision: self.schema_revision,
             schema_hash: &self.schema_hash,
-            members: &self.members,
+            members: self
+                .members
+                .iter()
+                .map(|member| CanonicalMember {
+                    id: &member.id,
+                    role: &member.role,
+                    route: &member.route,
+                    requested_reasoning: member.requested_reasoning,
+                })
+                .collect(),
             router: &self.router,
             legacy_roles: &self.legacy_roles,
         };
         let encoded = serde_json::to_vec(&shape).expect("snapshot shape is serializable");
         crate::named_fleet::sha256_label(&encoded)
+    }
+
+    /// Recompute the prototype content hash when (and only when) every exact
+    /// member carried its historic permission field. This validates old
+    /// evidence without projecting that field into current authority.
+    fn compute_legacy_content_hash(&self) -> Option<String> {
+        #[derive(Serialize)]
+        struct LegacyMember<'a> {
+            id: &'a str,
+            role: &'a str,
+            route: &'a FrozenRoute,
+            requested_reasoning: RequestedReasoning,
+            permissions: PermissionCeiling,
+        }
+        #[derive(Serialize)]
+        struct Shape<'a> {
+            fleet: &'a QualifiedFleetId,
+            schema_kind: &'a str,
+            schema_revision: u32,
+            schema_hash: &'a str,
+            members: Vec<LegacyMember<'a>>,
+            router: &'a Option<FleetSnapshotRouter>,
+            legacy_roles: &'a [FleetSnapshotLegacyRole],
+        }
+
+        if self.members.is_empty()
+            || self
+                .members
+                .iter()
+                .any(|member| member.legacy_permissions.is_none())
+        {
+            return None;
+        }
+        let shape = Shape {
+            fleet: &self.fleet,
+            schema_kind: &self.schema_kind,
+            schema_revision: self.schema_revision,
+            schema_hash: &self.schema_hash,
+            members: self
+                .members
+                .iter()
+                .map(|member| LegacyMember {
+                    id: &member.id,
+                    role: &member.role,
+                    route: &member.route,
+                    requested_reasoning: member.requested_reasoning,
+                    permissions: member
+                        .legacy_permissions
+                        .expect("checked every legacy permission above"),
+                })
+                .collect(),
+            router: &self.router,
+            legacy_roles: &self.legacy_roles,
+        };
+        let encoded = serde_json::to_vec(&shape).expect("legacy snapshot shape is serializable");
+        Some(crate::named_fleet::sha256_label(&encoded))
     }
 
     #[must_use]
@@ -323,7 +426,7 @@ fn exact_members(exact: &ExactFleet) -> Vec<FleetSnapshotMember> {
             role: canonical_role_key(&member.role),
             route: member.frozen_route(),
             requested_reasoning: member.reasoning,
-            permissions: member.permissions,
+            legacy_permissions: None,
         })
         .collect()
 }
@@ -443,16 +546,82 @@ permissions = "analyst"
         assert!(tampered.into_verified().is_err());
     }
 
-    /// Widening a permission ceiling is the tamper that matters most, since the
-    /// receipt's fingerprint is computed from the ceiling this snapshot carries.
+    /// Prototype snapshots carried member `permissions`. A valid old content
+    /// hash remains verifiable for replay, but the field is compatibility
+    /// evidence only and a fresh capture emits the authority-free shape.
     #[test]
-    fn a_widened_permission_ceiling_is_rejected() {
+    fn a_valid_legacy_permission_snapshot_verifies_and_round_trips() {
         let snapshot = captured();
         let mut value = serde_json::to_value(&snapshot).expect("serialize");
-        value["members"][1]["permissions"]["write"] = serde_json::json!(true);
-        let tampered: FleetSnapshot = serde_json::from_value(value).expect("deserialize");
+        for index in 0..2 {
+            value["members"][index]["permissions"] = serde_json::json!({
+                "write": index == 0,
+                "network_tool": false,
+                "shell": "read_only",
+                "delegation_depth": 0,
+                "tools": true
+            });
+        }
+        let mut replay: FleetSnapshot = serde_json::from_value(value).expect("legacy replay loads");
+        replay.content_hash = replay
+            .compute_legacy_content_hash()
+            .expect("old shape has a legacy hash");
 
+        assert_ne!(replay.compute_content_hash(), replay.content_hash);
+        assert!(replay.verify_content_hash().is_ok());
+        let encoded = serde_json::to_string(&replay).expect("legacy replay remains durable");
+        assert!(encoded.contains("\"permissions\""), "{encoded}");
+        let decoded: FleetSnapshot = serde_json::from_str(&encoded).expect("round trip");
+        assert!(decoded.verify_content_hash().is_ok());
+    }
+
+    #[test]
+    fn a_tampered_legacy_permission_snapshot_fails_closed() {
+        let snapshot = captured();
+        let mut value = serde_json::to_value(&snapshot).expect("serialize");
+        for index in 0..2 {
+            value["members"][index]["permissions"] = serde_json::json!({
+                "write": false,
+                "network_tool": false,
+                "shell": "read_only",
+                "delegation_depth": 0,
+                "tools": true
+            });
+        }
+        let mut replay: FleetSnapshot = serde_json::from_value(value).expect("legacy replay loads");
+        replay.content_hash = replay
+            .compute_legacy_content_hash()
+            .expect("old shape has a legacy hash");
+        let recorded = replay.content_hash.clone();
+
+        let mut tampered = serde_json::to_value(&replay).expect("serialize old replay");
+        tampered["members"][0]["permissions"]["write"] = serde_json::json!(true);
+        let tampered: FleetSnapshot = serde_json::from_value(tampered).expect("deserialize");
+        assert_eq!(tampered.content_hash(), recorded);
         assert!(tampered.verify_content_hash().is_err());
+    }
+
+    #[test]
+    fn legacy_permission_bytes_must_be_covered_by_the_legacy_hash() {
+        let snapshot = captured();
+        let canonical_hash = snapshot.content_hash().to_string();
+        let mut value = serde_json::to_value(&snapshot).expect("serialize");
+        for index in 0..2 {
+            value["members"][index]["permissions"] = serde_json::json!({
+                "write": false,
+                "network_tool": false,
+                "shell": "read_only",
+                "delegation_depth": 0,
+                "tools": true
+            });
+        }
+        let replay: FleetSnapshot = serde_json::from_value(value).expect("legacy shape loads");
+
+        assert_eq!(replay.content_hash(), canonical_hash);
+        assert!(
+            replay.verify_content_hash().is_err(),
+            "legacy bytes may not hitchhike on the authority-free canonical hash"
+        );
     }
 
     /// A forged hash fails the same way an edited body does: the check is a
@@ -597,7 +766,7 @@ call_reasoning = "low"
     }
 
     #[test]
-    fn snapshot_captures_identity_schema_routes_and_ceilings() {
+    fn snapshot_captures_identity_schema_routes_and_reasoning() {
         let snapshot = capture(EXACT, Some(luna()));
 
         assert_eq!(snapshot.fleet().qualified(), "workspace/glm-pair");
@@ -613,7 +782,8 @@ call_reasoning = "low"
         assert_eq!(by_id.route.provider, "zai");
         assert_eq!(by_id.route.model, "glm-5");
         assert_eq!(by_id.requested_reasoning, RequestedReasoning::Auto);
-        assert!(by_id.permissions.write);
+        let member_json = serde_json::to_value(by_id).expect("serialize member");
+        assert!(member_json.get("permissions").is_none(), "{member_json}");
 
         // An id lookup must not answer to a role, or a task naming one would
         // silently resolve the other.
@@ -710,8 +880,8 @@ call_reasoning = "low"
     fn editing_the_saved_fleet_does_not_touch_a_running_snapshot() {
         let snapshot = capture(EXACT, Some(luna()));
 
-        // The operator edits the saved file mid-run: different model, different
-        // reasoning, wider permissions.
+        // The operator edits the saved file mid-run: different model and
+        // reasoning. (The historic permissions key remains ignored input.)
         let edited = EXACT
             .replace(
                 "model = \"glm-5\"\nreasoning = \"auto\"",
@@ -724,7 +894,6 @@ call_reasoning = "low"
         let member = snapshot.member("implementer").expect("member");
         assert_eq!(member.route.model, "glm-5");
         assert_eq!(member.requested_reasoning, RequestedReasoning::Auto);
-        assert!(!member.permissions.network_tool);
 
         // The next run sees the edit, and the hashes prove they differ.
         assert_eq!(next.member("implementer").unwrap().route.model, "glm-4");
@@ -851,7 +1020,6 @@ call_reasoning = "low"
             provider: "zai".to_string(),
             model: "glm-5".to_string(),
             reasoning: RequestedReasoning::Off,
-            permissions: PermissionCeiling::default(),
         };
         let smuggled = ExactFleet {
             name: "f".to_string(),

@@ -187,6 +187,7 @@ fn parse_args(raw: &str) -> Result<PreviewArgs, String> {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::models::Role;
 
     fn args(raw: &str) -> Result<PreviewArgs, String> {
         parse_args(raw)
@@ -366,7 +367,7 @@ mod tests {
         ));
         let mut app = App::new(options, &Config::default());
         app.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![crate::models::ContentBlock::Text {
                 text: "hello".to_string(),
                 cache_control: None,

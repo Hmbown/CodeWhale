@@ -5,10 +5,12 @@ use serde::Deserialize;
 
 pub mod check;
 pub mod install;
+pub mod launch;
 pub mod tls;
 
 pub use check::{SuppressionReason, UpdateCheckCache, suppression_reason};
 pub use install::{InstallMethod, current_install_method};
+pub use launch::{LaunchOutcome, VersionChange, record_launch};
 
 /// Filename of the SHA-256 checksum manifest included in every release.
 ///

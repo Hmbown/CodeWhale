@@ -1254,7 +1254,7 @@ mod tests {
 
     /// Serialise env-mutating tests: tests in this module poke
     /// `DEEPSEEK_API_KEY` etc., which is process-global.
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()

@@ -1677,6 +1677,31 @@ impl Drop for BackgroundShell {
     }
 }
 
+#[cfg(all(unix, not(target_env = "ohos")))]
+pub(crate) fn inherited_interactive_terminal_refusal() -> Option<&'static str> {
+    Some(
+        "Inherited interactive terminal takeover is unavailable on Unix because foreground TTY \
+         ownership cannot be transferred safely. Use Bash with `background: true, tty: true`, \
+         then continue it with `action: \"interact\"` and the returned `task_id`; alternatively \
+         use `terminal/run` and `terminal/send`, or launch the command in a new terminal. For \
+         non-interactive work, omit `interactive: true`.",
+    )
+}
+
+#[cfg(all(unix, target_env = "ohos"))]
+pub(crate) fn inherited_interactive_terminal_refusal() -> Option<&'static str> {
+    Some(
+        "Inherited interactive terminal takeover is unavailable on Unix because foreground TTY \
+         ownership cannot be transferred safely. Launch the command in a new terminal, or omit \
+         `interactive: true` for non-interactive work.",
+    )
+}
+
+#[cfg(not(unix))]
+pub(crate) fn inherited_interactive_terminal_refusal() -> Option<&'static str> {
+    None
+}
+
 /// Manages background shell processes with optional sandboxing.
 pub struct ShellManager {
     processes: HashMap<String, BackgroundShell>,
@@ -2059,6 +2084,17 @@ impl ShellManager {
         extra_env: HashMap<String, String>,
     ) -> Result<ShellResult> {
         crate::shell_dispatcher::ShellDispatcher::log_exec(command);
+
+        // A new Unix process group that inherits the terminal is not its
+        // foreground owner. Letting it read stdin triggers SIGTTIN; sharing
+        // Codewhale's group instead would make cooked-mode Ctrl+C terminate
+        // both parent and child. Until this path owns a complete POSIX job-
+        // control lease, fail closed before spawning. Persistent PTY tools
+        // already provide a safe interactive lane without taking over the
+        // operator's live terminal.
+        if let Some(message) = inherited_interactive_terminal_refusal() {
+            return Err(anyhow!(message));
+        }
 
         let work_dir = working_dir.map_or_else(|| self.default_workspace.clone(), PathBuf::from);
         validate_shell_working_dir(&work_dir, working_dir.is_none())?;
@@ -4230,7 +4266,7 @@ impl ToolSpec for LowercaseBashTool {
     }
 
     fn description(&self) -> &'static str {
-        "Execute a shell command in the workspace and return stdout and stderr. Output keeps the last 2000 lines or 50KB. An optional timeout is expressed in seconds; when omitted there is no default timeout. In Ask, after a sandbox denial, retry the exact command once with sandbox_permissions (the narrowest wider mode that suffices) and a one-sentence justification; the approval prompt asks the user."
+        "Execute a shell command in the workspace and return stdout and stderr. Output keeps the last 2000 lines or 50KB. An optional timeout is expressed in seconds; when omitted the command is killed after 120 seconds, so pass an explicit timeout for work expected to take longer. In Ask, after a sandbox denial, retry the exact command once with sandbox_permissions (the narrowest wider mode that suffices) and a one-sentence justification; the approval prompt asks the user."
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -4238,7 +4274,7 @@ impl ToolSpec for LowercaseBashTool {
             "type": "object",
             "properties": {
                 "command": { "type": "string", "description": "Bash command to execute." },
-                "timeout": { "type": "number", "description": "Optional timeout in seconds; there is no default timeout." },
+                "timeout": { "type": "number", "description": "Optional timeout in seconds; when omitted the command is killed after 120 seconds." },
                 "sandbox_permissions": {
                     "type": "string",
                     "enum": ["workspace-write", "danger-full-access"],

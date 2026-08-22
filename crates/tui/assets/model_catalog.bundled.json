@@ -22,6 +22,15 @@
       "supported_parameters": ["reasoning"],
       "provenance": "bundled"
     },
+    "deepseek-v4-flash-vision-exp": {
+      "id": "deepseek-v4-flash-vision-exp",
+      "context_window": 1000000,
+      "max_output": 384000,
+      "supports_reasoning": true,
+      "modalities": ["text", "image"],
+      "supported_parameters": ["reasoning"],
+      "provenance": "bundled"
+    },
     "gpt-5-codex": {
       "id": "gpt-5-codex",
       "context_window": 400000,

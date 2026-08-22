@@ -165,42 +165,22 @@ impl AgentProgressEventMeta {
 pub enum Event {
     // === Streaming Events ===
     /// A new message block has started
-    MessageStarted {
-        #[allow(dead_code)]
-        index: usize,
-    },
+    MessageStarted { index: usize },
 
     /// Incremental text content delta
-    MessageDelta {
-        #[allow(dead_code)]
-        index: usize,
-        content: String,
-    },
+    MessageDelta { index: usize, content: String },
 
     /// Message block completed
-    MessageComplete {
-        #[allow(dead_code)]
-        index: usize,
-    },
+    MessageComplete { index: usize },
 
     /// Thinking block started
-    ThinkingStarted {
-        #[allow(dead_code)]
-        index: usize,
-    },
+    ThinkingStarted { index: usize },
 
     /// Incremental thinking content delta
-    ThinkingDelta {
-        #[allow(dead_code)]
-        index: usize,
-        content: String,
-    },
+    ThinkingDelta { index: usize, content: String },
 
     /// Thinking block completed
-    ThinkingComplete {
-        #[allow(dead_code)]
-        index: usize,
-    },
+    ThinkingComplete { index: usize },
 
     // === Tool Events ===
     /// Tool call initiated
@@ -305,10 +285,8 @@ pub enum Event {
         auto: bool,
         message: String,
         /// Number of messages before compaction.
-        #[allow(dead_code)]
         messages_before: Option<usize>,
         /// Number of messages after compaction.
-        #[allow(dead_code)]
         messages_after: Option<usize>,
         /// Rendered text of the accumulated compaction summary prompt, if any.
         /// Host layers (e.g. the /v1 runtime) persist this into the thread
@@ -449,7 +427,6 @@ pub enum Event {
     /// An error occurred
     Error {
         envelope: ErrorEnvelope,
-        #[allow(dead_code)]
         recoverable: bool,
     },
 
@@ -521,7 +498,6 @@ pub enum Event {
     },
 
     /// Request user decision after sandbox denial
-    #[allow(dead_code)]
     ElevationRequired {
         tool_id: String,
         tool_name: String,

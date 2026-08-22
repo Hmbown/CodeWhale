@@ -1,7 +1,7 @@
 # Hmbown.CodeWhale — winget singleton manifest for CodeWhale (single binary)
 # PackageIdentifier follows the publisher convention used by the Homebrew formula (codewhale).
-# This file is the source of truth for winget-pkgs submission; see README.md for the update flow.
-# The single-binary release (v0.9.5+) ships only `codewhale` + `codew` per target — no `codewhale-tui` asset.
+# Canonical maintenance instructions live in packaging/winget/README.md; the generator mirrors these exact bytes to .winget/.
+# Winget installs only `codewhale` + `codew`; compatibility release filenames are not installed commands.
 
 PackageIdentifier: Hmbown.CodeWhale
 PackageVersion: 0.9.6
@@ -19,7 +19,7 @@ LicenseUrl: https://github.com/Hmbown/CodeWhale/blob/main/LICENSE
 Copyright: Copyright (c) Hmbown
 ShortDescription: Terminal coding agent for supported hosted and local models
 Description: |
-  CodeWhale is a terminal coding agent that runs on your machine. The v0.9.5 single-binary
+  CodeWhale is a terminal coding agent that runs on your machine. The v0.9.5+ single-binary
   release ships one `codewhale` binary per target (plus the `codew` shim) across Linux x64 (musl),
   Linux arm64, Android arm64, macOS x64/arm64, and Windows x64/arm64. See https://github.com/Hmbown/CodeWhale
   for provider setup, Fleet workflows, and the full install guide (docs/INSTALL.md).

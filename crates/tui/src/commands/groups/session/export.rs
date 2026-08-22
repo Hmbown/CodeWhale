@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::commands::traits::{CommandInfo, RegisterCommand};
 use crate::localization::MessageId;
-use crate::models::{ContentBlock, Message};
+use crate::models::{ContentBlock, Message, Role};
 use crate::tui::app::App;
 use crate::tui::history::HistoryCell;
 
@@ -358,7 +358,7 @@ impl RestorePoints {
     /// an export message index are different counters, and asserting they line
     /// up would be a guess presented as provenance.
     fn render_correlation(&self, out: &mut String, message: &Message) {
-        if !message.role.trim().eq_ignore_ascii_case("user") {
+        if message.role != Role::User {
             return;
         }
         let Self::Recorded(snapshots) = self else {
@@ -434,9 +434,9 @@ fn first_text_block(message: &Message) -> Option<&str> {
 }
 
 fn render_message(out: &mut String, index: usize, message: &Message) {
-    let role = inline_text(&message.role);
+    let role = inline_text(message.role.as_str());
     let _ = writeln!(out, "## {index}. {role}\n");
-    if is_internal_role(&message.role) {
+    if is_internal_role(message.role.as_str()) {
         out.push_str("[internal context omitted]\n\n");
         return;
     }
@@ -929,21 +929,21 @@ mod tests {
         app.current_session_id = Some("session-123456789".to_string());
         app.api_messages = vec![
             Message {
-                role: "system".to_string(),
+                role: Role::System,
                 content: vec![ContentBlock::Text {
                     text: "hidden policy must never export".to_string(),
                     cache_control: None,
                 }],
             },
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "Please inspect this\u{1b}[31m output\u{1b}[0m".to_string(),
                     cache_control: None,
                 }],
             },
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![
                     ContentBlock::Thinking {
                         thinking: "private chain of thought".to_string(),
@@ -967,7 +967,7 @@ mod tests {
                 ],
             },
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: "call-1".to_string(),
                     content: "Authorization: Bearer another-secret-token\nresult ok".to_string(),
@@ -979,7 +979,7 @@ mod tests {
                 }],
             },
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::ImageUrl {
                     image_url: ImageUrlContent {
                         url: "data:image/png;base64,very-secret-image-data".to_string(),
@@ -1078,7 +1078,7 @@ mod tests {
         let tmpdir = TempDir::new().expect("tempdir");
         let mut app = test_app(&tmpdir);
         app.api_messages.push(Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "first export".to_string(),
                 cache_control: None,
@@ -1231,7 +1231,7 @@ mod tests {
 
     fn user_message(text: &str) -> Message {
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: text.to_string(),
                 cache_control: None,
@@ -1369,7 +1369,7 @@ mod tests {
         points.render_correlation(
             &mut out,
             &Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::Text {
                     text: "hello".to_string(),
                     cache_control: None,

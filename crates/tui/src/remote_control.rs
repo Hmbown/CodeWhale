@@ -132,6 +132,10 @@ pub enum RemoteEvent {
         command: RemoteCommand,
     },
     Failed(String),
+    /// The relay died before any server-confirmed lease existed — during
+    /// enrollment, device authorization, or the first connect. No lease can
+    /// still be live, so nothing is locked and `/rc` can retry immediately.
+    FailedPreLease(String),
     Stopped,
     OwnershipRestored {
         approvals: Vec<PendingRemoteApproval>,
@@ -185,6 +189,21 @@ pub enum RemoteCommand {
 pub enum RemoteControlRequest {
     Interrupt,
     Cancel,
+}
+
+enum RelayPhase {
+    /// Everything before the first server-confirmed lease: control-plane base
+    /// resolution, enrollment, device authorization, and the first connect.
+    Enrolling,
+    /// The server confirmed a lease (Connected was emitted). Any failure now
+    /// is a lost-after-lease disconnect and stays fail-closed.
+    Leased,
+}
+
+impl RelayPhase {
+    fn lease_confirmed(&self) -> bool {
+        matches!(self, Self::Leased)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -459,11 +478,6 @@ struct ActiveRelayRun {
 #[derive(Debug, Clone)]
 pub struct PendingRemoteApproval {
     pub tool_id: String,
-    pub tool_name: String,
-    pub description: String,
-    pub input: Value,
-    pub approval_key: String,
-    pub intent_summary: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -603,8 +617,13 @@ impl RemoteControlController {
         self.worker_tx = Some(worker_tx);
         self.event_rx = Some(event_rx);
         self.worker = Some(tokio::spawn(async move {
-            if let Err(error) = relay_worker(start, worker_rx, event_tx.clone()).await {
-                let _ = event_tx.send(RemoteEvent::Failed(error));
+            let mut phase = RelayPhase::Enrolling;
+            if let Err(error) = relay_worker(start, worker_rx, event_tx.clone(), &mut phase).await {
+                let _ = if phase.lease_confirmed() {
+                    event_tx.send(RemoteEvent::Failed(error))
+                } else {
+                    event_tx.send(RemoteEvent::FailedPreLease(error))
+                };
             }
         }));
         Ok(())
@@ -669,6 +688,11 @@ impl RemoteControlController {
                 self.ownership_blocked_until = Some(Instant::now() + OWNERSHIP_LOCK_AFTER_FAILURE);
             }
         }
+        if self.status == Status::Failed && self.ownership_blocked_until.is_none() {
+            // A pre-lease failure holds no lease; stopping is an ordinary
+            // reset, not a drain confirmation.
+            self.status = Status::Off;
+        }
         if self.status == Status::Off {
             self.account_ref = None;
             self.links = RemoteLinks::default();
@@ -724,7 +748,7 @@ impl RemoteControlController {
                 // beyond this attachment; resend every pending run now.
                 self.flush_all_pending();
                 self.status = Status::Connected;
-                self.status_detail = "web owns prompts and approvals".to_string();
+                self.status_detail = "web mirror connected".to_string();
                 self.ownership_blocked_until = None;
                 self.account_ref = Some(account_ref.clone());
                 self.target_ref = Some(target_ref.clone());
@@ -735,6 +759,16 @@ impl RemoteControlController {
             }
             RemoteEvent::RuntimeCursor { run_id, cursor } => {
                 self.reconcile_runtime_cursor(run_id, *cursor);
+            }
+            RemoteEvent::FailedPreLease(reason) => {
+                // No server-confirmed lease ever existed, so nothing is
+                // locked: no reconnect blackout, no approval handoff to
+                // undo, and `/rc` can retry immediately.
+                self.status = Status::Failed;
+                self.status_detail = reason.clone();
+                self.ownership_blocked_until = None;
+                self.active_run = None;
+                self.pending_local_turn_run = None;
             }
             RemoteEvent::Failed(reason) => {
                 self.status = Status::Failed;
@@ -817,47 +851,86 @@ impl RemoteControlController {
             Status::Stopping => {
                 "Remote control: stopping · confirming the runner is offline".to_string()
             }
-            Status::Failed => format!("Remote control: disconnected · {}", self.status_detail),
+            Status::Failed => {
+                if self
+                    .ownership_blocked_until
+                    .is_some_and(|deadline| Instant::now() < deadline)
+                {
+                    format!(
+                        "Remote control: lost after connecting · {} · reconnect waits for the server lease to drain",
+                        self.status_detail
+                    )
+                } else {
+                    format!(
+                        "Remote control: failed before connecting · {} · /rc to retry",
+                        self.status_detail
+                    )
+                }
+            }
         }
     }
 
-    pub fn blocks_local_input(&self) -> bool {
-        let server_may_still_own = match self.status {
-            Status::Connecting | Status::Connected | Status::Stopping => true,
-            Status::Failed => self
-                .ownership_blocked_until
-                .is_some_and(|deadline| Instant::now() < deadline),
-            Status::Off => false,
+    /// Whether the web mirror can carry an approval decision right now.
+    ///
+    /// `Connecting` deliberately does not qualify: there is not yet an
+    /// attachment/run cursor able to carry a typed approval, so the local
+    /// card stays the only actionable surface until `Connected`. A
+    /// transport failure also disqualifies — a dead relay cannot deliver a
+    /// decision, and the local card remains the source of truth either way.
+    ///
+    /// Mirror semantics: this never gates *local* input. It only decides
+    /// whether the approval card is *also* shared with the web.
+    pub fn can_share_approval_with_web(&self) -> bool {
+        let attached = match self.status {
+            // A connection alone is not enough. Until a concrete typed turn
+            // id is bound, `record_remote_approval` has nowhere safe to send
+            // a decision, so the card stays local-only.
+            Status::Connected | Status::Stopping => self.active_run.is_some(),
+            Status::Off | Status::Connecting | Status::Failed => false,
         };
-        server_may_still_own && !self.applying_remote_command
+        attached && !self.applying_remote_command
     }
 
-    /// Whether an approval or structured question can be handed to the web.
-    ///
-    /// `Connecting` deliberately does not qualify. A server lease may be in
-    /// flight, so new local prompts stay blocked, but there is not yet an
-    /// attachment/run cursor able to carry a typed approval. Keeping the
-    /// approval local until `Connected` avoids hiding an actionable decision
-    /// behind a web surface that cannot receive it yet.
-    pub fn web_owns_turn_input(&self) -> bool {
-        let server_owns = match self.status {
-            // A connection alone is not a turn owner. Until a concrete typed
-            // turn id is bound, `record_remote_approval` has nowhere safe to
-            // send a decision and the local card must remain actionable.
-            Status::Connected | Status::Stopping => self.active_run.is_some(),
-            // After transport failure the old server lease may still own the
-            // turn. Keep decisions fail-closed; `OwnershipRestored` reopens
-            // every pending approval after the lease deadline.
-            Status::Failed => self
-                .ownership_blocked_until
-                .is_some_and(|deadline| Instant::now() < deadline),
-            Status::Off | Status::Connecting => false,
-        };
-        server_owns && !self.applying_remote_command
+    /// Record that the *local* surface answered an approval, so a late web
+    /// decision for the same tool is acknowledged as "no longer pending"
+    /// instead of double-answering the engine. First decision wins; the
+    /// other surface is told.
+    pub fn resolve_pending_approval(&mut self, tool_id: &str, approved: bool) -> bool {
+        let gate = projected_approval_id(tool_id);
+        if self.pending_approvals.remove(&gate).is_none() {
+            return false;
+        }
+        if let Some(active) = self.active_run.clone() {
+            self.upload_envelope(
+                &active.run_id,
+                "approval.resolved",
+                Some(&active.turn_id),
+                json!({
+                    "id": gate,
+                    "approval_id": gate,
+                    "decision": if approved { "approved" } else { "denied" },
+                    "decided_by": "terminal",
+                }),
+            );
+        }
+        true
     }
 
     pub fn set_applying_remote_command(&mut self, value: bool) {
         self.applying_remote_command = value;
+    }
+
+    /// Test-only: put the controller into the exact state a live connected
+    /// mirror with an attached run would be in, without a relay worker.
+    #[cfg(test)]
+    pub(crate) fn force_mirror_connected_for_tests(&mut self, run_id: &str, turn_id: &str) {
+        self.status = Status::Connected;
+        self.status_detail = "web mirror connected".to_string();
+        self.attached_run_id = Some(run_id.to_string());
+        self.active_run = Some(ActiveRelayRun {
+            run_id: run_id.to_string(),
+            turn_id: turn_id.to_string(),
+        });
     }
 
     pub fn claim_command(
@@ -1000,20 +1073,15 @@ impl RemoteControlController {
         tool_id: &str,
         tool_name: &str,
         description: &str,
-        input: &Value,
-        approval_key: &str,
-        intent_summary: Option<&str>,
+        _input: &Value,
+        _approval_key: &str,
+        _intent_summary: Option<&str>,
     ) -> String {
         let gate = projected_approval_id(tool_id);
         self.pending_approvals.insert(
             gate.clone(),
             PendingRemoteApproval {
                 tool_id: tool_id.to_string(),
-                tool_name: tool_name.to_string(),
-                description: description.to_string(),
-                input: input.clone(),
-                approval_key: approval_key.to_string(),
-                intent_summary: intent_summary.map(ToString::to_string),
             },
         );
         if let Some(active) = self.active_run.clone() {
@@ -1572,17 +1640,15 @@ pub fn target_ref(workspace: &Path) -> String {
 /// falls back to the opaque account and runner receipts.
 pub fn remote_control_banner(account_ref: &str, runner_id: &str, run_url: Option<&str>) -> String {
     match run_url {
-        Some(url) => format!("REMOTE CONTROL · {url} · /rc stop returns input here"),
-        None => format!(
-            "REMOTE CONTROL · account {account_ref} · runner {runner_id} · /rc stop returns input here"
-        ),
+        Some(url) => format!("WEB MIRROR · {url} · /rc stop"),
+        None => format!("WEB MIRROR · account {account_ref} · runner {runner_id} · /rc stop"),
     }
 }
 
 /// Transcript note announcing where the live session can be followed.
 pub fn remote_control_link_notice(run_url: &str) -> String {
     format!(
-        "Remote control is live at {run_url} — run /rc open to open it in your browser, or /rc link to print it."
+        "Remote control is live at {run_url} — run /rc open to open it in your browser, or /rc link to print it. Both surfaces stay usable; one turn runs at a time."
     )
 }
 
@@ -1713,6 +1779,19 @@ fn projected_approval_id(raw: &str) -> String {
     format!("local_approval_{}", &bytes_to_hex(&hasher.finalize())[..24])
 }
 
+/// Whether this view is the approval card for exactly `gate` (the projected
+/// approval id). Used by the web mirror to dismiss the matching card — never
+/// an unrelated approval that happens to be on top.
+pub(crate) fn view_is_approval_for_gate(
+    view: &dyn crate::tui::views::ModalView,
+    gate: &str,
+) -> bool {
+    view.kind() == crate::tui::views::ModalKind::Approval
+        && view
+            .approval_request_id()
+            .is_some_and(|tool_id| projected_approval_id(tool_id) == gate)
+}
+
 fn projected_error_item_id(run_id: &str, turn_id: &str, code: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"local-runtime:error\0");
@@ -1747,6 +1826,7 @@ async fn relay_worker(
     start: RemoteStart,
     mut worker_rx: mpsc::UnboundedReceiver<WorkerCommand>,
     event_tx: mpsc::UnboundedSender<RemoteEvent>,
+    phase: &mut RelayPhase,
 ) -> Result<(), String> {
     let base = runner_control_plane_base()?;
     let client = Client::builder()
@@ -1783,6 +1863,10 @@ async fn relay_worker(
     };
 
     let connection = connect_runner(&client, &enrollment, &start).await?;
+    // connect_runner answered with a server-confirmed attachment: a lease
+    // exists from here on, and every later failure is a lost-after-lease
+    // disconnect that must stay fail-closed.
+    *phase = RelayPhase::Leased;
     let mut runner_id = connection.runner_id.clone();
     event_tx
         .send(RemoteEvent::Connected {
@@ -2956,10 +3040,14 @@ async fn runner_request(
         return Err("runner_access_token_expired".to_string());
     }
     if !response.status().is_success() {
-        return Err(format!(
-            "The remote-control server rejected a request ({}).",
-            response.status()
-        ));
+        let status = response.status();
+        let excerpt = rejection_excerpt(response).await;
+        return Err(match excerpt {
+            Some(reason) => {
+                format!("The remote-control server rejected a request ({status}): {reason}.")
+            }
+            None => format!("The remote-control server rejected a request ({status})."),
+        });
     }
     read_bounded_json(response).await
 }
@@ -2977,12 +3065,58 @@ async fn public_request(
         .await
         .map_err(|_| "Remote control could not reach Codewhale.".to_string())?;
     if !response.status().is_success() {
-        return Err(format!(
-            "Codewhale rejected remote-control enrollment ({}).",
-            response.status()
-        ));
+        let status = response.status();
+        let excerpt = rejection_excerpt(response).await;
+        return Err(match excerpt {
+            Some(reason) => {
+                format!("Codewhale rejected remote-control enrollment ({status}): {reason}.")
+            }
+            None => format!("Codewhale rejected remote-control enrollment ({status})."),
+        });
     }
     read_bounded_json(response).await
+}
+
+/// Bounded error-body read: at most MAX_RESPONSE_BYTES, so a misbehaving
+/// control plane cannot force an unbounded in-memory read through the
+/// rejection-excerpt path.
+async fn rejection_excerpt(response: reqwest::Response) -> Option<String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+    {
+        return None;
+    }
+    let mut body = Vec::new();
+    let mut response = response;
+    while let Some(chunk) = response.chunk().await.ok()? {
+        body.extend_from_slice(&chunk);
+        if body.len() > MAX_RESPONSE_BYTES {
+            return None;
+        }
+    }
+    sanitized_rejection_excerpt(&body)
+}
+
+/// Sanitized, bounded reason excerpt from a rejection body. Only the
+/// conventional error fields are read, control characters are stripped, and
+/// the excerpt is capped — raw server bytes are never echoed further.
+fn sanitized_rejection_excerpt(body: &[u8]) -> Option<String> {
+    let parsed: Value = serde_json::from_slice(body).ok()?;
+    for field in ["error", "message", "title"] {
+        if let Some(text) = parsed.get(field).and_then(Value::as_str) {
+            let cleaned: String = text
+                .chars()
+                .filter(|character| !character.is_control())
+                .take(140)
+                .collect();
+            let trimmed = cleaned.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
 }
 
 async fn read_bounded_json(response: reqwest::Response) -> Result<Value, String> {
@@ -3276,6 +3410,7 @@ fn epoch_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Role;
     use std::sync::{Arc, Mutex};
     use wiremock::{
         Mock, MockServer, Request, Respond, ResponseTemplate,
@@ -3308,7 +3443,7 @@ mod tests {
 
     fn text_message(role: &str, text: impl Into<String>) -> Message {
         Message {
-            role: role.to_string(),
+            role: Role::from(role),
             content: vec![ContentBlock::Text {
                 text: text.into(),
                 cache_control: None,
@@ -3548,12 +3683,12 @@ mod tests {
         );
         assert_eq!(
             with_link,
-            "REMOTE CONTROL · https://app.codewhale.net/session?run=run_fixture · /rc stop returns input here"
+            "WEB MIRROR · https://app.codewhale.net/session?run=run_fixture · /rc stop"
         );
         let without_link = remote_control_banner("account_fixture", "runner_fixture", None);
         assert_eq!(
             without_link,
-            "REMOTE CONTROL · account account_fixture · runner runner_fixture · /rc stop returns input here"
+            "WEB MIRROR · account account_fixture · runner runner_fixture · /rc stop"
         );
         let notice =
             remote_control_link_notice("https://app.codewhale.net/session?run=run_fixture");
@@ -3613,27 +3748,26 @@ mod tests {
     }
 
     #[test]
-    fn connecting_blocks_new_prompts_but_keeps_approvals_local_until_attached() {
+    fn connecting_never_blocks_local_prompts_and_shares_approvals_only_once_attached() {
         let mut controller = RemoteControlController::default();
         controller.status = Status::Connecting;
         controller.status_detail = "waiting for account authorization".to_string();
+        // Mirror semantics: there is no local-input gate at all. The only
+        // shared-decision surface is the approval card, and only once a
+        // typed turn is bound.
         assert!(
-            controller.blocks_local_input(),
-            "a possible server lease must prevent a second local prompt"
-        );
-        assert!(
-            !controller.web_owns_turn_input(),
+            !controller.can_share_approval_with_web(),
             "without a confirmed run cursor the web cannot receive an approval"
         );
 
         controller.status = Status::Connected;
         controller.attached_run_id = Some("run_fixture".to_string());
         assert!(
-            !controller.web_owns_turn_input(),
+            !controller.can_share_approval_with_web(),
             "a connected idle session has no typed turn to receive approvals"
         );
         assert!(controller.attach_current_local_turn(Some("turn_fixture")));
-        assert!(controller.web_owns_turn_input());
+        assert!(controller.can_share_approval_with_web());
     }
 
     #[test]
@@ -3761,12 +3895,12 @@ mod tests {
             Some(RemoteEvent::Connected { .. })
         ));
         assert!(
-            !controller.web_owns_turn_input(),
+            !controller.can_share_approval_with_web(),
             "a connected attachment without a bound typed turn keeps approvals local"
         );
         assert!(controller.attach_current_local_turn(Some("turn_existing")));
         assert!(
-            controller.web_owns_turn_input(),
+            controller.can_share_approval_with_web(),
             "the bound active turn can carry typed approvals to the web"
         );
         assert!(controller.has_active_run());
@@ -3853,7 +3987,7 @@ mod tests {
         );
         assert!(controller.active_run_matches("run_fixture"));
         assert!(
-            !controller.web_owns_turn_input(),
+            !controller.can_share_approval_with_web(),
             "a pending dispatch has no typed turn id, so approvals stay local"
         );
         assert!(worker_rx.try_recv().is_err());
@@ -3874,7 +4008,7 @@ mod tests {
         assert_eq!(envelopes[0]["turn_id"], "turn_started_later");
         let started_envelope = envelopes[0].clone();
         assert!(
-            controller.web_owns_turn_input(),
+            controller.can_share_approval_with_web(),
             "typed TurnStarted promotes the dispatch into a web-owned active turn"
         );
 
@@ -3939,7 +4073,7 @@ mod tests {
         assert!(controller.has_active_run());
         assert!(controller.release_unstarted_local_turn());
         assert!(!controller.has_active_run());
-        assert!(!controller.web_owns_turn_input());
+        assert!(!controller.can_share_approval_with_web());
         assert!(
             !controller.release_unstarted_local_turn(),
             "reconciling the same idle boundary is idempotent"
@@ -4414,14 +4548,174 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn pre_lease_failure_never_locks_and_allows_immediate_retry() {
+        let (mut controller, _worker_rx, event_tx) = wired_controller();
+        controller.status = Status::Connecting;
+        event_tx
+            .send(RemoteEvent::FailedPreLease(
+                "Codewhale rejected remote-control enrollment (403): client version not accepted."
+                    .to_string(),
+            ))
+            .unwrap();
+        assert!(matches!(
+            controller.try_next_event(),
+            Some(RemoteEvent::FailedPreLease(_))
+        ));
+        assert_eq!(controller.status, Status::Failed);
+        assert!(
+            controller.ownership_blocked_until.is_none(),
+            "a rejection before any lease must never start the reconnect blackout"
+        );
+        let line = controller.status_line();
+        assert!(line.contains("failed before connecting"), "{line}");
+        assert!(line.contains("/rc to retry"), "{line}");
+        assert!(
+            line.contains("403"),
+            "the sanitized HTTP status must surface: {line}"
+        );
+        assert!(line.contains("client version not accepted"), "{line}");
+
+        // Stopping after a pre-lease failure is an ordinary reset (no lease
+        // to drain, no blackout to honor).
+        controller.stop();
+        assert_eq!(controller.status, Status::Off);
+
+        // Immediate retry is allowed — no lease drain wait.
+        let result = controller.start(RemoteStart {
+            workspace_label: "fixture".to_string(),
+            target_ref: "target_fixture".to_string(),
+            session_id: "session_fixture".to_string(),
+            runtime_version: "0.9.1".to_string(),
+            runtime_commit: "a".repeat(40),
+            journal_dir: None,
+            git_remote: None,
+        });
+        assert!(result.is_ok(), "{result:?}");
+    }
+
     #[test]
-    fn disconnected_remote_owner_keeps_local_input_locked_until_lease_expiry() {
+    fn sanitized_rejection_excerpt_reads_only_bounded_error_fields() {
+        assert_eq!(
+            sanitized_rejection_excerpt(
+                br#"{"error":"client version not accepted","details":"noise"}"#
+            )
+            .as_deref(),
+            Some("client version not accepted")
+        );
+        assert_eq!(
+            sanitized_rejection_excerpt(br#"{"message":"enrollment closed"}"#).as_deref(),
+            Some("enrollment closed")
+        );
+        // Control characters are stripped, never echoed. A JSON-escaped NUL
+        // parses into the value; the strip must remove it. A raw NUL byte
+        // makes serde_json reject the body outright, which is also safe
+        // (no excerpt) — assert both directions.
+        let with_control = "{\"error\":\"bad\\u0000opaque\"}".to_string();
+        assert_eq!(
+            sanitized_rejection_excerpt(with_control.as_bytes()).as_deref(),
+            Some("badopaque")
+        );
+        let raw_nul = "{\"error\":\"bad\u{0}opaque\"}".to_string();
+        assert_eq!(sanitized_rejection_excerpt(raw_nul.as_bytes()), None);
+        // Non-JSON bodies yield no excerpt.
+        assert_eq!(sanitized_rejection_excerpt(b"<html>403</html>"), None);
+        // Overlong reasons are capped.
+        let long = format!("{{\"error\":\"{}\"}}", "x".repeat(400));
+        let excerpt = sanitized_rejection_excerpt(long.as_bytes()).expect("capped excerpt");
+        assert!(excerpt.chars().count() <= 140);
+    }
+
+    #[test]
+    fn view_gate_matching_never_confuses_two_approval_cards() {
+        use crate::tui::approval::ApprovalRequest;
+        use crate::tui::approval::ApprovalView;
+        use crate::tui::views::ViewStack;
+
+        let request = ApprovalRequest::new(
+            "tool_A",
+            "edit",
+            "Edit A",
+            &serde_json::json!({ "file": "a" }),
+            "approval_key_A",
+        );
+        let card = ApprovalView::new(request);
+        let gate_a = projected_approval_id("tool_A");
+        let gate_b = projected_approval_id("tool_B");
+
+        let mut stack = ViewStack::new();
+        stack.push(card);
+        assert!(
+            stack.top_matches_approval_gate(&gate_a),
+            "the matching gate must match"
+        );
+        assert!(
+            !stack.top_matches_approval_gate(&gate_b),
+            "a different gate must NEVER match this card — the whole point of identity-aware dismissal"
+        );
+        assert!(!stack.top_matches_approval_gate("local_approval_missing"));
+    }
+
+    #[tokio::test]
+    async fn enrollment_rejection_carries_a_sanitized_actionable_reason() {
+        crate::tls::ensure_rustls_crypto_provider();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/device"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+                "error": "client version not accepted",
+                "documentation": "https://example.test/docs"
+            })))
+            .mount(&server)
+            .await;
+        let client = Client::builder()
+            .https_only(false)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("test client");
+        let error = public_request(
+            &client,
+            Method::POST,
+            Url::parse(&format!(
+                "{}/oauth/device",
+                server.uri().trim_end_matches('/')
+            ))
+            .expect("server url"),
+            json!({ "audience": "codewhale-runner" }),
+        )
+        .await
+        .expect_err("403 must fail");
+        assert!(error.contains("403"), "{error}");
+        assert!(error.contains("client version not accepted"), "{error}");
+        assert!(
+            !error.contains("documentation"),
+            "only the conventional error fields may surface: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_relay_keeps_reconnect_blocked_until_lease_expiry() {
         let mut controller = RemoteControlController::default();
         controller.status = Status::Failed;
         controller.ownership_blocked_until = Some(Instant::now() + Duration::from_secs(90));
-        assert!(controller.blocks_local_input());
+        // Mirror semantics: local input is never locked, but reconnecting
+        // while the server lease may still be live is refused — the web must
+        // not see two runners for the same session.
+        let start = RemoteStart {
+            workspace_label: "fixture".to_string(),
+            target_ref: "target_fixture".to_string(),
+            session_id: "session_fixture".to_string(),
+            runtime_version: "0.9.1".to_string(),
+            runtime_commit: "a".repeat(40),
+            journal_dir: None,
+            git_remote: None,
+        };
+        assert!(controller.start(start.clone()).is_err());
+        // The web cannot answer shared approvals while the relay is failed.
+        assert!(!controller.can_share_approval_with_web());
         controller.ownership_blocked_until = Some(Instant::now() - Duration::from_secs(1));
-        assert!(!controller.blocks_local_input());
+        assert!(controller.start(start).is_ok());
     }
 
     #[test]
@@ -4433,11 +4727,6 @@ mod tests {
             "approval_fixture".to_string(),
             PendingRemoteApproval {
                 tool_id: "tool_fixture".to_string(),
-                tool_name: "edit".to_string(),
-                description: "Edit fixture".to_string(),
-                input: Value::Null,
-                approval_key: "approval_fixture".to_string(),
-                intent_summary: Some("fixture".to_string()),
             },
         );
 
@@ -4449,22 +4738,21 @@ mod tests {
         assert!(matches!(
             event,
             Some(RemoteEvent::OwnershipRestored { approvals })
-                if approvals.len() == 1
-                    && approvals[0].approval_key == "approval_fixture"
-                    && approvals[0].tool_id == "tool_fixture"
+                if approvals.len() == 1 && approvals[0].tool_id == "tool_fixture"
         ));
         assert_eq!(controller.status, Status::Off);
         assert!(controller.pending_approvals.is_empty());
     }
 
     #[test]
-    fn cancelling_a_connect_keeps_input_locked_and_reconnect_blocked() {
+    fn cancelling_a_connect_keeps_reconnect_blocked_until_lease_drain() {
         let mut controller = RemoteControlController::default();
         controller.status = Status::Connecting;
         controller.stop();
 
         assert_eq!(controller.status, Status::Failed);
-        assert!(controller.blocks_local_input());
+        // Mirror semantics: nothing about a cancelled connect locks local
+        // input; reconnect stays blocked until the possible lease drains.
         let result = controller.start(RemoteStart {
             workspace_label: "fixture".to_string(),
             target_ref: "target_fixture".to_string(),
@@ -4507,7 +4795,10 @@ mod tests {
                 .map(|entry| &entry.envelope),
             Some(&exact)
         );
-        assert!(controller.blocks_local_input());
+        // Fail-closed: the web can no longer answer shared approvals, and
+        // reconnecting waits out the possible server lease.
+        assert!(!controller.can_share_approval_with_web());
+        assert!(controller.ownership_blocked_until.is_some());
     }
 
     #[tokio::test]
@@ -4663,14 +4954,14 @@ mod tests {
     }
 
     #[test]
-    fn failed_stop_keeps_ownership_locked_with_no_dual_ownership() {
+    fn failed_stop_stays_fail_closed_with_no_dual_ownership() {
         let (mut controller, _worker_rx, event_tx) = wired_controller();
         controller.status = Status::Connected;
         controller.stop();
         assert_eq!(controller.status, Status::Stopping);
         assert!(
-            controller.blocks_local_input(),
-            "stopping must not return local input before confirmation"
+            !controller.can_share_approval_with_web(),
+            "stopping must close the shared-decision channel before confirmation"
         );
 
         // The worker could not confirm the drain or the offline heartbeat.
@@ -4682,11 +4973,15 @@ mod tests {
         let event = controller.try_next_event().unwrap();
         assert!(matches!(event, RemoteEvent::Failed(_)));
         assert!(
-            controller.blocks_local_input(),
-            "an unconfirmed stop must keep ownership locked through the lease expiry"
+            !controller.can_share_approval_with_web(),
+            "an unconfirmed stop must stay fail-closed through the lease expiry"
         );
         assert!(controller.ownership_blocked_until.is_some());
-        assert!(controller.status_line().contains("disconnected"));
+        assert!(
+            controller.status_line().contains("lost after connecting"),
+            "{}",
+            controller.status_line()
+        );
         assert!(
             controller.try_next_event().is_none(),
             "ownership must not be restored while the lease could still be live"
@@ -5112,8 +5407,8 @@ mod tests {
             "losing integrity state can never be silent"
         );
         assert!(
-            controller.blocks_local_input(),
-            "a failed-closed relay keeps ownership locked"
+            !controller.can_share_approval_with_web(),
+            "a failed-closed relay keeps the shared-decision channel closed"
         );
     }
 

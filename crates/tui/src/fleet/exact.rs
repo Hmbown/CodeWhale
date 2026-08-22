@@ -22,9 +22,10 @@
 //!    `reasoning = "auto"` always goes to the Fleet's Reasoning Router — no
 //!    provider-native-adaptive bypass, no legacy model routing, no local
 //!    keyword heuristic. A manual tier calls no Router at all.
-//! 4. **Ceilings narrow the real child.** The saved permission ceiling is
-//!    intersected with the live parent posture and turned into an actual tool
-//!    policy the child runtime enforces — not a label on a receipt.
+//! 4. **Runtime owns authority.** After exact member selection, Runtime maps
+//!    the semantic role onto its closed role policy and intersects that policy
+//!    with the live parent. Fleet identity never grants or withholds project
+//!    trust, tools, writes, network reach, shell, or delegation.
 //! 5. **Receipts are truthful and content-free.** The tier a selector picked,
 //!    the control a provider actually receives, and what a Router cost are
 //!    recorded separately; task text never is.
@@ -47,6 +48,7 @@ use crate::config::{ApiProvider, Config};
 use crate::fleet::profile::AgentProfile;
 use crate::fleet::roster::{FleetRoster, ProfileOrigin};
 use crate::llm_client::LlmClient;
+use crate::models::Role;
 use crate::tui::app::ReasoningEffort;
 
 /// Where exact fleet definitions and Reasoning Router profiles are looked up,
@@ -319,11 +321,8 @@ pub(crate) fn is_posture_denial(rule: &str) -> bool {
     .any(|entry| entry.eq_ignore_ascii_case(rule.trim()))
 }
 
-/// The saved ceiling, intersected with the live parent posture and translated
-/// into the concrete knobs a child spawn actually carries.
-///
-/// This is where [`PermissionCeiling::clamp_to`] has its real caller: an
-/// authority is never computed from the Fleet file alone.
+/// A Runtime role policy intersected with the live parent and translated into
+/// the concrete knobs a child spawn actually carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChildAuthority {
     /// The clamped ceiling. Never wider than either input.
@@ -344,29 +343,29 @@ pub(crate) struct ChildAuthority {
 }
 
 impl ChildAuthority {
-    /// Intersect a saved member ceiling with the live session posture.
+    /// Intersect one Runtime-requested posture with the live parent posture.
     ///
-    /// Every field takes the more restrictive side, so a saved Fleet can only
-    /// ever narrow live authority. A member saved as `full` inside a read-only
-    /// session runs read-only.
+    /// Every field takes the more restrictive side, so a child can never widen
+    /// live authority.
     #[must_use]
-    pub(crate) fn clamp(member: PermissionCeiling, session: PermissionCeiling) -> Self {
-        let ceiling = member.clamp_to(session);
+    pub(crate) fn clamp(requested: PermissionCeiling, session: PermissionCeiling) -> Self {
+        let ceiling = requested.clamp_to(session);
 
         // `tools = false` is total: an empty allowlist leaves the child with no
         // model-visible tools and nothing it is permitted to call.
         let allowed_tools = (!ceiling.tools).then(Vec::new);
 
-        // The deny list is the union of the parent's restrictions and this
-        // member's, so a descendant can never drop something an ancestor
+        // The deny list expresses the effective Runtime posture. The spawn
+        // registry separately unions it with inherited parent restrictions, so
+        // a descendant can never drop something an ancestor
         // imposed.
         let mut disallowed_tools = Vec::new();
         if !ceiling.network_tool {
             disallowed_tools.extend(NETWORK_TOOL_DENYLIST.iter().map(|name| (*name).to_string()));
         }
         // Raw shell requires the ceiling to *say* `shell = "full"`. Any narrower
-        // shell posture — `none` (the `analyst` preset) or `read_only` — loses
-        // the raw command surface outright. `clamp_for_role` may subsequently
+        // shell posture — `none` or `read_only` — loses the raw command surface
+        // outright. `from_runtime_role` may subsequently
         // retain canonical `Bash` for a named scout/reviewer, whose concrete
         // calls are bounded by the strict read-only classifier.
         //
@@ -402,8 +401,8 @@ impl ChildAuthority {
         if !ceiling.write {
             // `write = false` has to be a fact about the child's tool surface,
             // not a word on a receipt, so the mutating file tools go. The raw
-            // shell is already gone by the rule above; a named scout/reviewer
-            // may regain only canonical Bash in `clamp_for_role`, behind its
+            // shell is already gone by the rule above; a Runtime scout/reviewer
+            // may regain only canonical Bash in `from_runtime_role`, behind its
             // input-specific read-only classifier. The bounded verification
             // surface (`Run` / `run_tests` / `run_verifiers`) is deliberately
             // left for a full-shell verifier.
@@ -482,45 +481,26 @@ impl ChildAuthority {
         )
     }
 
-    /// [`Self::clamp`], for a member whose **semantic role** is known.
-    ///
-    /// The two are not interchangeable and the difference is the whole of
-    /// blocker eight: the ceiling alone can only say which posture a ceiling
-    /// *permits*, while a named role that already fits inside that ceiling is
-    /// the posture the roster profile actually installs. Reporting the
-    /// ceiling-derived posture for a member the operator named `reviewer` would
-    /// put `scout` on the receipt while `reviewer` governed the run.
-    ///
-    /// The role never widens anything: [`posture_role_for_member`] falls back
-    /// to the ceiling-derived posture unless the named role's built-in posture
-    /// already fits.
+    /// Derive authority exclusively from Runtime policy after Fleet identity
+    /// selection. Free-form semantic roles map to Runtime `custom`; neither
+    /// the Fleet file nor its legacy `permissions` key participates.
     #[must_use]
-    pub(crate) fn clamp_for_role(
-        role: &str,
-        member: PermissionCeiling,
-        session: PermissionCeiling,
-    ) -> Self {
-        let mut authority = Self::clamp(member, session);
-        authority.posture_role = posture_role_for_member(role, authority.ceiling);
-        let bounded_inspection_role = matches!(
-            role.trim().to_ascii_lowercase().as_str(),
-            "scout"
-                | "explore"
-                | "explorer"
-                | "reviewer"
-                | "review"
-                | "planner"
-                | "plan"
-                | "planning"
-                | "awaiter"
-        );
-        if bounded_inspection_role && authority.ceiling.shell != ShellCeiling::None {
-            // Read-only inspection needs ordinary `git`/`rg`/`gh ... view|list` inspection.
-            // Keep one canonical foreground tool and leave every legacy,
-            // background, interactive, and terminal alias denied. The Bash
-            // spec and the machine authority envelope both reclassify the
-            // concrete input, so removing the name denial does not grant an
-            // arbitrary command channel.
+    pub(crate) fn from_runtime_role(role: &str, session: PermissionCeiling) -> Self {
+        let runtime_role = runtime_role_for_member(role);
+        let requested = runtime_permission_ceiling(&runtime_role);
+        let mut authority = Self::clamp(requested, session);
+        authority.posture_role = runtime_role.as_str();
+
+        if matches!(
+            runtime_role,
+            crate::tools::subagent::FleetRole::Scout
+                | crate::tools::subagent::FleetRole::Reviewer
+                | crate::tools::subagent::FleetRole::Planner
+        ) && authority.ceiling.shell != ShellCeiling::None
+        {
+            // Runtime's Scout/Reviewer policy permits classifier-bounded Bash
+            // inspection. Keep the canonical entry while all other shell and
+            // execution aliases remain denied.
             authority
                 .disallowed_tools
                 .retain(|name| !name.eq_ignore_ascii_case("Bash"));
@@ -529,8 +509,8 @@ impl ChildAuthority {
     }
 }
 
-/// The active session's posture, expressed as a ceiling so a saved Fleet
-/// ceiling can be intersected with it.
+/// The active parent's posture, expressed as the upper bound for Runtime's
+/// requested child role policy.
 ///
 /// Read off the live parent runtime rather than assumed: this is the value that
 /// makes "a Fleet cannot widen what the operator is currently allowed to do"
@@ -545,12 +525,39 @@ pub(crate) fn session_permission_ceiling(
             && runtime.agent_tool_surface_options.web_search_enabled,
         shell: session_shell_ceiling(runtime.worker_profile.shell, runtime.allow_shell),
         delegation_depth: runtime.worker_profile.max_spawn_depth,
-        // The session side never withholds the tool bit: a parent that has
-        // reached this code is running a Workflow, which is itself a tool call,
-        // so `tools = false` here could only ever be a contradiction. The
-        // narrowing that matters — `tools = false` on a *member* ceiling — comes
-        // from the saved Fleet and survives the clamp untouched.
+        // The parent side never withholds the coarse tool bit: fine-grained
+        // inherited ToolScope/deny rules are intersected again by the spawn
+        // runtime. This value only captures the dimensions represented here.
         tools: true,
+    }
+}
+
+/// Map the Fleet's open semantic role label onto Runtime's closed role policy.
+/// Unknown labels remain useful identity (`auditor`, `research-lead`, …) but
+/// execute under Runtime `custom`, whose capabilities still intersect with the
+/// live parent.
+fn runtime_role_for_member(role: &str) -> crate::tools::subagent::FleetRole {
+    crate::tools::subagent::FleetRole::from_str(role)
+        .unwrap_or(crate::tools::subagent::FleetRole::Custom)
+}
+
+fn runtime_permission_ceiling(role: &crate::tools::subagent::FleetRole) -> PermissionCeiling {
+    let profile = crate::worker_profile::WorkerRuntimeProfile::for_role(role.clone());
+    let shell = match profile.shell {
+        crate::worker_profile::ShellPolicy::None => ShellCeiling::None,
+        crate::worker_profile::ShellPolicy::ReadOnly => ShellCeiling::ReadOnly,
+        crate::worker_profile::ShellPolicy::Full => ShellCeiling::Full,
+    };
+    let tools = match profile.tools {
+        crate::worker_profile::ToolScope::Inherit => true,
+        crate::worker_profile::ToolScope::Explicit(ref tools) => !tools.is_empty(),
+    };
+    PermissionCeiling {
+        write: profile.permissions.write,
+        network_tool: profile.permissions.network,
+        shell,
+        delegation_depth: profile.max_spawn_depth,
+        tools,
     }
 }
 
@@ -564,62 +571,6 @@ fn session_shell_ceiling(
         crate::worker_profile::ShellPolicy::Full if allow_shell => ShellCeiling::Full,
         crate::worker_profile::ShellPolicy::Full => ShellCeiling::None,
     }
-}
-
-/// The posture role for one member: its own semantic role when that role's
-/// built-in posture already fits inside the saved ceiling, and the
-/// ceiling-derived posture otherwise.
-///
-/// Both halves matter. Deriving the posture from the ceiling alone is what
-/// stops an arbitrary fleet role (`auditor`) from falling through
-/// [`crate::fleet::worker_runtime::fleet_role_to_agent_type`]'s unknown-role
-/// arm onto the full-write General surface. But applying it unconditionally
-/// threw away a role the operator did name: a `reviewer` or `consultant`
-/// member has a built-in posture no wider than `read_only`, and flattening it
-/// to `scout` silently swapped that role's system prompt and step budget for
-/// another one's.
-///
-/// The fit test is a strict subset check against the ceiling, so this can only
-/// ever pick a role that is *already* permitted — it never widens.
-#[must_use]
-pub(crate) fn posture_role_for_member(role: &str, ceiling: PermissionCeiling) -> &'static str {
-    canonical_role_within_ceiling(role, ceiling).unwrap_or_else(|| posture_role_for(ceiling))
-}
-
-/// The canonical Fleet role `role` names, if its built-in posture is no wider
-/// than `ceiling`.
-fn canonical_role_within_ceiling(role: &str, ceiling: PermissionCeiling) -> Option<&'static str> {
-    use crate::tools::subagent::FleetRole;
-
-    if !ceiling.tools {
-        // No tools at all: the narrowest posture is the only honest one, and
-        // the empty allowlist makes the choice moot anyway.
-        return None;
-    }
-    let canonical = FleetRole::from_str(role)?;
-    if matches!(canonical, FleetRole::Custom) {
-        // `custom` is defined by an explicit allowlist supplied at spawn time,
-        // not by a saved ceiling. Never derive it from a fleet role name.
-        return None;
-    }
-
-    let posture = crate::worker_profile::WorkerRuntimeProfile::for_role(canonical.clone());
-    let role_shell = match posture.shell {
-        crate::worker_profile::ShellPolicy::None => ShellCeiling::None,
-        crate::worker_profile::ShellPolicy::ReadOnly => ShellCeiling::ReadOnly,
-        crate::worker_profile::ShellPolicy::Full => ShellCeiling::Full,
-    };
-    if posture.permissions.write && !ceiling.write {
-        return None;
-    }
-    // Full-shell roles (verifier, reviewer, scout) do not fit a narrower
-    // ceiling — their job needs that shell. A read-only probe default
-    // (planner) intersects with the ceiling instead of flattening the
-    // named role into scout.
-    if role_shell == ShellCeiling::Full && role_shell > ceiling.shell {
-        return None;
-    }
-    Some(canonical.as_str())
 }
 
 /// Map a permission ceiling onto the canonical posture role that governs the
@@ -637,18 +588,6 @@ pub(crate) fn posture_role_for(ceiling: PermissionCeiling) -> &'static str {
     match ceiling.shell {
         ShellCeiling::None | ShellCeiling::ReadOnly => "scout",
         ShellCeiling::Full => "verifier",
-    }
-}
-
-/// Spawn write authority implied by a member ceiling. A ceiling can only
-/// narrow: a member that may not write is launched read-only.
-#[must_use]
-#[cfg(test)]
-pub(crate) fn write_authority_for(ceiling: PermissionCeiling) -> &'static str {
-    if ceiling.write {
-        "workspace_write"
-    } else {
-        "read_only"
     }
 }
 
@@ -1026,7 +965,7 @@ impl FleetRouterCaller for LiveFleetRouter {
         let request = MessageRequest {
             model: self.route.wire_model.clone(),
             messages: vec![Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: router_user_message(input),
                     cache_control: None,
@@ -1351,12 +1290,6 @@ impl ExactFleetWorkflow {
         &self.roster
     }
 
-    #[must_use]
-    #[cfg(test)]
-    pub(crate) fn member(&self, id_or_role: &str) -> Option<&FleetSnapshotMember> {
-        self.snapshot.member_by_id_or_role(id_or_role)
-    }
-
     /// Human-readable roster listing for "unknown member" errors.
     #[must_use]
     pub(crate) fn member_names(&self) -> String {
@@ -1432,7 +1365,7 @@ impl ExactFleetWorkflow {
             member_role: member.role.clone(),
             route: route.clone(),
             requires_router: member.requested_reasoning.is_auto(),
-            authority: ChildAuthority::clamp_for_role(&member.role, member.permissions, session),
+            authority: ChildAuthority::from_runtime_role(&member.role, session),
             session,
         })
     }
@@ -1474,9 +1407,10 @@ impl ExactFleetWorkflow {
             )
         })?;
 
-        // Recompute the authority from the snapshot member and the posture this
-        // binding was admitted against, and require it to be *identical* to the
-        // one the binding carries.
+        // Recompute authority from Runtime's role policy and the live-parent
+        // posture this binding was admitted against, and require it to be
+        // *identical* to the one the binding carries. The snapshot supplies
+        // identity only; legacy Fleet permission input is never consulted.
         //
         // A binding crosses gates, a concurrency wait, and (for `auto` members)
         // a router call before it gets here, so "the authority I was handed" and
@@ -1484,8 +1418,7 @@ impl ExactFleetWorkflow {
         // launch below is the value the spawn path consumes, so it must be the
         // recomputed one; the equality check is what turns a divergence into a
         // refused launch instead of a silently widened child.
-        let authority =
-            ChildAuthority::clamp_for_role(&member.role, member.permissions, binding.session);
+        let authority = ChildAuthority::from_runtime_role(&member.role, binding.session);
         if authority != binding.authority {
             return Err(format!(
                 "fleet `{}`: member `{}` resolved a different permission envelope at launch than \
@@ -1593,8 +1526,8 @@ impl ExactFleetWorkflow {
         .with_authority_fingerprint(authority.fingerprint())
         // Semantic role and runtime posture stay two separate facts all the way
         // onto the durable receipt: `member_role` is what the operator named
-        // and what gates key on, `posture_role` is the tool surface the clamped
-        // ceiling actually permits.
+        // and what gates key on, `posture_role` is the Runtime baseline role.
+        // The fingerprint above records the effective parent-narrowed surface.
         .with_posture_role(binding.authority.posture_role);
 
         Ok(ExactMemberLaunch {
@@ -1629,22 +1562,16 @@ impl ExactFleetWorkflow {
 ///   is carried as the display name. Role is what gates and records mean; id is
 ///   what resolves a roster entry. Conflating them would make a gate keyed on
 ///   `builder` silently miss a member whose id happens to be `implementer`.
-/// - The profile's *posture* role name is the member's own role when that
-///   role's built-in posture fits inside the saved ceiling, and the
-///   ceiling-derived posture otherwise. Posture role is what picks the child's
-///   tool surface and system prompt, so an arbitrary fleet role such as
-///   `auditor` must not fall through to the full-write General surface — while
-///   a real role such as `reviewer` must not be flattened into `scout` when the
-///   operator's ceiling already permits it. See
-///   [`posture_role_for_member`].
+/// - Runtime's closed role policy supplies the *posture* role. Free-form Fleet
+///   roles remain visible identity but map to Runtime `custom`; the profile
+///   carries no trust/permission/delegation input of its own.
 fn exact_member_profile(
     member: &FleetSnapshotMember,
     route: Option<&PreflightedRoute>,
     source: Option<&std::path::Path>,
 ) -> AgentProfile {
-    let posture_role = posture_role_for_member(&member.role, member.permissions);
-    let bounded_inspection_shell = matches!(posture_role, "scout" | "reviewer")
-        && member.permissions.shell != ShellCeiling::None;
+    let runtime_role = runtime_role_for_member(&member.role);
+    let posture_role = runtime_role.as_str();
     // The canonical wire model, so the child spawns with exactly what the
     // receipt records.
     let wire_model = route.map_or_else(
@@ -1672,18 +1599,11 @@ fn exact_member_profile(
         // Reasoning is decided per task (a member may be `auto`), so it is
         // placed on the spawn request explicitly rather than baked in here.
         reasoning_effort: None,
-        permissions: codewhale_config::FleetProfilePermissions {
-            // This legacy boolean controls whether Bash is registered at all.
-            // Named read-only inspection with a non-none ceiling registers it, while the
-            // typed worker profile and per-input classifier keep it ReadOnly.
-            allow_shell: member.permissions.shell == ShellCeiling::Full || bounded_inspection_shell,
-            trust: false,
-            approval_required: true,
-        },
-        delegation: codewhale_config::FleetDelegationHints {
-            max_spawn_depth: Some(member.permissions.delegation_depth),
-            max_concurrency: None,
-        },
+        // Compatibility-only profile fields stay neutral. Runtime derives
+        // capability, shell, trust/approval and recursion from its role policy
+        // plus the live parent after this member is selected.
+        permissions: codewhale_config::FleetProfilePermissions::default(),
+        delegation: codewhale_config::FleetDelegationHints::default(),
     };
 
     AgentProfile {
@@ -1693,6 +1613,7 @@ fn exact_member_profile(
             "Exact fleet member `{}` (role `{}`), pinned to {provider}/{wire_model}.",
             member.id, member.role
         )),
+        requires: Vec::new(),
         profile,
         source: source
             .map(std::path::Path::to_path_buf)
@@ -1956,11 +1877,7 @@ mod shell_ceiling_tests {
     #[test]
     fn bounded_inspection_role_keeps_only_classifier_bounded_bash() {
         for role in ["scout", "reviewer", "planner"] {
-            let authority = ChildAuthority::clamp_for_role(
-                role,
-                ceiling(false, ShellCeiling::ReadOnly),
-                session(),
-            );
+            let authority = ChildAuthority::from_runtime_role(role, session());
             assert!(
                 !authority
                     .disallowed_tools
@@ -1985,11 +1902,7 @@ mod shell_ceiling_tests {
         }
 
         for role in ["consultant", "verifier"] {
-            let authority = ChildAuthority::clamp_for_role(
-                role,
-                ceiling(false, ShellCeiling::ReadOnly),
-                session(),
-            );
+            let authority = ChildAuthority::from_runtime_role(role, session());
             assert!(
                 authority
                     .disallowed_tools
@@ -1999,11 +1912,8 @@ mod shell_ceiling_tests {
             );
         }
 
-        let parent_shell_off = ChildAuthority::clamp_for_role(
-            "scout",
-            ceiling(false, ShellCeiling::Full),
-            ceiling(true, ShellCeiling::None),
-        );
+        let parent_shell_off =
+            ChildAuthority::from_runtime_role("scout", ceiling(true, ShellCeiling::None));
         assert!(
             parent_shell_off
                 .disallowed_tools
@@ -2011,11 +1921,8 @@ mod shell_ceiling_tests {
                 .any(|name| name.eq_ignore_ascii_case("Bash")),
             "a named Scout may not turn a parent shell-off ceiling into ReadOnly"
         );
-        let planner_parent_shell_off = ChildAuthority::clamp_for_role(
-            "planner",
-            ceiling(false, ShellCeiling::ReadOnly),
-            ceiling(true, ShellCeiling::None),
-        );
+        let planner_parent_shell_off =
+            ChildAuthority::from_runtime_role("planner", ceiling(true, ShellCeiling::None));
         assert!(
             planner_parent_shell_off
                 .disallowed_tools
@@ -2032,9 +1939,9 @@ mod shell_ceiling_tests {
 
     /// #5426 acceptance 2, made mechanical: delegation moves work, never
     /// authority. A read-only scout's own runtime posture is the "session"
-    /// its children clamp against, so a `builder` member dispatched from a
-    /// read-only parent lands read-only — raw shell gone, ceiling-derived
-    /// posture, mutating tools denied — while the delegation itself stays
+    /// its children clamp against, so a Runtime `builder` dispatched from a
+    /// read-only parent lands read-only — raw shell gone and mutating tools
+    /// denied — while the Runtime posture remains separately identified and delegation stays
     /// available (the depth budget is the parent's, not zero). The escape
     /// hatch is work capacity, never a wider envelope.
     #[test]
@@ -2049,25 +1956,13 @@ mod shell_ceiling_tests {
             delegation_depth: 1,
             tools: true,
         };
-        let builder_member = PermissionCeiling {
-            write: true,
-            network_tool: true,
-            shell: ShellCeiling::Full,
-            delegation_depth: 1,
-            tools: true,
-        };
-        assert!(builder_member.write && builder_member.shell == ShellCeiling::Full);
-
-        let authority = ChildAuthority::clamp_for_role("builder", builder_member, scout_runtime);
+        let authority = ChildAuthority::from_runtime_role("builder", scout_runtime);
 
         // Authority does not widen through delegation: the child is read-only.
         assert!(!authority.ceiling.write);
         assert_eq!(authority.ceiling.shell, ShellCeiling::ReadOnly);
         assert_eq!(authority.write_authority, "read_only");
-        assert_eq!(
-            authority.posture_role, "scout",
-            "a write-capable role name must not smuggle write through delegation"
-        );
+        assert_eq!(authority.posture_role, "builder");
         assert!(denies_raw_shell(&authority));
         for mutating in ["write_file", "apply_patch"] {
             assert!(
@@ -2158,7 +2053,13 @@ permissions = "read_only"
     }
 
     fn full_session() -> PermissionCeiling {
-        PermissionCeiling::preset("full").expect("preset")
+        PermissionCeiling {
+            write: true,
+            network_tool: true,
+            shell: ShellCeiling::Full,
+            delegation_depth: codewhale_config::DEFAULT_SPAWN_DEPTH,
+            tools: true,
+        }
     }
 
     /// Takes the concrete fixture type: `Option` does not coerce its payload,
@@ -2439,106 +2340,47 @@ permissions = "read_only"
         );
     }
 
-    /// A saved ceiling must not be widened by an unusual fleet role name — and
-    /// a role the ceiling *does* permit must survive rather than be flattened.
+    /// Projection carries route and Runtime role, but no Fleet-owned authority.
     #[test]
-    fn a_read_only_member_projects_a_read_oriented_posture() {
-        let workflow = workflow_with(None, GLM_FLEET);
-        let auditor = workflow.roster().get("auditor").expect("auditor");
-
-        // `reviewer`'s built-in posture now needs a full shell (read-only inspection:
-        // bounded verification surface + network), which the `read_only`
-        // ceiling this member saved refuses — so it is flattened into
-        // `scout`, exactly as a `verifier` member under the same ceiling is.
-        assert_eq!(auditor.profile.role.name, "scout");
-        assert!(
-            auditor.profile.permissions.allow_shell,
-            "the projected Scout needs Bash registration for its typed read-only subset"
-        );
-        assert_eq!(
-            write_authority_for(workflow.member("auditor").expect("member").permissions),
-            "read_only"
-        );
-
-        let implementer = workflow.roster().get("implementer").expect("implementer");
-        assert_eq!(implementer.profile.role.name, "builder");
-    }
-
-    /// The posture role may only ever pick a role the ceiling already permits.
-    /// An unknown role, and a real role whose posture is wider than the saved
-    /// ceiling, both fall back to the ceiling-derived posture.
-    #[test]
-    fn a_members_posture_role_can_never_be_wider_than_its_ceiling() {
-        let read_only = PermissionCeiling::preset("read_only").expect("preset");
-        let read_write = PermissionCeiling::preset("read_write").expect("preset");
-
-        // Roles that fit are preserved, including the renamed public role.
-        // `reviewer` needs a full shell for its read-only inspection posture, which a
-        // read-only ceiling refuses, so it flattens to `scout` like
-        // `verifier` does below.
-        assert_eq!(posture_role_for_member("reviewer", read_only), "scout");
-        assert_eq!(posture_role_for_member("reviewer", read_write), "reviewer");
-        assert_eq!(posture_role_for_member("planner", read_only), "planner");
-        let analyst = PermissionCeiling::preset("analyst").expect("preset");
-        assert_eq!(
-            posture_role_for_member("planner", analyst),
-            "planner",
-            "a named planner under a no-shell ceiling stays planner; shell intersects"
-        );
-        assert_eq!(
-            posture_role_for_member("consultant", read_only),
-            "consultant"
-        );
-        // …and the compatibility aliases resolve to the same canonical role.
-        assert_eq!(posture_role_for_member("oracle", read_only), "consultant");
-
-        // A verifier needs a full shell; a read-only ceiling refuses it.
-        assert_eq!(posture_role_for_member("verifier", read_only), "scout");
-        assert_eq!(
-            posture_role_for_member("verifier", read_write),
-            "verifier",
-            "a full-shell ceiling does permit it"
-        );
-
-        // A builder needs write authority.
-        assert_eq!(posture_role_for_member("builder", read_only), "scout");
-        assert_eq!(posture_role_for_member("worker", read_only), "scout");
-        assert_eq!(posture_role_for_member("builder", read_write), "builder");
-
-        // An arbitrary domain role must not fall through to General.
-        assert_eq!(posture_role_for_member("auditor", read_only), "scout");
-        assert_eq!(posture_role_for_member("auditor", read_write), "builder");
-
-        // `custom` is defined by an explicit allowlist, never by a role name.
-        assert_eq!(posture_role_for_member("custom", read_write), "builder");
-
-        // `tools = false` keeps the narrowest posture whatever the role says.
-        assert_eq!(
-            posture_role_for_member("builder", PermissionCeiling::ROUTER),
-            "scout"
-        );
-    }
-
-    /// A preserved role must still resolve to the runtime agent type it names,
-    /// or the roster projection would have swapped one surface for another.
-    #[test]
-    fn a_preserved_posture_role_resolves_to_its_runtime_agent_type() {
+    fn projected_members_use_runtime_roles_and_neutral_compatibility_fields() {
         use crate::tools::subagent::FleetRole;
 
         let workflow = workflow_with(None, GLM_FLEET);
         for (id, expected) in [
-            // auditor saved `permissions = "read_only"`, which refuses
-            // reviewer's read-only inspection shell posture, so it projects scout.
-            ("auditor", FleetRole::Scout),
+            ("auditor", FleetRole::Reviewer),
             ("implementer", FleetRole::Builder),
         ] {
             let member = workflow.roster().get(id).expect("roster entry");
             assert_eq!(
                 crate::fleet::worker_runtime::roster_member_agent_type(member),
                 expected,
-                "{id} must resolve to the role its projected posture names"
+                "{id} must resolve through Runtime's closed role policy"
             );
+            assert_eq!(member.profile.permissions, Default::default());
+            assert_eq!(member.profile.delegation, Default::default());
         }
+    }
+
+    #[test]
+    fn a_free_form_member_role_maps_to_runtime_custom_without_losing_identity() {
+        const AUDIT_FLEET: &str = r#"
+name = "audit"
+schema = "exact"
+
+[[members]]
+id = "auditor-one"
+role = "audit-lead"
+provider = "zai"
+model = "glm-5"
+permissions = "read_only"
+"#;
+        let workflow = workflow_with(None, AUDIT_FLEET);
+        let member = workflow.roster().get("auditor-one").expect("roster entry");
+
+        assert_eq!(member.display_name.as_deref(), Some("audit-lead"));
+        assert_eq!(member.profile.role.name, "custom");
+        assert_eq!(member.profile.permissions, Default::default());
+        assert_eq!(member.profile.delegation, Default::default());
     }
 
     // ── Permission ceilings, as the child actually experiences them ─────────
@@ -3403,10 +3245,10 @@ call_reasoning = "low"
         assert!(!line.contains("refactor"), "{line}");
     }
 
-    /// A member's semantic role and its runtime permission posture are separate
+    /// A member's semantic role and its Runtime posture are separate
     /// facts and the receipt keeps both. An operator who named a member
     /// `auditor` must see `auditor` on the receipt, while the surface actually
-    /// granted (`scout`) is disclosed rather than substituted for the name.
+    /// selected (`custom`) is disclosed rather than substituted for the name.
     #[tokio::test]
     async fn a_receipt_records_the_posture_without_renaming_the_members_role() {
         const AUDIT_FLEET: &str = r#"
@@ -3428,7 +3270,7 @@ permissions = "read_only"
 
         // Enforcement uses the posture; it is not the operator's role name.
         assert_eq!(binding.member_role, "auditor");
-        assert_eq!(binding.authority.posture_role, "scout");
+        assert_eq!(binding.authority.posture_role, "custom");
 
         let launch = workflow
             .route_admitted_task(&binding, "review the queue")
@@ -3437,9 +3279,9 @@ permissions = "read_only"
         let receipt = &launch.receipt;
 
         assert_eq!(receipt.member_role, "auditor");
-        assert_eq!(receipt.posture_role.as_deref(), Some("scout"));
+        assert_eq!(receipt.posture_role.as_deref(), Some("custom"));
         let line = receipt.line();
         assert!(line.contains("(role auditor)"), "{line}");
-        assert!(line.contains("posture=scout"), "{line}");
+        assert!(line.contains("posture=custom"), "{line}");
     }
 }

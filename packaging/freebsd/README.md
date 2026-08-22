@@ -9,14 +9,16 @@ FreeBSD has no prebuilt GitHub Release asset. The npm wrapper intentionally fail
 
 ```bash
 pkg install -y rust pkgconf git  # or: pkg install -y lang/rust devel/pkgconf devel/git
-cargo install codewhale-cli --locked   # provides `codewhale` and `codew`
+cargo install codewhale-cli --locked   # provides `codewhale`
 codewhale --version
 codewhale doctor
 ```
 
-The single-binary release (v0.9.5+) ships only `codewhale` + `codew`. There is no separate
-`codewhale-tui` binary to install. If you previously installed `codewhale-tui` from ports or
-cargo, `cargo uninstall codewhale-tui` and rebuild `codewhale-cli`.
+Release installers (v0.9.5+) expose only `codewhale` + `codew`. Cargo installs
+`codewhale`; users who want the optional short name can add a `codew` symlink.
+There is no separate `codewhale-tui` binary to install. If you previously
+installed `codewhale-tui` from ports or Cargo, run
+`cargo uninstall codewhale-tui`, then rebuild `codewhale-cli`.
 
 Linux `libdbus-1` / `pkg-config` build deps are not needed on FreeBSD for the default
 feature set; the `rquickjs` FreeBSD bindings are generated at build time via `bindgen`

@@ -162,7 +162,7 @@ $:
               echo "ERROR: CNB_COMMIT ${commit_sha} does not match checkout ${checkout_sha}" >&2
               exit 1
             fi
-            export DEEPSEEK_BUILD_SHA="$commit_sha"
+            export CODEWHALE_BUILD_SHA="$commit_sha"
             cargo build --jobs 2 --release --locked \
               --target x86_64-unknown-linux-musl \
               -p codewhale-cli   # single binary

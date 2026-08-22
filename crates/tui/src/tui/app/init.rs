@@ -165,6 +165,7 @@ impl App {
                 }
             });
         if !explicit_launch_provider
+            && !config.fleet_operator_route_applied
             && let Some(ref provider_str) = settings.default_provider
             && let Ok(resolved) = config.resolve_provider_identity(provider_str)
         {
@@ -328,7 +329,9 @@ impl App {
         // request wins. Before this fix the memory won unconditionally, so
         // `codewhale --provider moonshot --model kimi-k3` silently kept running
         // the remembered `kimi-k2.7-code` while `doctor` reported `kimi-k3`.
-        let model = if crate::config::explicit_launch_model_override().is_some() {
+        let model = if crate::config::explicit_launch_model_override().is_some()
+            || config.fleet_operator_route_applied
+        {
             model
         } else {
             let configured = model;
@@ -400,12 +403,17 @@ impl App {
                     crate::route_runtime::ContextWindowSource::Fallback,
                 ))
             };
-        let reasoning_effort_explicit =
-            settings.reasoning_effort.is_some() || config.reasoning_effort_is_explicit();
-        let configured_reasoning_effort = settings
-            .reasoning_effort
-            .as_deref()
-            .or_else(|| config.reasoning_effort());
+        let reasoning_effort_explicit = config.fleet_operator_reasoning_applied
+            || settings.reasoning_effort.is_some()
+            || config.reasoning_effort_is_explicit();
+        let configured_reasoning_effort = if config.fleet_operator_reasoning_applied {
+            config.reasoning_effort()
+        } else {
+            settings
+                .reasoning_effort
+                .as_deref()
+                .or_else(|| config.reasoning_effort())
+        };
         let reasoning_effort_preference = configured_reasoning_effort
             .filter(|_| reasoning_effort_explicit)
             .map(ReasoningEffort::from_setting);
@@ -763,6 +771,7 @@ impl App {
             goal_max_continuations: config.goal_max_continuations(),
             goal_continuation_waiting: false,
             configured_sandbox_mode: config.sandbox_mode.clone(),
+            configured_sandbox_network: config.sandbox_network_access,
             sandbox_backend: crate::sandbox::get_platform_sandbox_with_bwrap_preference(
                 config.prefer_bwrap.unwrap_or(false),
             ),

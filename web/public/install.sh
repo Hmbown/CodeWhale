@@ -139,6 +139,28 @@ check_glibc() {
     *) return ;;
   esac
 
+  # Linux arm64 assets became static musl builds in v0.9.6. `latest` and
+  # explicit v0.9.6+ installs therefore have no glibc floor. Keep the
+  # preflight only for explicitly requested older releases, whose arm64
+  # assets were linked against GNU libc on Ubuntu 24.04.
+  if [ "$version" = "latest" ]; then
+    return
+  fi
+  numeric_version="${version#v}"
+  if awk -v have="$numeric_version" '
+    BEGIN {
+      if (have !~ /^[0-9]+\.[0-9]+\.[0-9]+$/) exit 1
+      split(have, h, ".")
+      if (h[1] > 0) exit 0
+      if (h[1] < 0) exit 1
+      if (h[2] > 9) exit 0
+      if (h[2] < 9) exit 1
+      exit !(h[3] >= 6)
+    }
+  '; then
+    return
+  fi
+
   [ "${CODEWHALE_SKIP_GLIBC_CHECK:-}" = "1" ] && return
   [ "${DEEPSEEK_TUI_SKIP_GLIBC_CHECK:-}" = "1" ] && return
   [ "${DEEPSEEK_SKIP_GLIBC_CHECK:-}" = "1" ] && return
@@ -147,11 +169,12 @@ check_glibc() {
   host="$(glibc_version || true)"
   if [ -z "$host" ] || ! version_at_least "$host" "$required"; then
     cat >&2 <<EOF
-codewhale install: prebuilt Codewhale $target assets require glibc $required or newer.
+codewhale install: Codewhale $version $target assets require glibc $required or newer.
 This system reports glibc ${host:-unavailable}.
 
-Linux x64 uses a static musl build. Linux arm64 release assets are GNU libc
-builds from Ubuntu 24.04. Build from source with Cargo or set
+Linux arm64 assets before v0.9.6 were GNU libc builds from Ubuntu 24.04.
+Current v0.9.6+ assets are static musl builds. Build this older release from
+source with Cargo or set
 CODEWHALE_SKIP_GLIBC_CHECK=1 to bypass this check at your own risk.
 EOF
     exit 1

@@ -1,6 +1,7 @@
 use super::*;
 use crate::core::events::{Event as EngineEvent, TurnOutcomeStatus};
 use crate::core::ops::Op;
+use crate::models::Role;
 use crate::models::Usage;
 use crate::runtime_threads::RuntimeEventRecord;
 use crate::test_support::{EnvVarGuard, lock_test_env};
@@ -229,7 +230,7 @@ fn saved_session_with_blocks(blocks: Vec<crate::models::ContentBlock>) -> SavedS
         journal: None,
         leaf_id: None,
         messages: vec![crate::models::Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: blocks,
         }],
         system_prompt: None,
@@ -1985,6 +1986,42 @@ async fn fleet_status_runtime_api_exposes_state_and_actions() -> Result<()> {
 
     handle.abort();
     Ok(())
+}
+
+/// A Parallel Workflow task may claim the whole workspace by normalizing its
+/// write scope to `"."`. `managed_paths_overlap` compared normalized strings
+/// only, so `"."` never matched a sibling task's `"crates/tui"` claim and the
+/// admission gate let two workers write the same tree concurrently.
+#[test]
+fn workspace_root_write_claim_collides_with_a_subdirectory_claim() {
+    fn task(id: &str, writable: &str) -> FleetTaskSpec {
+        serde_json::from_value(json!({
+            "id": id,
+            "name": id,
+            "instructions": "work",
+            "workspace": { "writable_paths": [writable] },
+        }))
+        .expect("fleet task spec fixture")
+    }
+
+    let error = reject_parallel_write_collisions(&[task("root", "."), task("sub", "crates/tui")])
+        .expect_err("a whole-workspace claim overlaps every subdirectory claim");
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert!(
+        error.message.contains("write scope collision"),
+        "unexpected message: {}",
+        error.message
+    );
+
+    // The reverse order is the same collision.
+    assert!(
+        reject_parallel_write_collisions(&[task("sub", "crates/tui"), task("root", ".")]).is_err()
+    );
+    // Disjoint subdirectories still admit.
+    assert!(
+        reject_parallel_write_collisions(&[task("a", "crates/tui"), task("b", "crates/cli")])
+            .is_ok()
+    );
 }
 
 #[test]
@@ -3958,14 +3995,14 @@ async fn session_create_from_completed_thread_saves_messages() -> Result<()> {
             &thread_id,
             &[
                 Message {
-                    role: "user".to_string(),
+                    role: Role::User,
                     content: vec![ContentBlock::Text {
                         text: "Please save this runtime thread".to_string(),
                         cache_control: None,
                     }],
                 },
                 Message {
-                    role: "assistant".to_string(),
+                    role: Role::Assistant,
                     content: vec![ContentBlock::Text {
                         text: "Saved replies should round-trip.".to_string(),
                         cache_control: None,
@@ -4096,14 +4133,14 @@ async fn create_seeded_thread(
             &thread_id,
             &[
                 Message {
-                    role: "user".to_string(),
+                    role: Role::User,
                     content: vec![ContentBlock::Text {
                         text: user_text.to_string(),
                         cache_control: None,
                     }],
                 },
                 Message {
-                    role: "assistant".to_string(),
+                    role: Role::Assistant,
                     content: vec![ContentBlock::Text {
                         text: "Done — anything else?".to_string(),
                         cache_control: None,
@@ -4442,14 +4479,14 @@ async fn spawn_server_with_saved_sessions(
             (*id).to_string(),
             &[
                 crate::models::Message {
-                    role: "user".to_string(),
+                    role: Role::User,
                     content: vec![crate::models::ContentBlock::Text {
                         text: format!("prompt for {title} with token=hunter2"),
                         cache_control: None,
                     }],
                 },
                 crate::models::Message {
-                    role: "assistant".to_string(),
+                    role: Role::Assistant,
                     content: vec![crate::models::ContentBlock::Text {
                         text: "acknowledged".to_string(),
                         cache_control: None,
@@ -5076,7 +5113,7 @@ async fn runtime_info_reports_bind_state() -> Result<()> {
         .as_str()
         .expect("runtime build commit must be a string");
     // Since #5245 the commit is env-stamped only: a stamped build (CI /
-    // release / a `DEEPSEEK_BUILD_SHA=…` dogfood build) reports a full 40-hex
+    // release / a `CODEWHALE_BUILD_SHA=…` dogfood build) reports a full 40-hex
     // sha; an unstamped local build honestly reports "unknown" rather than
     // reading the checkout. Both are valid provenance — a fabricated sha
     // would be the bug.
@@ -5426,6 +5463,336 @@ async fn mobile_insecure_mode_allows_page_and_v1_routes_without_token() -> Resul
     assert_eq!(summary.status(), StatusCode::OK);
 
     handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_summary_projects_typed_pending_attention_count() -> Result<()> {
+    let Some((addr, runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let attention_thread: serde_json::Value = client
+        .post(format!("http://{addr}/v1/threads"))
+        .json(&json!({}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let attention_id = attention_thread["id"]
+        .as_str()
+        .context("missing attention thread id")?;
+    let _approval_rx = runtime_threads
+        .register_pending_approval_for_thread_for_test(attention_id, "approval-summary-attention");
+    runtime_threads
+        .register_pending_user_input_for_thread_for_test(attention_id, "input-summary-attention");
+
+    let recent_thread: serde_json::Value = client
+        .post(format!("http://{addr}/v1/threads"))
+        .json(&json!({}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let recent_id = recent_thread["id"]
+        .as_str()
+        .context("missing recent thread id")?;
+
+    let summaries: serde_json::Value = client
+        .get(format!("http://{addr}/v1/threads/summary?limit=100"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let rows = summaries.as_array().context("summary should be an array")?;
+    let attention = rows
+        .iter()
+        .find(|row| row["id"] == attention_id)
+        .context("attention thread summary")?;
+    let recent = rows
+        .iter()
+        .find(|row| row["id"] == recent_id)
+        .context("recent thread summary")?;
+    assert_eq!(attention["pending_attention_count"], 2);
+    assert_eq!(recent["pending_attention_count"], 0);
+
+    handle.abort();
+    Ok(())
+}
+
+/// `GET /v1/threads/summary?search=` bounded the *store read* by `limit`
+/// before matching, so a thread older than the newest `limit` rows could not
+/// be found by searching for it — the embedded dashboard's search box asks
+/// for `limit=100`, which silently made every older thread unsearchable.
+/// `limit` bounds the returned rows, not how far the search looks.
+#[tokio::test]
+async fn thread_summary_search_finds_a_match_older_than_the_row_limit() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // `POST /v1/threads` has no title field; the title is a PATCH. Patching
+    // also re-stamps `updated_at`, so ordering is not left to two creates
+    // landing inside the same clock tick.
+    let create = |title: &str| {
+        let client = client.clone();
+        let title = title.to_string();
+        async move {
+            let thread: serde_json::Value = client
+                .post(format!("http://{addr}/v1/threads"))
+                .json(&json!({}))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            let id = thread["id"]
+                .as_str()
+                .context("missing thread id")?
+                .to_string();
+            client
+                .patch(format!("http://{addr}/v1/threads/{id}"))
+                .json(&json!({ "title": title }))
+                .send()
+                .await?
+                .error_for_status()?;
+            anyhow::Ok(id)
+        }
+    };
+
+    // Oldest thread carries the needle; three newer threads crowd it out of
+    // any `limit`-sized window.
+    let needle_id = create("zebracrossing handoff").await?;
+    for title in ["decoy one", "decoy two", "decoy three"] {
+        create(title).await?;
+    }
+
+    let summaries: serde_json::Value = client
+        .get(format!(
+            "http://{addr}/v1/threads/summary?limit=2&search=zebracrossing"
+        ))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let rows = summaries.as_array().context("summary should be an array")?;
+    assert_eq!(
+        rows.len(),
+        1,
+        "search must reach past the row limit; got {summaries}"
+    );
+    assert_eq!(rows[0]["id"], needle_id);
+
+    // `limit` still bounds the returned rows.
+    let bounded: serde_json::Value = client
+        .get(format!("http://{addr}/v1/threads/summary?limit=2"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(
+        bounded
+            .as_array()
+            .context("summary should be an array")?
+            .len(),
+        2
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+/// `GET /v1/threads/summary?search=` used to call `get_thread_detail` for every
+/// thread *before* matching. Detail walks the entire turns directory and the
+/// entire items directory, so a non-matching dashboard keystroke was
+/// O(threads × (all_turns + all_items)) JSON reads. Matching on the thread
+/// record first (and peeking one latest-turn file only when the title is
+/// unset) must not scale that way: adding items must not multiply reads by
+/// thread count.
+#[tokio::test]
+async fn thread_summary_search_does_not_scan_the_whole_store_per_thread() -> Result<()> {
+    let Some((addr, runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    const THREADS: usize = 8;
+    const TURNS_PER_THREAD: usize = 4;
+    const ITEMS_PER_TURN: usize = 4;
+    const PREVIEW_TOKEN: &str = "previewonlyneedlenowhereontherecord";
+    const TITLE_NEEDLE: &str = "zebracrossing-summary-search";
+
+    let mut thread_ids = Vec::with_capacity(THREADS);
+    for index in 0..THREADS {
+        let thread: serde_json::Value = client
+            .post(format!("http://{addr}/v1/threads"))
+            .json(&json!({}))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let id = thread["id"]
+            .as_str()
+            .context("missing thread id")?
+            .to_string();
+        let title = if index == 0 {
+            TITLE_NEEDLE
+        } else {
+            "decoy summary search title"
+        };
+        client
+            .patch(format!("http://{addr}/v1/threads/{id}"))
+            .json(&json!({ "title": title }))
+            .send()
+            .await?
+            .error_for_status()?;
+        seed_summary_search_transcript(
+            runtime_threads.test_store(),
+            &id,
+            index,
+            TURNS_PER_THREAD,
+            ITEMS_PER_TURN,
+            PREVIEW_TOKEN,
+        )?;
+        thread_ids.push(id);
+    }
+
+    let total_turns = (THREADS * TURNS_PER_THREAD) as u64;
+    let total_items = (THREADS * TURNS_PER_THREAD * ITEMS_PER_TURN) as u64;
+    let quadratic_file_reads = (THREADS as u64) * (total_turns + total_items);
+
+    runtime_threads.reset_whole_store_scan_file_reads();
+    let missed: serde_json::Value = client
+        .get(format!(
+            "http://{addr}/v1/threads/summary?limit=2&search={PREVIEW_TOKEN}"
+        ))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let (turn_files, item_files) = runtime_threads.whole_store_scan_file_reads();
+    let scan_reads = turn_files + item_files;
+    assert!(
+        scan_reads.saturating_mul(2) < quadratic_file_reads,
+        "non-matching search read {turn_files} turn files and {item_files} item files \
+         across {THREADS} threads ({total_turns} turns, {total_items} items); \
+         a per-thread get_thread_detail would have been ~{quadratic_file_reads} \
+         whole-store file reads"
+    );
+    assert!(
+        missed
+            .as_array()
+            .context("summary should be an array")?
+            .is_empty(),
+        "preview text is display-only and must not be a search key; got {missed}"
+    );
+
+    runtime_threads.reset_whole_store_scan_file_reads();
+    let found: serde_json::Value = client
+        .get(format!(
+            "http://{addr}/v1/threads/summary?limit=2&search={TITLE_NEEDLE}"
+        ))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let rows = found.as_array().context("summary should be an array")?;
+    assert_eq!(
+        rows.len(),
+        1,
+        "title search must still find the needle; got {found}"
+    );
+    assert_eq!(rows[0]["id"], thread_ids[0]);
+    assert!(
+        rows[0]["preview"]
+            .as_str()
+            .is_some_and(|preview| preview.contains(PREVIEW_TOKEN)),
+        "matching rows still load detail so the preview is filled; got {found}"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+fn seed_summary_search_transcript(
+    store: &crate::runtime_threads::RuntimeThreadStore,
+    thread_id: &str,
+    thread_index: usize,
+    turns: usize,
+    items_per_turn: usize,
+    preview_token: &str,
+) -> Result<()> {
+    let mut thread = store.load_thread(thread_id)?;
+    let base = Utc::now();
+    let mut latest_turn_id = None;
+    for turn_offset in 0..turns {
+        let created_at = base + chrono::Duration::milliseconds(turn_offset as i64);
+        let turn_id = format!("turn_sum_{thread_index}_{turn_offset}");
+        let mut item_ids = Vec::with_capacity(items_per_turn);
+        for item_offset in 0..items_per_turn {
+            let item_id = format!("item_sum_{thread_index}_{turn_offset}_{item_offset}");
+            let kind = if item_offset == 0 {
+                TurnItemKind::UserMessage
+            } else {
+                TurnItemKind::AgentMessage
+            };
+            let text = format!("{preview_token} {thread_index} {turn_offset} {item_offset}");
+            store.save_item(&crate::runtime_threads::TurnItemRecord {
+                schema_version: 2,
+                id: item_id.clone(),
+                turn_id: turn_id.clone(),
+                kind,
+                status: TurnItemLifecycleStatus::Completed,
+                summary: text.clone(),
+                detail: Some(text),
+                metadata: None,
+                artifact_refs: Vec::new(),
+                started_at: Some(created_at),
+                ended_at: Some(created_at),
+            })?;
+            item_ids.push(item_id);
+        }
+        store.save_turn(&TurnRecord {
+            schema_version: 2,
+            id: turn_id.clone(),
+            thread_id: thread_id.to_string(),
+            status: RuntimeTurnStatus::Completed,
+            input_summary: format!("decoy prompt {thread_index} {turn_offset}"),
+            created_at,
+            started_at: Some(created_at),
+            ended_at: Some(created_at),
+            duration_ms: Some(0),
+            usage: None,
+            permission_posture: None,
+            effective_provider: None,
+            effective_provider_id: None,
+            effective_billing_surface: None,
+            effective_endpoint_fingerprint: None,
+            effective_billing_mode: None,
+            effective_dispatched_at: None,
+            effective_model: None,
+            routed_usage: Vec::new(),
+            routed_usage_source_ids: Vec::new(),
+            routed_usage_dropped_records: 0,
+            error: None,
+            item_ids,
+            steer_count: 0,
+            agent_mail_message_id: None,
+        })?;
+        latest_turn_id = Some(turn_id);
+    }
+    thread.latest_turn_id = latest_turn_id;
+    store.save_thread(&thread)?;
     Ok(())
 }
 
@@ -6421,6 +6788,191 @@ async fn api_surfaces_only_active_model_when_runtime_route_passes_ids_through() 
         .filter_map(|entry| entry["id"].as_str())
         .collect();
     assert_eq!(model_ids, vec!["glm-5.2"]);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn provider_models_expose_exact_image_input_facts_and_thread_selection_stays_local()
+-> Result<()> {
+    let root = std::env::temp_dir().join(format!(
+        "codewhale-provider-model-capabilities-{}",
+        Uuid::new_v4()
+    ));
+    fs::create_dir_all(&root)?;
+    let config_file = root.join("custom-config.toml");
+    fs::write(
+        &config_file,
+        "provider = \"deepseek\"\ndefault_text_model = \"deepseek-v4-pro\"\n",
+    )?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_config_path(config_file).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let models = get_provider_models(&client, &addr, "deepseek").await;
+    let entries = models["models"].as_array().context("models array")?;
+    let vision = entries
+        .iter()
+        .find(|entry| entry["id"] == "deepseek-v4-flash-vision-exp")
+        .context("DeepSeek vision model entry")?;
+    assert_eq!(vision["image_input"], "supported");
+    let text_only = entries
+        .iter()
+        .find(|entry| entry["id"] == "deepseek-v4-pro")
+        .context("DeepSeek text model entry")?;
+    assert_eq!(text_only["image_input"], "unsupported");
+
+    let config_before = get_config(&client, &addr).await;
+    let response = client
+        .post(format!("http://{addr}/v1/threads"))
+        .json(&json!({
+            "model_provider": "deepseek",
+            "model": "deepseek-v4-flash-vision-exp",
+        }))
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let thread: serde_json::Value = response.json().await?;
+    assert_eq!(thread["model_provider"], "deepseek");
+    assert_eq!(thread["model"], "deepseek-v4-flash-vision-exp");
+
+    let config_after = get_config(&client, &addr).await;
+    assert_eq!(config_after["provider"], config_before["provider"]);
+    assert_eq!(config_after["model"], config_before["model"]);
+
+    handle.abort();
+    Ok(())
+}
+
+#[test]
+fn provider_catalog_keeps_official_deepseek_facts_but_not_custom_proxy_claims() {
+    for official_base_url in [
+        "https://api.deepseek.com/v1",
+        "https://api.deepseek.com/beta/",
+    ] {
+        let mut config = Config {
+            provider: Some("deepseek".to_string()),
+            default_text_model: Some("deepseek-v4-pro".to_string()),
+            ..Config::default()
+        };
+        let provider_config = config.provider_config_for_mut(ApiProvider::Deepseek);
+        provider_config.base_url = Some(official_base_url.to_string());
+        provider_config.model = Some("deepseek-v4-pro".to_string());
+
+        assert!(
+            !provider_uses_custom_route_for_api(&config, ApiProvider::Deepseek),
+            "official DeepSeek endpoint must retain the shared model catalog: {official_base_url}"
+        );
+        let models = provider_models_for_api(&config, ApiProvider::Deepseek, ApiProvider::Deepseek);
+        assert!(
+            models
+                .iter()
+                .any(|model| model == "deepseek-v4-flash-vision-exp"),
+            "official DeepSeek endpoint must expose the experimental vision model: {official_base_url}"
+        );
+    }
+
+    let mut custom = Config {
+        provider: Some("deepseek".to_string()),
+        default_text_model: Some("private-deepseek-deployment".to_string()),
+        ..Config::default()
+    };
+    let provider_config = custom.provider_config_for_mut(ApiProvider::Deepseek);
+    provider_config.base_url = Some("https://deepseek-proxy.example.test/v1".to_string());
+    provider_config.model = Some("private-deepseek-deployment".to_string());
+
+    assert!(provider_uses_custom_route_for_api(
+        &custom,
+        ApiProvider::Deepseek
+    ));
+    assert_eq!(
+        provider_models_for_api(&custom, ApiProvider::Deepseek, ApiProvider::Deepseek),
+        vec!["private-deepseek-deployment".to_string()],
+        "a real custom endpoint must expose only its explicitly configured model namespace"
+    );
+
+    custom.default_text_model = Some("deepseek-v4-flash-vision-exp".to_string());
+    custom.provider_config_for_mut(ApiProvider::Deepseek).model =
+        Some("deepseek-v4-flash-vision-exp".to_string());
+    assert_eq!(
+        provider_models_for_api(&custom, ApiProvider::Deepseek, ApiProvider::Deepseek),
+        vec!["deepseek-v4-flash-vision-exp".to_string()],
+        "a custom proxy may legitimately reuse a first-party model id"
+    );
+    assert_eq!(
+        provider_model_image_input_for_api(
+            &custom,
+            ApiProvider::Deepseek,
+            "deepseek-v4-flash-vision-exp",
+        ),
+        codewhale_config::route::CapabilityState::Unknown,
+        "same-name custom proxy must not surface first-party vision capability as verified"
+    );
+}
+
+#[tokio::test]
+async fn provider_catalog_preserves_named_custom_identity_for_new_threads() -> Result<()> {
+    let root = std::env::temp_dir().join(format!(
+        "codewhale-provider-named-custom-{}",
+        Uuid::new_v4()
+    ));
+    fs::create_dir_all(&root)?;
+    let config_file = root.join("custom-config.toml");
+    fs::write(
+        &config_file,
+        r#"provider = "lm-studio"
+
+[providers.lm-studio]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:18190/v1"
+model = "local-vision-model"
+api_key = "local-test-key"
+"#,
+    )?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_config_path(config_file).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let config_before = get_config(&client, &addr).await;
+    assert_eq!(config_before["provider"], "lm-studio");
+    assert_eq!(config_before["model"], "local-vision-model");
+
+    let providers = get_providers(&client, &addr).await;
+    assert_eq!(providers["current"], "custom");
+    let custom = providers["providers"]
+        .as_array()
+        .and_then(|entries| entries.iter().find(|entry| entry["id"] == "custom"))
+        .context("custom provider entry")?;
+    assert_eq!(custom["model_provider_id"], "lm-studio");
+    assert_eq!(custom["default_model"], "local-vision-model");
+
+    let response = client
+        .post(format!("http://{addr}/v1/threads"))
+        .json(&json!({
+            "model_provider": "custom",
+            "model_provider_id": custom["model_provider_id"],
+            "model": custom["default_model"],
+        }))
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let thread: serde_json::Value = response.json().await?;
+    assert_eq!(thread["model_provider"], "custom");
+    assert_eq!(thread["model_provider_id"], "lm-studio");
+    assert_eq!(thread["model"], "local-vision-model");
+
+    let config_after = get_config(&client, &addr).await;
+    assert_eq!(config_after["provider"], config_before["provider"]);
+    assert_eq!(config_after["model"], config_before["model"]);
 
     handle.abort();
     Ok(())

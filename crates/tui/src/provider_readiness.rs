@@ -518,10 +518,29 @@ pub(crate) struct ProviderReadinessSnapshot {
 
 impl ProviderReadinessSnapshot {
     fn last(&self, identity: &ProviderRouteIdentity) -> Option<&LastProviderCheck> {
-        self.checks
+        if let Some(check) = self
+            .checks
             .iter()
             .rev()
             .find_map(|(candidate, check)| (candidate == identity).then_some(check))
+        {
+            return Some(check);
+        }
+        // The auto model route never records under the literal "auto" —
+        // successes and failures are recorded against the concrete model
+        // the router actually ran. Without this fallback every auto-mode
+        // read would report "not checked" forever, even after hundreds of
+        // successful turns on that route.
+        if identity.model != "auto" {
+            return None;
+        }
+        self.checks.iter().rev().find_map(|(candidate, check)| {
+            (candidate.provider == identity.provider
+                && candidate.provider_id == identity.provider_id
+                && candidate.endpoint == identity.endpoint
+                && candidate.auth_class == identity.auth_class)
+                .then_some(check)
+        })
     }
 
     pub(crate) fn record_success(
@@ -1125,6 +1144,87 @@ mod tests {
             resolve_for_model(&alpha_moved, ApiProvider::Custom, "private-coder", &checks,),
             ResolvedProviderReadiness::SavedUnchecked,
             "changing endpoints must invalidate observed health"
+        );
+    }
+
+    #[test]
+    fn auto_model_readiness_follows_the_route_not_the_literal_identity() {
+        let config = crate::config::Config {
+            api_key: Some("test-key".to_string()),
+            ..Default::default()
+        };
+        let mut checks = ProviderReadinessSnapshot::default();
+
+        // Before any observed turn, auto honestly reports unchecked.
+        assert_eq!(
+            resolve_for_model(&config, ApiProvider::Deepseek, "auto", &checks),
+            ResolvedProviderReadiness::SavedUnchecked,
+            "auto with no observed history must stay unchecked"
+        );
+
+        // A successful concrete-model turn on the route verifies auto too —
+        // the router picks the model, so per-model scoping cannot apply.
+        checks.record_success(&config, ApiProvider::Deepseek, "deepseek-v4-flash");
+        assert_eq!(
+            resolve_for_model(&config, ApiProvider::Deepseek, "auto", &checks),
+            ResolvedProviderReadiness::Ready,
+            "a passed turn on the route must clear auto's not-checked badge"
+        );
+
+        // A later failure on the same route must surface for auto as well.
+        checks.record_failure_message(
+            &config,
+            ApiProvider::Deepseek,
+            "deepseek-v4-pro",
+            crate::error_taxonomy::ErrorCategory::Authentication,
+            "401 unauthorized",
+        );
+        assert!(
+            matches!(
+                resolve_for_model(&config, ApiProvider::Deepseek, "auto", &checks),
+                ResolvedProviderReadiness::SavedLastCheckFailed { .. }
+            ),
+            "the most recent route check must win for auto, including failures"
+        );
+    }
+
+    #[test]
+    fn auto_readiness_does_not_leak_across_providers_or_endpoints() {
+        let custom_config = |id: &str, endpoint: &str| crate::config::Config {
+            provider: Some(id.to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                custom: std::collections::HashMap::from([(
+                    id.to_string(),
+                    crate::config::ProviderConfig {
+                        kind: Some("openai-compatible".to_string()),
+                        base_url: Some(endpoint.to_string()),
+                        model: Some("private-coder".to_string()),
+                        api_key: Some("test-key".to_string()),
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut checks = ProviderReadinessSnapshot::default();
+        let alpha = custom_config("alpha", "https://alpha.example/v1");
+        checks.record_success(&alpha, ApiProvider::Custom, "private-coder");
+
+        // Same endpoint, different named provider: no leak.
+        let beta = custom_config("beta", "https://alpha.example/v1");
+        assert_eq!(
+            resolve_for_model(&beta, ApiProvider::Custom, "auto", &checks),
+            ResolvedProviderReadiness::SavedUnchecked,
+            "auto fallback is scoped to the route, not the workspace"
+        );
+
+        // Same named provider, different endpoint: no leak.
+        let alpha_moved = custom_config("alpha", "https://other.example/v1");
+        assert_eq!(
+            resolve_for_model(&alpha_moved, ApiProvider::Custom, "auto", &checks),
+            ResolvedProviderReadiness::SavedUnchecked,
+            "changing endpoints must invalidate the auto fallback too"
         );
     }
 

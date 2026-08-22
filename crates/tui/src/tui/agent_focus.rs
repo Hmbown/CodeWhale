@@ -934,4 +934,86 @@ mod tests {
                 .is_some_and(|status| status.contains("status is cancelled"))
         );
     }
+
+    #[test]
+    fn scroll_to_bottom_returns_the_focused_transcript_to_its_tail() {
+        let tmp = tempdir().expect("tempdir");
+        let mut app = test_app(tmp.path().to_path_buf());
+        let messages: Vec<serde_json::Value> = (0..40)
+            .map(|i| json!({"role": "assistant", "content": [{"type": "text", "text": format!("line {i}"), "cache_control": null}]}))
+            .collect();
+        seed_resident_transcript(&mut app, "agent_tail", json!(messages));
+        focus_agent(&mut app, "agent_tail");
+        let _ = render(&mut app, 60, 10);
+        app.scroll_up(5);
+        let _ = render(&mut app, 60, 10);
+        assert!(app.agent_focus.as_ref().unwrap().scroll_top.is_some());
+
+        // The main transcript's jump-to-bottom affordances (Ctrl+End, the
+        // jump-to-latest button) route through `App::scroll_to_bottom`; the
+        // focused pane shares those keys, so it must return to its own tail.
+        app.scroll_to_bottom();
+        let screen = render(&mut app, 60, 10);
+        assert!(
+            app.agent_focus.as_ref().unwrap().scroll_top.is_none(),
+            "jump-to-bottom must release the focused pane's pin"
+        );
+        assert!(screen.contains("line 39"), "{screen}");
+    }
+
+    #[test]
+    fn main_conversation_activity_keeps_a_pinned_focused_transcript_pinned() {
+        let tmp = tempdir().expect("tempdir");
+        let mut app = test_app(tmp.path().to_path_buf());
+        let messages: Vec<serde_json::Value> = (0..40)
+            .map(|i| json!({"role": "assistant", "content": [{"type": "text", "text": format!("line {i}"), "cache_control": null}]}))
+            .collect();
+        seed_resident_transcript(&mut app, "agent_pin", json!(messages));
+        focus_agent(&mut app, "agent_pin");
+        let _ = render(&mut app, 60, 10);
+        app.scroll_up(10);
+        let _ = render(&mut app, 60, 10);
+        assert!(app.agent_focus.as_ref().unwrap().scroll_top.is_some());
+
+        // Turn completion clears the per-turn scroll lock while the focused
+        // pane keeps its pin — the state the auto-follow guard must respect.
+        app.user_scrolled_during_stream = false;
+        app.add_message(HistoryCell::System {
+            content: "worker finished".to_string(),
+        });
+
+        assert!(
+            app.agent_focus.as_ref().unwrap().scroll_top.is_some(),
+            "main-conversation activity must not yank the pinned focused pane to its tail"
+        );
+    }
+
+    #[test]
+    fn focused_transcript_follows_new_child_activity_while_at_tail() {
+        let tmp = tempdir().expect("tempdir");
+        let mut app = test_app(tmp.path().to_path_buf());
+        let seed = |count: usize| {
+            let messages: Vec<serde_json::Value> = (0..count)
+                .map(|i| json!({"role": "assistant", "content": [{"type": "text", "text": format!("line {i}"), "cache_control": null}]}))
+                .collect();
+            json!(messages)
+        };
+        seed_resident_transcript(&mut app, "agent_live", seed(40));
+        focus_agent(&mut app, "agent_live");
+        let first = render(&mut app, 60, 10);
+        assert!(first.contains("line 39"), "{first}");
+        assert!(app.agent_focus.as_ref().unwrap().scroll_top.is_none());
+
+        // The child streams on; while the pane sits at its tail the new
+        // activity must pull the viewport down with it.
+        seed_resident_transcript(&mut app, "agent_live", seed(60));
+        app.agent_focus.as_mut().unwrap().last_refresh = Instant::now() - REFRESH_INTERVAL;
+        refresh_focus(&mut app);
+        let second = render(&mut app, 60, 10);
+        assert!(second.contains("line 59"), "{second}");
+        assert!(
+            app.agent_focus.as_ref().unwrap().scroll_top.is_none(),
+            "following the tail must not flip into a pinned offset"
+        );
+    }
 }

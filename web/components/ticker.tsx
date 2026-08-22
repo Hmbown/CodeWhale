@@ -1,6 +1,7 @@
 import type { FeedItem } from "@/lib/types";
 import { relativeAge, relativeTime } from "@/lib/github";
 import { splitToken } from "@/lib/i18n/dictionaries";
+import { truncateChars } from "@/lib/truncate";
 
 /**
  * The wire strip under the masthead: what actually happened in the
@@ -103,10 +104,7 @@ function TickerEntry({
         <span className="ticker-num tabular">#{item.number}</span>
       )}
       {title ? (
-        <span className="ticker-title">
-          {title.slice(0, 70)}
-          {title.length > 70 ? "…" : ""}
-        </span>
+        <span className="ticker-title">{truncateChars(title, 70)}</span>
       ) : null}
       {item.author ? (
         <span className="ticker-by">

@@ -160,6 +160,14 @@ fn display_name(record: &AgentWorkerRecord) -> String {
         .spec
         .session_name
         .clone()
+        .or_else(|| {
+            record
+                .spec
+                .child_route
+                .as_ref()
+                .and_then(|route| route.resolved_profile_id.clone())
+                .filter(|profile| !profile.trim().is_empty())
+        })
         .or_else(|| record.spec.role.clone())
         .unwrap_or_else(|| record.spec.agent_type.as_str().to_string())
 }

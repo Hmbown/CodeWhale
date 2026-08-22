@@ -230,7 +230,7 @@ assert.match(releaseStaticSmoke, /"\$\{bin_path\}" --version/);
 const builtAssetNames = [
   ...valuesForKey(artifacts, "cli_artifact"),
   ...valuesForKey(artifacts, "shim_artifact"),
-  ...valuesForKey(artifacts, "tui_artifact"),
+  ...valuesForKey(artifacts, "compat_tui_artifact"),
 ];
 assert.equal(builtAssetNames.length, 21);
 assert.deepEqual(
@@ -242,7 +242,7 @@ assert.deepEqual(
 );
 assert.match(
   artifacts,
-  /stage_binary "\$\{\{ matrix\.cli_binary \}\}" "\$\{\{ matrix\.tui_artifact \}\}"/,
+  /stage_binary "\$\{\{ matrix\.cli_binary \}\}" "\$\{\{ matrix\.compat_tui_artifact \}\}"/,
   "legacy TUI bridge assets must be staged from the one compiled codewhale binary",
 );
 const bundleInvocations = [...bundles.matchAll(
@@ -463,7 +463,7 @@ assert.ok(cnbSmoke > cnbAlias, "CNB release preflight must materialize codew bef
 const cnbTagRelease = cnb.match(/\$:\n  tag_push:\n([\s\S]*)$/);
 assert.ok(cnbTagRelease, "CNB must retain a tag release pipeline");
 const cnbTagStamp = cnbTagRelease[1].indexOf(
-  'export DEEPSEEK_BUILD_SHA="$commit_sha"',
+  'export CODEWHALE_BUILD_SHA="$commit_sha"',
 );
 const cnbTagBuild = cnbTagRelease[1].indexOf(
   "cargo build --jobs 2 --release --locked \\",

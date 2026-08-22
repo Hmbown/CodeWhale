@@ -62,21 +62,14 @@ posture remain authoritative.
 `codewhale fleet run` accepts JSON or TOML. The checked-in
 `docs/examples/fleet-dogfood.toml` file is the realistic manual smoke example;
 the JSON below shows the same authoring shape with one read-only reviewer and
-one bounded docs-note worker. It keeps secrets disabled and caps trust at
-`sandbox`.
+one bounded docs-note worker. The live Runtime policy controls secrets and
+trust; Fleet identity carries neither.
 
 ```json
 {
   "name": "docs readiness check",
   "labels": {
     "kind": "tutorial"
-  },
-  "security_policy": {
-    "default_trust_level": "sandbox",
-    "max_trust_level": "sandbox",
-    "allowed_secrets": [],
-    "capability_grants": [],
-    "require_identity_verification": true
   },
   "tasks": [
     {
@@ -153,16 +146,10 @@ Common task fields:
 | `scorer` | Deterministic or manual verification rule. |
 | `retry_policy`, `timeout_seconds`, `budget` | Retry and budget controls. |
 
-Security policy fields:
-
-| Field | Purpose |
-| --- | --- |
-| `default_trust_level` | Default worker trust level. `sandbox` is the conservative default. |
-| `max_trust_level` | Ceiling for any worker in the run. |
-| `allowed_secrets` | Secret names workers may resolve; never put secret values here. |
-| `capability_grants` | Scoped grants such as `network`, `git-push`, `provider-secrets`, `release`, or `workspace-write`. |
-| `require_identity_verification` | Requires remote workers to pass host identity checks before elevated trust. |
-| `allow_parallel_reads` | Allows conservative batching of independent read-only operations. |
+Do not put `security_policy` or worker `trust_level` in a new Fleet task spec.
+Those legacy fields remain readable only for old ledger replay and new-run
+validation rejects them. Project trust, filesystem/network reach, secrets,
+approvals, sandboxing, and tool authority are Runtime policy inputs.
 
 ## 3. Start And Monitor Fleet
 

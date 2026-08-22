@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use codewhale_core::request::{Message, SystemPrompt};
 
@@ -109,6 +109,9 @@ impl CommandWorkspaceContext for Workspace {
     fn work_state_snapshot(&self) -> Result<Option<String>, String> {
         Ok(None)
     }
+    fn operation_digest(&mut self) -> Result<String, String> {
+        Ok("No active operations or to-do items.".to_string())
+    }
 }
 
 #[test]
@@ -186,4 +189,158 @@ impl RegisterCommand<String> for Sample {
 fn registration_shape_has_no_app_dependency() {
     assert_eq!(Sample::info().name, "sample");
     assert!(matches!(Sample::handler(), CommandHandler::Pure(_)));
+}
+
+// ---------------------------------------------------------------------------
+// FEAT-018: presentation, media, and digest capabilities (D2-D5)
+// ---------------------------------------------------------------------------
+
+struct Presentation;
+impl CommandPresentationContext for Presentation {
+    fn translate(&self, key: &str, replacements: &[(&str, &str)]) -> Result<String, String> {
+        if key == "automation_usage" {
+            return Ok("Usage: /automation [list|show <id>]".to_string());
+        }
+        if key == "mcp_recommended_unknown_id" {
+            let command = replacements
+                .iter()
+                .find(|(name, _)| *name == "recommendations_command")
+                .map(|(_, value)| *value)
+                .unwrap_or("/mcp recommendations");
+            return Ok(format!("Unknown recommended MCP ID (try {command})"));
+        }
+        // D3: unknown keys fail safely without echoing the raw lookup key.
+        Err("unknown translation key".to_string())
+    }
+}
+
+struct Media;
+impl CommandMediaContext for Media {
+    fn attach_media(&mut self, path: &Path) -> Result<MediaAttachmentReceipt, String> {
+        if path.extension().and_then(|ext| ext.to_str()) == Some("png") {
+            Ok(MediaAttachmentReceipt {
+                kind: "image".to_string(),
+                path: path.to_path_buf(),
+            })
+        } else {
+            Err("Unsupported attachment type".to_string())
+        }
+    }
+}
+
+struct DigestWorkspace;
+impl CommandWorkspaceContext for DigestWorkspace {
+    fn workspace(&self) -> PathBuf {
+        PathBuf::from(".")
+    }
+    fn work_state_snapshot(&self) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+    fn operation_digest(&mut self) -> Result<String, String> {
+        Ok("No active operations or to-do items.".to_string())
+    }
+}
+
+#[test]
+fn new_capabilities_are_object_safe_and_independently_transportable() {
+    fn presentation(_: &dyn CommandPresentationContext) {}
+    fn media(_: &dyn CommandMediaContext) {}
+    fn digest_workspace(_: &dyn CommandWorkspaceContext) {}
+
+    presentation(&Presentation);
+    media(&Media);
+    digest_workspace(&DigestWorkspace);
+
+    let mut presentation = Presentation;
+    let mut media = Media;
+    let parts = CommandContexts::empty()
+        .with_presentation(&mut presentation)
+        .with_media(&mut media)
+        .into_parts();
+    assert!(parts.presentation.is_some());
+    assert!(parts.media.is_some());
+    assert!(parts.session.is_none());
+}
+
+#[test]
+fn translation_contract_resolves_known_keys_and_fails_safely() {
+    let presentation = Presentation;
+    assert_eq!(
+        presentation
+            .translate("automation_usage", &[])
+            .expect("known key"),
+        "Usage: /automation [list|show <id>]"
+    );
+    assert_eq!(
+        presentation
+            .translate(
+                "mcp_recommended_unknown_id",
+                &[("recommendations_command", "/mcp recommendations")],
+            )
+            .expect("known key with named replacement"),
+        "Unknown recommended MCP ID (try /mcp recommendations)"
+    );
+    let unknown = presentation.translate("no_such_key", &[]);
+    assert!(unknown.is_err(), "unknown key must fail safely");
+    let err = unknown.unwrap_err();
+    assert!(
+        !err.contains("no_such_key"),
+        "no raw lookup key exposure (D3)"
+    );
+}
+
+#[test]
+fn media_contract_is_atomic_and_returns_only_portable_data() {
+    let mut media = Media;
+    let ok = media
+        .attach_media(Path::new("/tmp/photo.png"))
+        .expect("png");
+    assert_eq!(ok.kind, "image");
+    assert_eq!(ok.path, PathBuf::from("/tmp/photo.png"));
+
+    let err = media.attach_media(Path::new("/tmp/notes.txt")).unwrap_err();
+    assert!(!err.is_empty(), "safe error string");
+}
+
+#[test]
+fn digest_operation_returns_final_text_and_safe_errors() {
+    let mut workspace = DigestWorkspace;
+    assert_eq!(
+        workspace.operation_digest().expect("digest"),
+        "No active operations or to-do items."
+    );
+}
+
+#[test]
+fn envelope_rejects_duplicate_new_slots_deterministically() {
+    struct SecondPresentation;
+    impl CommandPresentationContext for SecondPresentation {
+        fn translate(&self, _key: &str, _r: &[(&str, &str)]) -> Result<String, String> {
+            Ok(String::new())
+        }
+    }
+    struct SecondMedia;
+    impl CommandMediaContext for SecondMedia {
+        fn attach_media(&mut self, _p: &Path) -> Result<MediaAttachmentReceipt, String> {
+            Err("unused".to_string())
+        }
+    }
+
+    let mut a = Presentation;
+    let mut b = SecondPresentation;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CommandContexts::empty()
+            .with_presentation(&mut a)
+            .with_presentation(&mut b);
+    }));
+    assert!(result.is_err(), "duplicate presentation slot must assert");
+
+    let mut a = Media;
+    let mut b = SecondMedia;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CommandContexts::empty()
+            .with_media(&mut a)
+            .with_media(&mut b);
+    }));
+    assert!(result.is_err(), "duplicate media slot must assert");
 }

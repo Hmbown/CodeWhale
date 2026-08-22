@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:b092c34e8ca3 -->
+<!-- source: README.md sha256:a56bca473dbd -->
 # Codewhale
 
 Codewhale وكيل مفتوح المصدر للبرمجة عبر الطرفية، مبني بلغة Rust ويتطور علنًا بالتعاون مع الأشخاص الذين يستخدمونه.
@@ -20,6 +20,8 @@ codewhale
 ```
 
 يساعدك Codewhale عند التشغيل الأول على الاتصال بموفّر أو البقاء دون اتصال. ويدعم أيضًا Cargo وDocker وNix وScoop والأرشيفات المبنية مسبقًا وAndroid/Termux ومرآة CNB. راجع [دليل التثبيت](docs/INSTALL.md).
+
+يمكن تفعيل الإكمال بمفتاح Tab بأمر واحد لكل واجهة أوامر — `codewhale completion bash|zsh|fish|powershell|elvish`. راجع [إكمال واجهة الأوامر](docs/INSTALL.md#8-shell-completions).
 
 ## الاستخدام
 
@@ -74,4 +76,4 @@ codewhale exec "fix the failing tests and explain what changed"
 
 ## الترخيص
 
-[MIT](LICENSE)
+[MIT](LICENSE). الأجزاء المقتبسة والمعدّلة من مشاريع أخرى مفتوحة المصدر مسجّلة في [إشعارات الجهات الخارجية](docs/THIRD_PARTY_NOTICES.md).

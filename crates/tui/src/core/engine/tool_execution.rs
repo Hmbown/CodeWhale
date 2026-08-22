@@ -16,6 +16,14 @@ use super::*;
 
 const TOOL_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 
+fn inherited_interactive_shell_refusal(tool_name: &str, interactive: bool) -> Option<ToolError> {
+    if !interactive || !matches!(tool_name, "bash" | "Bash" | "exec_shell") {
+        return None;
+    }
+    crate::tools::shell::inherited_interactive_terminal_refusal()
+        .map(|message| ToolError::execution_failed(message.to_string()))
+}
+
 /// Emits delayed, best-effort liveness pulses for one running tool.
 ///
 /// Keep the ticker in its own task instead of embedding `tokio::time::Interval`
@@ -94,13 +102,19 @@ pub(super) struct InteractiveTerminalGuard {
 impl InteractiveTerminalGuard {
     /// Send `PauseEvents` and arm the guard. If `interactive` is false the
     /// guard is a no-op — `Drop` will skip the resume.
-    pub(super) async fn engage(tx: mpsc::Sender<Event>, interactive: bool) -> Self {
+    pub(super) async fn engage(
+        tx: mpsc::Sender<Event>,
+        interactive: bool,
+    ) -> Result<Self, ToolError> {
         if !interactive {
-            return Self { tx: None };
+            return Ok(Self { tx: None });
         }
-        // Best-effort: if the receiver is gone the TUI has already shut down
-        // and there's nothing to restore. If the event is delivered, wait for
-        // the UI to actually release the terminal before starting the child.
+        // Arm before the send/ack awaits. Cancellation can drop this future
+        // at either await point; the guard must still queue ResumeEvents if a
+        // PauseEvents raced into the UI first.
+        let guard = Self {
+            tx: Some(tx.clone()),
+        };
         let ack = Arc::new(tokio::sync::Notify::new());
         match tx
             .send(Event::PauseEvents {
@@ -113,11 +127,10 @@ impl InteractiveTerminalGuard {
                     .await
                     .is_err()
                 {
-                    tracing::warn!(
-                        target: "engine.tool_execution",
-                        "InteractiveTerminalGuard: timed out waiting for terminal pause ack; \
-                         continuing with interactive tool"
-                    );
+                    // `guard` drops on return and queues the matching resume.
+                    return Err(ToolError::execution_failed(
+                        "Terminal handoff was not acknowledged; interactive tool was not launched.",
+                    ));
                 }
             }
             Err(err) => {
@@ -126,9 +139,12 @@ impl InteractiveTerminalGuard {
                     ?err,
                     "InteractiveTerminalGuard: event channel closed before PauseEvents"
                 );
+                return Err(ToolError::execution_failed(
+                    "Terminal handoff channel closed; interactive tool was not launched.",
+                ));
             }
         }
-        Self { tx: Some(tx) }
+        Ok(guard)
     }
 }
 
@@ -383,6 +399,12 @@ impl Engine {
                 "Turn stopped by user. Tool call blocked.",
             ));
         }
+        // Unix inherited-terminal shell calls are impossible without a full
+        // POSIX job-control lease. Refuse them before the terminal guard so a
+        // known-invalid call cannot flash host scrollback or drain input.
+        if let Some(error) = inherited_interactive_shell_refusal(&tool_name, interactive) {
+            return Err(error);
+        }
         // This guard starts before lock acquisition, so contention as well as
         // registry/MCP/interpreter execution remains visibly live.
         let _heartbeat = ToolHeartbeatGuard::start(tx_event.clone(), TOOL_HEARTBEAT_INTERVAL);
@@ -423,7 +445,7 @@ impl Engine {
         // `InteractiveTerminalGuard` doc-comment for the regression this
         // closes (parent terminal scrollback hijacking the TUI after a
         // cancelled interactive tool).
-        let _terminal = InteractiveTerminalGuard::engage(tx_event, interactive).await;
+        let _terminal = InteractiveTerminalGuard::engage(tx_event, interactive).await?;
 
         if cancel_token
             .as_ref()
@@ -652,7 +674,8 @@ mod tests {
         let guard = tokio::time::timeout(Duration::from_secs(1), task)
             .await
             .expect("guard returned after ack")
-            .expect("guard task joined");
+            .expect("guard task joined")
+            .expect("terminal handoff acknowledged");
 
         drop(guard);
         let resumed = tokio::time::timeout(Duration::from_secs(1), rx.recv())
@@ -660,6 +683,86 @@ mod tests {
             .expect("resume event")
             .expect("event channel still open");
         assert!(matches!(resumed, Event::ResumeEvents));
+    }
+
+    #[tokio::test]
+    async fn terminal_guard_refuses_child_and_queues_resume_when_pause_is_not_acknowledged() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let task = tokio::spawn(InteractiveTerminalGuard::engage(tx, true));
+
+        let event = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("pause event")
+            .expect("event channel still open");
+        let _unacknowledged_pause = match event {
+            Event::PauseEvents { ack: Some(ack) } => ack,
+            other => panic!("expected PauseEvents with ack, got {other:?}"),
+        };
+
+        let handoff = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("guard refused child after pause timeout")
+            .expect("guard task joined");
+        let err = match handoff {
+            Ok(_) => panic!("unacknowledged terminal handoff must fail closed"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("was not acknowledged"),
+            "unexpected handoff error: {err}"
+        );
+
+        let resumed = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("queued resume event")
+            .expect("event channel still open");
+        assert!(matches!(resumed, Event::ResumeEvents));
+    }
+
+    #[tokio::test]
+    async fn terminal_guard_cancellation_during_pause_ack_still_queues_resume() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let task = tokio::spawn(InteractiveTerminalGuard::engage(tx, true));
+
+        let event = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("pause event")
+            .expect("event channel still open");
+        let _unacknowledged_pause = match event {
+            Event::PauseEvents { ack: Some(ack) } => ack,
+            other => panic!("expected PauseEvents with ack, got {other:?}"),
+        };
+
+        task.abort();
+        let cancelled = match task.await {
+            Ok(_) => panic!("engage future should be cancelled"),
+            Err(cancelled) => cancelled,
+        };
+        assert!(cancelled.is_cancelled());
+
+        let resumed = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("queued resume event")
+            .expect("event channel still open");
+        assert!(matches!(resumed, Event::ResumeEvents));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_interactive_shell_is_refused_before_terminal_handoff() {
+        for tool_name in ["bash", "Bash", "exec_shell"] {
+            let err = inherited_interactive_shell_refusal(tool_name, true)
+                .expect("Unix inherited-interactive shell must fail preflight");
+            assert!(
+                err.to_string().contains("foreground TTY ownership"),
+                "{tool_name}: {err}"
+            );
+        }
+        assert!(inherited_interactive_shell_refusal("Bash", false).is_none());
+        assert!(
+            inherited_interactive_shell_refusal(REQUEST_USER_INPUT_NAME, true).is_none(),
+            "user-input modal keeps its own terminal handoff"
+        );
     }
 
     #[test]

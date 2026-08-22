@@ -25,9 +25,10 @@ npm i -g codewhale
 codewhale --version
 ```
 
-You can also download `codewhale-linux-arm64` and
-`codewhale-tui-linux-arm64` from the GitHub Releases page and place both
-binaries on `PATH`.
+You can also download `codewhale-linux-arm64` and `codew-linux-arm64` from the
+GitHub Releases page and place both binaries on `PATH`. The
+`codewhale-tui-linux-arm64` filename is retained only for legacy updater
+compatibility and is not a third command.
 
 ## Cross-Compiling To OpenHarmony
 

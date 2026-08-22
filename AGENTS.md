@@ -35,6 +35,12 @@ instructions or memory. The nearest scoped `AGENTS.md` adds path-specific rules.
   `agent_open`/`agent_eval`/`agent_close`/`delegate_to_agent` surfaces or parallel
   lifecycle/tag systems.
 - `BASE_PROMPT` in `crates/tui/src/prompts/text.rs` is the sole base prompt.
+- There is exactly one turn loop: `Engine::run_turn` in
+  `crates/tui/src/core/engine/turn_loop.rs`. Note that `crates/tui/src/core/`
+  is a module inside the TUI crate — it is not `crates/core`, which owns
+  request construction, bounded fragments, and thread/session types and
+  runs no turns. Do not add a second loop beside the one that exists; a
+  guard test (`crates/core/tests/single_turn_loop.rs`) fails if you do.
 - The system prompt + tool catalog are a session-pinned KV-cache prefix
   (`docs/CACHE.md`). Any new session-context contributor must state its
   KV-cache effect: frozen prefix vs. append-only history. Never splice a

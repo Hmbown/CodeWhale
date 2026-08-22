@@ -174,7 +174,11 @@ fn untyped_transient_and_deterministic_classification_remains_compatible() {
 fn pressure_fixture() -> Vec<Message> {
     (0..30)
         .map(|index| Message {
-            role: if index % 2 == 0 { "user" } else { "assistant" }.to_string(),
+            role: if index % 2 == 0 {
+                Role::User
+            } else {
+                Role::Assistant
+            },
             content: vec![ContentBlock::Text {
                 text: "x".repeat(8_000),
                 cache_control: None,
@@ -186,7 +190,7 @@ fn pressure_fixture() -> Vec<Message> {
 fn oversized_tool_pair(id: &str, content: String) -> Vec<Message> {
     vec![
         Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: id.to_string(),
                 name: "read_file".to_string(),
@@ -196,7 +200,7 @@ fn oversized_tool_pair(id: &str, content: String) -> Vec<Message> {
             }],
         },
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: id.to_string(),
                 content,

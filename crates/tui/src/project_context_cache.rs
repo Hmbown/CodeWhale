@@ -61,7 +61,11 @@ pub(crate) fn store(key: CacheKey, value: ProjectContext) {
     });
 }
 
-#[cfg(test)]
+/// Drop every cached entry.
+///
+/// Used by tests, and by `set_foreign_instruction_imports`: changing which
+/// foreign instruction formats are imported changes what the loader would
+/// return for an otherwise-unchanged workspace, so the cache cannot survive it.
 pub(crate) fn clear() {
     CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();

@@ -162,7 +162,8 @@ To-do: with many workers behind one card there is no truthful place to hang a
 single list. A child To-do appears only when the runtime already represents
 that child as its own delegate card.
 
-The durable task/Fleet ledger still owns lifecycle state. `update_plan` is no
+The durable Runtime ledger (projected through Fleet task status) still owns
+lifecycle state. `update_plan` is no
 longer reachable by a model: `model_visible()` returns `false`
 (`crates/tui/src/tools/plan.rs:408-413`), so it is filtered out of the API tool
 list and never appears to a child. It survives only to replay older transcripts.
@@ -339,9 +340,12 @@ and aliases such as `glm` for Z.ai:
 max_concurrent = 20
 launch_concurrency = 20
 max_admitted = 200
+# Operator-selected Runtime delegation depth. The default is 3; this explicit
+# value opts in above the default but remains below the hard ceiling of 8.
 max_depth = 6
-# Per-child run budgets when a call carries none (role defaults: 60/120 turns).
-default_max_steps = 120
+# Omitted or zero model-step budget is unbounded. Set a positive value only
+# when an operator deliberately wants a per-child cap.
+default_max_steps = 0
 default_wall_time_secs = 1800
 token_budget = 100000
 
@@ -389,13 +393,16 @@ pinned prompt prefix, so upgrading re-fills the provider KV prefix once per
 session (docs/CACHE.md; accepted at the v0.9.9 boundary).
 
 **Parse-accepted but unadvertised (compat).** The following inputs were
-removed from the advertised schema but remain parse-accepted and honored
-unchanged, so saved transcripts, ACP/MCP clients and Fleet configs replay
-as-is — the same contract `token_budget` already follows:
+removed from the advertised schema but remain accepted for saved transcripts,
+ACP/MCP clients, Fleet execution data, and internal/operator compatibility.
+They are never advertised to the model; Runtime still validates, clamps, and
+intersects them with live policy:
 
-- budgets: `max_steps`, `wall_time_secs`, `max_depth` (see
-  [Child budgets](#child-budgets-steps-wall-time) for where defaults now
-  come from)
+- budgets: `max_steps`, `wall_time_secs` (see
+  [Child budgets](#child-budgets-steps-wall-time) for their defaults)
+- delegation compatibility: `max_depth`, `maxDepth`, or `max_spawn_depth`;
+  values are restricted to 0 through the Runtime hard ceiling of 8. New
+  model-authored calls inherit the operator's `[subagents] max_depth` instead.
 - routing: `model`, `model_strength`, `thinking` (a `profile` pins route and
   thinking tier; without one the child inherits the operator model)
 - workspace/isolation: `workspace_policy`, `write_authority`, `fork_context`,
@@ -418,13 +425,13 @@ from, in order:
    (replay compat),
 2. the operator defaults `[subagents] default_max_steps` and
    `[subagents] default_wall_time_secs`,
-3. Fleet role defaults: **60** model turns for read-mostly roles
-   (scout/planner/reviewer/verifier/consultant), **120** for
-   builder/worker/custom (`WorkerRuntimeProfile::default_max_steps`), and a
-   **1800 s** wall-clock default.
+3. Fleet role defaults: **unbounded model turns** for every role
+   (`WorkerRuntimeProfile::default_max_steps` returns zero), plus a **1800 s**
+   wall-clock default.
 
-Step values clamp to the 2000-turn hard ceiling; wall-time values clamp to
-1..=86400 s.
+Omitted or zero `max_steps` remains unbounded even when an operator default is
+configured; positive step values clamp to the 2000-turn hard ceiling.
+Wall-time values clamp to 1..=86400 s.
 
 ## Token budget governor
 

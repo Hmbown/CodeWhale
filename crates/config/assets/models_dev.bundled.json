@@ -9,7 +9,7 @@
     "curated": "qwen3.8-max (GA) is curated ahead of upstream Models.dev, which as of 2026-08-03 lists only qwen3.8-max-preview; facts verified against the owner's Token Plan console (2026-08-03): ~1M context, 128K output, image understanding, always-on reasoning. deepseek-v4-flash-0731 keeps the console/in-repo wire id for the row upstream serves as deepseek-v4-flash. Coding Plan rows for qwen3.8-max-preview, deepseek-v4-pro, deepseek-v4-flash-0731, and glm-5.2 are curated from the Token Plan upstream entries (upstream alibaba-coding-plan does not list them yet); the in-repo route layer already offers the same model set on both plans. Upstream provider ids alibaba-token-plan(-cn) / alibaba-coding-plan(-cn) were merged onto the CodeWhale provider ids (live refresh normalizes them via ProviderKind aliases; the -cn regional variants stay upstream-id browse rows until Codewhale ships China endpoints).",
     "pending_release_metadata": "GLM-5.3 is live on the Z.ai Coding Plan (docs.z.ai/devpack/overview and docs.z.ai/devpack/latest-model, recorded 2026-08-13) and is the default direct Z.ai model (DEFAULT_ZAI_MODEL); explicit GLM-5.2 selections keep their own id. First-party wire id is GLM-5.3; OpenRouter mirror is z-ai/glm-5.3. Capability/limit/dialect values still inherit from GLM-5.2 until Z.ai publishes distinct 5.3 numbers. Pricing stays absent: Coding Plan publishes credit multipliers, not a USD PAYG row we can stand behind. Z.ai may auto-route GLM-5.2/GLM-5.1 requests to GLM-5.3 on their side; Codewhale still sends the selected picker id. Do not send a [1m] suffix. Scope stays first-party Z.ai plus the OpenRouter mirror; add third-party gateway rows only against that gateway's own published roster.",
     "currency_sweep_2026_08_17": "Rows re-verified against official pages on 2026-08-17 (#5470 follow-up): gpt-5.6-terra 2.00/12.00 (cache read 0.20, write 2.50) and gpt-5.6-luna 0.20/1.20 (0.02/0.25) per developers.openai.com model pages; claude-sonnet-5 2.00/10.00 (0.20/2.50) is now Anthropic's standard price (the 2026-09-01 increase was cancelled) and claude-opus-5 5.00/25.00 (0.50/6.25) was added; kimi-k3 3.00/15.00 (0.30) and kimi-k2.7-code-highspeed 1.90/8.00 (0.38) per platform.kimi.ai; MiniMax-M2.7-highspeed 0.60/2.40 (0.06/0.375) per platform.minimax.io; grok-4.5 (500K) and grok-4.3 (1M) carry limits only because xAI doubles their rates past 200K (same rule as grok-4.6); OpenRouter dots-studio/dots-3-note-preview:free carries limits only (its single free endpoint publishes $0, which this seed does not restate as a price).",
-    "coverage": "20 providers, 89 model rows (offline seed only)."
+    "coverage": "20 providers, 90 model rows (offline seed only)."
   },
   "models": {
     "deepseek-v4-pro": {
@@ -60,6 +60,16 @@
           "reasoning": true,
           "tool_call": true,
           "modalities": { "input": ["text"], "output": ["text"] },
+          "limit": { "context": 1000000, "output": 384000 }
+        },
+        "deepseek-v4-flash-vision-exp": {
+          "id": "deepseek-v4-flash-vision-exp",
+          "base_model": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash Vision (experimental)",
+          "family": "deepseek",
+          "reasoning": true,
+          "tool_call": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
           "limit": { "context": 1000000, "output": 384000 }
         }
       }

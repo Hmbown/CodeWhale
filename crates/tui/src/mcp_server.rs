@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::client::DeepSeekClient;
 use crate::config::Config;
 use crate::llm_client::LlmClient;
+use crate::models::Role;
 use crate::models::{ContentBlock, Message, MessageRequest};
 use crate::session_manager::SessionManager;
 use crate::tools::spec::{ToolError, ToolResult};
@@ -373,7 +374,7 @@ impl McpServer {
 
         // Build message list
         let user_message = Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: prompt.to_string(),
                 cache_control: None,
@@ -461,7 +462,7 @@ impl McpServer {
             // to also append it to the stored thread and then the assistant response.
             if internal_name == "deepseek" {
                 convo.push(Message {
-                    role: "user".to_string(),
+                    role: Role::User,
                     content: vec![ContentBlock::Text {
                         text: prompt.to_string(),
                         cache_control: None,
@@ -469,7 +470,7 @@ impl McpServer {
                 });
             }
             convo.push(Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::Text {
                     text: response_text.clone(),
                     cache_control: None,
@@ -584,7 +585,7 @@ fn initialize_response() -> Value {
     json!({
         "protocolVersion": "2024-11-05",
         "serverInfo": {
-            "name": "deepseek-mcp-server",
+            "name": "codewhale-mcp-server",
             "version": env!("CARGO_PKG_VERSION"),
         },
         "capabilities": {
@@ -690,6 +691,15 @@ mod tests {
             resources.get("nextCursor").is_none(),
             "resources/list must omit nextCursor when there are no more pages"
         );
+    }
+
+    #[test]
+    fn initialize_uses_standard_mcp_shape_and_codewhale_identity() {
+        let response = initialize_response();
+        assert_eq!(response["protocolVersion"], "2024-11-05");
+        assert_eq!(response["serverInfo"]["name"], "codewhale-mcp-server");
+        assert_eq!(response["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
+        assert!(response["capabilities"]["tools"].is_object());
     }
 
     #[test]

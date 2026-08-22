@@ -131,10 +131,40 @@ pub struct McpResourceDescriptor {
 pub trait McpManagedClient: Send + Sync {
     /// List all tools provided by this server.
     fn list_tools(&self) -> Result<Vec<McpToolDescriptor>>;
+    /// List tools together with their MCP argument schemas.
+    ///
+    /// The default keeps existing external client implementations source
+    /// compatible: clients that predate schema forwarding still advertise an
+    /// empty object schema, while transports that receive `inputSchema` can
+    /// override this method and preserve it.
+    fn list_tools_with_input_schemas(&self) -> Result<Vec<(McpToolDescriptor, Value)>> {
+        Ok(self
+            .list_tools()?
+            .into_iter()
+            .map(|tool| (tool, default_tool_input_schema()))
+            .collect())
+    }
     /// Invoke a tool by name with the given arguments.
     fn call_tool(&self, tool_name: &str, arguments: Value) -> Result<Value>;
     /// List all resources provided by this server.
     fn list_resources(&self) -> Result<Vec<McpResourceDescriptor>>;
+    /// List resources together with their standard MCP metadata.
+    ///
+    /// `McpResourceDescriptor` predates the required MCP `name` field and the
+    /// optional `mimeType` field. Keeping those fields in additive metadata
+    /// preserves source compatibility for external trait implementations,
+    /// while transports that receive the standard fields can override this
+    /// method and forward them without loss.
+    fn list_resources_with_metadata(&self) -> Result<Vec<(McpResourceDescriptor, Value)>> {
+        Ok(self
+            .list_resources()?
+            .into_iter()
+            .map(|resource| {
+                let metadata = default_resource_metadata(&resource);
+                (resource, metadata)
+            })
+            .collect())
+    }
     /// Read a resource by URI.
     fn read_resource(&self, uri: &str) -> Result<Value>;
 }
@@ -256,27 +286,32 @@ impl McpManager {
     ///
     /// `qualify_tool_name` folds `-`, `.`, and case into `_`, so the segment
     /// carried by `mcp__server__segment` is not necessarily the name the
-    /// server expects. A literal match wins outright; otherwise, when exactly
-    /// one listed tool sanitizes to the segment, its original name is used.
-    /// When the lookup is impossible or ambiguous the segment is passed
-    /// through unchanged, preserving behavior for clients whose `list_tools`
-    /// does not enumerate every callable tool.
-    fn resolve_original_tool_name(&self, server_name: &str, tool_segment: &str) -> String {
+    /// server expects. Exactly one advertised, allowed match resolves to its
+    /// original name. Multiple matches fail closed; no match preserves the
+    /// direct-call behavior for clients whose catalog is not exhaustive.
+    fn resolve_original_tool_name(
+        &self,
+        server_name: &str,
+        tool_segment: &str,
+        qualified_tool_name: &str,
+    ) -> Result<String> {
         let Some(client) = self.clients.get(server_name) else {
-            return tool_segment.to_string();
+            return Ok(tool_segment.to_string());
         };
         let Ok(tools) = client.list_tools() else {
-            return tool_segment.to_string();
+            return Ok(tool_segment.to_string());
         };
-        if tools.iter().any(|tool| tool.tool_name == tool_segment) {
-            return tool_segment.to_string();
-        }
-        let mut matches = tools
-            .iter()
-            .filter(|tool| sanitize_component(&tool.tool_name) == tool_segment);
+        let filter = self.configs.get(server_name).map(|(_, filter)| filter);
+        let mut matches = tools.iter().filter(|tool| {
+            filter.is_none_or(|filter| allowed_by_filter(&tool.tool_name, filter))
+                && qualify_tool_name(server_name, &tool.tool_name) == qualified_tool_name
+        });
         match (matches.next(), matches.next()) {
-            (Some(tool), None) => tool.tool_name.clone(),
-            _ => tool_segment.to_string(),
+            (Some(tool), None) => Ok(tool.tool_name.clone()),
+            (None, _) => Ok(tool_segment.to_string()),
+            (Some(_), Some(_)) => bail!(
+                "qualified MCP tool name '{qualified_tool_name}' is ambiguous within server '{server_name}'"
+            ),
         }
     }
 
@@ -350,23 +385,52 @@ impl McpManager {
 
     /// List all tools from all running servers, applying tool filters.
     pub fn list_tools(&self) -> Result<Vec<McpToolDescriptor>> {
+        Ok(self
+            .list_tools_with_input_schemas()?
+            .into_iter()
+            .map(|(tool, _)| tool)
+            .collect())
+    }
+
+    fn list_tools_with_input_schemas(&self) -> Result<Vec<(McpToolDescriptor, Value)>> {
         let mut out = Vec::new();
+        let mut qualified_origins: HashMap<String, (String, String)> = HashMap::new();
         for (server_name, (_, filter)) in &self.configs {
             let Some(client) = self.clients.get(server_name) else {
                 continue;
             };
-            let tools = client.list_tools()?;
-            for tool in tools {
+            let tools = client.list_tools_with_input_schemas()?;
+            for (tool, input_schema) in tools {
                 if !allowed_by_filter(&tool.tool_name, filter) {
                     continue;
                 }
                 let qualified_name = qualify_tool_name(server_name, &tool.tool_name);
-                out.push(McpToolDescriptor {
-                    server_name: server_name.clone(),
-                    tool_name: tool.tool_name,
-                    qualified_name,
-                    description: tool.description,
-                });
+                if let Some((prior_server, prior_tool)) = qualified_origins.get(&qualified_name)
+                    && (prior_server != server_name || prior_tool != &tool.tool_name)
+                {
+                    let mut origins = [
+                        format!("{prior_server}:{prior_tool}"),
+                        format!("{server_name}:{}", tool.tool_name),
+                    ];
+                    origins.sort();
+                    bail!(
+                        "qualified MCP tool name '{qualified_name}' is ambiguous between {}",
+                        origins.join(" and ")
+                    );
+                }
+                qualified_origins.insert(
+                    qualified_name.clone(),
+                    (server_name.clone(), tool.tool_name.clone()),
+                );
+                out.push((
+                    McpToolDescriptor {
+                        server_name: server_name.clone(),
+                        tool_name: tool.tool_name,
+                        qualified_name,
+                        description: tool.description,
+                    },
+                    input_schema,
+                ));
             }
         }
         Ok(out)
@@ -413,7 +477,8 @@ impl McpManager {
         if let Ok((server_name, tool_name)) = &parsed
             && self.clients.contains_key(server_name)
         {
-            let resolved = self.resolve_original_tool_name(server_name, tool_name);
+            let resolved =
+                self.resolve_original_tool_name(server_name, tool_name, qualified_tool_name)?;
             return self.call_tool(server_name, &resolved, arguments);
         }
 
@@ -465,14 +530,22 @@ impl McpManager {
 
     /// List all resources from all running servers.
     pub fn list_resources(&self) -> Result<Vec<McpResourceDescriptor>> {
+        Ok(self
+            .list_resources_with_metadata()?
+            .into_iter()
+            .map(|(resource, _)| resource)
+            .collect())
+    }
+
+    fn list_resources_with_metadata(&self) -> Result<Vec<(McpResourceDescriptor, Value)>> {
         let mut out = Vec::new();
         for server_name in self.configs.keys() {
             let Some(client) = self.clients.get(server_name) else {
                 continue;
             };
-            for mut resource in client.list_resources()? {
+            for (mut resource, metadata) in client.list_resources_with_metadata()? {
                 resource.server_name = server_name.clone();
-                out.push(resource);
+                out.push((resource, metadata));
             }
         }
         Ok(out)
@@ -485,6 +558,51 @@ impl McpManager {
             .get(server_name)
             .with_context(|| format!("MCP server '{server_name}' not available"))?;
         client.read_resource(uri)
+    }
+
+    /// Resolve a standard URI-only resource read to exactly one child server.
+    ///
+    /// Older Codewhale clients supplied a non-standard `server` parameter (or
+    /// encoded it as the authority in an `mcp://server/...` URI). Standard MCP
+    /// clients send only the URI, so discover its owner from resources/list.
+    /// Never pick the first HashMap entry when more than one server advertises
+    /// the same URI.
+    fn read_resource_by_uri(&self, uri: &str) -> Result<Value> {
+        let mut matches = Vec::new();
+        for server_name in self.configs.keys() {
+            let Some(client) = self.clients.get(server_name) else {
+                continue;
+            };
+            if client
+                .list_resources()?
+                .iter()
+                .any(|resource| resource.uri == uri)
+            {
+                matches.push(server_name.clone());
+            }
+        }
+
+        match matches.len() {
+            1 => self.read_resource(&matches[0], uri),
+            0 => {
+                // Preserve the pre-standard URI convention for clients whose
+                // server does not implement resources/list.
+                if let Some(server_name) = parse_server_from_uri(uri)
+                    && self.clients.contains_key(&server_name)
+                {
+                    return self.read_resource(&server_name, uri);
+                }
+                bail!("resource URI '{uri}' was not advertised by any running MCP server")
+            }
+            _ => {
+                matches.sort();
+                bail!(
+                    "resource URI '{uri}' is ambiguous across MCP servers: {}; pass the legacy \
+                     server parameter to disambiguate",
+                    matches.join(", ")
+                )
+            }
+        }
     }
 
     /// Generate sandbox state update notices for all registered servers.
@@ -506,6 +624,16 @@ impl McpManager {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_tool_input_schema() -> Value {
+    json!({"type": "object", "properties": {}})
+}
+
+fn default_resource_metadata(resource: &McpResourceDescriptor) -> Value {
+    // The URI is a stable, non-empty fallback name for clients implementing
+    // the older descriptor-only trait surface.
+    json!({"name": resource.uri})
 }
 
 fn allowed_by_filter(name: &str, filter: &ToolFilter) -> bool {
@@ -579,13 +707,50 @@ fn parse_qualified_tool_name(value: &str) -> Result<(String, String)> {
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
+    jsonrpc: String,
     #[serde(default)]
-    jsonrpc: Option<String>,
-    #[serde(default)]
-    id: Option<Value>,
+    id: JsonRpcRequestId,
     method: String,
     #[serde(default)]
     params: Value,
+}
+
+/// JSON-RPC defines a notification by an *absent* id. An explicit `null` id is
+/// discouraged but still present and must receive a response carrying null;
+/// `Option<Value>` cannot preserve that distinction during deserialization.
+#[derive(Debug, Clone, Default)]
+enum JsonRpcRequestId {
+    #[default]
+    Missing,
+    Present(Value),
+}
+
+impl<'de> Deserialize<'de> for JsonRpcRequestId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        if !(value.is_null() || value.is_string() || value.is_number()) {
+            return Err(serde::de::Error::custom(
+                "JSON-RPC id must be a string, number, or null",
+            ));
+        }
+        Ok(Self::Present(value))
+    }
+}
+
+impl JsonRpcRequestId {
+    fn should_respond(&self) -> bool {
+        matches!(self, Self::Present(_))
+    }
+
+    fn response_id(&self) -> Option<Value> {
+        match self {
+            Self::Missing => None,
+            Self::Present(id) => Some(id.clone()),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -602,6 +767,21 @@ struct ToolsListParams {
 }
 
 #[derive(Debug, Deserialize)]
+struct McpImplementationInfo {
+    name: String,
+    version: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InitializeParams {
+    #[serde(rename = "protocolVersion")]
+    protocol_version: String,
+    #[serde(rename = "clientInfo")]
+    client_info: McpImplementationInfo,
+    capabilities: serde_json::Map<String, Value>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ToolsCallParams {
     #[serde(default)]
     name: Option<String>,
@@ -609,8 +789,12 @@ struct ToolsCallParams {
     tool: Option<String>,
     #[serde(default)]
     server: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_tool_arguments")]
     arguments: Value,
+}
+
+fn default_tool_arguments() -> Value {
+    json!({})
 }
 
 #[derive(Debug, Deserialize)]
@@ -640,6 +824,13 @@ struct ServerNameParams {
     name: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpSessionPhase {
+    Uninitialized,
+    InitializeResponded,
+    Ready,
+}
+
 struct StdioMcpState {
     manager: McpManager,
     definitions: HashMap<String, McpServerDefinition>,
@@ -648,6 +839,7 @@ struct StdioMcpState {
     /// snapshot so a failed spawn cannot be mistaken for a healthy server.
     errors: HashMap<String, String>,
     lifecycle_state: String,
+    session_phase: McpSessionPhase,
 }
 
 impl StdioMcpState {
@@ -690,20 +882,35 @@ impl StdioMcpState {
 pub fn run_stdio_server(
     initial_definitions: Vec<McpServerDefinition>,
 ) -> Result<Vec<McpServerDefinition>> {
-    use std::io::{self, BufRead, Write};
+    use std::io::{self, Write};
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
     let mut state = build_stdio_state(initial_definitions);
+    let mut input = stdin.lock();
 
-    for line in stdin.lock().lines() {
-        let line = line.context("failed to read stdio line")?;
+    loop {
+        let line =
+            match stdio_client::read_bounded_line(&mut input, stdio_client::MAX_JSONRPC_LINE_BYTES)
+            {
+                Ok(Some(line)) => line,
+                Ok(None) => break,
+                Err(err) => {
+                    let response = jsonrpc_error(
+                        None,
+                        JsonRpcError::parse_error(format!("invalid JSON-RPC frame: {err}")),
+                    );
+                    writeln!(stdout, "{response}")?;
+                    stdout.flush()?;
+                    bail!("failed to read bounded stdio JSON-RPC frame: {err}");
+                }
+            };
         if line.trim().is_empty() {
             continue;
         }
 
-        let request: JsonRpcRequest = match serde_json::from_str(&line) {
+        let value: Value = match serde_json::from_str(&line) {
             Ok(value) => value,
             Err(err) => {
                 let msg = jsonrpc_error(
@@ -715,24 +922,39 @@ pub fn run_stdio_server(
                 continue;
             }
         };
-
-        if request
-            .jsonrpc
-            .as_deref()
-            .is_some_and(|version| version != "2.0")
-        {
-            if should_respond_to_jsonrpc(&request.id) {
+        let request: JsonRpcRequest = match serde_json::from_value(value) {
+            Ok(request) => request,
+            Err(err) => {
                 let response = jsonrpc_error(
-                    request.id,
-                    JsonRpcError::invalid_request("jsonrpc version must be 2.0"),
+                    None,
+                    JsonRpcError::invalid_request(format!("invalid JSON-RPC request: {err}")),
                 );
                 writeln!(stdout, "{response}")?;
                 stdout.flush()?;
+                continue;
             }
+        };
+        let should_respond = request.id.should_respond();
+        let response_id = request.id.response_id();
+
+        if request.jsonrpc != "2.0" {
+            let response = jsonrpc_error(
+                response_id,
+                JsonRpcError::invalid_request("jsonrpc version must be exactly 2.0"),
+            );
+            writeln!(stdout, "{response}")?;
+            stdout.flush()?;
             continue;
         }
 
-        if !should_respond_to_jsonrpc(&request.id) {
+        if !should_respond {
+            // `initialize` requires a response carrying the negotiated
+            // protocol version. Treating an initialize notification as a real
+            // handshake would advance state even though the client could not
+            // observe that negotiation.
+            if request.method == "initialize" {
+                continue;
+            }
             match dispatch_stdio_request(&mut state, &request.method, request.params) {
                 Ok((_, should_exit)) if should_exit => break,
                 Ok(_) | Err(_) => {}
@@ -742,7 +964,7 @@ pub fn run_stdio_server(
 
         let response = match dispatch_stdio_request(&mut state, &request.method, request.params) {
             Ok((result, should_exit)) => {
-                let payload = jsonrpc_result(request.id, result);
+                let payload = jsonrpc_result(response_id, result);
                 writeln!(stdout, "{payload}")?;
                 stdout.flush()?;
                 if should_exit {
@@ -750,7 +972,7 @@ pub fn run_stdio_server(
                 }
                 continue;
             }
-            Err(err) => jsonrpc_error(request.id, err),
+            Err(err) => jsonrpc_error(response_id, err),
         };
 
         writeln!(stdout, "{response}")?;
@@ -758,7 +980,7 @@ pub fn run_stdio_server(
     }
 
     state.lifecycle_state = "stopped".to_string();
-    let _ = writeln!(stderr, "deepseek-mcp stdio server exited");
+    let _ = writeln!(stderr, "codewhale mcp-server: stdio server exited");
     let mut definitions: Vec<McpServerDefinition> = state.definitions.into_values().collect();
     definitions.sort_by(|a, b| a.config.name.cmp(&b.config.name));
     Ok(definitions)
@@ -771,6 +993,7 @@ fn build_stdio_state(initial_definitions: Vec<McpServerDefinition>) -> StdioMcpS
         running: HashMap::new(),
         errors: HashMap::new(),
         lifecycle_state: "running".to_string(),
+        session_phase: McpSessionPhase::Uninitialized,
     };
 
     for definition in initial_definitions {
@@ -796,6 +1019,8 @@ fn build_stdio_state(initial_definitions: Vec<McpServerDefinition>) -> StdioMcpS
 fn default_rpc_methods() -> Vec<&'static str> {
     vec![
         "initialize",
+        "notifications/initialized",
+        "ping",
         "healthz",
         "capabilities",
         "tools/list",
@@ -809,6 +1034,220 @@ fn default_rpc_methods() -> Vec<&'static str> {
         "server/unregister",
         "shutdown",
     ]
+}
+
+const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+const MCP_SERVER_NAME: &str = "codewhale-mcp-server";
+
+fn initialize_response(state: &StdioMcpState) -> Value {
+    json!({
+        // Standard MCP initialize result. Keep the management metadata below
+        // as additive compatibility fields for existing Codewhale clients.
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "capabilities": {
+            "tools": {},
+            "resources": {}
+        },
+        "serverInfo": {
+            "name": MCP_SERVER_NAME,
+            "version": env!("CARGO_PKG_VERSION")
+        },
+        "server": MCP_SERVER_NAME,
+        "transport": "stdio",
+        "methods": default_rpc_methods(),
+        "lifecycle": lifecycle_snapshot(state)
+    })
+}
+
+fn valid_mcp_annotations(value: &Value) -> bool {
+    let Some(annotations) = value.as_object() else {
+        return false;
+    };
+    if let Some(audience) = annotations.get("audience") {
+        let Some(audience) = audience.as_array() else {
+            return false;
+        };
+        if audience
+            .iter()
+            .any(|role| !matches!(role.as_str(), Some("user") | Some("assistant")))
+        {
+            return false;
+        }
+    }
+    if let Some(priority) = annotations.get("priority") {
+        let Some(priority) = priority.as_f64() else {
+            return false;
+        };
+        if !priority.is_finite() || !(0.0..=1.0).contains(&priority) {
+            return false;
+        }
+    }
+    true
+}
+
+fn valid_optional_annotations(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.get("annotations").is_none_or(valid_mcp_annotations)
+}
+
+fn valid_resource_content(value: &Value) -> bool {
+    let Some(content) = value.as_object() else {
+        return false;
+    };
+    let has_uri = content.get("uri").and_then(Value::as_str).is_some();
+    let has_payload = content.get("text").and_then(Value::as_str).is_some()
+        || content.get("blob").and_then(Value::as_str).is_some();
+    let valid_mime_type = content.get("mimeType").is_none_or(Value::is_string);
+    has_uri && has_payload && valid_mime_type
+}
+
+fn valid_tool_content(value: &Value) -> bool {
+    let Some(content) = value.as_object() else {
+        return false;
+    };
+    if !valid_optional_annotations(content) {
+        return false;
+    }
+    match content.get("type").and_then(Value::as_str) {
+        Some("text") => content.get("text").is_some_and(Value::is_string),
+        Some("image") => {
+            content.get("data").is_some_and(Value::is_string)
+                && content.get("mimeType").is_some_and(Value::is_string)
+        }
+        Some("resource") => content.get("resource").is_some_and(valid_resource_content),
+        _ => false,
+    }
+}
+
+fn valid_call_tool_result(fields: &serde_json::Map<String, Value>) -> bool {
+    fields
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|content| content.iter().all(valid_tool_content))
+        && fields.get("isError").is_none_or(Value::is_boolean)
+        && fields.get("_meta").is_none_or(Value::is_object)
+}
+
+fn looks_like_call_tool_result(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.contains_key("content") || fields.contains_key("isError") || fields.contains_key("_meta")
+}
+
+fn legacy_value_text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        value => value.to_string(),
+    }
+}
+
+fn stdio_tool_descriptor((tool, input_schema): (McpToolDescriptor, Value)) -> Value {
+    let McpToolDescriptor {
+        server_name,
+        tool_name,
+        qualified_name,
+        description,
+    } = tool;
+    let mut value = json!({
+        // Standard MCP fields. The qualified name is the only collision-safe
+        // public name once several child servers are aggregated.
+        "name": qualified_name.clone(),
+        "inputSchema": input_schema,
+        // Retain the pre-0.9.11 management fields for compatibility.
+        "server_name": server_name,
+        "tool_name": tool_name,
+        "qualified_name": qualified_name,
+    });
+    if let Some(description) = description {
+        value["description"] = Value::String(description);
+    }
+    value
+}
+
+fn stdio_tool_call_result(result: Value) -> Result<Value> {
+    let legacy_result = result.clone();
+    match result {
+        Value::Object(mut fields) if looks_like_call_tool_result(&fields) => {
+            if !valid_call_tool_result(&fields) {
+                bail!("child returned a malformed MCP CallToolResult");
+            }
+            // The child already returned a standard MCP CallToolResult. Expose
+            // it directly, while retaining the old nested result for clients
+            // that used the proxy before its MCP envelope was corrected.
+            fields.insert("result".to_string(), legacy_result);
+            Ok(Value::Object(fields))
+        }
+        value => Ok(json!({
+            "content": [{"type": "text", "text": legacy_value_text(&value)}],
+            "result": legacy_result
+        })),
+    }
+}
+
+fn stdio_resource_descriptor((resource, metadata): (McpResourceDescriptor, Value)) -> Value {
+    let McpResourceDescriptor {
+        server_name,
+        uri,
+        description,
+    } = resource;
+    let name = metadata
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(&uri)
+        .to_string();
+    let mut value = json!({
+        // Standard MCP Resource fields.
+        "uri": uri,
+        "name": name,
+        // Retain the pre-0.9.11 server selector as additive metadata.
+        "server_name": server_name,
+    });
+    if let Some(description) = description {
+        value["description"] = Value::String(description);
+    }
+    if let Some(mime_type) = metadata.get("mimeType").and_then(Value::as_str) {
+        value["mimeType"] = Value::String(mime_type.to_string());
+    }
+    if let Some(size) = metadata
+        .get("size")
+        .filter(|size| size.as_i64().is_some() || size.as_u64().is_some())
+    {
+        value["size"] = size.clone();
+    }
+    if let Some(annotations) = metadata
+        .get("annotations")
+        .filter(|annotations| valid_mcp_annotations(annotations))
+    {
+        value["annotations"] = annotations.clone();
+    }
+    value
+}
+
+fn valid_resource_contents(contents: &Value) -> bool {
+    contents
+        .as_array()
+        .is_some_and(|contents| contents.iter().all(valid_resource_content))
+}
+
+fn stdio_resource_read_result(uri: &str, result: Value) -> Value {
+    let legacy_resource = result.clone();
+    match result {
+        Value::Object(mut fields)
+            if fields.get("contents").is_some_and(valid_resource_contents)
+                && fields.get("_meta").is_none_or(Value::is_object) =>
+        {
+            // Pass through a valid standard ReadResourceResult and retain the
+            // old nested value for existing Codewhale management clients.
+            fields.insert("resource".to_string(), legacy_resource);
+            Value::Object(fields)
+        }
+        Value::String(text) => json!({
+            "contents": [{"uri": uri, "text": text}],
+            "resource": legacy_resource
+        }),
+        value => json!({
+            "contents": [{"uri": uri, "text": legacy_value_text(&value)}],
+            "resource": legacy_resource
+        }),
+    }
 }
 
 fn lifecycle_snapshot(state: &StdioMcpState) -> Value {
@@ -865,42 +1304,89 @@ fn parse_server_from_uri(uri: &str) -> Option<String> {
     }
 }
 
+fn require_ready_session(
+    state: &StdioMcpState,
+    method: &str,
+) -> std::result::Result<(), JsonRpcError> {
+    if state.session_phase != McpSessionPhase::Ready {
+        return Err(JsonRpcError::invalid_request(format!(
+            "{method} requires a completed initialize / notifications/initialized handshake"
+        )));
+    }
+    Ok(())
+}
+
 fn dispatch_stdio_request(
     state: &mut StdioMcpState,
     method: &str,
     params: Value,
 ) -> std::result::Result<(Value, bool), JsonRpcError> {
     match method {
-        "initialize" | "capabilities" => Ok((
-            json!({
-                "server": "deepseek-mcp",
-                "transport": "stdio",
-                "methods": default_rpc_methods(),
-                "lifecycle": lifecycle_snapshot(state)
-            }),
-            false,
-        )),
+        "initialize" => {
+            if state.session_phase != McpSessionPhase::Uninitialized {
+                return Err(JsonRpcError::invalid_request(
+                    "initialize may only be sent once per stdio session",
+                ));
+            }
+            let parsed: InitializeParams = parse_params(params_or_object(params))?;
+            if parsed.protocol_version.trim().is_empty() {
+                return Err(JsonRpcError::invalid_params(
+                    "protocolVersion must not be empty",
+                ));
+            }
+            if parsed.client_info.name.trim().is_empty()
+                || parsed.client_info.version.trim().is_empty()
+            {
+                return Err(JsonRpcError::invalid_params(
+                    "clientInfo.name and clientInfo.version must not be empty",
+                ));
+            }
+            // Deserializing into a Map above is the object-shape check. The
+            // proxy does not currently consume any client capability.
+            let _client_capabilities = parsed.capabilities;
+            state.session_phase = McpSessionPhase::InitializeResponded;
+            Ok((initialize_response(state), false))
+        }
+        // Pre-standard Codewhale management alias; it intentionally requires
+        // no MCP initialize envelope.
+        "capabilities" => Ok((initialize_response(state), false)),
+        "notifications/initialized" => {
+            if state.session_phase != McpSessionPhase::InitializeResponded {
+                return Err(JsonRpcError::invalid_request(
+                    "notifications/initialized requires a successful initialize request",
+                ));
+            }
+            state.session_phase = McpSessionPhase::Ready;
+            Ok((json!({}), false))
+        }
+        "ping" => Ok((json!({}), false)),
         "healthz" => Ok((
             json!({
                 "status": "ok",
-                "service": "deepseek-mcp",
+                "service": MCP_SERVER_NAME,
                 "transport": "stdio",
                 "lifecycle": lifecycle_snapshot(state)
             }),
             false,
         )),
         "tools/list" => {
+            require_ready_session(state, method)?;
             let parsed: ToolsListParams = parse_params(params_or_object(params))?;
             let mut tools = state
                 .manager
-                .list_tools()
+                .list_tools_with_input_schemas()
                 .map_err(|err| JsonRpcError::internal(err.to_string()))?;
             if let Some(server) = parsed.server {
-                tools.retain(|tool| tool.server_name == server);
+                tools.retain(|(tool, _)| tool.server_name == server);
             }
+            let tools = tools
+                .into_iter()
+                .map(stdio_tool_descriptor)
+                .collect::<Vec<_>>();
             Ok((json!({ "tools": tools }), false))
         }
         "tools/call" => {
+            require_ready_session(state, method)?;
             let parsed: ToolsCallParams = parse_params(params_or_object(params))?;
             let ToolsCallParams {
                 name,
@@ -912,11 +1398,11 @@ fn dispatch_stdio_request(
                 .or(tool)
                 .context("missing tool name")
                 .map_err(|err| JsonRpcError::invalid_params(err.to_string()))?;
-            let arguments = if arguments.is_null() {
-                json!({})
-            } else {
-                arguments
-            };
+            if !arguments.is_object() {
+                return Err(JsonRpcError::invalid_params(
+                    "tools/call arguments must be an object",
+                ));
+            }
             let result = if tool_name.starts_with("mcp__") {
                 state
                     .manager
@@ -931,31 +1417,36 @@ fn dispatch_stdio_request(
                     .call_tool(&server, &tool_name, arguments)
                     .map_err(|err| JsonRpcError::internal(err.to_string()))?
             };
-            Ok((json!({ "result": result }), false))
+            let result = stdio_tool_call_result(result)
+                .map_err(|err| JsonRpcError::internal(err.to_string()))?;
+            Ok((result, false))
         }
         "resources/list" => {
+            require_ready_session(state, method)?;
             let parsed: ResourcesListParams = parse_params(params_or_object(params))?;
             let mut resources = state
                 .manager
-                .list_resources()
+                .list_resources_with_metadata()
                 .map_err(|err| JsonRpcError::internal(err.to_string()))?;
             if let Some(server) = parsed.server {
-                resources.retain(|resource| resource.server_name == server);
+                resources.retain(|(resource, _)| resource.server_name == server);
             }
+            let resources = resources
+                .into_iter()
+                .map(stdio_resource_descriptor)
+                .collect::<Vec<_>>();
             Ok((json!({ "resources": resources }), false))
         }
         "resources/read" => {
+            require_ready_session(state, method)?;
             let parsed: ResourcesReadParams = parse_params(params_or_object(params))?;
             let ResourcesReadParams { server, uri } = parsed;
-            let server_name = server
-                .or_else(|| parse_server_from_uri(&uri))
-                .context("missing server for resource read")
-                .map_err(|err| JsonRpcError::invalid_params(err.to_string()))?;
-            let value = state
-                .manager
-                .read_resource(&server_name, &uri)
-                .map_err(|err| JsonRpcError::internal(err.to_string()))?;
-            Ok((json!({ "resource": value }), false))
+            let value = match server {
+                Some(server_name) => state.manager.read_resource(&server_name, &uri),
+                None => state.manager.read_resource_by_uri(&uri),
+            }
+            .map_err(|err| JsonRpcError::internal(err.to_string()))?;
+            Ok((stdio_resource_read_result(&uri, value), false))
         }
         "server/list" | "servers/list" => {
             Ok((json!({ "lifecycle": lifecycle_snapshot(state) }), false))
@@ -1060,10 +1551,6 @@ fn jsonrpc_result(id: Option<Value>, result: Value) -> Value {
     })
 }
 
-fn should_respond_to_jsonrpc(id: &Option<Value>) -> bool {
-    id.is_some()
-}
-
 fn jsonrpc_error(id: Option<Value>, err: JsonRpcError) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -1124,6 +1611,21 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+
+    fn complete_stdio_handshake(state: &mut StdioMcpState) {
+        dispatch_stdio_request(
+            state,
+            "initialize",
+            json!({
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "clientInfo": {"name": "test-client", "version": "1"},
+                "capabilities": {}
+            }),
+        )
+        .expect("initialize");
+        dispatch_stdio_request(state, "notifications/initialized", Value::Null)
+            .expect("initialized notification");
+    }
 
     struct EchoMcpClient;
 
@@ -1313,6 +1815,38 @@ mod tests {
                 .call_qualified_tool("mcp__my_server__t", json!({}))
                 .unwrap(),
             json!("trusted")
+        );
+    }
+
+    #[test]
+    fn same_server_tool_name_collisions_fail_closed_in_list_and_call() {
+        let mut manager = McpManager::default();
+        manager
+            .register_server(
+                make_server_config("s1"),
+                ToolFilter::default(),
+                Box::new(
+                    InMemoryMcpClient::default()
+                        .with_tool("foo-bar", json!("hyphen"))
+                        .with_tool("foo_bar", json!("underscore")),
+                ),
+            )
+            .unwrap();
+
+        let list_error = manager.list_tools().unwrap_err();
+        assert!(
+            list_error.to_string().contains("ambiguous"),
+            "unexpected list error: {list_error}"
+        );
+
+        let call_error = manager
+            .call_qualified_tool("mcp__s1__foo_bar", json!({}))
+            .unwrap_err();
+        assert!(
+            call_error
+                .to_string()
+                .contains("ambiguous within server 's1'"),
+            "unexpected call error: {call_error}"
         );
     }
 
@@ -1693,6 +2227,51 @@ mod tests {
     }
 
     #[test]
+    fn manager_resolves_a_unique_standard_resource_uri() {
+        let mut manager = McpManager::default();
+        manager
+            .register_server(
+                make_server_config("docs"),
+                ToolFilter::default(),
+                Box::new(
+                    InMemoryMcpClient::default()
+                        .with_resource("file:///guide.md", json!({"text": "guide"})),
+                ),
+            )
+            .unwrap();
+
+        let result = manager.read_resource_by_uri("file:///guide.md").unwrap();
+        assert_eq!(result["text"], "guide");
+    }
+
+    #[test]
+    fn manager_rejects_an_ambiguous_standard_resource_uri() {
+        let mut manager = McpManager::default();
+        for server in ["alpha", "beta"] {
+            manager
+                .register_server(
+                    make_server_config(server),
+                    ToolFilter::default(),
+                    Box::new(
+                        InMemoryMcpClient::default()
+                            .with_resource("file:///shared.txt", json!({"server": server})),
+                    ),
+                )
+                .unwrap();
+        }
+
+        let err = manager
+            .read_resource_by_uri("file:///shared.txt")
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("ambiguous"), "unexpected error: {message}");
+        assert!(
+            message.contains("alpha, beta"),
+            "server names must be deterministic: {message}"
+        );
+    }
+
+    #[test]
     fn manager_update_sandbox_state_returns_notices() {
         let mut manager = McpManager::default();
         manager
@@ -1822,9 +2401,265 @@ mod tests {
     }
 
     #[test]
-    fn jsonrpc_notifications_do_not_require_responses() {
-        assert!(!should_respond_to_jsonrpc(&None));
-        assert!(should_respond_to_jsonrpc(&Some(json!(1))));
+    fn jsonrpc_missing_and_explicit_null_ids_remain_distinct() {
+        let notification: JsonRpcRequest = serde_json::from_value(json!({
+            "jsonrpc": "2.0",
+            "method": "ping"
+        }))
+        .unwrap();
+        assert!(!notification.id.should_respond());
+        assert_eq!(notification.id.response_id(), None);
+
+        let null_id: JsonRpcRequest = serde_json::from_value(json!({
+            "jsonrpc": "2.0",
+            "id": null,
+            "method": "ping"
+        }))
+        .unwrap();
+        assert!(null_id.id.should_respond());
+        assert_eq!(null_id.id.response_id(), Some(Value::Null));
+
+        for invalid in [
+            json!({"method": "ping"}),
+            json!({"jsonrpc": null, "method": "ping"}),
+            json!({"jsonrpc": "2.0", "id": {}, "method": "ping"}),
+        ] {
+            assert!(
+                serde_json::from_value::<JsonRpcRequest>(invalid).is_err(),
+                "invalid envelope was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn stdio_initialize_uses_standard_mcp_shape_and_codewhale_identity() {
+        let state = build_stdio_state(Vec::new());
+        let response = initialize_response(&state);
+        assert_eq!(response["protocolVersion"], MCP_PROTOCOL_VERSION);
+        assert_eq!(response["serverInfo"]["name"], MCP_SERVER_NAME);
+        assert_eq!(response["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
+        assert!(response["capabilities"]["tools"].is_object());
+        assert!(response["capabilities"]["resources"].is_object());
+        assert_eq!(response["server"], MCP_SERVER_NAME);
+    }
+
+    #[test]
+    fn stdio_initialize_validates_required_client_fields() {
+        let mut state = build_stdio_state(Vec::new());
+        let valid = dispatch_stdio_request(
+            &mut state,
+            "initialize",
+            json!({
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "clientInfo": {"name": "test-client", "version": "1"},
+                "capabilities": {}
+            }),
+        )
+        .expect("valid initialize");
+        assert_eq!(valid.0["protocolVersion"], MCP_PROTOCOL_VERSION);
+
+        for invalid in [
+            json!({}),
+            json!({
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "clientInfo": {"name": "test-client", "version": "1"}
+            }),
+            json!({
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "clientInfo": {"name": "test-client", "version": "1"},
+                "capabilities": []
+            }),
+            json!({
+                "protocolVersion": "",
+                "clientInfo": {"name": "test-client", "version": "1"},
+                "capabilities": {}
+            }),
+        ] {
+            let mut state = build_stdio_state(Vec::new());
+            let error = dispatch_stdio_request(&mut state, "initialize", invalid)
+                .expect_err("malformed initialize must fail");
+            assert_eq!(error.code, -32602);
+        }
+    }
+
+    #[test]
+    fn standard_catalog_methods_require_the_complete_mcp_handshake() {
+        let mut state = build_stdio_state(Vec::new());
+        let early_initialized =
+            dispatch_stdio_request(&mut state, "notifications/initialized", Value::Null)
+                .expect_err("initialized cannot precede initialize");
+        assert_eq!(early_initialized.code, -32600);
+
+        // Explicit Codewhale management compatibility remains available before
+        // MCP initialization.
+        assert!(dispatch_stdio_request(&mut state, "capabilities", Value::Null).is_ok());
+        assert!(dispatch_stdio_request(&mut state, "server/list", Value::Null).is_ok());
+
+        for method in [
+            "tools/list",
+            "tools/call",
+            "resources/list",
+            "resources/read",
+        ] {
+            let error = dispatch_stdio_request(&mut state, method, json!({}))
+                .expect_err("standard MCP data methods must fail before initialize");
+            assert_eq!(error.code, -32600);
+            assert!(error.message.contains("completed initialize"));
+        }
+
+        dispatch_stdio_request(
+            &mut state,
+            "initialize",
+            json!({
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "clientInfo": {"name": "test-client", "version": "1"},
+                "capabilities": {}
+            }),
+        )
+        .unwrap();
+        let too_early = dispatch_stdio_request(&mut state, "tools/list", json!({}))
+            .expect_err("initialized notification is required");
+        assert_eq!(too_early.code, -32600);
+
+        dispatch_stdio_request(&mut state, "notifications/initialized", Value::Null).unwrap();
+        let tools = dispatch_stdio_request(&mut state, "tools/list", json!({})).unwrap();
+        assert_eq!(tools.0["tools"], json!([]));
+
+        let duplicate = dispatch_stdio_request(
+            &mut state,
+            "initialize",
+            json!({
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "clientInfo": {"name": "test-client", "version": "1"},
+                "capabilities": {}
+            }),
+        )
+        .expect_err("duplicate initialize must fail");
+        assert_eq!(duplicate.code, -32600);
+    }
+
+    #[test]
+    fn stdio_tools_call_rejects_non_object_arguments() {
+        let mut state = build_stdio_state(Vec::new());
+        complete_stdio_handshake(&mut state);
+        for arguments in [json!(null), json!("bad"), json!([]), json!(1)] {
+            let error = dispatch_stdio_request(
+                &mut state,
+                "tools/call",
+                json!({"name": "mcp__missing__tool", "arguments": arguments}),
+            )
+            .expect_err("non-object arguments must fail before dispatch");
+            assert_eq!(error.code, -32602);
+            assert!(error.message.contains("arguments must be an object"));
+        }
+    }
+
+    #[test]
+    fn stdio_tool_results_only_pass_through_valid_mcp_content_arrays() {
+        let standard = json!({
+            "content": [{"type": "text", "text": "ok"}],
+            "isError": true
+        });
+        let standard_response = stdio_tool_call_result(standard.clone()).unwrap();
+        assert_eq!(standard_response["content"][0]["text"], "ok");
+        assert_eq!(standard_response["isError"], true);
+        assert_eq!(standard_response["result"], standard);
+
+        let legacy = json!({"answer": 42});
+        let legacy_response = stdio_tool_call_result(legacy.clone()).unwrap();
+        assert_eq!(legacy_response["content"][0]["type"], "text");
+        assert_eq!(legacy_response["result"], legacy);
+
+        for malformed in [
+            json!({"content": {"type": "text", "text": "not-an-array"}}),
+            json!({"content": [null]}),
+            json!({"content": [{"type": "text"}]}),
+            json!({"content": [{"type": "image", "data": "abc"}]}),
+            json!({"content": [{"type": "resource", "resource": {"uri": "file:///x"}}]}),
+            json!({"content": [], "isError": "false"}),
+            json!({"content": [], "_meta": []}),
+            json!({"isError": true}),
+            json!({"_meta": {"trace": "x"}}),
+        ] {
+            let error = stdio_tool_call_result(malformed.clone())
+                .expect_err("CallToolResult-shaped malformed output must fail closed");
+            assert!(error.to_string().contains("malformed MCP CallToolResult"));
+        }
+
+        let legacy_string = stdio_tool_call_result(json!("plain text")).unwrap();
+        assert_eq!(legacy_string["content"][0]["text"], "plain text");
+    }
+
+    #[test]
+    fn malformed_call_tool_result_shape_becomes_a_protocol_error() {
+        let mut state = build_stdio_state(Vec::new());
+        state
+            .manager
+            .register_server(
+                make_server_config("malformed"),
+                ToolFilter::default(),
+                Box::new(
+                    InMemoryMcpClient::default().with_tool("broken", json!({"isError": true})),
+                ),
+            )
+            .unwrap();
+        complete_stdio_handshake(&mut state);
+
+        let error = dispatch_stdio_request(
+            &mut state,
+            "tools/call",
+            json!({"name": "mcp__malformed__broken", "arguments": {}}),
+        )
+        .expect_err("malformed CallToolResult-shaped output must not become success text");
+        assert_eq!(error.code, -32603);
+        assert!(error.message.contains("malformed MCP CallToolResult"));
+    }
+
+    #[test]
+    fn stdio_resources_use_standard_shapes_with_legacy_metadata() {
+        let descriptor = McpResourceDescriptor {
+            server_name: "docs".to_string(),
+            uri: "file:///guide.md".to_string(),
+            description: Some("User guide".to_string()),
+        };
+        let listed = stdio_resource_descriptor((
+            descriptor,
+            json!({
+                "name": "Guide",
+                "mimeType": "text/markdown",
+                "size": 42,
+                "annotations": {"audience": ["assistant"], "priority": 0.75}
+            }),
+        ));
+        assert_eq!(listed["uri"], "file:///guide.md");
+        assert_eq!(listed["name"], "Guide");
+        assert_eq!(listed["mimeType"], "text/markdown");
+        assert_eq!(listed["size"], 42);
+        assert_eq!(listed["annotations"]["audience"], json!(["assistant"]));
+        assert_eq!(listed["annotations"]["priority"], 0.75);
+        assert_eq!(listed["server_name"], "docs");
+
+        let standard = json!({
+            "contents": [{
+                "uri": "file:///guide.md",
+                "mimeType": "text/markdown",
+                "text": "hello"
+            }]
+        });
+        let standard_response = stdio_resource_read_result("file:///guide.md", standard.clone());
+        assert_eq!(standard_response["contents"][0]["text"], "hello");
+        assert_eq!(standard_response["resource"], standard);
+
+        for legacy in [
+            json!({"body": "legacy"}),
+            json!({"contents": [{"text": "missing URI"}]}),
+            json!({"contents": [], "_meta": []}),
+        ] {
+            let response = stdio_resource_read_result("file:///guide.md", legacy.clone());
+            assert_eq!(response["contents"][0]["uri"], "file:///guide.md");
+            assert!(response["contents"][0]["text"].is_string());
+            assert_eq!(response["resource"], legacy);
+        }
     }
 
     // ── stdio dispatch: no stub may answer for a configured server ─────
@@ -1869,6 +2704,7 @@ mod tests {
         );
 
         // And nothing answers on its behalf.
+        complete_stdio_handshake(&mut state);
         let err = dispatch_stdio_request(
             &mut state,
             "tools/call",
@@ -1887,26 +2723,49 @@ mod tests {
             "/bin/sh",
             &[script.path().to_str().expect("utf-8 script path")],
         )]);
+        complete_stdio_handshake(&mut state);
 
         let tools = call(&mut state, "tools/list", json!({}))["tools"].clone();
         let names: Vec<&str> = tools
             .as_array()
             .expect("tools array")
             .iter()
-            .filter_map(|tool| tool["tool_name"].as_str())
+            .filter_map(|tool| tool["name"].as_str())
             .collect();
         assert_eq!(
             names,
-            vec!["add"],
+            vec!["mcp__fake__add"],
             "only the child's real tools may be listed, got {names:?}"
         );
+        assert_eq!(tools[0]["tool_name"], "add");
+        assert_eq!(tools[0]["inputSchema"]["required"], json!(["a", "b"]));
 
         let result = call(
             &mut state,
             "tools/call",
             json!({"name": "mcp__fake__add", "arguments": {"a": 2, "b": 3}}),
         );
+        assert_eq!(result["content"][0]["text"], "5");
         assert_eq!(result["result"]["content"][0]["text"], "5");
+
+        let resources = call(&mut state, "resources/list", json!({}))["resources"].clone();
+        assert_eq!(resources[0]["uri"], "file:///fake/readme.txt");
+        assert_eq!(resources[0]["name"], "Fake readme");
+        assert_eq!(resources[0]["mimeType"], "text/plain");
+        assert_eq!(resources[0]["size"], 16);
+        assert_eq!(
+            resources[0]["annotations"]["audience"],
+            json!(["assistant"])
+        );
+        assert_eq!(resources[0]["server_name"], "fake");
+
+        let read = call(
+            &mut state,
+            "resources/read",
+            json!({"uri": "file:///fake/readme.txt"}),
+        );
+        assert_eq!(read["contents"][0]["text"], "spawned-resource");
+        assert_eq!(read["resource"]["contents"][0]["text"], "spawned-resource");
     }
 
     #[cfg(unix)]

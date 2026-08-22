@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:b092c34e8ca3 -->
+<!-- source: README.md sha256:a56bca473dbd -->
 # Codewhale
 
 Codewhale は Rust で構築された、ターミナル向けのオープンソース・コーディングエージェントです。利用者とともに、公開の場で改善を続けています。
@@ -20,6 +20,8 @@ codewhale
 ```
 
 初回起動時にプロバイダーへの接続を案内しますが、オフラインのまま使うこともできます。Codewhale は Cargo、Docker、Nix、Scoop、ビルド済みアーカイブ、Android/Termux、CNB ミラーにも対応しています。詳しくは[インストールガイド](docs/INSTALL.md)をご覧ください。
+
+各シェルの Tab 補完はコマンド一つで設定できます — `codewhale completion bash|zsh|fish|powershell|elvish`。詳しくは[シェル補完](docs/INSTALL.md#8-shell-completions)をご覧ください。
 
 ## 使い方
 
@@ -74,4 +76,4 @@ Codewhale は `deepseek-tui` として始まり、その設定とセッション
 
 ## ライセンス
 
-[MIT](LICENSE)
+[MIT](LICENSE)。他のオープンソースプロジェクトを基にした部分は[サードパーティー通知](docs/THIRD_PARTY_NOTICES.md)に記載しています。

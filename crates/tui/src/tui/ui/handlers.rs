@@ -1264,18 +1264,11 @@ pub(crate) async fn handle_view_events(
                 )
                 .await;
             }
-            ViewEvent::FleetRosterOpenSetupRequested { role } => {
-                // The roster view hands off to the authoring wizard (same
-                // path as AppAction::OpenFleetSetup), carrying the member role
-                // already selected so the wizard can begin at Model.
-                if app.view_stack.top_kind() != Some(ModalKind::FleetSetup) {
-                    let _ = app.next_draft_gen();
-                    app.view_stack.push(
-                        crate::tui::views::fleet_setup::FleetSetupView::new_for_role(
-                            app, config, &role,
-                        ),
-                    );
-                }
+            ViewEvent::FleetRosterOpenSetupRequested { member_id } => {
+                // The shared router opens the selected v2 Fleet's exact editor
+                // (focused on this member) or the legacy wizard when no named
+                // Fleet is selected.
+                open_fleet_setup_target(app, config, Some(&member_id));
             }
             ViewEvent::FleetListOpenDetailRequested { name, scope } => {
                 if app.view_stack.top_kind() != Some(ModalKind::FleetDetail) {
@@ -1299,11 +1292,18 @@ pub(crate) async fn handle_view_events(
                 app.status_message = Some(message);
                 // Refresh the dispatch roster from the fleet-aware source so
                 // selection changes take effect for the next spawn.
-                let roster = crate::fleet::roster::FleetRoster::load_with_plugins(
+                let roster = crate::fleet::identity::load_effective_roster(
                     &config.fleet_config(),
                     &app.workspace,
-                    app.plugin_registry.as_ref(),
+                    Some(app.plugin_registry.as_ref()),
                 );
+                if let Some(error) = roster.load_error() {
+                    app.set_sticky_status(
+                        error.to_string(),
+                        crate::tui::app::StatusToastLevel::Error,
+                        None,
+                    );
+                }
                 let _ = engine_handle.try_send(Op::SetFleetRoster {
                     roster: std::sync::Arc::new(roster),
                 });
@@ -1488,13 +1488,12 @@ pub(crate) async fn handle_view_events(
                 txn.stage(target.clone(), draft.render_toml().into_bytes());
                 match txn.commit() {
                     Ok(()) => {
-                        let roster = std::sync::Arc::new(
-                            crate::fleet::roster::FleetRoster::load_with_plugins(
+                        let roster =
+                            std::sync::Arc::new(crate::fleet::identity::load_effective_roster(
                                 &config.fleet_config(),
                                 &app.workspace,
-                                app.plugin_registry.as_ref(),
-                            ),
-                        );
+                                Some(app.plugin_registry.as_ref()),
+                            ));
                         let roster_refresh_failed = engine_handle
                             .try_send(Op::SetFleetRoster { roster })
                             .is_err();
@@ -1576,15 +1575,7 @@ pub(crate) async fn handle_view_events(
                 }
             }
             ViewEvent::SetupOpenFleetRequested => {
-                if app.view_stack.top_kind() != Some(ModalKind::FleetSetup) {
-                    let _ = app.next_draft_gen();
-                    app.view_stack
-                        .push(crate::tui::views::fleet_setup::FleetSetupView::new(
-                            app, config,
-                        ));
-                    app.status_message =
-                        Some("Fleet setup opened from /setup Operate/Fleet readiness.".to_string());
-                }
+                open_fleet_setup_target(app, config, None);
             }
             ViewEvent::SetupOpenHotbarRequested => {
                 if app.view_stack.top_kind() != Some(ModalKind::HotbarSetup) {

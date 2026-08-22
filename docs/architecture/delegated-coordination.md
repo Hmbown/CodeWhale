@@ -17,8 +17,9 @@ declare at least one `write_roots`, `exact_files`, or
 An active shared-workspace claim blocks another active owner when either tree
 contains the other, exact files collide, or a named contract matches. A real
 isolated worktree may proceed concurrently. Scope expansion uses
-`agents/coordinate action=claim`; a collision records a bounded contention
-receipt and fails before mutation without opening a permission modal.
+`agent action=claim` (`write_roots`, `exact_files`,
+`coordination_contracts`); a collision records a bounded contention receipt and
+fails before mutation without opening a permission modal.
 
 Fleet workers follow the same rule. Write-capable Fleet tasks declare
 `workspace.writable_paths` or `metadata.coordination_contracts`, and the
@@ -87,11 +88,24 @@ contention, projections, and reconciliation sequence.
 
 ## Inspection
 
-`agents/list` exposes concise per-child claims and accepted decisions.
-`agents/coordinate action=inspect` exposes bounded decision, claim, contention,
-projection, and reconciliation receipts plus deterministic hottest-path counts.
-Metrics without an authoritative source, such as package growth or route cost,
-remain explicitly null instead of being inferred.
+`agent action=status` exposes concise per-child claims and accepted decisions.
+The bounded decision, claim, contention, projection, and reconciliation
+receipts, plus deterministic hottest-path counts, reach the TUI through
+`CoordinationDetailProjection`; the `agents/coordinate action=inspect` tool that
+used to serve them to the model is registered for transcript replay only and is
+no longer advertised in the model catalog. Metrics without an authoritative
+source, such as package growth or route cost, remain explicitly null instead of
+being inferred.
+
+## One model-facing surface
+
+`agent` is the only sub-agent tool in the model catalog. The six narrow
+`agents/*` tools stay registered so a persisted transcript replays against the
+same implementations, but they declare `model_visible() -> false`: they are not
+sent in the initial catalog and `tool_search` cannot return them. Everything
+they did is reachable through an `agent` action — `status`/`peek` for `list`,
+`message`, `followup`, `interrupt`, `wait`, and `claim` for the one capability
+that had no equivalent, write-scope expansion.
 
 ## The workspace lock, and what losing it does and does not mean
 

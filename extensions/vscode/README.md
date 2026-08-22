@@ -24,7 +24,7 @@ retry/undo/snapshot GUI endpoints yet.
 npm install
 npm run compile
 npm run package
-code --install-extension codewhale-vscode-0.9.4.vsix
+code --install-extension codewhale-vscode-0.9.11.vsix
 ```
 
 Configure `codewhale.commandPath`, `codewhale.runtimeHost`,

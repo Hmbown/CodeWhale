@@ -9,10 +9,10 @@ Browsing note:
   aliases. New prompts and integrations should use `Web`.
 
 Server mode note:
-- `codewhale-tui serve --mcp` runs the MCP stdio server.
-- `codewhale-tui serve --http` runs the runtime HTTP/SSE API (separate mode).
-- The `codewhale` dispatcher exposes `codewhale mcp-server` as an equivalent stdio
-  entrypoint used by the split CLI.
+- `codewhale serve --mcp` runs the MCP stdio server.
+- `codewhale serve --http` runs the runtime HTTP/SSE API (separate mode).
+- `codewhale mcp-server` is an equivalent stdio entrypoint on the same
+  consolidated runtime.
 
 ## Setup wizard vs manual MCP setup (#3407)
 
@@ -71,25 +71,25 @@ cancellation. MCP subscriptions are not exposed through plugin bundles. See
 Create a starter MCP config at your resolved MCP path:
 
 ```bash
-codewhale-tui mcp init
+codewhale mcp init
 ```
 
-`codewhale-tui setup --mcp` performs the same MCP bootstrap alongside skills setup.
+`codewhale setup --mcp` performs the same MCP bootstrap alongside skills setup.
 
 Common management commands:
 
 ```bash
-codewhale-tui mcp list
-codewhale-tui mcp tools [server]
-codewhale-tui mcp add <name> --command "<cmd>" --arg "<arg>"
-codewhale-tui mcp add <name> --url "http://localhost:3000/mcp"
-codewhale-tui mcp add <name> --url "https://example.com/mcp" --bearer-token-env-var MCP_TOKEN
-codewhale-tui mcp login <name>
-codewhale-tui mcp logout <name>
-codewhale-tui mcp enable <name>
-codewhale-tui mcp disable <name>
-codewhale-tui mcp remove <name>
-codewhale-tui mcp validate
+codewhale mcp list
+codewhale mcp tools [server]
+codewhale mcp add <name> --command "<cmd>" --arg "<arg>"
+codewhale mcp add <name> --url "http://localhost:3000/mcp"
+codewhale mcp add <name> --url "https://example.com/mcp" --bearer-token-env-var MCP_TOKEN
+codewhale mcp login <name>
+codewhale mcp logout <name>
+codewhale mcp enable <name>
+codewhale mcp disable <name>
+codewhale mcp remove <name>
+codewhale mcp validate
 ```
 
 ## In-TUI Manager
@@ -195,8 +195,8 @@ For bearer-token auth, prefer env-backed config:
 For generic remote MCP OAuth, add the URL server and run login:
 
 ```bash
-codewhale-tui mcp add remote --url "https://example.com/mcp"
-codewhale-tui mcp login remote
+codewhale mcp add remote --url "https://example.com/mcp"
+codewhale mcp login remote
 ```
 
 Codewhale discovers the server OAuth metadata, opens the authorization URL in
@@ -298,7 +298,7 @@ Overrides:
 - Config: `mcp_config_path = "/path/to/mcp.json"`
 - Env: `DEEPSEEK_MCP_CONFIG=/path/to/mcp.json`
 
-`codewhale-tui mcp init` (and `codewhale-tui setup --mcp`) writes to this resolved path.
+`codewhale mcp init` (and `codewhale setup --mcp`) writes to this resolved path.
 
 The interactive `/config` editor also exposes `mcp_config_path`. Changing it in
 the TUI updates the path used by `/mcp` and marks the pool reload-required;
@@ -357,10 +357,12 @@ You can register your local Codewhale binary as an MCP server so other Codewhale
 ### Quick Setup
 
 ```bash
-codewhale-tui mcp add-self
+codewhale mcp add-self
 ```
 
-This resolves the current binary path, generates a config entry that runs `codewhale-tui serve --mcp`, and writes it to your MCP config file. The default server name is `codewhale`.
+This resolves the current binary path, generates a config entry that runs
+`codewhale serve --mcp`, and writes it to your MCP config file. The default
+server name is `codewhale`.
 
 Options:
 
@@ -383,11 +385,10 @@ Equivalent manual entry in `~/.codewhale/mcp.json`:
 }
 ```
 
-The `codewhale-tui` binary supports `serve --mcp` directly. The `codewhale`
-dispatcher offers the equivalent `codewhale mcp-server` stdio entrypoint. Use
-whichever is on your `PATH` (run `which codewhale` or `which codewhale-tui` to
-find the full path). The `mcp add-self` command automatically resolves the
-correct binary.
+The consolidated `codewhale` runtime supports `serve --mcp` directly and also
+offers the equivalent `codewhale mcp-server` stdio entrypoint. Release
+installers expose the same runtime as `codew`; `mcp add-self` automatically
+resolves the command that invoked it.
 
 ### Prerequisites
 
@@ -406,7 +407,7 @@ becomes `mcp_codewhale_shell`.
 
 ### MCP Server vs HTTP/SSE API vs ACP
 
-| | `codewhale-tui serve --mcp` | `codewhale-tui serve --http` | `codewhale-tui serve --acp` |
+| | `codewhale serve --mcp` | `codewhale serve --http` | `codewhale serve --acp` |
 |---|---|---|---|
 | **Protocol** | MCP stdio | HTTP/SSE JSON-RPC | ACP stdio |
 | **Use case** | Tool server for MCP clients | Runtime API for apps | Editor agent for Zed/custom ACP clients |
@@ -422,8 +423,8 @@ Use `serve --acp` when an editor wants to talk to Codewhale as an ACP agent.
 After adding, test the connection:
 
 ```bash
-codewhale-tui mcp validate
-codewhale-tui mcp tools codewhale
+codewhale mcp validate
+codewhale mcp tools codewhale
 ```
 
 ## Server Fields
@@ -461,9 +462,9 @@ Avoid committing literal `Authorization` headers. Prefer `env_headers`,
 
 ## Troubleshooting
 
-- Run `codewhale-tui doctor` to confirm the MCP config path it resolved and whether it exists.
+- Run `codewhale doctor` to confirm the MCP config path it resolved and whether it exists.
 - In the TUI, run `/mcp validate` to refresh the visible server/tool snapshot.
 - If tools are missing from the model's catalog after a config or credential
   change, run `/mcp reload` — `/mcp validate` only refreshes the UI snapshot.
-- If the MCP config is missing, run `codewhale-tui mcp init --force` to regenerate it.
+- If the MCP config is missing, run `codewhale mcp init --force` to regenerate it.
 - If tools don’t appear, verify the server command works from your shell and that the server supports MCP `tools/list`.

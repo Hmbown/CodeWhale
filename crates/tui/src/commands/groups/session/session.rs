@@ -564,6 +564,7 @@ fn prune(app: &mut App, days_arg: Option<&str>) -> CommandResult {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::models::Role;
     use crate::test_support::EnvVarGuard;
     use crate::tui::app::{App, AppMode, ReasoningEffort, TuiOptions, TurnCacheRecord};
     use crate::tui::history::HistoryCell;
@@ -691,7 +692,7 @@ mod tests {
         app.current_session_metadata = Some(cached_parent.clone());
         app.session_title = Some(cached_parent.title.clone());
         app.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![crate::models::ContentBlock::Text {
                 text: "try another path".to_string(),
                 cache_control: None,
@@ -779,7 +780,7 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         app.current_session_id = Some("parent-session".to_string());
         app.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![crate::models::ContentBlock::Text {
                 text: "still running".to_string(),
                 cache_control: None,
@@ -802,7 +803,7 @@ mod tests {
         app.current_session_id = Some("old-session".to_string());
         app.session_title = Some("Old Session".to_string());
         app.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![crate::models::ContentBlock::Text {
                 text: "continue this thread".to_string(),
                 cache_control: None,
@@ -905,7 +906,7 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         app.current_session_id = Some("old-session".to_string());
         app.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![],
         });
         app.is_loading = true;
@@ -931,7 +932,7 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         app.current_session_id = Some("old-session".to_string());
         app.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![],
         });
         app.task_panel.push(crate::tui::app::TaskPanelEntry {
@@ -1050,7 +1051,7 @@ mod tests {
         let mut app1 = create_test_app_with_tmpdir(&tmpdir);
         // Set up some state to save
         app1.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![crate::models::ContentBlock::Text {
                 text: "Hello".to_string(),
                 cache_control: None,
@@ -1135,7 +1136,7 @@ mod tests {
         let tmpdir = TempDir::new().unwrap();
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         app.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![],
         });
         app.current_session_id = Some("current-session".to_string());
@@ -1227,7 +1228,7 @@ mod tests {
         let tmpdir = TempDir::new().unwrap();
         let mut saved_app = create_test_app_with_tmpdir(&tmpdir);
         saved_app.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![crate::models::ContentBlock::Text {
                 text: "checkpoint".to_string(),
                 cache_control: None,

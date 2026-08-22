@@ -298,12 +298,16 @@ If a repo-local config declares `api_key`, `base_url`, `provider`,
 `mcp_config_path`, `hotbar`, `allow_shell = true`, or `instructions`,
 Codewhale ignores that key and keeps the user's global setting.
 
-The `codewhale` facade and `codewhale-tui` binary share the same config file for
-DeepSeek auth and model defaults. `codewhale auth set --provider deepseek` (and
-the legacy `codewhale login --api-key ...` alias) saves the key to
-`~/.codewhale/config.toml` (migrating legacy `~/.deepseek/config.toml` on first
-launch when needed), and `codewhale --model deepseek-v4-flash` is forwarded to
-the TUI as `DEEPSEEK_MODEL`.
+The consolidated `codewhale` runtime uses one config file for DeepSeek auth
+and model defaults. `codewhale auth set --provider deepseek` saves
+the key to `~/.codewhale/config.toml` (migrating legacy `~/.deepseek/config.toml`
+on first launch when needed), and `codewhale --model deepseek-v4-flash` is
+forwarded to the TUI as `DEEPSEEK_MODEL`.
+
+`codewhale login` signs in to the Codewhale account — it is the same browser
+device flow as `codewhale account login`, not a provider-key command. Provider
+credentials are configured exclusively through `codewhale auth set
+--provider <provider>`.
 
 That provider credential is distinct from the optional managed-product
 account. `codewhale account login` starts the Codewhale browser device flow;
@@ -313,6 +317,30 @@ credential manager. A file-backed session store exists only as an explicit
 development fallback. `codewhale account keys list|set|remove` manages the
 signed-in account's BYOK vault without displaying secret values. The older
 `codewhale cloud ...` spelling remains a command alias.
+
+### Portable config bundles
+
+`codewhale config export --portable [--project] [--out FILE]` writes a
+portable, secret-free bundle of your configuration: sorted TOML with
+credential and machine-specific keys (API keys, base URLs, socket paths)
+dropped, never a redacted placeholder in their place. Without `--out` the
+bundle goes to stdout.
+
+`codewhale config import <FILE|HTTPS_URL|-> [--dry-run] [--yes] [--project]`
+applies a bundle. The envelope is strict (`schema_version = 1`, kind
+`codewhale.portable-config`; unknown fields fail). Import prints a
+deterministic plan — added / changed / skipped / conflicting / rejected —
+then asks for consent unless `--yes` is given; headless use requires it.
+Credential-shaped entries are rejected by key name and by value shape;
+rejections name the field, never a value. Remote bundles come from HTTPS
+only (loopback http excepted) with a 5 MiB cap. Application backs up the
+target document to `<config>.bundle-backup-<timestamp>`, rolls back on any
+failure, and re-importing an applied bundle changes nothing.
+
+Sections map to scope: `[project]` entries land only in the workspace
+document (`--project`, which must target an actual workspace config),
+`[global]` only in the user-global one; `preferences`, `profiles`, and
+`plugins` apply at either scope.
 
 ### Credential read precedence (#5197)
 
@@ -599,18 +627,15 @@ has a key — `router_available = router_configured && has_api_key_for(...)`
 the heuristic decides, not a failure. The turn's route receipt (`/status` →
 Auto) records which one it was.
 
-To bootstrap MCP and skills directories at their resolved paths, run `codewhale-tui setup`.
-To only scaffold MCP, run `codewhale-tui mcp init`.
+To bootstrap MCP and skills directories at their resolved paths, run `codewhale setup`.
+To only scaffold MCP, run `codewhale mcp init`.
 
 Note: `setup`, `doctor`, `mcp`, `features`, `sessions`, `resume`/`fork`, `exec`,
-`review`, and `eval` are subcommands of the `codewhale-tui` binary, and the
-`codewhale` dispatcher accepts every one of them as a passthrough
-(`TuiPassthroughArgs`, `crates/cli/src/lib.rs:244-429`) — the dispatcher's
-surface is a **superset**, not a distinct set. It adds commands the TUI binary
-does not have of its own: `auth`, `config`, `model`, `thread`, `sandbox`,
+`review`, and `eval` are all available from the installed `codewhale` command.
+The consolidated dispatcher also provides `auth`, `config`, `model`, `thread`, `sandbox`,
 `app-server`, `mcp-server`, `completions`, `login`/`logout`, `account`,
-`metrics`, `update`, `lane`, `workflow`, `web`. Plain prompts are forwarded to
-`codewhale-tui`.
+`metrics`, `update`, `lane`, `workflow`, and `web`. Plain prompts enter the
+in-process TUI runtime. Release installers expose the same bytes as `codew`.
 
 ### Startup Update Checks
 
@@ -2385,10 +2410,10 @@ exec_policy = true
 
 You can also override features for a single run:
 
-- `codewhale-tui --enable web_search`
-- `codewhale-tui --disable subagents`
+- `codewhale --enable web_search`
+- `codewhale --disable subagents`
 
-Use `codewhale-tui features list` to inspect known flags and their effective state.
+Use `codewhale features list` to inspect known flags and their effective state.
 The native `/config` view also includes a read-only **Experimental** section
 for experimental feature flags. It shows each flag's effective enabled/disabled
 state and whether that state comes from the default or a configured override.
@@ -2488,18 +2513,18 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 
 If configured values violate requirements, startup fails with a descriptive error.
 
-## Notes On `codewhale-tui doctor`
+## Notes On `codewhale doctor`
 
-`codewhale-tui doctor` follows the same config resolution rules as the rest of the
+`codewhale doctor` follows the same config resolution rules as the rest of the
 TUI. That means `--config`, `CODEWHALE_CONFIG_PATH`, and the legacy
 `DEEPSEEK_CONFIG_PATH` are respected, and MCP/skills
 checks use the resolved `mcp_config_path` / `skills_dir` (including env overrides).
 
-To bootstrap missing MCP/skills paths, run `codewhale-tui setup --all`. You can
-also run `codewhale-tui setup --skills --local` to create a workspace-local
+To bootstrap missing MCP/skills paths, run `codewhale setup --all`. You can
+also run `codewhale setup --skills --local` to create a workspace-local
 `./skills` dir.
 
-Both plain `codewhale-tui doctor` and `doctor --json` are structural and
+Both plain `codewhale doctor` and `codewhale doctor --json` are structural and
 offline by default. They do not check the release service, hosted provider
 APIs, local provider endpoints, or MCP processes, and they do not load a
 workspace credential `.env`. Use `--check-updates`,
@@ -2563,7 +2588,7 @@ configure reasoning effort.
 
 ## Setup status, clean, and extension dirs
 
-`codewhale-tui setup` accepts a few flags beyond the existing `--mcp`,
+`codewhale setup` accepts a few flags beyond the existing `--mcp`,
 `--skills`, `--local`, `--all`, and `--force`:
 
 - `--status` — print a compact one-screen status (api key, base URL, model,

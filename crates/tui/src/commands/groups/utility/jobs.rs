@@ -1,31 +1,31 @@
 //! Shell job-center commands.
 
-use crate::commands::traits::{CommandInfo, RegisterCommand};
-use crate::localization::MessageId;
-use crate::tui::app::{App, AppAction, ShellJobAction};
+use codewhale_command_contract::handler::CommandHandler;
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::commands::CommandResult;
+use crate::tui::app::{AppAction, ShellJobAction};
 
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "jobs",
     aliases: &["job", "zuoye"],
     usage: "/jobs [list|show <id>|poll <id>|wait <id>|stdin <id> <input>|cancel <id>]",
-    description_id: MessageId::CmdJobsDescription,
+    description_key: "cmd_jobs_description",
 };
 
 pub(in crate::commands) struct JobsCmd;
 
-impl RegisterCommand for JobsCmd {
+impl RegisterCommand<CommandResult> for JobsCmd {
     fn info() -> &'static CommandInfo {
         &COMMAND_INFO
     }
 
-    fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
-        jobs(app, arg)
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Pure(jobs)
     }
 }
 
-fn jobs(_app: &mut App, args: Option<&str>) -> CommandResult {
+fn jobs(args: Option<&str>) -> CommandResult {
     let raw = args.unwrap_or("").trim();
     if raw.is_empty() || raw.eq_ignore_ascii_case("list") {
         return CommandResult::action(AppAction::ShellJob(ShellJobAction::List));
@@ -87,41 +87,33 @@ fn jobs(_app: &mut App, args: Option<&str>) -> CommandResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::tui::app::TuiOptions;
-    use std::path::PathBuf;
-
-    fn app() -> App {
-        App::new(
-            TuiOptions {
-                use_alt_screen: false,
-                max_subagents: 2,
-                ..crate::test_support::test_tui_options(PathBuf::from("."))
-            },
-            &Config::default(),
-        )
-    }
 
     #[test]
     fn parses_job_actions() {
-        let mut app = app();
-        let show = jobs(&mut app, Some("show shell_abcd"));
+        let show = jobs(Some("show shell_abcd"));
         assert!(matches!(
             show.action,
             Some(AppAction::ShellJob(ShellJobAction::Show { id })) if id == "shell_abcd"
         ));
 
-        let send = jobs(&mut app, Some("stdin shell_abcd y"));
+        let send = jobs(Some("stdin shell_abcd y"));
         assert!(matches!(
             send.action,
             Some(AppAction::ShellJob(ShellJobAction::SendStdin { id, input, close: false }))
                 if id == "shell_abcd" && input == "y"
         ));
 
-        let cancel_all = jobs(&mut app, Some("cancel-all"));
+        let cancel_all = jobs(Some("cancel-all"));
         assert!(matches!(
             cancel_all.action,
             Some(AppAction::ShellJob(ShellJobAction::CancelAll))
         ));
+    }
+
+    #[test]
+    fn handler_is_pure_and_argument_only() {
+        assert!(matches!(JobsCmd::handler(), CommandHandler::Pure(_)));
+        assert_eq!(JobsCmd::info().description_key, "cmd_jobs_description");
+        assert_eq!(JobsCmd::info().aliases, &["job", "zuoye"]);
     }
 }

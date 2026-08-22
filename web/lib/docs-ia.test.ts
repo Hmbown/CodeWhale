@@ -16,6 +16,7 @@ import { locales } from "./i18n/config";
 import { contentLocalesForPath } from "./i18n/content-locales";
 import { getChrome, getHome } from "./i18n/dictionaries";
 import {
+  currentNavHref,
   footerProductLinks,
   footerProjectLinks,
   navLinks as buildNavLinks,
@@ -210,6 +211,33 @@ describe("navigation parity and accessibility", () => {
     expect(mobileMenu).toContain('aria-expanded={open}');
     expect(mobileMenu).toContain('aria-controls="mobile-menu"');
     expect(mobileMenu).toContain('role="dialog"');
+  });
+
+  it("marks exactly one nav link as the current page on a nested route", () => {
+    // `/xx/docs` and `/xx/docs/guide` are both nav links, so the plain
+    // prefix test both surfaces used marked two links `aria-current="page"`
+    // on the guide route — and drew the nav underline under both.
+    for (const locale of locales) {
+      const links = buildNavLinks(locale, getChrome(locale));
+      const guide = `/${locale}/docs/guide`;
+      const naive = links.filter(
+        (l) => guide === l.href || guide.startsWith(`${l.href}/`),
+      );
+      expect(naive.length, `${locale} ancestor+page collision`).toBeGreaterThan(1);
+      expect(currentNavHref(links, guide), `${locale} current nav link`).toBe(guide);
+      // A route that is not itself a nav link still resolves to its section.
+      expect(
+        currentNavHref(links, `/${locale}/docs/configuration`),
+        `${locale} section fallback`,
+      ).toBe(`/${locale}/docs`);
+      expect(currentNavHref(links, `/${locale}`), `${locale} home`).toBeNull();
+    }
+    // Both surfaces resolve the current page through the shared helper
+    // rather than repeating the prefix test that collided.
+    expect(navLinks).toContain("currentNavHref(links, pathname)");
+    expect(mobileMenu).toContain("currentNavHref(links, pathname)");
+    expect(navLinks).not.toContain("pathname.startsWith(");
+    expect(mobileMenu).not.toContain("pathname.startsWith(");
   });
 
   it("ships a keyboard-reachable skip link to the main landmark", () => {

@@ -26,6 +26,7 @@ use std::path::Path;
 use crate::fleet::profile::{FleetProfileDraft, UntrustedProfileParse};
 use crate::llm_client::LlmClient;
 use crate::localization::Locale;
+use crate::models::Role;
 use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt};
 
 /// Output budget for the one-shot profile draft. Profiles are small; this is
@@ -219,7 +220,7 @@ pub(crate) fn profile_drafting_request(
     MessageRequest {
         model: request_model.to_string(),
         messages: vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: profile_drafting_user_prompt(role, model, locale, workspace_fingerprint),
                 cache_control: None,

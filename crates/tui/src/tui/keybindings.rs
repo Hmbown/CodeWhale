@@ -321,6 +321,13 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         description_id: crate::localization::MessageId::KbCompactContext,
         section: KeybindingSection::Sessions,
     },
+    KeybindingEntry {
+        // Same shifted-Ctrl family as Ctrl+Shift+A/E/O; routes through the
+        // `/update install` command, so managed installs keep their gate.
+        chord: "Ctrl+Shift+U",
+        description_id: crate::localization::MessageId::KbUpdateInstall,
+        section: KeybindingSection::Sessions,
+    },
     // --- Clipboard ---
     KeybindingEntry {
         // Keep both terminal-client families visible: the TUI may be running
@@ -578,6 +585,23 @@ mod tests {
         assert_eq!(
             crate::localization::tr(crate::localization::Locale::En, editor.description_id,),
             "Open composer draft in external editor"
+        );
+    }
+
+    #[test]
+    fn ctrl_shift_u_update_install_is_documented_in_the_sessions_section() {
+        let entry = KEYBINDINGS
+            .iter()
+            .find(|entry| entry.chord == "Ctrl+Shift+U")
+            .expect("Ctrl+Shift+U keybinding should be documented");
+        assert_eq!(
+            entry.description_id,
+            crate::localization::MessageId::KbUpdateInstall
+        );
+        assert_eq!(entry.section, KeybindingSection::Sessions);
+        assert_eq!(
+            crate::localization::tr(crate::localization::Locale::En, entry.description_id),
+            "Check for and install the latest CodeWhale update (`/update install`)"
         );
     }
 

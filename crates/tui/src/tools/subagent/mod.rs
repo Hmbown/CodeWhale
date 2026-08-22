@@ -6,7 +6,9 @@
 //!
 //! The model-facing creation surface is the `agent` tool. Narrow coordination
 //! tools (`agents/list`, `agents/message`, `agents/followup`,
-//! `agents/interrupt`, `agents/coordinate`, `agents/wait`) wrap the same runtime without restoring
+//! `agents/interrupt`, `agents/coordinate`, `agents/wait`) are retired from
+//! the model catalog (#5462) — still registered and executable by name so
+//! persisted transcripts replay, never advertised — and wrap the same runtime without restoring
 //! the retired lifecycle theater. Older manager helpers remain executable for
 //! persisted records and internal recovery.
 
@@ -84,6 +86,7 @@ use worktree::{SubAgentWorktreeRequest, prepare_child_workspace};
 #[cfg(test)]
 use worktree::{create_isolated_worktree, git_repo_root};
 
+use crate::models::Role;
 #[allow(unused_imports)] // re-exported for hosts / tests; registration uses concrete types
 pub use advisor::{
     AdvisorConfig, EmissionGuard, ToolCallPair, build_advisor_prompt, extract_tool_call_pairs,
@@ -242,8 +245,8 @@ fn read_bounded_resident_context(
     })
 }
 
-/// Child model-turn budgets are finite by role; explicit spawn values are
-/// clamped to the hard ceiling below.
+/// Positive child model-turn budgets are clamped to this hard ceiling. Zero is
+/// the unbounded sentinel used by the default agent loop.
 const MAX_SUBAGENT_STEPS: u32 = 2_000;
 /// Default wall-clock budget for one child run, including model and tool work.
 const DEFAULT_CHILD_WALL_TIME: Duration = Duration::from_secs(30 * 60);
@@ -265,7 +268,11 @@ const MIN_EVENT_CHANNEL_HEADROOM_FOR_ROUTINE_PROGRESS: usize = 32;
 /// Format a step counter for sub-agent progress messages.
 ///
 fn format_step_counter(steps: u32, max_steps: u32) -> String {
-    format!("step {steps}/{max_steps}")
+    if max_steps == 0 {
+        format!("step {steps}")
+    } else {
+        format!("step {steps}/{max_steps}")
+    }
 }
 
 fn resolve_max_steps(role: FleetRole, explicit: Option<u32>, configured: Option<u32>) -> u32 {
@@ -1742,7 +1749,7 @@ fn append_subagent_inputs_as_user_messages(
     while let Some(input) = pending_inputs.pop_front() {
         if !input.text.trim().is_empty() {
             messages.push(Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: input.text,
                     cache_control: None,
@@ -3222,9 +3229,8 @@ pub struct SubAgentManager {
     coordination_process_lock: std::sync::Mutex<Option<CoordinationProcessLock>>,
     coordination_process_lock_required: bool,
     /// Configured default per-child model-turn budget (`[subagents]
-    /// default_max_steps`, #5324). `None` keeps the Fleet role defaults
-    /// (`WorkerRuntimeProfile::default_max_steps`); an explicit spawn
-    /// `max_steps` still wins.
+    /// default_max_steps`, #5324). `None` keeps the unbounded Fleet default;
+    /// an explicit spawn `max_steps` still wins. Zero means unbounded.
     max_steps: Option<u32>,
     /// Configured default per-child wall-clock budget (`[subagents]
     /// default_wall_time_secs`, #5324). `None` keeps
@@ -3411,8 +3417,8 @@ impl SubAgentManager {
     }
 
     /// Set the configured default per-child model-turn budget applied when a
-    /// spawn carries no explicit `max_steps` (#5324). `None` keeps the Fleet
-    /// role defaults.
+    /// spawn carries no explicit `max_steps` (#5324). `None` keeps the
+    /// unbounded default; a positive explicit/configured value still caps it.
     #[must_use]
     pub fn with_default_max_steps(mut self, max_steps: Option<u32>) -> Self {
         self.max_steps = max_steps;
@@ -3980,7 +3986,7 @@ impl SubAgentManager {
         )?;
         if let Some(path) = paths.iter().find(|path| !claim.claim.contains_path(path)) {
             return Err(format!(
-                "write '{path}' is outside agent '{owner}' scope (roots: {:?}, files: {:?}); expand it first with agents/coordinate action=claim",
+                "write '{path}' is outside agent '{owner}' scope (roots: {:?}, files: {:?}); expand it first with agent action=claim",
                 claim.claim.roots, claim.claim.exact_files
             ));
         }
@@ -6421,7 +6427,7 @@ impl SubAgentManager {
         }
         if let Some(claim) = persisted_claim.as_ref().map(|record| &record.claim) {
             prompt.push_str(&format!(
-                "\n\nWrite scope (enforced; coordination-root-relative): roots={:?}; exact_files={:?}; contracts={:?}. Expand it with agents/coordinate action=claim before mutating anything outside this scope.",
+                "\n\nWrite scope (enforced; coordination-root-relative): roots={:?}; exact_files={:?}; contracts={:?}. Expand it with agent action=claim before mutating anything outside this scope.",
                 claim.roots, claim.exact_files, claim.contracts
             ));
             agent.prompt = prompt.clone();
@@ -8058,6 +8064,7 @@ impl AgentTool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentToolAction {
     Start,
+    Roster,
     Status,
     Peek,
     Message,
@@ -8065,6 +8072,13 @@ enum AgentToolAction {
     Interrupt,
     Wait,
     Cancel,
+    /// Expand this caller's write claim before mutating outside it (#5462).
+    ///
+    /// The one coordination action that had no equivalent on `agent`: write
+    /// scope could only be widened through `agents/coordinate action=claim`,
+    /// so retiring that tool from the catalog without this action would have
+    /// left fail-closed write enforcement with no in-band way to satisfy it.
+    Claim,
 }
 
 fn parse_agent_tool_action(input: &Value) -> Result<AgentToolAction, ToolError> {
@@ -8073,6 +8087,7 @@ fn parse_agent_tool_action(input: &Value) -> Result<AgentToolAction, ToolError> 
     };
     match action.trim().to_ascii_lowercase().as_str() {
         "" | "start" | "spawn" | "run" => Ok(AgentToolAction::Start),
+        "roster" | "members" | "profiles" => Ok(AgentToolAction::Roster),
         "status" | "list" | "inspect" => Ok(AgentToolAction::Status),
         "peek" | "progress" => Ok(AgentToolAction::Peek),
         "message" | "queue_message" => Ok(AgentToolAction::Message),
@@ -8080,10 +8095,48 @@ fn parse_agent_tool_action(input: &Value) -> Result<AgentToolAction, ToolError> 
         "interrupt" | "pause" => Ok(AgentToolAction::Interrupt),
         "wait" | "join" | "await" | "block" => Ok(AgentToolAction::Wait),
         "cancel" | "stop" | "abort" => Ok(AgentToolAction::Cancel),
+        "claim" => Ok(AgentToolAction::Claim),
         other => Err(ToolError::invalid_input(format!(
-            "Invalid agent action '{other}'. Use start, status, peek, message, followup, interrupt, wait, or cancel."
+            "Invalid agent action '{other}'. Use start, roster, status, peek, message, followup, interrupt, wait, claim, or cancel."
         ))),
     }
+}
+
+/// Translate `agent{action:"claim", ...}` into the `agents/coordinate` wire.
+///
+/// Two things this function exists to get right, both of which fail *silently*
+/// when they are wrong:
+///
+/// 1. The coordinate wire key is `roots`, not `write_roots`
+///    ([`AgentsCoordinateTool::execute`] reads `roots`). A translation that
+///    forwarded `write_roots` would hand `expand_write_claim` three empty
+///    lists, which returns the unchanged claim with `Ok` — a successful
+///    receipt for an expansion that never happened, and then a fail-closed
+///    write refusal the model cannot explain.
+/// 2. An all-empty claim is refused here. `expand_write_claim` treats it as a
+///    no-op success for the same reason, so without this check a call that
+///    forgot its scope would read as "claim granted".
+///
+/// The three field names are the ones `agent action=start` already uses for
+/// write scope (`write_roots` advertised; `exact_files` and
+/// `coordination_contracts` parse-accepted), so one vocabulary describes a
+/// child's scope whether it is declared at launch or widened later.
+fn agent_claim_coordinate_input(input: &Value) -> Result<Value, ToolError> {
+    let roots = parse_coordination_paths(input, "write_roots")?;
+    let exact_files = parse_coordination_paths(input, "exact_files")?;
+    let contracts = parse_bounded_strings(input, "coordination_contracts", 16)?;
+    if roots.is_empty() && exact_files.is_empty() && contracts.is_empty() {
+        return Err(ToolError::invalid_input(
+            "agent action=claim needs at least one scope entry: write_roots, exact_files, or coordination_contracts. An empty claim would report success while expanding nothing."
+                .to_string(),
+        ));
+    }
+    Ok(json!({
+        "action": "claim",
+        "roots": roots,
+        "exact_files": exact_files,
+        "contracts": contracts,
+    }))
 }
 
 fn parse_agent_ref(input: &Value) -> Result<Option<String>, ToolError> {
@@ -8162,13 +8215,15 @@ impl ToolSpec for AgentTool {
             "Use multiple starts for independent parallel tasks. ",
             "type selects the Fleet role: worker (full tool access), scout (fast read-only exploration), planner (grounded strategy, read-only probes), reviewer (reads and grades code), builder (lands focused code changes), verifier (runs tests and reports evidence), consultant (read-only design counsel), or custom (allowed_tools on the parent's posture). ",
             "profile runs the child as a named Fleet profile (roster member) — its role posture, model route, and thinking tier — so pass a profile only when the task needs that member. Without a profile the child inherits the parent's model; per-call model or thinking overrides are not part of this surface. ",
+            "Use action=roster to inspect the current selected Fleet's member ids, names, roles, and exact provider/model routes before choosing a profile. ",
             "Child run budgets (model turns, wall time) come from Fleet role defaults and operator [subagents] config, not per-call fields. ",
             "worktree=true gives the child an isolated git worktree — use it whenever parallel writers must not collide with the parent checkout. ",
             "A write-capable child defaults write scope to the parent workspace; narrow it with write_roots (repo-relative directory trees) so parallel children claim disjoint scope. ",
             "Prefer type=builder for write work and type=verifier (or the Run tool with action=\"verifiers\") after writes settle — dispatch is not completion. ",
             "Coordinate through this same tool: action=message queues a note without waking the child; action=followup delivers queued notes and wakes a running child for its next user-provenance turn; action=interrupt stops the current child turn while preserving its checkpoint; action=wait blocks without changing child state, and until=\"all\" joins a whole fan-out in one call. ",
-            "Action contract: start requires prompt; message/followup require a target and message; peek/interrupt/cancel require a target; status and wait may be unscoped. ",
-            "The narrow agents/list, agents/message, agents/followup, agents/interrupt, and agents/wait tools expose the same semantics directly; there is no second transport. ",
+            "action=claim widens your own enforced write scope: pass write_roots (and optionally exact_files, coordination_contracts) before mutating anything a fail-closed write refusal named. It records a durable claim receipt and fails on contention with a peer claim; it never touches another agent's scope. ",
+            "Action contract: start requires prompt; message/followup require a target and message; peek/interrupt/cancel require a target; claim requires at least one scope entry; roster, status, and wait are unscoped. ",
+            "This is the whole model-facing sub-agent surface; there is no second transport. ",
             "In Operate, use detached=true only for independent or long work that must outlive the active turn; a write-capable root start defaults write scope to the parent workspace unless narrowed with write_roots; arbitrary shell remains gated. ",
             "Legacy action=status|peek|cancel remain for compatibility."
         )
@@ -8198,8 +8253,8 @@ impl ToolSpec for AgentTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["start", "status", "peek", "message", "followup", "interrupt", "wait", "cancel"],
-                    "description": "start launches a turn-owned worker and returns immediately. status/peek inspect. message queues a note without waking a running child. followup delivers queued notes and wakes a running child for its next user-provenance model turn. interrupt stops the current turn while preserving the child checkpoint. wait only observes; see until. cancel permanently cancels a running child."
+                    "enum": ["start", "roster", "status", "peek", "message", "followup", "interrupt", "wait", "claim", "cancel"],
+                    "description": "start launches a turn-owned worker and returns immediately. roster lists the current Fleet members and exact routes. status/peek inspect running or retained workers. message queues a note without waking a running child. followup delivers queued notes and wakes a running child for its next user-provenance model turn. interrupt stops the current turn while preserving the child checkpoint. wait only observes; see until. claim widens your own enforced write scope (see write_roots). cancel permanently cancels a running child."
                 },
                 "until": {
                     "type": "string",
@@ -8233,7 +8288,7 @@ impl ToolSpec for AgentTool {
                 },
                 "profile": {
                     "type": "string",
-                    "description": "Optional Fleet roster member to run this child as (e.g. reviewer, scout, builder, verifier, synthesizer, manager, or a custom member from project .codewhale/agents/, personal $CODEWHALE_HOME/agents/, or [fleet.profiles] config). The member supplies role posture, model routing, thinking tier, instruction overlay, and delegation bounds. Named profiles bind 1:1 to their configured route — the child's model and thinking come from the profile or inherit the parent; there is no per-call model override on this surface. See /fleet. For fast exploration use the scout role."
+                    "description": "Optional Fleet member selector. Use an exact member id, unique display name or role, exact pinned model id, offline model name, or route:provider/model; action=roster lists the current choices. Ambiguous labels are refused and require member:<id>. The resolved member supplies role posture, exact model route, thinking tier, instruction overlay, and delegation bounds. Named profiles bind 1:1 to their configured route; there is no per-call model override on this surface."
                 },
                 "worktree": {
                     "type": "boolean",
@@ -8242,7 +8297,7 @@ impl ToolSpec for AgentTool {
                 "write_roots": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Expected repo-relative directory trees this child may mutate. Defaults to the parent workspace ('.') when omitted on a write-capable start. Shared write-capable children claim these before launch; scope expansion must use agents/coordinate before mutation. Paths outside the parent workspace are refused."
+                    "description": "Repo-relative directory trees a write-capable agent may mutate. On action=start: the scope this child claims, defaulting to the parent workspace ('.') when omitted. On action=claim: the trees to add to your own enforced scope, which you must do before mutating anything outside it. Paths outside the parent workspace are refused."
                 },
                 "resume_from": {
                     "type": "string",
@@ -8258,6 +8313,9 @@ impl ToolSpec for AgentTool {
                                 "prompt": {}
                             },
                             "required": ["prompt"]
+                        },
+                        {
+                            "properties": {"action": {"const": "roster"}}
                         },
                         {
                             "properties": {"action": {"const": "status"}}
@@ -8288,6 +8346,14 @@ impl ToolSpec for AgentTool {
                         },
                         {
                             "properties": {"action": {"const": "wait"}}
+                        },
+                        {
+                            // `claim` names no agent: it always widens the
+                            // caller's own scope. Which of the three scope
+                            // lists carries the entries is left to the call —
+                            // `execute` refuses an empty claim rather than
+                            // silently succeeding with no expansion.
+                            "properties": {"action": {"const": "claim"}}
                         },
                         {
                             "properties": {"action": {"const": "cancel"}},
@@ -8321,12 +8387,23 @@ impl ToolSpec for AgentTool {
     /// the inside. Write-capable spawns keep their gate.
     fn approval_requirement_for(&self, input: &Value) -> ApprovalRequirement {
         match parse_agent_tool_action(input) {
-            Ok(AgentToolAction::Status | AgentToolAction::Peek | AgentToolAction::Wait) => {
-                ApprovalRequirement::Auto
-            }
+            Ok(
+                AgentToolAction::Roster
+                | AgentToolAction::Status
+                | AgentToolAction::Peek
+                | AgentToolAction::Wait,
+            ) => ApprovalRequirement::Auto,
             Ok(AgentToolAction::Start) if start_requests_read_only_role(input) => {
                 ApprovalRequirement::Auto
             }
+            // #5462: `agents/coordinate` declared `Auto` because gating a
+            // coordination record deadlocks autonomous fan-in — a child that
+            // must widen its scope to proceed cannot raise a modal in a
+            // parent UI nobody is watching. Inheriting the action must
+            // inherit that reasoning, not quietly upgrade it to `Required`.
+            // Authority is unchanged: `claim` can only widen the *caller's
+            // own* scope, and contention with a peer claim still fails.
+            Ok(AgentToolAction::Claim) => ApprovalRequirement::Auto,
             _ => ApprovalRequirement::Required,
         }
     }
@@ -8344,7 +8421,7 @@ impl ToolSpec for AgentTool {
     fn supports_parallel_for(&self, input: &Value) -> bool {
         matches!(
             parse_agent_tool_action(input),
-            Ok(AgentToolAction::Status) | Ok(AgentToolAction::Peek)
+            Ok(AgentToolAction::Roster) | Ok(AgentToolAction::Status) | Ok(AgentToolAction::Peek)
         )
     }
 
@@ -8353,7 +8430,10 @@ impl ToolSpec for AgentTool {
     fn is_read_only_for(&self, input: &Value) -> bool {
         matches!(
             parse_agent_tool_action(input),
-            Ok(AgentToolAction::Status | AgentToolAction::Peek | AgentToolAction::Wait)
+            Ok(AgentToolAction::Roster
+                | AgentToolAction::Status
+                | AgentToolAction::Peek
+                | AgentToolAction::Wait)
         )
     }
 
@@ -8361,6 +8441,30 @@ impl ToolSpec for AgentTool {
         let action = parse_agent_tool_action(&input)?;
         match action {
             AgentToolAction::Start => {}
+            AgentToolAction::Roster => {
+                let mut runtime = self.runtime.clone();
+                refresh_spawn_route_sources(&mut runtime);
+                if let Some(error) = runtime.fleet_roster.load_error() {
+                    return Err(ToolError::execution_failed(error.to_string()));
+                }
+                let members = crate::fleet::identity::roster_identities(&runtime.fleet_roster);
+                let total_count = runtime.fleet_roster.members().len();
+                let payload = json!({
+                    "action": "roster",
+                    "count": members.len(),
+                    "total_count": total_count,
+                    "truncated": members.len() < total_count,
+                    "members": members,
+                    "selector_help": "Use member:<id> for an exact choice. Unique role:<role>, model:<id>, model name, and route:<provider>/<model> selectors are also accepted; ambiguity is refused. If truncated=true, use a known exact member id or inspect /fleet.",
+                });
+                let mut result = ToolResult::json(&payload)
+                    .map_err(|error| ToolError::execution_failed(error.to_string()))?;
+                result.metadata = Some(json!({
+                    "action": "roster",
+                    "count": payload["count"],
+                }));
+                return Ok(result);
+            }
             AgentToolAction::Status | AgentToolAction::Peek => {
                 return inspect_agent_from_input(
                     &input,
@@ -8402,6 +8506,14 @@ impl ToolSpec for AgentTool {
                     context,
                     self.runtime.parent_agent_id.as_deref(),
                 )
+                .await;
+            }
+            AgentToolAction::Claim => {
+                return AgentsCoordinateTool::new(
+                    self.manager.clone(),
+                    self.runtime.parent_agent_id.clone(),
+                )
+                .execute(agent_claim_coordinate_input(&input)?, context)
                 .await;
             }
         }
@@ -8997,6 +9109,74 @@ fn child_client_for_member(
 ) -> Result<DeepSeekClient, ToolError> {
     child_provider_binding(runtime, member).map(|binding| binding.client)
 }
+
+/// Enforce selected Fleet member requirements against the exact child route
+/// before the child reserves a worktree or an admission slot.
+///
+/// Capability facts are three-state and route-scoped. Only an explicit
+/// `Supported` fact satisfies a requirement; `Unsupported` and `Unknown`
+/// both refuse the launch. In particular, a custom proxy that reuses a
+/// first-party model id remains unknown and is never silently rerouted.
+fn enforce_fleet_member_route_requirements(
+    member: Option<&crate::fleet::profile::AgentProfile>,
+    runtime: &SubAgentRuntime,
+    model: &str,
+) -> Result<(), ToolError> {
+    let Some(member) = member else {
+        return Ok(());
+    };
+    if member.requires.is_empty() {
+        return Ok(());
+    }
+    let member_id = crate::fleet::identity::FleetMemberIdentity::from_member(member).member_id;
+
+    let candidate = crate::route_runtime::resolve_route_candidate(
+        runtime.client.api_provider(),
+        Some(model),
+        None,
+        Some(runtime.client.base_url().to_string()),
+        None,
+    )
+    .map_err(|error| {
+        ToolError::execution_failed(format!(
+            "Fleet member '{member_id}' requirements could not be checked against its exact child route: {}",
+            crate::safe_label::safe_error_text(&error.to_string())
+        ))
+    })?;
+    let provider_id = runtime.api_config.as_ref().map_or_else(
+        || candidate.provider_id().as_str().to_string(),
+        |config| config.provider_identity_for(runtime.client.api_provider()),
+    );
+    let provider_id = crate::safe_label::SafeLabel::identifier(&provider_id);
+    let model_id = crate::safe_label::SafeLabel::catalog_model(candidate.wire_model_id().as_str());
+
+    for requirement in &member.requires {
+        match crate::fleet::store::MemberCapability::parse(requirement) {
+            Some(crate::fleet::store::MemberCapability::Vision) => {
+                let state = candidate.capabilities().image_input;
+                if !state.is_supported() {
+                    let state = match state {
+                        codewhale_config::route::CapabilityState::Unsupported => "unsupported",
+                        codewhale_config::route::CapabilityState::Unknown => "unknown",
+                        codewhale_config::route::CapabilityState::Supported => unreachable!(),
+                    };
+                    return Err(ToolError::execution_failed(format!(
+                        "Fleet member '{member_id}' requires vision, but exact route {provider_id}/{model_id} has image_input={state}. Codewhale will not reroute a capability-bound member; pin an exact route with verified image_input support."
+                    )));
+                }
+            }
+            None => {
+                let requirement = crate::fleet::identity::bounded_identity_field(requirement);
+                return Err(ToolError::execution_failed(format!(
+                    "Fleet member '{member_id}' has unknown capability requirement '{}'; valid values: {}",
+                    requirement,
+                    crate::fleet::store::MemberCapability::VOCABULARY.join(", ")
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 async fn spawn_subagent_from_input(
     input: Value,
     manager: SharedSubAgentManager,
@@ -9076,6 +9256,11 @@ async fn spawn_subagent_from_input(
     {
         child_runtime.client = rebound;
     }
+    enforce_fleet_member_route_requirements(
+        profile_member.as_ref(),
+        &child_runtime,
+        &effective_model,
+    )?;
     child_runtime.reasoning_effort = route.reasoning_effort.clone();
     child_runtime.reasoning_effort_auto = false;
     let model_route = route.model_route;
@@ -9816,7 +10001,7 @@ fn build_initial_subagent_messages_with_system(
     }
 
     messages.push(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: build_assignment_prompt(prompt, assignment, agent_type),
             cache_control: None,
@@ -9846,7 +10031,7 @@ fn work_state_worth_publishing(
 
 fn system_text_message(text: String) -> Message {
     Message {
-        role: "system".to_string(),
+        role: Role::System,
         content: vec![ContentBlock::Text {
             text,
             cache_control: None,
@@ -10909,7 +11094,7 @@ then re-plan dependent work before claiming completion.\n",
     text.push_str("</codewhale:runtime_event>");
 
     Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text,
             cache_control: None,
@@ -11040,11 +11225,8 @@ async fn run_subagent(
     let mut latest_checkpoint: Option<SubAgentCheckpoint> = None;
     let mut tokens_used: u64 = 0;
     let mut terminal_failure_reason: Option<String> = None;
-    // #4050: distinguish a real "the model chose to stop" exit (the `break`
-    // below) from loop exhaustion (running out of `max_steps` while still
-    // tool-calling). Only the former, with a non-empty final summary, is a
-    // genuine success; everything else must surface its stop reason instead of
-    // reporting a completed child with no payload.
+    // Distinguish a real "the model chose to stop" exit from an explicitly
+    // configured step-cap exit. The normal loop is unbounded (max_steps == 0).
     let mut stopped_naturally = false;
     // A worker is inspectable as soon as it is launched, not only after its
     // first model round trip. This gives Open a real conversation destination
@@ -11064,7 +11246,10 @@ async fn run_subagent(
     )
     .await;
 
-    for _step in 0..max_steps {
+    loop {
+        if max_steps > 0 && steps >= max_steps {
+            break;
+        }
         // Cooperative cancellation: bail if this session's token was cancelled
         // while we were between steps. Top-level model-visible sub-agents use
         // a detached token so parent turn cancellation does not stop them.
@@ -11124,7 +11309,7 @@ async fn run_subagent(
             });
         }
 
-        steps += 1;
+        steps = steps.saturating_add(1);
         record_agent_progress(
             runtime,
             &agent_id,
@@ -11509,7 +11694,7 @@ async fn run_subagent(
         }
 
         messages.push(Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: response.content.clone(),
         });
         latest_checkpoint = Some(
@@ -11797,7 +11982,7 @@ async fn run_subagent(
 
         if !tool_results.is_empty() {
             messages.push(Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: tool_results,
             });
             latest_checkpoint = Some(
@@ -12592,32 +12777,34 @@ fn validate_session_name(name: &str) -> Result<String, ToolError> {
     Ok(trimmed.to_string())
 }
 
-/// Validate and normalize the `profile` spawn parameter: a bare roster member
-/// id token (same rule as fleet model/profile tokens — visible, no
-/// whitespace, quotes, backticks, or '='), lowercased for the roster's
-/// case-insensitive lookup.
+/// Validate a bounded human Fleet selector. Resolution owns normalization so
+/// the route receipt can preserve the safe spelling the caller actually used
+/// (`DeepSeek V4 Flash`, `role:scout`, or an exact member id).
 fn validate_profile_name(value: &str) -> Result<String, ToolError> {
-    validate_roster_token(value, "profile")
+    validate_roster_selector(value, "profile")
 }
 
 fn validate_role_name(value: &str) -> Result<String, ToolError> {
-    validate_roster_token(value, "role")
+    validate_roster_selector(value, "role")
 }
 
-fn validate_roster_token(value: &str, field: &str) -> Result<String, ToolError> {
+fn validate_roster_selector(value: &str, field: &str) -> Result<String, ToolError> {
+    const MAX_SELECTOR_CHARS: usize = 128;
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(ToolError::invalid_input(format!("{field} cannot be blank")));
     }
-    if !trimmed
-        .chars()
-        .all(|ch| ch.is_ascii_graphic() && !matches!(ch, '"' | '\'' | '`' | '='))
-    {
+    if trimmed.chars().count() > MAX_SELECTOR_CHARS {
         return Err(ToolError::invalid_input(format!(
-            "{field} must be a bare roster member id without whitespace, quotes, backticks, or '='"
+            "{field} must be at most {MAX_SELECTOR_CHARS} characters"
         )));
     }
-    Ok(trimmed.to_ascii_lowercase())
+    if trimmed.chars().any(char::is_control) {
+        return Err(ToolError::invalid_input(format!(
+            "{field} must not contain control characters or newlines"
+        )));
+    }
+    Ok(trimmed.to_string())
 }
 
 /// Resolve the `profile` spawn parameter against the fleet roster and fold
@@ -12644,20 +12831,10 @@ fn refresh_spawn_route_sources(runtime: &mut SubAgentRuntime) {
     let Some(config) = runtime.api_config.as_deref() else {
         return;
     };
-    let roster = runtime.context.plugin_registry.as_deref().map_or_else(
-        || {
-            crate::fleet::roster::FleetRoster::load(
-                &config.fleet_config(),
-                &runtime.context.workspace,
-            )
-        },
-        |plugins| {
-            crate::fleet::roster::FleetRoster::load_with_plugins(
-                &config.fleet_config(),
-                &runtime.context.workspace,
-                plugins,
-            )
-        },
+    let roster = crate::fleet::identity::load_effective_roster(
+        &config.fleet_config(),
+        &runtime.context.workspace,
+        runtime.context.plugin_registry.as_deref(),
     );
     let mut role_models = roster.model_overrides();
     role_models.extend(config.subagent_model_overrides());
@@ -12669,40 +12846,65 @@ fn apply_spawn_profile(
     request: &mut SpawnRequest,
     roster: &crate::fleet::roster::FleetRoster,
 ) -> Result<Option<crate::fleet::profile::AgentProfile>, ToolError> {
+    if let Some(error) = roster.load_error() {
+        return Err(ToolError::execution_failed(error.to_string()));
+    }
     // If the caller used a legacy `type`/`role` alias (e.g. `builder`) and it
     // resolves to a saved fleet roster member, treat it as a profile so the
     // child gets the member's pinned provider/model instead of colliding with
     // the session provider (#4177 keeps type aliases from being promoted when
     // they do *not* resolve to a member).
     let mut resolved_from_role = false;
-    let profile_id = request.profile.as_deref().or_else(|| {
+    let profile_id = if let Some(profile) = request.profile.clone() {
+        Some(profile)
+    } else {
         // #5285: every *named* `type` dispatch resolves through the roster —
         // including worker/planner/custom, which are now seeded roster
         // members. Only the fully-unnamed default (no type/role/profile) skips
         // roster resolution, so there is no dispatch posture the roster cannot
         // see and no parallel hidden enum.
         if !request.agent_type_named {
-            return None;
+            None
+        } else if let Some(role) = request.assignment.role.as_deref() {
+            let member = crate::fleet::identity::resolve_member(roster, role)
+                .map_err(|error| ToolError::invalid_input(error.to_string()))?;
+            member.map(|member| {
+                resolved_from_role = true;
+                member.id.clone()
+            })
+        } else {
+            None
         }
-        let role = request.assignment.role.as_deref()?;
-        resolve_roster_member(roster, role).map(|member| {
-            resolved_from_role = true;
-            member.id.as_str()
-        })
-    });
+    };
     let Some(profile_id) = profile_id else {
         return Ok(None);
     };
-    let Some(member) = resolve_roster_member(roster, profile_id) else {
-        let available = roster
-            .members()
+    let Some(member) = crate::fleet::identity::resolve_member(roster, &profile_id)
+        .map_err(|error| ToolError::invalid_input(error.to_string()))?
+    else {
+        let identities = crate::fleet::identity::roster_identities(roster);
+        let available = identities
             .iter()
-            .map(|member| member.id.as_str())
+            .map(|member| member.member_id.as_str())
             .collect::<Vec<_>>()
             .join(", ");
+        let available = if available.is_empty() {
+            "none".to_string()
+        } else {
+            available
+        };
+        let truncation = if identities.len() < roster.members().len() {
+            format!(
+                " Showing the first {} of {} bounded member ids; use agent action=roster for the bounded roster receipt.",
+                identities.len(),
+                roster.members().len()
+            )
+        } else {
+            String::new()
+        };
         return Err(ToolError::invalid_input(format!(
             "Unknown fleet role/profile '{profile_id}'. Available fleet roster members: {available}. \
-             Type aliases: {VALID_ROLE_ALIASES}. See /fleet."
+             Type aliases: {VALID_ROLE_ALIASES}. See /fleet.{truncation}"
         )));
     };
     if let Some(authority) = member.plugin_authority.as_ref()
@@ -12823,42 +13025,6 @@ fn apply_spawn_profile(
     }
 
     Ok(Some(member.clone()))
-}
-
-/// Resolve a fleet role or profile token against the roster (#4177).
-///
-/// Lookup order:
-/// 1. Member id (case-insensitive)
-/// 2. Member role name
-/// 3. Common stopship aliases (`implementer` → `builder`, `release_lead` → `manager`)
-fn resolve_roster_member<'a>(
-    roster: &'a crate::fleet::roster::FleetRoster,
-    id_or_role: &str,
-) -> Option<&'a crate::fleet::profile::AgentProfile> {
-    let key = id_or_role.trim();
-    if key.is_empty() {
-        return None;
-    }
-    if let Some(member) = roster.get(key) {
-        return Some(member);
-    }
-    if let Some(member) = roster
-        .members()
-        .iter()
-        .find(|member| member.profile.role.name.trim().eq_ignore_ascii_case(key))
-    {
-        return Some(member);
-    }
-    let alias = match key.to_ascii_lowercase().as_str() {
-        "implementer" | "implement" | "implementation" => Some("builder"),
-        "release_lead" | "release-lead" | "releaselead" => Some("manager"),
-        "scout" | "explore" | "explorer" | "exploration" => Some("scout"),
-        // #5285: `general`/`default` are legacy spellings of the canonical
-        // `worker` posture, which is now the seeded roster member.
-        "general" | "default" => Some("worker"),
-        _ => None,
-    };
-    alias.and_then(|id| roster.get(id))
 }
 
 /// Compact profile block appended to the child prompt, mirroring the fleet
@@ -14585,6 +14751,42 @@ impl SubAgentToolRegistry {
             && crate::tools::shell::agent_readonly_bash_input(input)
     }
 
+    /// Per-role gating for the single multi-action model-facing tool.
+    ///
+    /// Every other capability gate in this file keys off a *tool name*: the
+    /// registry allow/deny lists, `posture_permits_tool`, the execution
+    /// envelope. That worked while each coordination capability had its own
+    /// name, and it is exactly what breaks when six tools collapse into one —
+    /// `agent` is deliberately exempt from both name-keyed gates (
+    /// `posture_permits_tool` short-circuits it so delegation depth, not write
+    /// posture, governs spawning; `execution_envelope::is_delegation_tool`
+    /// classifies it `Bounded` so a read-only member can still fan out
+    /// read-only work). A capability folded into `agent` therefore inherits
+    /// *no* gate at all unless one is written for the action.
+    ///
+    /// So the answer is per-action, and it reproduces the gate the retired
+    /// tool actually had rather than inventing a new one:
+    ///
+    /// - `claim` carried `agents/coordinate`'s authority, and that tool was
+    ///   kept off a read-only child's catalog by declaring
+    ///   `ToolCapability::WritesFiles` against `envelope.write`. The same
+    ///   question is asked here directly. A read-only role has no write scope
+    ///   to widen, so the action is meaningless to it, not merely refused.
+    /// - Every other action keeps exactly today's visibility. `agent` already
+    ///   offered message/followup/interrupt to read-only roles even while the
+    ///   narrow tools were posture-gated; narrowing that here would be an
+    ///   unrelated behavior change smuggled in behind a catalog cleanup.
+    ///
+    /// An operator deny rule naming the retired tool still removes the
+    /// action, so a ceiling written against `agents/coordinate` keeps meaning
+    /// what it meant.
+    fn agent_action_permitted(&self, action: &str) -> bool {
+        if action != "claim" {
+            return true;
+        }
+        !self.write_is_denied() && !self.is_tool_denied("agents/coordinate")
+    }
+
     fn visibility_representative_input(&self, name: &str) -> Option<Value> {
         // Visibility and dispatch consult the same capability guard. These
         // representative calls let a read-only bash schema survive catalog
@@ -14691,6 +14893,28 @@ impl SubAgentToolRegistry {
                     && self.envelope_permits(&tool.name, &representative)
             });
         }
+        // `agent` is not a `CANONICAL_ACTION_ALIASES` family, so the pruner
+        // above never reaches it — and it must not become one, because
+        // `canonical_action_alias` feeds `execution_envelope`, where `agent`'s
+        // `ExecutesCode` capability is deliberately reclassified `Bounded`.
+        // Shape its enum explicitly instead.
+        for tool in &mut tools {
+            if tool.name != "agent" {
+                continue;
+            }
+            let Some(actions) = tool
+                .input_schema
+                .pointer_mut("/properties/action/enum")
+                .and_then(serde_json::Value::as_array_mut)
+            else {
+                continue;
+            };
+            actions.retain(|action| {
+                action
+                    .as_str()
+                    .is_some_and(|action| self.agent_action_permitted(action))
+            });
+        }
         tools.retain(|tool| {
             tool.input_schema["properties"]["action"]["enum"]
                 .as_array()
@@ -14750,6 +14974,19 @@ impl SubAgentToolRegistry {
         {
             return Err(anyhow!(
                 "Tool Web is limited to search/fetch in the read-only evidence profile"
+            ));
+        }
+        // Catalog shaping is not authority. `agent` clears both name-keyed
+        // gates below by design, so the per-action gate has to be repeated
+        // here or a hand-written call would reach an action the role's own
+        // catalog withheld.
+        if name == "agent"
+            && matches!(parse_agent_tool_action(&input), Ok(AgentToolAction::Claim))
+            && !self.agent_action_permitted("claim")
+        {
+            return Err(anyhow!(
+                "agent action=claim widens an enforced write scope, and the Fleet role `{role}` has no write authority to widen. Use a `builder` or `worker` role.",
+                role = self.agent_type.as_str()
             ));
         }
         let family_action_allowed = if !Self::ACTION_ALIASES

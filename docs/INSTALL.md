@@ -8,7 +8,7 @@ If you just want the short version, see the
 [main README](../README.md#install) or
 [简体中文 README](../README.zh-CN.md#安装).
 
-This branch describes the **v0.9.10 source candidate**. Install commands that use
+This branch describes the **v0.9.11 source candidate**. Install commands that use
 `latest` resolve to the latest published package or GitHub Release, which may
 trail the source candidate. A candidate is not a published install until the
 matching package, tag, checksums, and release assets exist.
@@ -28,7 +28,7 @@ verifies them against `codewhale-artifacts-sha256.txt`, installs to
 ## 1. Supported platforms
 
 Published Codewhale releases ship matched `codewhale` and `codew` prebuilt binaries for their supported platform/architecture
-combinations. The table below is the intended v0.9.9 candidate matrix;
+combinations. The table below is the intended v0.9.11 candidate matrix;
 Android/Termux is preview pending real-device QA. Linux ARM64 is available from
 v0.8.8 onward. Linux RISC-V prebuilts are temporarily paused because the locked
 `rquickjs-sys` dependency does not ship `riscv64gc-unknown-linux-gnu` bindings.
@@ -52,7 +52,7 @@ v0.8.8 onward. Linux RISC-V prebuilts are temporarily paused because the locked
   [Build from source](#7-build-from-source) below.
 ³ RISC-V source builds currently need upstream `rquickjs-sys` RISC-V bindings or
   a bindgen-enabled dependency build.
-⁴ The v0.9.10 source-candidate npm wrapper recognizes Android arm64 and resolves
+⁴ The v0.9.11 source-candidate npm wrapper recognizes Android arm64 and resolves
   the matching `codewhale` and `codew` Android assets. npm
   installation works only for a package version whose GitHub Release publishes
   those matching assets. The Android/Termux path remains preview-only until the
@@ -64,7 +64,7 @@ Linux `codewhale-linux-arm64` archive in Termux; use the Termux-specific
 Android archive when a release or release candidate publishes one, or build
 from source inside Termux.
 
-The Linux **x64 and arm64** v0.9.9 candidate assets are **static musl builds**.
+The Linux **x64 and arm64** v0.9.11 candidate assets are **static musl builds**.
 The x64 release path has used musl since v0.8.65; v0.9.6 extends the same build
 and static-launch check to arm64. These binaries have no glibc dependency and
 run on their matching architecture across Ubuntu, Debian, RHEL/CentOS, and
@@ -82,7 +82,7 @@ version `GLIBC_2.39' not found
 ```
 
 The npm wrapper, `codewhale update`, and the Unix archive installer retain their
-GNU-binary preflight for older releases. The v0.9.9 arm64 candidate instead uses
+GNU-binary preflight for older releases. The v0.9.11 arm64 candidate instead uses
 `aarch64-unknown-linux-musl`, so it has no `GLIBC_*` floor. If you are installing
 an earlier release on an older arm64 distribution, use:
 
@@ -528,8 +528,10 @@ when you need the newest version immediately.
 
 ### Windows winget (v0.9.5+)
 
-CodeWhale publishes a winget manifest for `Hmbown.CodeWhale` (resolves #1561). The
-single-binary release ships only `codewhale` + `codew` — no `codewhale-tui` asset.
+CodeWhale publishes a winget manifest for `Hmbown.CodeWhale` (resolves #1561).
+Winget installs only the `codewhale` + `codew` commands. GitHub Releases retain
+byte-identical `codewhale-tui-*` filenames only for legacy updater compatibility;
+they are not a third installed command.
 
 ```powershell
 winget install Hmbown.CodeWhale
@@ -774,7 +776,80 @@ packaging separately exposes the same executable as `codew.exe`.
 
 ---
 
-## 8. Troubleshooting
+## 8. Shell completions
+
+Codewhale generates its own completion scripts. One command per shell; each
+script completes **both** `codewhale` and the `codew` shorthand.
+
+```bash
+codewhale completion <bash|zsh|fish|powershell|elvish>
+```
+
+`codewhale completions` is an accepted alias for the same command.
+
+The script is written to stdout, so installing it is a redirect to wherever
+your shell loads completions from.
+
+**Bash** — needs the `bash-completion` package loaded by your shell:
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+codewhale completion bash > ~/.local/share/bash-completion/completions/codewhale
+```
+
+For the current shell only: `source <(codewhale completion bash)`.
+
+**Zsh** — the script's `#compdef` line already covers both command names:
+
+```bash
+mkdir -p ~/.zfunc
+codewhale completion zsh > ~/.zfunc/_codewhale
+```
+
+If `~/.zfunc` is not already on `fpath`, add this to `~/.zshrc`:
+
+```zsh
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit && compinit
+```
+
+**Fish**:
+
+```fish
+mkdir -p ~/.config/fish/completions
+codewhale completion fish > ~/.config/fish/completions/codewhale.fish
+```
+
+**PowerShell** — append to your profile so it loads in every session:
+
+```powershell
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PROFILE)
+codewhale completion powershell >> $PROFILE
+```
+
+For the current session only:
+
+```powershell
+codewhale completion powershell | Out-String | Invoke-Expression
+```
+
+**Elvish** — the script registers both command names:
+
+```elvish
+codewhale completion elvish >> ~/.config/elvish/rc.elv
+```
+
+Regenerate the script after upgrading Codewhale — it is a snapshot of the
+command surface at the version that produced it, not a live query.
+
+> Upgrading from v0.9.10 or earlier? Those releases emitted a script that
+> registered the internal `codewhale-tui` executable, so nothing completed for
+> `codewhale` or `codew` ([#5526](https://github.com/Hmbown/CodeWhale/issues/5526)).
+> Delete the old file and regenerate it with the commands above.
+
+---
+
+## 9. Troubleshooting
 
 ### `Unsupported architecture: arm64 on platform linux`
 
@@ -1002,7 +1077,7 @@ Use one of these paths:
 
 ---
 
-## 9. Verifying your install
+## 10. Verifying your install
 
 ```bash
 codewhale --version

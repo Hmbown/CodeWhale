@@ -300,6 +300,7 @@ fn describe_load_error(err: &std::io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Role;
     use crate::models::{ContentBlock, Message};
     use crate::session_manager::{SavedSession, create_saved_session_with_id_and_mode};
     use std::path::PathBuf;
@@ -325,7 +326,7 @@ mod tests {
 
     fn saved(id: &str, workspace: &Path, title: &str) -> SavedSession {
         let messages = vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "hello".to_string(),
                 cache_control: None,

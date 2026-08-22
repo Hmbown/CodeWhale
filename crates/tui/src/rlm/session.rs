@@ -459,6 +459,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Role;
 
     #[test]
     fn derive_session_name_slugifies_path() {
@@ -487,7 +488,7 @@ mod tests {
             PathBuf::from("/tmp/work"),
             Some(SystemPrompt::Text("system body".to_string())),
             vec![Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "hello RLM".to_string(),
                     cache_control: None,
@@ -522,7 +523,7 @@ mod tests {
             PathBuf::from("/tmp/work"),
             None,
             vec![Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: "call_1".to_string(),
                     content: large.clone(),

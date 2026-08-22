@@ -16,6 +16,7 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::localization::{Locale, MessageId, tr};
+use crate::models::Role;
 use crate::palette;
 use crate::session_manager::{
     SavedSession, SessionListFilter, SessionManager, SessionMetadata, extract_title,
@@ -1076,7 +1077,7 @@ fn build_preview_lines(session: &SavedSession, locale: Locale) -> Vec<String> {
         if text.trim().is_empty() {
             continue;
         }
-        out.push(format!("{}:", message.role.to_ascii_uppercase()));
+        out.push(format!("{}:", message.role.as_str().to_ascii_uppercase()));
         for line in text.lines() {
             out.push(format!("  {line}"));
         }
@@ -1093,7 +1094,7 @@ fn message_text_for_history(message: &crate::models::Message, locale: Locale) ->
     for block in &message.content {
         let part = match block {
             crate::models::ContentBlock::Text { text: body, .. } => {
-                if message.role.eq_ignore_ascii_case("user") {
+                if message.role == Role::User {
                     extract_user_prompt(body).to_string()
                 } else {
                     strip_thinking_tags(body)
@@ -1280,7 +1281,7 @@ mod tests {
 
     fn text_message(role: &str, text: &str) -> crate::models::Message {
         crate::models::Message {
-            role: role.to_string(),
+            role: Role::from(role),
             content: vec![crate::models::ContentBlock::Text {
                 text: text.to_string(),
                 cache_control: None,

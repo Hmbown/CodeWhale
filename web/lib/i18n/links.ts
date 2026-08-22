@@ -74,3 +74,31 @@ export function footerProjectLinks(locale: string, chrome: ChromeDict): ChromeLi
     { href: REPO_LICENSE_URL, label: chrome.footerLicense },
   ];
 }
+
+/**
+ * The one link in a chrome set that names the page currently being viewed.
+ *
+ * Nav and the compact sheet used to decide this per link with a plain
+ * prefix test (`pathname === href || pathname.startsWith(href + "/")`).
+ * Two nav links are ancestor and descendant of each other — `/de/docs` and
+ * `/de/docs/guide` — so on the guide route that test was true for both:
+ * the nav underline landed under Docs and Start at once, and two links
+ * carried `aria-current="page"`, telling assistive technology the reader is
+ * on two pages simultaneously.
+ *
+ * The longest matching href is the page; anything shorter is an ancestor
+ * section, not a location. `/de/docs/configuration` is not a nav link, so
+ * Docs still wins there — only the collision resolves.
+ */
+export function currentNavHref(
+  links: readonly ChromeLink[],
+  pathname: string,
+): string | null {
+  let current: string | null = null;
+  for (const link of links) {
+    const matches = pathname === link.href || pathname.startsWith(`${link.href}/`);
+    if (!matches) continue;
+    if (current === null || link.href.length > current.length) current = link.href;
+  }
+  return current;
+}

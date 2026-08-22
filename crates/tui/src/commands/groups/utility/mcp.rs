@@ -1,10 +1,11 @@
 //! In-TUI MCP manager command parser.
 
-use crate::commands::traits::{CommandInfo, RegisterCommand};
-use crate::localization::{Locale, MessageId, tr};
-use crate::tui::app::{App, AppAction, McpUiAction};
+use codewhale_command_contract::facets::CommandPresentationContext;
+use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::commands::CommandResult;
+use crate::tui::app::{AppAction, McpUiAction};
 
 const GITHUB_MCP_URL: &str = "https://api.githubcopilot.com/mcp/";
 const CHROME_DEVTOOLS_MCP_PACKAGE: &str = "chrome-devtools-mcp@1.7.0";
@@ -17,22 +18,31 @@ pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "mcp",
     aliases: &[],
     usage: "/mcp [init|import|import approve <name>|import decline <name>|recommendations|add recommended <id>|add stdio <name> <command> [args...]|add http <name> <url>|enable <name>|disable <name>|remove <name>|doctor|validate|restart|reload]",
-    description_id: MessageId::CmdMcpDescription,
+    description_key: "cmd_mcp_description",
 };
 
 pub(in crate::commands) struct McpCmd;
 
-impl RegisterCommand for McpCmd {
+impl RegisterCommand<CommandResult> for McpCmd {
     fn info() -> &'static CommandInfo {
         &COMMAND_INFO
     }
 
-    fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
-        mcp(app, arg)
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Contextual(mcp_contextual)
     }
 }
 
-fn mcp(app: &mut App, args: Option<&str>) -> CommandResult {
+fn mcp_contextual(contexts: CommandContexts<'_>, args: Option<&str>) -> CommandResult {
+    let mut parts = contexts.into_parts();
+    let presentation = parts
+        .presentation
+        .as_deref_mut()
+        .expect("presentation facet");
+    mcp(presentation, args)
+}
+
+fn mcp(presentation: &mut dyn CommandPresentationContext, args: Option<&str>) -> CommandResult {
     let raw = args.unwrap_or("").trim();
     if raw.is_empty() || raw.eq_ignore_ascii_case("status") || raw.eq_ignore_ascii_case("list") {
         return CommandResult::action(AppAction::Mcp(McpUiAction::Show));
@@ -45,9 +55,9 @@ fn mcp(app: &mut App, args: Option<&str>) -> CommandResult {
             force: parts.any(|part| part == "--force" || part == "-f"),
         })),
         "recommend" | "recommended" | "recommendations" => {
-            CommandResult::message(recommended_mcp_text(app.ui_locale))
+            CommandResult::message(recommended_mcp_text(presentation))
         }
-        "add" => parse_add(app.ui_locale, parts.collect()),
+        "add" => parse_add(presentation, parts.collect()),
         "enable" => match parse_name(parts.next(), "Usage: /mcp enable <name>") {
             Ok(name) => CommandResult::action(AppAction::Mcp(McpUiAction::Enable { name })),
             Err(msg) => CommandResult::error(msg),
@@ -119,11 +129,15 @@ fn parse_name(name: Option<&str>, usage: &str) -> Result<String, String> {
     }
 }
 
-fn parse_add(locale: Locale, parts: Vec<&str>) -> CommandResult {
-    parse_add_for_platform(locale, parts, cfg!(windows))
+fn parse_add(presentation: &mut dyn CommandPresentationContext, parts: Vec<&str>) -> CommandResult {
+    parse_add_for_platform(presentation, parts, cfg!(windows))
 }
 
-fn parse_add_for_platform(locale: Locale, parts: Vec<&str>, windows: bool) -> CommandResult {
+fn parse_add_for_platform(
+    presentation: &mut dyn CommandPresentationContext,
+    parts: Vec<&str>,
+    windows: bool,
+) -> CommandResult {
     if parts
         .first()
         .is_some_and(|part| part.eq_ignore_ascii_case("recommended"))
@@ -181,10 +195,7 @@ fn parse_add_for_platform(locale: Locale, parts: Vec<&str>, windows: bool) -> Co
                     args: vec!["stdio".to_string()],
                 }))
             }
-            [_, _] => CommandResult::error(
-                tr(locale, MessageId::McpRecommendedUnknownId)
-                    .replace("{recommendations_command}", "/mcp recommendations"),
-            ),
+            [_, _] => CommandResult::error(mcp_unknown_id(presentation)),
             _ => CommandResult::error("Usage: /mcp add recommended <id>"),
         };
     }
@@ -215,33 +226,93 @@ fn parse_add_for_platform(locale: Locale, parts: Vec<&str>, windows: bool) -> Co
     }
 }
 
-fn recommended_mcp_text(locale: Locale) -> String {
-    let heading = tr(locale, MessageId::McpRecommendationsHeading);
-    let safety = tr(locale, MessageId::McpRecommendationsSafety)
-        .replace("{restart_command}", "/mcp restart");
-    let github = tr(locale, MessageId::McpRecommendationGithub)
-        .replace("{endpoint}", GITHUB_MCP_URL)
-        .replace("{login_command}", "/mcp login github")
-        .replace("{add_command}", "/mcp add recommended github");
-    let chrome = tr(locale, MessageId::McpRecommendationChrome)
-        .replace("{package}", CHROME_DEVTOOLS_MCP_PACKAGE)
-        .replace("{launcher}", "npx/npx.cmd")
-        .replace("{restart_command}", "/mcp restart")
-        .replace("{add_command}", "/mcp add recommended chrome-devtools");
-    let playwright = tr(locale, MessageId::McpRecommendationPlaywright)
-        .replace("{package}", PLAYWRIGHT_MCP_PACKAGE)
-        .replace("{source}", PLAYWRIGHT_MCP_SOURCE)
-        .replace("{launcher}", "npx/npx.cmd")
-        .replace("{restart_command}", "/mcp restart")
-        .replace("{add_command}", "/mcp add recommended playwright");
-    let cua = tr(locale, MessageId::McpRecommendationCua)
-        .replace("{source}", CUA_DRIVER_SOURCE)
-        .replace("{restart_command}", "/mcp restart")
-        .replace("{add_command}", "/mcp add recommended cua");
-    let container_use = tr(locale, MessageId::McpRecommendationContainerUse)
-        .replace("{source}", CONTAINER_USE_SOURCE)
-        .replace("{restart_command}", "/mcp restart")
-        .replace("{add_command}", "/mcp add recommended container-use");
+/// Localized unknown-recommendation error through the presentation facet (D3).
+fn mcp_unknown_id(presentation: &mut dyn CommandPresentationContext) -> String {
+    presentation
+        .translate(
+            "mcp_recommended_unknown_id",
+            &[("recommendations_command", "/mcp recommendations")],
+        )
+        .unwrap_or_else(|_| {
+            "Unknown recommended MCP ID. Run /mcp recommendations to inspect the curated list."
+                .to_string()
+        })
+}
+
+fn recommended_mcp_text(presentation: &mut dyn CommandPresentationContext) -> String {
+    let heading = presentation
+        .translate("mcp_recommendations_heading", &[])
+        .unwrap_or_else(|_| {
+            "Suggested Codewhale plugins (MCP components; nothing is installed automatically)"
+                .to_string()
+        });
+    let safety = presentation
+        .translate(
+            "mcp_recommendations_safety",
+            &[("restart_command", "/mcp restart")],
+        )
+        .unwrap_or_else(|_| "Viewing this list adds or enables nothing.".to_string());
+    let github = presentation
+        .translate(
+            "mcp_recommendation_github",
+            &[
+                ("endpoint", GITHUB_MCP_URL),
+                ("login_command", "/mcp login github"),
+                ("add_command", "/mcp add recommended github"),
+            ],
+        )
+        .unwrap_or_else(|_| {
+            format!(
+                "• github — GitHub's official remote MCP endpoint\n  endpoint: {GITHUB_MCP_URL}"
+            )
+        });
+    let chrome = presentation
+        .translate(
+            "mcp_recommendation_chrome",
+            &[
+                ("package", CHROME_DEVTOOLS_MCP_PACKAGE),
+                ("launcher", "npx/npx.cmd"),
+                ("restart_command", "/mcp restart"),
+                ("add_command", "/mcp add recommended chrome-devtools"),
+            ],
+        )
+        .unwrap_or_else(|_| {
+            format!("• chrome-devtools — official Chrome DevTools MCP via pinned npm package\n  package: {CHROME_DEVTOOLS_MCP_PACKAGE}")
+        });
+    let playwright = presentation
+        .translate(
+            "mcp_recommendation_playwright",
+            &[
+                ("package", PLAYWRIGHT_MCP_PACKAGE),
+                ("source", PLAYWRIGHT_MCP_SOURCE),
+                ("launcher", "npx/npx.cmd"),
+                ("restart_command", "/mcp restart"),
+                ("add_command", "/mcp add recommended playwright"),
+            ],
+        )
+        .unwrap_or_else(|_| {
+            format!("• playwright — Microsoft's official Playwright MCP via pinned npm package\n  package: {PLAYWRIGHT_MCP_PACKAGE}")
+        });
+    let cua = presentation
+        .translate(
+            "mcp_recommendation_cua",
+            &[
+                ("source", CUA_DRIVER_SOURCE),
+                ("restart_command", "/mcp restart"),
+                ("add_command", "/mcp add recommended cua"),
+            ],
+        )
+        .unwrap_or_else(|_| format!("• cua — Cua Driver computer-use plugin (MCP server component)\n  source: {CUA_DRIVER_SOURCE}"));
+    let container_use = presentation
+        .translate(
+            "mcp_recommendation_container_use",
+            &[
+                ("source", CONTAINER_USE_SOURCE),
+                ("restart_command", "/mcp restart"),
+                ("add_command", "/mcp add recommended container-use"),
+            ],
+        )
+        .unwrap_or_else(|_| format!("• container-use — Dagger's experimental container-use MCP\n  source: {CONTAINER_USE_SOURCE}"));
     format!(
         "{heading}\n\
          {safety}\n\
@@ -312,49 +383,76 @@ fn parse_scopes(parts: Vec<&str>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::tui::app::TuiOptions;
-    use std::path::PathBuf;
 
-    fn app() -> App {
-        App::new(
-            TuiOptions {
-                use_alt_screen: false,
-                max_subagents: 2,
-                ..crate::test_support::test_tui_options(PathBuf::from("."))
-            },
-            &Config::default(),
-        )
+    struct FakePresentation;
+    impl CommandPresentationContext for FakePresentation {
+        fn translate(&self, key: &str, r: &[(&str, &str)]) -> Result<String, String> {
+            let mut out = match key {
+                "mcp_recommended_unknown_id" => {
+                    "Unknown recommended MCP ID. Run {recommendations_command} to inspect the curated list.".to_string()
+                }
+                "mcp_recommendations_heading" => {
+                    "Suggested Codewhale plugins (MCP components; nothing is installed automatically)"
+                        .to_string()
+                }
+                "mcp_recommendations_safety" => {
+                    "Viewing this list adds or enables nothing. An explicit add writes config only; review it before {restart_command} connects the server."
+                        .to_string()
+                }
+                "mcp_recommendation_github" => {
+                    "• github — GitHub's official remote MCP endpoint\n  endpoint: {endpoint}\n  auth is separate: use {login_command} only when the server advertises OAuth;\n  otherwise configure a least-privilege PAT outside command history.\n  add: {add_command}".to_string()
+                }
+                "mcp_recommendation_chrome" => {
+                    "• chrome-devtools — official Chrome DevTools MCP via pinned npm package\n  package: {package} ({launcher})\n  it can inspect/control Chrome and read authenticated pages.\n  add: {add_command}".to_string()
+                }
+                "mcp_recommendation_playwright" => {
+                    "• playwright — Microsoft's official Playwright MCP via pinned npm package\n  package: {package} ({launcher})\n  source: {source}\n  --isolated starts a fresh browser profile. It can browse/control pages and read authenticated pages.\n  add: {add_command}".to_string()
+                }
+                "mcp_recommendation_cua" => {
+                    "• cua — Cua Driver computer-use plugin (MCP server component)\n  command: cua-driver mcp\n  source: {source}\n  preview: install and verify Cua Driver separately; Codewhale never downloads it. It can control the desktop and requires operating-system permissions.\n  add: {add_command}".to_string()
+                }
+                "mcp_recommendation_container_use" => {
+                    "• container-use — Dagger's experimental container-use MCP\n  command: container-use stdio\n  source: {source}\n  requires the separately installed container-use binary; Codewhale never downloads or installs this binary.\n  add: {add_command}".to_string()
+                }
+                _ => return Err("unknown translation key".to_string()),
+            };
+            for (name, value) in r {
+                out = out.replace(&format!("{{{name}}}"), value);
+            }
+            Ok(out)
+        }
     }
 
     #[test]
     fn parses_add_and_validate() {
-        let mut app = app();
-        let add = mcp(&mut app, Some("add stdio local node server.js"));
+        let add = mcp(
+            &mut FakePresentation,
+            Some("add stdio local node server.js"),
+        );
         assert!(matches!(
             add.action,
             Some(AppAction::Mcp(McpUiAction::AddStdio { name, command, args }))
                 if name == "local" && command == "node" && args == vec!["server.js".to_string()]
         ));
 
-        let validate = mcp(&mut app, Some("validate"));
+        let validate = mcp(&mut FakePresentation, Some("validate"));
         assert!(matches!(
             validate.action,
             Some(AppAction::Mcp(McpUiAction::Validate))
         ));
 
-        let doctor = mcp(&mut app, Some("doctor"));
+        let doctor = mcp(&mut FakePresentation, Some("doctor"));
         assert!(matches!(
             doctor.action,
             Some(AppAction::Mcp(McpUiAction::Validate))
         ));
-        let restart = mcp(&mut app, Some("restart"));
+        let restart = mcp(&mut FakePresentation, Some("restart"));
         assert!(matches!(
             restart.action,
             Some(AppAction::Mcp(McpUiAction::Reload))
         ));
 
-        let recommended = mcp(&mut app, Some("recommendations"))
+        let recommended = mcp(&mut FakePresentation, Some("recommendations"))
             .message
             .expect("recommendations text");
         assert!(recommended.contains("nothing is installed automatically"));
@@ -368,36 +466,29 @@ mod tests {
         assert!(recommended.contains("least-privilege PAT outside command history"));
         assert!(recommended.contains("read authenticated pages"));
 
-        app.ui_locale = Locale::Es419;
-        let localized = mcp(&mut app, Some("recommendations"))
-            .message
-            .expect("localized recommendations text");
-        assert!(localized.contains("páginas autenticadas"), "{localized}");
-        assert!(
-            !localized.contains("read authenticated pages"),
-            "{localized}"
-        );
-        let unknown = mcp(&mut app, Some("add recommended unknown"))
+        let unknown = mcp(&mut FakePresentation, Some("add recommended unknown"))
             .message
             .expect("localized unknown recommendation error");
-        assert!(unknown.contains("ID de MCP recomendado"), "{unknown}");
-        app.ui_locale = Locale::En;
+        assert!(unknown.contains("Unknown recommended MCP ID"), "{unknown}");
 
-        let add_recommended = mcp(&mut app, Some("add recommended hugging-face"));
+        let add_recommended = mcp(&mut FakePresentation, Some("add recommended hugging-face"));
         assert!(matches!(
             add_recommended.action,
             Some(AppAction::Mcp(McpUiAction::AddHttp { name, url, transport: None }))
                 if name == "hugging-face" && url == "https://huggingface.co/mcp"
         ));
 
-        let add_github = mcp(&mut app, Some("add recommended github"));
+        let add_github = mcp(&mut FakePresentation, Some("add recommended github"));
         assert!(matches!(
             add_github.action,
             Some(AppAction::Mcp(McpUiAction::AddHttp { name, url, transport: None }))
                 if name == "github" && url == GITHUB_MCP_URL
         ));
 
-        let add_chrome = mcp(&mut app, Some("add recommended chrome-devtools"));
+        let add_chrome = mcp(
+            &mut FakePresentation,
+            Some("add recommended chrome-devtools"),
+        );
         assert!(matches!(
             add_chrome.action,
             Some(AppAction::Mcp(McpUiAction::AddStdio { name, command, args }))
@@ -406,7 +497,7 @@ mod tests {
                     && args == vec!["-y".to_string(), CHROME_DEVTOOLS_MCP_PACKAGE.to_string()]
         ));
 
-        let add_playwright = mcp(&mut app, Some("add recommended playwright"));
+        let add_playwright = mcp(&mut FakePresentation, Some("add recommended playwright"));
         assert!(matches!(
             add_playwright.action,
             Some(AppAction::Mcp(McpUiAction::AddStdio { name, command, args }))
@@ -419,7 +510,7 @@ mod tests {
                     ]
         ));
 
-        let add_container = mcp(&mut app, Some("add recommended container-use"));
+        let add_container = mcp(&mut FakePresentation, Some("add recommended container-use"));
         assert!(matches!(
             add_container.action,
             Some(AppAction::Mcp(McpUiAction::AddStdio { name, command, args }))
@@ -428,7 +519,7 @@ mod tests {
                     && args == vec!["stdio".to_string()]
         ));
 
-        let add_cua = mcp(&mut app, Some("add recommended cua"));
+        let add_cua = mcp(&mut FakePresentation, Some("add recommended cua"));
         assert!(matches!(
             add_cua.action,
             Some(AppAction::Mcp(McpUiAction::AddStdio { name, command, args }))
@@ -437,32 +528,31 @@ mod tests {
                     && args == vec!["mcp".to_string()]
         ));
 
-        let import_list = mcp(&mut app, Some("import"));
+        let import_list = mcp(&mut FakePresentation, Some("import"));
         assert!(matches!(
             import_list.action,
             Some(AppAction::Mcp(McpUiAction::ImportList))
         ));
-        let import_approve = mcp(&mut app, Some("import approve local-tools"));
+        let import_approve = mcp(&mut FakePresentation, Some("import approve local-tools"));
         assert!(matches!(
             import_approve.action,
             Some(AppAction::Mcp(McpUiAction::ImportApprove { name }))
                 if name == "local-tools"
         ));
-        let import_decline = mcp(&mut app, Some("import decline local-tools"));
+        let import_decline = mcp(&mut FakePresentation, Some("import decline local-tools"));
         assert!(matches!(
             import_decline.action,
             Some(AppAction::Mcp(McpUiAction::ImportDecline { name }))
                 if name == "local-tools"
         ));
-        let marketplace = mcp(&mut app, Some("marketplace"));
+        let marketplace = mcp(&mut FakePresentation, Some("marketplace"));
         assert!(matches!(
             marketplace.action,
             Some(AppAction::Mcp(McpUiAction::ImportList))
         ));
-        assert!(recommended.contains("/mcp import"));
 
         let login = mcp(
-            &mut app,
+            &mut FakePresentation,
             Some("login remote --scope tools/read,tools/write"),
         );
         assert!(matches!(
@@ -478,7 +568,11 @@ mod tests {
         assert_eq!(recommended_npx_command_for(false), "npx");
         assert_eq!(recommended_npx_command_for(true), "npx.cmd");
 
-        let windows = parse_add_for_platform(Locale::En, vec!["recommended", "playwright"], true);
+        let windows = parse_add_for_platform(
+            &mut FakePresentation,
+            vec!["recommended", "playwright"],
+            true,
+        );
         assert!(matches!(
             windows.action,
             Some(AppAction::Mcp(McpUiAction::AddStdio { name, command, args }))
@@ -494,7 +588,7 @@ mod tests {
 
     #[test]
     fn recommendations_state_execution_and_install_boundaries() {
-        let text = recommended_mcp_text(Locale::En);
+        let text = recommended_mcp_text(&mut FakePresentation);
         assert!(text.contains("nothing is installed automatically"));
         assert!(text.contains("Suggested Codewhale plugins"));
         assert!(text.contains("never downloads or"));
@@ -502,15 +596,12 @@ mod tests {
         assert!(text.contains("experimental"));
         assert!(text.contains("--isolated"));
         assert!(text.contains("operating-system permissions"));
+    }
 
-        let mut app = app();
-        let unknown = mcp(&mut app, Some("add recommended not-in-the-list"));
-        assert!(unknown.action.is_none());
-        assert!(
-            unknown
-                .message
-                .expect("unknown ID error")
-                .contains("Unknown recommended MCP ID")
-        );
+    #[test]
+    fn handler_is_contextual_and_requests_presentation_facet() {
+        assert!(matches!(McpCmd::handler(), CommandHandler::Contextual(_)));
+        assert_eq!(McpCmd::info().description_key, "cmd_mcp_description");
+        assert_eq!(McpCmd::info().aliases, &[] as &[&str]);
     }
 }

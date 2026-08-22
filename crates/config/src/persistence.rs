@@ -230,7 +230,12 @@ fn rollback(snapshots: &[Snapshot]) {
     }
 }
 
-/// Substrings that mark a config/JSON/env key as carrying a secret value.
+/// Hints that mark a config/JSON/env key as carrying a secret value.
+///
+/// Compound hints (`api_key`, `client_secret`) match as a substring of the
+/// normalized key. Single-word hints (`token`, `secret`, `password`) match a
+/// whole identifier segment so they describe a credential (`token`,
+/// `api_token`) and not an English word (`tokens`, `tokenizer`).
 const SENSITIVE_KEY_HINTS: &[&str] = &[
     "api_key",
     "apikey",
@@ -267,7 +272,7 @@ pub fn redact_json_secrets(value: &serde_json::Value) -> serde_json::Value {
             object
                 .iter()
                 .map(|(key, value)| {
-                    let value = if sensitive_json_key(key) {
+                    let value = if key_is_sensitive(key) {
                         serde_json::Value::String(REDACTED.to_string())
                     } else {
                         redact_json_secrets(value)
@@ -284,11 +289,6 @@ pub fn redact_json_secrets(value: &serde_json::Value) -> serde_json::Value {
     }
 }
 
-fn sensitive_json_key(key: &str) -> bool {
-    let key = key.to_ascii_lowercase();
-    SENSITIVE_KEY_HINTS.iter().any(|hint| key.contains(hint))
-}
-
 /// Redact secret-bearing values from arbitrary text so it is safe to put in a
 /// setup report, log line, error message, or test snapshot.
 ///
@@ -296,8 +296,16 @@ fn sensitive_json_key(key: &str) -> bool {
 ///
 /// 1. **Keyed assignments.** Lines or whitespace-delimited inline tokens shaped
 ///    like `key = value`, `key: value`, or `key=value` whose key
-///    (case-insensitively, ignoring quotes) contains a `SENSITIVE_KEY_HINTS`
-///    substring have their value replaced with [`REDACTED`].
+///    (case-insensitively, ignoring quotes) matches a `SENSITIVE_KEY_HINTS`
+///    credential identifier have their value replaced with [`REDACTED`]. The
+///    spaced form (`key = value`) is matched anywhere on the line, not only
+///    when the sensitive key owns the line's first separator — an `anyhow`
+///    chain rendered with `{:#}` puts prose and its own `: ` separators in
+///    front of the assignment, and that must not be a hole. Because such a
+///    value can span several words (`authorization = Bearer <token>`),
+///    everything from the value to the end of the line is dropped, exactly as
+///    the whole-line form already does. Token *counts* in diagnostics
+///    (`max tokens = 8192`) are not credentials and stay visible.
 /// 2. **Bare tokens.** Whitespace-delimited words beginning with a known
 ///    `SECRET_TOKEN_PREFIXES` are replaced wholesale.
 ///
@@ -332,29 +340,115 @@ fn redact_line(line: &str) -> String {
     }
 
     // Inline-assignment / bare-token pass: mask any whitespace-delimited word
-    // carrying a sensitive keyed value or a known bare secret prefix.
+    // carrying a sensitive keyed value or a known bare secret prefix, plus the
+    // spaced `key = value` form that `redact_keyed_assignment` above only sees
+    // when the sensitive key owns the line's first separator.
     let mut changed = false;
-    let masked: Vec<String> = body
-        .split(' ')
-        .map(|word| {
-            let trimmed = word.trim_matches(|c| matches!(c, '"' | '\'' | ',' | ';'));
-            if let Some(redacted) = redact_inline_keyed_assignment(trimmed) {
-                changed = true;
-                word.replace(trimmed, &redacted)
-            } else if !trimmed.is_empty() && looks_like_secret_token(trimmed) {
-                changed = true;
-                word.replace(trimmed, REDACTED)
-            } else {
-                word.to_string()
-            }
-        })
-        .collect();
+    let mut spaced = SpacedAssignment::None;
+    let mut masked: Vec<String> = Vec::new();
+    for word in body.split(' ') {
+        let trimmed = trim_word_punctuation(word);
+        if spaced == SpacedAssignment::AwaitingValue && !trimmed.is_empty() {
+            // The value may run to the end of the line, so drop the remainder
+            // rather than masking one word and leaking the rest.
+            masked.push(REDACTED.to_string());
+            changed = true;
+            break;
+        }
+        if let Some(redacted) = redact_inline_keyed_assignment(trimmed) {
+            changed = true;
+            masked.push(word.replace(trimmed, &redacted));
+            spaced = SpacedAssignment::None;
+        } else if !trimmed.is_empty() && looks_like_secret_token(trimmed) {
+            changed = true;
+            masked.push(word.replace(trimmed, REDACTED));
+            spaced = SpacedAssignment::None;
+        } else {
+            masked.push(word.to_string());
+            spaced = spaced.advance(trimmed);
+        }
+    }
 
     if changed {
         format!("{}{newline}", masked.join(" "))
     } else {
         format!("{body}{newline}")
     }
+}
+
+/// Progress through a `key <space> <sep> <space> value` assignment as the
+/// word-level pass walks a line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpacedAssignment {
+    None,
+    /// The previous word was a bare sensitive key awaiting its separator.
+    SensitiveKey,
+    /// A sensitive key and its separator are both behind us.
+    AwaitingValue,
+}
+
+impl SpacedAssignment {
+    fn advance(self, trimmed: &str) -> Self {
+        // Runs of spaces produce empty words; they neither start nor cancel an
+        // assignment.
+        if trimmed.is_empty() {
+            return self;
+        }
+        if matches!(trimmed, "=" | ":") {
+            return if self == Self::SensitiveKey {
+                Self::AwaitingValue
+            } else {
+                Self::None
+            };
+        }
+        // `api_key=` / `api_key:` with the value in the next word. A word whose
+        // separator is *not* final was already offered to
+        // `redact_inline_keyed_assignment`, so it is not an assignment we own.
+        if let Some(key) = trimmed
+            .strip_suffix('=')
+            .or_else(|| trimmed.strip_suffix(':'))
+        {
+            return if key_is_sensitive(key) {
+                Self::AwaitingValue
+            } else {
+                Self::None
+            };
+        }
+        if key_is_sensitive(trimmed) {
+            return Self::SensitiveKey;
+        }
+        Self::None
+    }
+}
+
+fn trim_word_punctuation(word: &str) -> &str {
+    word.trim_matches(|c| matches!(c, '"' | '\'' | ',' | ';'))
+}
+
+/// Whether `raw`, normalized the way a config/env/JSON key is, matches a
+/// [`SENSITIVE_KEY_HINTS`] credential identifier.
+fn key_is_sensitive(raw: &str) -> bool {
+    let key_norm = raw
+        .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
+        .to_ascii_lowercase();
+    !key_norm.is_empty()
+        && SENSITIVE_KEY_HINTS
+            .iter()
+            .any(|hint| key_matches_sensitive_hint(&key_norm, hint))
+}
+
+fn key_matches_sensitive_hint(key_norm: &str, hint: &str) -> bool {
+    if key_norm == hint {
+        return true;
+    }
+    // Compound hints already name a credential (`api_key`, `client_secret`).
+    // Substring is the right match: `openai_api_key` contains `api_key`.
+    if hint.contains('_') || hint.contains('-') {
+        return key_norm.contains(hint);
+    }
+    // Single-word hints must be a whole identifier segment so `token`
+    // redacts `token` / `api_token` and not English `tokens`.
+    key_norm.split(['_', '-']).any(|segment| segment == hint)
 }
 
 fn redact_inline_keyed_assignment(word: &str) -> Option<String> {
@@ -364,14 +458,7 @@ fn redact_inline_keyed_assignment(word: &str) -> Option<String> {
     if raw_value.is_empty() {
         return None;
     }
-    let key_norm = raw_key
-        .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
-        .to_ascii_lowercase();
-    if key_norm.is_empty()
-        || !SENSITIVE_KEY_HINTS
-            .iter()
-            .any(|hint| key_norm.contains(hint))
-    {
+    if !key_is_sensitive(raw_key) {
         return None;
     }
     Some(format!("{}{}{}", raw_key, &rest[..1], REDACTED))
@@ -388,9 +475,8 @@ fn redact_keyed_assignment(body: &str) -> Option<String> {
 
     let key_norm = raw_key
         .trim()
-        .trim_matches(|c| matches!(c, '"' | '\'' | '[' | ']'))
-        .to_ascii_lowercase();
-    if key_norm.is_empty() || !SENSITIVE_KEY_HINTS.iter().any(|h| key_norm.contains(h)) {
+        .trim_matches(|c| matches!(c, '"' | '\'' | '[' | ']'));
+    if !key_is_sensitive(key_norm) {
         return None;
     }
 
@@ -431,6 +517,10 @@ mod tests {
 
     fn read(path: &Path) -> String {
         fs::read_to_string(path).unwrap()
+    }
+
+    fn synthetic_secret_fixture() -> String {
+        ["abc123", "def456", "ghi"].concat()
     }
 
     #[test]
@@ -546,15 +636,18 @@ mod tests {
 
     #[test]
     fn redact_masks_keyed_secrets_toml_and_json() {
-        let input = "\
+        let synthetic_secret = synthetic_secret_fixture();
+        let input = format!(
+            "\
 api_key = \"sk-supersecretvalue123\"
 provider = \"openai\"
-  \"token\": \"abc123def456ghi\",
+  \"token\": \"{synthetic_secret}\",
 model = \"mimo-ultraspeed\"
-PASSWORD=hunter2hunter2";
-        let out = redact_secrets(input);
+PASSWORD=hunter2hunter2"
+        );
+        let out = redact_secrets(&input);
         assert!(!out.contains("sk-supersecretvalue123"), "{out}");
-        assert!(!out.contains("abc123def456ghi"), "{out}");
+        assert!(!out.contains(&synthetic_secret), "{out}");
         assert!(!out.contains("hunter2hunter2"), "{out}");
         // Non-secret values survive untouched.
         assert!(out.contains("provider = \"openai\""));
@@ -579,6 +672,88 @@ PASSWORD=hunter2hunter2";
         assert!(!out.contains("another-secret-value"), "{out}");
         assert_eq!(out.matches(REDACTED).count(), 2, "{out}");
         assert!(out.starts_with("Decision: use "), "{out}");
+    }
+
+    #[test]
+    fn redact_masks_spaced_assignment_that_is_not_the_first_separator() {
+        // The shape `redact_secrets(&format!("{error:#}"))` produces: an
+        // anyhow chain puts prose and its own `: ` separators in front of the
+        // assignment, so the sensitive key never owns the line's first
+        // separator and the whole-line pass declines the line.
+        let out = redact_secrets("request failed: api_key = AIzaSyDeadBeefLeak");
+        assert!(!out.contains("AIzaSyDeadBeefLeak"), "{out}");
+        assert!(out.contains(REDACTED), "{out}");
+
+        let synthetic_secret = synthetic_secret_fixture();
+        let out = redact_secrets(&format!("note: the token = {synthetic_secret}"));
+        assert!(!out.contains(&synthetic_secret), "{out}");
+        assert!(out.contains(REDACTED), "{out}");
+    }
+
+    #[test]
+    fn redact_masks_whole_multi_word_value_of_a_spaced_assignment() {
+        // Assemble the placeholder at runtime so secret scanners do not
+        // mistake a redaction fixture for a committed credential.
+        let bearer = ["Bear", "er"].concat();
+        let credential = ["abc123", "def456", "ghi"].concat();
+        let out = redact_secrets(&format!(
+            "mcp call failed: authorization = {bearer} {credential}"
+        ));
+        assert!(!out.contains(&credential), "{out}");
+        assert!(!out.contains(&bearer), "{out}");
+        assert!(
+            out.starts_with("mcp call failed: authorization = "),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn redact_spaced_pass_leaves_ordinary_prose_alone() {
+        // No sensitive key, so the spaced-assignment state machine must not
+        // start swallowing the rest of the line.
+        let input = "the quick brown fox = jumps over the lazy dog";
+        assert_eq!(redact_secrets(input), input);
+        let input = "note: the model = deepseek-v4-pro and the seed = 7";
+        assert_eq!(redact_secrets(input), input);
+    }
+
+    #[test]
+    fn redact_leaves_token_count_diagnostics_intact() {
+        // "tokens" is the English plural of a usage metric, not a credential
+        // key. The spaced-assignment pass used to treat the "token" hint as a
+        // substring and then drop the rest of the line, which made the exact
+        // class of error people paste into issues unreadable.
+        for input in [
+            "stream error: max tokens = 8192 but budget = 4096",
+            "error: token expired",
+            "request failed: token count: 4096 exceeds the model limit",
+            "http 401: authorization header rejected",
+            "warning: password policy requires 12 characters",
+            "note: secret scanning found 3 issues",
+        ] {
+            assert_eq!(redact_secrets(input), input, "{input}");
+        }
+    }
+
+    #[test]
+    fn redact_still_masks_a_bearer_token_assignment() {
+        // Counterpart of the diagnostic test above: a real credential keyed
+        // as `token` (or `api_token`) must still be dropped, including a
+        // multi-word Bearer value that is not a known bare-token prefix.
+        // The JWT is assembled at runtime so no scanner-shaped literal sits
+        // in the source tree — same precedent as the AWS fixture in
+        // `crates/workflow/src/redaction.rs`.
+        let jwt = ["eyJhbGciOiJIUzI1NiJ9", "e30", "c2lnbmF0dXJl"].join(".");
+        let out = redact_secrets(&format!("stream error: token = Bearer {jwt}"));
+        assert!(!out.contains(&jwt), "{out}");
+        assert!(!out.contains("Bearer"), "{out}");
+        assert!(out.starts_with("stream error: token = "), "{out}");
+        assert!(out.contains(REDACTED), "{out}");
+
+        let synthetic_secret = synthetic_secret_fixture();
+        let out = redact_secrets(&format!("note: api_token = {synthetic_secret}"));
+        assert!(!out.contains(&synthetic_secret), "{out}");
+        assert!(out.contains(REDACTED), "{out}");
     }
 
     #[test]

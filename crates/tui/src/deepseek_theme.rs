@@ -43,6 +43,7 @@ pub struct Theme {
     pub tool_label_color: Color,
     pub tool_running_accent: Color,
     pub tool_success_accent: Color,
+    pub tool_warning_accent: Color,
     pub tool_failed_accent: Color,
 }
 
@@ -68,6 +69,7 @@ impl Theme {
             tool_label_color: palette::TEXT_DIM,
             tool_running_accent: palette::ACCENT_TOOL_LIVE,
             tool_success_accent: palette::STATUS_SUCCESS,
+            tool_warning_accent: palette::STATUS_WARNING,
             tool_failed_accent: palette::STATUS_ERROR,
         }
     }
@@ -88,6 +90,7 @@ impl Theme {
             tool_label_color: palette::LIGHT_TEXT_HINT,
             tool_running_accent: palette::LIGHT_LIVE,
             tool_success_accent: palette::LIGHT_SUCCESS_FG,
+            tool_warning_accent: palette::LIGHT_WARNING,
             tool_failed_accent: palette::LIGHT_DANGER,
         }
     }
@@ -108,6 +111,7 @@ impl Theme {
             tool_label_color: palette::SOLARIZED_TEXT_DIM,
             tool_running_accent: palette::SOLARIZED_BLUE,
             tool_success_accent: palette::SOLARIZED_CYAN,
+            tool_warning_accent: palette::SOLARIZED_YELLOW,
             tool_failed_accent: palette::SOLARIZED_RED,
         }
     }
@@ -128,6 +132,7 @@ impl Theme {
             tool_label_color: palette::GRAYSCALE_TEXT_HINT,
             tool_running_accent: palette::GRAYSCALE_TEXT_SOFT,
             tool_success_accent: palette::GRAYSCALE_TEXT_HINT,
+            tool_warning_accent: palette::GRAYSCALE_TEXT_MUTED,
             tool_failed_accent: palette::GRAYSCALE_TEXT_BODY,
         }
     }
@@ -149,6 +154,7 @@ impl Theme {
             ToolStatus::Running => self.tool_running_accent,
             ToolStatus::Success => self.tool_success_accent,
             ToolStatus::Hydrated => self.tool_running_accent,
+            ToolStatus::Warning => self.tool_warning_accent,
             ToolStatus::Failed => self.tool_failed_accent,
         }
     }
@@ -249,6 +255,10 @@ mod tests {
         assert_eq!(
             theme.tool_status_color(ToolStatus::Hydrated),
             theme.tool_running_accent
+        );
+        assert_eq!(
+            theme.tool_status_color(ToolStatus::Warning),
+            theme.tool_warning_accent
         );
         assert_eq!(
             theme.tool_status_color(ToolStatus::Failed),

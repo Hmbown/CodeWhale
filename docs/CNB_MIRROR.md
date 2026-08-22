@@ -58,7 +58,8 @@ release assets from source and publishes a CNB release with:
 
 - `codewhale-linux-x64`
 - `codew-linux-x64`
-- `codewhale-tui-linux-x64`
+- `codewhale-tui-linux-x64` (compatibility-only release filename; not a third
+  installed command)
 - `codewhale-artifacts-sha256.txt`
 
 This gives users who can reach CNB but not GitHub a CNB-native release path.

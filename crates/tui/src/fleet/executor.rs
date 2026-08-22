@@ -35,6 +35,19 @@ use crate::tools::spec::{
 };
 use crate::tools::subagent::{AgentWorkerSpec, FleetRole};
 
+#[derive(Clone, Copy, Default)]
+struct WorkerExecRoute<'a> {
+    model: Option<&'a str>,
+    provider: Option<&'a str>,
+    reasoning_effort: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct WorkerExecLimits {
+    max_turns: Option<u32>,
+    max_tool_calls: Option<u32>,
+}
+
 /// Resolve the executable used for Fleet worker subprocesses.
 ///
 /// Kept here so every long-lived surface (CLI and Runtime API) launches the
@@ -70,14 +83,21 @@ pub fn build_worker_exec_command(
     exec_config: &FleetExecConfig,
     model: Option<&str>,
 ) -> FleetWorkerCommand {
+    let max_turns = effective_task_max_turns(task_spec, exec_config);
+    let max_tool_calls = task_max_tool_calls(task_spec);
     build_worker_exec_command_from_prompt(
         codewhale_binary,
         fleet_task_prompt(task_spec),
         exec_config,
-        model,
+        WorkerExecRoute {
+            model,
+            ..WorkerExecRoute::default()
+        },
         None,
-        None,
-        None,
+        WorkerExecLimits {
+            max_turns,
+            max_tool_calls,
+        },
     )
 }
 
@@ -101,14 +121,22 @@ pub fn build_worker_exec_command_with_profiles(
     let (worker_model, worker_provider) =
         fleet_worker_launch_route(task_spec, agent_profiles, model.unwrap_or_default());
     let worker_reasoning_effort = fleet_worker_launch_reasoning_effort(task_spec, agent_profiles);
+    let max_turns = effective_task_max_turns(task_spec, exec_config);
+    let max_tool_calls = task_max_tool_calls(task_spec);
     Ok(build_worker_exec_command_from_prompt(
         codewhale_binary,
         fleet_task_prompt_with_profiles(task_spec, agent_profiles)?,
         exec_config,
-        Some(worker_model.as_str()),
-        worker_provider.as_deref(),
-        worker_reasoning_effort.as_deref(),
+        WorkerExecRoute {
+            model: Some(worker_model.as_str()),
+            provider: worker_provider.as_deref(),
+            reasoning_effort: worker_reasoning_effort.as_deref(),
+        },
         None,
+        WorkerExecLimits {
+            max_turns,
+            max_tool_calls,
+        },
     ))
 }
 
@@ -128,15 +156,57 @@ pub fn build_worker_exec_command_with_launch_spec(
         fleet_worker_launch_route(task_spec, agent_profiles, model.unwrap_or_default());
     let worker_reasoning_effort = fleet_worker_launch_reasoning_effort(task_spec, agent_profiles);
     let authority = authority_envelope_for_worker(launch_spec, task_spec)?;
+    // Production dispatch receives an already-hardened launch spec from the
+    // Fleet manager. Its positive max_steps value has therefore already been
+    // intersected with a positive FleetExecConfig.max_turns; zero remains the
+    // explicit unbounded sentinel.
+    let max_turns = (launch_spec.max_steps > 0).then_some(launch_spec.max_steps);
+    let max_tool_calls = task_max_tool_calls(task_spec);
     Ok(build_worker_exec_command_from_prompt(
         codewhale_binary,
         launch_spec.objective.clone(),
         exec_config,
-        Some(worker_model.as_str()),
-        worker_provider.as_deref(),
-        worker_reasoning_effort.as_deref(),
+        WorkerExecRoute {
+            model: Some(worker_model.as_str()),
+            provider: worker_provider.as_deref(),
+            reasoning_effort: worker_reasoning_effort.as_deref(),
+        },
         Some(&authority),
+        WorkerExecLimits {
+            max_turns,
+            max_tool_calls,
+        },
     ))
+}
+
+fn task_max_steps(task_spec: &FleetTaskSpec) -> Option<u32> {
+    task_spec
+        .budget
+        .as_ref()
+        .and_then(|budget| budget.max_steps)
+        .filter(|max_steps| *max_steps > 0)
+}
+
+fn task_max_tool_calls(task_spec: &FleetTaskSpec) -> Option<u32> {
+    task_spec
+        .budget
+        .as_ref()
+        .and_then(|budget| budget.max_tool_calls)
+        .filter(|max_tool_calls| *max_tool_calls > 0)
+}
+
+fn effective_task_max_turns(
+    task_spec: &FleetTaskSpec,
+    exec_config: &FleetExecConfig,
+) -> Option<u32> {
+    match (task_max_steps(task_spec), exec_config.max_turns) {
+        (Some(task_max_steps), fleet_max_turns) if fleet_max_turns > 0 => {
+            Some(task_max_steps.min(fleet_max_turns))
+        }
+        (Some(task_max_steps), _) => Some(task_max_steps),
+        (None, fleet_max_turns) if fleet_max_turns > 0 => Some(fleet_max_turns),
+        (None, _) => None,
+    }
 }
 
 pub(crate) fn authority_envelope_for_worker(
@@ -207,10 +277,9 @@ fn build_worker_exec_command_from_prompt(
     codewhale_binary: &str,
     task_prompt: String,
     exec_config: &FleetExecConfig,
-    model: Option<&str>,
-    provider: Option<&str>,
-    reasoning_effort: Option<&str>,
+    route: WorkerExecRoute<'_>,
     authority: Option<&ToolAuthorityEnvelope>,
+    limits: WorkerExecLimits,
 ) -> FleetWorkerCommand {
     let mut args: Vec<String> = Vec::new();
 
@@ -218,7 +287,7 @@ fn build_worker_exec_command_from_prompt(
     // global flags and deliberately rejects them after `exec`. Keep them in
     // front of the subcommand so Fleet commands work through the installed
     // dispatcher as well as when a host points directly at `codewhale-tui`.
-    if let Some(model) = model.map(str::trim).filter(|m| !m.is_empty()) {
+    if let Some(model) = route.model.map(str::trim).filter(|m| !m.is_empty()) {
         args.push("--model".to_string());
         args.push(model.to_string());
     }
@@ -227,7 +296,7 @@ fn build_worker_exec_command_from_prompt(
     // provider's credentials from its own env/config. Emitted ONLY when the
     // worker's profile explicitly pins a provider, so profile-less workers keep
     // their own session default exactly as before.
-    if let Some(provider) = provider.map(str::trim).filter(|p| !p.is_empty()) {
+    if let Some(provider) = route.provider.map(str::trim).filter(|p| !p.is_empty()) {
         args.push("--provider".to_string());
         args.push(provider.to_string());
     }
@@ -242,7 +311,11 @@ fn build_worker_exec_command_from_prompt(
     // Non-secret thinking tier only (#4137). This is profile metadata and
     // follows the same explicit-only policy as provider: omit it when the
     // worker profile inherits the session/default reasoning setting.
-    if let Some(reasoning_effort) = reasoning_effort.map(str::trim).filter(|e| !e.is_empty()) {
+    if let Some(reasoning_effort) = route
+        .reasoning_effort
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+    {
         args.push("--reasoning-effort".to_string());
         args.push(reasoning_effort.to_string());
     }
@@ -255,9 +328,13 @@ fn build_worker_exec_command_from_prompt(
         args.push("--disallowed-tools".to_string());
         args.push(exec_config.disallowed_tools.join(","));
     }
-    if exec_config.max_turns > 0 {
+    if let Some(max_turns) = limits.max_turns {
         args.push("--max-turns".to_string());
-        args.push(exec_config.max_turns.to_string());
+        args.push(max_turns.to_string());
+    }
+    if let Some(max_tool_calls) = limits.max_tool_calls {
+        args.push("--max-tool-calls".to_string());
+        args.push(max_tool_calls.to_string());
     }
     if !exec_config.append_system_prompt.trim().is_empty() {
         args.push("--append-system-prompt".to_string());
@@ -779,7 +856,7 @@ mod tests {
         FleetSlot,
     };
     use codewhale_protocol::fleet::{
-        FleetHostSpec, FleetTaskSpec, FleetTaskWorkerProfile, FleetWorkerSpec,
+        FleetHostSpec, FleetTaskBudget, FleetTaskSpec, FleetTaskWorkerProfile, FleetWorkerSpec,
         FleetWorkspaceRequirements,
     };
     use std::collections::BTreeMap;
@@ -821,6 +898,7 @@ mod tests {
             id: id.to_string(),
             display_name: Some(format!("{role} profile")),
             description: Some(format!("{role} description")),
+            requires: Vec::new(),
             profile: FleetProfile {
                 slot: FleetSlot::from_name(role),
                 role: FleetRole {
@@ -940,6 +1018,77 @@ mod tests {
         assert!(joined.contains("--disallowed-tools exec_shell"));
         assert!(joined.contains("--max-turns 40"));
         assert!(cmd.args.iter().any(|a| a == "never push to main"));
+    }
+
+    #[test]
+    fn worker_command_threads_positive_task_budgets_and_caps_steps() {
+        let mut task = task("audit");
+        task.budget = Some(FleetTaskBudget {
+            max_steps: Some(75),
+            max_tool_calls: Some(11),
+            ..FleetTaskBudget::default()
+        });
+        let exec = FleetExecConfig {
+            max_turns: 40,
+            ..FleetExecConfig::default()
+        };
+
+        let cmd = build_worker_exec_command("codewhale", &task, &exec, None);
+        let max_turns_idx = cmd
+            .args
+            .iter()
+            .position(|arg| arg == "--max-turns")
+            .expect("positive max_steps must reach exec");
+        let max_tool_calls_idx = cmd
+            .args
+            .iter()
+            .position(|arg| arg == "--max-tool-calls")
+            .expect("positive max_tool_calls must reach exec");
+
+        assert_eq!(cmd.args[max_turns_idx + 1], "40");
+        assert_eq!(cmd.args[max_tool_calls_idx + 1], "11");
+    }
+
+    #[test]
+    fn production_worker_command_uses_hardened_launch_spec_steps() {
+        let tmp = TempDir::new().unwrap();
+        let mut task = task("audit");
+        task.budget = Some(FleetTaskBudget {
+            max_steps: Some(75),
+            max_tool_calls: Some(11),
+            ..FleetTaskBudget::default()
+        });
+        let mut launch_spec = launch_spec(&task, tmp.path());
+        // The manager owns this hardening step. A different value here proves
+        // production argv comes from the registered spec, not a second budget
+        // projection from the task document.
+        launch_spec.max_steps = 13;
+
+        let cmd = build_worker_exec_command_with_launch_spec(
+            "codewhale",
+            &task,
+            &launch_spec,
+            &FleetExecConfig {
+                max_turns: 40,
+                ..FleetExecConfig::default()
+            },
+            None,
+            &[],
+        )
+        .unwrap();
+        let max_turns_idx = cmd
+            .args
+            .iter()
+            .position(|arg| arg == "--max-turns")
+            .expect("hardened launch max_steps must reach exec");
+        let max_tool_calls_idx = cmd
+            .args
+            .iter()
+            .position(|arg| arg == "--max-tool-calls")
+            .expect("task max_tool_calls must reach exec");
+
+        assert_eq!(cmd.args[max_turns_idx + 1], "13");
+        assert_eq!(cmd.args[max_tool_calls_idx + 1], "11");
     }
 
     #[test]
@@ -1306,26 +1455,36 @@ mod tests {
 
     #[test]
     fn zero_max_turns_is_not_passed() {
-        // max_turns = 0 means "no cap"; --max-turns should not appear in the command.
+        // Zero task budgets and max_turns mean "no cap"; neither flag should
+        // appear in the command.
         let exec = FleetExecConfig {
             max_turns: 0,
             ..Default::default()
         };
-        let cmd = build_worker_exec_command("codewhale", &task("x"), &exec, None);
+        let mut task = task("x");
+        task.budget = Some(FleetTaskBudget {
+            max_steps: Some(0),
+            max_tool_calls: Some(0),
+            ..FleetTaskBudget::default()
+        });
+        let cmd = build_worker_exec_command("codewhale", &task, &exec, None);
         assert!(!cmd.args.join(" ").contains("--max-turns"));
+        assert!(!cmd.args.join(" ").contains("--max-tool-calls"));
     }
 
     #[test]
-    fn default_max_turns_is_passed_as_bounded_flag() {
-        // The default is now FLEET_DEFAULT_MAX_TURNS (500), so --max-turns IS passed
-        // to ensure workers respect the finite budget (#3885).
+    fn default_max_turns_does_not_add_a_hidden_worker_cap() {
         let exec = FleetExecConfig::default();
         let joined = build_worker_exec_command("codewhale", &task("x"), &exec, None)
             .args
             .join(" ");
         assert!(
-            joined.contains("--max-turns"),
-            "default finite budget should be forwarded to the subprocess: {joined}"
+            !joined.contains("--max-turns"),
+            "the unbounded default must not become a subprocess cap: {joined}"
+        );
+        assert!(
+            !joined.contains("--max-tool-calls"),
+            "the unbounded default must not become a tool-call cap: {joined}"
         );
     }
 

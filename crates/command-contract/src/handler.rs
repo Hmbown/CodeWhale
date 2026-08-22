@@ -5,8 +5,9 @@
 //! `CommandHandler<crate::commands::CommandResult>`.
 
 use crate::facets::{
-    CommandCostContext, CommandModePolicyContext, CommandModelContext, CommandSessionContext,
-    CommandSkillsContext, CommandSystemPromptContext, CommandWorkspaceContext,
+    CommandCostContext, CommandMediaContext, CommandModePolicyContext, CommandModelContext,
+    CommandPresentationContext, CommandSessionContext, CommandSkillsContext,
+    CommandSystemPromptContext, CommandWorkspaceContext,
 };
 
 /// A command handler that is either argument-only or capability-scoped.
@@ -25,6 +26,8 @@ pub struct CommandContexts<'a> {
     system_prompt: Option<&'a mut dyn CommandSystemPromptContext>,
     skills: Option<&'a mut dyn CommandSkillsContext>,
     workspace: Option<&'a mut dyn CommandWorkspaceContext>,
+    presentation: Option<&'a mut dyn CommandPresentationContext>,
+    media: Option<&'a mut dyn CommandMediaContext>,
 }
 
 /// Consumed envelope used when one handler needs several independent facets.
@@ -36,6 +39,8 @@ pub struct ContextParts<'a> {
     pub system_prompt: Option<&'a mut dyn CommandSystemPromptContext>,
     pub skills: Option<&'a mut dyn CommandSkillsContext>,
     pub workspace: Option<&'a mut dyn CommandWorkspaceContext>,
+    pub presentation: Option<&'a mut dyn CommandPresentationContext>,
+    pub media: Option<&'a mut dyn CommandMediaContext>,
 }
 
 impl<'a> CommandContexts<'a> {
@@ -48,6 +53,8 @@ impl<'a> CommandContexts<'a> {
             system_prompt: None,
             skills: None,
             workspace: None,
+            presentation: None,
+            media: None,
         }
     }
 
@@ -60,6 +67,8 @@ impl<'a> CommandContexts<'a> {
             system_prompt: self.system_prompt,
             skills: self.skills,
             workspace: self.workspace,
+            presentation: self.presentation,
+            media: self.media,
         }
     }
 
@@ -112,6 +121,22 @@ impl<'a> CommandContexts<'a> {
         assert!(
             self.workspace.replace(value).is_none(),
             "workspace facet already set"
+        );
+        self
+    }
+
+    pub fn with_presentation(mut self, value: &'a mut dyn CommandPresentationContext) -> Self {
+        assert!(
+            self.presentation.replace(value).is_none(),
+            "presentation facet already set"
+        );
+        self
+    }
+
+    pub fn with_media(mut self, value: &'a mut dyn CommandMediaContext) -> Self {
+        assert!(
+            self.media.replace(value).is_none(),
+            "media facet already set"
         );
         self
     }

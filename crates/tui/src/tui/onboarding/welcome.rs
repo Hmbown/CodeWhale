@@ -13,16 +13,17 @@ use crate::palette;
 use crate::tui::app::App;
 
 pub fn lines(app: &App, width: usize) -> Vec<Line<'static>> {
-    let mut out = vec![
-        headline(app, MessageId::OnboardWelcomeTitle),
-        Line::from(""),
-    ];
+    let mut out = Vec::new();
+    headline(&mut out, app, MessageId::OnboardWelcomeTitle, width);
+    out.push(Line::from(""));
     body(&mut out, app, MessageId::OnboardWelcomeLead, width);
     out
 }
 
 pub fn ready_lines(app: &App, width: usize) -> Vec<Line<'static>> {
-    let mut out = vec![headline(app, MessageId::OnboardReadyTitle), Line::from("")];
+    let mut out = Vec::new();
+    headline(&mut out, app, MessageId::OnboardReadyTitle, width);
+    out.push(Line::from(""));
     body(&mut out, app, MessageId::OnboardReadyLead, width);
     // The offline-explore notice is durable onboarding state, not a toast:
     // trust decisions are allowed to replace status_message without hiding
@@ -42,13 +43,19 @@ pub fn ready_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     out
 }
 
-fn headline(app: &App, id: MessageId) -> Line<'static> {
-    Line::from(Span::styled(
-        app.tr(id).to_string(),
-        Style::default()
-            .fg(palette::WHALE_HUMAN)
-            .add_modifier(Modifier::BOLD),
-    ))
+/// A headline is a whole sentence in several locales, so it wraps like the
+/// body it sits above. Returning a single unwrapped `Line` left the very first
+/// screen of first run reading "Codewhale arbeitet mit dir in diesem O" at 40
+/// columns — cut mid-word, on the screen that introduces the product.
+fn headline(out: &mut Vec<Line<'static>>, app: &App, id: MessageId, width: usize) {
+    for segment in super::wrap_words(&app.tr(id), width) {
+        out.push(Line::from(Span::styled(
+            segment,
+            Style::default()
+                .fg(palette::WHALE_HUMAN)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
 }
 
 fn body(out: &mut Vec<Line<'static>>, app: &App, id: MessageId, width: usize) {
@@ -101,5 +108,64 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("Workspace trust was not changed."), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod narrow_locale_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::localization::{Locale, MessageId, tr};
+    use crate::tui::app::TuiOptions;
+    use std::path::PathBuf;
+    use unicode_width::UnicodeWidthStr;
+
+    fn probe_app() -> App {
+        let options = TuiOptions {
+            model: "test-model".to_string(),
+            ..crate::test_support::test_tui_options(PathBuf::from("workspace-fixture"))
+        };
+        App::new(options, &Config::default())
+    }
+
+    fn flatten(lines: Vec<Line<'static>>) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// The welcome headline is a whole sentence in most locales. It used to be
+    /// emitted as one unwrapped line, so the first screen of first run read
+    /// "Codewhale arbeitet mit dir in diesem O" in German at 40 columns.
+    #[test]
+    fn the_welcome_headline_survives_a_small_terminal_in_every_locale() {
+        let mut app = probe_app();
+        for locale in Locale::shipped().iter().copied() {
+            app.ui_locale = locale;
+            for width in [40usize, 60, 80] {
+                let rendered = flatten(lines(&app, width));
+                for row in &rendered {
+                    assert!(
+                        row.width() <= width,
+                        "{locale:?} at {width}: row overflows: {row:?}",
+                    );
+                }
+                // Whitespace removed, not collapsed: Japanese and Chinese wrap
+                // between characters with no space between them in the source.
+                let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+                let joined = squash(&rendered.join(" "));
+                let title = tr(locale, MessageId::OnboardWelcomeTitle);
+                assert!(
+                    joined.contains(&squash(title.as_ref())),
+                    "{locale:?} at {width}: headline was cut.\nwanted: {title}\ngot: {rendered:?}",
+                );
+            }
+        }
     }
 }

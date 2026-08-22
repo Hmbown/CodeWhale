@@ -11,9 +11,18 @@ const TRUNCATED_TAIL_BYTES: usize = MAX_OUTPUT_SIZE - TRUNCATED_HEAD_BYTES;
 const SUMMARY_MAX_LINES: usize = 3;
 const SUMMARY_MAX_CHARS: usize = 240;
 /// Maximum number of preserved high-signal lines extracted from the tail
-/// when output is truncated (#242). Bounded so the preserved summary
-/// itself can never blow up the context window.
+/// when output is truncated (#242).
 const MAX_PRESERVED_SUMMARY_LINES: usize = 80;
+/// Byte ceiling for the whole preserved-summary block, and the character
+/// ceiling applied to each line before it is admitted.
+///
+/// The line count alone does not bound the block: a single rustc `error:` or
+/// `note:` line carrying a long inferred type, a minified bundler frame, or a
+/// `--verbose` link command is routinely hundreds of kilobytes, and eighty of
+/// them are unbounded in every way that matters to a context budget. These two
+/// limits are what make the block small next to [`MAX_OUTPUT_SIZE`].
+const MAX_PRESERVED_SUMMARY_BYTES: usize = 4 * 1024;
+const MAX_PRESERVED_SUMMARY_LINE_CHARS: usize = 400;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TruncationMeta {
@@ -77,15 +86,30 @@ pub(crate) fn truncate_with_meta(output: &str) -> (String, TruncationMeta) {
 /// and `Finished`/`running ...` markers. Returns at most
 /// `MAX_PRESERVED_SUMMARY_LINES` lines, oldest-first within each match
 /// class so the most actionable signal is at the end.
+///
+/// Each line is clipped to `MAX_PRESERVED_SUMMARY_LINE_CHARS` and the block
+/// stops at `MAX_PRESERVED_SUMMARY_BYTES`. Both bounds are load-bearing: the
+/// line count alone let one very wide `error:` line put the entire omitted
+/// middle back into a result the caller had just bounded to
+/// `MAX_OUTPUT_SIZE`.
 pub(crate) fn collect_summary_lines(text: &str) -> Vec<String> {
     let mut preserved: Vec<String> = Vec::new();
+    let mut remaining = MAX_PRESERVED_SUMMARY_BYTES;
     for line in text.lines() {
         if preserved.len() >= MAX_PRESERVED_SUMMARY_LINES {
             break;
         }
-        if is_summary_line(line) {
-            preserved.push(line.to_string());
+        if !is_summary_line(line) {
+            continue;
         }
+        let clipped = truncate_chars(line, MAX_PRESERVED_SUMMARY_LINE_CHARS);
+        // `+ 1` for the newline `truncate_with_meta` joins these lines with.
+        let cost = clipped.len().saturating_add(1);
+        if cost > remaining {
+            break;
+        }
+        remaining -= cost;
+        preserved.push(clipped);
     }
     preserved
 }
@@ -275,6 +299,31 @@ mod tests {
         assert!(
             truncated.contains("tail-marker: final compiler error"),
             "raw tail must remain visible"
+        );
+    }
+
+    #[test]
+    fn preserved_summary_lines_are_bounded_in_bytes_not_only_in_count() {
+        // One rustc `error:` line can be megabytes wide (a long inferred type,
+        // a minified bundler frame, a `--verbose` link line). Landing in the
+        // omitted middle, it was re-inlined verbatim by the preserved-summary
+        // block, so the "30KB" truncation returned a 400KB tool result.
+        let mut output = String::from("head-marker\n");
+        output.push_str(&"noise line\n".repeat(1_000));
+        output.push_str(&format!("error: {}\n", "T".repeat(400_000)));
+        output.push_str(&"noise line\n".repeat(4_000));
+        output.push_str("tail-marker\n");
+
+        let (truncated, meta) = truncate_with_meta(&output);
+        assert!(meta.truncated, "expected truncation");
+        assert!(
+            truncated.contains("error: TTT"),
+            "the high-signal line must still be preserved"
+        );
+        assert!(
+            truncated.len() <= MAX_OUTPUT_SIZE + 2 * MAX_PRESERVED_SUMMARY_BYTES,
+            "preserved summary blew the output budget: {} bytes",
+            truncated.len()
         );
     }
 

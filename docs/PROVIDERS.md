@@ -561,7 +561,7 @@ overlay and lets DSH resolve its own keys.
 
 | Provider ID | TOML table | Auth env | Base URL env and default | Default or static models | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `deepseek` | `[providers.deepseek]` | `DEEPSEEK_API_KEY` | `CODEWHALE_BASE_URL` / `DEEPSEEK_BASE_URL`; default `https://api.deepseek.com/beta` | `deepseek-v4-pro`, `deepseek-v4-flash`; compatibility aliases `deepseek-chat`, `deepseek-reasoner` | First-class default. The live Pro backend is labeled `DeepSeek-V4-Pro-0813`; the callable API ID remains `deepseek-v4-pro`. Beta URL enables strict tool mode, chat prefix completion, and FIM completion. Set `https://api.deepseek.com` or `/v1` explicitly to opt out of beta-only features. Reasoning effort maps to the documented wire ladder `low`/`high`/`max` plus the `thinking` toggle: `off` sends `thinking: {"type":"disabled"}`, `low` sends `reasoning_effort: "low"`, `medium` rounds up to `"high"` (the wire has no medium), and `high`/`max` pass through. |
+| `deepseek` | `[providers.deepseek]` | `DEEPSEEK_API_KEY` | `CODEWHALE_BASE_URL` / `DEEPSEEK_BASE_URL`; default `https://api.deepseek.com/beta` | `deepseek-v4-pro`, `deepseek-v4-flash`, experimental `deepseek-v4-flash-vision-exp`; vision aliases `flash-vision`, `deepseek-v4flashvisionexp`; compatibility aliases `deepseek-chat`, `deepseek-reasoner` | First-class default. The live Pro backend is labeled `DeepSeek-V4-Pro-0813`; the callable API ID remains `deepseek-v4-pro`. Beta URL enables strict tool mode, chat prefix completion, and FIM completion. Set `https://api.deepseek.com` or `/v1` explicitly to opt out of beta-only features. Reasoning effort maps to the documented wire ladder `low`/`high`/`max` plus the `thinking` toggle: `off` sends `thinking: {"type":"disabled"}`, `low` sends `reasoning_effort: "low"`, `medium` rounds up to `"high"` (the wire has no medium), and `high`/`max` pass through. The experimental vision ID was observed in the authenticated `/models` roster on 2026-08-21 and is advertised as image-input capable on the direct Chat Completions route only. Its limits, reasoning, and tool-call flags provisionally inherit Flash; pricing remains unknown, and no funded image round trip was made during this release work. |
 | `deepseek-anthropic` | `[providers.deepseek_anthropic]` | `DEEPSEEK_API_KEY` | `DEEPSEEK_ANTHROPIC_BASE_URL`; default `https://api.deepseek.com/anthropic` | `deepseek-v4-pro`, `deepseek-v4-flash`; compatibility aliases `deepseek-chat`, `deepseek-reasoner` | Opt-in DeepSeek route for the Anthropic Messages wire protocol. Uses `/v1/messages`, `x-api-key`, and `anthropic-version: 2023-06-01`. Keep `provider = "deepseek"` for the default Chat Completions path. |
 | `nvidia-nim` | `[providers.nvidia_nim]` | `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY`, fallback `DEEPSEEK_API_KEY` | `NVIDIA_NIM_BASE_URL`, `NIM_BASE_URL`, `NVIDIA_BASE_URL`; default `https://integrate.api.nvidia.com/v1` | `deepseek-ai/deepseek-v4-pro`, `deepseek-ai/deepseek-v4-flash` | Hosted DeepSeek V4 through NVIDIA NIM. `NVIDIA_NIM_MODEL` is accepted by the TUI config path. |
 | `openai` | `[providers.openai]` | `OPENAI_API_KEY` | `OPENAI_BASE_URL`; default `https://api.openai.com/v1` | Registry entries: `deepseek-v4-pro`, `deepseek-v4-flash`, `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`; default config model `deepseek-v4-pro` | Generic OpenAI-compatible route for gateways and custom endpoints, including Alibaba Bailian / Model Studio DashScope when configured with that endpoint. The [GPT-5.6 family](https://developers.openai.com/api/docs/models/gpt-5.6-sol) uses OpenAI's documented 1.05M context, 128K max output, and reasoning levels. Use this for explicit third-party OpenAI-compatible routes instead of inventing a new provider ID. `OPENAI_MODEL` is accepted. |
@@ -755,7 +755,7 @@ endpoint when the endpoint supports model listing.
 
 | Provider | Static registry entries | Tool calls | Registry reasoning flag |
 | --- | --- | --- | --- |
-| `deepseek` | `deepseek-v4-pro`, `deepseek-v4-flash` | yes | yes |
+| `deepseek` | `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp` | yes | yes |
 | `nvidia-nim` | `deepseek-ai/deepseek-v4-pro`, `deepseek-ai/deepseek-v4-flash` | yes | yes |
 | `openai` | `deepseek-v4-pro`, `deepseek-v4-flash`, `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` | yes | yes |
 | `atlascloud` | `deepseek-ai/deepseek-v4-flash`, `deepseek-ai/deepseek-v4-pro` | yes | yes |
@@ -799,7 +799,7 @@ listing when available.
 
 ## Capability Metadata
 
-`codewhale-tui doctor --json` exposes the `capability` object. It is static
+`codewhale doctor --json` exposes the `capability` object. It is static
 metadata, not a live API probe. Current fields are:
 
 `resolved_provider`, `resolved_model`, `context_window`, `max_output`,
@@ -833,6 +833,7 @@ keeps a conservative ceiling. The "Max output metadata" column below reads
 | Provider/model class | Context window | Max output metadata | Thinking support | Cache telemetry | FIM endpoint |
 | --- | --- | --- | --- | --- | --- |
 | DeepSeek V4 (`deepseek-v4-pro`, `deepseek-v4-flash`) | 1,000,000 | 384,000 | yes | yes | DeepSeek beta only |
+| DeepSeek V4 Flash Vision experimental (`deepseek-v4-flash-vision-exp`) | 1,000,000 inherited from Flash | 384,000 inherited from Flash | yes, inherited | yes, inherited | not claimed; Chat Completions route only |
 | DeepSeek compatibility aliases (`deepseek-chat`, `deepseek-reasoner`) | 1,000,000 | 384,000 | yes | yes | DeepSeek beta only |
 | NVIDIA NIM V4 registry models | 1,000,000 | 384,000 | yes | yes | not documented in code |
 | Volcengine Ark V4 model IDs | 1,000,000 | 384,000 | yes | yes | not documented in code |

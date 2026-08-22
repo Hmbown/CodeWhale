@@ -270,8 +270,12 @@ impl LspTransport for StdioLspTransport {
             let mut rx = self.diagnostics_rx.lock().await;
             let next = match timeout(remaining, rx.recv()).await {
                 Ok(Some(item)) => item,
-                Ok(None) => break, // channel closed
-                Err(_) => break,   // timed out
+                Ok(None) => {
+                    return Err(anyhow!(
+                        "LSP diagnostics channel closed before publishDiagnostics"
+                    ));
+                }
+                Err(_) => break, // timed out
             };
             drop(rx);
             let (file, items) = next;
@@ -545,5 +549,35 @@ mod tests {
         let path = PathBuf::from("/tmp/example/foo.rs");
         let uri = format!("file://{}", path.display());
         assert_eq!(path_from_uri(&uri), Some(path));
+    }
+
+    #[tokio::test]
+    async fn closed_diagnostics_channel_is_an_error_not_an_empty_result() {
+        let (tx_outbound, _rx_outbound) = mpsc::channel(1);
+        let (tx_diag, rx_diag) = mpsc::channel(1);
+        drop(tx_diag);
+        let transport = StdioLspTransport {
+            child: AsyncMutex::new(None),
+            tx_outbound,
+            diagnostics_rx: AsyncMutex::new(rx_diag),
+            pending: Arc::new(AsyncMutex::new(HashMap::new())),
+            next_id: AsyncMutex::new(1),
+            language_id: "rust".to_string(),
+            opened: AsyncMutex::new(HashMap::new()),
+        };
+
+        let error = transport
+            .diagnostics_for(
+                Path::new("/tmp/closed-channel.rs"),
+                "fn main() {}\n",
+                Duration::from_millis(10),
+            )
+            .await
+            .expect_err("a closed transport must not look like an empty lint result");
+
+        assert!(
+            error.to_string().contains("diagnostics channel closed"),
+            "unexpected error: {error}"
+        );
     }
 }

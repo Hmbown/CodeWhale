@@ -1,6 +1,6 @@
 //! Fleet detail — open a saved named Fleet and edit it.
 //!
-//! Row 0 is the Fleet's own operator route; below it one row per member.
+//! Row 0 is the Coordinator's own model; below it one row per member.
 //! Editing a Fleet edits that Fleet's file — never the live session route and
 //! never a global collection of role profiles. Every write goes through
 //! [`crate::fleet::store`] with an atomic save and a receipt naming the exact
@@ -92,6 +92,18 @@ impl FleetDetailView {
     /// Open a saved Fleet by name and scope. The caller (the list view) names
     /// the scope explicitly, so ambiguity is impossible here.
     pub fn open(app: &App, config: &Config, name: &str, scope: FleetScope) -> Option<Self> {
+        Self::open_for_member(app, config, name, scope, None)
+    }
+
+    /// Open the exact named Fleet and, when the request came from a roster
+    /// member, focus that member in the v2 editor.
+    pub(crate) fn open_for_member(
+        app: &App,
+        config: &Config,
+        name: &str,
+        scope: FleetScope,
+        member_id: Option<&str>,
+    ) -> Option<Self> {
         let (fleet, source) = load_fleet_in_scope(name, scope, &app.workspace).ok()?;
         let session_provider = if app.auto_model {
             app.last_effective_provider_identity
@@ -107,7 +119,7 @@ impl FleetDetailView {
         } else {
             app.model.clone()
         };
-        Some(Self::from_parts(
+        let mut view = Self::from_parts(
             fleet,
             scope,
             source,
@@ -115,7 +127,17 @@ impl FleetDetailView {
             config,
             &session_provider,
             &session_model,
-        ))
+        );
+        if let Some(member_id) = member_id.map(str::trim).filter(|id| !id.is_empty())
+            && let Some(index) = view
+                .fleet
+                .members
+                .iter()
+                .position(|member| member.id.eq_ignore_ascii_case(member_id))
+        {
+            view.selected = index + 1;
+        }
+        Some(view)
     }
 
     fn from_parts(
@@ -357,6 +379,7 @@ impl FleetDetailView {
         };
         self.fleet.members.push(FleetMember {
             id: role.to_string(),
+            display_name: None,
             role: role.to_string(),
             provider: None,
             model: None,
@@ -440,12 +463,12 @@ impl FleetDetailView {
             DetailStep::Overview => {
                 let mut hints = vec![
                     ActionHint::new("↑/↓", "move"),
-                    ActionHint::new("o", "operator route"),
-                    ActionHint::new("e", "member route"),
+                    ActionHint::new("o", "Coordinator model"),
+                    ActionHint::new("e", "member model"),
                     ActionHint::new("t", "reasoning"),
                     ActionHint::new("r", "rename"),
                     ActionHint::new("s", "save"),
-                    ActionHint::new("c", "copy scope"),
+                    ActionHint::new("c", "copy destination"),
                     ActionHint::new("u/w", "select"),
                 ];
                 if self.selected > 0 {
@@ -613,8 +636,8 @@ impl ModalView for FleetDetailView {
             Line::from(""),
         ];
         let operator_line = match &self.fleet.operator {
-            Some(op) => format!("  operator: {}/{}", op.provider, op.model),
-            None => "  operator: inherits session route".to_string(),
+            Some(op) => format!("  Coordinator: {}/{}", op.provider, op.model),
+            None => "  Coordinator: uses the session's model".to_string(),
         };
         header.push(Line::from(Span::styled(
             operator_line,
@@ -688,8 +711,8 @@ impl FleetDetailView {
                 Style::default().fg(palette::TEXT_SECONDARY)
             };
             let route = match (&member.provider, &member.model) {
-                (Some(p), Some(m)) => format!("{p}/{m} (pinned)"),
-                _ => "inherits session route".to_string(),
+                (Some(p), Some(m)) => format!("model {p}/{m}"),
+                _ => "same model as this session".to_string(),
             };
             let reasoning = member.reasoning.as_deref().unwrap_or("inherit");
             let vision = if member.requires.iter().any(|r| r == "vision") {
@@ -703,9 +726,28 @@ impl FleetDetailView {
                     Style::default().fg(palette::WHALE_ERROR),
                 )]));
             } else {
+                let role = member.role.trim();
+                let role = if role.is_empty() {
+                    member.id.as_str()
+                } else {
+                    role
+                };
+                let member_label = member
+                    .display_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case(&member.id))
+                    .map_or_else(
+                        || member.id.clone(),
+                        |name| format!("{name} ({})", member.id),
+                    );
                 lines.push(Line::from(vec![
                     Span::styled(if selected { "» " } else { "  " }, base),
-                    Span::styled(member.id.clone(), base),
+                    Span::styled(member_label, base),
+                    Span::styled(
+                        format!(" · role {role}"),
+                        Style::default().fg(palette::TEXT_SECONDARY),
+                    ),
                     Span::styled("  ", Style::default()),
                     Span::styled(route, Style::default().fg(palette::TEXT_MUTED)),
                     Span::styled(
@@ -735,7 +777,7 @@ impl FleetDetailView {
         };
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(Span::styled(
-            format!("  Route for {target_label} — Enter picks, Esc back."),
+            format!("  Model for {target_label} — Enter picks, Esc back."),
             Style::default().fg(palette::TEXT_MUTED),
         )));
         lines.push(Line::from(""));
@@ -763,12 +805,12 @@ impl FleetDetailView {
     }
 }
 
-/// Build the route-picker rows: "inherit session route" first, then every
+/// Build the model-picker rows: "same as session" first, then every
 /// concrete model across configured providers, with its readiness label —
-/// the same route list the fleet setup wizard's Model step shows.
+/// the same list the fleet setup wizard's Model step shows.
 fn build_route_rows(config: &Config) -> Vec<RouteRow> {
     let mut rows = vec![RouteRow {
-        label: "inherit session route".to_string(),
+        label: "same as session".to_string(),
         summary: String::new(),
         provider: None,
         model: None,
@@ -842,6 +884,7 @@ mod tests {
         });
         fleet.members.push(FleetMember {
             id: "scout".to_string(),
+            display_name: Some("Flash Scout".to_string()),
             role: "scout".to_string(),
             provider: None,
             model: None,
@@ -874,6 +917,33 @@ mod tests {
         assert_eq!(view.scope, FleetScope::Workspace);
         assert_eq!(view.source, path);
         assert_eq!(view.row_count(), 2); // operator + scout
+
+        let mut duplicate_roles = sample_fleet("Duplicate Roles");
+        duplicate_roles.members.push(FleetMember {
+            id: "fast-scout".to_string(),
+            display_name: Some("Fast Scout".to_string()),
+            role: "scout".to_string(),
+            provider: None,
+            model: None,
+            reasoning: None,
+            instructions: None,
+            requires: Vec::new(),
+        });
+        save_fleet(&duplicate_roles, FleetScope::Workspace, ws.path())
+            .expect("save duplicate-role Fleet");
+        let focused = FleetDetailView::open_for_member(
+            &app,
+            &Config::default(),
+            "Duplicate Roles",
+            FleetScope::Workspace,
+            Some("fast-scout"),
+        )
+        .expect("open focused member");
+        assert_eq!(focused.selected, 2);
+        assert_eq!(
+            focused.selected_member().map(|member| member.id.as_str()),
+            Some("fast-scout")
+        );
 
         // A missing fleet fails to open (the host shows the error receipt).
         app.workspace = ws.path().to_path_buf();

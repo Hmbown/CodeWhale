@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { ChromeLink } from "@/lib/i18n/links";
+import { currentNavHref, type ChromeLink } from "@/lib/i18n/links";
 
 export function MobileMenu({
   links,
@@ -29,6 +29,8 @@ export function MobileMenu({
   const [closing, setClosing] = useState(false);
   const closeTimer = useRef<number | null>(null);
   const pathname = usePathname();
+  // One link is the page; ancestors are not. See currentNavHref.
+  const currentHref = currentNavHref(links, pathname);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -193,7 +195,7 @@ export function MobileMenu({
           <nav className="px-6 py-4">
             <ul className="divide-y divide-[rgba(27,34,48,0.18)]">
               {links.map((l) => {
-                const isActive = pathname === l.href || pathname.startsWith(`${l.href}/`);
+                const isActive = l.href === currentHref;
                 return (
                   <li key={l.href}>
                     <Link

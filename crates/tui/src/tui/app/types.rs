@@ -966,7 +966,8 @@ pub enum AppAction {
     OpenFleetList,
     /// Open the `/fleet` roster — the saved-party view of the agent team.
     OpenFleetRoster,
-    /// Open the `/fleet` profile authoring wizard.
+    /// Open the selected v2 Fleet editor, or legacy profile setup when no
+    /// named Fleet is selected.
     OpenFleetSetup,
     /// Open the `/hotbar` setup wizard.
     OpenHotbarSetup,

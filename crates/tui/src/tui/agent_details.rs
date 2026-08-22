@@ -161,14 +161,27 @@ pub(crate) fn project_agent_details(app: &App, agent_id: &str) -> Option<AgentDe
         if let Some(role) = role {
             push_safe_line(app, &mut lines, "Role", role);
         }
-        // Profile is the named roster member when one was resolved; otherwise
-        // the canonical Fleet type is the only identity we can truthfully show.
+        // Profile is the member that actually resolved. A caller alias/model
+        // label is useful evidence but must not be presented as who ran.
         let profile = route
-            .and_then(|route| route.requested_profile.as_deref())
+            .and_then(|route| route.resolved_profile_id.as_deref())
             .map(str::trim)
             .filter(|profile| !profile.is_empty())
+            .or_else(|| {
+                route
+                    .and_then(|route| route.requested_profile.as_deref())
+                    .map(str::trim)
+                    .filter(|profile| !profile.is_empty())
+            })
             .unwrap_or_else(|| agent.agent_type.as_str());
         push_safe_line(app, &mut lines, "Profile", profile);
+        if let Some(requested) = route
+            .and_then(|route| route.requested_profile.as_deref())
+            .map(str::trim)
+            .filter(|requested| !requested.is_empty() && !requested.eq_ignore_ascii_case(profile))
+        {
+            push_safe_line(app, &mut lines, "Requested as", requested);
+        }
         push_safe_line(app, &mut lines, "Type", agent.agent_type.as_str());
         lines.push(format!("Parent: {}", safe_parent_name(app, agent)));
     } else {
@@ -720,7 +733,8 @@ mod tests {
             .expect("projection")
             .body;
         assert!(body.contains("Role: release-lead"), "{body}");
-        assert!(body.contains("Profile: release-lead"), "{body}");
+        assert!(body.contains("Profile: roster-release-lead"), "{body}");
+        assert!(body.contains("Requested as: release-lead"), "{body}");
         assert!(body.contains("Type: builder"), "{body}");
         assert!(body.contains("Model: deepseek-v4-pro"), "{body}");
         assert!(body.contains("Provider: deepseek"), "{body}");

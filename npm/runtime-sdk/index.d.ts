@@ -130,6 +130,9 @@ export interface FleetEnvironmentRequirements {
 
 export interface FleetTaskBudget {
   max_tokens?: number | null;
+  /** Maximum model turns. Omitted, null, or zero means unbounded. */
+  max_steps?: number | null;
+  /** Maximum admitted tool calls. Omitted, null, or zero means unbounded. */
   max_tool_calls?: number | null;
   max_seconds?: number | null;
 }

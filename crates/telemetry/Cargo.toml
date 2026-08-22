@@ -7,12 +7,15 @@ license.workspace = true
 repository.workspace = true
 description = "Anonymous, user-disableable product usage counting for Codewhale"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
-codewhale-config = { path = "../config", version = "0.9.10" }
-codewhale-paths = { path = "../paths", version = "0.9.10" }
-codewhale-release = { path = "../release", version = "0.9.10" }
+codewhale-config = { path = "../config", version = "0.9.11" }
+codewhale-paths = { path = "../paths", version = "0.9.11" }
+codewhale-release = { path = "../release", version = "0.9.11" }
 fd-lock = "4.0.4"
 reqwest = { workspace = true, features = ["blocking"] }
 serde.workspace = true
@@ -22,9 +25,9 @@ tracing.workspace = true
 uuid.workspace = true
 
 [build-dependencies]
-codewhale-build-support = { path = "../build-support", version = "0.9.10" }
+codewhale-build-support = { path = "../build-support", version = "0.9.11" }
 
 [dev-dependencies]
 # Used as an *assertion*, never as a filter: every string leaf of a serialized
 # batch is run through `redact_for_disclosure` and must come back unredacted.
-codewhale-workflow = { path = "../workflow", version = "0.9.10" }
+codewhale-workflow = { path = "../workflow", version = "0.9.11" }

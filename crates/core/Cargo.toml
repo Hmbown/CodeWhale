@@ -7,20 +7,23 @@ license.workspace = true
 repository.workspace = true
 description = "Core runtime boundaries for Codewhale"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio-util.workspace = true
-codewhale-agent = { path = "../agent", version = "0.9.10" }
-codewhale-config = { path = "../config", version = "0.9.10" }
-codewhale-execpolicy = { path = "../execpolicy", version = "0.9.10" }
-codewhale-hooks = { path = "../hooks", version = "0.9.10" }
-codewhale-mcp = { path = "../mcp", version = "0.9.10" }
-codewhale-protocol = { path = "../protocol", version = "0.9.10" }
-codewhale-state = { path = "../state", version = "0.9.10" }
-codewhale-tools = { path = "../tools", version = "0.9.10" }
+codewhale-agent = { path = "../agent", version = "0.9.11" }
+codewhale-config = { path = "../config", version = "0.9.11" }
+codewhale-execpolicy = { path = "../execpolicy", version = "0.9.11" }
+codewhale-hooks = { path = "../hooks", version = "0.9.11" }
+codewhale-mcp = { path = "../mcp", version = "0.9.11" }
+codewhale-protocol = { path = "../protocol", version = "0.9.11" }
+codewhale-state = { path = "../state", version = "0.9.11" }
+codewhale-tools = { path = "../tools", version = "0.9.11" }
 regex = "1.11"
 serde_json = { workspace = true, features = ["preserve_order"] }
 tokio = { workspace = true, features = ["time"] }

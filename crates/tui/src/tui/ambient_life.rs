@@ -23,6 +23,21 @@
 //! velocity by construction. Direction may only change while the school is
 //! fully off-screen.
 //!
+//! The aquarium has a habitat and it defers to whatever is composed above it.
+//! Collision is one rule — [`is_open_water`]: a mark may only land in a
+//! horizontal span that carries no text and has none within
+//! [`TEXT_CLEARANCE_ROWS`] of it, measured off the rendered lines rather than
+//! guessed from fractions of the field. Everything else follows from it. A
+//! short status line therefore leaves honest water beside it instead of
+//! claiming the whole row. The school rides a band off the
+//! floor ([`SCHOOL_FLOOR_GAP`]); bubbles rise a few rows from the floor and
+//! dissolve ([`BUBBLE_MAX_RISE_ROWS`]); the jellyfish only surfaces where
+//! [`deep_water_rows`] says the water is deep enough to hold it *and* the
+//! school; and the surface caustics stop at the first row of the composition.
+//! Light above, life below, words in between — and as a transcript fills the
+//! field the water closes row by row until nothing moves behind the text the
+//! reader is actually reading.
+//!
 //! Two clocks feed this module and neither is a token counter. Positions ride
 //! `App::sample_ambient_clock_ms`, which advances by real elapsed time clamped
 //! to `App::AMBIENT_MAX_STEP_MS` per draw, so drift speed is identical at 16 ms
@@ -170,8 +185,8 @@ pub struct AmbientFrameStats {
     pub cells_written: u32,
 }
 
-/// Hard upper bound on marks built in one frame: 7 fish + 1 jellyfish × 5
-/// parts (2 dome rows + 3 tentacles) + 2 bubbles + 2 whale-cameo cells = 16,
+/// Hard upper bound on marks built in one frame: 7 fish + 1 jellyfish × 4
+/// parts (2 dome rows + 2 tentacles) + 2 bubbles + 2 whale-cameo cells = 15,
 /// plus headroom. This is a test-gate ceiling asserted against
 /// [`AmbientFrameStats::marks_built`], not a runtime clamp: the population is
 /// bounded by construction, and this constant is what fails the build if a
@@ -223,15 +238,17 @@ pub fn render_ambient_life(
     // Positions always ride the live monotonic clock; `presence` fades the
     // marks in and out, so the animated/static boundary eases instead of
     // snapping fish between t=0 and their mid-path positions.
-    let frame = build_frame_marks(area, elapsed_ms, density, cursor, whale, &mut stats);
+    let frame = build_frame_marks(area, elapsed_ms, density, lines, cursor, whale, &mut stats);
     paint_marks(area, buf, inks, lines, &frame, presence, &mut stats);
     stats
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_frame_marks(
     area: Rect,
     elapsed_ms: u128,
     density: LifeDensity,
+    lines: &[Line<'static>],
     cursor: AmbientCursor,
     whale: WhaleCameo,
     stats: &mut AmbientFrameStats,
@@ -239,13 +256,16 @@ fn build_frame_marks(
     let mut marks = Vec::with_capacity(48);
     let t = elapsed_ms;
 
-    // Leave the empty-state brand band (center third) mostly clear so life
-    // frames the room instead of littering the hero whale + status lines.
-    let quiet_top = (area.height / 5).max(2);
-    let quiet_mid_lo = area.height.saturating_mul(2) / 5;
-    let quiet_mid_hi = area.height.saturating_mul(3) / 5;
+    // Where the water is. The old rule was a guess at where the composition
+    // sat — fifths of the field — and it was wrong on every real screen: at
+    // 80×24 it reserved two rows in the middle of the field while the
+    // wordmark, caption, and invitation lived three rows lower, so a fish
+    // surfaced in the one-row gap between the caption and the invitation.
+    // Now the field is measured, not guessed: [`is_open_water`] asks the
+    // rendered lines directly.
+    let water = |x: u16, y: u16, width: u16| is_open_water(lines, x, y, width);
 
-    // --- One loose fish school on a wrap-around path ---
+    // --- One loose fish school along the floor ---
     // The school enters one edge, crosses, and exits the other; direction
     // may only change while it is fully off-screen, so facing always equals
     // velocity. A travelling sin² brightness wave runs through the wedge.
@@ -267,13 +287,12 @@ fn build_frame_marks(
         ((school_clock % cycle_ms) / SCHOOL_CELL_MS) as i32,
     );
     let swims_right = school_swims_right(cycle_index);
-    // Alternate the travel band between crossings; both avoid the hero band.
-    let swims_low = school_swims_low(cycle_index);
-    let anchor_y = if swims_low {
-        area.height.saturating_mul(3) / 4
-    } else {
-        quiet_top.saturating_add(1)
-    };
+    // The school has one home: the deep water just off the floor. It used to
+    // alternate between an upper and a lower band, which is most of why the
+    // aquarium read as decoration sprinkled over the whole field instead of
+    // as depth beneath it. Direction still alternates — that is the part a
+    // viewer reads as "the fish came back" — but the band does not.
+    let anchor_y = school_band_row(area);
     let ptr = cursor.column.saturating_sub(area.x);
     let ptr_y = cursor.row.saturating_sub(area.y);
     for (m, (dy, dx)) in SCHOOL_WEDGE.iter().take(school_size).enumerate() {
@@ -290,20 +309,19 @@ fn build_frame_marks(
         };
         // Slight per-fish vertical stagger + slow bob.
         let bob = sine_bob(t, 3_400 + (m as u128) * 640, 1);
-        let mut y_i32 = i32::from(anchor_y) + i32::from(*dy) + i32::from(bob);
-        // Fish flee the pointer in both dimensions (nearby motion only).
+        let y_i32 = i32::from(anchor_y) + i32::from(*dy) + i32::from(bob);
+        // Fish dart sideways away from the scatter anchor (nearby only).
         if let Some(flee_ms) = cursor.flee_elapsed_ms {
             let flee = i32::from(fish_flee_offset(flee_ms));
             if x_i32.abs_diff(i32::from(ptr)) < 16 && y_i32.abs_diff(i32::from(ptr_y)) < 6 {
+                // Horizontal only. The old ±1 row kick pushed the outer
+                // fish off the school's band and straight into the row the
+                // composition had already claimed, so a scatter punched a
+                // hole in the wedge exactly when the eye was on it.
                 if x_i32 >= i32::from(ptr) {
                     x_i32 += flee;
                 } else {
                     x_i32 -= flee;
-                }
-                if y_i32 >= i32::from(ptr_y) {
-                    y_i32 += 1;
-                } else {
-                    y_i32 -= 1;
                 }
             }
         }
@@ -313,8 +331,8 @@ fn build_frame_marks(
             continue; // off-screen while wrapping
         }
         let y = y_i32 as u16;
-        // Never swim through the hero band.
-        if y > quiet_mid_lo && y < quiet_mid_hi {
+        // Never swim through the composition or the row of air around it.
+        if !water(x_i32 as u16, y, body_w) {
             continue;
         }
         let brightness = FISH_BRIGHTNESS_FLOOR
@@ -340,12 +358,20 @@ fn build_frame_marks(
     // tentacles. The dome opens and closes on a slow floor-bounded sin²;
     // the tentacles repeat the pulse ~350 ms later and sway out of phase
     // with each other — the lag is what sells "jellyfish". Rich/Normal get
-    // the full 5-cell dome with three tentacles; Sparse (narrow) swaps in a
-    // compact 3-cell dome with two — a real fallback silhouette, not just
-    // fewer jellies. They drift slowly upward through the side lanes, wrap,
-    // and park mid-rise just under the hero band under reduced motion.
-    let in_band = |row: u16| row > quiet_mid_lo && row < quiet_mid_hi;
-    for j in 0..density.jellyfish_count() {
+    // the full 5-cell dome; Sparse (narrow) swaps in a compact 3-cell one — a
+    // real fallback silhouette, not just fewer jellies. Both hang two
+    // tentacles. They drift slowly upward through a side lane of the deep
+    // water and vanish before the rise would reach the composition.
+    //
+    // It only visits water deep enough to hold it: three rows of silhouette,
+    // a row of clear water, and the school's own band, measured up from the
+    // floor. At 80×24 the composition leaves four rows of water and the
+    // jellyfish used to land inside the school — a five-cell pulsing
+    // silhouette and a wedge of fish sharing four rows of a 24-row terminal
+    // is the definition of not earning the space. Below the budget it simply
+    // does not come up.
+    let jellyfish_count = density.jellyfish_count();
+    for j in 0..jellyfish_count {
         let phase = 3_100u128.saturating_add((j as u128) * 4_700);
         let lane_x = if j % 2 == 0 {
             area.width.saturating_mul(5) / 6
@@ -357,12 +383,19 @@ fn build_frame_marks(
         let (dome_top, dome_skirt, tentacle_cols): (&[&str], &[&str], &[u16]) = if compact {
             (JELLY_DOME_TOP_COMPACT, JELLY_DOME_SKIRT_COMPACT, &[0, 2])
         } else {
-            (JELLY_DOME_TOP_FRAMES, JELLY_DOME_SKIRT_FRAMES, &[1, 2, 3])
+            // Two tentacles hanging from the rim, not three abreast. Three
+            // adjacent one-cell strokes spend most of their sway table
+            // rendering as `||\` or `|||` — a solid bar of punctuation under
+            // the bell, which is what the dogfood frame actually showed.
+            (JELLY_DOME_TOP_FRAMES, JELLY_DOME_SKIRT_FRAMES, &[1, 3])
         };
         let dome_w = dome_top[0].len() as u16; // ASCII frames: len == width
         let x = lane_x
             .saturating_add(wobble)
             .min(area.width.saturating_sub(dome_w + 1));
+        if deep_water_rows(area, lines, x, dome_w) < JELLY_MIN_DEEP_ROWS {
+            continue;
+        }
         // A visit is a short, slow rise near the floor followed by a long
         // absence: the jelly climbs [`JELLY_VISIT_ROWS`] rows and then spends
         // the rest of the cycle out of sight. Rows are discrete cells, so the
@@ -374,8 +407,11 @@ fn build_frame_marks(
             continue; // still down in the dark between visits
         }
         let risen = slot as u16;
-        let y = area.height.saturating_sub(3).saturating_sub(risen);
-        if y == 0 || in_band(y) {
+        let y = area
+            .height
+            .saturating_sub(JELLY_FLOOR_GAP)
+            .saturating_sub(risen);
+        if y == 0 || !water(x, y, dome_w) {
             continue;
         }
         let dome_brightness = jelly_glow(wave01(t, JELLY_PULSE_MS, phase));
@@ -393,7 +429,11 @@ fn build_frame_marks(
         // band checks deliberately allowed the dome, skirt, or tentacles to
         // disappear independently, which is exactly the broken punctuation
         // visible in the v0.9.2 dogfood screenshot.
-        if tentacle_row >= area.height || [y, skirt_row, tentacle_row].into_iter().any(in_band) {
+        if tentacle_row >= area.height
+            || ![y, skirt_row, tentacle_row]
+                .into_iter()
+                .all(|row| water(x, row, dome_w))
+        {
             continue;
         }
         for (row, glyph) in [
@@ -434,7 +474,13 @@ fn build_frame_marks(
         }
     }
 
-    // --- Rising bubble streams (quiet ·/˚ with occasional glints) ---
+    // --- Rising bubble streams: a short run off the floor, then dissolve ---
+    // A bubble used to travel the whole column and then clamp at the top of
+    // the field, where it parked as a single unattached speck for the rest of
+    // its cycle — the `·` sitting at column 11 doing nothing in the 80×24
+    // frame. It now rises [`BUBBLE_MAX_RISE_ROWS`] rows from the floor,
+    // grows, and fades out, which is both what a bubble does and a reason for
+    // it to be exactly where it is.
     for b in 0..density.bubble_streams() {
         let phase = (b as u128).saturating_mul(1_900);
         // Edge columns — avoid center brand.
@@ -443,26 +489,31 @@ fn build_frame_marks(
         } else {
             area.width.saturating_mul(7) / 8
         };
-        let rise_period = 3_200u128.saturating_add(phase % 900);
+        let rise_period = BUBBLE_RISE_MS.saturating_add(phase % 900);
         let cycle = (t.saturating_add(phase) % rise_period) as f64 / rise_period as f64;
-        let max_rise = area.height.saturating_sub(3) as f64;
-        let rise = (cycle * max_rise) as u16;
         let boost = if cursor.flee_elapsed_ms.is_some() && column.abs_diff(ptr) < 10 {
             2
         } else {
             0
         };
-        let y = area
-            .height
-            .saturating_sub(2)
-            .saturating_sub(rise.saturating_add(boost))
-            .max(quiet_top);
-        // Skip the empty-state text band.
-        if y > quiet_mid_lo && y < quiet_mid_hi {
+        let rise = ((cycle * f64::from(BUBBLE_MAX_RISE_ROWS)) as u16)
+            .saturating_add(boost)
+            .min(BUBBLE_MAX_RISE_ROWS);
+        let y = area.height.saturating_sub(2).saturating_sub(rise);
+        if !water(column, y, 1) {
             continue;
         }
-        let glyph = ["·", "˚", "·", "°"][((t.saturating_add(phase)) / 320) as usize % 4];
-        let brightness = glint01(t, 2_600 + phase % 700, 600, BUBBLE_BRIGHTNESS_FLOOR, phase);
+        // Size is a function of height risen, not of the clock: the old
+        // `["·", "˚", "·", "°"]` table swapped glyph every 320 ms in place,
+        // which is a flicker in peripheral vision rather than a rise.
+        let glyph = bubble_glyph(rise);
+        let brightness = glint01(
+            t,
+            BUBBLE_GLINT_MS.saturating_add(phase % 700),
+            600,
+            BUBBLE_BRIGHTNESS_FLOOR,
+            phase,
+        ) * bubble_dissolve(rise);
         marks.push(AmbientMark {
             x: column.min(area.width.saturating_sub(1)),
             y,
@@ -524,7 +575,24 @@ fn build_frame_marks(
 
 /// Loose diagonal wedge for the school: `(row_offset, columns_behind_lead)`.
 /// The slight row spread is what makes it read as a school, not a text row.
-const SCHOOL_WEDGE: &[(i16, u16)] = &[(0, 0), (-1, 4), (1, 6), (-2, 9), (2, 11), (0, 14), (-1, 17)];
+///
+/// Three rows, not five. The ±2 rows put the wedge across a fifth of a 24-row
+/// terminal, which reads as fish scattered over the screen rather than as one
+/// shoal; at ±1 (plus each fish's own bob) the school still has depth but
+/// stays a single object the eye can take in at once.
+const SCHOOL_WEDGE: &[(i16, u16)] = &[(0, 0), (-1, 4), (1, 6), (-1, 9), (1, 11), (0, 14), (-1, 17)];
+
+/// Rows between the school's centre line and the bottom of the field. With the
+/// ±1 wedge and a one-row bob the shoal occupies `height-4 ..= height-1`: the
+/// deep water, clear of anything the composition is using.
+const SCHOOL_FLOOR_GAP: u16 = 3;
+
+/// The row the school centres on, in field-local coordinates. Public so the
+/// compositor can aim a scatter at the shoal instead of guessing where it is.
+#[must_use]
+pub fn school_band_row(area: Rect) -> u16 {
+    area.height.saturating_sub(SCHOOL_FLOOR_GAP)
+}
 
 /// Wall-clock milliseconds per column of school travel (~2.6 cells/s).
 const SCHOOL_CELL_MS: u128 = 380;
@@ -549,13 +617,18 @@ const LEAD_FISH_LEFT: &str = "<o><";
 /// rim (`(v_v)` / `(v.v)`), which read as two eyes and a mouth. The motion the
 /// silhouette is meant to sell lives in the tentacle row below, not in the
 /// skirt.
-const JELLY_DOME_TOP_FRAMES: &[&str] = &[".-~-.", ".'-.'"];
+///
+/// Both contracted frames are left-right symmetric on purpose. The former
+/// `.'-.'` and `'.'` were not — a dot on one side and an apostrophe on the
+/// other — and an asymmetric five-cell arc does not read as a bell at all; in
+/// the 80×24 dogfood frame it read as three unrelated rows of punctuation.
+const JELLY_DOME_TOP_FRAMES: &[&str] = &[".-~-.", ".'-'."];
 const JELLY_DOME_SKIRT_FRAMES: &[&str] = &["\\___/", "(___)"];
 /// Compact dome for the Sparse (narrow) tier: same two-row read at 3 cells.
-const JELLY_DOME_TOP_COMPACT: &[&str] = &[".-.", "'.'"];
+const JELLY_DOME_TOP_COMPACT: &[&str] = &[".-.", "'-'"];
 const JELLY_DOME_SKIRT_COMPACT: &[&str] = &["\\_/", "(_)"];
 /// Tentacle sway frames (all width-1). Each column runs the same table with
-/// a phase offset so the trio lags instead of strobing in sync.
+/// a phase offset so the pair lags instead of strobing in sync.
 const JELLY_TENTACLE_FRAMES: &[&str] = &["|", "/", "|", "\\"];
 
 /// How far sideways a jellyfish may dodge to clear transcript text before it
@@ -592,6 +665,16 @@ const JELLY_RISE_ROW_MS: u128 = 9_400;
 const JELLY_RISE_ROW_STAGGER_MS: u128 = 1_400;
 /// Rows climbed in a single visit — about 56 s of presence.
 const JELLY_VISIT_ROWS: u16 = 6;
+/// Rows between the jellyfish's dome and the bottom of the field. The
+/// silhouette is three rows tall, so this leaves exactly one row of clear
+/// water between its tentacles and the top of the school's band — the
+/// jellyfish is a visitor in the same water, not a passenger on the shoal.
+const JELLY_FLOOR_GAP: u16 = 8;
+/// Unbroken water rows (measured up from the floor) a jellyfish needs before
+/// it will surface at all: its own three rows, the gap, and the school's band.
+/// Same number as [`JELLY_FLOOR_GAP`] by construction — the dome's row is the
+/// deepest row it touches.
+const JELLY_MIN_DEEP_ROWS: u16 = JELLY_FLOOR_GAP;
 /// Row-slots in one full visit cycle. Slots at or past [`JELLY_VISIT_ROWS`]
 /// are spent out of sight, and that gap is *the* rarity knob: at 32 slots the
 /// cycle is ~5 min and a jellyfish is present under a fifth of the time —
@@ -611,8 +694,8 @@ const JELLY_PULSE_MS: u128 = 5_200;
 const JELLY_TENTACLE_LAG_MS: u128 = 620;
 /// Wall-clock milliseconds per tentacle sway frame.
 const JELLY_TENTACLE_SWAY_MS: u128 = 2_600;
-/// Per-column sway phase offset, so adjacent tentacles never move in sync.
-/// Keep this a non-divisor of [`JELLY_TENTACLE_SWAY_MS`] or the trio strobes.
+/// Per-column sway phase offset, so the two tentacles never move in sync.
+/// Keep this a non-divisor of [`JELLY_TENTACLE_SWAY_MS`] or the pair strobes.
 const JELLY_TENTACLE_PHASE_STEP_MS: u128 = 700;
 /// Dimmest point of the pulse: still legible against the water, no lower.
 const JELLY_BRIGHTNESS_FLOOR: f32 = 0.28;
@@ -629,6 +712,33 @@ fn jelly_glow(pulse: f32) -> f32 {
 
 /// Bubbles stay mostly steady with occasional glints, not a constant wave.
 const BUBBLE_BRIGHTNESS_FLOOR: f32 = 0.55;
+/// Rows a bubble climbs before it dissolves. Short on purpose: a bubble that
+/// crosses the whole field is a moving speck with no source and no end.
+const BUBBLE_MAX_RISE_ROWS: u16 = 5;
+/// Wall-clock milliseconds for one bubble to make that climb.
+const BUBBLE_RISE_MS: u128 = 3_200;
+/// Base period of the raised-cosine glint.
+const BUBBLE_GLINT_MS: u128 = 2_600;
+/// How much of its brightness a bubble keeps at the top of its rise.
+const BUBBLE_DISSOLVE_CEIL: f32 = 0.25;
+
+/// Bubbles grow as they rise. Keyed to height, never to the clock.
+#[must_use]
+fn bubble_glyph(rise: u16) -> &'static str {
+    match rise {
+        0..=1 => "·",
+        2..=3 => "˚",
+        _ => "°",
+    }
+}
+
+/// Linear fade across the rise: full at the floor, nearly gone at the top.
+#[must_use]
+fn bubble_dissolve(rise: u16) -> f32 {
+    let span = f32::from(BUBBLE_MAX_RISE_ROWS.max(1));
+    let remaining = f32::from(BUBBLE_MAX_RISE_ROWS.saturating_sub(rise)) / span;
+    BUBBLE_DISSOLVE_CEIL + (1.0 - BUBBLE_DISSOLVE_CEIL) * remaining
+}
 
 /// One soft sin² hump per `period_ms`, wall-clock keyed, in `[0, 1]`.
 #[must_use]
@@ -665,10 +775,50 @@ fn school_swims_right(cycle_index: u128) -> bool {
     (cycle_index.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 7) & 1 == 0
 }
 
-/// Stateless per-crossing band choice (lower vs upper third).
+/// Rows of clear air the composition keeps on each side of every line it
+/// writes. One row is enough: it is the difference between a fish swimming
+/// *behind* a block of text and a fish surfacing in the gap between two of its
+/// lines, which is what the 80×24 frame showed between the caption and the
+/// invitation.
+const TEXT_CLEARANCE_ROWS: u16 = 1;
+
+/// True when the horizontal span at `(x, y)` — and the same span on every row
+/// within [`TEXT_CLEARANCE_ROWS`] — carries no rendered text. One column of
+/// horizontal air is reserved on both sides so a fish never touches the prose,
+/// while short left-aligned transcript lines still leave real water to their
+/// right.
 #[must_use]
-fn school_swims_low(cycle_index: u128) -> bool {
-    (cycle_index.wrapping_mul(0xC2B2_AE3D_27D4_EB4F) >> 9) & 1 == 0
+fn is_open_water(lines: &[Line<'_>], x: u16, y: u16, width: u16) -> bool {
+    let first = usize::from(y.saturating_sub(TEXT_CLEARANCE_ROWS));
+    let last = usize::from(y.saturating_add(TEXT_CLEARANCE_ROWS));
+    !(first..=last).any(|row| {
+        lines
+            .get(row)
+            .and_then(occupied_text_bounds)
+            .is_some_and(|(start, end)| span_touches_text(x, width, start, end))
+    })
+}
+
+#[must_use]
+fn span_touches_text(x: u16, width: u16, start: usize, end: usize) -> bool {
+    usize::from(x) < end.saturating_add(1)
+        && usize::from(x).saturating_add(usize::from(width)) > start.saturating_sub(1)
+}
+
+/// Unbroken open-water rows measured up from the bottom of the field: how much
+/// deep water the composition has left for the aquarium to live in.
+#[must_use]
+fn deep_water_rows(area: Rect, lines: &[Line<'_>], x: u16, width: u16) -> u16 {
+    let mut rows = 0u16;
+    let mut y = area.height;
+    while y > 0 {
+        y -= 1;
+        if !is_open_water(lines, x, y, width) {
+            break;
+        }
+        rows = rows.saturating_add(1);
+    }
+    rows
 }
 
 fn paint_marks(
@@ -696,12 +846,6 @@ fn paint_marks(
         Anchor { original: u16, placed: u16 },
         Skip(SkipReason),
     }
-    #[derive(Clone, Copy)]
-    struct RowBounds {
-        y: u16,
-        protected: Option<(usize, usize)>,
-    }
-
     let mut placements: [Option<Placement>; 2] = [None, None];
     let population_overflow = frame
         .marks
@@ -722,40 +866,11 @@ fn paint_marks(
         let Some(original) = marks().map(|mark| mark.x).min() else {
             continue;
         };
-        let mut rows: [Option<RowBounds>; MAX_FRAME_MARKS as usize] =
-            [None; MAX_FRAME_MARKS as usize];
-        let mut row_count = 0usize;
-        let mut row_overflow = false;
         let mut group_end = 0u16;
         for mark in marks() {
             let offset = mark.x.saturating_sub(original);
             let width = u16::try_from(UnicodeWidthStr::width(mark.glyph)).unwrap_or(u16::MAX);
             group_end = group_end.max(offset.saturating_add(width));
-            if rows[..row_count]
-                .iter()
-                .flatten()
-                .all(|row| row.y != mark.y)
-            {
-                if row_count == rows.len() {
-                    debug_assert!(
-                        row_count < rows.len(),
-                        "jellyfish rows exceeded the ambient mark budget"
-                    );
-                    row_overflow = true;
-                    break;
-                }
-                rows[row_count] = Some(RowBounds {
-                    y: mark.y,
-                    protected: lines
-                        .get(usize::from(mark.y))
-                        .and_then(occupied_text_bounds),
-                });
-                row_count += 1;
-            }
-        }
-        if row_overflow {
-            *placement = Some(Placement::Skip(SkipReason::Clipped));
-            continue;
         }
         let Some(right_edge) = area.width.checked_sub(group_end) else {
             *placement = Some(Placement::Skip(SkipReason::Clipped));
@@ -777,16 +892,9 @@ fn paint_marks(
             let fits = candidate <= right_edge
                 && marks().all(|mark| {
                     let x = candidate.saturating_add(mark.x.saturating_sub(original));
-                    let width = UnicodeWidthStr::width(mark.glyph);
-                    !rows[..row_count]
-                        .iter()
-                        .flatten()
-                        .find(|row| row.y == mark.y)
-                        .and_then(|row| row.protected)
-                        .is_some_and(|(start, end)| {
-                            usize::from(x) < end.saturating_add(1)
-                                && usize::from(x) + width > start.saturating_sub(1)
-                        })
+                    let width =
+                        u16::try_from(UnicodeWidthStr::width(mark.glyph)).unwrap_or(u16::MAX);
+                    is_open_water(lines, x, mark.y, width)
                 });
             if fits {
                 let ranked = (dodge, candidate);
@@ -799,23 +907,21 @@ fn paint_marks(
         consider(0);
         consider(i64::from(right_edge));
         for mark in marks() {
-            let Some((start, end)) = rows[..row_count]
-                .iter()
-                .flatten()
-                .find(|row| row.y == mark.y)
-                .and_then(|row| row.protected)
-            else {
-                continue;
-            };
             let offset = mark.x.saturating_sub(original);
             let mark_end = offset.saturating_add(
                 u16::try_from(UnicodeWidthStr::width(mark.glyph)).unwrap_or(u16::MAX),
             );
-            if let Ok(start) = i64::try_from(start) {
-                consider(start - 1 - i64::from(mark_end));
-            }
-            if let Ok(end) = i64::try_from(end) {
-                consider(end + 1 - i64::from(offset));
+            let first = usize::from(mark.y.saturating_sub(TEXT_CLEARANCE_ROWS));
+            let last = usize::from(mark.y.saturating_add(TEXT_CLEARANCE_ROWS));
+            for (start, end) in
+                (first..=last).filter_map(|row| lines.get(row).and_then(occupied_text_bounds))
+            {
+                if let Ok(start) = i64::try_from(start) {
+                    consider(start - 1 - i64::from(mark_end));
+                }
+                if let Ok(end) = i64::try_from(end) {
+                    consider(end + 1 - i64::from(offset));
+                }
             }
         }
         *placement = Some(match best {
@@ -857,14 +963,12 @@ fn paint_marks(
                 stats.marks_clipped += 1;
                 continue;
             }
-            let protected = lines
-                .get(usize::from(mark.y))
-                .and_then(occupied_text_bounds);
-            let collides = protected.is_some_and(|(start, end)| {
-                usize::from(mark_x) < end.saturating_add(1)
-                    && usize::from(mark_x) + mark_width > start.saturating_sub(1)
-            });
-            if collides {
+            if !is_open_water(
+                lines,
+                mark_x,
+                mark.y,
+                u16::try_from(mark_width).unwrap_or(u16::MAX),
+            ) {
                 stats.marks_skipped_text += 1;
                 continue;
             }
@@ -991,7 +1095,20 @@ pub fn apply_caustic_shimmer(
         return;
     }
     // Sparse sampling: every 3rd column on every other row near the surface.
-    let band = (area.height / 3).max(2);
+    //
+    // The light stops where the composition starts. Sunlight raking across
+    // the rows a wordmark is sitting in is the same failure as a fish
+    // swimming through them, just quieter, and it costs nothing to measure:
+    // the surface band is clipped to the first row that carries text.
+    let ceiling = (0..area.height)
+        .find(|row| {
+            lines
+                .get(usize::from(*row))
+                .and_then(occupied_text_bounds)
+                .is_some()
+        })
+        .unwrap_or(area.height);
+    let band = (area.height / 3).max(2).min(ceiling);
     for local_y in 0..band {
         let protected = lines
             .get(usize::from(local_y))

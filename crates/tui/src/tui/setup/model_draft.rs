@@ -26,6 +26,7 @@ use crate::localization::Locale;
 use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt};
 
 use super::{GuidedConstitutionDraft, autonomy_label};
+use crate::models::Role;
 
 /// Output budget for the one-shot draft. Roomy enough for a full constitution
 /// (bounds cap the persisted form far below this), small enough to be a real
@@ -126,7 +127,7 @@ pub(crate) fn drafting_request(
     MessageRequest {
         model: request_model.to_string(),
         messages: vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: drafting_user_prompt(draft, freeform_note, locale),
                 cache_control: None,

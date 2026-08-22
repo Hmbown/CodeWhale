@@ -1680,11 +1680,42 @@ impl TaskManager {
         let persist_debounce = self.cfg.execution_limits.persist_debounce;
 
         let (mut result, manager_terminalized) = loop {
-            match guard.evaluate(
+            let mut action = guard.evaluate(
                 Instant::now(),
                 cancel.is_cancelled(),
                 self.cancel_token.is_cancelled(),
+            );
+            if matches!(
+                action,
+                GuardAction::Interrupt {
+                    reason: TaskTerminalReason::IdleTimeout
+                }
             ) {
+                // Progress already accepted by the executor must win an idle
+                // deadline race. Drain only the events queued at this instant
+                // so a producer cannot keep the watchdog from re-evaluating
+                // wall time, shutdown, or explicit cancellation indefinitely.
+                let queued = event_rx.len();
+                for _ in 0..queued {
+                    let Ok(event) = event_rx.try_recv() else {
+                        break;
+                    };
+                    self.process_execution_event(
+                        &task_id,
+                        event,
+                        &mut guard,
+                        &mut accumulated_result_text,
+                        &mut dirty,
+                    )
+                    .await;
+                }
+                action = guard.evaluate(
+                    Instant::now(),
+                    cancel.is_cancelled(),
+                    self.cancel_token.is_cancelled(),
+                );
+            }
+            match action {
                 GuardAction::Interrupt { reason } => {
                     cancel.cancel();
                     guard.note_interrupt(Instant::now(), reason);
@@ -1695,27 +1726,21 @@ impl TaskManager {
                 }
                 GuardAction::Run { wait } => {
                     tokio::select! {
-                        maybe_event = event_rx.recv() => {
-                            if let Some(event) = maybe_event {
-                                let now = Instant::now();
-                                if execution_event_is_progress(&event) {
-                                    guard.note_progress(now);
-                                }
-                                append_message_delta(&mut accumulated_result_text, &event);
-                                match self.apply_execution_event(&task_id, event).await {
-                                    Ok(outcome) => {
-                                        dirty = !outcome.persisted;
-                                    }
-                                    Err(err) => {
-                                        tracing::error!(
-                                            "Failed to apply task event for {task_id}: {err}"
-                                        );
-                                    }
-                                }
-                            }
-                        }
+                        biased;
                         exec_result = &mut exec_fut => {
                             break (guard.preserve_timeout_reason(exec_result), false);
+                        }
+                        maybe_event = event_rx.recv() => {
+                            if let Some(event) = maybe_event {
+                                self.process_execution_event(
+                                    &task_id,
+                                    event,
+                                    &mut guard,
+                                    &mut accumulated_result_text,
+                                    &mut dirty,
+                                )
+                                .await;
+                            }
                         }
                         _ = self.cancel_token.cancelled(), if !self.cancel_token.is_cancelled() => {
                             cancel.cancel();
@@ -1750,6 +1775,28 @@ impl TaskManager {
             .await
         {
             tracing::error!("Failed to finalize task {task_id}: {err}");
+        }
+    }
+
+    async fn process_execution_event(
+        &self,
+        task_id: &str,
+        event: TaskExecutionEvent,
+        guard: &mut ExecutionGuard,
+        accumulated_result_text: &mut String,
+        dirty: &mut bool,
+    ) {
+        if execution_event_is_progress(&event) {
+            guard.note_progress(Instant::now());
+        }
+        append_message_delta(accumulated_result_text, &event);
+        match self.apply_execution_event(task_id, event).await {
+            Ok(outcome) => {
+                *dirty = !outcome.persisted;
+            }
+            Err(err) => {
+                tracing::error!("Failed to apply task event for {task_id}: {err}");
+            }
         }
     }
 
@@ -2673,6 +2720,15 @@ mod tests {
             execution_limits: TaskExecutionLimits::short_for_tests(),
             ..test_config(root)
         }
+    }
+
+    fn wall_timeout_test_config(root: PathBuf) -> TaskManagerConfig {
+        let mut config = short_test_config(root);
+        config.execution_limits.idle_progress = config
+            .execution_limits
+            .wall_time
+            .saturating_add(config.execution_limits.cancel_grace);
+        config
     }
 
     #[tokio::test]
@@ -3864,7 +3920,7 @@ mod tests {
     async fn cooperative_cancel_after_wall_timeout_keeps_timeout_reason() -> Result<()> {
         let root = std::env::temp_dir().join(format!("deepseek-task-test-{}", Uuid::new_v4()));
         let manager = TaskManager::start_with_executor(
-            short_test_config(root),
+            wall_timeout_test_config(root),
             Arc::new(CooperativeProgressCancelExecutor),
         )
         .await?;

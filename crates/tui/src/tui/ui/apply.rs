@@ -3,6 +3,10 @@
 //!
 //! Moved verbatim out of `ui.rs`.
 
+use super::observer_hooks::{
+    execute_subagent_observer_hook, surface_observer_hook_submission_failure,
+};
+use super::task_projection::refresh_active_task_panel;
 use super::*;
 
 /// Record the model frozen into a child's runtime at spawn time.
@@ -1874,13 +1878,7 @@ pub(crate) async fn apply_command_result(
                 }
             }
             AppAction::OpenFleetSetup => {
-                if app.view_stack.top_kind() != Some(ModalKind::FleetSetup) {
-                    let _ = app.next_draft_gen();
-                    app.view_stack
-                        .push(crate::tui::views::fleet_setup::FleetSetupView::new(
-                            app, config,
-                        ));
-                }
+                open_fleet_setup_target(app, config, None);
             }
             AppAction::OpenHotbarSetup => {
                 if app.view_stack.top_kind() != Some(ModalKind::HotbarSetup) {
@@ -1992,15 +1990,7 @@ pub(crate) async fn apply_command_result(
                 crate::remote_control::RemoteControlAction::Stop => {
                     app.remote_control.stop();
                     let status = app.remote_control.status_line();
-                    if app.remote_control.blocks_local_input() {
-                        app.sticky_status = Some(StatusToast::new(
-                            status.clone(),
-                            StatusToastLevel::Warning,
-                            None,
-                        ));
-                    } else {
-                        app.sticky_status = None;
-                    }
+                    app.sticky_status = None;
                     app.status_message = Some(status);
                 }
             },
@@ -2227,6 +2217,10 @@ pub(crate) async fn apply_approval_decision(
 
     match event.decision {
         ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
+            // Mirror mode: clear the shared-approval gate so a late web
+            // decision acks "no longer pending" instead of double-answering.
+            app.remote_control
+                .resolve_pending_approval(&event.tool_id, true);
             let _ = engine_handle.approve_tool_call(event.tool_id).await;
         }
         ReviewDecision::Denied => {
@@ -2237,6 +2231,8 @@ pub(crate) async fn apply_approval_decision(
             if !event.timed_out {
                 app.approval_session_denied.insert(event.approval_key);
             }
+            app.remote_control
+                .resolve_pending_approval(&event.tool_id, false);
             let _ = engine_handle.deny_tool_call(event.tool_id).await;
         }
         ReviewDecision::Abort => {
@@ -2367,6 +2363,7 @@ pub(crate) fn apply_setup_runtime_preset(
     config.allow_shell = Some(preset.allow_shell());
     config.sandbox_mode = Some(preset.sandbox_mode().to_string());
     app.configured_sandbox_mode = config.sandbox_mode.clone();
+    app.configured_sandbox_network = config.sandbox_network_access;
 
     let approval_mode = ApprovalMode::from_config_value(
         preset

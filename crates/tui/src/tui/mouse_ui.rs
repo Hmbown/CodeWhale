@@ -1619,6 +1619,7 @@ mod tests {
         agent_transcript_text, build_context_menu_entries, handle_mouse_event, sidebar_click_action,
     };
     use crate::config::Config;
+    use crate::models::Role;
     use crate::models::{ContentBlock, Message};
     use crate::tui::app::{
         App, SidebarHoverRow, SidebarHoverSection, SidebarRowAction, TuiOptions,
@@ -2005,14 +2006,14 @@ mod tests {
         let early = format!("EARLY-OPEN-MARKER\n{}", "a".repeat(1_100_000));
         let messages = vec![
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: early,
                     cache_control: None,
                 }],
             },
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::Text {
                     text: "LAST-OPEN-MARKER".to_string(),
                     cache_control: None,

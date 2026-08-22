@@ -249,8 +249,15 @@ pub fn score(prompt: &str) -> i32 {
         }
     }
 
-    // Length factor: long prompts tend to be more complex
-    let len = prompt.len();
+    // Length factor: long prompts tend to be more complex.
+    //
+    // Counted in characters, not bytes, as the doc comment above states. Half
+    // the keyword lists here are Chinese, so CJK input is a first-class case —
+    // and every CJK character is three UTF-8 bytes, which made `prompt.len()`
+    // award the long-prompt bonus at a third of the documented length. A
+    // 200-character Chinese prompt scored +2 (600 bytes) and classified as
+    // complex, where the same-length English prompt scored 0.
+    let len = prompt.chars().count();
     if len > 500 {
         score += 2;
     } else if len > 200 {
@@ -353,6 +360,23 @@ mod tests {
     #[test]
     fn test_quick_question_uses_flash() {
         assert_eq!(classify("what is the capital of France?"), FLASH_MODEL);
+    }
+
+    #[test]
+    fn length_bonus_counts_characters_not_utf8_bytes() {
+        // Keyword-free prompts of identical *length* must score identically
+        // regardless of script. "啊" is three UTF-8 bytes, so a byte-counted
+        // length factor gave the Chinese prompt a bonus the English one did
+        // not earn — and at 200 characters it flipped the classification.
+        let english = "a".repeat(200);
+        let chinese = "啊".repeat(200);
+        assert_eq!(score(&chinese), score(&english));
+        assert_eq!(classify(&chinese), FLASH_MODEL);
+
+        let english_long = "a".repeat(600);
+        let chinese_long = "啊".repeat(600);
+        assert_eq!(score(&chinese_long), score(&english_long));
+        assert_eq!(classify(&chinese_long), PRO_MODEL);
     }
 
     #[test]

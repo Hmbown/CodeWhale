@@ -46,6 +46,253 @@ const PROJECT_CONTEXT_FILES: &[&str] = &[
     ".deepseek/instructions.md",
 ];
 
+/// A foreign agent's instruction format. These are read only when the user
+/// opts in by name, because a file written as law for a different tool is not
+/// automatically law for this one — and because silently treating a file the
+/// user never pointed at us as standing authority is an injection surface,
+/// not a convenience.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ForeignInstructionFormat {
+    Claude,
+    Cursor,
+    Cline,
+    Windsurf,
+    Gemini,
+    Copilot,
+    Muse,
+}
+
+impl ForeignInstructionFormat {
+    pub(crate) const ALL: &'static [Self] = &[
+        Self::Claude,
+        Self::Cursor,
+        Self::Cline,
+        Self::Windsurf,
+        Self::Gemini,
+        Self::Copilot,
+        Self::Muse,
+    ];
+
+    /// Configuration spelling, as written in `project_instruction_imports`.
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Cursor => "cursor",
+            Self::Cline => "cline",
+            Self::Windsurf => "windsurf",
+            Self::Gemini => "gemini",
+            Self::Copilot => "copilot",
+            Self::Muse => "muse",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        let value = value.trim().to_ascii_lowercase();
+        Self::ALL.iter().copied().find(|f| f.key() == value)
+    }
+
+    /// Workspace-relative instruction files this format contributes.
+    fn context_files(self) -> &'static [&'static str] {
+        match self {
+            Self::Claude => &[".claude/instructions.md", "CLAUDE.md"],
+            // The remaining formats are imported through the bounded-fragment
+            // loader in `codewhale_core::fragments`, not through this chain.
+            _ => &[],
+        }
+    }
+
+    /// Workspace-relative rules directories this format contributes.
+    fn rules_dirs(self) -> &'static [&'static str] {
+        match self {
+            Self::Claude => &[".claude/rules"],
+            _ => &[],
+        }
+    }
+
+    /// Candidates handled by the bounded-fragment loader in
+    /// `codewhale_core::fragments` rather than by the instruction chain.
+    fn fragment_candidates(self) -> &'static [&'static str] {
+        match self {
+            Self::Cursor => &[".cursorrules", ".cursor/rules"],
+            Self::Cline => &[".clinerules"],
+            Self::Windsurf => &[".windsurf/rules"],
+            Self::Gemini => &[".gemini"],
+            Self::Copilot => &[".github/copilot-instructions.md"],
+            Self::Muse => &[".github/muse-instructions.md"],
+            // Claude's files are read by the instruction chain above, so
+            // importing them here too would inject the same bytes twice.
+            Self::Claude => &[],
+        }
+    }
+}
+
+/// The set of foreign formats the user has explicitly opted into.
+///
+/// Resolved from config once and read by the loader. Empty by default: a fresh
+/// checkout containing a `CLAUDE.md` written for another tool contributes
+/// nothing to Codewhale's standing instructions until someone says so.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ForeignInstructionImports {
+    enabled: std::collections::BTreeSet<&'static str>,
+}
+
+impl ForeignInstructionImports {
+    #[cfg(test)]
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Parse configured names, returning the set plus any unrecognized names
+    /// so the caller can warn instead of silently ignoring a typo.
+    #[must_use]
+    pub fn from_config(values: &[String]) -> (Self, Vec<String>) {
+        let mut enabled = std::collections::BTreeSet::new();
+        let mut unknown = Vec::new();
+        for value in values {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.eq_ignore_ascii_case("all") {
+                enabled.extend(ForeignInstructionFormat::ALL.iter().map(|f| f.key()));
+                continue;
+            }
+            match ForeignInstructionFormat::parse(trimmed) {
+                Some(format) => {
+                    enabled.insert(format.key());
+                }
+                None => unknown.push(trimmed.to_string()),
+            }
+        }
+        (Self { enabled }, unknown)
+    }
+
+    #[must_use]
+    pub(crate) fn is_enabled(&self, format: ForeignInstructionFormat) -> bool {
+        self.enabled.contains(format.key())
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.enabled.is_empty()
+    }
+
+    /// Enabled format keys, for provenance and diagnostics.
+    #[cfg(test)]
+    #[must_use]
+    pub fn keys(&self) -> Vec<&'static str> {
+        self.enabled.iter().copied().collect()
+    }
+}
+
+/// Foreign fragment candidates enabled by the active opt-in set.
+///
+/// `.agents/AGENTS.md` is always included: it is the cross-agent `AGENTS.md`
+/// standard Codewhale already follows, not another vendor's format.
+#[must_use]
+pub(crate) fn active_fragment_candidates() -> Vec<&'static str> {
+    let imports = foreign_instruction_imports();
+    fragment_candidates_for(&imports)
+}
+
+#[must_use]
+pub(crate) fn fragment_candidates_for(imports: &ForeignInstructionImports) -> Vec<&'static str> {
+    let mut candidates: Vec<&'static str> = vec![".agents/AGENTS.md"];
+    for format in ForeignInstructionFormat::ALL {
+        if imports.is_enabled(*format) {
+            candidates.extend(format.fragment_candidates());
+        }
+    }
+    candidates
+}
+
+static FOREIGN_IMPORTS: std::sync::RwLock<Option<ForeignInstructionImports>> =
+    std::sync::RwLock::new(None);
+
+/// Install the resolved opt-in set. Called once while config is applied.
+pub fn set_foreign_instruction_imports(imports: ForeignInstructionImports) {
+    if let Ok(mut guard) = FOREIGN_IMPORTS.write() {
+        *guard = Some(imports);
+    }
+    crate::project_context_cache::clear();
+}
+
+/// The active opt-in set. Defaults to "import nothing".
+#[must_use]
+pub(crate) fn foreign_instruction_imports() -> ForeignInstructionImports {
+    FOREIGN_IMPORTS
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .unwrap_or_default()
+}
+
+/// Instruction file candidates in priority order for the active opt-in set.
+fn context_files_for(imports: &ForeignInstructionImports) -> Vec<&'static str> {
+    // Order is priority: `load_dir_instructions` takes the first match in a
+    // directory. AGENTS.md leads, then Codewhale's own files, and only then
+    // anything imported from another tool — an imported CLAUDE.md must never
+    // outrank .codewhale/instructions.md the way the old flat list let it.
+    let mut files: Vec<&'static str> = vec![
+        "AGENTS.md",
+        ".codewhale/instructions.md",
+        ".deepseek/instructions.md",
+    ];
+    for format in ForeignInstructionFormat::ALL {
+        if imports.is_enabled(*format) {
+            files.extend(format.context_files());
+        }
+    }
+    files
+}
+
+/// Rules directories for the active opt-in set.
+fn rules_dirs_for(imports: &ForeignInstructionImports) -> Vec<&'static str> {
+    let mut dirs: Vec<&'static str> = vec![".codewhale/rules"];
+    for format in ForeignInstructionFormat::ALL {
+        if imports.is_enabled(*format) {
+            dirs.extend(format.rules_dirs());
+        }
+    }
+    dirs
+}
+
+/// Foreign instruction files that exist in the workspace but were not
+/// imported, so the user can discover the opt-in instead of wondering why
+/// their `CLAUDE.md` is being ignored.
+fn unimported_foreign_warnings(
+    workspace: &Path,
+    imports: &ForeignInstructionImports,
+) -> Vec<String> {
+    let mut seen: Vec<&'static str> = Vec::new();
+    for format in ForeignInstructionFormat::ALL {
+        if imports.is_enabled(*format) {
+            continue;
+        }
+        let present = format
+            .context_files()
+            .iter()
+            .chain(format.rules_dirs().iter())
+            .any(|relative| workspace.join(relative).exists());
+        if present {
+            seen.push(format.key());
+        }
+    }
+    if seen.is_empty() {
+        return Vec::new();
+    }
+    vec![format!(
+        "Found instruction files for {} in this workspace; they are not loaded.          Codewhale reads AGENTS.md and its own instruction files by default.          To import them, set project_instruction_imports = [{}] in config.",
+        seen.join(", "),
+        seen.iter()
+            .map(|key| format!("\"{key}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )]
+}
+
 /// Rules directories auto-discovered at workspace level, in priority order.
 /// `.codewhale/rules/` is Codewhale-native; `.claude/rules/` is Claude compatibility.
 /// All `.md` files in these directories are loaded as project rules in filename order.
@@ -80,43 +327,152 @@ const GLOBAL_INSTRUCTIONS_LEGACY_PATH: &[&str] = &[".deepseek", "instructions.md
 /// Maximum size for project context files (to prevent loading huge files)
 const MAX_CONTEXT_SIZE: usize = 100 * 1024; // 100KB
 
-/// Maximum total instruction bytes assembled across the repository-root →
-/// workspace chain. One aggregate budget for the whole chain (same policy as
-/// the rules block): every segment's bytes count against it and later
-/// segments are truncated with an explicit marker once it is exhausted.
-const MAX_CHAIN_CONTEXT_BYTES: usize = 200 * 1024; // 200KB
+/// One aggregate budget for everything that reaches the model as project
+/// instruction authority: the repository-root → workspace instruction chain,
+/// the global fallback layer merged into it, the assembled rules block, and
+/// any opted-in foreign-agent rule files.
+///
+/// Previously each of those had its own cap — 200 KiB for the chain, 500 KiB
+/// for the rules block, 40 KiB for the imported-fragment path — so a workspace
+/// could put roughly three quarters of a megabyte of standing instructions in
+/// front of the model before skills, memory, history, or tool schemas were
+/// counted, and no single number described the ceiling. One budget, checked
+/// once, is the number that can actually be reasoned about.
+///
+/// Authority decides what survives: `instructions` claims the budget first and
+/// is trimmed from the *front* (the broadest scope) so the nearest-scope file
+/// is the last thing dropped; the rules block takes what is left. Both trims
+/// leave an explicit marker in the text.
+pub(crate) const MAX_PROJECT_INSTRUCTION_BYTES: usize = 48 * 1024; // 48 KiB
 
 /// Maximum number of rule files loaded per rules directory.
 /// Prevents a project from silently injecting hundreds of rule files.
 const MAX_RULES_FILES: usize = 50;
 
-/// Maximum total bytes across the assembled rules_block.
-/// 50 files × 100 KB per file could reach ~5 MB; this caps the
-/// cumulative injected content so a large rules directory can't
-/// dominate the context window. Exceeded bytes are truncated with
-/// an explicit marker.
-const MAX_RULES_BLOCK_BYTES: usize = 500 * 1024; // 500 KB
+const CHAIN_TRUNCATION_MARKER: &str =
+    "[…broader-scope project instructions dropped at the aggregate budget…]\n\n";
+const RULES_TRUNCATION_MARKER: &str = "\n\n[…rules block truncated at the aggregate budget…]";
+
+/// Trim `text` to at most `max` bytes, keeping the tail and marking the cut.
+fn keep_tail_within(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let keep = max.saturating_sub(CHAIN_TRUNCATION_MARKER.len());
+    if keep == 0 {
+        return CHAIN_TRUNCATION_MARKER.to_string();
+    }
+    let mut start = text.len() - keep;
+    while start < text.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("{CHAIN_TRUNCATION_MARKER}{}", &text[start..])
+}
+
+/// Trim `text` to at most `max` bytes, keeping the head and marking the cut.
+fn keep_head_within(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let keep = max.saturating_sub(RULES_TRUNCATION_MARKER.len());
+    if keep == 0 {
+        return String::new();
+    }
+    let mut end = keep;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{RULES_TRUNCATION_MARKER}", &text[..end])
+}
+
+/// Apply the single aggregate project-instruction budget.
+///
+/// Called once, after every source has been assembled, so the ceiling holds
+/// across the chain, the global layer, and the rules block together rather
+/// than per-loader. Nothing here re-reads the filesystem.
+pub(crate) fn enforce_project_instruction_budget(ctx: &mut ProjectContext) {
+    let instructions_len = ctx.instructions.as_ref().map_or(0, String::len);
+    let rules_len = ctx.rules_block.as_ref().map_or(0, String::len);
+    if instructions_len + rules_len <= MAX_PROJECT_INSTRUCTION_BYTES {
+        return;
+    }
+
+    // Instructions are the higher authority and claim the budget first.
+    if instructions_len > MAX_PROJECT_INSTRUCTION_BYTES
+        && let Some(text) = ctx.instructions.as_ref()
+    {
+        let trimmed = keep_tail_within(text, MAX_PROJECT_INSTRUCTION_BYTES);
+        tracing::warn!(
+            target: "project_context",
+            was = instructions_len,
+            now = trimmed.len(),
+            cap = MAX_PROJECT_INSTRUCTION_BYTES,
+            "Dropping broadest-scope project instructions at the aggregate budget"
+        );
+        ctx.instructions = Some(trimmed);
+    }
+
+    let used = ctx.instructions.as_ref().map_or(0, String::len);
+    let remaining = MAX_PROJECT_INSTRUCTION_BYTES.saturating_sub(used);
+    if rules_len > remaining
+        && let Some(text) = ctx.rules_block.as_ref()
+    {
+        let trimmed = keep_head_within(text, remaining);
+        tracing::warn!(
+            target: "project_context",
+            was = rules_len,
+            now = trimmed.len(),
+            remaining,
+            "Truncating rules block to the aggregate project-instruction budget"
+        );
+        ctx.rules_block = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        };
+    }
+}
 /// Load project context from the workspace directory.
 ///
 /// This searches for known project context files and loads the first one found.
+/// Convenience wrapper that reads the process-wide opt-in set.
+///
+/// Production goes through [`load_project_context_with_imports`] so the import
+/// set is explicit at the call site; this exists for tests that only care about
+/// default behaviour.
+#[cfg(test)]
 pub fn load_project_context(workspace: &Path) -> ProjectContext {
+    load_project_context_with_imports(workspace, &foreign_instruction_imports())
+}
+
+/// Load workspace project context under an explicit foreign-import set.
+///
+/// The set is a parameter rather than a global read so a caller — and every
+/// test — states which foreign formats are in play instead of depending on
+/// process-wide state that parallel tests would race on.
+pub(crate) fn load_project_context_with_imports(
+    workspace: &Path,
+    imports: &ForeignInstructionImports,
+) -> ProjectContext {
     let mut ctx = ProjectContext::empty(workspace.to_path_buf());
 
     // Search for active project context files.
-    let (instructions, source_path, warnings) = load_dir_instructions(workspace);
+    let (instructions, source_path, warnings) = load_dir_instructions(workspace, imports);
     ctx.instructions = instructions;
     ctx.source_path = source_path;
     ctx.warnings.extend(warnings);
 
     ctx.warnings
         .extend(ignored_project_whale_warnings(workspace));
+    ctx.warnings
+        .extend(unimported_foreign_warnings(workspace, imports));
 
     // Load rules from auto-discovered directories (.codewhale/rules/, .claude/rules/)
     // Each rule file is wrapped in a <project_rule> block and appended after
     // the main instructions content. Security model: same as AGENTS.md —
     // workspace-contained content only, no absolute-path escape.
     let mut rules_content = String::new();
-    for rules_dir in RULES_DIRS {
+    for rules_dir in rules_dirs_for(imports) {
         let rules = load_rules_from_dir(workspace, rules_dir);
         for (path, content) in rules {
             if !rules_content.is_empty() {
@@ -131,26 +487,16 @@ pub fn load_project_context(workspace: &Path) -> ProjectContext {
     }
 
     if !rules_content.is_empty() {
-        // Cap total rules bytes so a large rules dir can't dominate the context window
-        if rules_content.len() > MAX_RULES_BLOCK_BYTES {
-            let mut end = MAX_RULES_BLOCK_BYTES;
-            while !rules_content.is_char_boundary(end) {
-                end -= 1;
-            }
-            rules_content.truncate(end);
-            rules_content.push_str("\n\n[…rules block truncated at 500 KB…]");
-            tracing::warn!(
-                target: "project_context",
-                total_bytes = rules_content.len(),
-                cap = MAX_RULES_BLOCK_BYTES,
-                "Truncating rules block to total byte budget"
-            );
-        }
+        // No private cap here: `enforce_project_instruction_budget` applies the
+        // one aggregate ceiling across instructions and rules together, after
+        // every source has been assembled.
         ctx.rules_block = Some(rules_content);
     }
 
     // Check for trust file
     ctx.is_trusted = check_trust_status(workspace);
+
+    enforce_project_instruction_budget(&mut ctx);
 
     ctx
 }
@@ -159,10 +505,13 @@ pub fn load_project_context(workspace: &Path) -> ProjectContext {
 ///
 /// Returns the content, its path, and any warnings from failed candidates.
 /// A directory with no candidate file yields `(None, None, warnings)`.
-fn load_dir_instructions(dir: &Path) -> (Option<String>, Option<PathBuf>, Vec<String>) {
+fn load_dir_instructions(
+    dir: &Path,
+    imports: &ForeignInstructionImports,
+) -> (Option<String>, Option<PathBuf>, Vec<String>) {
     let mut warnings = Vec::new();
 
-    for filename in PROJECT_CONTEXT_FILES {
+    for filename in context_files_for(imports) {
         let file_path = dir.join(filename);
 
         if context_candidate_exists(&file_path) {
@@ -220,8 +569,17 @@ fn load_project_context_with_parents_and_home(
     workspace: &Path,
     home_dir: Option<&Path>,
 ) -> ProjectContext {
+    let imports = &foreign_instruction_imports();
+    load_project_context_with_parents_and_home_imports(workspace, home_dir, imports)
+}
+
+fn load_project_context_with_parents_and_home_imports(
+    workspace: &Path,
+    home_dir: Option<&Path>,
+    imports: &ForeignInstructionImports,
+) -> ProjectContext {
     let workspace_canonical = canonicalize_workspace_or_keep(workspace);
-    let mut ctx = load_project_context(&workspace_canonical);
+    let mut ctx = load_project_context_with_imports(&workspace_canonical, imports);
 
     // Assemble the repository-root → workspace instruction chain. The chain
     // directories come from Git traversal of the containing checkout, so a
@@ -235,7 +593,7 @@ fn load_project_context_with_parents_and_home(
     let mut ancestor_docs: Vec<(PathBuf, String)> = Vec::new();
     for dir in ancestor_dirs {
         ctx.warnings.extend(ignored_project_whale_warnings(dir));
-        let (content, path, warnings) = load_dir_instructions(dir);
+        let (content, path, warnings) = load_dir_instructions(dir, imports);
         ctx.warnings.extend(warnings);
         if let (Some(content), Some(path)) = (content, path) {
             ancestor_docs.push((path, content));
@@ -243,40 +601,27 @@ fn load_project_context_with_parents_and_home(
     }
 
     if !ancestor_docs.is_empty() {
-        // One aggregate byte budget spans the whole chain, root first.
+        // Assemble root → workspace so the nearest scope has the last word.
+        // The byte ceiling is applied once at the end of this function by
+        // `enforce_project_instruction_budget`, which trims from the front —
+        // i.e. drops the broadest scope first and never strands the workspace's
+        // own file behind an exhausted budget the way per-segment accounting
+        // did.
         let mut assembled = String::new();
-        let mut remaining_budget = MAX_CHAIN_CONTEXT_BYTES;
 
         for (path, content) in &ancestor_docs {
-            if remaining_budget == 0 {
-                tracing::warn!(
-                    target: "project_context",
-                    path = %path.display(),
-                    "Skipping instruction file: aggregate chain budget already exhausted"
-                );
-                continue;
-            }
-            let content = fit_chain_segment_to_budget(content.clone(), path, &mut remaining_budget);
-            append_chain_segment(&mut assembled, path, &content);
+            append_chain_segment(&mut assembled, path, content);
         }
 
-        // The workspace's own file is the most specific link: it reads last
-        // under the same budget, and `source_path` keeps pointing at it so
-        // the user knows where the workspace-level override lives.
+        // The workspace's own file is the most specific link: it reads last,
+        // and `source_path` keeps pointing at it so the user knows where the
+        // workspace-level override lives.
         if let Some(content) = ctx.instructions.take() {
-            if remaining_budget == 0 {
-                tracing::warn!(
-                    target: "project_context",
-                    "Workspace instruction file skipped: aggregate chain budget already exhausted"
-                );
-            } else {
-                let path = ctx
-                    .source_path
-                    .clone()
-                    .unwrap_or_else(|| workspace_canonical.clone());
-                let content = fit_chain_segment_to_budget(content, &path, &mut remaining_budget);
-                append_chain_segment(&mut assembled, &path, &content);
-            }
+            let path = ctx
+                .source_path
+                .clone()
+                .unwrap_or_else(|| workspace_canonical.clone());
+            append_chain_segment(&mut assembled, &path, &content);
         } else if let Some((path, _)) = ancestor_docs.last() {
             // No workspace-level file: the nearest ancestor is the most
             // specific source.
@@ -338,6 +683,11 @@ fn load_project_context_with_parents_and_home(
     ctx.constitution_block = constitution_block;
     ctx.constitution_source_path = constitution_source_path;
 
+    // The chain and the global layer were both rebuilt above, so re-apply the
+    // one ceiling here. Without this the merged global block was entirely
+    // unbudgeted: the old per-chain accounting closed before the merge.
+    enforce_project_instruction_budget(&mut ctx);
+
     ctx
 }
 
@@ -348,8 +698,12 @@ pub(crate) fn project_context_cache_candidate_paths(
     let workspace = canonicalize_workspace_or_keep(workspace);
     let mut paths = Vec::new();
 
-    // Mirror the loader exactly: the same repository-bounded root → workspace
-    // chain decides which files can change the assembled instructions.
+    // Enumerate the superset of instruction candidates, not just the ones the
+    // active opt-in set loads: a `CLAUDE.md` that is *not* imported still
+    // decides whether the "not loaded" warning fires, so its content has to
+    // invalidate the cache too. Changing the opt-in set clears the cache
+    // outright (`set_foreign_instruction_imports`), so over-enumerating here
+    // only ever costs an extra reload.
     for dir in context_chain_dirs(&workspace, home_dir) {
         for filename in PROJECT_CONTEXT_FILES {
             paths.push(dir.join(filename));
@@ -529,35 +883,6 @@ fn append_chain_segment(assembled: &mut String, path: &Path, content: &str) {
         ));
     }
     assembled.push_str(content);
-}
-
-/// Fit one chain segment into the remaining aggregate budget, truncating with
-/// an explicit marker (same policy as the rules block) when it does not fit.
-fn fit_chain_segment_to_budget(
-    content: String,
-    path: &Path,
-    remaining_budget: &mut usize,
-) -> String {
-    if content.len() <= *remaining_budget {
-        *remaining_budget -= content.len();
-        return content;
-    }
-
-    let mut end = *remaining_budget;
-    while !content.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut truncated = content[..end].to_string();
-    truncated.push_str("\n\n[…instructions chain truncated at the aggregate byte budget…]");
-    tracing::warn!(
-        target: "project_context",
-        path = %path.display(),
-        remaining_bytes = *remaining_budget,
-        cap = MAX_CHAIN_CONTEXT_BYTES,
-        "Truncating instruction chain segment to the aggregate byte budget"
-    );
-    *remaining_budget = 0;
-    truncated
 }
 
 /// Combine global user-wide preferences with a project-local
@@ -1151,10 +1476,10 @@ mod tests {
             "source_path points at the most specific (current-directory) file"
         );
         assert!(
-            instructions.len() <= MAX_CHAIN_CONTEXT_BYTES + 512,
-            "assembled chain must stay within the aggregate budget ({} > {} + label overhead)",
+            instructions.len() <= MAX_PROJECT_INSTRUCTION_BYTES,
+            "assembled chain must stay within the aggregate budget ({} > {})",
             instructions.len(),
-            MAX_CHAIN_CONTEXT_BYTES
+            MAX_PROJECT_INSTRUCTION_BYTES
         );
     }
 
@@ -1925,18 +2250,88 @@ mod tests {
     }
 
     #[test]
-    fn rules_from_claude_dir_are_compat_loaded() {
+    fn claude_rules_load_only_when_explicitly_imported() {
         let tmp = tempdir().expect("tempdir");
         let rules_dir = tmp.path().join(".claude/rules");
         fs::create_dir_all(&rules_dir).expect("mkdir rules");
         fs::write(rules_dir.join("style.md"), "Use tabs").expect("write");
 
-        let ctx = load_project_context(tmp.path());
-
-        let rules = ctx.rules_block.as_ref().expect("rules should be loaded");
+        // Default: another tool's rules directory is not Codewhale's law.
+        let ctx = load_project_context_with_imports(tmp.path(), &ForeignInstructionImports::none());
         assert!(
-            rules.contains("Use tabs"),
-            "expected .claude/rules/ compat loading"
+            ctx.rules_block.is_none(),
+            "an un-imported .claude/rules must contribute nothing: {:?}",
+            ctx.rules_block
+        );
+        assert!(
+            ctx.warnings
+                .iter()
+                .any(|w| w.contains("claude") && w.contains("project_instruction_imports")),
+            "the user must be told the files exist and how to import them: {:?}",
+            ctx.warnings
+        );
+
+        // Opted in by name: loaded, and ranked after Codewhale's own.
+        let (imports, unknown) = ForeignInstructionImports::from_config(&["claude".to_string()]);
+        assert!(unknown.is_empty());
+        let ctx = load_project_context_with_imports(tmp.path(), &imports);
+        let rules = ctx.rules_block.as_ref().expect("rules should be loaded");
+        assert!(rules.contains("Use tabs"), "expected .claude/rules/ import");
+    }
+
+    #[test]
+    fn foreign_instruction_imports_parse_names_and_report_typos() {
+        let (imports, unknown) = ForeignInstructionImports::from_config(&[]);
+        assert!(imports.is_empty(), "default imports nothing");
+        assert!(unknown.is_empty());
+
+        let (imports, unknown) = ForeignInstructionImports::from_config(&[
+            "Claude".to_string(),
+            " cursor ".to_string(),
+            "clawed".to_string(),
+        ]);
+        assert!(imports.is_enabled(ForeignInstructionFormat::Claude));
+        assert!(imports.is_enabled(ForeignInstructionFormat::Cursor));
+        assert!(!imports.is_enabled(ForeignInstructionFormat::Gemini));
+        assert_eq!(unknown, vec!["clawed".to_string()], "typos are reported");
+
+        let (all, _) = ForeignInstructionImports::from_config(&["all".to_string()]);
+        for format in ForeignInstructionFormat::ALL {
+            assert!(
+                all.is_enabled(*format),
+                "{} missing from `all`",
+                format.key()
+            );
+        }
+        assert_eq!(all.keys().len(), ForeignInstructionFormat::ALL.len());
+    }
+
+    #[test]
+    fn codewhale_instructions_outrank_an_imported_claude_file() {
+        // On the previous default list CLAUDE.md sat at rank 3 and
+        // .codewhale/instructions.md at rank 4, so another tool's file won.
+        let tmp = tempdir().expect("tempdir");
+        fs::create_dir_all(tmp.path().join(".codewhale")).expect("mkdir codewhale");
+        fs::write(
+            tmp.path().join(".codewhale/instructions.md"),
+            "CODEWHALE-OWN",
+        )
+        .expect("write codewhale");
+        fs::write(tmp.path().join("CLAUDE.md"), "CLAUDE-FILE").expect("write claude");
+
+        let (imports, _) = ForeignInstructionImports::from_config(&["claude".to_string()]);
+        let files = context_files_for(&imports);
+        let cw = files
+            .iter()
+            .position(|f| *f == ".codewhale/instructions.md")
+            .expect("codewhale file in list");
+        let cl = files
+            .iter()
+            .position(|f| *f == "CLAUDE.md")
+            .expect("claude file in list");
+        assert!(
+            cl > cw,
+            "Codewhale's own instruction file must outrank an imported CLAUDE.md: {files:?}"
         );
     }
 
@@ -2095,7 +2490,8 @@ mod tests {
         fs::write(codewhale_rules.join("cw.md"), "codewhale-rule").expect("write");
         fs::write(claude_rules.join("claude.md"), "claude-rule").expect("write");
 
-        let ctx = load_project_context(tmp.path());
+        let (imports, _) = ForeignInstructionImports::from_config(&["claude".to_string()]);
+        let ctx = load_project_context_with_imports(tmp.path(), &imports);
         let rules = ctx.rules_block.as_ref().unwrap();
 
         assert!(
@@ -2104,9 +2500,9 @@ mod tests {
         );
         assert!(
             rules.contains("claude-rule"),
-            ".claude/rules/ should be loaded"
+            "an imported .claude/rules/ should be loaded"
         );
-        // .codewhale/rules/ content should appear before .claude/rules/ (RULES_DIRS order)
+        // .codewhale/rules/ content should precede an imported foreign dir
         let pos_cw = rules.find("codewhale-rule").unwrap();
         let pos_claude = rules.find("claude-rule").unwrap();
         assert!(
@@ -2116,12 +2512,11 @@ mod tests {
     }
 
     #[test]
-    fn rules_block_truncated_at_total_byte_budget() {
+    fn rules_block_truncated_at_the_aggregate_budget() {
         let tmp = tempdir().expect("tempdir");
         let rules_dir = tmp.path().join(".codewhale/rules");
         fs::create_dir_all(&rules_dir).expect("mkdir rules");
 
-        // Create files whose combined content exceeds MAX_RULES_BLOCK_BYTES
         let per_file = "X".repeat(20 * 1024); // 20 KB each
         for i in 0..30 {
             fs::write(rules_dir.join(format!("rule_{i:04}.md")), &per_file).expect("write");
@@ -2131,14 +2526,81 @@ mod tests {
         let rules = ctx.rules_block.as_ref().unwrap();
 
         assert!(
-            rules.len() <= MAX_RULES_BLOCK_BYTES + 200, // + marker overhead
-            "rules block should be truncated to budget: {} > {}",
+            rules.len() <= MAX_PROJECT_INSTRUCTION_BYTES,
+            "rules block should be truncated to the aggregate budget: {} > {}",
             rules.len(),
-            MAX_RULES_BLOCK_BYTES
+            MAX_PROJECT_INSTRUCTION_BYTES
         );
         assert!(
-            rules.contains("truncated at 500 KB"),
-            "truncation marker missing"
+            rules.contains("truncated at the aggregate budget"),
+            "truncation marker missing:\n{}",
+            &rules[rules.len().saturating_sub(200)..]
+        );
+    }
+
+    #[test]
+    fn instructions_and_rules_share_one_aggregate_budget() {
+        // The point of the change: three separate caps (200 KiB chain,
+        // 500 KiB rules, 40 KiB fragments) meant no single number described
+        // how much standing instruction text could precede the conversation.
+        let tmp = tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "A".repeat(40 * 1024)).expect("write agents");
+        let rules_dir = tmp.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+        for i in 0..10 {
+            fs::write(rules_dir.join(format!("r{i}.md")), "B".repeat(20 * 1024)).expect("write");
+        }
+
+        let ctx = load_project_context(tmp.path());
+        let total = ctx.instructions.as_ref().map_or(0, String::len)
+            + ctx.rules_block.as_ref().map_or(0, String::len);
+        assert!(
+            total <= MAX_PROJECT_INSTRUCTION_BYTES,
+            "instructions + rules must share one ceiling: {total} > {MAX_PROJECT_INSTRUCTION_BYTES}"
+        );
+        // Instructions are the higher authority and are not starved by rules.
+        assert!(
+            ctx.instructions
+                .as_ref()
+                .is_some_and(|i| i.len() > 8 * 1024),
+            "the instruction file must keep its claim on the budget"
+        );
+    }
+
+    #[test]
+    fn nearest_scope_survives_when_the_budget_forces_a_cut() {
+        // Trimming from the front means the broadest scope is dropped first,
+        // so the workspace's own file is the last thing to go. The previous
+        // per-segment accounting spent the budget root-first and could strand
+        // the most specific file entirely.
+        let tmp = tempdir().expect("tempdir");
+        let root = tmp.path();
+        fs::create_dir_all(root.join(".git")).expect("mkdir git");
+        fs::write(root.join(".git").join("HEAD"), "ref: refs/heads/main\n").expect("head");
+        fs::write(
+            root.join("AGENTS.md"),
+            format!("ROOT-MARKER {}", "R".repeat(60 * 1024)),
+        )
+        .expect("root agents");
+        let nested = root.join("crates").join("tui");
+        fs::create_dir_all(&nested).expect("mkdir nested");
+        fs::write(nested.join("AGENTS.md"), "NEAREST-MARKER stays").expect("nested agents");
+
+        let ctx = load_project_context_with_parents_and_home(&nested, None);
+        let instructions = ctx.instructions.as_deref().unwrap_or("");
+
+        assert!(
+            instructions.contains("NEAREST-MARKER stays"),
+            "the nearest-scope file must survive the cut"
+        );
+        assert!(
+            instructions.contains(CHAIN_TRUNCATION_MARKER.trim()),
+            "an explicit marker must record that broader scopes were dropped"
+        );
+        assert!(
+            instructions.len() <= MAX_PROJECT_INSTRUCTION_BYTES,
+            "budget not enforced: {}",
+            instructions.len()
         );
     }
 }

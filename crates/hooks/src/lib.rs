@@ -347,7 +347,14 @@ impl HookDispatcher {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    #[cfg(unix)]
+    use std::sync::atomic::{AtomicU64, Ordering};
+    #[cfg(unix)]
+    use std::time::Duration;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(unix)]
+    static SOCKET_PATH_NONCE: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn hook_event_serializes_with_snake_case_type_and_payload() {
@@ -510,7 +517,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn unix_socket_sink_skips_when_listener_absent() {
-        let (root, socket_path) = unique_short_socket_path("missing");
+        let (_root, socket_path) = unique_short_socket_path("missing");
         let sink = UnixSocketHookSink::new(socket_path);
         let result = sink
             .emit(&HookEvent::ResponseStart {
@@ -518,7 +525,6 @@ mod tests {
             })
             .await;
         assert!(result.is_ok());
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[cfg(unix)]
@@ -533,8 +539,12 @@ mod tests {
 
         let listener = UnixListener::bind(&socket_path).expect("bind");
         let sink = UnixSocketHookSink::new(socket_path.clone());
+        let cleanup = || {
+            let _ = std::fs::remove_file(&socket_path);
+            let _ = std::fs::remove_dir_all(&root);
+        };
 
-        let handle = tokio::spawn(async move {
+        let mut handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("accept");
             let mut reader = tokio::io::BufReader::new(stream);
             let mut line = String::new();
@@ -542,20 +552,35 @@ mod tests {
             line
         });
 
-        sink.emit(&HookEvent::ResponseStart {
+        let event = HookEvent::ResponseStart {
             response_id: "resp-42".to_string(),
-        })
-        .await
-        .expect("emit");
+        };
+        let emit = sink.emit(&event);
+        match tokio::time::timeout(Duration::from_secs(5), emit).await {
+            Ok(result) => result.expect("emit"),
+            Err(_) => {
+                handle.abort();
+                let _ = (&mut handle).await;
+                cleanup();
+                panic!("unix socket emit timed out");
+            }
+        }
 
-        let received = handle.await.expect("join");
+        let received = match tokio::time::timeout(Duration::from_secs(5), &mut handle).await {
+            Ok(result) => result.expect("join"),
+            Err(_) => {
+                handle.abort();
+                let _ = (&mut handle).await;
+                cleanup();
+                panic!("unix socket exchange timed out");
+            }
+        };
         let parsed: Value = serde_json::from_str(&received).expect("parse");
         assert_eq!(parsed["event"]["type"], "response_start");
         assert_eq!(parsed["event"]["response_id"], "resp-42");
         assert!(parsed["at"].as_str().is_some());
 
-        let _ = std::fs::remove_file(&socket_path);
-        let _ = std::fs::remove_dir_all(root);
+        cleanup();
     }
 
     #[derive(Default)]
@@ -603,8 +628,12 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = PathBuf::from("/tmp").join(format!("cw-hk-{}-{nanos}", std::process::id()));
-        let path = root.join(format!("{label}.sock"));
+        let nonce = SOCKET_PATH_NONCE.fetch_add(1, Ordering::Relaxed);
+        let root = PathBuf::from("/tmp").join(format!(
+            "cw-hk-{label}-{}-{nanos}-{nonce}",
+            std::process::id()
+        ));
+        let path = root.join("hook.sock");
         (root, path)
     }
 

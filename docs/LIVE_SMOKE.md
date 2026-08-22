@@ -115,7 +115,7 @@ env -i \
 
     export "$CW_SMOKE_CRED_VAR=$CW_SMOKE_CRED"
     unset CW_SMOKE_CRED
-    exec codewhale-tui exec \
+    exec codewhale exec \
       --provider "$1" --model "$2" --reasoning-effort "$3" --json "$4"
   ' sh "$CW_SMOKE_PROVIDER" "$CW_SMOKE_MODEL" "$CW_SMOKE_EFFORT" "$CW_SMOKE_PROMPT"
 ```
@@ -144,7 +144,7 @@ tool-catalog and reasoning receipts, use the streaming form (still inside the
 same `env -i` wrapper, substituting the `exec` line):
 
 ```sh
-    exec codewhale-tui exec --auto --max-turns 3 \
+    exec codewhale exec --auto --max-turns 3 \
       --output-format stream-json \
       --provider "$1" --model "$2" --reasoning-effort "$3" "$4"
 ```

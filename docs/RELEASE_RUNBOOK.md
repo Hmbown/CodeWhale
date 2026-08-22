@@ -4,7 +4,8 @@ This runbook is the source of truth for shipping Rust crates, GitHub release ass
 and the `codewhale` npm wrapper.
 
 Current packaging note:
-- `codewhale-tui` is the live runtime crate shipped to users today.
+- `codewhale-tui` is the live runtime crate linked into the installed
+  `codewhale`/`codew` commands; it is not a third installed command.
 - `codewhale-app-server` is a supporting library crate. The shipped entrypoint
   is `codewhale app-server`; do not add or publish a standalone app-server binary.
 
@@ -79,7 +80,7 @@ PR merge or milestone cleanup work.
 Run these from the repository root before cutting a tag:
 
 ```bash
-./scripts/release/check-versions.sh   # version drift between workspace, npm, lockfile
+./scripts/release/check-versions.sh   # workspace/npm/SDK/VS Code/generated-fact/lock drift
 cargo fmt --all -- --check
 cargo check --workspace --all-targets --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
@@ -89,8 +90,9 @@ cargo test --workspace --all-features --locked
 
 `check-versions.sh` also runs in CI on every push/PR (the `versions` job in
 `.github/workflows/ci.yml`), so drift between `Cargo.toml`, the per-crate
-manifests, `npm/codewhale/package.json`, and `Cargo.lock` is caught before
-release time rather than at it.
+manifests, the npm wrapper and Runtime SDK, the VS Code extension and lock,
+generated web facts, and `Cargo.lock` is caught before release time rather than
+at it.
 
 The source-controlled CNB pipeline mirrors the heavy Linux version/fmt/check/
 clippy/test/npm-smoke gates for `fix/*`, `rebrand/*`, `work/v*`, and `main`.
@@ -146,9 +148,10 @@ exact requested SHA. It invokes the same reusable artifact workflow as the
 public release, building all seven targets (including Android arm64 and native
 Windows arm64), staging `codewhale` and `codew` (single binary), building the
 NSIS installer and nine platform archives, and validating the authoritative
-34-file v0.9.5 bridge inventory from `npm/codewhale/scripts/artifacts.js` (27
-current assets plus seven legacy `codewhale-tui-*` names containing the same
-compiled `codewhale` bytes for v0.9.4 update compatibility). It then installs
+34-file inventory from `npm/codewhale/scripts/artifacts.js` (27 current
+artifacts and manifests plus seven compatibility-only `codewhale-tui-*`
+filenames containing the same compiled `codewhale` bytes for v0.9.4 update
+clients). It then installs
 the packed npm wrapper against those assembled local assets and exercises its
 delegated entrypoints. The resulting `codewhale-release-assets` bundle is a
 short-lived GitHub Actions artifact only.
@@ -235,8 +238,10 @@ and fails branch-only release sources before assets are published.
 
 1. Write the CHANGELOG entry, then run
    `./scripts/release/prepare-release.sh X.Y.Z` — it bumps every
-   version-bearing file (workspace + crate pins + npm wrapper + README
-   install tags), refreshes the lockfile and generated files, and runs
+   version-bearing file (workspace + crate pins + npm wrapper + Runtime SDK +
+   VS Code extension/lock + remote-smoke default + public source-candidate
+   facts + README install tags), refreshes the Cargo/npm locks and generated
+   files, and runs
    the version and OHOS gates. It is safe to rerun after the workspace already
    equals `X.Y.Z`: the second run skips replacements, refreshes the packaged
    changelog and web facts, and reruns both gates.
@@ -290,8 +295,9 @@ The publish helper is idempotent for reruns: already-published crate versions ar
 - one `codewhale-*` runtime binary for Linux x64/arm64, Android arm64, macOS
   x64/arm64, and Windows x64/arm64
 - byte-identical `codew-*` command assets copied from that runtime
-- for v0.9.5 only, byte-identical `codewhale-tui-*` compatibility filenames so
-  installed v0.9.4 clients can discover and complete the one-runtime upgrade
+- byte-identical `codewhale-tui-*` compatibility filenames so installed v0.9.4
+  clients can discover and complete the one-runtime upgrade; current installers
+  never expose those filenames as a third command
 - `codewhale.bat` for the Windows npm/GitHub x64 launcher, and the same
   filename inside Windows zip archives and the NSIS install (those copies
   launch `codewhale.exe` and prefer Windows Terminal)

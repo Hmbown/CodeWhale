@@ -1234,6 +1234,7 @@ mod tests {
 mod dialect_seam_tests {
     use super::*;
     use crate::config::{Config, ProviderConfig, ProvidersConfig};
+    use crate::models::Role;
     use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt, Tool};
     use serde_json::json;
 
@@ -1257,7 +1258,7 @@ mod dialect_seam_tests {
         MessageRequest {
             model: model.to_string(),
             messages: vec![Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "hello".to_string(),
                     cache_control: None,
@@ -1382,6 +1383,93 @@ mod dialect_seam_tests {
 
     /// Every production Anthropic Messages route: native Anthropic, the
     /// DeepSeek Messages route, and the MiniMax Messages route. Each shapes
+    fn message(role: Role, text: &str) -> Message {
+        Message {
+            role,
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+                cache_control: None,
+            }],
+        }
+    }
+
+    /// Anthropic Messages has no in-transcript `system` role, but a compaction
+    /// summary cannot be dropped or hoisted without changing transcript
+    /// meaning. The seam keeps it in place and the adapter projects it onto a
+    /// user message, one of the two roles the wire accepts.
+    #[test]
+    fn seam_preserves_an_in_transcript_system_message_on_anthropic() {
+        let client = client("anthropic", |providers| {
+            providers.anthropic = configured("sk-ant-test", None, "claude-sonnet-4-5");
+        });
+        let mut request = request("claude-sonnet-4-5");
+        request
+            .messages
+            .push(message(Role::System, "compaction summary"));
+
+        let prepared = client
+            .prepare_outbound_request(request, true)
+            .expect("Anthropic projects positioned system history onto user");
+        let carried = prepared.body["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .find(|message| {
+                message["content"].as_array().is_some_and(|blocks| {
+                    blocks
+                        .iter()
+                        .any(|block| block["text"] == "compaction summary")
+                })
+            })
+            .expect("compaction summary survives");
+        assert_eq!(carried["role"], "user");
+    }
+
+    /// Same seam, same rejection, on the wire that has always failed closed.
+    #[test]
+    fn seam_refuses_the_interrupted_sentinel_on_cloud_code() {
+        let client = client("antigravity", |providers| {
+            providers.antigravity = configured("agy-test", None, "gemini-3-pro");
+        });
+        let mut request = request("gemini-3-pro");
+        request.system = None;
+        request.tools = None;
+        request
+            .messages
+            .push(message(Role::InterruptedAssistant, "half a thought"));
+
+        let error = client
+            .prepare_outbound_request(request, true)
+            .expect_err("cloud-code has never accepted the interrupted sentinel");
+        assert!(error.to_string().contains("google-cloud-code"), "{error}");
+    }
+
+    /// The dialects that have always dropped an unrepresentable role keep
+    /// dropping it. Turning that into a hard failure would break live
+    /// sessions; the point of the seam is to make the choice explicit, not to
+    /// make every dialect strict.
+    #[test]
+    fn seam_lets_the_openai_shaped_dialects_keep_dropping_unknown_roles() {
+        let client = client("deepseek", |providers| {
+            providers.deepseek = configured("sk-test-deepseek", None, "deepseek-chat");
+        });
+        let mut request = request("deepseek-chat");
+        request.messages.push(message(
+            Role::Unrecognized("future_role".to_string()),
+            "from a newer build",
+        ));
+
+        let prepared = client
+            .prepare_outbound_request(request, true)
+            .expect("an unknown role must not fail a Chat Completions turn");
+        let body = serde_json::to_string(&prepared.body).expect("serialize body");
+        assert!(
+            !body.contains("from a newer build"),
+            "an unknown role must not reach the wire: {body}"
+        );
+        assert!(!body.contains("\"future_role\""), "{body}");
+    }
+
     /// thinking differently, so each is checked against its own builder run.
     #[test]
     fn anthropic_messages_preview_matches_the_production_messages_builder() {

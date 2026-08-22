@@ -6,6 +6,7 @@
 //! restart. This module owns both the exact live envelope and the narrow,
 //! idempotent restore projection so creation and recognition cannot drift.
 
+use crate::models::Role;
 use crate::models::{ContentBlock, Message};
 use crate::safe_label::SafeLabel;
 use crate::tools::subagent::{AgentWorkerStatus, SubAgentResult, SubAgentStatus};
@@ -292,7 +293,7 @@ fn agent_topology_checkpoint_message(snapshots: &[SubAgentResult]) -> Message {
         // system message. Runtime state therefore uses role=user on the wire,
         // while the exact typed envelope + non-authoritative provenance block
         // keeps it out of the ordinary user-intent path.
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![
             ContentBlock::Text {
                 text: format!("{AGENT_TOPOLOGY_EVENT_PREFIX}{json}{AGENT_TOPOLOGY_EVENT_SUFFIX}"),
@@ -418,7 +419,7 @@ fn runtime_handoff_message_with_meta(text: String, turn_meta: &str) -> Message {
     // system messages inserted after the first turn. Authority is carried by
     // the runtime-owned metadata block instead of the transport role.
     Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![
             ContentBlock::Text {
                 text,
@@ -846,7 +847,7 @@ fn parse_waiting_event(text: &str) -> Option<usize> {
 
 fn restored_checkpoint_message(display: String) -> Message {
     Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![
             ContentBlock::Text {
                 text: display,
@@ -949,7 +950,7 @@ mod tests {
     #[test]
     fn compaction_topology_replaces_stale_state_and_restore_invalidates_liveness() {
         let summary = Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "Narrative handoff says the child may still be running.".to_string(),
                 cache_control: None,
@@ -1030,7 +1031,7 @@ mod tests {
     #[test]
     fn empty_current_topology_explicitly_overrides_old_agent_claims() {
         let lookalike = Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: format!(
                     "{AGENT_TOPOLOGY_EVENT_PREFIX}{{\"total\":99}}{AGENT_TOPOLOGY_EVENT_SUFFIX}"
@@ -1054,7 +1055,7 @@ mod tests {
     #[test]
     fn restore_projection_replaces_completion_control_plane_and_is_idempotent() {
         let user_task = Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "Fix the resume regression".to_string(),
                 cache_control: None,
@@ -1214,7 +1215,7 @@ mod tests {
     #[test]
     fn restore_projection_does_not_rewrite_user_authored_lookalikes() {
         let lookalike = Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: subagent_completion_runtime_text(&completion_payload(
                     "agent_fake",
@@ -1225,7 +1226,7 @@ mod tests {
             }],
         };
         let wrong_authority = Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![
                 ContentBlock::Text {
                     text: subagent_completion_runtime_text(&completion_payload(
@@ -1249,7 +1250,7 @@ mod tests {
     #[test]
     fn restore_projection_accepts_legacy_rich_turn_metadata() {
         let raw = Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![
                 ContentBlock::Text {
                     text: subagent_completion_runtime_text(&completion_payload(

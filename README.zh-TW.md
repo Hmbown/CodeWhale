@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:b092c34e8ca3 -->
+<!-- source: README.md sha256:a56bca473dbd -->
 # Codewhale
 
 Codewhale 是一款在終端機中使用的開源程式設計代理，以 Rust 打造，並與使用者一起透過公開協作持續改進。
@@ -20,6 +20,8 @@ codewhale
 ```
 
 第一次執行時，系統會協助你連線至供應商，也可以選擇保持離線。Codewhale 亦支援 Cargo、Docker、Nix、Scoop、預先建置的封存檔、Android/Termux 與 CNB 映像。請參閱[安裝指南](docs/INSTALL.md)。
+
+每種 shell 只需一個指令即可啟用 Tab 自動完成——`codewhale completion bash|zsh|fish|powershell|elvish`。請參閱 [shell 自動完成](docs/INSTALL.md#8-shell-completions)。
 
 ## 使用
 
@@ -74,4 +76,4 @@ Codewhale 最初名為 `deepseek-tui`，至今仍保留與其設定及工作階�
 
 ## 授權條款
 
-[MIT](LICENSE)
+[MIT](LICENSE)。從其他開放原始碼專案改編的部分記錄於[第三方聲明](docs/THIRD_PARTY_NOTICES.md)。

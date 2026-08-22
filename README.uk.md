@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:b092c34e8ca3 -->
+<!-- source: README.md sha256:a56bca473dbd -->
 # Codewhale
 
 Codewhale — це агент програмування з відкритим кодом для вашого термінала, створений на Rust і вдосконалюваний публічно разом із людьми, які ним користуються.
@@ -20,6 +20,8 @@ codewhale
 ```
 
 Під час першого запуску Codewhale допоможе під’єднати провайдера або залишитися в автономному режимі. Він також підтримує Cargo, Docker, Nix, Scoop, готові архіви, Android/Termux і дзеркало CNB. Див. [посібник зі встановлення](docs/INSTALL.md).
+
+Для автодоповнення за Tab достатньо однієї команди для кожної оболонки — `codewhale completion bash|zsh|fish|powershell|elvish`. Див. [автодоповнення оболонки](docs/INSTALL.md#8-shell-completions).
 
 ## Використання
 
@@ -74,4 +76,4 @@ Codewhale починався як `deepseek-tui` і досі зберігає с
 
 ## Ліцензія
 
-[MIT](LICENSE)
+[MIT](LICENSE). Частини, адаптовані з інших проєктів із відкритим кодом, зазначено в [повідомленнях про сторонні компоненти](docs/THIRD_PARTY_NOTICES.md).

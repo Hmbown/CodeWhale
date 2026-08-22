@@ -1,8 +1,8 @@
-pub mod engine;
 pub mod fragments;
 pub mod ids;
 pub mod journal;
 pub mod request;
+pub mod role;
 pub mod session;
 pub mod tool_parser;
 
@@ -12,9 +12,9 @@ use std::sync::Arc;
 
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use codewhale_agent::ModelRegistry;
-use codewhale_config::{CliRuntimeOverrides, ConfigToml, ProviderKind};
+use codewhale_config::{ConfigToml, ProviderKind};
 use codewhale_execpolicy::{
     AskForApproval, ExecApprovalRequirement, ExecPolicyContext, ExecPolicyDecision,
     ExecPolicyEngine,
@@ -24,11 +24,11 @@ use codewhale_mcp::{
     McpManager, McpStartupCompleteEvent, McpStartupStatus as McpManagerStartupStatus,
 };
 use codewhale_protocol::{
-    AppResponse, EventFrame, ExecApprovalRequestEvent, PromptRequest, PromptResponse,
-    ResponseChannel, ReviewDecision, Status, Thread, ThreadForkParams, ThreadGoal,
-    ThreadGoalClearParams, ThreadGoalGetParams, ThreadGoalProgressParams, ThreadGoalSetParams,
-    ThreadGoalStatus, ThreadListParams, ThreadReadParams, ThreadRequest, ThreadResponse,
-    ThreadResumeParams, ThreadSetNameParams, ThreadStatus, ToolPayload, UserInputRequestEvent,
+    AppResponse, EventFrame, ExecApprovalRequestEvent, ResponseChannel, ReviewDecision, Status,
+    Thread, ThreadForkParams, ThreadGoal, ThreadGoalClearParams, ThreadGoalGetParams,
+    ThreadGoalProgressParams, ThreadGoalSetParams, ThreadGoalStatus, ThreadListParams,
+    ThreadReadParams, ThreadRequest, ThreadResponse, ThreadResumeParams, ThreadSetNameParams,
+    ThreadStatus, ToolPayload, UserInputRequestEvent,
 };
 use codewhale_state::{
     JobStateRecord, JobStateStatus, SessionSource, StateStore, ThreadGoalRecord,
@@ -1027,18 +1027,6 @@ impl Runtime {
         }))
     }
 
-    fn persist_latest_checkpoint(&self, thread_id: &str, reason: &str, state: Value) -> Result<()> {
-        self.thread_manager.state_store().save_checkpoint(
-            thread_id,
-            "latest",
-            &json!({
-                "reason": reason,
-                "saved_at": chrono::Utc::now().timestamp(),
-                "state": state
-            }),
-        )
-    }
-
     /// Dispatches a thread request (create, start, resume, fork, list, read, etc.).
     pub async fn handle_thread(&mut self, req: ThreadRequest) -> Result<ThreadResponse> {
         match req {
@@ -1310,127 +1298,19 @@ impl Runtime {
                     data: json!({}),
                 })
             }
-            ThreadRequest::Message { thread_id, input } => {
-                self.thread_manager.touch_message(&thread_id, &input)?;
-                // Keyed by a fresh uuid, like handle_prompt: keying on
-                // `{thread_id}:{input.len()}` made any two equal-length
-                // messages share a response_id, breaking hook correlation.
-                let response_id = format!("resp-{}", Uuid::new_v4());
-                self.hooks
-                    .emit(HookEvent::ResponseStart {
-                        response_id: response_id.clone(),
-                    })
-                    .await;
-                self.hooks
-                    .emit(HookEvent::ResponseEnd {
-                        response_id: response_id.clone(),
-                    })
-                    .await;
-
-                Ok(ThreadResponse {
-                    thread_id,
-                    status: "accepted".to_string(),
-                    thread: None,
-                    threads: Vec::new(),
-                    goal: None,
-                    model: None,
-                    model_provider: None,
-                    cwd: None,
-                    approval_policy: None,
-                    sandbox: None,
-                    events: vec![
-                        EventFrame::ResponseStart {
-                            response_id: response_id.clone(),
-                        },
-                        EventFrame::ResponseDelta {
-                            response_id: response_id.clone(),
-                            delta: "queued".to_string(),
-                            channel: ResponseChannel::Text,
-                        },
-                        EventFrame::ResponseEnd { response_id },
-                    ],
-                    data: json!({}),
-                })
-            }
+            // A thread message is a *turn*, and this type is not the turn
+            // engine — it owns thread bookkeeping and persistence only. The
+            // app-server routes messages through its runtime bridge
+            // (`POST /v1/threads/{id}/turns` on the runtime API) and never
+            // reaches this arm. Returning an error rather than a canned
+            // "accepted" keeps any other caller from mistaking bookkeeping
+            // for execution.
+            ThreadRequest::Message { thread_id, .. } => Err(anyhow!(
+                "thread message for {thread_id} cannot be executed here: \
+                 Runtime::handle_thread does not run turns. Send it through the \
+                 app-server runtime bridge (POST /v1/threads/{{id}}/turns)."
+            )),
         }
-    }
-
-    /// Resolves the model for a prompt, records the message, and returns the response.
-    pub async fn handle_prompt(
-        &mut self,
-        req: PromptRequest,
-        cli_overrides: &CliRuntimeOverrides,
-    ) -> Result<PromptResponse> {
-        let resolved = self.config.resolve_runtime_options(cli_overrides);
-        let requested_model = req.model.clone().unwrap_or_else(|| resolved.model.clone());
-        let selection = self
-            .model_registry
-            .resolve(Some(&requested_model), Some(resolved.provider));
-        let resolved_model = selection.resolved.id.clone();
-        let response_id = format!("resp-{}", Uuid::new_v4());
-
-        self.hooks
-            .emit(HookEvent::ResponseStart {
-                response_id: response_id.clone(),
-            })
-            .await;
-        self.hooks
-            .emit(HookEvent::ResponseDelta {
-                response_id: response_id.clone(),
-                delta: "model-selected".to_string(),
-            })
-            .await;
-        self.hooks
-            .emit(HookEvent::ResponseEnd {
-                response_id: response_id.clone(),
-            })
-            .await;
-
-        let payload = json!({
-            "provider": resolved.provider.as_str(),
-            "model": resolved_model.clone(),
-            "prompt": req.prompt,
-            "telemetry": resolved.telemetry,
-            "base_url": resolved.base_url,
-            "has_api_key": resolved.api_key.as_ref().is_some_and(|k| !k.trim().is_empty()),
-            "approval_policy": resolved.approval_policy,
-            "sandbox_mode": resolved.sandbox_mode
-        });
-        if let Some(thread_id) = req.thread_id.as_ref() {
-            self.thread_manager.touch_message(thread_id, &req.prompt)?;
-            let assistant_message_id = self.thread_manager.store.append_message(
-                thread_id,
-                "assistant",
-                &payload.to_string(),
-                Some(payload.clone()),
-            )?;
-            self.persist_latest_checkpoint(
-                thread_id,
-                "prompt_response",
-                json!({
-                    "response_id": response_id.clone(),
-                    "model": resolved_model.clone(),
-                    "provider": resolved.provider.as_str(),
-                    "assistant_message_id": assistant_message_id
-                }),
-            )?;
-        }
-
-        Ok(PromptResponse {
-            output: payload.to_string(),
-            model: resolved_model,
-            events: vec![
-                EventFrame::ResponseStart {
-                    response_id: response_id.clone(),
-                },
-                EventFrame::ResponseDelta {
-                    response_id: response_id.clone(),
-                    delta: "model-selected".to_string(),
-                    channel: ResponseChannel::Text,
-                },
-                EventFrame::ResponseEnd { response_id },
-            ],
-        })
     }
 
     /// Evaluates execution policy and dispatches a tool call.
@@ -1544,10 +1424,17 @@ impl Runtime {
         // branch (issue #3102). The TUI intercepts this tool by name before
         // dispatch and blocks on a reply channel; the headless runtime instead
         // emits a typed `UserInputRequest` frame and returns a
-        // `user_input_required` status so the client can render the question
-        // and POST answers back via `AppRequest::SubmitUserInput`. It does NOT
-        // block — consistent with the headless approval model, which has no
-        // resume channel either.
+        // `user_input_required` status so the client can render the question.
+        // It does NOT block — consistent with the headless approval model,
+        // which has no resume channel either.
+        //
+        // The reply goes to the runtime API
+        // (`POST /v1/user-input/{thread_id}/{request_id}`), which owns the
+        // pending request and can resume the turn. The app-server control
+        // transport cannot: it executes only `thread/interrupt` mid-turn, so
+        // an answer sent over it would queue behind the very turn that is
+        // waiting for it. `AppRequest::SubmitUserInput` therefore refuses
+        // explicitly instead of pretending to have delivered the answer.
         if call.name == REQUEST_USER_INPUT_TOOL_NAME {
             let request_id = format!("user-input-{}", Uuid::new_v4());
             let arguments = match &call.payload {
@@ -3346,14 +3233,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_message_response_ids_are_unique_for_equal_length_inputs() {
-        // The Message arm used to key response_id as `{thread_id}:{input.len()}`,
-        // so any two equal-length messages collided and hooks could not tell
-        // their ResponseStart/ResponseEnd pairs apart.
+    async fn thread_message_is_refused_rather_than_faked() {
+        // This arm used to record the user message, emit canned
+        // ResponseStart/ResponseDelta("queued")/ResponseEnd frames and report
+        // status "accepted" — with no worker, no model, and nothing queued.
+        // `Runtime` owns thread bookkeeping, not the turn engine, so the only
+        // honest answer here is a refusal that names where turns actually run.
         let mut runtime = Runtime::new(
             ConfigToml::default(),
             ModelRegistry::default(),
-            temp_core_state("response-id-unique"),
+            temp_core_state("message-refused"),
             Arc::new(ToolRegistry::default()),
             Arc::new(McpManager::default()),
             ExecPolicyEngine::new(vec![], vec![]),
@@ -3370,33 +3259,27 @@ mod tests {
             .expect("spawn thread");
         let thread_id = spawned.thread.id.clone();
 
-        let mut response_ids = Vec::new();
-        for input in ["aaaa", "bbbb"] {
-            let response = runtime
-                .handle_thread(ThreadRequest::Message {
-                    thread_id: thread_id.clone(),
-                    input: input.to_string(),
-                })
-                .await
-                .expect("handle message");
-            let response_id = response
-                .events
-                .iter()
-                .find_map(|frame| match frame {
-                    EventFrame::ResponseStart { response_id } => Some(response_id.clone()),
-                    _ => None,
-                })
-                .expect("response start event");
-            response_ids.push(response_id);
-        }
-
-        assert_ne!(
-            response_ids[0], response_ids[1],
-            "equal-length inputs must not share a response_id"
-        );
+        let err = runtime
+            .handle_thread(ThreadRequest::Message {
+                thread_id: thread_id.clone(),
+                input: "run this".to_string(),
+            })
+            .await
+            .expect_err("handle_thread must not pretend to execute a turn");
         assert!(
-            response_ids.iter().all(|id| id.starts_with("resp-")),
-            "response ids should use the resp-<uuid> shape: {response_ids:?}"
+            err.to_string().contains("/v1/threads/{id}/turns"),
+            "the refusal must name the surface that does run turns: {err}"
+        );
+
+        // Nothing was written to history on the way out.
+        let history = runtime
+            .thread_manager
+            .store
+            .list_messages(&thread_id, None)
+            .expect("list messages");
+        assert!(
+            history.is_empty(),
+            "a refused message must leave no history rows: {history:?}"
         );
     }
 }

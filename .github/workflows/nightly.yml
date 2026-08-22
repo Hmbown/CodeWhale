@@ -21,7 +21,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUSTFLAGS: -Dwarnings
-  DEEPSEEK_BUILD_SHA: ${{ github.sha }}
+  CODEWHALE_BUILD_SHA: ${{ github.sha }}
 
 jobs:
   build:

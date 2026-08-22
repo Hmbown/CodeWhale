@@ -1,6 +1,7 @@
 use super::DeepSeekClient;
 use super::chat::{parse_chat_message, parse_sse_chunk};
 use crate::config::{Config, ProviderConfig, ProvidersConfig};
+use crate::models::Role;
 use crate::models::{ContentBlock, Delta, Message, MessageRequest, StreamEvent, Tool};
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -30,7 +31,7 @@ fn request(effort: &str) -> MessageRequest {
     MessageRequest {
         model: "deepseek-v4-flash".to_string(),
         messages: vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "hello".to_string(),
                 cache_control: None,

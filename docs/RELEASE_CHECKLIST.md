@@ -64,9 +64,10 @@ generic checklist does not enumerate.
 ## 2. Version pins are in sync
 
 - [ ] Run `./scripts/release/prepare-release.sh X.Y.Z` — it bumps the
-      workspace version, every per-crate dependency pin,
-      `npm/codewhale/package.json` (`version` + `codewhaleBinaryVersion`),
-      the README install-tag examples, refreshes `Cargo.lock`, regenerates
+      workspace version, every per-crate dependency pin, the npm wrapper
+      (`version` + `codewhaleBinaryVersion`), Runtime SDK, VS Code extension
+      and lock, remote-smoke default, public source-candidate facts, and README
+      install-tag examples; it refreshes the Cargo/npm locks, regenerates
       `crates/tui/CHANGELOG.md` and `web/lib/facts.generated.ts`, and ends
       by running the version and OHOS gates. Write the CHANGELOG entry
       **before** running it. The helper is safe to rerun at the requested
@@ -75,7 +76,7 @@ generic checklist does not enumerate.
 - [ ] `npm/deepseek-tui/package.json` remains private/compatibility-only and
       is **not** bumped or published.
 - [ ] `./scripts/release/check-versions.sh` reports
-      `Version state OK: workspace=X.Y.Z, npm=X.Y.Z, lockfile in sync.`
+      `Version state OK: workspace=X.Y.Z, npm=X.Y.Z, npm-binary=X.Y.Z, lockfile in sync.`
 - [ ] `./scripts/release/check-ohos-deps.sh` reports that the OpenHarmony
       Windows linker keeps the target/sysroot flags, the target enables the
       `rquickjs-sys` bindgen edge, and its graph does not pull the unsupported
@@ -175,8 +176,10 @@ release anxiety: contributors cannot tell whether their work merged.
       ```
       Both runs must resolve to that SHA. The candidate must report all seven
       targets and the complete 34-file asset inventory, including Android
-      arm64, Windows arm64, `codew`, the NSIS installer, archives, and checksum
-      manifests. These are Actions artifacts only and are not a release.
+      arm64, Windows arm64, `codew`, the NSIS installer, archives, checksum
+      manifests, and seven compatibility-only `codewhale-tui-*` release
+      filenames that are not installed commands. These are Actions artifacts
+      only and are not a release.
 - [ ] PR has been reviewed.
 
 ## 7. Tag and release (after review)

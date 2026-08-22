@@ -14,7 +14,7 @@ Pada macOS dan Linux, installer situs web adalah jalur instalasi dan pembaruan t
 curl -fsSL https://codewhale.net/install.sh | sh
 ```
 
-Skrip ini akan mengunduh biner rilis `codewhale`, `codew`, dan `codewhale-tui` yang cocok, memverifikasinya terhadap `codewhale-artifacts-sha256.txt`, menginstal ke `~/.local/bin` secara bawaan, serta menyediakan perintah `codew`.
+Skrip ini akan mengunduh biner rilis `codewhale` dan `codew` yang cocok, memverifikasinya terhadap `codewhale-artifacts-sha256.txt`, dan menginstalnya ke `~/.local/bin` secara bawaan. Nama aset `codewhale-tui-*` hanya dipertahankan untuk kompatibilitas updater lama dan bukan perintah ketiga.
 
 ---
 
@@ -24,13 +24,13 @@ Rilis resmi Codewhale menyediakan biner pra-kemas untuk kombinasi platform dan a
 
 | Platform     | Arsitektur | `npm install` | `cargo install` | Aset Rilis GitHub                                     |
 | ------------ | ------------ | :---------: | :-------------: | ----------------------------------------------------- |
-| Linux        | x64 (x86_64) |     ✅      |       ✅        | `codewhale-linux-x64`, `codew-linux-x64`, `codewhale-tui-linux-x64`        |
-| Linux        | arm64        |     ✅      |       ✅        | `codewhale-linux-arm64`, `codew-linux-arm64`, `codewhale-tui-linux-arm64`    |
+| Linux        | x64 (x86_64) |     ✅      |       ✅        | `codewhale-linux-x64`, `codew-linux-x64`        |
+| Linux        | arm64        |     ✅      |       ✅        | `codewhale-linux-arm64`, `codew-linux-arm64`    |
 | Android / Termux | arm64 (aarch64) | ⚠️ Pratinjau | ⚠️ Pratinjau | Arsip pratinjau `codewhale-android-arm64.tar.gz` |
-| macOS        | x64          |     ✅      |       ✅        | `codewhale-macos-x64`, `codew-macos-x64`, `codewhale-tui-macos-x64`        |
-| macOS        | arm64 (M-series) | ✅      |       ✅        | `codewhale-macos-arm64`, `codew-macos-arm64`, `codewhale-tui-macos-arm64`    |
-| Windows      | x64          |     ✅      |       ✅        | `codewhale-windows-x64.exe`, `codew-windows-x64.exe`, `codewhale-tui-windows-x64.exe` |
-| Windows      | arm64        |     ✅      |       ✅        | `codewhale-windows-arm64.exe`, `codew-windows-arm64.exe`, `codewhale-tui-windows-arm64.exe` |
+| macOS        | x64          |     ✅      |       ✅        | `codewhale-macos-x64`, `codew-macos-x64`        |
+| macOS        | arm64 (M-series) | ✅      |       ✅        | `codewhale-macos-arm64`, `codew-macos-arm64`    |
+| Windows      | x64          |     ✅      |       ✅        | `codewhale-windows-x64.exe`, `codew-windows-x64.exe` |
+| Windows      | arm64        |     ✅      |       ✅        | `codewhale-windows-arm64.exe`, `codew-windows-arm64.exe` |
 
 ---
 
@@ -52,7 +52,6 @@ Jika Anda ingin mengompilasi biner langsung dari sumber kode menggunakan Rust:
 
 ```bash
 cargo install codewhale-cli --locked
-cargo install codewhale-tui --locked
 ```
 
 Persyaratan sistem:
@@ -72,7 +71,6 @@ Termux berjalan di atas Bionic libc Android dan menggunakan `$PREFIX` sebagai aw
 2. Jalankan instalasi via Cargo:
    ```bash
    cargo install codewhale-cli --locked
-   cargo install codewhale-tui --locked
    ```
 
 ---

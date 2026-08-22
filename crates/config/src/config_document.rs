@@ -60,9 +60,19 @@ where
 /// pass (existing top-level values always win; shadowed duplicates are
 /// dropped), until no literal `extras` table remains. Bounded passes keep a
 /// pathological file from looping.
+///
+/// An `extras` key that is *not* table-like (a string, array, or number) has
+/// nothing to lift, so it is left exactly where it is. Removing it would
+/// delete user data this function cannot heal, on every subsequent write.
 pub fn heal_extras_nesting(document: &mut toml_edit::DocumentMut) -> bool {
     let mut healed = false;
     for _ in 0..16 {
+        if document
+            .get("extras")
+            .is_none_or(|item| !item.is_table_like())
+        {
+            break;
+        }
         let Some(extras) = document
             .remove("extras")
             .and_then(|item| item.into_table().ok())
@@ -444,6 +454,51 @@ fn table_like_at_path_mut<'a>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn healing_keeps_a_non_table_extras_key_it_cannot_lift() {
+        // `extras` is where the config structs flatten unknown keys, so a
+        // scalar or array under that exact name round-trips through the typed
+        // path as ordinary user data. Healing used to `remove()` it before
+        // discovering it was not a table, dropping it on the very next
+        // `codewhale config set` — and reporting `healed == false` while doing
+        // so.
+        for body in [
+            "extras = \"opaque\"\nmodel = \"m\"\n",
+            "extras = [1, 2]\nmodel = \"m\"\n",
+            "model = \"m\"\nextras = 7\n",
+        ] {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let path = tmp.path().join("config.toml");
+            std::fs::write(&path, body).expect("write fixture");
+
+            super::mutate_config_document(&path, |doc| {
+                super::set_config_document_value(doc, &["tui", "low_motion"], true)
+            })
+            .expect("mutate");
+
+            let saved = std::fs::read_to_string(&path).expect("read");
+            let parsed: toml::Value = toml::from_str(&saved).expect("parse");
+            assert!(
+                parsed.get("extras").is_some(),
+                "non-table `extras` was deleted by an unrelated write: {saved}"
+            );
+            assert!(saved.contains("low_motion = true"), "{saved}");
+        }
+    }
+
+    #[test]
+    fn healing_still_lifts_an_inline_extras_table() {
+        // The preservation guard above must not stop the real healing path:
+        // an inline table is table-like and still gets lifted.
+        let mut doc = "extras = { trust = true }\nmodel = \"m\"\n"
+            .parse::<toml_edit::DocumentMut>()
+            .expect("parse");
+        assert!(super::heal_extras_nesting(&mut doc));
+        let rendered = doc.to_string();
+        assert!(rendered.contains("trust = true"), "{rendered}");
+        assert!(!rendered.contains("extras"), "{rendered}");
+    }
+
     #[test]
     fn healing_lifts_nested_extras_towers_to_the_top_level() {
         let tmp = tempfile::tempdir().expect("tempdir");

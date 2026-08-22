@@ -2482,6 +2482,7 @@ mod tests {
     use super::*;
     use crate::approval_log::ApprovalOutcome;
     use crate::models::ContentBlock;
+    use crate::models::Role;
     use crate::tools::plan::StepStatus;
     use crate::tui::history::{HistoryCell, ToolCell, history_cells_from_message};
     use std::fs;
@@ -2489,7 +2490,7 @@ mod tests {
 
     fn make_test_message(role: &str, text: &str) -> Message {
         Message {
-            role: role.to_string(),
+            role: Role::from(role),
             content: vec![ContentBlock::Text {
                 text: text.to_string(),
                 cache_control: None,
@@ -3090,7 +3091,7 @@ mod tests {
 
         let turn_meta = "<turn_meta>\nCurrent local date: 2026-08-01\n</turn_meta>";
         let trailing_shape = Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![
                 ContentBlock::Text {
                     text: "Fix the flaky test".to_string(),
@@ -3103,7 +3104,7 @@ mod tests {
             ],
         };
         let legacy_leading_shape = Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![
                 ContentBlock::Text {
                     text: turn_meta.to_string(),
@@ -3162,7 +3163,7 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
         let messages = vec![Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: "call-in-flight".to_string(),
                 name: "read_file".to_string(),
@@ -3197,7 +3198,7 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
         let messages = vec![Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: "call-crashed".to_string(),
                 name: "read_file".to_string(),
@@ -3234,7 +3235,7 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
         let messages = vec![Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: "call-crashed".to_string(),
                 name: "read_file".to_string(),
@@ -3288,7 +3289,7 @@ mod tests {
         let messages = vec![
             make_test_message("user", "plan this carefully"),
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::ToolUse {
                     id: "plan-1".to_string(),
                     name: "update_plan".to_string(),
@@ -3308,7 +3309,7 @@ mod tests {
                 }],
             },
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: "plan-1".to_string(),
                     content: "Plan updated".to_string(),
@@ -3346,7 +3347,7 @@ mod tests {
         let raw = "RAW_SESSION_SENTINEL\n".repeat(2_000);
         let messages = vec![
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::ToolUse {
                     id: "call-big".to_string(),
                     name: "exec_shell".to_string(),
@@ -3356,7 +3357,7 @@ mod tests {
                 }],
             },
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: "call-big".to_string(),
                     content: raw.clone(),
@@ -3399,7 +3400,7 @@ mod tests {
         let raw = "RAW_LEGACY_RESUME_SENTINEL\n".repeat(2_000);
         let messages = vec![
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::ToolUse {
                     id: "call-legacy".to_string(),
                     name: "exec_shell".to_string(),
@@ -3409,7 +3410,7 @@ mod tests {
                 }],
             },
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: "call-legacy".to_string(),
                     content: raw.clone(),

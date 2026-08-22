@@ -78,6 +78,12 @@ const WORKFLOW_RESULT_MAX_CHARS: usize = 24_000;
 /// In-memory (and snapshot) event retention per run: only the newest events
 /// are kept; older ones remain in the per-event journal lines (#2974).
 const WORKFLOW_RUN_EVENTS_MAX_RETAINED: usize = 1_000;
+/// In-memory progress retention per run. Progress is journaled line-by-line,
+/// so the owner record only needs a bounded newest tail for status/history.
+const WORKFLOW_RUN_PROGRESS_MAX_RETAINED: usize = 1_000;
+/// In-memory structured dispatch-failure retention per run. The exact count
+/// is stored separately and each rejection remains durable as a typed event.
+const WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED: usize = WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL;
 /// Progress lines the host detail projection keeps for the run manager's
 /// detail pane — the newest few, matching what a human scans at a glance.
 const HOST_RUN_PROGRESS_TAIL: usize = 3;
@@ -275,8 +281,8 @@ struct WorkflowRunSummary {
     token_budget: Option<u64>,
     child_count: usize,
     schema_error_count: usize,
-    dispatch_failure_count: usize,
-    progress_count: usize,
+    dispatch_failure_count: u64,
+    progress_count: u64,
     last_progress: Option<String>,
     event_count: usize,
     last_event_type: Option<String>,
@@ -596,11 +602,19 @@ struct WorkflowRunRecord {
     workflow_goal: Option<String>,
     token_budget: Option<u64>,
     child_ids: Vec<String>,
+    /// Exact progress-line count, including entries older than `progress`'s
+    /// bounded in-memory tail. Legacy snapshots are repaired on hydration.
+    #[serde(default)]
+    progress_count: u64,
     progress: Vec<String>,
     #[serde(default)]
     events: Vec<WorkflowUiEvent>,
     schema_errors: Vec<WorkflowSchemaError>,
     /// Task dispatches the driver rejected before any child ran (#5035).
+    /// This is the exact, saturating total; `dispatch_failures` is only the
+    /// newest structured tail.
+    #[serde(default)]
+    dispatch_failure_count: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dispatch_failures: Vec<WorkflowDispatchFailure>,
     result: Option<Value>,
@@ -651,9 +665,11 @@ impl WorkflowRunRecord {
             workflow_goal: spec.map(|spec| spec.goal.clone()),
             token_budget,
             child_ids: Vec::new(),
+            progress_count: 0,
             progress: Vec::new(),
             events: Vec::new(),
             schema_errors: Vec::new(),
+            dispatch_failure_count: 0,
             dispatch_failures: Vec::new(),
             result: None,
             execution: None,
@@ -684,6 +700,50 @@ impl WorkflowRunRecord {
         }
     }
 
+    /// Retain only the newest progress lines while preserving an exact,
+    /// saturating total for summaries and payload truncation receipts.
+    fn push_progress(&mut self, message: String) {
+        self.progress_count = self.progress_count.saturating_add(1);
+        self.progress.push(message);
+        if self.progress.len() > WORKFLOW_RUN_PROGRESS_MAX_RETAINED {
+            let overflow = self.progress.len() - WORKFLOW_RUN_PROGRESS_MAX_RETAINED;
+            self.progress.drain(..overflow);
+        }
+    }
+
+    /// Record one rejected task slot without allowing a malformed workflow's
+    /// rejection loop to grow the owner record without bound.
+    fn push_dispatch_failure(&mut self, failure: WorkflowDispatchFailure) {
+        self.dispatch_failure_count = self.dispatch_failure_count.saturating_add(1);
+        self.dispatch_failures.push(failure);
+        if self.dispatch_failures.len() > WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED {
+            let overflow =
+                self.dispatch_failures.len() - WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED;
+            self.dispatch_failures.drain(..overflow);
+        }
+    }
+
+    /// Repair legacy or malformed snapshot counters before exposing them.
+    /// A declared count may exceed the retained tail, but never trail it.
+    fn normalize_bounded_ledgers(&mut self) {
+        self.progress_count = self
+            .progress_count
+            .max(u64::try_from(self.progress.len()).unwrap_or(u64::MAX));
+        if self.progress.len() > WORKFLOW_RUN_PROGRESS_MAX_RETAINED {
+            let overflow = self.progress.len() - WORKFLOW_RUN_PROGRESS_MAX_RETAINED;
+            self.progress.drain(..overflow);
+        }
+
+        self.dispatch_failure_count = self
+            .dispatch_failure_count
+            .max(u64::try_from(self.dispatch_failures.len()).unwrap_or(u64::MAX));
+        if self.dispatch_failures.len() > WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED {
+            let overflow =
+                self.dispatch_failures.len() - WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED;
+            self.dispatch_failures.drain(..overflow);
+        }
+    }
+
     fn summary(&self) -> WorkflowRunSummary {
         WorkflowRunSummary {
             run_id: self.run_id.clone(),
@@ -697,8 +757,8 @@ impl WorkflowRunRecord {
             token_budget: self.token_budget,
             child_count: self.child_ids.len(),
             schema_error_count: self.schema_errors.len(),
-            dispatch_failure_count: self.dispatch_failures.len(),
-            progress_count: self.progress.len(),
+            dispatch_failure_count: self.dispatch_failure_count,
+            progress_count: self.progress_count,
             last_progress: self.progress.last().cloned(),
             event_count: usize::try_from(self.events_total.max(self.events.len() as u64))
                 .unwrap_or(usize::MAX),
@@ -822,7 +882,7 @@ impl ToolSpec for WorkflowTool {
                 },
                 "fleet": {
                     "type": "string",
-                    "description": "Named Fleet to resolve task({ role }) declarations, loaded from $CODEWHALE_HOME/fleets/ or workspace fleets/. Accepts a qualified origin/name. A legacy roster maps roles to profiles. An exact Fleet (schema = \"exact\") is frozen at start: each member's provider, model, reasoning, and permission ceiling are fixed, and per-task model/thinking overrides are rejected."
+                    "description": "Named Fleet from $CODEWHALE_HOME/fleets/ or workspace fleets/; qualified origin/name accepted. Exact Fleets freeze member identity, route, and reasoning. Runtime derives authority from role and live parent; per-task route/authority overrides are rejected."
                 },
                 "plan": {
                     "type": "object",
@@ -1444,7 +1504,7 @@ fn apply_named_fleet_to_task_request(
 }
 
 /// **Phase one** of an exact-Fleet task: resolve the member and stamp its
-/// clamped authority onto the request, contacting nobody.
+/// Runtime-derived authority onto the request, contacting nobody.
 ///
 /// This runs *before* gate evaluation and before a concurrency slot is taken,
 /// which is what makes it safe: a task that is about to be rejected or queued
@@ -1458,13 +1518,11 @@ fn bind_exact_fleet_task_request(
 ) -> Result<crate::fleet::exact::ExactMemberBinding, DriverError> {
     let fleet = operation.snapshot().fleet().qualified();
 
-    // A saved exact Fleet is the authority on routing and on posture. A task
-    // that tries to re-route a member — or to widen it by asking for a
-    // different agent type or a broader tool surface — is rejected outright
-    // rather than silently ignored. `subagent_type` and `allowed_tools` matter
-    // as much as `model` here: the member's posture role is derived from its
-    // saved permission ceiling, and a task-supplied type would otherwise pick
-    // a different tool surface than the one the operator saved.
+    // The exact Fleet owns member identity, route, and reasoning. Runtime owns
+    // authority: after selection it derives the closed role posture and
+    // intersects it with the live parent. A task may override neither side of
+    // that boundary; `subagent_type`, tool lists, and write authority would
+    // otherwise substitute a different Runtime posture per task.
     for (field, present) in [
         ("model", request.model.is_some()),
         ("model_strength", request.model_strength.is_some()),
@@ -1476,9 +1534,10 @@ fn bind_exact_fleet_task_request(
         if present {
             return Err(DriverError::Rejected(format!(
                 "fleet `{fleet}` is an exact fleet: task option `{field}` is not allowed. Every \
-                 member's provider, model, reasoning, and permission ceiling are fixed by the \
-                 saved Fleet — switch Fleets or edit the Fleet, do not override a member per \
-                 task."
+                 member's identity, provider, model, and reasoning are fixed by the saved Fleet, \
+                 while Runtime derives authority from its role and the live parent. Switch \
+                 Fleets/edit the Fleet for identity or route changes; do not override either \
+                 contract per task."
             )));
         }
     }
@@ -1497,13 +1556,11 @@ fn bind_exact_fleet_task_request(
     request.profile = Some(binding.member_id.clone());
     request.role = Some(binding.member_role.clone());
 
-    // Ceilings narrow the child; they never widen it. `subagent_type` is
-    // cleared rather than defaulted so the roster profile's posture role — the
-    // one derived from the saved ceiling — is what picks the tool surface.
+    // `subagent_type` is cleared rather than defaulted so the selected roster
+    // profile's Runtime role is what picks the child posture.
     request.subagent_type = None;
-    // The clamped authority becomes an actual tool policy the child runtime
-    // enforces: an empty allowlist when `tools = false`, and a deny list that
-    // removes every model-visible network surface when `network_tool = false`.
+    // The Runtime/parent intersection becomes an actual tool policy the child
+    // enforces, not a Fleet identity label.
     request.allowed_tools = binding.authority.allowed_tools.clone();
     request.disallowed_tools = binding.authority.disallowed_tools.clone();
     request.write_authority = Some(binding.authority.write_authority.to_string());
@@ -1527,8 +1584,8 @@ fn bind_exact_fleet_task_request(
 /// Which role a `task_started` event displays.
 ///
 /// An exact-Fleet receipt wins over the spawn metadata, because the metadata's
-/// role is the roster profile's **permission posture** — the tool surface the
-/// clamped ceiling permits — and rendering that where the member's role belongs
+/// role is the roster profile's **Runtime posture** — the closed role policy
+/// selected after identity resolution — and rendering that where the member's role belongs
 /// renames the operator's `auditor` to `scout` in the panel, the history card,
 /// and the journal. The posture is not lost: it rides the same receipt in its
 /// own field. Non-Fleet tasks keep the previous metadata-then-request order
@@ -1578,7 +1635,7 @@ fn validate_exact_write_scope(
     if binding.authority.write_authority == "read_only" {
         if declares_scope {
             return Err(DriverError::Rejected(format!(
-                "fleet `{fleet}`: member `{}` is read-only under the clamped ceiling, so this \
+                "fleet `{fleet}`: member `{}` is read-only under the effective Runtime posture, so this \
                  task may not declare write_roots, exact_files, or coordination_contracts.",
                 binding.member_id
             )));
@@ -1738,13 +1795,17 @@ async fn run_workflow_vm(
                     .iter()
                     .filter(|task| task.status == IrWorkflowRunStatus::Failed)
                     .count();
-                let rejected = record.dispatch_failures.len();
+                let rejected = record.dispatch_failure_count;
                 if record.child_ids.is_empty() && rejected > 0 {
                     // #5035: every dispatch was rejected before a child ran.
                     status = WorkflowRunStatus::Failed;
+                    let retained_detail = record
+                        .dispatch_failures
+                        .first()
+                        .map(|failure| format!("; retained detail: {}", failure.message))
+                        .unwrap_or_default();
                     error = Some(format!(
-                        "no child agents ran: all {rejected} task dispatch(es) were rejected; first: {}",
-                        record.dispatch_failures[0].message
+                        "no child agents ran: all {rejected} task dispatch(es) were rejected{retained_detail}"
                     ));
                 } else if failed_children > 0 || rejected > 0 {
                     status = WorkflowRunStatus::Degraded;
@@ -1904,11 +1965,19 @@ fn render_run_report(record: &WorkflowRunRecord) -> String {
     if let Some(error) = record.error.as_deref() {
         out.push_str(&format!("- error: {error}\n"));
     }
-    if !record.dispatch_failures.is_empty() {
+    if record.dispatch_failure_count > 0 {
         out.push_str(&format!(
             "\n## Dispatch failures ({})\n\n",
-            record.dispatch_failures.len()
+            record.dispatch_failure_count
         ));
+        let omitted = record
+            .dispatch_failure_count
+            .saturating_sub(u64::try_from(record.dispatch_failures.len()).unwrap_or(u64::MAX));
+        if omitted > 0 {
+            out.push_str(&format!(
+                "- {omitted} older failure receipt(s) omitted from this bounded report; see the workflow journal\n"
+            ));
+        }
         for failure in &record.dispatch_failures {
             let slot = failure
                 .label
@@ -2058,9 +2127,10 @@ fn workflow_result_for(
 struct RunPayloadBounds {
     events_returned: usize,
     events_omitted: usize,
-    progress_omitted: usize,
+    progress_returned: usize,
+    progress_omitted: u64,
     dispatch_failures_returned: usize,
-    dispatch_failures_omitted: usize,
+    dispatch_failures_omitted: u64,
     dispatch_failure_fields_truncated: usize,
     result_truncated: bool,
     leaf_outputs_truncated: usize,
@@ -2103,6 +2173,15 @@ fn bounded_run_record_value(
         return (value, bounds);
     };
 
+    // The structured failure tail below is intentionally clipped, but panel
+    // summaries still need the exact saturating total to remain truthful
+    // after replay.
+    obj.insert(
+        "dispatch_failure_count".to_string(),
+        json!(record.dispatch_failure_count),
+    );
+    obj.insert("progress_count".to_string(), json!(record.progress_count));
+
     if let Some(events) = obj.get_mut("events").and_then(Value::as_array_mut) {
         if events.len() > WORKFLOW_RESULT_EVENTS_TAIL {
             let omitted = events.len() - WORKFLOW_RESULT_EVENTS_TAIL;
@@ -2122,17 +2201,21 @@ fn bounded_run_record_value(
         );
     }
 
-    if let Some(progress) = obj.get_mut("progress").and_then(Value::as_array_mut)
-        && progress.len() > WORKFLOW_RESULT_PROGRESS_TAIL
-    {
-        let omitted = progress.len() - WORKFLOW_RESULT_PROGRESS_TAIL;
-        progress.drain(..omitted);
-        bounds.progress_omitted = omitted;
+    if let Some(progress) = obj.get_mut("progress").and_then(Value::as_array_mut) {
+        if progress.len() > WORKFLOW_RESULT_PROGRESS_TAIL {
+            let omitted = progress.len() - WORKFLOW_RESULT_PROGRESS_TAIL;
+            progress.drain(..omitted);
+        }
+        bounds.progress_returned = progress.len();
+        let returned = u64::try_from(bounds.progress_returned).unwrap_or(u64::MAX);
+        bounds.progress_omitted = record.progress_count.saturating_sub(returned);
+    }
+    if bounds.progress_omitted > 0 {
         obj.insert(
             "progress_note".to_string(),
             json!(format!(
-                "showing the newest {WORKFLOW_RESULT_PROGRESS_TAIL} of {} progress lines; full log: {journal}",
-                omitted + WORKFLOW_RESULT_PROGRESS_TAIL,
+                "showing the newest {} of {} progress lines; full log: {journal}",
+                bounds.progress_returned, record.progress_count,
             )),
         );
     }
@@ -2144,7 +2227,6 @@ fn bounded_run_record_value(
         if failures.len() > WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL {
             let omitted = failures.len() - WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL;
             failures.drain(..omitted);
-            bounds.dispatch_failures_omitted = omitted;
         }
         bounds.dispatch_failures_returned = failures.len();
         for failure in failures {
@@ -2168,13 +2250,15 @@ fn bounded_run_record_value(
             }
         }
     }
+    bounds.dispatch_failures_omitted = record
+        .dispatch_failure_count
+        .saturating_sub(u64::try_from(bounds.dispatch_failures_returned).unwrap_or(u64::MAX));
     if bounds.dispatch_failures_omitted > 0 || bounds.dispatch_failure_fields_truncated > 0 {
         obj.insert(
             "dispatch_failures_note".to_string(),
             json!(format!(
                 "showing {} of {} dispatch failures with bounded fields; full record: {journal}",
-                bounds.dispatch_failures_returned,
-                bounds.dispatch_failures_returned + bounds.dispatch_failures_omitted,
+                bounds.dispatch_failures_returned, record.dispatch_failure_count,
             )),
         );
     }
@@ -3707,8 +3791,8 @@ impl SubAgentWorkflowDriver {
                 // Prefer spawn metadata (fleet-resolved); fall back to request.
                 //
                 // An exact-Fleet receipt overrides both, because the spawn
-                // metadata's role is the roster profile's **posture** role —
-                // the tool surface the clamped ceiling permits — and displaying
+                // metadata's role is the roster profile's **Runtime posture** —
+                // the closed role policy selected after member identity — and displaying
                 // that where the member's role belongs silently renames the
                 // operator's `auditor` to `scout`. The posture is not lost: it
                 // rides the receipt as its own field.
@@ -3867,9 +3951,9 @@ impl SubAgentWorkflowDriver {
         if let Ok(mut runs) = self.state.runs.lock()
             && let Some(record) = runs.get_mut(&self.run_id)
         {
-            record.progress.push(progress_line.clone());
+            record.push_progress(progress_line.clone());
             record.push_event(ui_event.clone());
-            record.dispatch_failures.push(failure);
+            record.push_dispatch_failure(failure);
         }
         self.state.record_progress(&self.run_id, &progress_line);
         self.state.record_event(&self.run_id, &ui_event);
@@ -4190,7 +4274,7 @@ impl WorkflowDriver for SubAgentWorkflowDriver {
         if let Ok(mut runs) = self.state.runs.lock()
             && let Some(record) = runs.get_mut(&self.run_id)
         {
-            record.progress.push(message.clone());
+            record.push_progress(message.clone());
             record.push_event(ui_event.clone());
             if let Some(schema_error) = schema_error {
                 record.schema_errors.push(schema_error);
@@ -4708,8 +4792,9 @@ fn now_ms() -> u64 {
 
 mod journal {
     use super::{
-        SharedWorkflowControllers, SharedWorkflowLifecycles, SharedWorkflowRuns, WorkflowRunRecord,
-        WorkflowRunStatus, WorkflowUiEvent, WorkflowWorkLifecycle,
+        SharedWorkflowControllers, SharedWorkflowLifecycles, SharedWorkflowRuns,
+        WorkflowDispatchFailure, WorkflowRunRecord, WorkflowRunStatus, WorkflowUiEvent,
+        WorkflowUiEventKind, WorkflowWorkLifecycle,
     };
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
@@ -4934,16 +5019,32 @@ mod journal {
                 };
                 match record {
                     WorkflowJournalRecord::Snapshot { run } => {
-                        runs.insert(run.run_id.clone(), *run);
+                        let mut run = *run;
+                        run.normalize_bounded_ledgers();
+                        runs.insert(run.run_id.clone(), run);
                     }
                     WorkflowJournalRecord::Progress { run_id, message } => {
                         if let Some(run) = runs.get_mut(&run_id) {
-                            run.progress.push(message);
+                            run.push_progress(message);
                         }
                     }
                     WorkflowJournalRecord::Event { run_id, event } => {
                         if let Some(run) = runs.get_mut(&run_id) {
-                            run.push_event(*event);
+                            let event = *event;
+                            if let WorkflowUiEventKind::TaskDispatchFailed {
+                                label,
+                                phase,
+                                message,
+                            } = &event.kind
+                            {
+                                run.push_dispatch_failure(WorkflowDispatchFailure {
+                                    at_ms: event.at_ms,
+                                    label: label.clone(),
+                                    phase: phase.clone(),
+                                    message: message.clone(),
+                                });
+                            }
+                            run.push_event(event);
                         }
                     }
                 }
@@ -4951,6 +5052,7 @@ mod journal {
             // Journals written before #2974 have no counters; rebuild them
             // from the retained tail so summaries stay truthful.
             for run in runs.values_mut() {
+                run.normalize_bounded_ledgers();
                 run.events_total = run.events_total.max(run.events.len() as u64);
             }
             // A run journaled as Running belongs to a process that is gone;
@@ -5022,7 +5124,7 @@ mod journal {
 
     #[cfg(test)]
     mod tests {
-        use super::super::WorkflowUiEventKind;
+        use super::super::{WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED, WorkflowUiEventKind};
         use super::*;
 
         fn sample_record(run_id: &str, status: WorkflowRunStatus) -> WorkflowRunRecord {
@@ -5038,9 +5140,11 @@ mod journal {
                 workflow_goal: Some("journal test".to_string()),
                 token_budget: None,
                 child_ids: Vec::new(),
+                progress_count: 0,
                 progress: Vec::new(),
                 events: Vec::new(),
                 schema_errors: Vec::new(),
+                dispatch_failure_count: 0,
                 dispatch_failures: Vec::new(),
                 result: None,
                 execution: None,
@@ -5163,6 +5267,76 @@ mod journal {
                     .map(WorkflowUiEvent::event_type)
                     .collect::<Vec<_>>(),
                 vec!["phase_started", "handoff_promoted", "handoff_consumed"]
+            );
+        }
+
+        #[test]
+        fn workflow_journal_rebuilds_a_bounded_exact_rejection_ledger() {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let state = WorkflowWorkspaceState::open(tmp.path());
+            state.record_snapshot(&sample_record(
+                "workflow_rejections",
+                WorkflowRunStatus::Running,
+            ));
+            let total = WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED + 5;
+            for index in 0..total {
+                let message = format!("invalid task options {index}");
+                state.record_progress(
+                    "workflow_rejections",
+                    &format!("dispatch failed for rejected-{index}: {message}"),
+                );
+                state.record_event(
+                    "workflow_rejections",
+                    &WorkflowUiEvent::at(
+                        index as u64,
+                        "session-journal",
+                        WorkflowUiEventKind::TaskDispatchFailed {
+                            label: Some(format!("rejected-{index}")),
+                            phase: Some("fan-out".to_string()),
+                            message,
+                        },
+                    ),
+                );
+            }
+            drop(state);
+
+            let reloaded = WorkflowWorkspaceState::open(tmp.path());
+            let run = reloaded
+                .runs
+                .lock()
+                .expect("runs lock")
+                .get("workflow_rejections")
+                .cloned()
+                .expect("hydrated rejection run");
+            assert_eq!(run.progress_count, total as u64);
+            assert_eq!(run.progress.len(), total);
+            assert_eq!(run.dispatch_failure_count, total as u64);
+            assert_eq!(
+                run.dispatch_failures.len(),
+                WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED
+            );
+            assert_eq!(
+                run.dispatch_failures
+                    .first()
+                    .and_then(|failure| failure.label.as_deref()),
+                Some("rejected-5")
+            );
+            drop(reloaded);
+
+            // Restart recovery appends a compact snapshot. Replaying the
+            // journal again must not double-count its earlier event lines.
+            let reopened = WorkflowWorkspaceState::open(tmp.path());
+            let run = reopened
+                .runs
+                .lock()
+                .expect("runs lock")
+                .get("workflow_rejections")
+                .cloned()
+                .expect("rehydrated rejection run");
+            assert_eq!(run.dispatch_failure_count, total as u64);
+            assert_eq!(
+                run.dispatch_failures.len(),
+                WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED
             );
         }
 
@@ -5339,11 +5513,9 @@ mod journal {
             let state = WorkflowWorkspaceState::open(tmp.path());
             let mut record = sample_record("workflow_detail", WorkflowRunStatus::Running);
             record.workflow_goal = Some("audit provider errors".to_string());
-            record.progress = vec![
-                "phase: scan".to_string(),
-                "child slow-1 done".to_string(),
-                "child slow-2 failed".to_string(),
-            ];
+            for message in ["phase: scan", "child slow-1 done", "child slow-2 failed"] {
+                record.push_progress(message.to_string());
+            }
             state.record_snapshot(&record);
             drop(state);
 
@@ -5879,7 +6051,7 @@ mod tests {
         );
         record.status = WorkflowRunStatus::Completed;
         record.workflow_goal = Some("prove the report artifact".to_string());
-        record.progress.push("phase: scan".to_string());
+        record.push_progress("phase: scan".to_string());
         record.result = Some(serde_json::json!({"confirmed": 2}));
 
         write_run_report_artifact(tmp.path(), &record);
@@ -6371,7 +6543,13 @@ permissions = "read_only"
     }
 
     fn exact_session() -> codewhale_workflow::PermissionCeiling {
-        codewhale_workflow::PermissionCeiling::preset("full").expect("preset")
+        codewhale_workflow::PermissionCeiling {
+            write: true,
+            network_tool: true,
+            shell: codewhale_workflow::ShellCeiling::Full,
+            delegation_depth: codewhale_config::DEFAULT_SPAWN_DEPTH,
+            tools: true,
+        }
     }
 
     fn exact_workflow_with(
@@ -6398,10 +6576,10 @@ permissions = "read_only"
         )
     }
 
-    /// Binding resolves the member and its ceiling; routing resolves reasoning.
+    /// Binding resolves the member and Runtime authority; routing resolves reasoning.
     /// Both halves land on the request, in that order.
     #[tokio::test]
-    async fn exact_fleet_task_launch_resolves_the_member_route_and_ceiling() {
+    async fn exact_fleet_task_launch_resolves_member_route_and_runtime_authority() {
         let operation = exact_workflow(EXACT_GLM_FLEET);
         let mut request = exact_write_task_request("builder");
 
@@ -6418,9 +6596,12 @@ permissions = "read_only"
         assert_eq!(member.profile.provider.as_deref(), Some("zai"));
         assert_eq!(member.profile.model.as_deref(), Some("glm-5"));
 
-        // The saved ceiling reached the spawn request before any routing.
+        // Runtime's role/parent intersection reached the request before routing.
         assert_eq!(request.write_authority.as_deref(), Some("workspace_write"));
-        assert_eq!(request.max_depth, Some(0));
+        assert_eq!(
+            request.max_depth,
+            Some(codewhale_config::DEFAULT_SPAWN_DEPTH)
+        );
         assert!(request.thinking.is_none(), "reasoning is not decided yet");
 
         route_admitted_exact_task(&operation, &binding, &mut request)
@@ -6642,8 +6823,8 @@ permissions = "read_only"
         }
     }
 
-    /// A task must not be able to widen a member's saved ceiling by asking for
-    /// a different agent type, a broader tool surface, or write authority.
+    /// A task must not be able to replace Runtime's role/parent authority by
+    /// asking for a different agent type, tool surface, or write authority.
     #[test]
     fn exact_fleet_rejects_task_level_posture_widening() {
         let operation = exact_workflow(EXACT_GLM_FLEET);
@@ -6662,12 +6843,11 @@ permissions = "read_only"
                 request.write_authority = Some("workspace_write".to_string());
             }),
         ] {
-            // The read-only auditor is the interesting victim: its saved
-            // ceiling is the narrowest in the fleet.
+            // The Runtime reviewer posture is read-only.
             let mut request = exact_task_request("reviewer");
             mutate(&mut request);
             let err = bind_exact_fleet_task_request(&operation, exact_session(), &mut request)
-                .expect_err("an exact ceiling must win over a task option");
+                .expect_err("Runtime authority must win over a task option");
             let message = format!("{err:?}");
             assert!(
                 message.contains(field) && message.contains("not allowed"),
@@ -6675,7 +6855,7 @@ permissions = "read_only"
             );
         }
 
-        // And with no task options at all, the saved ceiling is what lands.
+        // With no task options, Runtime's reviewer posture is what lands.
         let mut clean = exact_task_request("reviewer");
         bind_exact_fleet_task_request(&operation, exact_session(), &mut clean)
             .expect("clean launch");
@@ -6683,40 +6863,59 @@ permissions = "read_only"
         assert_eq!(clean.subagent_type, None);
     }
 
-    /// The saved ceiling becomes a real tool policy on the spawn request: a
-    /// member with no network tool carries a deny list the child enforces.
+    /// Runtime's reviewer posture becomes a real tool policy, and the legacy
+    /// Fleet `permissions` key cannot turn network reach off or rewrite it.
     #[test]
-    fn exact_fleet_ceilings_reach_the_spawn_request_as_a_tool_policy() {
+    fn exact_fleet_runtime_authority_reaches_the_spawn_request() {
         let operation = exact_workflow(EXACT_GLM_FLEET);
         let mut request = exact_task_request("reviewer");
 
         bind_exact_fleet_task_request(&operation, exact_session(), &mut request).expect("bind");
 
-        // `read_only` has tools but no network tool.
         assert_eq!(
             request.allowed_tools, None,
-            "a tool-using member keeps full inheritance, narrowed by the deny list"
+            "Runtime reviewer inherits the parent tool surface"
         );
-        // The Web family *name* survives so the read-only search/fetch actions
-        // stay reachable; every reaching spelling is denied by the list the
-        // child registry enforces.
-        for denied in [
-            "web.run",
-            "web_search",
-            "fetch_url",
-            "wait_for_dev_server",
-            "mcp*",
-        ] {
+        for denied in ["write_file", "apply_patch", "exec_shell"] {
             assert!(
                 request.disallowed_tools.iter().any(|name| name == denied),
                 "{denied} must be denied: {:?}",
                 request.disallowed_tools
             );
         }
-        assert!(
-            !request.disallowed_tools.iter().any(|name| name == "Web"),
-            "the Web family name must stay reachable so search/fetch survive: {:?}",
-            request.disallowed_tools
+        for available in ["Bash", "Web", "web.run", "fetch_url", "mcp*"] {
+            assert!(
+                !request
+                    .disallowed_tools
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(available)),
+                "Runtime reviewer keeps {available}: {:?}",
+                request.disallowed_tools
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_fleet_permissions_cannot_change_runtime_authority() {
+        let narrow = exact_workflow(EXACT_GLM_FLEET);
+        let legacy_full_text =
+            EXACT_GLM_FLEET.replace("permissions = \"read_only\"", "permissions = \"full\"");
+        let legacy_full = exact_workflow(&legacy_full_text);
+        let mut narrow_request = exact_task_request("reviewer");
+        let mut full_request = exact_task_request("reviewer");
+
+        let narrow_binding =
+            bind_exact_fleet_task_request(&narrow, exact_session(), &mut narrow_request)
+                .expect("legacy narrow value loads");
+        let full_binding =
+            bind_exact_fleet_task_request(&legacy_full, exact_session(), &mut full_request)
+                .expect("legacy full value loads");
+
+        assert_eq!(narrow_binding.authority, full_binding.authority);
+        assert_eq!(narrow_request.write_authority, full_request.write_authority);
+        assert_eq!(
+            narrow_request.disallowed_tools,
+            full_request.disallowed_tools
         );
     }
 
@@ -6799,8 +6998,9 @@ permissions = "read_only"
     }
 
     /// A member's semantic role is what the operator named and what gates key
-    /// on; the roster profile's role is the permission **posture** the clamped
-    /// ceiling permits. The started event must show the first, not the second.
+    /// on; the roster profile's role is the Runtime **posture** selected after
+    /// identity resolution. The started event must show the first, not the
+    /// second.
     #[tokio::test]
     async fn a_started_event_shows_the_members_role_not_its_permission_posture() {
         const AUDIT_FLEET: &str = r#"
@@ -6816,7 +7016,10 @@ reasoning = "high"
 permissions = "read_only"
 "#;
         let operation = exact_workflow_with(AUDIT_FLEET, None);
-        let mut request = exact_task_request("auditor");
+        // Free-form Fleet roles map to Runtime `custom`, whose baseline is
+        // write-capable under this full parent. Keep the production write-scope
+        // gate intact by declaring an exact scope in the fixture.
+        let mut request = exact_write_task_request("auditor");
         let binding =
             bind_exact_fleet_task_request(&operation, exact_session(), &mut request).expect("bind");
         let receipt = route_admitted_exact_task(&operation, &binding, &mut request)
@@ -6833,8 +7036,8 @@ permissions = "read_only"
             .role
             .name
             .clone();
-        assert_eq!(posture, "scout");
-        assert_eq!(receipt.posture_role.as_deref(), Some("scout"));
+        assert_eq!(posture, "custom");
+        assert_eq!(receipt.posture_role.as_deref(), Some("custom"));
 
         // What the run displays is the member's role, not that posture.
         assert_eq!(
@@ -7254,12 +7457,12 @@ workflow({
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn declarative_max_steps_zero_stops_before_provider_call() {
+    async fn declarative_max_steps_zero_runs_without_a_turn_cap() {
         let _retry_guard = workflow_test_retry_guard();
         let tmp = tempfile::tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path().to_path_buf());
         let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
-        let (client, calls) = fake_chat_client("must not be called").await;
+        let (client, calls) = fake_chat_client("Completed without a turn cap.").await;
         let runtime = SubAgentRuntime::new(
             client,
             "deepseek-v4-flash".to_string(),
@@ -7276,11 +7479,11 @@ workflow({
                     "action": "run",
                     "script": r#"
                     workflow({
-                      "goal": "prove the child step cap reaches runtime",
+                      "goal": "prove zero means an unbounded child loop",
                       "nodes": [{
                         "agent": {
                           "id": "zero-step",
-                          "prompt": "Do not start a model turn.",
+                          "prompt": "Complete this task.",
                           "budget": { "max_steps": 0, "timeout_secs": 90 }
                         }
                       }]
@@ -7290,17 +7493,17 @@ workflow({
                 &ctx,
             )
             .await
-            .expect("failed workflow still returns its terminal receipt");
+            .expect("workflow returns its terminal receipt");
         let payload: Value = serde_json::from_str(&result.content).expect("workflow JSON");
 
         assert_eq!(
             calls.load(Ordering::SeqCst),
-            0,
-            "provider must not be called"
+            1,
+            "an unbounded child must be allowed to start a model turn"
         );
-        assert_eq!(payload["status"], "failed", "{payload}");
+        assert_eq!(payload["status"], "completed", "{payload}");
         assert_eq!(
-            payload["execution"]["leaf_results"][0]["status"], "failed",
+            payload["execution"]["leaf_results"][0]["status"], "succeeded",
             "{payload}"
         );
     }
@@ -10612,6 +10815,74 @@ FINAL RECEIPT
     }
 
     #[test]
+    fn run_record_progress_and_rejection_ledgers_are_bounded_with_exact_counts() {
+        let mut record = WorkflowRunRecord::new(
+            "workflow_rejection_loop".to_string(),
+            Some("session-test".to_string()),
+            None,
+            None,
+            None,
+        );
+        let progress_total = WORKFLOW_RUN_PROGRESS_MAX_RETAINED + 7;
+        for index in 0..progress_total {
+            record.push_progress(format!("progress {index}"));
+        }
+        let rejection_total = WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED + 7;
+        for index in 0..rejection_total {
+            record.push_dispatch_failure(WorkflowDispatchFailure {
+                at_ms: index as u64,
+                label: Some(format!("rejected-{index}")),
+                phase: Some("fan-out".to_string()),
+                message: "invalid task options".to_string(),
+            });
+        }
+
+        assert_eq!(record.progress.len(), WORKFLOW_RUN_PROGRESS_MAX_RETAINED);
+        assert_eq!(record.progress_count, progress_total as u64);
+        assert_eq!(
+            record.progress.first().map(String::as_str),
+            Some("progress 7")
+        );
+        assert_eq!(
+            record.dispatch_failures.len(),
+            WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED
+        );
+        assert_eq!(record.dispatch_failure_count, rejection_total as u64);
+        assert_eq!(record.dispatch_failures[0].at_ms, 7);
+
+        let summary = record.summary();
+        assert_eq!(summary.progress_count, progress_total as u64);
+        assert_eq!(summary.dispatch_failure_count, rejection_total as u64);
+
+        let (payload, bounds) = bounded_run_record_value(&record, Path::new("workflow-runs.jsonl"));
+        assert_eq!(payload["progress_count"], progress_total as u64);
+        assert_eq!(payload["dispatch_failure_count"], rejection_total as u64);
+        assert_eq!(
+            bounds.dispatch_failures_omitted,
+            (rejection_total - WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL) as u64
+        );
+
+        // Imported counters can already be saturated. Another rejection must
+        // retain its newest detail without wrapping the authoritative total.
+        record.dispatch_failure_count = u64::MAX;
+        record.push_dispatch_failure(WorkflowDispatchFailure {
+            at_ms: u64::MAX,
+            label: None,
+            phase: None,
+            message: "malformed rejection loop".to_string(),
+        });
+        assert_eq!(record.dispatch_failure_count, u64::MAX);
+        assert_eq!(
+            record.dispatch_failures.len(),
+            WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED
+        );
+        assert_eq!(
+            record.dispatch_failures.last().map(|failure| failure.at_ms),
+            Some(u64::MAX)
+        );
+    }
+
+    #[test]
     fn workflow_status_payload_bounds_oversized_run_records() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let state = WorkflowWorkspaceState::open(tmp.path());
@@ -10635,10 +10906,10 @@ FINAL RECEIPT
             ));
         }
         for index in 0..60 {
-            record.progress.push(format!("progress line {index}"));
+            record.push_progress(format!("progress line {index}"));
         }
         for index in 0..40u64 {
-            record.dispatch_failures.push(WorkflowDispatchFailure {
+            record.push_dispatch_failure(WorkflowDispatchFailure {
                 at_ms: index,
                 label: Some(format!("rejected-{index}")),
                 phase: Some("fan-out".to_string()),
@@ -10703,6 +10974,10 @@ FINAL RECEIPT
             "{payload}"
         );
         assert_eq!(dispatch_failures[0]["at_ms"], 28);
+        assert_eq!(
+            payload["dispatch_failure_count"], 40,
+            "exact count must survive the bounded failure tail"
+        );
         assert!(
             dispatch_failures.iter().all(|failure| failure["message"]
                 .as_str()

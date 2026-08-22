@@ -37,8 +37,9 @@ CODEWHALE_PROVIDER=vllm VLLM_BASE_URL=http://127.0.0.1:8000/v1 VLLM_MODEL=<id> \
 `codewhale exec` (add `--auto` for tool use) is the non-interactive path to
 exercise the full agent loop.
 
-## Dispatcher needs its sibling
+## Consolidated runtime commands
 
-The `codewhale` binary shells out to a sibling `codewhale-tui` in the same
-directory (both land in `target/debug` after a build). If they are not
-co-located, set `DEEPSEEK_TUI_BIN` to the `codewhale-tui` path.
+The current `codewhale` binary runs the TUI in-process. Release installers copy
+the same bytes to the optional `codew` short command; no sibling
+`codewhale-tui` executable is required. `DEEPSEEK_TUI_BIN` remains a legacy
+replay/migration setting, not a current install requirement.

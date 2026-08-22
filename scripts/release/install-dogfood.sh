@@ -14,7 +14,7 @@ if [[ ! -x "${src_dir}/codewhale" ]]; then
   echo "ERROR: expected executable codewhale in ${src_dir}" >&2
   # Since #5245 local builds are unstamped ("(dev)"); a dogfood build must be
   # stamped explicitly or the identity check below will (correctly) refuse it.
-  echo "Build first: DEEPSEEK_BUILD_SHA=\$(git rev-parse HEAD) cargo build --release -p codewhale-cli --locked" >&2
+  echo "Build first: CODEWHALE_BUILD_SHA=\$(git rev-parse HEAD) cargo build --release -p codewhale-cli --locked" >&2
   exit 1
 fi
 
@@ -38,7 +38,7 @@ if [[ "${cli_version}" != *"${short_sha}"* ]]; then
   echo "ERROR: release binaries do not embed current HEAD ${short_sha}" >&2
   echo "  codewhale: ${cli_version}" >&2
   echo "Rebuild this checkout before installing:" >&2
-  echo "  DEEPSEEK_BUILD_SHA=\$(git rev-parse HEAD) cargo build --release -p codewhale-cli --locked" >&2
+  echo "  CODEWHALE_BUILD_SHA=\$(git rev-parse HEAD) cargo build --release -p codewhale-cli --locked" >&2
   exit 1
 fi
 cli_sha="$(shasum -a 256 "${src_dir}/codewhale" | awk '{print $1}')"

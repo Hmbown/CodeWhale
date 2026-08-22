@@ -5,20 +5,24 @@
 //! the same account without copying tokens or inventing another login protocol.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::{DefaultKeyringStore, Secrets, SecretsError};
+use crate::{Secrets, SecretsError};
 
 /// Production account API origin used when no override is configured.
 pub const DEFAULT_ACCOUNT_API_BASE: &str = "https://api.codewhale.net";
 /// Environment variable that selects the account API origin.
 pub const ACCOUNT_API_BASE_ENV: &str = "CODEWHALE_CLOUD_API_BASE";
-/// Explicit opt-in for storing account sessions in the private local file.
+/// Former opt-in for the local file session store. The file store is now the
+/// automatic fallback (codex-style); the variable is accepted but ignored.
+#[deprecated(
+    since = "0.9.11",
+    note = "the file session store is the automatic fallback; this variable is ignored"
+)]
 pub const ACCOUNT_ALLOW_FILE_SESSION_STORE_ENV: &str = "CODEWHALE_CLOUD_ALLOW_FILE_SESSION_STORE";
 /// OS credential-manager service shared by CLI, TUI, and Runtime API.
 pub const ACCOUNT_KEYRING_SERVICE: &str = "codewhale-cloud";
@@ -195,7 +199,7 @@ pub enum AccountSessionError {
     InvalidCredentials,
     /// No approved secure session backend is available.
     #[error(
-        "Codewhale account sessions require an OS credential manager; set {ACCOUNT_ALLOW_FILE_SESSION_STORE_ENV}=1 only to explicitly opt into the private local file"
+        "Codewhale account sessions could not open a secret store; check that HOME is writable or set CODEWHALE_HOME to an absolute path"
     )]
     SecureStoreUnavailable,
 }
@@ -273,12 +277,11 @@ impl AccountSessionStore {
 /// The native credential manager is required unless the user explicitly opts
 /// into the private `0600` file store for a headless environment.
 pub fn secure_account_session_secrets() -> Result<Secrets, AccountSessionError> {
-    let keyring = DefaultKeyringStore::new(ACCOUNT_KEYRING_SERVICE);
-    match keyring.probe() {
-        Ok(()) => Ok(Secrets::new(Arc::new(keyring))),
-        Err(_) if account_file_session_store_opted_in() => Ok(Secrets::file_backed()),
-        Err(_) => Err(AccountSessionError::SecureStoreUnavailable),
-    }
+    // Codex-style storage contract: prefer the OS credential manager, fall
+    // back to the private 0600 file store when it is unavailable. Account
+    // sign-in must not hard-require a platform keyring (headless Linux, SSH,
+    // containers); the file store enforces owner-only permissions itself.
+    Ok(Secrets::system_keyring())
 }
 
 /// Normalize an optional CLI/TUI profile to the durable account slot label.
@@ -306,19 +309,6 @@ pub fn account_auth_slot(profile: &str, api_base: &str) -> String {
         encoded.push(HEX[(byte & 0x0f) as usize] as char);
     }
     format!("codewhale-cloud-auth-v1-{encoded}")
-}
-
-/// Return whether the private file session store was explicitly enabled.
-#[must_use]
-pub fn account_file_session_store_opted_in() -> bool {
-    let value = std::env::var(ACCOUNT_ALLOW_FILE_SESSION_STORE_ENV).ok();
-    account_file_session_store_opted_in_value(value.as_deref())
-}
-
-/// Parse the explicit file-session-store opt-in value.
-#[must_use]
-pub fn account_file_session_store_opted_in_value(value: Option<&str>) -> bool {
-    value.is_some_and(|value| value.trim() == "1")
 }
 
 /// Validate the credential-bearing portion of an account response or record.
@@ -423,7 +413,38 @@ fn normalized_scopes(scopes: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
     use crate::InMemoryKeyringStore;
+
+    /// Codex-style storage contract: with no OS keyring available and no
+    /// opt-in env var, session secrets must still resolve (to the private
+    /// 0600 file store) instead of failing closed.
+    #[test]
+    fn session_secrets_fall_back_to_file_store_without_opt_in() {
+        let _lock = crate::tests::env_lock();
+        // SAFETY (test): single-threaded via env_lock; restoring not needed —
+        // temp CODEWHALE_HOME is discarded with the process-scoped test env.
+        let prev_home = std::env::var("CODEWHALE_HOME").ok();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let home = dir.path().join("codewhale-home");
+        std::fs::create_dir_all(&home).expect("home");
+        // SAFETY (test): see above.
+        unsafe { std::env::set_var("CODEWHALE_HOME", &home) };
+        unsafe { std::env::remove_var("CODEWHALE_CLOUD_ALLOW_FILE_SESSION_STORE") };
+        let _prev_home = prev_home;
+        // The contract under test: resolution succeeds with NO opt-in env var.
+        // Which backend wins is platform-dependent (keyring when present,
+        // private 0600 file otherwise); assert the store is usable either way.
+        let secrets =
+            secure_account_session_secrets().expect("session secrets must resolve without opt-in");
+        let name = secrets.backend_name();
+        assert!(!name.is_empty(), "backend must report a name");
+        assert!(
+            name.to_lowercase().contains("file") || name.to_lowercase().contains("keyring"),
+            "unexpected backend: {name}"
+        );
+    }
 
     fn auth(
         account_id: &str,
@@ -563,14 +584,5 @@ mod tests {
             store.runtime_info_at(now).unwrap().state,
             AccountSessionState::Revoked
         );
-    }
-
-    #[test]
-    fn file_store_requires_the_exact_explicit_opt_in() {
-        assert!(!account_file_session_store_opted_in_value(None));
-        assert!(!account_file_session_store_opted_in_value(Some("")));
-        assert!(!account_file_session_store_opted_in_value(Some("true")));
-        assert!(account_file_session_store_opted_in_value(Some("1")));
-        assert!(account_file_session_store_opted_in_value(Some(" 1 ")));
     }
 }

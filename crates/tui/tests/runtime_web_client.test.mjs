@@ -8,10 +8,21 @@ import {
   answersForUserInput,
   applyRuntimeEvent,
   applySnapshot,
+  buildCreateThreadRequest,
+  claimInFlight,
   createThreadState,
   eventStreamUrl,
   formatRuntimeProvenance,
+  imageInputPresentation,
+  isComposerSubmitKey,
+  groupThreadSummaries,
   modeLabel,
+  modelOptionLabel,
+  newThreadDefaults,
+  pendingAttentionCount,
+  pendingAttentionLabel,
+  providerOptionLabel,
+  receiptPresentation,
   recoverSnapshotAndSubscribe,
   renderRuntimeProvenance,
   resolveUserInputTarget,
@@ -22,6 +33,7 @@ import {
   setSafeText,
   snapshotThenSubscribe,
   threadTarget,
+  threadProviderLabel,
 } from "../src/runtime_web/app.mjs";
 
 function snapshot(threadId = "thread-a", latestSeq = 7) {
@@ -62,24 +74,29 @@ function cssDeclarations(styles, selectorPattern) {
   return match[1];
 }
 
-test("embedded web client uses the Blue Stage semantic palette", async () => {
+test("embedded web client uses the Ocean Blue Stage semantic palette", async () => {
   const [styles, html] = await Promise.all([
     readFile(new URL("../src/runtime_web/styles.css", import.meta.url), "utf8"),
     readFile(new URL("../src/runtime_web/index.html", import.meta.url), "utf8"),
   ]);
 
   for (const token of [
-    "--ink-0: #03070d",
-    "--ink-1: #08111c",
-    "--ink-2: #0e1729",
-    "--stage-surface: #0e1729",
+    "--bg: #020711",
+    "--sidebar: #050b16",
+    "--surface: #0e1a30",
+    "--surface-raised: #172945",
+    "--stage-surface: #142747",
     "--text: #f6f2e8",
     "--action: #6aaef2",
-    "--human: #f6c453",
-    "--live: #4fd1c5",
-    "--warning: #ff7a59",
-    "--danger: #ff86b2",
+    "--status-human: #f6c453",
+    "--status-live: #4fd1c5",
+    "--status-warning: #ff7a59",
+    "--status-danger: #ff86b2",
     "--ok: #9bd66f",
+    "--radius-control: 6px",
+    "--radius-card: 12px",
+    "--radius-composer: 16px",
+    "--rail: 256px",
   ]) {
     assert.match(styles, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
@@ -107,7 +124,7 @@ test("embedded web client uses the Blue Stage semantic palette", async () => {
     cssDeclarations(styles, "\\.connection-dot\\.ready"),
     /background: var\(--ok\)/,
   );
-  assert.match(html, /name="theme-color" content="#0e1729"/);
+  assert.match(html, /name="theme-color" content="#020711"/);
 });
 
 test("embedded web client keeps the CWC stage, transcript, and receipt hierarchy quiet", async () => {
@@ -130,6 +147,36 @@ test("embedded web client keeps the CWC stage, transcript, and receipt hierarchy
   assert.match(source, /card\.append\(element\("span", "receipt-dot"\)\)/);
 });
 
+test("thread rail groups typed pending requests without disturbing server order", async () => {
+  const summaries = [
+    { id: "newest-recent", pending_attention_count: 0 },
+    { id: "newest-needs-you", pending_attention_count: 2 },
+    { id: "older-needs-you", pending_attention_count: 1 },
+    { id: "older-recent", pending_attention_count: 0 },
+  ];
+  const groups = groupThreadSummaries(summaries);
+
+  assert.deepEqual(groups.needsYou.map(({ id }) => id), ["newest-needs-you", "older-needs-you"]);
+  assert.deepEqual(groups.recent.map(({ id }) => id), ["newest-recent", "older-recent"]);
+  assert.deepEqual(summaries.map(({ id }) => id), [
+    "newest-recent",
+    "newest-needs-you",
+    "older-needs-you",
+    "older-recent",
+  ]);
+  assert.equal(pendingAttentionCount({ pending_attention_count: -1 }), 0);
+  assert.equal(pendingAttentionLabel({ pending_attention_count: 1 }), "1 item needs your attention");
+  assert.equal(pendingAttentionLabel({ pending_attention_count: 2 }), "2 items need your attention");
+
+  const [html, source] = await Promise.all([
+    readFile(new URL("../src/runtime_web/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../src/runtime_web/app.mjs", import.meta.url), "utf8"),
+  ]);
+  assert.match(html, /id="thread-list" aria-label="Live threads"/);
+  assert.match(source, /group\.setAttribute\("aria-labelledby", headingId\)/);
+  assert.match(source, /attention\.setAttribute\("aria-label", pendingAttentionLabel\(summary\)\)/);
+});
+
 test("mobile drawer owns focus and background interaction while it is open", async () => {
   const [html, source] = await Promise.all([
     readFile(new URL("../src/runtime_web/index.html", import.meta.url), "utf8"),
@@ -141,7 +188,9 @@ test("mobile drawer owns focus and background interaction while it is open", asy
   assert.match(source, /function openRail\(\)[\s\S]*dom\.railClose\.focus/);
   assert.match(source, /dom\.session\.setAttribute\("aria-hidden", "true"\)[\s\S]*setInert\(dom\.session, true\)/);
   assert.match(source, /function closeRail[\s\S]*returnTarget\.focus[\s\S]*applyClosedMobileRailAccessibility/);
-  assert.match(source, /function trapRailFocus[\s\S]*event\.key !== "Tab"[\s\S]*first\.focus/);
+  assert.match(source, /function trapFocusWithin[\s\S]*event\.key !== "Tab"[\s\S]*first\.focus/);
+  assert.match(source, /function trapRailFocus[\s\S]*trapFocusWithin\(event, dom\.rail\)/);
+  assert.match(source, /document\.addEventListener\("keydown", \(event\) => \{\s+if \(dom\.newThreadDialog\.open\) return;\s+if \(trapRailFocus\(event\)\) return;/);
   assert.match(source, /event\.key === "Escape"[\s\S]*closeRail\(\)/);
 });
 
@@ -154,6 +203,10 @@ test("mobile viewport and truth controls survive the software keyboard and coars
   assert.match(styles, /height: var\(--visual-viewport-height\)/);
   assert.match(source, /globalThis\.visualViewport\?\.addEventListener\("resize", syncVisualViewport\)/);
   assert.match(styles, /@media \(pointer: coarse\)[\s\S]*min-height: 44px/);
+  assert.match(
+    styles,
+    /@media \(max-width: 800px\)[\s\S]*\.composer textarea,[\s\S]*font-size: 16px/,
+  );
   assert.match(styles, /@media \(max-width: 430px\)[\s\S]*\.session-facts \{[\s\S]*display: flex/);
   assert.match(styles, /\.session-facts \.fact-chip\[data-fact="workspace"\][\s\S]*display: none/);
   assert.match(source, /chip\.dataset\.fact = String\(label \|\| ""\)\.toLowerCase\(\)/);
@@ -171,8 +224,44 @@ test("stream reconciliation preserves live controls, disclosures, and selected t
   assert.match(source, /function reconcileChildren\(/);
   assert.match(source, /captureTranscriptSelection\(\)[\s\S]*restoreTranscriptSelection\(selection\)/);
   assert.match(source, /card\.dataset\.attentionKey = key/);
-  assert.match(source, /card\.tabIndex = -1/);
-  assert.match(source, /requestAnimationFrame\(\(\) => focusPendingAttention/);
+  assert.equal(source.includes("focusPendingAttention"), false);
+  assert.doesNotMatch(source, /card\.tabIndex = -1/);
+});
+
+test("attention requests stay single-flight without stealing the active control", async () => {
+  const requests = new Set();
+  assert.equal(claimInFlight(requests, "approval:one"), true);
+  assert.equal(claimInFlight(requests, "approval:one"), false);
+  requests.delete("approval:one");
+  assert.equal(claimInFlight(requests, "approval:one"), true);
+
+  const source = await readFile(
+    new URL("../src/runtime_web/app.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /if \(!claimInFlight\(app\.inFlightActions, action\)\) return;/);
+  assert.match(source, /setAttentionCardBusy\(action, true\)/);
+  assert.match(source, /finally \{\s+app\.inFlightActions\.delete\(action\);\s+setAttentionCardBusy\(action, false\);/);
+});
+
+test("degraded workflow receipts surface rejected dispatches as attention", () => {
+  const detail = JSON.stringify({
+    status: "degraded",
+    dispatch_failure_count: 2,
+    dispatch_failures: [{ label: "review", message: "profile unavailable" }],
+  });
+  assert.deepEqual(receiptPresentation({
+    kind: "tool_call",
+    status: "completed",
+    summary: "workflow: degraded",
+    detail,
+    metadata: { status: "degraded", dispatch_failure_count: 2 },
+  }), {
+    label: "Workflow · Needs attention",
+    summary: "2 task dispatches were rejected",
+    raw: `workflow: degraded\n\n${detail}`,
+    failed: true,
+  });
 });
 
 test("rail New thread cannot paint over the session fact chips", async () => {
@@ -184,6 +273,146 @@ test("rail New thread cannot paint over the session fact chips", async () => {
   assert.match(cssDeclarations(styles, "\\.new-thread"), /max-width:\s*100%/);
   assert.match(cssDeclarations(styles, "\\.session-header"), /overflow:\s*hidden/);
   assert.match(cssDeclarations(styles, "\\.session-facts"), /flex-wrap:\s*nowrap/);
+});
+
+test("production shell keeps readable type, controls, focus, and motion contracts", async () => {
+  const [styles, html] = await Promise.all([
+    readFile(new URL("../src/runtime_web/styles.css", import.meta.url), "utf8"),
+    readFile(new URL("../src/runtime_web/index.html", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(cssDeclarations(styles, "\\.thread-row"), /min-height:\s*62px/);
+  assert.match(cssDeclarations(styles, "\\.thread-title"), /font-size:\s*14px/);
+  assert.match(cssDeclarations(styles, "\\.message-body"), /font-size:\s*15\.5px/);
+  assert.match(cssDeclarations(styles, "\\.composer textarea"), /font-size:\s*15\.5px/);
+  assert.match(cssDeclarations(styles, "\\.composer textarea"), /max-height:\s*220px/);
+  assert.match(
+    styles,
+    /\.primary-button,[\s\S]*?\.icon-button\s*\{[\s\S]*?min-height:\s*36px/,
+  );
+  assert.match(
+    styles,
+    /button:focus-visible,[\s\S]*?outline:\s*3px solid var\(--action\)/,
+  );
+  assert.match(
+    styles,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*scroll-behavior: auto !important/,
+  );
+  assert.match(html, /Enter send · Shift\+Enter newline/);
+});
+
+test("composer Enter sends without interrupting newlines or IME composition", () => {
+  assert.equal(isComposerSubmitKey({ key: "Enter" }), true);
+  assert.equal(isComposerSubmitKey({ key: "Enter", metaKey: true }), true);
+  assert.equal(isComposerSubmitKey({ key: "Enter", ctrlKey: true }), true);
+  assert.equal(isComposerSubmitKey({ key: "Enter", shiftKey: true }), false);
+  assert.equal(isComposerSubmitKey({ key: "Enter", isComposing: true }), false);
+  assert.equal(isComposerSubmitKey({ key: "a" }), false);
+});
+
+test("new thread selection keeps provider and model scoped to the create request", () => {
+  const catalog = {
+    current: "deepseek",
+    providers: [
+      { id: "openai", default_model: "gpt-5.6" },
+      { id: "deepseek", default_model: "deepseek-v4-pro" },
+    ],
+  };
+  assert.deepEqual(newThreadDefaults(catalog), {
+    providerId: "deepseek",
+    modelProviderId: "",
+    model: "deepseek-v4-pro",
+  });
+  assert.deepEqual(
+    buildCreateThreadRequest(" deepseek ", " deepseek-v4-flash-vision-exp "),
+    {
+      model_provider: "deepseek",
+      model: "deepseek-v4-flash-vision-exp",
+    },
+  );
+  assert.throws(() => buildCreateThreadRequest("deepseek", ""), /provider and a model/);
+
+  const namedCustom = {
+    current: "custom",
+    providers: [{
+      id: "custom",
+      model_provider_id: "lm-studio",
+      default_model: "local-vision-model",
+    }],
+  };
+  assert.deepEqual(newThreadDefaults(namedCustom), {
+    providerId: "custom",
+    modelProviderId: "lm-studio",
+    model: "local-vision-model",
+  });
+  assert.deepEqual(
+    buildCreateThreadRequest("custom", "local-vision-model", "lm-studio"),
+    {
+      model_provider: "custom",
+      model: "local-vision-model",
+      model_provider_id: "lm-studio",
+    },
+  );
+  assert.equal(
+    providerOptionLabel({
+      id: "custom",
+      display_name: "Custom",
+      model_provider_id: "lm-studio",
+    }),
+    "Custom · lm-studio",
+  );
+  assert.equal(threadProviderLabel({
+    model_provider: "custom",
+    model_provider_id: "lm-studio",
+  }), "lm-studio");
+  assert.equal(threadProviderLabel({ model_provider: "deepseek" }), "deepseek");
+});
+
+test("thread facts keep exact named provider identity visible after creation", async () => {
+  const source = await readFile(
+    new URL("../src/runtime_web/app.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /const provider = threadProviderLabel\(thread\)/);
+  assert.match(source, /factChip\("Provider", provider\)/);
+});
+
+test("composer send guard survives rerenders until the request settles", async () => {
+  const source = await readFile(
+    new URL("../src/runtime_web/app.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /const sending = app\.inFlightActions\.has\(composerSendAction\)/);
+  assert.match(source, /dom\.composerInput\.disabled = sending \|\| !ready/);
+  assert.match(source, /dom\.send\.disabled = sending \|\| !ready/);
+  assert.match(source, /if \(!claimInFlight\(app\.inFlightActions, composerSendAction\)\) return;/);
+  assert.match(source, /finally \{\s+app\.inFlightActions\.delete\(composerSendAction\);\s+renderComposer\(\);/);
+});
+
+test("new thread dialog labels exact vision capability without exposing attachments", async () => {
+  const [html, source] = await Promise.all([
+    readFile(new URL("../src/runtime_web/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../src/runtime_web/app.mjs", import.meta.url), "utf8"),
+  ]);
+  const vision = { id: "deepseek-v4-flash-vision-exp", image_input: "supported" };
+  assert.equal(modelOptionLabel(vision), "deepseek-v4-flash-vision-exp · Vision");
+  assert.equal(imageInputPresentation("supported").label, "Vision");
+  assert.equal(imageInputPresentation("unsupported").label, "Text only");
+  assert.equal(imageInputPresentation("unknown").state, "unknown");
+
+  assert.match(html, /id="new-thread-dialog"[^>]+tabindex="-1"[^>]+aria-labelledby="new-thread-title"/);
+  assert.match(html, /id="new-thread-cancel"[^>]+autofocus/);
+  assert.match(html, /id="new-thread-provider" required disabled/);
+  assert.match(html, /id="new-thread-model" required disabled/);
+  assert.match(html, /does not change your Runtime defaults/);
+  assert.doesNotMatch(html, /type="file"/);
+  assert.match(source, /api\("\/v1\/providers"\)/);
+  assert.match(source, /\/v1\/providers\/\$\{encodeURIComponent\(provider\.id\)\}\/models/);
+  assert.match(source, /body: JSON\.stringify\(request\)/);
+  assert.match(source, /function trapFocusWithin\(event, container\)/);
+  assert.match(source, /dom\.newThreadCancel\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(source, /trapFocusWithin\(event, dom\.newThreadDialog\)/);
+  assert.doesNotMatch(source, /\/v1\/providers\/[^`"']+\/switch/);
 });
 
 test("uses the v0.9.6 Work vocabulary for the agent wire mode", () => {

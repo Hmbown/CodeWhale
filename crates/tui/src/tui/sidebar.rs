@@ -538,6 +538,15 @@ pub(crate) fn sidebar_agent_rows(app: &App) -> Vec<SidebarAgentRow> {
             // id; never replay a persisted label from another language.
             let display_name = dispatched_agent_name(agent)
                 .map(str::to_string)
+                .or_else(|| {
+                    agent
+                        .child_route
+                        .as_ref()
+                        .and_then(|route| route.resolved_profile_id.as_deref())
+                        .map(str::trim)
+                        .filter(|profile| !profile.is_empty())
+                        .map(str::to_string)
+                })
                 .or_else(|| display_names.get(&agent.agent_id).cloned())
                 .or_else(|| app.agent_label_map.get(&agent.agent_id).cloned())
                 .unwrap_or_else(|| agent.name.clone());
@@ -2347,6 +2356,32 @@ mod tests {
 
         let rows = super::sidebar_agent_rows(&app);
         assert_eq!(rows[0].name, "branch-triage");
+    }
+
+    #[test]
+    fn sidebar_agent_rows_prefer_resolved_profile_over_generated_whale() {
+        let mut app = create_test_app();
+        let agent_id = "agent_cafe0123";
+        app.ensure_agent_label(agent_id);
+        let mut agent = cached_agent(agent_id, Some("Blue Whale"));
+        agent.child_route = Some(crate::tools::subagent::ChildRouteReceipt {
+            requested_type: "custom".to_string(),
+            requested_profile: Some("DeepSeek V4 Flash".to_string()),
+            resolved_profile_id: Some("flash-scout".to_string()),
+            profile_origin: Some("fleet:release".to_string()),
+            canonical_role: "scout".to_string(),
+            provider_id: "deepseek".to_string(),
+            model_id: "deepseek-v4-flash-vision-exp".to_string(),
+            route_source: "fleet".to_string(),
+            requested_reasoning: "inherit".to_string(),
+            effective_reasoning: None,
+            runtime_version: "test".to_string(),
+            runtime_build_sha: "unknown".to_string(),
+        });
+        app.subagent_cache.push(agent);
+
+        let rows = super::sidebar_agent_rows(&app);
+        assert_eq!(rows[0].name, "flash-scout");
     }
 
     #[test]

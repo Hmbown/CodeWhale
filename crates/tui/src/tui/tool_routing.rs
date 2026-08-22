@@ -1093,46 +1093,103 @@ fn apply_workflow_output_to_panel(app: &mut App, output: &str) {
         return;
     };
 
+    // A status response is an envelope rather than a run. Route only its
+    // selected record through the same identity checks as direct results.
+    if value.get("action").and_then(|v| v.as_str()) == Some("status") {
+        if let Some(runs) = value.get("runs").and_then(|r| r.as_array())
+            && let Some(run) = runs.last()
+        {
+            apply_workflow_output_to_panel(app, &run.to_string());
+        }
+        return;
+    }
+
+    // Tool completions can arrive after a newer run has already selected the
+    // shared panel. Bind the entire payload to one run before replaying any of
+    // its retained events. A different run may replace a settled panel only
+    // when its recorded start is strictly newer; missing/older provenance
+    // fails closed instead of contaminating the displayed run.
+    let Some(run_id) = value
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .filter(|run_id| !run_id.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            value
+                .get("events")
+                .and_then(|events| events.as_array())
+                .and_then(|events| {
+                    events.iter().find_map(|event| {
+                        event
+                            .get("run_id")
+                            .and_then(|v| v.as_str())
+                            .filter(|run_id| !run_id.trim().is_empty())
+                            .map(str::to_string)
+                    })
+                })
+        })
+    else {
+        return;
+    };
+    if let Some(panel) = app.workflow_panel.as_ref()
+        && panel.run_id != run_id
+    {
+        let incoming_started_at = value.get("started_at_ms").and_then(|v| v.as_u64());
+        if panel.lifecycle.is_running()
+            || incoming_started_at.is_none_or(|at_ms| at_ms <= panel.started_at_ms)
+        {
+            return;
+        }
+    }
+
     // Prefer the typed event stream when present.
     if let Some(events) = value.get("events").and_then(|e| e.as_array()) {
-        // Ensure a panel exists before applying — seed from run_id/goal if needed.
-        if app.workflow_panel.is_none() {
-            let run_id = value
-                .get("run_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("workflow")
-                .to_string();
+        // Ensure the selected panel belongs to this payload before applying.
+        // A newer settled run can reach this branch without a retained
+        // run_started event, so replace it with a correctly identified shell.
+        if app
+            .workflow_panel
+            .as_ref()
+            .is_none_or(|panel| panel.run_id != run_id)
+        {
             let label = value
                 .get("workflow_goal")
                 .and_then(|v| v.as_str())
                 .or_else(|| value.get("workflow_id").and_then(|v| v.as_str()))
-                .unwrap_or("workflow")
+                .unwrap_or(&run_id)
                 .to_string();
             let at_ms = value
                 .get("started_at_ms")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            let mut panel =
-                crate::tui::widgets::workflow_panel::WorkflowPanel::new(run_id, label, at_ms);
+            let mut panel = crate::tui::widgets::workflow_panel::WorkflowPanel::new(
+                run_id.clone(),
+                label,
+                at_ms,
+            );
             panel.locale = app.ui_locale;
             app.workflow_panel = Some(panel);
         }
         if let Some(panel) = app.workflow_panel.as_mut() {
-            let run_id = value
-                .get("run_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&panel.run_id)
-                .to_string();
             let mut injected = Vec::with_capacity(events.len());
             for event in events {
                 let mut event = event.clone();
                 if let Some(obj) = event.as_object_mut() {
-                    obj.entry("run_id".to_string())
-                        .or_insert_with(|| serde_json::Value::String(run_id.clone()));
+                    // The top-level run record is authoritative. Do not let a
+                    // stale/malformed embedded id retarget one replay event.
+                    obj.insert(
+                        "run_id".to_string(),
+                        serde_json::Value::String(run_id.clone()),
+                    );
                 }
                 injected.push(event);
             }
             panel.apply_json_events(&injected);
+            // Completion/status payloads replay a retained event tail. Merge
+            // the authoritative exact count + bounded structured ledger after
+            // replay so live dispatch failures are neither duplicated nor
+            // lost when older events have fallen out of the tail (#5528).
+            panel.merge_dispatch_failures_from_run_json(&value);
             // Carry final result / source into panel for expanded history card.
             if let Some(summary) = value
                 .get("result")
@@ -1150,16 +1207,6 @@ fn apply_workflow_output_to_panel(app: &mut App, output: &str) {
         return;
     }
 
-    // Fallback: status list — show the most recent run as a shell panel.
-    if value.get("action").and_then(|v| v.as_str()) == Some("status") {
-        if let Some(runs) = value.get("runs").and_then(|r| r.as_array())
-            && let Some(run) = runs.last()
-        {
-            apply_workflow_output_to_panel(app, &run.to_string());
-        }
-        return;
-    }
-
     // Prefer full panel hydration from summary/phases snapshot when present.
     if let Some(mut panel) =
         crate::tui::widgets::workflow_panel::WorkflowPanel::from_run_json(&value)
@@ -1172,13 +1219,13 @@ fn apply_workflow_output_to_panel(app: &mut App, output: &str) {
     }
 
     // Fallback: bare run record without events — at least surface header state.
-    if let Some(run_id) = value.get("run_id").and_then(|v| v.as_str()) {
+    if value.get("run_id").and_then(|v| v.as_str()).is_some() {
         use crate::tui::widgets::workflow_panel::{WorkflowPanelEvent, WorkflowPanelLifecycle};
         let label = value
             .get("workflow_goal")
             .and_then(|v| v.as_str())
             .or_else(|| value.get("workflow_id").and_then(|v| v.as_str()))
-            .unwrap_or(run_id)
+            .unwrap_or(&run_id)
             .to_string();
         let at_ms = value
             .get("started_at_ms")
@@ -1188,39 +1235,49 @@ fn apply_workflow_output_to_panel(app: &mut App, output: &str) {
             .get("status")
             .and_then(|v| v.as_str())
             .unwrap_or("running");
-        app.apply_workflow_panel_event(WorkflowPanelEvent::RunStarted {
-            run_id: run_id.to_string(),
-            workflow_id: value
-                .get("workflow_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            workflow_goal: Some(label),
-            source_path: value
-                .get("source_path")
-                .and_then(|v| v.as_str())
-                .map(PathBuf::from),
-            token_budget: value.get("token_budget").and_then(|v| v.as_u64()),
-            at_ms,
-        });
+        let started_applied = app.apply_workflow_panel_event(
+            &run_id,
+            WorkflowPanelEvent::RunStarted {
+                run_id: run_id.clone(),
+                workflow_id: value
+                    .get("workflow_id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                workflow_goal: Some(label),
+                source_path: value
+                    .get("source_path")
+                    .and_then(|v| v.as_str())
+                    .map(PathBuf::from),
+                token_budget: value.get("token_budget").and_then(|v| v.as_u64()),
+                at_ms,
+            },
+        );
+        if !started_applied {
+            return;
+        }
         if status != "running" {
             let life = match status {
                 "completed" | "succeeded" => WorkflowPanelLifecycle::Succeeded,
+                "degraded" => WorkflowPanelLifecycle::Degraded,
                 "failed" => WorkflowPanelLifecycle::Failed,
                 "cancelled" | "canceled" => WorkflowPanelLifecycle::Cancelled,
                 _ => WorkflowPanelLifecycle::Running,
             };
             if life != WorkflowPanelLifecycle::Running {
-                app.apply_workflow_panel_event(WorkflowPanelEvent::RunCompleted {
-                    status: life,
-                    error: value
-                        .get("error")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string),
-                    at_ms: value
-                        .get("completed_at_ms")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(at_ms),
-                });
+                app.apply_workflow_panel_event(
+                    &run_id,
+                    WorkflowPanelEvent::RunCompleted {
+                        status: life,
+                        error: value
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        at_ms: value
+                            .get("completed_at_ms")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(at_ms),
+                    },
+                );
             }
         }
         sync_workflow_history_card_from_panel(app);
@@ -1233,11 +1290,17 @@ pub(super) fn apply_workflow_ui_event(app: &mut App, run_id: &str, event: &serde
 
     let mut event = event.clone();
     if let Some(obj) = event.as_object_mut() {
-        obj.entry("run_id".to_string())
-            .or_insert_with(|| serde_json::Value::String(run_id.to_string()));
+        // The engine envelope owns route identity. An embedded stale id must
+        // not move this event onto another run's panel.
+        obj.insert(
+            "run_id".to_string(),
+            serde_json::Value::String(run_id.to_string()),
+        );
     }
-    if let Some(panel_event) = WorkflowPanelEvent::from_json_value(&event) {
-        app.apply_workflow_panel_event(panel_event);
+    if let Some(panel_event) = WorkflowPanelEvent::from_json_value(&event)
+        && !app.apply_workflow_panel_event(run_id, panel_event)
+    {
+        return;
     }
     sync_workflow_history_card_from_panel(app);
 }
@@ -1266,6 +1329,10 @@ fn sync_workflow_history_card_from_panel(app: &mut App) {
     };
     let run_id = panel.run_id.clone();
     let snapshot = panel.to_run_json().to_string();
+    let degraded = matches!(
+        panel.lifecycle,
+        crate::tui::widgets::workflow_panel::WorkflowPanelLifecycle::Degraded
+    );
 
     // Prefer an in-flight Generic(workflow) cell whose output already carries
     // this run_id, else the newest running workflow cell, else any workflow
@@ -1336,9 +1403,15 @@ fn sync_workflow_history_card_from_panel(app: &mut App) {
                 }
             }
         };
+        let status_changed = degraded && generic.status != ToolStatus::Warning;
+        if status_changed {
+            generic.status = ToolStatus::Warning;
+        }
         if replace {
             generic.output = Some(snapshot);
             generic.output_summary = Some(format!("workflow {}", run_id));
+        }
+        if replace || status_changed {
             app.mark_history_updated();
         }
     }
@@ -1849,6 +1922,250 @@ mod tests {
     use super::*;
     use crate::tools::plan::StepStatus;
     use serde_json::json;
+
+    #[test]
+    fn late_live_event_from_prior_run_does_not_mutate_active_run() {
+        let mut app = crate::test_support::test_app_with_options(
+            crate::test_support::test_tui_options(std::path::PathBuf::from(".")),
+        );
+        apply_workflow_ui_event(
+            &mut app,
+            "run-a",
+            &json!({
+                "type": "run_started",
+                "workflow_goal": "first run",
+                "at_ms": 1_000,
+            }),
+        );
+        apply_workflow_ui_event(
+            &mut app,
+            "run-b",
+            &json!({
+                "type": "run_started",
+                "workflow_goal": "second run",
+                "at_ms": 2_000,
+            }),
+        );
+        apply_workflow_ui_event(
+            &mut app,
+            "run-b",
+            &json!({"type": "phase_started", "title": "Build", "at_ms": 2_100}),
+        );
+        let before = app
+            .workflow_panel
+            .as_ref()
+            .expect("run B panel")
+            .to_run_json();
+
+        // Even a delayed start cannot rewind the selected panel to an older
+        // run. A genuinely newer run B was already accepted above.
+        apply_workflow_ui_event(
+            &mut app,
+            "run-a",
+            &json!({
+                "type": "run_started",
+                "workflow_goal": "delayed first run",
+                "at_ms": 1_500,
+            }),
+        );
+        // The immutable envelope says A even if a malformed embedded field
+        // claims B. Neither this failure nor A's terminal event belongs to B.
+        apply_workflow_ui_event(
+            &mut app,
+            "run-a",
+            &json!({
+                "type": "task_dispatch_failed",
+                "run_id": "run-b",
+                "label": "late task",
+                "message": "late A failure",
+                "at_ms": 2_200,
+            }),
+        );
+        apply_workflow_ui_event(
+            &mut app,
+            "run-a",
+            &json!({
+                "type": "run_completed",
+                "status": "failed",
+                "error": "late A completion",
+                "at_ms": 2_300,
+            }),
+        );
+
+        let panel = app.workflow_panel.as_ref().expect("run B remains active");
+        assert_eq!(panel.run_id, "run-b");
+        assert_eq!(panel.to_run_json(), before);
+    }
+
+    #[test]
+    fn prior_run_completion_replay_does_not_replace_active_run() {
+        let mut app = crate::test_support::test_app_with_options(
+            crate::test_support::test_tui_options(std::path::PathBuf::from(".")),
+        );
+        apply_workflow_ui_event(
+            &mut app,
+            "run-b",
+            &json!({
+                "type": "run_started",
+                "workflow_goal": "active run",
+                "at_ms": 2_000,
+            }),
+        );
+        apply_workflow_ui_event(
+            &mut app,
+            "run-b",
+            &json!({"type": "phase_started", "title": "Verify", "at_ms": 2_100}),
+        );
+        let before = app
+            .workflow_panel
+            .as_ref()
+            .expect("run B panel")
+            .to_run_json();
+
+        // A retained completion tail can contain run_started. The top-level
+        // run identity and timestamp keep the whole replay off run B.
+        apply_workflow_output_to_panel(
+            &mut app,
+            &json!({
+                "run_id": "run-a",
+                "workflow_goal": "prior run",
+                "started_at_ms": 1_000,
+                "completed_at_ms": 2_200,
+                "status": "failed",
+                "events": [
+                    {
+                        "type": "run_started",
+                        "run_id": "run-a",
+                        "workflow_goal": "prior run",
+                        "at_ms": 1_000,
+                    },
+                    {
+                        "type": "task_dispatch_failed",
+                        "run_id": "run-a",
+                        "message": "prior failure",
+                        "at_ms": 1_100,
+                    },
+                    {
+                        "type": "run_completed",
+                        "run_id": "run-a",
+                        "status": "failed",
+                        "at_ms": 2_200,
+                    }
+                ],
+                "dispatch_failure_count": 1,
+                "dispatch_failures": [{
+                    "message": "prior failure",
+                    "at_ms": 1_100,
+                }],
+            })
+            .to_string(),
+        );
+
+        let panel = app.workflow_panel.as_ref().expect("run B remains active");
+        assert_eq!(panel.run_id, "run-b");
+        assert_eq!(panel.to_run_json(), before);
+    }
+
+    #[test]
+    fn workflow_completion_replay_uses_authoritative_dispatch_failure_ledger() {
+        let mut app = crate::test_support::test_app_with_options(
+            crate::test_support::test_tui_options(std::path::PathBuf::from(".")),
+        );
+        let failure = json!({
+            "type": "task_dispatch_failed",
+            "label": "review docs",
+            "phase": "Analyze",
+            "message": "profile unavailable",
+            "at_ms": 1_250,
+        });
+        apply_workflow_ui_event(
+            &mut app,
+            "run-1",
+            &json!({
+                "type": "run_started",
+                "workflow_goal": "audit",
+                "at_ms": 1_000,
+            }),
+        );
+        apply_workflow_ui_event(&mut app, "run-1", &failure);
+        assert_eq!(
+            app.workflow_panel
+                .as_ref()
+                .expect("live panel")
+                .dispatch_failure_count,
+            1
+        );
+
+        // A long run's retained tail may no longer include run_started, so
+        // this event is a replay of the live failure rather than a new slot.
+        apply_workflow_output_to_panel(
+            &mut app,
+            &json!({
+                "run_id": "run-1",
+                "workflow_goal": "audit",
+                "started_at_ms": 1_000,
+                "events": [failure],
+                "dispatch_failure_count": 1,
+                "dispatch_failures": [{
+                    "label": "review docs",
+                    "phase": "Analyze",
+                    "message": "profile unavailable",
+                    "at_ms": 1_250,
+                }],
+            })
+            .to_string(),
+        );
+
+        let panel = app.workflow_panel.as_ref().expect("completed panel");
+        assert_eq!(panel.dispatch_failure_count, 1);
+        assert_eq!(panel.dispatch_failures.len(), 1);
+        assert_eq!(panel.failure_cancel_counts(), (1, 0));
+    }
+
+    #[test]
+    fn degraded_workflow_snapshot_marks_history_receipt_as_warning() {
+        let mut app = crate::test_support::test_app_with_options(
+            crate::test_support::test_tui_options(std::path::PathBuf::from(".")),
+        );
+        app.history
+            .push(HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+                name: "workflow".to_string(),
+                status: ToolStatus::Running,
+                input_summary: Some("action: run".to_string()),
+                output: None,
+                prompts: None,
+                spillover_path: None,
+                output_summary: None,
+                is_diff: false,
+            })));
+
+        apply_workflow_output_to_panel(
+            &mut app,
+            &json!({
+                "run_id": "run-partial",
+                "workflow_goal": "audit",
+                "status": "degraded",
+                "started_at_ms": 1_000,
+                "completed_at_ms": 2_000,
+                "dispatch_failure_count": 1,
+                "dispatch_failures": [{
+                    "label": "review docs",
+                    "message": "profile unavailable",
+                    "at_ms": 1_500,
+                }],
+            })
+            .to_string(),
+        );
+
+        let HistoryCell::Tool(ToolCell::Generic(receipt)) = app.history.last().expect("receipt")
+        else {
+            panic!("workflow receipt must remain generic")
+        };
+        assert_eq!(receipt.status, ToolStatus::Warning);
+        assert!(!history_cell_has_running_tool(
+            app.history.last().expect("receipt")
+        ));
+    }
 
     #[cfg(unix)]
     fn hook_log_lines_eventually(path: &std::path::Path, expected: usize) -> Vec<String> {

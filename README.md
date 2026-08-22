@@ -23,6 +23,9 @@ The first run helps you connect a provider or stay offline. Codewhale also
 supports Cargo, Docker, Nix, Scoop, prebuilt archives, Android/Termux, and a CNB
 mirror. See [the installation guide](docs/INSTALL.md).
 
+Tab completion is one command per shell — `codewhale completion bash|zsh|fish|powershell|elvish`.
+See [shell completions](docs/INSTALL.md#8-shell-completions).
+
 ## Use
 
 Talk to Codewhale the same way you would talk to a teammate:
@@ -97,4 +100,5 @@ project grow. See [the contributor record](docs/CONTRIBUTORS.md).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Portions adapted from other open-source projects are recorded
+in [third-party notices](docs/THIRD_PARTY_NOTICES.md).

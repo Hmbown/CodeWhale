@@ -38,10 +38,13 @@ export interface ProductTerm {
 export const PRODUCT_TERMS: ProductTerm[] = [
   {
     term: "Fleet",
-    short: { en: "who does the work", zh: "谁来做工作" },
+    short: {
+      en: "who is in the roster and which member is selected",
+      zh: "花名册中有哪些成员，以及选中了哪一位",
+    },
     long: {
-      en: "Who does the work: the configured workers, roles, models, hosts, and trust boundaries.",
-      zh: "谁来做工作：配置好的 worker、角色、模型、主机和信任边界。",
+      en: "Fleet records member IDs and names, semantic roles, provider/model identities, and roster state.",
+      zh: "Fleet 记录成员 ID 和名称、语义角色、提供商/模型身份以及花名册状态。",
     },
   },
   {
@@ -62,10 +65,13 @@ export const PRODUCT_TERMS: ProductTerm[] = [
   },
   {
     term: "Runtime",
-    short: { en: "where and how a Lane executes", zh: "Lane 在哪里、如何执行" },
+    short: {
+      en: "where, how, and with what authority selected work executes",
+      zh: "选定工作在哪里、如何以及以何种权限执行",
+    },
     long: {
-      en: "Where and how a Lane executes: local or remote process, provider route, sandbox, and API boundary.",
-      zh: "Lane 在哪里、如何执行：本地或远程进程、提供商路由、沙箱和 API 边界。",
+      en: "Runtime owns the local or remote process, provider route, project/workspace trust, filesystem, network, secrets, approvals, sandbox, tools, and API boundary.",
+      zh: "Runtime 负责本地或远程进程、提供商路由、项目/工作区信任、文件系统、网络、密钥、审批、沙箱、工具和 API 边界。",
     },
   },
 ];

@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "App-server protocol frames for Codewhale runtime integrations"
 
+[lints]
+workspace = true
+
 [dependencies]
 chrono.workspace = true
 serde.workspace = true

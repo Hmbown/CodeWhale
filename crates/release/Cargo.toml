@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "Shared Codewhale release discovery and version comparison helpers"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }

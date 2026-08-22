@@ -28,6 +28,7 @@ use tracing::debug;
 use crate::client::DeepSeekClient;
 use crate::core::events::Event;
 use crate::llm_client::LlmClient;
+use crate::models::Role;
 use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt};
 use crate::utils::truncate_with_ellipsis;
 
@@ -294,7 +295,7 @@ pub async fn run_advisor_for_turn(
     let request = MessageRequest {
         model: model.clone(),
         messages: vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: prompt,
                 cache_control: None,
@@ -444,7 +445,7 @@ mod tests {
             let id = format!("tool_{i}");
             // assistant message with ToolUse
             messages.push(Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::ToolUse {
                     id: id.clone(),
                     name: "exec_shell".to_string(),
@@ -455,7 +456,7 @@ mod tests {
             });
             // user message with ToolResult
             messages.push(Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: id,
                     content: format!("{i}"),
@@ -479,7 +480,7 @@ mod tests {
     #[test]
     fn extract_tool_call_pairs_empty_when_no_tool_calls() {
         let messages = vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "hello".to_string(),
                 cache_control: None,

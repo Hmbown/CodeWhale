@@ -10,6 +10,7 @@ pub(crate) fn complete_trust_directory_onboarding(
     app: &mut App,
     config: &Config,
 ) -> Result<(), String> {
+    let enter_hint = app.tr(MessageId::OnboardTrustEnterHint).into_owned();
     onboarding::mark_trusted(&app.workspace).map_err(|err| err.to_string())?;
     app.trust_mode = true;
     // `rebind`, not `new`: trusting the directory can add project hooks, but
@@ -26,6 +27,7 @@ pub(crate) fn complete_trust_directory_onboarding(
     );
     app.runtime_services.hook_executor = Some(std::sync::Arc::new(app.hooks.clone()));
     app.status_message = None;
+    app.status_toasts.retain(|toast| toast.text != enter_hint);
     advance_after_trust_directory_choice(app);
     Ok(())
 }

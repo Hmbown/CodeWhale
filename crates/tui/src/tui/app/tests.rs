@@ -1707,6 +1707,55 @@ fn saved_startup_provider_overrides_config_file_provider() {
 }
 
 #[test]
+fn selected_fleet_operator_outranks_remembered_startup_route_and_reasoning() {
+    let _lock = lock_test_env();
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    std::fs::write(
+        tmp.path().join("settings.toml"),
+        r#"default_provider = "openrouter"
+reasoning_effort = "off"
+
+[provider_models]
+deepseek = "deepseek-v4-pro"
+openrouter = "openai/gpt-5"
+"#,
+    )
+    .expect("settings");
+    let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+
+    let config = Config {
+        provider: Some("deepseek".to_string()),
+        reasoning_effort: Some("high".to_string()),
+        fleet_operator_route_applied: true,
+        fleet_operator_reasoning_applied: true,
+        providers: Some(ProvidersConfig {
+            deepseek: ProviderConfig {
+                api_key: Some("deepseek-config-key".to_string()),
+                model: Some("deepseek-v4-flash-vision-exp".to_string()),
+                ..ProviderConfig::default()
+            },
+            openrouter: ProviderConfig {
+                api_key: Some("openrouter-config-key".to_string()),
+                model: Some("openai/gpt-5".to_string()),
+                ..ProviderConfig::default()
+            },
+            ..ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+
+    let mut options = test_options(false);
+    options.model = "deepseek-v4-flash-vision-exp".to_string();
+    let app = App::new(options, &config);
+
+    assert_eq!(app.api_provider, ApiProvider::Deepseek);
+    assert_eq!(app.model, "deepseek-v4-flash-vision-exp");
+    assert_eq!(app.reasoning_effort, ReasoningEffort::High);
+    assert_eq!(app.reasoning_effort_preference, Some(ReasoningEffort::High));
+}
+
+#[test]
 fn explicit_launch_provider_overrides_saved_startup_provider() {
     let _lock = lock_test_env();
     let tmp = tempfile::TempDir::new().expect("tempdir");

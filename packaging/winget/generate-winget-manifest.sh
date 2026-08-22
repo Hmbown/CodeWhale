@@ -90,9 +90,10 @@ bump_manifest() {
 }
 
 bump_manifest "$winget_primary"
-if [[ -f "$winget_mirror" ]]; then
-  bump_manifest "$winget_mirror"
-fi
+# The README promises a verbatim structural mirror. Generate the canonical
+# manifest once, then copy those exact bytes so comments and optional fields
+# cannot drift while versions and hashes still look current.
+cp "$winget_primary" "$winget_mirror"
 
 echo "winget manifests bumped to v$version ($today)"
 echo "  CodeWhaleSetup.exe: $installer_sha"

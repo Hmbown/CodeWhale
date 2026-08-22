@@ -5,9 +5,10 @@
 //!
 //! - its **operator** route (provider + exact model + reasoning), or the
 //!   explicit absence of one ("inherit the session route");
-//! - its **roster**: each member's role, exact model pin or inherit policy,
-//!   provider (pins only — never inferred from a model string), reasoning
-//!   level, optional instructions, and capability requirements;
+//! - its **roster**: each member's stable id, optional human-facing name, role,
+//!   exact model pin or inherit policy, provider (pins only — never inferred
+//!   from a model string), reasoning level, optional instructions, and
+//!   capability requirements;
 //! - its **save scope and source**: personal (`$CODEWHALE_HOME/fleets/`) or
 //!   workspace (`.codewhale/fleets/`), with the exact file path surfaced.
 //!
@@ -34,6 +35,7 @@ use super::roster::FleetRoster;
 
 pub const FLEET_SCHEMA_KIND: &str = "fleet";
 pub const FLEET_SCHEMA_REVISION: u32 = 2;
+const MAX_MEMBER_DISPLAY_NAME_CHARS: usize = 80;
 
 /// The directory name used by both roots (next to `agents/` for legacy
 /// profiles). Also used by the workflow crate for its own legacy/exact files;
@@ -123,6 +125,13 @@ impl MemberCapability {
 pub struct FleetMember {
     /// Stable member id — the role identity (e.g. `scout`, `builder`).
     pub id: String,
+    /// Optional human-facing name used by roster views and member selectors.
+    ///
+    /// `name` is accepted as an authoring alias, while canonical saves use
+    /// `display_name`. Existing revision-2 files omit this field and continue
+    /// to deserialize unchanged.
+    #[serde(default, alias = "name", skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     /// Role label; defaults to `id` when absent.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub role: String,
@@ -223,18 +232,38 @@ impl FleetFile {
                 "fleet name must not be empty".to_string(),
             ));
         }
-        let mut seen: BTreeMap<&str, ()> = BTreeMap::new();
+        let mut seen: BTreeMap<String, String> = BTreeMap::new();
         for member in &self.members {
-            if member.id.trim().is_empty() {
+            let member_id = member.id.trim();
+            if member_id.is_empty() {
                 return Err(FleetStoreError::Invalid(
                     "member id must not be empty".to_string(),
                 ));
             }
-            if seen.insert(member.id.as_str(), ()).is_some() {
+            let member_key = member_id.to_ascii_lowercase();
+            if let Some(existing) = seen.insert(member_key, member.id.clone()) {
                 return Err(FleetStoreError::Invalid(format!(
-                    "duplicate member id `{}`",
-                    member.id
+                    "duplicate member id `{}` conflicts case-insensitively with `{existing}`",
+                    member.id,
                 )));
+            }
+            if let Some(display_name) = member.display_name.as_deref() {
+                let trimmed = display_name.trim();
+                if trimmed.is_empty() {
+                    return Err(FleetStoreError::Invalid(format!(
+                        "member `{}` display_name must not be empty",
+                        member.id,
+                    )));
+                }
+                if trimmed != display_name
+                    || display_name.chars().any(char::is_control)
+                    || display_name.chars().count() > MAX_MEMBER_DISPLAY_NAME_CHARS
+                {
+                    return Err(FleetStoreError::Invalid(format!(
+                        "member `{}` display_name must be one trimmed printable line no longer than {MAX_MEMBER_DISPLAY_NAME_CHARS} characters",
+                        member.id,
+                    )));
+                }
             }
             match (&member.provider, &member.model) {
                 (Some(_), None) | (None, Some(_)) => {
@@ -289,7 +318,10 @@ impl FleetFile {
     /// Look up a member by role id.
     #[must_use]
     pub fn member(&self, id: &str) -> Option<&FleetMember> {
-        self.members.iter().find(|m| m.id == id)
+        let id = id.trim();
+        self.members
+            .iter()
+            .find(|member| member.id.trim().eq_ignore_ascii_case(id))
     }
 
     /// Whether the roster contains a scout member (the fast exploratory role).
@@ -589,54 +621,84 @@ pub fn delete_fleet(
 /// user-global default. Each file is scope-explicit; a workspace selection
 /// can never hide the personal Fleet — the personal default is only overridden
 /// for this folder, visibly.
-pub fn selected_fleet(workspace: &Path) -> Option<SelectedFleet> {
+pub fn resolve_selected_fleet(workspace: &Path) -> Result<Option<SelectedFleet>, FleetStoreError> {
     let ws_dir = workspace_fleets_dir(workspace);
-    if let Some(name) = read_selection(&ws_dir) {
+    if let Some(name) = read_selection_result(&ws_dir)? {
         // A workspace selection may name a personal Fleet (selected for this
         // folder only): resolve workspace first, then personal, and report
         // the scope the Fleet actually lives in.
         let ws_path = ws_dir.join(format!("{}.toml", slugify(&name)));
         if ws_path.is_file() {
-            return Some(SelectedFleet {
+            return Ok(Some(SelectedFleet {
                 name,
                 scope: FleetScope::Workspace,
                 path: ws_path,
-            });
+            }));
         }
         if let Ok(dir) = personal_fleets_dir() {
             let personal_path = dir.join(format!("{}.toml", slugify(&name)));
             if personal_path.is_file() {
-                return Some(SelectedFleet {
+                return Ok(Some(SelectedFleet {
                     name,
                     scope: FleetScope::Personal,
                     path: personal_path,
-                });
+                }));
             }
         }
+        return Err(FleetStoreError::NotFound(format!(
+            "selected Fleet `{name}` (folder selection at {})",
+            ws_dir.join(SELECTED_FILE).display()
+        )));
     }
     if let Ok(dir) = personal_fleets_dir()
-        && let Some(name) = read_selection(&dir)
+        && let Some(name) = read_selection_result(&dir)?
     {
         let path = dir.join(format!("{}.toml", slugify(&name)));
         if path.is_file() {
-            return Some(SelectedFleet {
+            return Ok(Some(SelectedFleet {
                 name,
                 scope: FleetScope::Personal,
                 path,
+            }));
+        }
+        return Err(FleetStoreError::NotFound(format!(
+            "selected Fleet `{name}` (user selection at {})",
+            dir.join(SELECTED_FILE).display()
+        )));
+    }
+    Ok(None)
+}
+
+/// Compatibility projection for display-only callers. Runtime callers must
+/// use [`resolve_selected_fleet`] so a broken explicit selection cannot be
+/// mistaken for "no selection" and silently fall back to legacy profiles.
+#[must_use]
+pub fn selected_fleet(workspace: &Path) -> Option<SelectedFleet> {
+    resolve_selected_fleet(workspace).ok().flatten()
+}
+
+fn read_selection_result(dir: &Path) -> Result<Option<String>, FleetStoreError> {
+    let path = dir.join(SELECTED_FILE);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(FleetStoreError::Io {
+                path: path.display().to_string(),
+                message: error.to_string(),
             });
         }
+    };
+    let name = text.trim();
+    if name.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(name.to_string()))
     }
-    None
 }
 
 fn read_selection(dir: &Path) -> Option<String> {
-    let text = fs::read_to_string(dir.join(SELECTED_FILE)).ok()?;
-    let name = text.trim();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name.to_string())
-    }
+    read_selection_result(dir).ok().flatten()
 }
 
 /// Write the selection for a scope. Returns the exact file written.
@@ -795,6 +857,7 @@ pub fn migrate_legacy_roster(
         rows.push(row);
         fleet.members.push(FleetMember {
             id: member.id.clone(),
+            display_name: member.display_name.clone(),
             role: profile.role.name.clone(),
             model,
             provider,
@@ -878,6 +941,7 @@ mod tests {
             })
             .with_member(FleetMember {
                 id: "scout".to_string(),
+                display_name: Some("Flash Scout".to_string()),
                 role: "scout".to_string(),
                 provider: None,
                 model: None,
@@ -887,6 +951,7 @@ mod tests {
             })
             .with_member(FleetMember {
                 id: "builder".to_string(),
+                display_name: None,
                 role: "builder".to_string(),
                 provider: Some("deepseek".to_string()),
                 model: Some("deepseek-v4-pro".to_string()),
@@ -929,6 +994,29 @@ mod tests {
             "{err}"
         );
 
+        // Dispatch identity is case-insensitive, so validation must reject a
+        // pair lookup could not distinguish.
+        let mut fleet = sample_fleet();
+        let mut duplicate = fleet.members[0].clone();
+        duplicate.id = "SCOUT".to_string();
+        fleet.members.push(duplicate);
+        let err = fleet.validate().unwrap_err();
+        assert!(err.to_string().contains("case-insensitively"), "{err}");
+
+        // Human-facing names stay bounded and single-line before they can
+        // enter selectors, roster discovery, or terminal rendering.
+        let mut fleet = sample_fleet();
+        fleet.members[0].display_name = Some("x".repeat(MAX_MEMBER_DISPLAY_NAME_CHARS + 1));
+        let err = fleet.validate().unwrap_err();
+        assert!(err.to_string().contains("no longer than 80"), "{err}");
+        let mut fleet = sample_fleet();
+        fleet.members[0].display_name = Some("Flash\nScout".to_string());
+        let err = fleet.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("one trimmed printable line"),
+            "{err}"
+        );
+
         // Lone provider / lone model: never silently reinterpreted.
         let mut fleet = sample_fleet();
         fleet.members[0].provider = Some("deepseek".to_string());
@@ -964,7 +1052,43 @@ mod tests {
         assert_eq!(parsed, fleet);
         assert!(text.contains("schema = \"fleet\""));
         assert!(text.contains("schema_revision = 2"));
+        assert!(text.contains("display_name = \"Flash Scout\""));
         assert!(text.contains("deepseek-v4-flash"));
+    }
+
+    #[test]
+    fn member_name_alias_is_accepted_and_old_files_remain_valid() {
+        let aliased = FleetFile::parse(
+            r#"schema = "fleet"
+schema_revision = 2
+name = "Named"
+
+[[members]]
+id = "scout"
+name = "Scout One"
+role = "scout"
+"#,
+        )
+        .expect("name alias");
+        assert_eq!(
+            aliased.members[0].display_name.as_deref(),
+            Some("Scout One")
+        );
+        let canonical = aliased.render_toml().expect("canonical render");
+        assert!(canonical.contains("display_name = \"Scout One\""));
+
+        let without_name = FleetFile::parse(
+            r#"schema = "fleet"
+schema_revision = 2
+name = "Existing"
+
+[[members]]
+id = "scout"
+role = "scout"
+"#,
+        )
+        .expect("pre-display-name revision-2 file");
+        assert!(without_name.members[0].display_name.is_none());
     }
 
     #[test]
@@ -1025,12 +1149,25 @@ mod tests {
         set_selected("DeepSeek Flash", FleetScope::Workspace, ws.path()).unwrap();
         let sel = selected_fleet(ws.path()).expect("selected");
         assert_eq!(sel.scope, FleetScope::Workspace);
-
         // Deleting the workspace Fleet clears the workspace selection; the
         // personal default reappears rather than a phantom.
         delete_fleet("DeepSeek Flash", FleetScope::Workspace, ws.path()).unwrap();
         let sel = selected_fleet(ws.path()).expect("personal default returns");
         assert_eq!(sel.scope, FleetScope::Personal);
+    }
+
+    #[test]
+    fn stale_explicit_selection_is_an_error_not_legacy_fallback() {
+        let _lock = crate::test_support::lock_test_env();
+        let _home = set_sealed_home();
+        let ws = tempfile::TempDir::new().unwrap();
+        let dir = workspace_fleets_dir(ws.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(SELECTED_FILE), "Missing Fleet\n").unwrap();
+
+        let error = resolve_selected_fleet(ws.path()).expect_err("stale selection must fail");
+        assert!(error.to_string().contains("Missing Fleet"), "{error}");
+        assert!(error.to_string().contains("folder selection"), "{error}");
     }
 
     #[test]
@@ -1084,6 +1221,7 @@ members = []"#;
         std::fs::write(
             agents_dir.join("scout.toml"),
             r#"id = "scout"
+display_name = "Scout One"
 role_hint = "scout"
 model = "deepseek-v4-flash"
 provider = "deepseek"
@@ -1101,6 +1239,7 @@ provider = "deepseek"
 
         assert_eq!(receipt.fleet.name, "Default");
         let scout = receipt.fleet.member("scout").expect("scout member");
+        assert_eq!(scout.display_name.as_deref(), Some("Scout One"));
         assert_eq!(scout.model.as_deref(), Some("deepseek-v4-flash"));
         assert_eq!(scout.provider.as_deref(), Some("deepseek"));
         assert!(receipt.saved_to.ends_with("fleets/default.toml"));

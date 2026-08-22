@@ -14,7 +14,6 @@ install steps. The short version:
 ```sh
 # Inside Termux (pkg install rust git ...)
 cargo install codewhale-cli --locked
-cargo install codewhale-tui --locked
 ```
 
 Or, when a release includes `codewhale-android-arm64.tar.gz`, extract it

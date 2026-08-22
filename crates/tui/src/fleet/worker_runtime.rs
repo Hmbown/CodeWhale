@@ -13,17 +13,107 @@
 
 #![allow(dead_code)]
 
+use std::borrow::Cow;
+use std::path::PathBuf;
+
 use anyhow::{Result, bail};
 use codewhale_protocol::fleet::{
     FleetEffectivePermissions, FleetResolvedRoute, FleetTaskSpec, FleetTaskWorkerProfile,
     FleetWorkerSpec,
 };
+use serde::{Deserialize, Serialize};
 
-use super::profile::{AgentProfile, canonical_public_role_name};
+use super::identity::resolve_member_in_profiles;
+use super::profile::{
+    AgentProfile, FleetDelegationHints, FleetLoadout, FleetProfile, FleetProfilePermissions,
+    FleetRole as FleetProfileRole, FleetSlot, ProfileOrigin, canonical_public_role_name,
+};
 use crate::config::{ApiProvider, Config};
 use crate::route_runtime::{resolve_route_candidate, resolve_runtime_route};
 use crate::tools::subagent::{AgentWorkerSpec, AgentWorkerToolProfile, FleetRole};
 use crate::worker_profile::{ChildLaunchManifest, ModelRoute, ToolScope, WorkerRuntimeProfile};
+
+/// Reserved durable task metadata written after author input is validated.
+///
+/// Keeping the selected identity snapshot inside the already-durable task
+/// record prevents a queued run or retry from silently changing member/model
+/// when a profile file is edited after run creation.
+pub(crate) const FROZEN_FLEET_MEMBER_METADATA_KEY: &str = "_codewhale.frozen_fleet_member.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct FrozenFleetMember {
+    schema_version: u32,
+    id: String,
+    display_name: Option<String>,
+    description: Option<String>,
+    requires: Vec<String>,
+    slot: String,
+    role: String,
+    role_description: Option<String>,
+    role_instructions: Option<String>,
+    loadout: String,
+    provider: Option<String>,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    max_spawn_depth: Option<u32>,
+    origin: ProfileOrigin,
+}
+
+impl FrozenFleetMember {
+    fn from_profile(profile: &AgentProfile) -> Self {
+        Self {
+            schema_version: 1,
+            id: profile.id.clone(),
+            display_name: profile.display_name.clone(),
+            description: profile.description.clone(),
+            requires: profile.requires.clone(),
+            slot: profile.profile.slot.as_str().to_string(),
+            role: canonical_public_role_name(&profile.profile.role.name),
+            role_description: profile.profile.role.description.clone(),
+            role_instructions: profile.profile.role.instructions.clone(),
+            loadout: profile.profile.loadout.as_str().to_string(),
+            provider: profile.profile.provider.clone(),
+            model: profile.profile.model.clone(),
+            reasoning_effort: profile.profile.reasoning_effort.clone(),
+            max_spawn_depth: profile.profile.delegation.max_spawn_depth,
+            origin: profile.origin,
+        }
+    }
+
+    fn into_profile(self) -> Result<AgentProfile> {
+        if self.schema_version != 1 || self.id.trim().is_empty() || self.role.trim().is_empty() {
+            bail!("invalid frozen Fleet member snapshot");
+        }
+        Ok(AgentProfile {
+            id: self.id,
+            display_name: self.display_name,
+            description: self.description,
+            requires: self.requires,
+            profile: FleetProfile {
+                slot: FleetSlot::from_name(&self.slot),
+                role: FleetProfileRole {
+                    name: self.role,
+                    description: self.role_description,
+                    instructions: self.role_instructions,
+                },
+                loadout: FleetLoadout::from_name(&self.loadout),
+                model: self.model,
+                provider: self.provider,
+                reasoning_effort: self.reasoning_effort,
+                // Authority is always derived from live Runtime policy. A
+                // Fleet identity snapshot cannot persist or grant it.
+                permissions: FleetProfilePermissions::default(),
+                delegation: FleetDelegationHints {
+                    max_spawn_depth: self.max_spawn_depth,
+                    max_concurrency: None,
+                },
+            },
+            source: PathBuf::from("<durable-fleet-member>"),
+            origin: self.origin,
+            plugin_authority: None,
+        })
+    }
+}
 
 /// Validate that every task referencing a workspace agent profile can resolve it.
 ///
@@ -39,16 +129,102 @@ pub fn validate_task_agent_profiles(
     Ok(())
 }
 
-/// Rewrite compatibility-only advisory role names before a Fleet run is
-/// persisted. Replayed older ledgers are still canonicalized at projection
-/// boundaries, but every newly created durable task records `consultant`.
-pub(crate) fn canonicalize_fleet_task_roles(tasks: &mut [FleetTaskSpec]) {
+/// Resolve and freeze every deterministic member selection before persistence.
+///
+/// Author-facing selectors may be ids, names, semantic roles, model labels, or
+/// exact routes. The durable task stores the selected member's canonical id and
+/// the identity/route inputs used for launch. Legacy `worker.role` remains a
+/// posture when it does not name exactly one member; explicit
+/// `worker.agent_profile` selectors fail closed when unknown or ambiguous.
+pub(crate) fn freeze_fleet_task_members(
+    tasks: &mut [FleetTaskSpec],
+    agent_profiles: &[AgentProfile],
+    require_exact_member: bool,
+) -> Result<()> {
     for task in tasks {
-        let Some(role) = task.worker.as_mut().and_then(|worker| worker.role.as_mut()) else {
+        let Some(worker) = task.worker.as_ref() else {
+            if require_exact_member {
+                bail!(
+                    "fleet task {} must name one member from the explicitly selected Fleet",
+                    task.id
+                );
+            }
             continue;
         };
-        *role = canonical_public_role_name(role.trim());
+        let explicit_selector = worker
+            .agent_profile
+            .as_deref()
+            .map(str::trim)
+            .filter(|selector| !selector.is_empty())
+            .map(str::to_string);
+        let legacy_role_selector = worker
+            .role
+            .as_deref()
+            .map(str::trim)
+            .filter(|selector| !selector.is_empty())
+            .map(str::to_string);
+
+        let selected = if let Some(selector) = explicit_selector.as_deref() {
+            let selected = resolve_member_in_profiles(agent_profiles, selector).map_err(|error| {
+                anyhow::anyhow!(
+                    "fleet task {} has invalid worker.agent_profile selector {selector:?}: {error}",
+                    task.id
+                )
+            })?;
+            Some(selected.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "fleet task {} references unknown agent profile selector {selector:?}",
+                    task.id
+                )
+            })?)
+        } else if let Some(selector) = legacy_role_selector.as_deref() {
+            // `role` was historically only a posture. Preserve that contract
+            // when no exact Fleet is selected and a roster lookup is absent.
+            // Ambiguity is never a posture: silently dropping it would make a
+            // selected team launch an anonymous session-route worker.
+            match resolve_member_in_profiles(agent_profiles, selector).map_err(|error| {
+                anyhow::anyhow!(
+                    "fleet task {} has invalid worker.role member selector {selector:?}: {error}",
+                    task.id
+                )
+            })? {
+                Some(profile) => Some(profile),
+                None if require_exact_member => {
+                    bail!(
+                        "fleet task {} worker.role selector {selector:?} does not name a member in the explicitly selected Fleet",
+                        task.id
+                    )
+                }
+                None => None,
+            }
+        } else if require_exact_member {
+            bail!(
+                "fleet task {} must name one member from the explicitly selected Fleet",
+                task.id
+            );
+        } else {
+            None
+        };
+
+        if let Some(profile) = selected {
+            validate_selected_member_model(task, profile)?;
+            let snapshot = FrozenFleetMember::from_profile(profile);
+            task.metadata.insert(
+                FROZEN_FLEET_MEMBER_METADATA_KEY.to_string(),
+                serde_json::to_value(&snapshot)?,
+            );
+            let worker = task.worker.as_mut().expect("worker checked above");
+            worker.agent_profile = Some(format!("member:{}", profile.id));
+            if explicit_selector.is_none() {
+                worker.role = Some(snapshot.role.clone());
+            } else if let Some(role) = worker.role.as_mut() {
+                *role = canonical_public_role_name(role.trim());
+            }
+        } else if let Some(role) = task.worker.as_mut().and_then(|worker| worker.role.as_mut()) {
+            *role = canonical_public_role_name(role.trim());
+        }
     }
+    Ok(())
 }
 
 /// Validate that every task's pinned model route actually resolves before any
@@ -71,9 +247,8 @@ pub fn validate_fleet_task_routes(
 ) -> Result<()> {
     let run_model = session_model.unwrap_or("auto");
     for task in tasks {
-        let agent_profile = resolve_task_agent_profile(task, agent_profiles)
-            .ok()
-            .flatten();
+        let agent_profile = resolve_task_agent_profile(task, agent_profiles)?;
+        let agent_profile = agent_profile.as_deref();
         let (model, source) =
             effective_fleet_model_with_source(run_model, task.worker.as_ref(), agent_profile);
         let pinned_model = matches!(source, "task.model" | "agent_profile.model");
@@ -135,9 +310,8 @@ fn validate_fleet_reasoning_effort(
     session_model: Option<&str>,
     config: Option<&Config>,
 ) -> Result<()> {
-    let agent_profile = resolve_task_agent_profile(task, agent_profiles)
-        .ok()
-        .flatten();
+    let agent_profile = resolve_task_agent_profile(task, agent_profiles)?;
+    let agent_profile = agent_profile.as_deref();
     let Some(effort) =
         effective_fleet_reasoning_effort_for_role(task.worker.as_ref(), agent_profile)
     else {
@@ -202,6 +376,7 @@ pub fn fleet_task_to_worker_spec_with_profiles(
     parent_runtime_profile: Option<&WorkerRuntimeProfile>,
 ) -> Result<AgentWorkerSpec> {
     let agent_profile = resolve_task_agent_profile(task_spec, agent_profiles)?;
+    let agent_profile = agent_profile.as_deref();
     let worker_profile = task_spec.worker.as_ref();
     let role = effective_fleet_role(worker_profile, agent_profile);
     let agent_type = fleet_role_to_agent_type(role.as_deref());
@@ -267,8 +442,8 @@ pub fn fleet_task_to_worker_spec_with_profiles(
     let max_steps = task_spec
         .budget
         .as_ref()
-        .and_then(|b| b.max_tool_calls)
-        .unwrap_or_else(|| WorkerRuntimeProfile::default_max_steps(agent_type.clone()));
+        .and_then(|budget| budget.max_steps)
+        .unwrap_or(0);
 
     Ok(AgentWorkerSpec {
         worker_id: worker_id.to_string(),
@@ -459,6 +634,7 @@ pub(crate) fn resolve_fleet_route_with_config(
     let agent_profile = resolve_task_agent_profile(task_spec, agent_profiles)
         .ok()
         .flatten();
+    let agent_profile = agent_profile.as_deref();
     let worker_profile = task_spec.worker.as_ref();
     let (role, role_source) = effective_fleet_role_with_source(worker_profile, agent_profile);
     let (loadout, loadout_source) =
@@ -569,6 +745,7 @@ pub(crate) fn resolve_fleet_route_from_worker_report(
     let agent_profile = resolve_task_agent_profile(task_spec, agent_profiles)
         .ok()
         .flatten();
+    let agent_profile = agent_profile.as_deref();
     let worker_profile = task_spec.worker.as_ref();
     let (role, role_source) = effective_fleet_role_with_source(worker_profile, agent_profile);
     let (loadout, loadout_source) =
@@ -639,7 +816,10 @@ pub(crate) fn fleet_task_prompt_with_profiles(
     agent_profiles: &[AgentProfile],
 ) -> Result<String> {
     let agent_profile = resolve_task_agent_profile(task_spec, agent_profiles)?;
-    Ok(fleet_task_prompt_with_profile(task_spec, agent_profile))
+    Ok(fleet_task_prompt_with_profile(
+        task_spec,
+        agent_profile.as_deref(),
+    ))
 }
 
 fn fleet_task_prompt_with_profile(
@@ -715,26 +895,96 @@ fn fleet_task_prompt_with_profile(
 fn resolve_task_agent_profile<'a>(
     task_spec: &FleetTaskSpec,
     agent_profiles: &'a [AgentProfile],
-) -> Result<Option<&'a AgentProfile>> {
-    let Some(profile_id) = task_spec
-        .worker
-        .as_ref()
-        .and_then(|worker| worker.agent_profile.as_deref())
+) -> Result<Option<Cow<'a, AgentProfile>>> {
+    if let Some(snapshot) = task_spec.metadata.get(FROZEN_FLEET_MEMBER_METADATA_KEY) {
+        let snapshot: FrozenFleetMember =
+            serde_json::from_value(snapshot.clone()).map_err(|error| {
+                anyhow::anyhow!(
+                    "fleet task {} has an invalid durable member snapshot: {error}",
+                    task_spec.id
+                )
+            })?;
+        return Ok(Some(Cow::Owned(snapshot.into_profile()?)));
+    }
+    let Some(worker) = task_spec.worker.as_ref() else {
+        return Ok(None);
+    };
+    if let Some(selector) = worker
+        .agent_profile
+        .as_deref()
         .map(str::trim)
-        .filter(|id| !id.is_empty())
+        .filter(|selector| !selector.is_empty())
+    {
+        let profile = resolve_member_in_profiles(agent_profiles, selector).map_err(|error| {
+            anyhow::anyhow!(
+                "fleet task {} has invalid worker.agent_profile selector {selector:?}: {error}",
+                task_spec.id
+            )
+        })?;
+        let Some(profile) = profile else {
+            bail!(
+                "fleet task {} references unknown agent profile selector {selector:?}",
+                task_spec.id
+            );
+        };
+        validate_selected_member_model(task_spec, profile)?;
+        return Ok(Some(Cow::Borrowed(profile)));
+    }
+
+    let Some(selector) = worker
+        .role
+        .as_deref()
+        .map(str::trim)
+        .filter(|selector| !selector.is_empty())
     else {
         return Ok(None);
     };
-    let Some(profile) = agent_profiles
-        .iter()
-        .find(|profile| profile.id == profile_id)
-    else {
-        bail!(
-            "fleet task {} references unknown agent profile {profile_id:?}",
+    // `worker.role` predates human member selectors. Resolve it only when one
+    // member is deterministic; an ambiguous/missing roster match remains the
+    // historical Runtime posture instead of breaking an existing task.
+    let profile = resolve_member_in_profiles(agent_profiles, selector).map_err(|error| {
+        anyhow::anyhow!(
+            "fleet task {} has invalid worker.role member selector {selector:?}: {error}",
             task_spec.id
-        );
+        )
+    })?;
+    if let Some(profile) = profile {
+        validate_selected_member_model(task_spec, profile)?;
+    }
+    Ok(profile.map(Cow::Borrowed))
+}
+
+fn validate_selected_member_model(task_spec: &FleetTaskSpec, profile: &AgentProfile) -> Result<()> {
+    let Some(task_model) = task_spec
+        .worker
+        .as_ref()
+        .and_then(|worker| worker.model.as_deref())
+        .and_then(non_empty_trimmed)
+    else {
+        return Ok(());
     };
-    Ok(Some(profile))
+    let Some(profile_provider) = profile
+        .profile
+        .provider
+        .as_deref()
+        .and_then(non_empty_trimmed)
+    else {
+        return Ok(());
+    };
+    let Some(profile_model) = profile.profile.model.as_deref().and_then(non_empty_trimmed) else {
+        return Ok(());
+    };
+    if !task_model.eq_ignore_ascii_case(profile_model) {
+        bail!(
+            "fleet task {} selects member {:?} with frozen route {}/{}; worker.model {:?} conflicts with that member route",
+            task_spec.id,
+            profile.id,
+            profile_provider,
+            profile_model,
+            task_model
+        );
+    }
+    Ok(())
 }
 
 fn effective_fleet_role(
@@ -748,6 +998,20 @@ fn effective_fleet_role_with_source(
     worker_profile: Option<&FleetTaskWorkerProfile>,
     agent_profile: Option<&AgentProfile>,
 ) -> (Option<String>, Option<&'static str>) {
+    // When legacy `worker.role` deterministically selected a roster member,
+    // use that member's semantic role as the runtime posture. A display name,
+    // model label, or route selector must never become a posture string.
+    if worker_profile
+        .and_then(|worker| worker.agent_profile.as_deref())
+        .and_then(non_empty_trimmed)
+        .is_none()
+        && let Some(profile) = agent_profile
+    {
+        return (
+            Some(canonical_public_role_name(&profile.profile.role.name)),
+            Some("agent_profile.role"),
+        );
+    }
     worker_profile
         .and_then(|worker| worker.role.as_deref())
         .map(str::trim)
@@ -817,6 +1081,16 @@ fn effective_fleet_model_with_source(
     worker_profile: Option<&FleetTaskWorkerProfile>,
     agent_profile: Option<&AgentProfile>,
 ) -> (String, &'static str) {
+    if agent_profile
+        .and_then(|profile| profile.profile.provider.as_deref())
+        .and_then(non_empty_trimmed)
+        .is_some()
+        && let Some(model) = agent_profile
+            .and_then(|profile| profile.profile.model.as_deref())
+            .and_then(non_empty_trimmed)
+    {
+        return (model.to_string(), "agent_profile.model");
+    }
     if let Some(model) = worker_profile
         .and_then(|worker| worker.model.as_deref())
         .and_then(non_empty_trimmed)
@@ -903,7 +1177,7 @@ pub(crate) fn fleet_worker_launch_reasoning_effort(
     let agent_profile = resolve_task_agent_profile(task_spec, agent_profiles)
         .ok()
         .flatten();
-    effective_fleet_reasoning_effort_for_role(task_spec.worker.as_ref(), agent_profile)
+    effective_fleet_reasoning_effort_for_role(task_spec.worker.as_ref(), agent_profile.as_deref())
 }
 
 /// The route (model selector + optional explicit provider id) that a fleet
@@ -932,6 +1206,7 @@ pub(crate) fn fleet_worker_launch_route(
     let agent_profile = resolve_task_agent_profile(task_spec, agent_profiles)
         .ok()
         .flatten();
+    let agent_profile = agent_profile.as_deref();
     let worker_profile = task_spec.worker.as_ref();
     let model = effective_fleet_model(run_model, worker_profile, agent_profile);
     let provider = explicit_fleet_provider_id(agent_profile);
@@ -1114,7 +1389,11 @@ pub fn apply_exec_hardening(
 ) -> AgentWorkerSpec {
     // Cap max_steps to config max_turns (0 means no cap).
     if exec.max_turns > 0 {
-        spec.max_steps = spec.max_steps.min(exec.max_turns);
+        spec.max_steps = if spec.max_steps == 0 {
+            exec.max_turns
+        } else {
+            spec.max_steps.min(exec.max_turns)
+        };
     }
     spec.max_spawn_depth = exec
         .max_spawn_depth
@@ -1165,7 +1444,10 @@ pub(crate) fn fleet_effective_permissions_for_task(
     let agent_profile = resolve_task_agent_profile(task_spec, agent_profiles)
         .ok()
         .flatten();
-    fleet_effective_permissions_from_runtime_profile(&spec.runtime_profile, agent_profile)
+    fleet_effective_permissions_from_runtime_profile(
+        &spec.runtime_profile,
+        agent_profile.as_deref(),
+    )
 }
 
 pub(crate) fn fleet_effective_permissions_from_runtime_profile(
@@ -1227,6 +1509,7 @@ pub(crate) fn network_posture_warning_for_task(
     let agent_profile = resolve_task_agent_profile(task, agent_profiles)
         .ok()
         .flatten();
+    let agent_profile = agent_profile.as_deref();
     let worker_profile = task.worker.as_ref();
     let role = effective_fleet_role(worker_profile, agent_profile);
     let agent_type = fleet_role_to_agent_type(role.as_deref());
@@ -1315,7 +1598,7 @@ fn filter_tool_profile(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codewhale_protocol::fleet::{FleetHostSpec, FleetWorkspaceRequirements};
+    use codewhale_protocol::fleet::{FleetHostSpec, FleetTaskBudget, FleetWorkspaceRequirements};
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -1556,6 +1839,7 @@ mod tests {
             id: id.to_string(),
             display_name: Some(format!("{role} profile")),
             description: Some(format!("{role} description")),
+            requires: Vec::new(),
             profile: codewhale_config::FleetProfile {
                 slot: codewhale_config::FleetSlot::from_name(role),
                 role: codewhale_config::FleetRole {
@@ -2905,8 +3189,353 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("references unknown agent profile \"missing\"")
+                .contains("references unknown agent profile selector \"missing\"")
         );
+    }
+
+    #[test]
+    fn fleet_task_member_selector_accepts_display_model_and_keeps_member_posture() {
+        let mut profile = agent_profile(
+            "flash-scout",
+            "scout",
+            Some("Inspect the requested surface."),
+            codewhale_config::FleetLoadout::Fast,
+        );
+        profile.display_name = Some("Scout One".to_string());
+        profile.profile.provider = Some("deepseek".to_string());
+        profile.profile.model = Some("deepseek-v4-flash".to_string());
+        let worker = FleetWorkerSpec {
+            id: "worker-1".to_string(),
+            name: "Worker".to_string(),
+            host: FleetHostSpec::Local,
+            trust_level: None,
+            labels: Default::default(),
+            capabilities: vec![],
+            max_concurrent_tasks: None,
+        };
+
+        for task in [
+            fleet_task(
+                "profile-selector",
+                Some(worker_profile(
+                    Some("DeepSeek V4 Flash"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    vec![],
+                )),
+            ),
+            fleet_task(
+                "legacy-role-selector",
+                Some(worker_profile(
+                    None,
+                    Some("DeepSeek V4 Flash"),
+                    None,
+                    None,
+                    None,
+                    vec![],
+                )),
+            ),
+        ] {
+            let spec = fleet_task_to_worker_spec_with_profiles(
+                "worker-1",
+                "run-1",
+                &task,
+                &worker,
+                "auto",
+                Path::new("/tmp"),
+                Path::new("/tmp"),
+                &[profile.clone()],
+                None,
+            )
+            .expect("display-model selector should resolve");
+            assert_eq!(spec.model, "deepseek-v4-flash");
+            assert_eq!(spec.role.as_deref(), Some("scout"));
+            assert_eq!(spec.agent_type, FleetRole::Scout);
+            assert!(spec.objective.contains("Fleet profile: flash-scout"));
+        }
+    }
+
+    #[test]
+    fn fleet_task_member_selector_reports_ambiguity() {
+        let mut first = agent_profile(
+            "scout-a",
+            "scout",
+            None,
+            codewhale_config::FleetLoadout::Fast,
+        );
+        first.profile.provider = Some("deepseek".to_string());
+        first.profile.model = Some("deepseek-v4-flash".to_string());
+        let mut second = agent_profile(
+            "scout-b",
+            "reviewer",
+            None,
+            codewhale_config::FleetLoadout::Fast,
+        );
+        second.profile.provider = Some("deepseek".to_string());
+        second.profile.model = Some("deepseek-v4-flash".to_string());
+        let task = fleet_task(
+            "ambiguous",
+            Some(worker_profile(
+                Some("DeepSeek V4 Flash"),
+                None,
+                None,
+                None,
+                None,
+                vec![],
+            )),
+        );
+
+        let error = validate_task_agent_profiles(&[task], &[first, second])
+            .expect_err("ambiguous selector must fail before lease");
+        assert!(error.to_string().contains("is ambiguous"), "{error:#}");
+        assert!(error.to_string().contains("scout-a"), "{error:#}");
+        assert!(error.to_string().contains("scout-b"), "{error:#}");
+    }
+
+    #[test]
+    fn unmatched_legacy_worker_role_remains_a_runtime_posture() {
+        let task = fleet_task(
+            "legacy-role",
+            Some(worker_profile(
+                None,
+                Some("reviewer"),
+                None,
+                None,
+                None,
+                vec![],
+            )),
+        );
+        assert!(resolve_task_agent_profile(&task, &[]).unwrap().is_none());
+        assert_eq!(
+            effective_fleet_role(task.worker.as_ref(), None).as_deref(),
+            Some("reviewer")
+        );
+        assert_eq!(
+            fleet_role_to_agent_type(effective_fleet_role(task.worker.as_ref(), None).as_deref()),
+            FleetRole::Reviewer
+        );
+    }
+
+    #[test]
+    fn ambiguous_legacy_role_never_falls_back_to_anonymous_posture() {
+        let first = agent_profile(
+            "scout-a",
+            "scout",
+            None,
+            codewhale_config::FleetLoadout::Fast,
+        );
+        let second = agent_profile(
+            "scout-b",
+            "scout",
+            None,
+            codewhale_config::FleetLoadout::Fast,
+        );
+        let mut task = fleet_task(
+            "ambiguous-role",
+            Some(worker_profile(
+                None,
+                Some("scout"),
+                None,
+                None,
+                None,
+                vec![],
+            )),
+        );
+
+        let error =
+            freeze_fleet_task_members(std::slice::from_mut(&mut task), &[first, second], true)
+                .expect_err("an ambiguous role must fail before persistence");
+        assert!(error.to_string().contains("is ambiguous"), "{error:#}");
+        assert!(error.to_string().contains("scout-a"), "{error:#}");
+        assert!(error.to_string().contains("scout-b"), "{error:#}");
+    }
+
+    #[test]
+    fn exact_roster_requires_every_task_to_name_one_member() {
+        let profile = agent_profile(
+            "flash-scout",
+            "scout",
+            None,
+            codewhale_config::FleetLoadout::Fast,
+        );
+        let mut missing = fleet_task(
+            "missing-member",
+            Some(worker_profile(
+                None,
+                Some("reviewer"),
+                None,
+                None,
+                None,
+                vec![],
+            )),
+        );
+        let error = freeze_fleet_task_members(
+            std::slice::from_mut(&mut missing),
+            std::slice::from_ref(&profile),
+            true,
+        )
+        .expect_err("an exact Fleet cannot silently fall back to a posture");
+        assert!(
+            error.to_string().contains("does not name a member"),
+            "{error:#}"
+        );
+
+        let mut unspecified = fleet_task("unspecified-member", None);
+        let error =
+            freeze_fleet_task_members(std::slice::from_mut(&mut unspecified), &[profile], true)
+                .expect_err("an exact Fleet task must name a member");
+        assert!(
+            error.to_string().contains("must name one member"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn frozen_member_selection_survives_roster_edits_and_task_round_trip() {
+        let mut original = agent_profile(
+            "flash-scout",
+            "scout",
+            Some("Inspect the selected surface."),
+            codewhale_config::FleetLoadout::Fast,
+        );
+        original.display_name = Some("Scout One".to_string());
+        original.profile.provider = Some("deepseek".to_string());
+        original.profile.model = Some("deepseek-v4-flash".to_string());
+        original.profile.reasoning_effort = Some("medium".to_string());
+        original.profile.delegation.max_spawn_depth = Some(2);
+
+        let mut task = fleet_task(
+            "durable-selection",
+            Some(worker_profile(
+                Some("DeepSeek V4 Flash"),
+                None,
+                None,
+                None,
+                None,
+                vec![],
+            )),
+        );
+        freeze_fleet_task_members(std::slice::from_mut(&mut task), &[original], true)
+            .expect("selection should freeze");
+        assert_eq!(
+            task.worker.as_ref().unwrap().agent_profile.as_deref(),
+            Some("member:flash-scout")
+        );
+
+        // Exercise the actual durable representation, then present a live
+        // roster whose same id now points somewhere else. Launch must keep the
+        // run-creation snapshot rather than re-resolving the edited profile.
+        let task: FleetTaskSpec =
+            serde_json::from_value(serde_json::to_value(task).unwrap()).unwrap();
+        let mut edited = agent_profile(
+            "flash-scout",
+            "reviewer",
+            Some("This edit happened after queueing."),
+            codewhale_config::FleetLoadout::Inherit,
+        );
+        edited.profile.provider = Some("openrouter".to_string());
+        edited.profile.model = Some("gpt-5.6".to_string());
+
+        let edited_profiles = [edited];
+        let resolved = resolve_task_agent_profile(&task, &edited_profiles)
+            .unwrap()
+            .expect("frozen member");
+        assert_eq!(resolved.profile.role.name, "scout");
+        assert_eq!(resolved.profile.provider.as_deref(), Some("deepseek"));
+        assert_eq!(resolved.profile.model.as_deref(), Some("deepseek-v4-flash"));
+        assert_eq!(resolved.profile.delegation.max_spawn_depth, Some(2));
+    }
+
+    #[test]
+    fn legacy_advisory_member_id_is_selected_before_role_canonicalization() {
+        let profile = agent_profile(
+            "advisor",
+            "reviewer",
+            None,
+            codewhale_config::FleetLoadout::Inherit,
+        );
+        let mut task = fleet_task(
+            "advisor-selection",
+            Some(worker_profile(
+                None,
+                Some("advisor"),
+                None,
+                None,
+                None,
+                vec![],
+            )),
+        );
+
+        freeze_fleet_task_members(std::slice::from_mut(&mut task), &[profile], true)
+            .expect("exact member id should win");
+        let worker = task.worker.as_ref().unwrap();
+        assert_eq!(worker.agent_profile.as_deref(), Some("member:advisor"));
+        assert_eq!(worker.role.as_deref(), Some("reviewer"));
+    }
+
+    #[test]
+    fn selected_exact_member_route_rejects_conflicting_task_model() {
+        let mut profile = agent_profile(
+            "flash-scout",
+            "scout",
+            None,
+            codewhale_config::FleetLoadout::Fast,
+        );
+        profile.profile.provider = Some("deepseek".to_string());
+        profile.profile.model = Some("deepseek-v4-flash".to_string());
+        let task = fleet_task(
+            "conflict",
+            Some(worker_profile(
+                Some("flash-scout"),
+                None,
+                None,
+                None,
+                Some("deepseek-v4-pro"),
+                vec![],
+            )),
+        );
+
+        let error = validate_task_agent_profiles(&[task], &[profile])
+            .expect_err("conflicting task model must fail before lease");
+        assert!(error.to_string().contains("frozen route"), "{error:#}");
+        assert!(error.to_string().contains("worker.model"), "{error:#}");
+    }
+
+    #[test]
+    fn fleet_task_max_steps_zero_or_omitted_is_unbounded_and_positive_is_enforced() {
+        let worker = FleetWorkerSpec {
+            id: "worker-1".to_string(),
+            name: "Worker".to_string(),
+            host: FleetHostSpec::Local,
+            trust_level: None,
+            labels: Default::default(),
+            capabilities: vec![],
+            max_concurrent_tasks: None,
+        };
+        for (max_steps, expected) in [(None, 0), (Some(0), 0), (Some(7), 7)] {
+            let mut task = fleet_task("budget", None);
+            task.budget = Some(FleetTaskBudget {
+                max_tokens: None,
+                max_steps,
+                max_tool_calls: Some(99),
+                max_seconds: None,
+            });
+            let spec = fleet_task_to_worker_spec_with_profiles(
+                "worker-1",
+                "run-1",
+                &task,
+                &worker,
+                "auto",
+                Path::new("/tmp"),
+                Path::new("/tmp"),
+                &[],
+                None,
+            )
+            .expect("budget should build");
+            assert_eq!(spec.max_steps, expected, "max_steps={max_steps:?}");
+        }
     }
 
     #[test]

@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:b092c34e8ca3 -->
+<!-- source: README.md sha256:a56bca473dbd -->
 # Codewhale
 
 Codewhale là tác nhân lập trình mã nguồn mở dành cho terminal, được xây dựng bằng Rust và được cải thiện công khai cùng những người sử dụng nó.
@@ -20,6 +20,8 @@ codewhale
 ```
 
 Trong lần chạy đầu tiên, Codewhale sẽ giúp bạn kết nối với nhà cung cấp hoặc tiếp tục làm việc ngoại tuyến. Codewhale cũng hỗ trợ Cargo, Docker, Nix, Scoop, các gói dựng sẵn, Android/Termux và bản sao CNB. Xem [hướng dẫn cài đặt](docs/INSTALL.md).
+
+Mỗi shell chỉ cần một lệnh để bật tính năng hoàn thành bằng phím Tab — `codewhale completion bash|zsh|fish|powershell|elvish`. Xem [tính năng hoàn thành của shell](docs/INSTALL.md#8-shell-completions).
 
 ## Sử dụng
 
@@ -74,4 +76,4 @@ Cảm ơn mọi người đóng góp và các cộng đồng mã nguồn mở đ
 
 ## Giấy phép
 
-[MIT](LICENSE)
+[MIT](LICENSE). Các phần được điều chỉnh từ những dự án nguồn mở khác được ghi trong [thông báo của bên thứ ba](docs/THIRD_PARTY_NOTICES.md).

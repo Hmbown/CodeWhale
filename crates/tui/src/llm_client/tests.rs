@@ -74,6 +74,23 @@ fn http_response_boundary_classifies_status_contract() {
         LlmError::from_http_response(400, "invalid json"),
         LlmError::InvalidRequest { status: 400, .. }
     ));
+    // "Unsupported parameter: max_output_tokens" names a *token* field, which
+    // the generic keyword rules misread as a context-window overflow. It is a
+    // request-shape error, and retrying or compacting cannot fix it.
+    assert!(matches!(
+        LlmError::from_http_response(
+            400,
+            "{\"error\":{\"code\":\"unsupported_parameter\",\"message\":\"Unsupported parameter: max_output_tokens\"}}"
+        ),
+        LlmError::InvalidRequest { status: 400, .. }
+    ));
+    assert!(matches!(
+        LlmError::from_http_response(
+            400,
+            "{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Unsupported parameter: temperature\"}}"
+        ),
+        LlmError::InvalidRequest { status: 400, .. }
+    ));
 }
 
 #[test]

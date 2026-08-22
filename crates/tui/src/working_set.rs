@@ -1590,11 +1590,12 @@ const IGNORED_ROOT_DIRS: &[&str] = &["target", "node_modules", "dist", "build", 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Role;
     use tempfile::TempDir;
 
     fn make_message(role: &str, text: &str) -> Message {
         Message {
-            role: role.to_string(),
+            role: Role::from(role),
             content: vec![ContentBlock::Text {
                 text: text.to_string(),
                 cache_control: None,
@@ -1883,7 +1884,7 @@ mod tests {
     #[test]
     fn extract_paths_from_message_picks_up_tool_results() {
         let msg = Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: "tool_1".to_string(),
                 content: "Changed src/compaction.rs".to_string(),

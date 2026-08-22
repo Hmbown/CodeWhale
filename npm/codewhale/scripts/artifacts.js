@@ -5,7 +5,8 @@ const CHECKSUM_MANIFEST = "codewhale-artifacts-sha256.txt";
 const BUNDLE_CHECKSUM_MANIFEST = "codewhale-bundles-sha256.txt";
 const WINDOWS_INSTALLER_ASSET = "CodeWhaleSetup.exe";
 
-// v0.9.5 bridge: already-shipped v0.9.4 clients require these names before
+// Compatibility bridge introduced in v0.9.5: already-shipped v0.9.4 clients
+// require these names before
 // they will advertise or install a newer release. They contain byte-identical
 // copies of the consolidated `codewhale` runtime; current installers do not
 // expose them as a third command.
@@ -101,7 +102,7 @@ function unsupportedBuildHint() {
     "You can still run codewhale by building from source with Cargo (single binary):",
     "",
     "  # Requires Rust 1.88+ (https://rustup.rs)",
-    "  cargo install codewhale-cli --locked   # provides `codewhale` and `codew`",
+    "  cargo install codewhale-cli --locked   # provides `codewhale`",
     "",
     "Or build from a checkout:",
     "",

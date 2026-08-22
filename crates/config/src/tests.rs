@@ -7559,7 +7559,7 @@ fn workflow_config_defaults_match_product_surface() {
     assert_eq!(defaults.auto_start_child_limit, 16);
     assert_eq!(defaults.max_children, 1000);
     assert_eq!(defaults.max_concurrent, 16);
-    assert_eq!(defaults.max_depth, 2);
+    assert_eq!(defaults.max_depth, 5);
     assert_eq!(defaults.default_token_budget, 120_000);
     assert_eq!(defaults.max_parallel_writes_without_worktree, 0);
     assert!(defaults.persist_completed_activity);
@@ -7604,7 +7604,7 @@ default_token_budget = 50000
     assert!(workflow.require_approval_for_writes);
     assert_eq!(workflow.auto_start_child_limit, 16);
     assert_eq!(workflow.max_concurrent, 16);
-    assert_eq!(workflow.max_depth, 2);
+    assert_eq!(workflow.max_depth, 5);
     assert_eq!(workflow.max_parallel_writes_without_worktree, 0);
     assert!(workflow.persist_completed_activity);
     assert!(workflow.persist_completed_across_restarts);
@@ -7626,6 +7626,11 @@ fn fleet_exec_config_default_matches_subagent_depth() {
     );
     assert_eq!(FleetExecConfig::default().max_spawn_depth, 3);
     const { assert!(DEFAULT_SPAWN_DEPTH <= MAX_SPAWN_DEPTH_CEILING) };
+}
+
+#[test]
+fn fleet_exec_model_turns_are_unbounded_by_default() {
+    assert_eq!(FleetExecConfig::default().max_turns, 0);
 }
 
 #[test]
@@ -7670,7 +7675,7 @@ fn fleet_profile_defaults_round_trip_through_config() {
 }
 
 #[test]
-fn fleet_profile_explicit_config_parses_role_loadout_permissions() {
+fn fleet_profile_explicit_config_parses_legacy_permissions_as_ignored_input() {
     let config: ConfigToml = toml::from_str(
         r#"
 [fleet.profiles.verifier]
@@ -7722,6 +7727,8 @@ concurrency = 3
     assert!(profile.permissions.approval_required);
     assert_eq!(profile.delegation.max_spawn_depth, Some(0));
     assert_eq!(profile.delegation.max_concurrency, Some(3));
+    let serialized = toml::to_string_pretty(&profile).expect("profile serializes");
+    assert!(!serialized.contains("permissions"));
 }
 
 #[test]
@@ -8089,7 +8096,7 @@ max_spawn_depth = 2
 }
 
 #[test]
-fn named_fleet_parses_operator_and_trust() {
+fn named_fleet_parses_legacy_authority_keys_for_migration() {
     let config: ConfigToml = toml::from_str(
         r#"
 [fleets.alice-team]
@@ -8107,7 +8114,7 @@ max_trust_level = "operator"
 }
 
 #[test]
-fn named_fleet_defaults_apply_when_fields_absent() {
+fn named_fleet_has_no_authority_defaults_when_legacy_fields_are_absent() {
     let config: ConfigToml = toml::from_str(
         r#"
 [fleets.minimal]
@@ -8118,9 +8125,9 @@ operator = "bob"
 
     let fleet = config.fleets.get("minimal").expect("minimal fleet");
     assert_eq!(fleet.operator, "bob");
-    assert_eq!(fleet.default_trust_level, "sandbox");
-    assert!(fleet.require_identity_verification);
-    assert_eq!(fleet.max_trust_level, "operator");
+    assert!(fleet.default_trust_level.is_empty());
+    assert!(!fleet.require_identity_verification);
+    assert!(fleet.max_trust_level.is_empty());
     assert!(fleet.roles.is_empty());
     assert!(fleet.profiles.is_empty());
 }
@@ -8370,7 +8377,7 @@ fn named_fleet_error_messages_are_actionable() {
 }
 
 #[test]
-fn named_fleet_as_fleet_config_view_matches_fields() {
+fn named_fleet_view_preserves_legacy_input_without_making_it_policy() {
     let config: ConfigToml = toml::from_str(
         r#"
 [fleets.team]
@@ -8394,7 +8401,7 @@ max_turns = 100
 }
 
 #[test]
-fn named_fleet_serializes_and_round_trips() {
+fn named_fleet_serialization_drops_legacy_authority_keys() {
     let config: ConfigToml = toml::from_str(
         r#"
 [fleets.my-fleet]
@@ -8409,9 +8416,10 @@ max_spawn_depth = 1
 
     let fleet = config.fleets.get("my-fleet").expect("my-fleet");
     let serialized = toml::to_string_pretty(fleet).expect("serializes");
+    assert!(!serialized.contains("default_trust_level"));
     let round_tripped: NamedFleetConfigToml = toml::from_str(&serialized).expect("round trips");
     assert_eq!(round_tripped.operator, "alice");
-    assert_eq!(round_tripped.default_trust_level, "local");
+    assert!(round_tripped.default_trust_level.is_empty());
     assert_eq!(round_tripped.exec.max_spawn_depth, 1);
 }
 

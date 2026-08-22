@@ -303,6 +303,7 @@ fn format_count(value: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::Role;
     use std::path::{Path, PathBuf};
 
     use super::*;
@@ -311,7 +312,7 @@ mod tests {
 
     fn tool_use_message(id: &str, name: &str, input: Value) -> Message {
         Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -324,7 +325,7 @@ mod tests {
 
     fn tool_result_message(id: &str, content: &str) -> Message {
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: id.to_string(),
                 content: content.to_string(),

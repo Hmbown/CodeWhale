@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:b092c34e8ca3 -->
+<!-- source: README.md sha256:a56bca473dbd -->
 # Codewhale
 
 Codewhale adalah agen pemrograman sumber terbuka untuk terminal Anda, dibuat dengan Rust dan dikembangkan secara terbuka bersama orang-orang yang menggunakannya.
@@ -20,6 +20,8 @@ codewhale
 ```
 
 Saat pertama dijalankan, Codewhale membantu Anda menghubungkan penyedia atau tetap bekerja secara luring. Codewhale juga mendukung Cargo, Docker, Nix, Scoop, arsip siap pakai, Android/Termux, dan mirror CNB. Lihat [panduan instalasi](docs/INSTALL.md).
+
+Penyelesaian Tab cukup diaktifkan dengan satu perintah per shell — `codewhale completion bash|zsh|fish|powershell|elvish`. Lihat [penyelesaian shell](docs/INSTALL.md#8-shell-completions).
 
 ## Penggunaan
 
@@ -74,4 +76,4 @@ Terima kasih kepada setiap kontributor dan komunitas sumber terbuka yang membant
 
 ## Lisensi
 
-[MIT](LICENSE)
+[MIT](LICENSE). Bagian yang diadaptasi dari proyek sumber terbuka lain dicatat dalam [pemberitahuan pihak ketiga](docs/THIRD_PARTY_NOTICES.md).

@@ -1,26 +1,1522 @@
+//! Transcript history-cell tests.
+//!
+//! Rebuilt in v0.9.11 after declaring test bankruptcy on the previous suite
+//! (123 tests / 3,964 lines). About a third of that file pinned glyph choices,
+//! palette tokens, span indices and English label text — `spans[1] == "⣤"`,
+//! `title_span.style.fg == theme.tool_title_color`, `visible[1] == "▏ done:
+//! scan repo"`. Those assertions fail on every legitimate visual refactor and
+//! catch nothing a user would notice, which is the liability `d64b9429b`
+//! ("remove brittle visual test mass") named.
+//!
+//! What survives is named for the *property* it protects. Rules for additions:
+//!
+//! * Assert a property, not a token. `spans[1] == "⣤"` is a token; "the frame
+//!   does not change while motion is reduced" is the property, and it is
+//!   strictly stronger — it also catches an animation leak the constant missed.
+//! * Where the value is a design choice (color, glyph, verb), assert the
+//!   *relationship* between cases instead: warning must not read as error.
+//! * One test per property, with its cases in a table — not one test per case.
+//! * Never assert `a || b` where `b` is trivially true of any English string.
+
 use super::constants::{
     TOOL_OUTPUT_HEAD_LINES, TOOL_OUTPUT_LINE_LIMIT, TOOL_OUTPUT_TAIL_LINES,
     TOOL_SUCCESS_OUTPUT_PREVIEW_LINES,
 };
+use super::thinking::cached_color_depth;
 use super::{
-    ASSISTANT_GLYPH, ExecCell, ExecSource, GenericToolCell, HistoryCell, McpToolCell,
-    PlanUpdateCell, REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, TOOL_RUNNING_SYMBOLS,
-    TOOL_STATUS_SYMBOL_MS, ToolCell, ToolStatus, TranscriptRenderOptions, USER_GLYPH,
-    WebSearchCell, assistant_label_style_for, extract_reasoning_summary,
+    ASSISTANT_GLYPH, ExecCell, ExecSource, GenericToolCell, HistoryCell, PlanUpdateCell,
+    REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, RenderMode, ToolCell, ToolStatus,
+    TranscriptRenderOptions, WebSearchCell, assistant_label_style_for, extract_reasoning_summary,
     render_spillover_annotation, render_thinking, render_thinking_with_analysis,
     running_status_label_with_elapsed,
 };
-use crate::deepseek_theme::Theme;
-use crate::models::{ContentBlock, Message};
-use crate::palette;
+use crate::models::{ContentBlock, Message, Role};
 use crate::tools::plan::{PlanSnapshot, StepStatus};
 use crate::tui::motion::MotionMode;
 use crate::tui::ui_text::{line_to_plain, slice_text, text_display_width};
-use ratatui::style::Modifier;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn line_text(line: &ratatui::text::Line<'static>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+fn lines_text(lines: &[ratatui::text::Line<'static>]) -> String {
+    lines.iter().map(line_text).collect::<Vec<_>>().join("\n")
+}
+
+fn generic_tool(name: &str, status: ToolStatus) -> GenericToolCell {
+    GenericToolCell {
+        name: name.to_string(),
+        status,
+        input_summary: None,
+        output: None,
+        prompts: None,
+        spillover_path: None,
+        output_summary: None,
+        is_diff: false,
+    }
+}
+
+fn exec_tool(command: &str, status: ToolStatus) -> ExecCell {
+    ExecCell {
+        command: command.to_string(),
+        status,
+        output: None,
+        live_output: None,
+        shell_task_id: None,
+        owner_agent_id: None,
+        owner_agent_name: None,
+        started_at: None,
+        duration_ms: None,
+        stale_elapsed_since_output_ms: None,
+        source: ExecSource::Assistant,
+        interaction: None,
+        output_summary: None,
+    }
+}
+
+fn numbered_output(count: usize) -> String {
+    (0..count)
+        .map(|i| format!("row {i:02} plain content"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn calm_options() -> TranscriptRenderOptions {
+    TranscriptRenderOptions {
+        low_motion: true,
+        ..TranscriptRenderOptions::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Leaks — a rendered cell never exposes something the user was not shown
+// ---------------------------------------------------------------------------
+
+/// Spilled tool output lives in a file under the session directory. The path is
+/// an internal storage detail: it names the user's home, their session id, and
+/// a content hash, and it is useless to them because the affordance opens the
+/// pager, not the file. No width, no render mode, and no standalone annotation
+/// may print it.
+///
+/// Replaces five separate tests that each checked one width or one mode.
 #[test]
-fn web_search_cell_renders_receipt_source_degradation_and_citations() {
+fn no_width_or_render_mode_leaks_a_spillover_storage_path() {
+    let secret = "/Users/private/.codewhale/sessions/session-a/artifacts/hash.txt";
+
+    for width in [18_u16, 40, 80, 120] {
+        for mode in [RenderMode::Live, RenderMode::Transcript] {
+            let mut cell = generic_tool("read_file", ToolStatus::Success);
+            cell.input_summary = Some("cmd: cargo build --release".to_string());
+            cell.output = Some(numbered_output(40));
+            cell.spillover_path = Some(PathBuf::from(secret));
+
+            let rendered = lines_text(&cell.lines_with_mode(width, true, mode));
+            for fragment in ["/Users", ".codewhale", "sessions/", "hash.txt"] {
+                assert!(
+                    !rendered.contains(fragment),
+                    "storage path fragment {fragment:?} leaked at width {width} in {mode:?}: \
+                     {rendered:?}"
+                );
+            }
+        }
+
+        // The standalone affordance carries no path either, and it fits the
+        // width it was given — an affordance that overflows is a wrap artifact
+        // in the transcript.
+        let annotation = line_to_plain(&render_spillover_annotation(width));
+        assert!(
+            text_display_width(&annotation) <= usize::from(width),
+            "affordance exceeds width {width}: {annotation:?}"
+        );
+        for fragment in ["/Users", ".codewhale", "hash.txt"] {
+            assert!(
+                !annotation.contains(fragment),
+                "affordance leaked {fragment:?}: {annotation:?}"
+            );
+        }
+    }
+
+    // The common case — a result that never spilled — spends no row on an
+    // affordance that would open an empty pager.
+    let mut plain = generic_tool("read_file", ToolStatus::Success);
+    plain.output = Some("contents".to_string());
+    let hint = crate::tui::key_shortcuts::tool_details_shortcut_action_hint("output");
+    let rendered = lines_text(&plain.lines_with_mode(80, true, RenderMode::Live));
+    assert!(
+        !rendered.contains(&hint),
+        "a result that did not spill must not advertise the spillover pager: {rendered:?}"
+    );
+}
+
+/// With reasoning display off, the model's chain of thought must not reach the
+/// screen in any lifecycle state — not while streaming, not once complete.
+/// The live case still needs a progress signal, so it renders one compact row.
+#[test]
+fn hidden_reasoning_never_renders_its_content_in_any_state() {
+    let secret = "private chain of thought that must not be shown";
+    let hidden = TranscriptRenderOptions {
+        show_thinking: false,
+        low_motion: true,
+        ..TranscriptRenderOptions::default()
+    };
+
+    let streaming = HistoryCell::Thinking {
+        content: secret.to_string(),
+        streaming: true,
+        duration_secs: None,
+    };
+    let live = streaming.lines_with_options(80, hidden);
+    let live_text = lines_text(&live);
+    assert!(
+        !live_text.contains(secret),
+        "hidden live reasoning revealed its body: {live_text}"
+    );
+    assert_eq!(
+        live.len(),
+        1,
+        "hidden reasoning is one compact progress row, not a stack of state \
+         copy: {live_text}"
+    );
+
+    let complete = HistoryCell::Thinking {
+        content: secret.to_string(),
+        streaming: false,
+        duration_secs: Some(1.0),
+    };
+    assert!(
+        complete.lines_with_options(80, hidden).is_empty(),
+        "completed hidden reasoning must leave the live transcript entirely"
+    );
+}
+
+/// A live card is a summary. It must name the tool that ran (so the row is
+/// attributable) and must not spend its one line echoing arguments the caller
+/// never chose — `max_count: 15` is a schema default, not a user intent.
+/// Transcript replay is the record, so it keeps the exact tool id.
+///
+/// Replaces six tests, one of which (`unknown_generic_tool_keeps_raw_name_in_
+/// live_mode`) asserted only `!text.is_empty()` and so could never fail.
+#[test]
+fn live_cards_name_their_tool_without_echoing_control_only_arguments() {
+    assert_eq!(
+        super::summarize_tool_args(&serde_json::json!({
+            "max_count": 15,
+            "timeout_ms": 30_000
+        })),
+        None,
+        "an argument set that is entirely control defaults summarizes to nothing"
+    );
+    assert_eq!(
+        super::summarize_tool_args(&serde_json::json!({
+            "max_count": 15,
+            "branch": "main"
+        }))
+        .as_deref(),
+        Some("branch: main"),
+        "the meaningful key is what the summary is for"
+    );
+
+    for name in ["git_log", "future_private_tool"] {
+        let mut cell = generic_tool(name, ToolStatus::Success);
+        cell.input_summary = Some("max_count: 15".to_string());
+        let lines = cell.lines_with_mode(120, true, RenderMode::Live);
+        let joined = lines_text(&lines);
+
+        assert_eq!(lines.len(), 1, "compact live row for {name}: {joined:?}");
+        assert!(
+            joined.contains(name),
+            "the row must be attributable to {name}: {joined:?}"
+        );
+        assert!(
+            !joined.contains("max_count"),
+            "control defaults must not become the visible summary for {name}: {joined:?}"
+        );
+    }
+
+    // A tool the UI has a family for is identified by that family live; the
+    // raw id would be a second, redundant name. Replay keeps it.
+    let mut known = generic_tool("run_verifiers", ToolStatus::Running);
+    known.input_summary = Some("profile: auto, level: quick".to_string());
+    let known = HistoryCell::Tool(ToolCell::Generic(known));
+    let live = lines_text(&known.lines(80));
+    let transcript = lines_text(&known.transcript_lines(80));
+    assert!(
+        !live.contains("run_verifiers"),
+        "a known tool id must not take a slot in the compact live card: {live}"
+    );
+    assert!(
+        transcript.contains("run_verifiers"),
+        "transcript replay preserves the exact tool id: {transcript}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Budget — the card never lies about how much it is showing
+// ---------------------------------------------------------------------------
+
+/// `selected_output_indices` fills head + tail and then tops up from lines that
+/// look important (error / warning / path). Plain output — a list of names, a
+/// clean build log — matches none of those, so the top-up found nothing and the
+/// card silently forfeited the rest of its budget while still reporting the
+/// remainder as omitted. A card that advertises N rows shows N rows.
+#[test]
+fn a_live_card_spends_the_whole_output_budget_it_advertises() {
+    let total = 40usize;
+    let cell = {
+        let mut exec = exec_tool("list_things", ToolStatus::Failed);
+        exec.output = Some(numbered_output(total));
+        exec.duration_ms = Some(120);
+        HistoryCell::Tool(ToolCell::Exec(exec))
+    };
+
+    let live_text = lines_text(&cell.lines_with_options(80, calm_options()));
+    let shown = (0..total)
+        .filter(|i| live_text.contains(&format!("row {i:02} plain content")))
+        .count();
+
+    assert_eq!(
+        shown, TOOL_OUTPUT_LINE_LIMIT,
+        "a card promising {TOOL_OUTPUT_LINE_LIMIT} rows must show \
+         {TOOL_OUTPUT_LINE_LIMIT}, not stop at head+tail: {live_text}"
+    );
+    for i in 0..TOOL_OUTPUT_HEAD_LINES {
+        assert!(
+            live_text.contains(&format!("row {i:02} plain content")),
+            "head row {i} missing: {live_text}"
+        );
+    }
+    for i in (total - TOOL_OUTPUT_TAIL_LINES)..total {
+        assert!(
+            live_text.contains(&format!("row {i:02} plain content")),
+            "tail row {i} missing: {live_text}"
+        );
+    }
+}
+
+/// Failure output is the one thing worth the vertical space. Whatever the
+/// display settings say about density, a failed tool's body stays expanded and
+/// is never traded for an omission marker or a "see details" affordance — the
+/// user should not have to press a key to learn why something broke.
+///
+/// Replaces four tests that differed only in which option flag they set.
+#[test]
+fn failed_tool_output_is_never_traded_for_an_affordance() {
+    let total = 30usize;
+    let last = format!("row {:02} plain content", total - 1);
+
+    for (label, options) in [
+        ("default", TranscriptRenderOptions::default()),
+        (
+            "tool details hidden",
+            TranscriptRenderOptions {
+                show_tool_details: false,
+                ..TranscriptRenderOptions::default()
+            },
+        ),
+        (
+            "calm mode",
+            TranscriptRenderOptions {
+                calm_mode: true,
+                ..TranscriptRenderOptions::default()
+            },
+        ),
+    ] {
+        let cell = {
+            let mut cell = generic_tool("read_file", ToolStatus::Failed);
+            cell.input_summary = Some("command: noisy".to_string());
+            cell.output = Some(numbered_output(total));
+            HistoryCell::Tool(ToolCell::Generic(cell))
+        };
+
+        let text = lines_text(&cell.lines_with_options(80, options));
+        assert!(
+            !text.contains("lines omitted"),
+            "[{label}] failed output must not be hidden behind an omission marker: {text}"
+        );
+        assert!(
+            text.contains(&last),
+            "[{label}] failed output must stay expanded to its last row: {text}"
+        );
+        assert!(
+            text.contains("command: noisy"),
+            "[{label}] the failing invocation must stay visible: {text}"
+        );
+    }
+}
+
+/// The live surface is a summary and the transcript is the record. The contract
+/// is directional: anything the live view drops must still be in the
+/// transcript, and the live view must say so when it drops something. A success
+/// gets a bounded preview; a failure gets the full budget; neither may leave
+/// the transcript short.
+///
+/// Replaces four near-identical live/transcript comparison tests.
+#[test]
+fn whatever_live_truncates_the_transcript_still_holds() {
+    let total = 30usize;
+    let first = "row 00 plain content";
+    let last = format!("row {:02} plain content", total - 1);
+
+    // Failed exec: capped live with an honest marker, uncapped in transcript.
+    let failed = {
+        let mut exec = exec_tool("noisy_script.sh", ToolStatus::Failed);
+        exec.output = Some(numbered_output(total));
+        exec.duration_ms = Some(120);
+        HistoryCell::Tool(ToolCell::Exec(exec))
+    };
+    let live = failed.lines_with_options(80, calm_options());
+    let transcript = failed.transcript_lines(80);
+    let live_text = lines_text(&live);
+    let transcript_text = lines_text(&transcript);
+    assert!(
+        live.len() < transcript.len(),
+        "live must compress (live={}, transcript={})",
+        live.len(),
+        transcript.len()
+    );
+    assert!(
+        live_text.contains("lines omitted"),
+        "a live view that drops rows must say so: {live_text}"
+    );
+    assert!(
+        !transcript_text.contains("lines omitted"),
+        "the transcript drops nothing, so it claims nothing: {transcript_text}"
+    );
+    assert!(transcript_text.contains(first) && transcript_text.contains(&last));
+    assert!(
+        transcript_text.contains("row 15 plain content"),
+        "the transcript keeps the middle the live view skipped: {transcript_text}"
+    );
+
+    // Successful exec: a bounded head preview, never the whole body.
+    let success = {
+        let mut exec = exec_tool("noisy_script.sh", ToolStatus::Success);
+        exec.output = Some(numbered_output(total));
+        exec.duration_ms = Some(120);
+        HistoryCell::Tool(ToolCell::Exec(exec))
+    };
+    let live_text = lines_text(&success.lines_with_options(80, calm_options()));
+    let transcript_text = lines_text(&success.transcript_lines(80));
+    let previewed = (0..total)
+        .filter(|i| live_text.contains(&format!("row {i:02} plain content")))
+        .count();
+    assert_eq!(
+        previewed, TOOL_SUCCESS_OUTPUT_PREVIEW_LINES,
+        "a successful exec previews exactly {TOOL_SUCCESS_OUTPUT_PREVIEW_LINES} \
+         rows: {live_text}"
+    );
+    assert!(
+        live_text.contains(first) && !live_text.contains(&last),
+        "the preview reads from the top and stops: {live_text}"
+    );
+    assert!(transcript_text.contains(first) && transcript_text.contains(&last));
+
+    // Successful generic tool: output collapses entirely live, and does so
+    // without spending a row telling the user it collapsed.
+    let quiet = {
+        let mut cell = generic_tool("read_file", ToolStatus::Success);
+        cell.input_summary = Some("path: crates/tui/src/main.rs".to_string());
+        cell.output = Some(numbered_output(24));
+        HistoryCell::Tool(ToolCell::Generic(cell))
+    };
+    let live_text = lines_text(&quiet.lines_with_options(80, TranscriptRenderOptions::default()));
+    let transcript_text = lines_text(&quiet.transcript_lines(80));
+    assert!(
+        !live_text.contains(first) && !live_text.contains("lines omitted"),
+        "a quiet success collapses silently: {live_text}"
+    );
+    assert!(transcript_text.contains(first));
+    assert!(transcript_text.contains("row 23 plain content"));
+}
+
+/// Repro for #80: a `git diff --stat`-shaped result must keep its newlines on
+/// the transcript surface — one file per row, not squashed into one line.
+#[test]
+fn multi_line_tool_output_keeps_one_row_per_source_line() {
+    let diff_stat = "Cargo.lock                |  1 +\n\
+                     crates/cli/Cargo.toml     |  1 +\n\
+                     crates/cli/src/main.rs    | 47 ++++++\n\
+                     crates/config/src/lib.rs  | 27 ++++\n\
+                     crates/tui/src/mcp.rs     | 384 +++++";
+
+    let cell = {
+        let mut cell = generic_tool("read_file", ToolStatus::Success);
+        cell.input_summary = Some("command: git diff --stat".to_string());
+        cell.output = Some(diff_stat.to_string());
+        HistoryCell::Tool(ToolCell::Generic(cell))
+    };
+
+    let transcript_text = lines_text(&cell.transcript_lines(80));
+    for needle in [
+        "Cargo.lock",
+        "crates/cli/Cargo.toml",
+        "crates/cli/src/main.rs",
+        "crates/config/src/lib.rs",
+        "crates/tui/src/mcp.rs",
+    ] {
+        assert!(
+            transcript_text.contains(needle),
+            "transcript missing {needle:?}: {transcript_text}"
+        );
+    }
+    let cargo_lock_row = transcript_text
+        .lines()
+        .find(|line| line.contains("Cargo.lock"))
+        .expect("Cargo.lock row must exist");
+    assert!(
+        !cargo_lock_row.contains("crates/cli/Cargo.toml"),
+        "two files were joined onto one row: {cargo_lock_row}"
+    );
+}
+
+/// Reasoning folds in the live view and the fold is reversible: the collapsed
+/// state must truncate a long body, the expanded state must restore every line
+/// it dropped, and both must show the model's own identifiers verbatim (the
+/// #4146/#4148 scrub rendered `refresh_catalog_cache` as `…` and protected
+/// nothing, since the body was always one keypress away). The configured
+/// default only inverts which state the toggle starts in.
+///
+/// Replaces four separate fold tests.
+#[test]
+fn reasoning_folds_in_live_and_the_fold_is_reversible() {
+    let body = (1..=20)
+        .map(|i| format!("step {i:02}: refresh_catalog_cache iteration"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let cell = HistoryCell::Thinking {
+        content: body,
+        streaming: false,
+        duration_secs: Some(1.0),
+    };
+
+    for default_expanded in [false, true] {
+        let options = TranscriptRenderOptions {
+            thinking_default_expanded: default_expanded,
+            low_motion: true,
+            ..TranscriptRenderOptions::default()
+        };
+        // `folded` is the Space toggle *relative to* the configured default,
+        // so the expanded state is whichever call disagrees with it. Running
+        // both defaults proves the toggle survives the inversion.
+        let expanded = lines_text(
+            &cell
+                .lines_with_options_folded(80, options, !default_expanded)
+                .0,
+        );
+        let collapsed = lines_text(
+            &cell
+                .lines_with_options_folded(80, options, default_expanded)
+                .0,
+        );
+
+        for i in 1..=20 {
+            assert!(
+                expanded.contains(&format!("step {i:02}: refresh_catalog_cache iteration")),
+                "[default_expanded={default_expanded}] expanded reasoning dropped line {i}: \
+                 {expanded}"
+            );
+        }
+        assert!(
+            !collapsed.contains("step 20:"),
+            "[default_expanded={default_expanded}] the collapsed fold must truncate: {collapsed}"
+        );
+        assert!(
+            collapsed.contains("refresh_catalog_cache"),
+            "[default_expanded={default_expanded}] the shown head keeps identifiers \
+             verbatim: {collapsed}"
+        );
+        assert!(
+            !collapsed.contains("Space:") && !collapsed.contains("Ctrl+O"),
+            "[default_expanded={default_expanded}] the per-cell renderer stays \
+             target-neutral; the chord belongs to whoever owns focus: {collapsed}"
+        );
+    }
+}
+
+/// A completed reasoning cell short enough to fit needs no expand affordance,
+/// and the live view must still show it — the alternative was a dead card that
+/// said reasoning happened and nothing about what it was.
+#[test]
+fn short_completed_reasoning_is_shown_live_without_an_affordance() {
+    let cell = HistoryCell::Thinking {
+        content: "One brief reasoning step.".to_string(),
+        streaming: false,
+        duration_secs: Some(0.4),
+    };
+
+    let live_text = lines_text(&cell.lines_with_options(80, calm_options()));
+    let transcript_text = lines_text(&cell.transcript_lines(80));
+
+    assert!(
+        live_text.contains("One brief reasoning step."),
+        "short completed reasoning belongs inline: {live_text}"
+    );
+    assert!(transcript_text.contains("One brief reasoning step."));
+    assert!(
+        !live_text.contains("Ctrl+O") && !live_text.contains("Space:"),
+        "a body that fits needs no affordance: {live_text}"
+    );
+}
+
+/// A live reasoning block must show what the model is thinking right now — the
+/// old behavior stalled on a `thinking...` placeholder until the block closed,
+/// and a long body must keep the newest line rather than the oldest.
+#[test]
+fn streaming_reasoning_shows_its_newest_line_not_a_placeholder() {
+    let short = render_thinking(
+        "Step 1: read the code\nStep 2: trace the call\nStep 3: form a hypothesis",
+        80,
+        true,
+        None,
+        true,
+        true,
+    );
+    let short_text = lines_text(&short);
+    assert!(
+        short_text.contains("Step 3: form a hypothesis"),
+        "the newest reasoning line must be visible while streaming: {short_text}"
+    );
+    assert!(
+        !short_text.contains("thinking..."),
+        "real content means the placeholder must not be drawn: {short_text}"
+    );
+
+    let long = (1..=16)
+        .map(|i| format!("Reasoning line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let long_text = lines_text(&render_thinking(&long, 80, true, None, true, true));
+    assert!(
+        long_text.contains("Reasoning line 16"),
+        "the tail is what is live: {long_text}"
+    );
+    assert!(
+        !long_text.contains("Reasoning line 1\n"),
+        "the head is what gets clipped: {long_text}"
+    );
+}
+
+/// A foreground shell wait blocks the turn. The card's job is to tell the user
+/// how to take the terminal back, not to re-print the command they just watched
+/// the model type, and not to duplicate the sidebar's live tail in the
+/// transcript. Once the command finishes, the final output supersedes any stale
+/// live tail.
+///
+/// Replaces three tests.
+#[test]
+fn a_foreground_shell_wait_offers_the_escape_hatch_not_the_command_echo() {
+    let command = "cargo test --workspace --all-features";
+    let running = {
+        let mut exec = exec_tool(command, ToolStatus::Running);
+        exec.live_output = Some("running line 1\nrunning line 2".to_string());
+        exec.shell_task_id = Some("shell_live".to_string());
+        exec
+    };
+
+    for (label, text) in [
+        ("live", lines_text(&running.lines_with_motion(80, true))),
+        (
+            "transcript",
+            lines_text(&HistoryCell::Tool(ToolCell::Exec(running.clone())).transcript_lines(80)),
+        ),
+    ] {
+        assert!(
+            text.contains("Ctrl+B"),
+            "[{label}] the backgrounding chord is the point of the card: {text}"
+        );
+        assert!(
+            !text.contains("running line 1"),
+            "[{label}] the live tail belongs to the sidebar and /jobs: {text}"
+        );
+        assert!(
+            !text.contains(command),
+            "[{label}] the header already carries the summary; do not echo the \
+             command target: {text}"
+        );
+        assert!(!text.contains("command:"), "[{label}] {text}");
+    }
+
+    let mut finished = exec_tool(command, ToolStatus::Success);
+    finished.output = Some("final output".to_string());
+    finished.live_output = Some("stale live tail".to_string());
+    finished.shell_task_id = Some("shell_live".to_string());
+    let text = lines_text(&finished.lines_with_motion(80, true));
+    assert!(
+        !text.contains("stale live tail"),
+        "a finished command must not show the tail it already superseded: {text}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Clipboard — what you copy is what was authored
+// ---------------------------------------------------------------------------
+
+/// Every rendered line carries a `copy_prefix_width`: the display columns of
+/// decoration the clipboard must skip. The property is that slicing a line at
+/// that width yields the payload and nothing decorative — for role markers,
+/// status chrome, and the two-column continuation prefix on wrapped fenced code
+/// (which must be counted in display columns, not bytes, or CJK shifts it).
+///
+/// Replaces three tests that each covered one cell kind.
+#[test]
+fn the_copy_prefix_skips_every_decoration_and_keeps_the_payload() {
+    let decorations = ['╎', '▎', '●', '│', '┃', '✓', '▏'];
+
+    let copied_line = |cell: &HistoryCell, width: u16, needle: &str| -> (String, usize) {
+        let rendered = cell.lines_with_copy_metadata(width, TranscriptRenderOptions::default());
+        let target = rendered
+            .iter()
+            .find(|entry| {
+                entry
+                    .line
+                    .spans
+                    .iter()
+                    .any(|span| span.content.contains(needle))
+            })
+            .unwrap_or_else(|| panic!("no rendered line contains {needle:?}"));
+        let text = line_to_plain(&target.line);
+        (
+            slice_text(&text, target.copy_prefix_width, text_display_width(&text)),
+            target.copy_prefix_width,
+        )
+    };
+
+    // Fenced code: indentation survives, decoration does not.
+    let rust_fence = HistoryCell::Assistant {
+        content: "```rust\n    let answer = 42;\n```".to_string(),
+        streaming: false,
+    };
+    let (copied, _) = copied_line(&rust_fence, 40, "answer");
+    assert!(
+        copied.contains("    let answer = 42;"),
+        "code indentation was not preserved: {copied:?}"
+    );
+    for glyph in decorations {
+        assert!(
+            !copied.contains(glyph),
+            "decorative glyph {glyph:?} leaked into copied code: {copied:?}"
+        );
+    }
+
+    // Wrapped CJK code: the prefix is two *display* columns, not two bytes.
+    let cjk_fence = HistoryCell::Assistant {
+        content: "```text\n  中文 = 1\n```".to_string(),
+        streaming: false,
+    };
+    let (copied, prefix) = copied_line(&cjk_fence, 24, "中文");
+    assert_eq!(
+        prefix, 2,
+        "the continuation prefix is the role marker's two display columns"
+    );
+    assert!(
+        copied.starts_with("    中文"),
+        "wide-character indentation was mis-sliced: {copied:?}"
+    );
+
+    // Tool receipt: status and family chrome are prefix, the receipt text is
+    // payload.
+    let receipt = {
+        let mut exec = exec_tool("printf 'receipt'", ToolStatus::Success);
+        exec.output = Some("receipt".to_string());
+        HistoryCell::Tool(ToolCell::Exec(exec))
+    };
+    let rendered = receipt.lines_with_copy_metadata(80, TranscriptRenderOptions::default());
+    let header = rendered.first().expect("tool receipt header");
+    assert!(
+        header.copy_prefix_width >= 4,
+        "status and family chrome should be measured as prefix, got {}",
+        header.copy_prefix_width
+    );
+    let body = line_to_plain(&ratatui::text::Line::from(
+        header
+            .line
+            .spans
+            .iter()
+            .skip(1)
+            .cloned()
+            .collect::<Vec<_>>(),
+    ));
+    let copied = slice_text(&body, header.copy_prefix_width, text_display_width(&body));
+    assert!(
+        copied.contains("run done"),
+        "receipt text was clipped away: {copied:?}"
+    );
+    for glyph in decorations {
+        assert!(
+            !copied.contains(glyph),
+            "decorative glyph {glyph:?} leaked into the copied receipt: {copied:?}"
+        );
+    }
+}
+
+/// Issue #1212: the transcript rail (`▏`) marks prose continuation. Inside a
+/// fence it corrupts anything the user copies, so no line of a code block may
+/// carry it — not the first, not a blank line in the middle, not a wrapped
+/// continuation of an over-long source line.
+///
+/// Replaces four tests that each covered one fence shape.
+#[test]
+fn no_line_inside_a_fence_carries_the_transcript_rail() {
+    let long_source = "let x = ".to_string() + &"abcdef ".repeat(40);
+
+    for (label, content, width) in [
+        (
+            "short fence",
+            "SQL:\n```sql\nSELECT\nFROM customers\n```".to_string(),
+            80u16,
+        ),
+        (
+            "multi-line fence",
+            "Here's the query:\n```sql\nSELECT\n  c.customer_id,\n  c.name,\n  \
+             COUNT(o.order_id) AS order_count\nFROM customers c\nJOIN orders o ON \
+             c.customer_id = o.customer_id;\n```"
+                .to_string(),
+            80,
+        ),
+        (
+            "fence with a blank line",
+            "```\nfn one() {}\n\nfn two() {}\n```".to_string(),
+            80,
+        ),
+        ("wrapped fence", format!("```\n{long_source}\n```"), 40),
+    ] {
+        let cell = HistoryCell::Assistant {
+            content,
+            streaming: false,
+        };
+        // Line 0 is the intro paragraph (or the fence opener); every line
+        // after it belongs to the code block.
+        for line in cell.lines(width).iter().skip(1) {
+            let text = line_text(line);
+            assert!(
+                !text.contains('\u{258F}'),
+                "[{label}] code line took the transcript rail: {text:?}"
+            );
+        }
+    }
+}
+
+/// Whose text gets interpreted is a trust boundary. The model's markdown is
+/// rendered; the user's prompt is shown exactly as typed, including leading
+/// hashes, dashes and runs of spaces. A cell holding only whitespace renders
+/// nothing at all rather than an orphaned role glyph.
+///
+/// Replaces three tests.
+#[test]
+fn authored_text_keeps_its_shape_on_both_sides_of_the_turn() {
+    let user = HistoryCell::User {
+        content: "  # heading\n- item\n   \nhello    world".to_string(),
+    };
+    let visible: Vec<String> = user.lines(80).iter().map(line_text).collect();
+    assert!(
+        visible[0].trim_end().ends_with("# heading"),
+        "a user's literal `#` must not become a rendered heading: {visible:?}"
+    );
+    assert!(
+        visible[1].trim_end().ends_with("- item"),
+        "dash-prefixed user text stays literal: {visible:?}"
+    );
+    assert!(
+        visible[2].ends_with("   "),
+        "whitespace-only user lines survive: {visible:?}"
+    );
+    assert!(
+        visible[3].trim_end().ends_with("hello    world"),
+        "internal spacing stays literal: {visible:?}"
+    );
+    assert!(
+        !visible.iter().any(|line| line.contains('\u{2500}')),
+        "user text must not gain a markdown heading rule: {visible:?}"
+    );
+
+    let assistant = HistoryCell::Assistant {
+        content: "# Heading\n\n- item".to_string(),
+        streaming: false,
+    };
+    let visible: Vec<String> = assistant.lines(80).iter().map(line_text).collect();
+    assert!(
+        visible[0].contains("Heading") && !visible[0].contains("# Heading"),
+        "the model's markdown is still parsed: {visible:?}"
+    );
+    assert!(
+        visible.iter().any(|line| line.contains('\u{2500}')),
+        "an assistant h1 still draws its rule: {visible:?}"
+    );
+
+    // A stray newline streamed between reasoning and a tool call used to render
+    // as a bare role glyph with nothing after it.
+    for content in ["", "   ", "\n", "\n\n", " \t \n"] {
+        for streaming in [false, true] {
+            let cell = HistoryCell::Assistant {
+                content: content.to_string(),
+                streaming,
+            };
+            assert!(
+                cell.lines(80).is_empty(),
+                "whitespace-only assistant content {content:?} (streaming={streaming}) \
+                 must render nothing"
+            );
+        }
+    }
+    let real = HistoryCell::Assistant {
+        content: "hi".to_string(),
+        streaming: false,
+    };
+    assert_eq!(
+        real.lines(80)[0].spans[0].content.as_ref(),
+        ASSISTANT_GLYPH,
+        "real content still gets its role marker"
+    );
+}
+
+/// Reasoning is neither the user's prompt nor the model's answer, and a reader
+/// scanning the transcript has to be able to skip it. The markers below are
+/// referenced as named constants rather than literal glyphs on purpose: this
+/// protects the *distinction*, so a redesign that restyles reasoning stays
+/// green while one that stops marking it at all fails.
+#[test]
+fn reasoning_is_marked_apart_from_both_the_prompt_and_the_answer() {
+    let body_text = "concrete reasoning content";
+    let reasoning = render_thinking(body_text, 80, false, Some(1.0), false, true);
+    assert!(reasoning.len() >= 2, "expected a header and a body line");
+
+    let header = line_text(&reasoning[0]);
+    assert!(
+        header.starts_with(REASONING_OPENER),
+        "the reasoning header opens with its own marker: {header:?}"
+    );
+    let body = line_text(&reasoning[1]);
+    assert!(
+        body.starts_with(REASONING_RAIL),
+        "the reasoning body carries its own rail: {body:?}"
+    );
+
+    let rail = REASONING_RAIL.trim();
+    for cell in [
+        HistoryCell::User {
+            content: body_text.to_string(),
+        },
+        HistoryCell::Assistant {
+            content: body_text.to_string(),
+            streaming: false,
+        },
+    ] {
+        let rendered = lines_text(&cell.lines(80));
+        assert!(
+            rendered.contains(body_text),
+            "sanity: the cell rendered its content: {rendered}"
+        );
+        assert!(
+            !rendered.contains(rail),
+            "only reasoning may wear the reasoning rail: {rendered}"
+        );
+    }
+}
+
+/// A filled background behind reasoning is unreadable on a transparent or
+/// light terminal, so the highlight is configurable. With it off, not one span
+/// may carry a background — a single tinted span is the bug. The enabled case
+/// follows the terminal's actual color depth: capable terminals tint the body,
+/// while ANSI-16 intentionally stays untinted because it cannot render the
+/// subtle surface faithfully.
+#[test]
+fn disabling_the_reasoning_highlight_leaves_no_span_with_a_background() {
+    let render = |highlight: bool| {
+        render_thinking_with_analysis(
+            "reasoning without a filled surface",
+            80,
+            false,
+            Some(1.0),
+            false,
+            true,
+            highlight,
+        )
+        .0
+    };
+
+    assert!(
+        render(false)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .all(|span| span.style.bg.is_none()),
+        "a disabled highlight must not tint any span"
+    );
+    let enabled_has_background = render(true)
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .any(|span| span.style.bg.is_some());
+    assert_eq!(
+        enabled_has_background,
+        crate::palette::reasoning_surface_tint(cached_color_depth()).is_some(),
+        "the enabled highlight must follow the terminal color-depth contract"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Motion — reduced motion is actually still
+// ---------------------------------------------------------------------------
+
+/// The deleted tests pinned the frozen glyphs (`assert_eq!(spans[1], "⣤")`).
+/// That breaks on a skin change and passes on the bug that matters: a marker
+/// that keeps animating for a user who asked it to stop. The property is
+/// stillness — a running cell's rendered frame must not depend on how long it
+/// has been running once motion is reduced — and the full-motion case is
+/// asserted alongside it so a renderer that froze everything could not make
+/// this test vacuously true.
+///
+/// Stillness is not enough on its own. Animation frame 0 is U+2800 BRAILLE
+/// PATTERN BLANK, an invisible cell. Freezing there (or on the Still path)
+/// looks like a missing marker, which is why reduced motion must freeze on a
+/// filled, legible bubble rather than the blank the spinner starts on.
+#[test]
+fn reduced_and_still_motion_render_a_frame_that_does_not_move() {
+    let frame_symbols = super::TOOL_RUNNING_SYMBOLS.len() as u64;
+    let frame_at = |elapsed_ms: u64, low_motion: bool, motion: MotionMode| {
+        let mut exec = exec_tool("echo hi", ToolStatus::Running);
+        exec.started_at = Some(Instant::now() - Duration::from_millis(elapsed_ms));
+        let cell = HistoryCell::Tool(ToolCell::Exec(exec));
+        lines_text(&cell.lines_with_options(
+            80,
+            TranscriptRenderOptions {
+                low_motion,
+                motion_mode: motion,
+                ..TranscriptRenderOptions::default()
+            },
+        ))
+    };
+
+    // Half a spinner cycle apart, and both well under the 3s elapsed-badge
+    // threshold so the badge itself cannot be the thing that differs.
+    let early = crate::tui::spinner::LIVE_MARKER_DELAY_MS;
+    let late = early + super::TOOL_STATUS_SYMBOL_MS * (frame_symbols / 2);
+    assert!(
+        late < 3_000,
+        "both samples must stay under the elapsed badge"
+    );
+
+    // Two independent mechanisms are supposed to produce stillness — the
+    // `low_motion` flag and the resolved `motion_mode`. Each is asserted on its
+    // own so losing either one fails here, rather than only losing both.
+    for (low_motion, motion) in [
+        (true, MotionMode::Reduced),
+        (true, MotionMode::Still),
+        (false, MotionMode::Reduced),
+        (false, MotionMode::Still),
+    ] {
+        let frozen = frame_at(early, low_motion, motion);
+        assert_eq!(
+            frozen,
+            frame_at(late, low_motion, motion),
+            "low_motion={low_motion} / {motion:?} must not animate the live marker"
+        );
+        assert!(
+            !frozen.contains('\u{2800}'),
+            "a frozen marker must still be visible: low_motion={low_motion} / {motion:?}: {frozen:?}"
+        );
+    }
+    assert_ne!(
+        frame_at(early, false, MotionMode::Full),
+        frame_at(late, false, MotionMode::Full),
+        "full motion must actually animate, or the stillness assertions above \
+         prove nothing"
+    );
+
+    // The same contract for the two other animated surfaces: the streaming
+    // reasoning cursor and the assistant role marker's pulse.
+    let cursor_off = lines_text(&render_thinking(
+        "ongoing reasoning...",
+        80,
+        true,
+        None,
+        false,
+        true,
+    ));
+    assert!(
+        !cursor_off.contains(REASONING_CURSOR),
+        "low motion must suppress the streaming reasoning cursor: {cursor_off}"
+    );
+    assert_eq!(
+        assistant_label_style_for(true, true).fg,
+        assistant_label_style_for(false, false).fg,
+        "a streaming assistant marker under low motion must look exactly like an \
+         idle one — no pulse"
+    );
+}
+
+/// Dual of the low-motion freeze above: when the cell is streaming and
+/// motion is allowed, the assistant marker must actually pulse. The deleted
+/// test slept up to 1s sampling `SystemTime` until the 2s sine dipped; the
+/// property is that the streaming+motion color is `pulse_brightness` of the
+/// idle source, which we can check without waiting on the wall clock.
+///
+/// Around the sine crest, `pulse_brightness` rounds back to the source
+/// (~70ms of a 2s cycle). Matching the current instant would then also pass
+/// a renderer that never pulsed, so we only compare once the pure function
+/// itself is off the crest — a busy wait, not a sleep.
+#[test]
+fn assistant_marker_pulses_when_streaming_and_motion_is_allowed() {
+    use crate::palette::{self, pulse_brightness};
+
+    let idle = assistant_label_style_for(false, false).fg;
+    assert_eq!(
+        idle,
+        Some(palette::WHALE_INFO),
+        "the idle marker is the unpulsed source; pulsing everything would make \
+         the streaming assertion vacuously true"
+    );
+    assert_eq!(
+        assistant_label_style_for(true, true).fg,
+        idle,
+        "low motion must keep the streaming marker at the unpulsed source"
+    );
+
+    let epoch_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    };
+    let deadline = Instant::now() + Duration::from_millis(250);
+    let (t0, actual) = loop {
+        assert!(
+            Instant::now() < deadline,
+            "pulse_brightness stayed at the source color through a 250ms spin; \
+             the 2s cycle leaves the crest in ~70ms"
+        );
+        let t0 = epoch_ms();
+        // Skip the crest and a few ms of margin so the product read of
+        // SystemTime cannot land back on identity between this sample and
+        // the call under test.
+        let near_crest = (t0.saturating_sub(8)..=t0.saturating_add(8))
+            .any(|ms| pulse_brightness(palette::WHALE_INFO, ms) == palette::WHALE_INFO);
+        if near_crest {
+            continue;
+        }
+        break (t0, assistant_label_style_for(true, false).fg);
+    };
+    let t1 = epoch_ms();
+    let matches_pulse =
+        (t0..=t1.max(t0)).any(|ms| actual == Some(pulse_brightness(palette::WHALE_INFO, ms)));
+    assert!(
+        matches_pulse,
+        "streaming + motion must apply pulse_brightness to the assistant \
+         marker, got {actual:?}"
+    );
+    assert_ne!(
+        actual, idle,
+        "streaming + motion must not sit at the idle color once the pulse \
+         is off its crest"
+    );
+}
+
+/// The still-motion path rewrites the leading status marker in place. It once
+/// rewrote any braille cell it found, which silently ate braille that was part
+/// of the tool's own output.
+#[test]
+fn the_still_marker_rewrite_never_consumes_braille_tool_output() {
+    let mut cell = generic_tool("read_file", ToolStatus::Running);
+    cell.output = Some("⣿".to_string());
+    let cell = HistoryCell::Tool(ToolCell::Generic(cell));
+
+    let lines = cell.lines_with_options(
+        80,
+        TranscriptRenderOptions {
+            low_motion: true,
+            motion_mode: MotionMode::Still,
+            ..TranscriptRenderOptions::default()
+        },
+    );
+
+    assert!(
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .any(|span| span.content.as_ref() == "⣿"),
+        "tool output must survive the typed-header marker pass: {lines:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Identity — a card never names a verb or a tool it did not run
+// ---------------------------------------------------------------------------
+
+/// #4145: a completed grep grouped under the exploration card rendered
+/// `read done · Searching …` — the header verb contradicted the label directly
+/// under it. The verb must agree with the work, in every locale, and a locale
+/// must not fall back to the English status word.
+///
+/// Replaces two tests, each of which hard-coded one direction.
+#[test]
+fn a_card_verb_agrees_with_its_own_label_in_every_locale() {
+    use crate::localization::Locale;
+
+    for (label, expected_en, expected_zh, forbidden_en) in [
+        (
+            "Searching for `TranscriptScroll`",
+            "find done",
+            "find 完成",
+            "read done",
+        ),
+        ("Reading src/foo.rs", "read done", "read 完成", "find done"),
+    ] {
+        let cell = super::ExploringCell {
+            entries: vec![super::ExploringEntry {
+                label: label.to_string(),
+                status: ToolStatus::Success,
+            }],
+        };
+
+        let header_en = line_text(&cell.lines_with_motion_and_locale(80, true, Locale::En)[0]);
+        assert!(
+            header_en.contains(expected_en),
+            "{label:?} should read {expected_en:?}: {header_en:?}"
+        );
+        assert!(
+            !header_en.contains(forbidden_en),
+            "{label:?} must not be paired with {forbidden_en:?}: {header_en:?}"
+        );
+        assert!(
+            header_en.contains(label),
+            "the label itself must survive: {header_en:?}"
+        );
+
+        let header_zh = line_text(&cell.lines_with_motion_and_locale(80, true, Locale::ZhHans)[0]);
+        assert!(
+            header_zh.contains(expected_zh),
+            "{label:?} should read {expected_zh:?} in zh-Hans: {header_zh:?}"
+        );
+        assert!(
+            !header_zh.contains("done"),
+            "zh-Hans must not leak the English status word: {header_zh:?}"
+        );
+        assert!(
+            header_zh.contains(label),
+            "the label itself must survive localization: {header_zh:?}"
+        );
+    }
+}
+
+/// A read/find receipt reports a line count, so the count has to be real —
+/// including the singular/plural and the localized unit. A run receipt reports
+/// no count at all: inferring "3 lines" from rendered text that happens to
+/// contain `stdout:` would be inventing a number the shell never reported.
+#[test]
+fn receipts_count_only_what_they_actually_counted() {
+    use crate::localization::Locale;
+    use crate::tui::widgets::tool_card::ToolFamily;
+
+    for (locale, done, unit) in [(Locale::En, "done", "line"), (Locale::ZhHans, "完成", "行")] {
+        let label = |family, status, output| {
+            super::tool_receipt_label(family, status, Some(output), locale)
+        };
+
+        assert_eq!(label(ToolFamily::Read, ToolStatus::Success, ""), done);
+        assert_eq!(
+            label(ToolFamily::Read, ToolStatus::Success, "hello\n"),
+            if locale == Locale::En {
+                "1 line".to_string()
+            } else {
+                format!("1 {unit}")
+            }
+        );
+        assert_eq!(
+            label(ToolFamily::Read, ToolStatus::Success, "a\nb\nc\n"),
+            if locale == Locale::En {
+                "3 lines".to_string()
+            } else {
+                format!("3 {unit}")
+            }
+        );
+        assert_eq!(
+            label(ToolFamily::Find, ToolStatus::Success, "match 1\nmatch 2\n"),
+            if locale == Locale::En {
+                "2 lines".to_string()
+            } else {
+                format!("2 {unit}")
+            }
+        );
+
+        // Run never counts, whatever the body looks like.
+        for body in [
+            "stdout:\nok\nmore\nstderr:\nbad\n",
+            "line 1\nline 2\nline 3\n",
+        ] {
+            assert_eq!(
+                label(ToolFamily::Run, ToolStatus::Success, body),
+                done,
+                "a run receipt must not infer counts from {body:?}"
+            );
+        }
+    }
+
+    assert_eq!(
+        super::tool_receipt_label(
+            ToolFamily::Read,
+            ToolStatus::Running,
+            Some("a\nb"),
+            Locale::En
+        ),
+        "running",
+        "an unfinished read has nothing to count yet"
+    );
+}
+
+/// The same truthfulness contract through the real shell render path, where a
+/// formatter has already rewritten the output: the header still reports a plain
+/// localized completion and never a fabricated line count or stream name.
+#[test]
+fn shell_headers_stay_truthful_through_the_output_formatters() {
+    use crate::localization::Locale;
+
+    let cases = [
+        (
+            "printf redirect",
+            "printf '%s\\n' 'hello' 'world' > src/main.rs",
+            "printf > src/main.rs\nhello\nworld\n",
+        ),
+        (
+            "logical-or fallback",
+            "cargo build || echo fallback",
+            "   Compiling pkg v0.1.0\n   Finished dev [unoptimized + debuginfo]\n",
+        ),
+    ];
+
+    for (label, command, output) in cases {
+        let mut cell = exec_tool(command, ToolStatus::Success);
+        cell.output = Some(output.to_string());
+        cell.duration_ms = Some(42);
+
+        for (locale, done, unit) in [
+            (Locale::En, "done", "lines"),
+            (Locale::ZhHans, "完成", "行"),
+        ] {
+            let header = line_text(&cell.render_with_locale(80, true, RenderMode::Live, locale)[0]);
+            assert!(
+                header.contains(done),
+                "[{label}] header must carry the localized completion: {header}"
+            );
+            assert!(
+                !header.contains(unit) && !header.contains("stdout") && !header.contains("stderr"),
+                "[{label}] header must not invent counts or stream names: {header}"
+            );
+        }
+    }
+}
+
+/// #4133 / #4148: a spawn yields its card entirely to the DelegateCard, and an
+/// inspection (`peek` / `wait` / `status`) is a one-line check in every render
+/// mode. It must name the child it checked, must not read as a completed
+/// delegation, and must not leak the internal "unknown child" placeholder or
+/// echo the verb twice when the resolved identity collapses onto it.
+///
+/// Replaces eight tests.
+#[test]
+fn agent_cards_stay_one_line_and_spawn_cards_yield_to_the_delegate_card() {
+    let agent = |summary: &str, output: Option<&str>| {
+        let mut cell = generic_tool("agent", ToolStatus::Success);
+        cell.input_summary = Some(summary.to_string());
+        cell.output = output.map(str::to_string);
+        cell
+    };
+
+    for mode in [RenderMode::Live, RenderMode::Transcript] {
+        let spawn = agent(
+            "prompt: map the repo",
+            Some(r#"{"agent_id":"agent_scout_1","status":"running"}"#),
+        );
+        assert!(
+            spawn.lines_with_mode(120, true, mode).is_empty(),
+            "a spawn must not draw a generic card beside the DelegateCard in {mode:?}"
+        );
+
+        for (summary, output, expected) in [
+            (
+                "action: peek agent_id: agent_scout_1",
+                Some(r#"{"agent_id":"agent_scout_1","status":"running"}"#),
+                "checked",
+            ),
+            (
+                "action: wait",
+                Some(r#"{"action":"wait","settled":[{"agent_id":"agent_scout_1"}]}"#),
+                "waited",
+            ),
+            (
+                "action: status agent_id: agent_scout_1",
+                Some(r#"{"agent_id":"agent_scout_1","status":"running","terminal":false}"#),
+                "checked",
+            ),
+        ] {
+            let cell = agent(summary, output);
+            let lines = cell.lines_with_mode(120, true, mode);
+            let text = lines_text(&lines);
+            assert_eq!(
+                lines.len(),
+                1,
+                "{summary:?} must stay one line in {mode:?}: {lines:?}"
+            );
+            assert!(
+                text.contains(expected),
+                "{summary:?} should read as {expected:?}: {text:?}"
+            );
+            assert!(
+                !text.contains("delegate done"),
+                "an inspection must not read as a finished delegation: {text:?}"
+            );
+        }
+    }
+
+    // Identity fallbacks: no raw placeholder, no doubled verb.
+    let unresolved = agent("action: peek agent_type: delegate", None);
+    let text = lines_text(&unresolved.lines_with_mode(80, true, RenderMode::Live));
+    assert!(
+        !text.contains("unknown child"),
+        "the internal fallback token must not reach the transcript: {text:?}"
+    );
+
+    let collapsing = agent("action: peek role: delegate", None);
+    let text = lines_text(&collapsing.lines_with_mode(80, true, RenderMode::Live));
+    assert_eq!(
+        text.matches("delegate").count(),
+        1,
+        "the verb must not be echoed by the summary: {text:?}"
+    );
+}
+
+/// A tool the catalog does not have produces one useful sentence — the catalog
+/// error — and nothing else. The old rendering spent a `name:` / `args:` /
+/// `result:` block restating a call that never happened.
+#[test]
+fn an_unknown_tool_failure_shows_only_the_catalog_error() {
+    let mut cell = generic_tool("item", ToolStatus::Failed);
+    cell.input_summary = Some("status: pending".to_string());
+    cell.output = Some(
+        "Tool 'item' is not available in the current tool catalog. \
+         Checklist entries are not separate tool calls."
+            .to_string(),
+    );
+
+    for mode in [RenderMode::Live, RenderMode::Transcript] {
+        let lines = cell.lines_with_mode(120, true, mode);
+        let text = lines_text(&lines);
+        assert_eq!(lines.len(), 1, "single header line in {mode:?}: {lines:?}");
+        assert!(
+            text.contains("Tool 'item' is not available"),
+            "the catalog error is the useful part: {text:?}"
+        );
+        assert!(
+            !text.contains("name: item"),
+            "no name/args/result block for a call that did not happen: {text:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Severity — the ranks stay distinguishable
+// ---------------------------------------------------------------------------
+
+/// The deleted tests pinned each severity to a named palette constant, so a
+/// theme change broke four tests and a severity collapse broke none. What has
+/// to hold is the *relationship*: `Critical` reads exactly as loud as `Error`,
+/// `Warning` is visibly not an error, and `Info` is quieter than both — so a
+/// transient retry cannot be mistaken for a hard failure sitting next to it.
+#[test]
+fn error_severity_ranks_stay_visually_distinguishable() {
+    use crate::error_taxonomy::ErrorSeverity;
+
+    let rank = |severity| {
+        let cell = HistoryCell::Error {
+            message: "Authentication failed: invalid API key".to_string(),
+            severity,
+        };
+        let lines = cell.lines(80);
+        assert!(!lines.is_empty(), "{severity:?} must render a line");
+        let label = &lines[0].spans[0];
+        (label.content.to_string(), label.style.fg)
+    };
+
+    let (error_label, error_fg) = rank(ErrorSeverity::Error);
+    let (critical_label, critical_fg) = rank(ErrorSeverity::Critical);
+    let (warning_label, warning_fg) = rank(ErrorSeverity::Warning);
+    let (info_label, info_fg) = rank(ErrorSeverity::Info);
+
+    assert_eq!(
+        (critical_label, critical_fg),
+        (error_label.clone(), error_fg),
+        "Critical and Error both flip offline mode; they must read identically"
+    );
+    assert_ne!(
+        warning_fg, error_fg,
+        "a warning that reads as an error is the whole bug this guards"
+    );
+    assert_ne!(warning_label, error_label, "and the labels must differ too");
+    assert_ne!(info_fg, error_fg, "info must not shout");
+    assert_ne!(info_fg, warning_fg, "info must not read as a warning");
+    assert_ne!(info_label, warning_label);
+
+    // The body inherits the label's rank rather than staying neutral, or the
+    // colour would carry no information past the first word.
+    let cell = HistoryCell::Error {
+        message: "Authentication failed: invalid API key".to_string(),
+        severity: ErrorSeverity::Error,
+    };
+    let body_fg = cell
+        .lines(80)
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.contains("Authentication"))
+        .expect("error body span")
+        .style
+        .fg;
+    assert_eq!(body_fg, error_fg);
+}
+
+/// A multiline failure can run past the bottom of the terminal while its full
+/// text stays in history. The live cell advertises the pager; the pager and the
+/// transcript must carry the recovery instruction verbatim and must not
+/// recursively advertise themselves.
+#[test]
+fn an_error_cell_advertises_the_pager_live_and_never_inside_it() {
+    let recovery = "Refusing insecure base URL 'http://192.168.1.25:8000/v1'.\n\
+Loopback hosts (localhost, 127.0.0.1, [::1]) are auto-allowed.\n\
+Set CODEWHALE_ALLOW_INSECURE_HTTP=1 only for a trusted LAN host.";
+    let cell = HistoryCell::Error {
+        message: recovery.to_string(),
+        severity: crate::error_taxonomy::ErrorSeverity::Error,
+    };
+
+    let live_text = lines_text(&cell.lines(48));
+    let transcript_text = lines_text(&cell.transcript_lines(200));
+    let hint = crate::tui::key_shortcuts::tool_details_shortcut_action_hint("full error");
+
+    assert!(live_text.contains(&hint), "{live_text}");
+    assert!(!transcript_text.contains(&hint), "{transcript_text}");
+    assert!(
+        transcript_text.contains("CODEWHALE_ALLOW_INSECURE_HTTP=1"),
+        "the actionable instruction must survive verbatim: {transcript_text}"
+    );
+    assert!(
+        transcript_text.contains("192.168.1.25"),
+        "the offending host must survive verbatim: {transcript_text}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cards with a content contract
+// ---------------------------------------------------------------------------
+
+/// A search receipt has to name where the answer came from and whether the
+/// provider it claimed was the provider it used.
+#[test]
+fn a_web_search_receipt_names_its_source_and_any_degradation() {
     let cell = WebSearchCell {
         query: "current release".to_string(),
         status: ToolStatus::Success,
@@ -29,190 +1525,60 @@ fn web_search_cell_renders_receipt_source_degradation_and_citations() {
         degraded: Some("provider_native -> duckduckgo".to_string()),
         ref_count: 2,
     };
-    let rendered = cell
-        .lines_with_motion(120, true)
-        .iter()
-        .map(line_to_plain)
-        .collect::<Vec<_>>()
-        .join("\n");
 
-    assert!(rendered.contains("source"));
-    assert!(rendered.contains("provider-native/xai/grok-4.5"));
-    assert!(rendered.contains("degraded"));
-    assert!(rendered.contains("provider_native -> duckduckgo"));
-    assert!(rendered.contains("citations"));
+    let rendered = lines_text(&cell.lines_with_motion(120, true));
+
+    for needle in [
+        "source",
+        "provider-native/xai/grok-4.5",
+        "degraded",
+        "provider_native -> duckduckgo",
+        "citations",
+    ] {
+        assert!(rendered.contains(needle), "missing {needle:?}: {rendered}");
+    }
 }
 
+/// A workflow card stands in for a whole fan-out the user cannot see. The run
+/// card reports lifecycle, child count, phases and failures without repeating
+/// the header in the body; the expanded card adds the goal, the child labels,
+/// the final result and the error; the status card lists the runs it found.
+///
+/// Replaces three tests, and drops assertions of the form
+/// `contains('s') || contains('m')` — true of essentially any English string.
 #[test]
-fn restored_history_hides_wire_reasoning_placeholder_but_keeps_model_reasoning() {
-    let message = Message {
-        role: "assistant".to_string(),
-        content: vec![
-            ContentBlock::Thinking {
-                thinking: "(reasoning omitted)".to_string(),
-                signature: None,
-                state: None,
-            },
-            ContentBlock::Thinking {
-                thinking: "Actual model reasoning".to_string(),
-                signature: None,
-                state: None,
-            },
-        ],
-    };
-
-    let cells = super::history_cells_from_message(&message);
-    assert_eq!(cells.len(), 1);
-    assert!(matches!(
-        &cells[0],
-        HistoryCell::Thinking { content, .. } if content == "Actual model reasoning"
-    ));
-}
-
-// ---- elapsed-seconds badge for long-running tools ----
-//
-// Below 3s the label stays "running" — quick reads/greps shouldn't
-// visually churn. From 3s onward the badge appears and ticks each
-// second so the user can tell the call hasn't hung.
-// ---- #4619 adaptive evidence UI receipt ----
-//
-// When a tool result carries a `spillover_path` (set by the
-// tool-routing layer when the tool's `metadata.spillover_path` is
-// populated), expanded live detail appends a calm path-free receipt.
-// Transcript-mode replay leaves the hint off because the full output is
-// already inline.
-
-#[test]
-fn compact_live_row_does_not_leak_evidence_path() {
-    use std::path::PathBuf;
-    let cell = GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Success,
-        input_summary: Some("cmd: cargo build --release".to_string()),
-        output: Some("very large output...".to_string()),
-        prompts: None,
-        spillover_path: Some(PathBuf::from(
-            "/Users/dev/.deepseek/tool_outputs/call-abc12.txt",
-        )),
-        output_summary: None,
-        is_diff: false,
-    };
-    let lines = cell.lines_with_mode(120, true, super::RenderMode::Live);
-    let joined: String = lines
-        .iter()
-        .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
-        .collect();
-    assert!(
-        joined.contains("read 1 line · cmd: cargo build --release"),
-        "expected compact live summary: {joined:?}"
-    );
-    assert!(
-        !joined.contains("full output:"),
-        "spillover paths stay out of compact live rows: {joined:?}"
-    );
-}
-
-#[test]
-fn render_spillover_annotation_omitted_in_transcript_mode() {
-    use std::path::PathBuf;
-    // Transcript mode is for replay; the full output is already
-    // inline so the annotation would just be redundant.
-    let cell = GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Success,
-        input_summary: None,
-        output: Some("output".to_string()),
-        prompts: None,
-        spillover_path: Some(PathBuf::from("/tmp/spill.txt")),
-        output_summary: None,
-        is_diff: false,
-    };
-    let lines = cell.lines_with_mode(120, true, super::RenderMode::Transcript);
-    let joined: String = lines
-        .iter()
-        .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
-        .collect();
-    assert!(
-        !joined.contains("full output:"),
-        "annotation should be omitted in transcript mode: {joined:?}"
-    );
-}
-
-#[test]
-fn workflow_tool_renders_run_card_instead_of_generic_oneliner() {
-    let output = serde_json::json!({
+fn workflow_cards_report_lifecycle_children_phases_and_failures() {
+    let run_output = serde_json::json!({
         "run_id": "workflow_2400c600",
         "status": "completed",
         "workflow_goal": "audit the FLEET and WORKFLOW docs",
         "child_ids": ["a1", "a2", "a3"],
         "progress": ["phase: Scan", "log: 3 findings"],
         "events": [
-            {
-                "type": "task_started",
-                "task_id": "a1",
-                "label": "scan-docs",
-                "workflow_run_id": "workflow_2400c600",
-                "workflow_phase_id": "Scan",
-                "workflow_task_label": "scan-docs",
-                "workflow_child_index": 0,
-            },
-            {
-                "type": "task_started",
-                "task_id": "a2",
-                "workflow_task_label": "check-fleet",
-                "workflow_run_id": "workflow_2400c600",
-                "workflow_child_index": 1,
-            },
-            {
-                "type": "task_started",
-                "task_id": "a3",
-                "label": "summarize",
-                "workflow_run_id": "workflow_2400c600",
-                "workflow_child_index": 2,
-            },
+            {"type": "task_started", "task_id": "a1", "label": "scan-docs",
+             "workflow_run_id": "workflow_2400c600", "workflow_phase_id": "Scan",
+             "workflow_task_label": "scan-docs", "workflow_child_index": 0},
+            {"type": "task_started", "task_id": "a2", "workflow_task_label": "check-fleet",
+             "workflow_run_id": "workflow_2400c600", "workflow_child_index": 1},
+            {"type": "task_started", "task_id": "a3", "label": "summarize",
+             "workflow_run_id": "workflow_2400c600", "workflow_child_index": 2},
         ],
         "schema_errors": [],
     })
     .to_string();
-    let cell = GenericToolCell {
-        name: "workflow".to_string(),
-        status: ToolStatus::Success,
-        input_summary: Some("action: run".to_string()),
-        output: Some(output),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-    let joined: String = cell
-        .lines_with_mode(120, true, super::RenderMode::Live)
-        .iter()
-        .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
-        .collect();
-    // Compact (#4122): lifecycle, children, phases, failures, elapsed.
+    let mut run = generic_tool("workflow", ToolStatus::Success);
+    run.input_summary = Some("action: run".to_string());
+    run.output = Some(run_output);
+    let text = lines_text(&run.lines_with_mode(120, true, RenderMode::Live));
+    assert!(text.contains("children"), "child count: {text:?}");
+    assert!(text.contains("phase"), "phase count: {text:?}");
+    assert!(text.contains("fail"), "failure count: {text:?}");
     assert!(
-        joined.contains("3 children") || joined.contains("children"),
-        "child count: {joined:?}"
+        !text.contains("status:"),
+        "the body must not repeat the header lifecycle: {text:?}"
     );
-    assert!(
-        joined.contains("success") || joined.contains("done"),
-        "header lifecycle: {joined:?}"
-    );
-    assert!(joined.contains("phase"), "phase count: {joined:?}");
-    assert!(joined.contains("fail"), "failure count present: {joined:?}");
-    assert!(
-        joined.contains('s') || joined.contains('m'),
-        "elapsed: {joined:?}"
-    );
-    assert!(
-        !joined.contains("status:"),
-        "body must not repeat the header lifecycle: {joined:?}"
-    );
-}
 
-#[test]
-fn workflow_tool_expanded_card_shows_phase_child_result_and_failures() {
-    let output = serde_json::json!({
+    let failed_output = serde_json::json!({
         "run_id": "workflow_exp",
         "status": "failed",
         "workflow_goal": "ship v0.8.68",
@@ -222,81 +1588,36 @@ fn workflow_tool_expanded_card_shows_phase_child_result_and_failures() {
         "error": "phase Verify failed",
         "result": {"summary": "2 of 3 children ok"},
         "events": [
-            {
-                "type": "run_started",
-                "at_ms": 1000,
-                "run_id": "workflow_exp",
-                "workflow_goal": "ship v0.8.68"
-            },
+            {"type": "run_started", "at_ms": 1000, "run_id": "workflow_exp",
+             "workflow_goal": "ship v0.8.68"},
             {"type": "phase_started", "at_ms": 1100, "title": "Verify"},
-            {
-                "type": "task_started",
-                "at_ms": 1200,
-                "task_id": "t1",
-                "label": "run tests",
-                "workflow_task_label": "run tests",
-                "profile": "implementer"
-            },
-            {
-                "type": "task_completed",
-                "at_ms": 4000,
-                "task_id": "t1",
-                "status": "failed"
-            },
-            {
-                "type": "run_completed",
-                "at_ms": 5000,
-                "status": "failed",
-                "error": "phase Verify failed"
-            }
+            {"type": "task_started", "at_ms": 1200, "task_id": "t1", "label": "run tests",
+             "workflow_task_label": "run tests", "profile": "implementer"},
+            {"type": "task_completed", "at_ms": 4000, "task_id": "t1", "status": "failed"},
+            {"type": "run_completed", "at_ms": 5000, "status": "failed",
+             "error": "phase Verify failed"}
         ]
     })
     .to_string();
-    let cell = GenericToolCell {
-        name: "workflow".to_string(),
-        status: ToolStatus::Failed,
-        input_summary: Some("action: run".to_string()),
-        output: Some(output),
-        prompts: None,
-        spillover_path: Some(std::path::PathBuf::from("/tmp/wf-artifact.json")),
-        output_summary: None,
-        is_diff: false,
-    };
-    let joined: String = cell
-        .lines_with_mode(140, true, super::RenderMode::Transcript)
-        .iter()
-        .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(joined.contains("ship v0.8.68"), "goal: {joined}");
-    assert!(
-        joined.contains("phases:") || joined.contains("Verify"),
-        "phase: {joined}"
-    );
-    assert!(
-        joined.contains("children:") || joined.contains("child"),
-        "child: {joined}"
-    );
-    assert!(joined.contains("run tests"), "child label: {joined}");
-    assert!(
-        joined.contains("result:") || joined.contains("2 of 3"),
-        "final result: {joined}"
-    );
-    assert!(
-        joined.contains("artifact:")
-            || joined.contains("source:")
-            || joined.contains("transcript:"),
-        "links: {joined}"
-    );
-    assert!(
-        joined.contains("error:") || joined.contains("phase Verify failed"),
-        "failure details: {joined}"
-    );
-}
+    let mut failed = generic_tool("workflow", ToolStatus::Failed);
+    failed.input_summary = Some("action: run".to_string());
+    failed.output = Some(failed_output);
+    failed.spillover_path = Some(PathBuf::from("/tmp/wf-artifact.json"));
+    let text = lines_text(&failed.lines_with_mode(140, true, RenderMode::Transcript));
+    for needle in [
+        "ship v0.8.68",
+        "Verify",
+        "run tests",
+        "2 of 3",
+        "phase Verify failed",
+    ] {
+        assert!(
+            text.contains(needle),
+            "the expanded card must carry {needle:?}: {text}"
+        );
+    }
 
-#[test]
-fn workflow_tool_renders_status_list_card() {
-    let output = serde_json::json!({
+    let status_output = serde_json::json!({
         "action": "status",
         "count": 2,
         "runs": [
@@ -305,515 +1626,77 @@ fn workflow_tool_renders_status_list_card() {
         ],
     })
     .to_string();
-    let cell = GenericToolCell {
-        name: "workflow".to_string(),
-        status: ToolStatus::Success,
-        input_summary: Some("action: status".to_string()),
-        output: Some(output),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-    let joined: String = cell
-        .lines_with_mode(120, true, super::RenderMode::Live)
-        .iter()
-        .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
-        .collect();
-    assert!(joined.contains("2 run(s)"), "count header: {joined:?}");
-    assert!(joined.contains("workflow_aaa"), "first run row: {joined:?}");
-    assert!(joined.contains("running"), "run status: {joined:?}");
-    assert!(
-        joined.contains("workflow_bbb"),
-        "second run row: {joined:?}"
-    );
-}
-
-#[test]
-fn render_spillover_annotation_omitted_when_no_path_set() {
-    // The common case: most tool results don't trigger spillover.
-    let cell = GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Success,
-        input_summary: None,
-        output: Some("contents".to_string()),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-    let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
-    let joined: String = lines
-        .iter()
-        .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
-        .collect();
-    assert!(!joined.contains("full output:"), "{joined:?}");
-}
-
-#[test]
-fn summarize_tool_args_ignores_control_only_defaults() {
-    let summary = super::summarize_tool_args(&serde_json::json!({
-        "max_count": 15,
-        "timeout_ms": 30_000
-    }));
-
-    assert_eq!(summary, None);
-}
-
-#[test]
-fn summarize_tool_args_falls_back_to_meaningful_unknown_key() {
-    let summary = super::summarize_tool_args(&serde_json::json!({
-        "max_count": 15,
-        "branch": "main"
-    }));
-
-    assert_eq!(summary.as_deref(), Some("branch: main"));
-}
-
-#[test]
-fn compact_git_tool_header_names_tool_not_control_default() {
-    let cell = GenericToolCell {
-        name: "git_log".to_string(),
-        status: ToolStatus::Success,
-        input_summary: Some("max_count: 15".to_string()),
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-
-    let lines = cell.lines_with_mode(120, true, super::RenderMode::Live);
-    let joined: String = lines
-        .iter()
-        .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
-        .collect();
-
-    assert_eq!(lines.len(), 1);
-    assert!(
-        joined.contains("read done · git_log"),
-        "expected exact tool name in compact row: {joined:?}"
-    );
-    assert!(
-        !joined.contains("max_count"),
-        "control defaults should not become the visible tool summary: {joined:?}"
-    );
-}
-
-#[test]
-fn compact_unknown_tool_header_names_tool_not_control_default() {
-    let cell = GenericToolCell {
-        name: "future_private_tool".to_string(),
-        status: ToolStatus::Success,
-        input_summary: Some("max_count: 15".to_string()),
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-
-    let lines = cell.lines_with_mode(120, true, super::RenderMode::Live);
-    let joined: String = lines
-        .iter()
-        .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
-        .collect();
-
-    assert_eq!(lines.len(), 1);
-    assert!(
-        joined.contains("tool done · future_private_tool"),
-        "expected exact tool name in compact row: {joined:?}"
-    );
-    assert!(
-        !joined.contains("max_count"),
-        "control defaults should not become the visible tool summary: {joined:?}"
-    );
-}
-
-#[test]
-fn render_spillover_annotation_truncates_to_width() {
-    use std::path::PathBuf;
-    let long_path = "/Users/dev/.deepseek/tool_outputs/this-is-a-very-long-tool-call-id-that-will-not-fit-in-narrow-widths.txt";
-    let cell = GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Success,
-        input_summary: None,
-        output: Some("output".to_string()),
-        prompts: None,
-        spillover_path: Some(PathBuf::from(long_path)),
-        output_summary: None,
-        is_diff: false,
-    };
-    let width = 80;
-    let lines = cell.lines_with_mode(width, true, super::RenderMode::Live);
-    let rendered: String = lines
-        .iter()
-        .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
-        .collect();
-    assert!(
-        rendered.contains("Output shortened"),
-        "compact live rows should expose the calm expand affordance: {rendered:?}"
-    );
-    assert!(
-        rendered.contains(":output"),
-        "expected cap:verb affordance, got {rendered:?}"
-    );
-    assert!(!rendered.contains("opens full output"), "{rendered:?}");
-    assert!(text_display_width(&rendered) <= usize::from(width));
-    assert!(!rendered.contains(long_path));
-}
-
-#[test]
-fn specialized_bash_and_mcp_cells_share_the_calm_expand_affordance() {
-    let receipt = "head\n\n… 200 KiB of output omitted — view full output in the tool details view\n\n…\ntail";
-    let bash = ExecCell {
-        command: "cargo test".to_string(),
-        status: ToolStatus::Failed,
-        output: Some(receipt.to_string()),
-        live_output: None,
-        shell_task_id: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: Some(50),
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
-    };
-    let mcp = McpToolCell {
-        tool: "mcp_fixture".to_string(),
-        status: ToolStatus::Failed,
-        content: Some(receipt.to_string()),
-        is_image: false,
-    };
-    for rendered in [
-        lines_text(&ToolCell::Exec(bash).lines_with_motion(80, true)),
-        lines_text(&ToolCell::Mcp(mcp).lines_with_motion(80, true)),
-    ] {
-        assert!(rendered.contains("Output shortened"), "{rendered}");
+    let mut status = generic_tool("workflow", ToolStatus::Success);
+    status.input_summary = Some("action: status".to_string());
+    status.output = Some(status_output);
+    let text = lines_text(&status.lines_with_mode(120, true, RenderMode::Live));
+    for needle in ["2 run(s)", "workflow_aaa", "running", "workflow_bbb"] {
         assert!(
-            rendered.contains(":output"),
-            "expected cap:verb affordance, got {rendered}"
+            text.contains(needle),
+            "the status card must list {needle:?}: {text:?}"
         );
-        assert!(!rendered.contains("opens full output"), "{rendered}");
-        // The chord is a global details affordance, not a per-card stamp (#4718).
-        assert!(!rendered.contains("Option+V to inspect"), "{rendered}");
-        assert!(!rendered.contains("retrieve_tool_result"), "{rendered}");
-        assert!(!rendered.contains("head"), "{rendered}");
     }
 }
 
 #[test]
-fn adaptive_evidence_affordance_is_calm_path_free_and_width_bounded() {
-    use std::path::Path;
+fn degraded_workflow_receipt_is_terminal_warning_not_running_or_success() {
+    let output = serde_json::json!({
+        "run_id": "workflow_partial",
+        "status": "degraded",
+        "workflow_goal": "review the release",
+        "started_at_ms": 1_000,
+        "completed_at_ms": 2_000,
+        "dispatch_failure_count": 1,
+        "dispatch_failures": [{
+            "label": "review docs",
+            "message": "profile unavailable",
+            "at_ms": 1_500,
+        }],
+    })
+    .to_string();
+    let mut run = generic_tool("workflow", ToolStatus::Success);
+    run.output = Some(output);
 
-    let secret_path = Path::new("/Users/private/.codewhale/sessions/session-a/artifacts/hash.txt");
-    let expected = format!(
-        "Output shortened — {}",
-        crate::tui::key_shortcuts::tool_details_shortcut_action_hint("output")
+    let lines = run.lines_with_mode(120, false, RenderMode::Live);
+    let text = lines_text(&lines);
+    assert!(text.contains("issue"), "warning receipt missing: {text:?}");
+    assert!(
+        !text.contains(" done"),
+        "must not read as success: {text:?}"
     );
-    for width in [18_u16, 40, 80, 120] {
-        let rendered = line_to_plain(&render_spillover_annotation(width));
-        assert!(
-            text_display_width(&rendered) <= usize::from(width),
-            "affordance exceeds width {width}: {rendered:?}"
-        );
-        assert!(!rendered.contains("/Users"));
-        assert!(!rendered.contains("hash.txt"));
-        assert!(!rendered.contains("Option+V"));
-        if usize::from(width) >= text_display_width(&expected) {
-            assert_eq!(rendered, expected);
-        }
-    }
-    // The path parameter is gone: the annotation never exposes storage paths.
-    let _ = secret_path;
-}
+    assert!(
+        !text.contains(" running"),
+        "must not read as live: {text:?}"
+    );
 
-#[test]
-fn activity_group_renders_as_single_metadata_line() {
-    let cell = GenericToolCell {
-        name: "activity_group".to_string(),
-        status: ToolStatus::Success,
-        input_summary: Some("Explored 2 files, 1 search".to_string()),
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-
-    let lines = cell.lines_with_mode(120, true, super::RenderMode::Live);
-    let joined: String = lines
+    let warning = lines
         .iter()
-        .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
-        .collect();
-
-    assert_eq!(lines.len(), 1);
-    assert_eq!(joined, "Explored 2 files, 1 search");
-    assert!(!joined.contains("activity_group"));
-}
-
-// ---- Compact agent rendering ----
-//
-// The DelegateCard owns live state for spawned sub-agents; the
-// generic tool block previously duplicated that signal at 3-4 lines
-// per spawn. In live mode we now render a single compact line that
-// points at the spawned agent id; transcript-mode replay keeps the
-// full block so debug history is intact.
-
-#[test]
-fn extract_agent_id_pulls_id_from_json_output() {
-    let output =
-        r#"{"agent_id": "agent-abc12", "nickname": "Beluga", "model": "deepseek-v4-flash"}"#;
-    assert_eq!(super::extract_agent_id(output), Some("agent-abc12"));
-}
-
-#[test]
-fn extract_agent_id_handles_extra_whitespace() {
-    let output = r#"{
-        "agent_id"   :    "agent-xyz",
-        "model": "x"
-    }"#;
-    assert_eq!(super::extract_agent_id(output), Some("agent-xyz"));
-}
-
-#[test]
-fn extract_agent_id_returns_none_when_missing() {
-    let output = r#"{"nickname": "Orca", "model": "x"}"#;
-    assert!(super::extract_agent_id(output).is_none());
-    assert!(super::extract_agent_id("(not json)").is_none());
-    assert!(super::extract_agent_id("").is_none());
-}
-
-#[test]
-fn extract_agent_id_returns_none_for_empty_id() {
-    let output = r#"{"agent_id": "", "model": "x"}"#;
-    assert!(super::extract_agent_id(output).is_none());
-}
-
-#[test]
-fn agent_spawn_suppresses_generic_card_in_live_mode() {
-    // #4133: spawn cards yield entirely to DelegateCard — no generic tool row.
-    let cell = GenericToolCell {
-        name: "agent".to_string(),
-        status: ToolStatus::Running,
-        input_summary: Some("prompt: do thing".to_string()),
-        output: Some(
-            r#"{"agent_id": "agent-abc12", "nickname": "Beluga", "model": "deepseek-v4-flash"}"#
-                .to_string(),
-        ),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-    let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
-    assert!(
-        lines.is_empty(),
-        "spawn generic tool card must be suppressed: {lines:?}"
-    );
-}
-
-#[test]
-fn agent_inspection_renders_single_compact_line_in_live_mode() {
-    let cell = GenericToolCell {
-        name: "agent".to_string(),
-        status: ToolStatus::Running,
-        input_summary: Some("action: peek agent_id: agent-abc12".to_string()),
-        output: Some(
-            r#"{"agent_id": "agent-abc12", "nickname": "Beluga", "model": "deepseek-v4-flash"}"#
-                .to_string(),
-        ),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-    let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
-    assert_eq!(lines.len(), 1, "expected exactly 1 line, got {lines:?}");
-    let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-    assert!(
-        rendered.contains("agent-abc12"),
-        "expected agent id in header: {rendered:?}"
-    );
-    assert!(
-        rendered.contains("checking"),
-        "expected inspection status in header: {rendered:?}"
-    );
-    assert!(
-        !rendered.contains("args"),
-        "args should be hidden: {rendered:?}"
-    );
-}
-
-#[test]
-fn agent_pending_inspection_uses_fallback_token() {
-    // Pending inspection (no agent_id yet) still renders a compact check line.
-    let cell = GenericToolCell {
-        name: "agent".to_string(),
-        status: ToolStatus::Running,
-        input_summary: Some("action: peek prompt: do thing".to_string()),
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-    let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
-    assert_eq!(lines.len(), 1, "inspection must stay compact: {lines:?}");
-    let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-    assert!(
-        rendered.contains("checking") || rendered.contains("subagent"),
-        "{rendered:?}"
-    );
-    assert!(!rendered.contains('\u{2026}'), "{rendered:?}");
-}
-
-#[test]
-fn agent_spawn_suppresses_generic_card_in_transcript_mode() {
-    // #4133: spawn cards are suppressed in both Live and Transcript; DelegateCard
-    // is the sole visible spawn artifact.
-    let cell = GenericToolCell {
-        name: "agent".to_string(),
-        status: ToolStatus::Success,
-        input_summary: Some("prompt: do thing".to_string()),
-        output: Some(r#"{"agent_id": "agent-abc12", "model": "deepseek-v4-flash"}"#.to_string()),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-    let lines = cell.lines_with_mode(80, true, super::RenderMode::Transcript);
-    assert!(
-        lines.is_empty(),
-        "spawn generic tool card must be suppressed in transcript: {lines:?}"
-    );
-}
-
-#[test]
-fn other_tools_are_unaffected_by_agent_compact_path() {
-    // Live-mode tool rows are compact by default; raw detail remains
-    // available through the detail pager.
-    let cell = GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Success,
-        input_summary: Some("path: foo.rs".to_string()),
-        output: Some("first line\nsecond line\nthird line".to_string()),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-    let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
-    assert_eq!(lines.len(), 1, "live tools should use compact rows");
-}
-
-#[test]
-fn agent_compact_header_omits_unknown_child_fallback() {
-    // #4148: an inspection whose identity can't be resolved must not leak the
-    // raw internal "unknown child" token into the default transcript.
-    let cell = GenericToolCell {
-        name: "agent".to_string(),
-        status: ToolStatus::Running,
-        input_summary: Some("action: peek agent_type: delegate".to_string()),
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-    let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
-    assert_eq!(lines.len(), 1, "inspection must stay compact: {lines:?}");
-    let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-    assert!(
-        !rendered.contains("unknown child"),
-        "raw fallback token must not leak: {rendered:?}"
-    );
-    assert!(
-        rendered.contains("subagent"),
-        "friendly fallback label should be shown: {rendered:?}"
-    );
-}
-
-#[test]
-fn agent_compact_header_does_not_duplicate_delegate_verb() {
-    // #4148: when the resolved identity collapses to the "delegate" verb, the
-    // compact inspection header must not render a redundant "delegate · delegate".
-    let cell = GenericToolCell {
-        name: "agent".to_string(),
-        status: ToolStatus::Running,
-        input_summary: Some("action: peek role: delegate".to_string()),
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-    let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
-    assert_eq!(lines.len(), 1, "inspection must stay compact: {lines:?}");
-    let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-    assert!(
-        !rendered.contains("delegate delegate"),
-        "no adjacent duplicate: {rendered:?}"
-    );
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.as_ref() == "issue")
+        .expect("terminal warning status span");
     assert_eq!(
-        rendered.matches("delegate").count(),
-        1,
-        "verb must not be echoed by the summary: {rendered:?}"
+        warning.style.fg,
+        Some(crate::deepseek_theme::active_theme().tool_warning_accent),
+        "degraded receipt must use the terminal warning accent"
+    );
+    assert!(
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .all(|span| !span
+                .content
+                .chars()
+                .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch))),
+        "terminal receipt must not retain a spinner: {text:?}"
     );
 }
 
-// ---- #403 concise todo / checklist update rendering ----
-//
-// The tool emits an "Updated todo #N to STATUS" leading line plus a
-// JSON snapshot. The renderer should detect the prefix and produce
-// a compact one-line state-change card instead of dumping the full
-// item list every time.
-
+/// A checklist update names one item. Showing the rest would make every
+/// single-item edit cost the height of the whole list; showing none would make
+/// the row unreadable. An id past the end of the list falls back to a
+/// placeholder instead of panicking.
 #[test]
-fn parse_update_prefix_recognises_todo_form() {
-    let parsed = super::parse_update_prefix("Updated todo #3 to in_progress\n{ \"items\": [...] }");
-    assert_eq!(
-        parsed,
-        Some(super::ChecklistChange {
-            id: 3,
-            status: "in_progress".to_string(),
-        }),
-    );
-}
-
-#[test]
-fn parse_update_prefix_recognises_checklist_form() {
-    let parsed = super::parse_update_prefix("Updated checklist #7 to completed\n{ \"items\": [] }");
-    assert_eq!(
-        parsed,
-        Some(super::ChecklistChange {
-            id: 7,
-            status: "completed".to_string(),
-        }),
-    );
-}
-
-#[test]
-fn parse_update_prefix_returns_none_for_writes() {
-    // `todo_write` / `checklist_write` outputs don't start with
-    // "Updated …" — they should fall through to the full-card path.
-    assert!(super::parse_update_prefix("{ \"items\": [] }").is_none());
-    assert!(super::parse_update_prefix("Wrote 5 todos\n{}").is_none());
-}
-
-#[test]
-fn parse_update_prefix_returns_none_for_malformed() {
-    // Missing arrow/status → fall through.
-    assert!(super::parse_update_prefix("Updated todo #3\n").is_none());
-    // Non-numeric id → fall through.
-    assert!(super::parse_update_prefix("Updated todo #foo to done\n").is_none());
-}
-
-#[test]
-fn render_checklist_change_card_shows_only_changed_item() {
-    // Build a snapshot with three items; render the change for #2.
+fn a_checklist_update_shows_only_the_item_that_changed() {
     let snapshot = super::ChecklistSnapshot {
         items: vec![
             super::ChecklistItemSnapshot {
@@ -833,61 +1716,38 @@ fn render_checklist_change_card_shows_only_changed_item() {
         completed: 1,
         total: 3,
     };
-    let change = super::ChecklistChange {
-        id: 2,
-        status: "in_progress".to_string(),
-    };
     let lines = super::render_checklist_change_card(
         "todo_update",
         ToolStatus::Success,
         &snapshot,
-        &change,
+        &super::ChecklistChange {
+            id: 2,
+            status: "in_progress".to_string(),
+        },
         80,
         true,
     );
-    // Header + change line + summary affordance = 3 lines.
-    assert!(lines.len() >= 3, "expected ≥3 lines, got {}", lines.len());
+    assert!(lines.len() >= 3, "header, change, summary: {}", lines.len());
 
-    // The change line should mention the title and the new status,
-    // and should NOT include the other two item titles (that's the
-    // whole point — concise rendering).
-    let change_line: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
-    assert!(change_line.contains("#2"), "missing id: {change_line:?}");
+    let change = line_text(&lines[1]);
+    for needle in ["#2", "Write the test", "in_progress"] {
+        assert!(change.contains(needle), "missing {needle:?}: {change:?}");
+    }
+    for other in ["Land the PR", "Read the spec"] {
+        assert!(
+            !change.contains(other),
+            "an update must not redraw the whole list: {change:?}"
+        );
+    }
+
+    let summary = line_text(lines.last().expect("summary row"));
+    assert!(summary.contains("3 items"), "{summary:?}");
     assert!(
-        change_line.contains("Write the test"),
-        "missing title: {change_line:?}"
-    );
-    assert!(
-        change_line.contains("in_progress"),
-        "missing status: {change_line:?}"
-    );
-    assert!(
-        !change_line.contains("Land the PR"),
-        "should not show other items: {change_line:?}"
-    );
-    assert!(
-        !change_line.contains("Read the spec"),
-        "should not show other items: {change_line:?}"
+        summary.contains(&crate::tui::key_shortcuts::tool_details_shortcut_action_hint("list")),
+        "the full list stays one keypress away: {summary:?}"
     );
 
-    // The summary line carries the count + explicit details-pager hint.
-    let summary_line: String = lines
-        .last()
-        .unwrap()
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect();
-    assert!(summary_line.contains("3 items"), "{summary_line:?}");
-    let expected_hint = crate::tui::key_shortcuts::tool_details_shortcut_action_hint("list");
-    assert!(summary_line.contains(&expected_hint), "{summary_line:?}");
-}
-
-#[test]
-fn render_checklist_change_card_handles_missing_title_gracefully() {
-    // If the change targets an out-of-range id, the title falls
-    // back to a placeholder rather than crashing.
-    let snapshot = super::ChecklistSnapshot {
+    let single = super::ChecklistSnapshot {
         items: vec![super::ChecklistItemSnapshot {
             content: "only item".to_string(),
             status: "pending".to_string(),
@@ -896,1369 +1756,26 @@ fn render_checklist_change_card_handles_missing_title_gracefully() {
         completed: 0,
         total: 1,
     };
-    let change = super::ChecklistChange {
-        id: 99,
-        status: "completed".to_string(),
-    };
     let lines = super::render_checklist_change_card(
         "todo_update",
         ToolStatus::Success,
-        &snapshot,
-        &change,
+        &single,
+        &super::ChecklistChange {
+            id: 99,
+            status: "completed".to_string(),
+        },
         80,
         true,
     );
-    let change_line: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
-    assert!(change_line.contains("#99"));
-    assert!(change_line.contains("(missing title)"));
+    let change = line_text(&lines[1]);
+    assert!(change.contains("#99") && change.contains("(missing title)"));
 }
 
+/// The plan card is the only place a plan's supporting artifact is visible.
+/// Every populated section has to reach the surface, or the model can record
+/// context the user never sees.
 #[test]
-fn running_status_label_omits_elapsed_below_threshold() {
-    assert_eq!(running_status_label_with_elapsed(0), "running");
-    assert_eq!(running_status_label_with_elapsed(1), "running");
-    assert_eq!(running_status_label_with_elapsed(2), "running");
-}
-
-#[test]
-fn running_status_label_appends_elapsed_at_three_seconds() {
-    assert_eq!(running_status_label_with_elapsed(3), "running (3s)");
-    assert_eq!(running_status_label_with_elapsed(7), "running (7s)");
-    assert_eq!(running_status_label_with_elapsed(120), "running (120s)");
-}
-
-#[test]
-fn extract_reasoning_summary_prefers_summary_block() {
-    let text = "Thinking...\nSummary: First line\nSecond line\n\nTail";
-    let summary = extract_reasoning_summary(text).expect("summary should exist");
-    assert_eq!(summary, "First line\nSecond line");
-}
-
-#[test]
-fn extract_reasoning_summary_falls_back_to_full_text() {
-    let text = "Line one\nLine two";
-    let summary = extract_reasoning_summary(text).expect("summary should exist");
-    assert_eq!(summary, "Line one\nLine two");
-}
-
-#[test]
-fn archived_context_metadata_preserves_spaces_in_attributes() {
-    let msg = Message {
-        role: "assistant".to_string(),
-        content: vec![ContentBlock::Text {
-            text: "<archived_context level=\"1\" range=\"msg 0-128\" tokens=\"2499\" density=\"~2,500 tokens\" model=\"deepseek-v4-flash\" timestamp=\"2026-04-28T00:00:00Z\">\nSummary body\n</archived_context>".to_string(),
-            cache_control: None,
-        }],
-    };
-
-    let cells = super::history_cells_from_message(&msg);
-    assert_eq!(cells.len(), 1);
-    let HistoryCell::ArchivedContext {
-        level,
-        range,
-        tokens,
-        density,
-        model,
-        timestamp,
-        summary,
-    } = &cells[0]
-    else {
-        panic!("expected archived context cell");
-    };
-
-    assert_eq!(*level, 1);
-    assert_eq!(range, "msg 0-128");
-    assert_eq!(tokens, "2499");
-    assert_eq!(density, "~2,500 tokens");
-    assert_eq!(model, "deepseek-v4-flash");
-    assert_eq!(timestamp, "2026-04-28T00:00:00Z");
-    assert_eq!(summary, "Summary body");
-}
-
-#[test]
-fn tool_history_repair_receipt_renders_as_system_history() {
-    let msg = Message {
-        role: "assistant".to_string(),
-        content: vec![ContentBlock::Text {
-            text: "[tool_history_repair] Repaired 1 crashed tool call(s); quarantined 0 duplicate and 0 orphan terminal result(s).".to_string(),
-            cache_control: None,
-        }],
-    };
-
-    let cells = super::history_cells_from_message(&msg);
-
-    assert!(matches!(
-        cells.as_slice(),
-        [HistoryCell::System { content }] if content.starts_with("[tool_history_repair]")
-    ));
-}
-
-#[test]
-fn user_history_hides_only_the_trailing_turn_metadata_block() {
-    let visible = "Explain this literal: <turn_meta>example</turn_meta>";
-    let turn_meta = concat!(
-        "<turn_meta>\n",
-        "Current local date: 2026-07-22\n",
-        "Input provenance: external_user\n",
-        "Input authority: external_current_turn\n",
-        "</turn_meta>",
-    );
-    let msg = Message {
-        role: "user".to_string(),
-        content: vec![
-            ContentBlock::Text {
-                text: visible.to_string(),
-                cache_control: None,
-            },
-            ContentBlock::Text {
-                text: turn_meta.to_string(),
-                cache_control: None,
-            },
-        ],
-    };
-
-    let cells = super::history_cells_from_message(&msg);
-
-    assert!(matches!(
-        cells.as_slice(),
-        [HistoryCell::User { content }] if content == visible
-    ));
-
-    let literal_only = Message {
-        role: "user".to_string(),
-        content: vec![ContentBlock::Text {
-            text: "<turn_meta>user-authored example</turn_meta>".to_string(),
-            cache_control: None,
-        }],
-    };
-    let literal_cells = super::history_cells_from_message(&literal_only);
-    assert!(matches!(
-        literal_cells.as_slice(),
-        [HistoryCell::User { content }]
-            if content == "<turn_meta>user-authored example</turn_meta>"
-    ));
-}
-
-#[test]
-fn history_replays_update_plan_tool_use_as_plan_card() {
-    let msg = Message {
-        role: "assistant".to_string(),
-        content: vec![ContentBlock::ToolUse {
-            id: "plan-1".to_string(),
-            name: "update_plan".to_string(),
-            input: serde_json::json!({
-                "objective": "Make Plan mode reviewable",
-                "sources_used": ["gh issue view 2691"],
-                "critical_files": ["crates/tui/src/tools/plan.rs"],
-                "plan": [
-                    { "step": "render replay card", "status": "completed" }
-                ]
-            }),
-            caller: None,
-            thought_signature: None,
-        }],
-    };
-
-    let cells = super::history_cells_from_message(&msg);
-    assert_eq!(cells.len(), 1);
-    let HistoryCell::Tool(ToolCell::PlanUpdate(cell)) = &cells[0] else {
-        panic!("expected update_plan replay cell");
-    };
-
-    assert_eq!(cell.status, ToolStatus::Success);
-    assert_eq!(
-        cell.snapshot.objective.as_deref(),
-        Some("Make Plan mode reviewable")
-    );
-    assert_eq!(cell.snapshot.sources_used, vec!["gh issue view 2691"]);
-    assert_eq!(cell.snapshot.items[0].status, StepStatus::Completed);
-}
-
-#[test]
-fn render_thinking_collapsed_keeps_neutral_affordance() {
-    let lines = render_thinking(
-        "Summary: First line\nSecond line\nThird line\nFourth line\nFifth line",
-        80,
-        false,
-        Some(2.0),
-        true,
-        false,
-    );
-    let text = lines
-        .iter()
-        .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
-        .collect::<String>();
-    assert!(
-        !text.contains("Ctrl+O") && !text.contains("Space:"),
-        "{text}"
-    );
-    // Pin the actual header shape ("… reasoning done") — a bare
-    // `contains("reasoning")` is already satisfied by the Ctrl+O
-    // affordance line above and would never fail on its own.
-    let header = lines
-        .first()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-        })
-        .unwrap_or_default();
-    assert!(
-        header.starts_with(REASONING_OPENER),
-        "header opens with the dotted opener: {header:?}"
-    );
-    assert!(
-        header.contains("reasoning done"),
-        "header carries the reasoning title and done status: {header:?}"
-    );
-}
-
-#[test]
-fn render_thinking_streaming_collapsed_shows_live_content() {
-    // #861 RC4 / #1324: during a live thinking block in collapsed view,
-    // the body must NOT be blanked out. Users want to watch the model
-    // think; the previous behaviour stalled on a "thinking..." spinner
-    // until ThinkingComplete fired.
-    let lines = render_thinking(
-        "Step 1: read the code\nStep 2: trace the call\nStep 3: form a hypothesis",
-        80,
-        true, // streaming
-        None, // no duration yet
-        true, // collapsed
-        true, // low_motion (no cursor noise to grep)
-    );
-    let text = lines
-        .iter()
-        .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
-        .collect::<String>();
-    assert!(
-        text.contains("Step 3: form a hypothesis"),
-        "the most recent thinking line must be visible during streaming, got: {text}"
-    );
-    // "thinking..." placeholder must not be the only thing rendered.
-    assert!(
-        !text.contains("thinking..."),
-        "raw content present means the placeholder line should not be drawn, got: {text}"
-    );
-}
-
-#[test]
-fn render_hidden_streaming_thinking_shows_activity_without_content() {
-    let cell = HistoryCell::Thinking {
-        content: "private chain of thought that must not be shown".to_string(),
-        streaming: true,
-        duration_secs: None,
-    };
-
-    let lines = cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            show_thinking: false,
-            low_motion: true,
-            ..TranscriptRenderOptions::default()
-        },
-    );
-    let text = lines_text(&lines);
-
-    assert!(
-        text.contains("reasoning hidden"),
-        "hidden live thinking should still show progress: {text}"
-    );
-    assert_eq!(
-        lines.len(),
-        1,
-        "hidden reasoning should have one compact status treatment: {text}"
-    );
-    assert!(
-        !text.contains("reasoning live") && !text.contains("model is still working"),
-        "hidden reasoning should not stack duplicate live-state copy: {text}"
-    );
-    assert!(
-        !text.contains("private chain of thought"),
-        "hidden live thinking must not reveal content: {text}"
-    );
-}
-
-#[test]
-fn render_hidden_completed_thinking_stays_hidden() {
-    let cell = HistoryCell::Thinking {
-        content: "completed hidden reasoning".to_string(),
-        streaming: false,
-        duration_secs: Some(1.0),
-    };
-
-    let lines = cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            show_thinking: false,
-            ..TranscriptRenderOptions::default()
-        },
-    );
-
-    assert!(
-        lines.is_empty(),
-        "completed hidden thinking should stay out of the transcript"
-    );
-}
-
-#[test]
-fn render_thinking_streaming_truncation_keeps_neutral_affordance() {
-    let long = (1..=16)
-        .map(|i| format!("Reasoning line {i}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let lines = render_thinking(&long, 80, true, None, true, true);
-    let text = lines
-        .iter()
-        .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
-        .collect::<String>();
-    assert!(
-        !text.contains("Space:") && !text.contains("Ctrl+O"),
-        "per-cell renderer must stay target-neutral, got: {text}"
-    );
-    // The most recent line must be the visible tail (head dropped).
-    assert!(
-        text.contains("Reasoning line 16"),
-        "tail line missing, got: {text}"
-    );
-    assert!(
-        !text.contains("Reasoning line 1\n"),
-        "head should be clipped, got: {text}"
-    );
-}
-
-#[test]
-fn tool_lines_with_options_respects_low_motion_in_default_path() {
-    // Use a 2× cycle offset so the animated frame lands on index 2,
-    // which is maximally far from index 0. This avoids flaky failures on
-    // platforms with coarse timer resolution (Windows ≈ 15.6 ms) and
-    // gives several frame intervals of headroom before the index could
-    // wrap back to 0.
-    let started_at = Some(
-        Instant::now()
-            - Duration::from_millis(
-                crate::tui::spinner::LIVE_MARKER_DELAY_MS + TOOL_STATUS_SYMBOL_MS * 2,
-            ),
-    );
-    let cell = HistoryCell::Tool(ToolCell::Exec(ExecCell {
-        command: "echo hi".to_string(),
-        status: ToolStatus::Running,
-        output: None,
-        live_output: None,
-        shell_task_id: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at,
-        duration_ms: None,
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
-    }));
-
-    let animated = cell.lines_with_options(80, TranscriptRenderOptions::default());
-    let low_motion = cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            low_motion: true,
-            motion_mode: MotionMode::Reduced,
-            ..TranscriptRenderOptions::default()
-        },
-    );
-    let still = cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            low_motion: true,
-            motion_mode: MotionMode::Still,
-            ..TranscriptRenderOptions::default()
-        },
-    );
-
-    // Index 0 is card-rail glyph (╭); the animated symbol is at index 1.
-    let animated_symbol = animated[0].spans[1].content.trim();
-    let low_motion_symbol = low_motion[0].spans[1].content.trim();
-    let still_symbol = still[0].spans[1].content.trim();
-
-    // Reduced motion freezes at a filled, legible bubble rather than an
-    // invisible blank braille cell.
-    assert_eq!(low_motion_symbol, "⣤");
-    assert_eq!(still_symbol, "›");
-    // The animated path should be on a different frame (index 2).
-    assert_ne!(animated_symbol, TOOL_RUNNING_SYMBOLS[0]);
-}
-
-#[test]
-fn reduced_verify_marker_uses_the_shared_calm_glyph() {
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "run_verifiers".to_string(),
-        status: ToolStatus::Running,
-        input_summary: None,
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
-    let lines = cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            low_motion: true,
-            motion_mode: MotionMode::Reduced,
-            ..TranscriptRenderOptions::default()
-        },
-    );
-
-    assert_eq!(lines[0].spans[1].content.trim(), "⣤");
-}
-
-#[test]
-fn still_fanout_marker_uses_the_shared_chevron() {
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "workflow".to_string(),
-        status: ToolStatus::Running,
-        input_summary: Some("action: run".to_string()),
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
-    let lines = cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            low_motion: true,
-            motion_mode: MotionMode::Still,
-            ..TranscriptRenderOptions::default()
-        },
-    );
-
-    assert_eq!(lines[0].spans[1].content.trim(), "›");
-    assert_eq!(lines[0].spans[2].content.trim(), "⋮⋮");
-}
-
-#[test]
-fn still_marker_rewrite_never_consumes_braille_tool_output() {
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Running,
-        input_summary: None,
-        output: Some("⣿".to_string()),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
-    let lines = cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            low_motion: true,
-            motion_mode: MotionMode::Still,
-            ..TranscriptRenderOptions::default()
-        },
-    );
-
-    assert_eq!(lines[0].spans[1].content.trim(), "›");
-    assert!(
-        lines
-            .iter()
-            .flat_map(|line| line.spans.iter())
-            .any(|span| span.content.as_ref() == "⣿"),
-        "tool output must survive the typed-header marker pass: {lines:?}"
-    );
-}
-
-// === Speaker glyph tests (v0.6.6 UI redesign) ===
-//
-// The literal "Assistant" / "You" labels are replaced by the calmer
-// bullet/bar glyphs (`●` / `▎`). Only the assistant glyph pulses, and
-// only while the cell is streaming — finished turns sit at the source
-// sky color so the transcript reads as solid history.
-
-#[test]
-fn user_cell_renders_with_bar_glyph_not_literal_label() {
-    let cell = HistoryCell::User {
-        content: "hello".to_string(),
-    };
-    let lines = cell.lines(80);
-    let head = &lines[0];
-    assert_eq!(head.spans[0].content.as_ref(), USER_GLYPH);
-    assert_eq!(head.spans[0].style.fg, Some(palette::USER_BODY));
-    assert_eq!(head.style.bg, Some(palette::SURFACE_ELEVATED));
-    assert_eq!(head.width(), 80);
-    assert!(
-        head.spans.iter().any(|span| span.style.bg.is_none()),
-        "content spans should keep their own styles and inherit the line background"
-    );
-    // No "You" literal anywhere in the rendered head line.
-    let visible: String = head
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(!visible.contains("You"), "user label dropped: {visible:?}");
-    assert!(visible.contains("hello"));
-}
-
-#[test]
-fn user_cell_wraps_fill_transcript_rows() {
-    let cell = HistoryCell::User {
-        content: "hello world this prompt wraps onto multiple transcript lines".to_string(),
-    };
-    let lines = cell.lines(18);
-
-    assert!(lines.len() > 1, "expected wrapped user message");
-    assert!(
-        lines
-            .iter()
-            .all(|line| line.style.bg == Some(palette::SURFACE_ELEVATED)),
-        "wrapped user message lines should keep the highlighted block background"
-    );
-    assert!(
-        lines.iter().all(|line| line.width() == 18),
-        "wrapped user message lines should fill the rendered row width"
-    );
-}
-
-#[test]
-fn user_transcript_lines_do_not_append_visual_padding() {
-    let cell = HistoryCell::User {
-        content: "hello".to_string(),
-    };
-    let lines = cell.transcript_lines(80);
-    let head = &lines[0];
-    let visible: String = head.spans.iter().map(|s| s.content.as_ref()).collect();
-
-    assert_eq!(visible, format!("{USER_GLYPH} hello"));
-    assert!(head.width() < 80);
-    assert_eq!(head.style.bg, None);
-}
-
-#[test]
-fn user_cell_renders_plain_text_without_markdown_interpretation() {
-    let cell = HistoryCell::User {
-        content: "  # heading\n- item\n   \nhello    world".to_string(),
-    };
-    let visible: Vec<String> = cell.lines(80).iter().map(line_text).collect();
-
-    assert_eq!(visible[0].trim_end(), format!("{USER_GLYPH}   # heading"));
-    assert!(
-        visible[1].trim_end().ends_with("- item"),
-        "dash-prefixed text must remain literal: {visible:?}"
-    );
-    assert!(
-        visible[2].ends_with("   "),
-        "whitespace-only lines must survive: {visible:?}"
-    );
-    assert!(
-        visible[3].trim_end().ends_with("hello    world"),
-        "internal spacing must remain literal: {visible:?}"
-    );
-    assert!(
-        !visible.iter().any(|line| line.contains('\u{2500}')),
-        "plain user heading must not add markdown heading rule: {visible:?}"
-    );
-}
-
-#[test]
-fn assistant_cell_renders_with_bullet_glyph_not_literal_label() {
-    let cell = HistoryCell::Assistant {
-        content: "ready".to_string(),
-        streaming: false,
-    };
-    let lines = cell.lines(80);
-    let head = &lines[0];
-    assert_eq!(head.spans[0].content.as_ref(), ASSISTANT_GLYPH);
-    let visible: String = head
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(
-        !visible.contains("Assistant"),
-        "assistant label dropped: {visible:?}"
-    );
-    assert!(visible.contains("ready"));
-    assert_ne!(head.style.bg, Some(palette::SURFACE_ELEVATED));
-}
-
-#[test]
-fn copy_metadata_strips_tool_receipt_chrome_but_keeps_text() {
-    let cell = HistoryCell::Tool(ToolCell::Exec(ExecCell {
-        command: "printf 'receipt'".to_string(),
-        status: ToolStatus::Success,
-        output: Some("receipt".to_string()),
-        live_output: None,
-        shell_task_id: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: None,
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
-    }));
-    let rendered = cell.lines_with_copy_metadata(80, TranscriptRenderOptions::default());
-    let header = rendered.first().expect("tool receipt header");
-    assert!(
-        header.copy_prefix_width >= 4,
-        "missing status/family chrome width"
-    );
-    assert!(
-        header
-            .line
-            .spans
-            .iter()
-            .any(|span| span.content.contains("receipt")),
-        "receipt text must remain in the rendered copy source"
-    );
-    let header_text = line_to_plain(&ratatui::text::Line::from(
-        header
-            .line
-            .spans
-            .iter()
-            .skip(1)
-            .cloned()
-            .collect::<Vec<_>>(),
-    ));
-    let copied = slice_text(
-        &header_text,
-        header.copy_prefix_width,
-        text_display_width(&header_text),
-    );
-    assert!(
-        !copied.contains('✓'),
-        "status chrome leaked into copy: {copied:?}"
-    );
-    assert!(
-        !copied.contains('●'),
-        "family chrome leaked into copy: {copied:?}"
-    );
-    assert!(
-        copied.contains("run done"),
-        "receipt text was clipped: {copied:?}"
-    );
-}
-
-#[test]
-fn copy_metadata_tracks_wrapped_assistant_code_prefix_in_display_columns() {
-    let cell = HistoryCell::Assistant {
-        content: "```text\n  中文 = 1\n```".to_string(),
-        streaming: false,
-    };
-    let rendered = cell.lines_with_copy_metadata(24, TranscriptRenderOptions::default());
-    let code_line = rendered
-        .iter()
-        .find(|line| {
-            line.line
-                .spans
-                .iter()
-                .any(|span| span.content.contains("中文"))
-        })
-        .expect("wrapped fenced code line");
-    assert_eq!(
-        code_line.copy_prefix_width, 2,
-        "code continuation prefix uses the role marker's two display columns"
-    );
-    let code = line_to_plain(&code_line.line);
-    let copied = slice_text(
-        &code,
-        code_line.copy_prefix_width,
-        text_display_width(&code),
-    );
-    assert!(
-        copied.contains("中文 = 1"),
-        "code text was clipped: {copied:?}"
-    );
-    assert!(
-        copied.starts_with("    中文"),
-        "code indentation or visual prefix was wrong: {copied:?}"
-    );
-}
-
-#[test]
-fn copy_metadata_keeps_fenced_code_indentation_after_prefix_removal() {
-    let cell = HistoryCell::Assistant {
-        content: "```rust\n    let answer = 42;\n```".to_string(),
-        streaming: false,
-    };
-    let rendered = cell.lines_with_copy_metadata(40, TranscriptRenderOptions::default());
-    let code_line = rendered
-        .iter()
-        .find(|line| {
-            line.line
-                .spans
-                .iter()
-                .any(|span| span.content.contains("answer"))
-        })
-        .expect("fenced code body");
-    let text = line_to_plain(&code_line.line);
-    let content = slice_text(
-        &text,
-        code_line.copy_prefix_width,
-        text_display_width(&text),
-    );
-    assert!(
-        content.contains("    let answer = 42;"),
-        "code indentation was not preserved: {content:?}"
-    );
-    for glyph in ['╎', '▎', '●', '│', '┃'] {
-        assert!(
-            !content.contains(glyph),
-            "decorative glyph leaked: {content:?}"
-        );
-    }
-}
-
-#[test]
-fn whitespace_only_assistant_cell_renders_nothing() {
-    // Regression: a stray newline/space streamed between reasoning and a
-    // tool call produced a whitespace-only Assistant cell that rendered as
-    // a bare, orphaned role glyph — the "blue dot with nothing after it"
-    // artifact. It must collapse to zero lines instead.
-    for content in ["", "   ", "\n", "\n\n", " \t \n"] {
-        for streaming in [false, true] {
-            let cell = HistoryCell::Assistant {
-                content: content.to_string(),
-                streaming,
-            };
-            assert!(
-                cell.lines(80).is_empty(),
-                "whitespace-only assistant content {content:?} (streaming={streaming}) \
-                 must render no lines",
-            );
-        }
-    }
-
-    // Sanity: real prose still renders the role glyph as its first span.
-    let cell = HistoryCell::Assistant {
-        content: "hi".to_string(),
-        streaming: false,
-    };
-    assert_eq!(
-        cell.lines(80)[0].spans[0].content.as_ref(),
-        ASSISTANT_GLYPH,
-        "non-empty assistant content must still render the role glyph",
-    );
-}
-
-#[test]
-fn assistant_cell_still_renders_markdown() {
-    let cell = HistoryCell::Assistant {
-        content: "# Heading\n\n- item".to_string(),
-        streaming: false,
-    };
-    let visible: Vec<String> = cell.lines(80).iter().map(line_text).collect();
-
-    assert!(
-        visible[0].contains("Heading"),
-        "assistant heading text should render: {visible:?}"
-    );
-    assert!(
-        !visible[0].contains("# Heading"),
-        "assistant heading should still be parsed as markdown: {visible:?}"
-    );
-    assert!(
-        visible.iter().any(|line| line.contains('\u{2500}')),
-        "assistant h1 markdown should still add a heading rule: {visible:?}"
-    );
-}
-
-#[test]
-fn assistant_code_block_lines_do_not_get_transcript_rail() {
-    let cell = HistoryCell::Assistant {
-        content: "SQL:\n```sql\nSELECT\nFROM customers\n```".to_string(),
-        streaming: false,
-    };
-    let visible: Vec<String> = cell
-        .lines(80)
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-        })
-        .collect();
-
-    assert_eq!(visible[0], format!("{ASSISTANT_GLYPH} SQL:"));
-    for line in visible
-        .iter()
-        .filter(|line| line.contains("SELECT") || line.contains("FROM customers"))
-    {
-        assert!(
-            !line.contains('\u{258F}'),
-            "code block line should not inherit the transcript rail: {line:?}"
-        );
-    }
-}
-
-/// Issue #1212 repro: a multi-line SQL fence rendered after a short
-/// intro paragraph. Every code-block line — not just the first or last —
-/// must avoid the `▏` rail.
-#[test]
-fn assistant_long_code_block_keeps_every_line_rail_free() {
-    let cell = HistoryCell::Assistant {
-        content: "Here's the query:\n```sql\nSELECT\n  c.customer_id,\n  c.name,\n  COUNT(o.order_id) AS order_count\nFROM customers c\nJOIN orders o ON c.customer_id = o.customer_id;\n```".to_string(),
-        streaming: false,
-    };
-    let visible: Vec<String> = cell
-        .lines(80)
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-        })
-        .collect();
-
-    let code_markers = ["SELECT", "customer_id", "name,", "COUNT", "FROM", "JOIN"];
-    for marker in code_markers {
-        let line = visible
-            .iter()
-            .find(|line| line.contains(marker))
-            .unwrap_or_else(|| panic!("expected code line containing {marker:?}"));
-        assert!(
-            !line.contains('\u{258F}'),
-            "code block line containing {marker:?} must not have the transcript rail: {line:?}"
-        );
-    }
-}
-
-/// Edge case: a blank line inside a fence is still a code line; it must
-/// not regress to the rail because the empty body falls through a
-/// different wrap branch.
-#[test]
-fn assistant_code_block_blank_line_keeps_no_rail() {
-    let cell = HistoryCell::Assistant {
-        content: "```\nfn one() {}\n\nfn two() {}\n```".to_string(),
-        streaming: false,
-    };
-    for line in cell.lines(80).iter().skip(1) {
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(
-            !text.contains('\u{258F}'),
-            "fence body line must stay rail-free: {text:?}"
-        );
-    }
-}
-
-/// Wrapped code lines (a single source line longer than the viewport)
-/// emit multiple rendered lines from one `Block::Code`. None of them
-/// should leak the rail.
-#[test]
-fn assistant_wrapped_code_lines_keep_no_rail() {
-    let long = "let x = ".to_string() + &"abcdef ".repeat(40);
-    let content = format!("```\n{long}\n```");
-    let cell = HistoryCell::Assistant {
-        content,
-        streaming: false,
-    };
-    for line in cell.lines(40).iter().skip(1) {
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(
-            !text.contains('\u{258F}'),
-            "wrapped code line must stay rail-free: {text:?}"
-        );
-    }
-}
-
-#[test]
-fn assistant_glyph_holds_full_brightness_when_idle() {
-    // Idle (streaming=false) and low_motion both pin the colour to the
-    // source sky — pulse only fires when actively streaming.
-    let idle = assistant_label_style_for(false, false);
-    let low_motion = assistant_label_style_for(true, true);
-    assert_eq!(idle.fg, Some(palette::WHALE_INFO));
-    assert_eq!(low_motion.fg, Some(palette::WHALE_INFO));
-}
-
-#[test]
-fn assistant_glyph_pulses_when_streaming_and_motion_allowed() {
-    // The streaming path runs through `pulse_brightness`, which yields
-    // an RGB colour scaled within 30%..100% of the source. Sample twice
-    // — at least one of the samples must fall below 100% brightness, or
-    // the test wouldn't be exercising the pulse at all. (We can't pin
-    // the value because the function reads SystemTime::now().)
-    use ratatui::style::Color;
-    let mut saw_dimmed = false;
-    for _ in 0..50 {
-        if let Some(Color::Rgb(_, _, b)) = assistant_label_style_for(true, false).fg {
-            let Color::Rgb(_, _, src_b) = palette::WHALE_INFO else {
-                panic!("WHALE_INFO must be RGB");
-            };
-            if b < src_b {
-                saw_dimmed = true;
-                break;
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    assert!(
-        saw_dimmed,
-        "expected the streaming pulse to dip below source brightness at least once",
-    );
-}
-
-// === Tool-card verb-glyph tests (v0.6.6 UI redesign) ===
-
-#[test]
-fn exec_cell_header_uses_run_verb_glyph_and_label() {
-    let cell = ExecCell {
-        command: "ls".to_string(),
-        status: ToolStatus::Success,
-        output: Some("a\nb\n".to_string()),
-        live_output: None,
-        shell_task_id: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: Some(10),
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
-    };
-    let header = &cell.lines_with_motion(80, true)[0];
-    let visible: String = header
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(
-        visible.contains('\u{25B6}'),
-        "Run glyph `▶` present: {visible:?}"
-    );
-    assert!(visible.contains(" run "), "verb label `run`: {visible:?}");
-    // Old literal title must be gone.
-    assert!(
-        !visible.contains("Shell"),
-        "old `Shell` literal is gone: {visible:?}"
-    );
-}
-
-#[test]
-fn exec_cell_header_includes_compact_command_summary() {
-    let cell = ExecCell {
-        command: "cargo test --workspace --all-features".to_string(),
-        status: ToolStatus::Running,
-        output: None,
-        live_output: None,
-        shell_task_id: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: None,
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
-    };
-
-    let header = &cell.lines_with_motion(80, true)[0];
-    let visible: String = header
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(visible.contains("run running"));
-    assert!(
-        visible.contains("Ctrl+B"),
-        "foreground wait header should expose Ctrl+B hint, not command: {visible:?}"
-    );
-    assert!(
-        !visible.contains("cargo test"),
-        "foreground wait live header must not repeat command target: {visible:?}"
-    );
-
-    let transcript_visible: String = HistoryCell::Tool(ToolCell::Exec(ExecCell {
-        command: "cargo test --workspace --all-features".to_string(),
-        status: ToolStatus::Running,
-        output: None,
-        live_output: None,
-        shell_task_id: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: None,
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
-    }))
-    .transcript_lines(80)[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(
-        transcript_visible.contains("Ctrl+B"),
-        "transcript compact wait should expose Ctrl+B hint: {transcript_visible:?}"
-    );
-    assert!(
-        !transcript_visible.contains("cargo test --workspace --all-features"),
-        "transcript compact wait must not repeat command target: {transcript_visible:?}"
-    );
-}
-
-#[test]
-fn generic_tool_cell_picks_family_from_tool_name() {
-    // Use an inspection call so the compact Delegate header still renders;
-    // spawn cards are suppressed entirely (#4133).
-    let cell = GenericToolCell {
-        name: "agent".to_string(),
-        status: ToolStatus::Running,
-        input_summary: Some("action: peek foo".to_string()),
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-    let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
-    assert_eq!(lines.len(), 1, "inspection must stay compact: {lines:?}");
-    let header_visible: String = lines[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    // agent → Delegate family (◐ delegate).
-    assert!(
-        header_visible.contains('\u{25D0}'),
-        "Delegate glyph `◐`: {header_visible:?}"
-    );
-    assert!(
-        header_visible.contains(" delegate "),
-        "verb label `delegate`: {header_visible:?}"
-    );
-}
-
-#[test]
-fn generic_tool_cell_renders_rlm_with_rlm_label_not_swarm() {
-    let cell = GenericToolCell {
-        name: "rlm".to_string(),
-        status: ToolStatus::Running,
-        input_summary: Some("task: compare source trees".to_string()),
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    };
-    let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
-    let header_visible: String = lines[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-
-    assert!(
-        header_visible.contains(" rlm "),
-        "RLM card should identify RLM work: {header_visible:?}"
-    );
-    assert!(
-        !header_visible.contains("swarm"),
-        "RLM card must not use removed swarm wording: {header_visible:?}"
-    );
-}
-
-#[test]
-fn exploring_card_search_reads_as_find_not_read() {
-    use crate::localization::Locale;
-    // #4145: a completed grep grouped under the exploration card must not
-    // render `read done · Searching …`; the header verb has to agree with the
-    // `Searching for …` label.
-    let cell = super::ExploringCell {
-        entries: vec![super::ExploringEntry {
-            label: "Searching for `TranscriptScroll`".to_string(),
-            status: ToolStatus::Success,
-        }],
-    };
-    let header_en: String = cell.lines_with_motion_and_locale(80, true, Locale::En)[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(
-        header_en.contains("find done"),
-        "search card header should read `find done`: {header_en:?}"
-    );
-    assert!(
-        !header_en.contains("read done"),
-        "search card must not pair `read done` with a search label: {header_en:?}"
-    );
-    assert!(
-        header_en.contains("Searching for `TranscriptScroll`"),
-        "search label should remain intact: {header_en:?}"
-    );
-
-    // zh-Hans localization regression
-    let header_zh: String = cell.lines_with_motion_and_locale(80, true, Locale::ZhHans)[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(
-        header_zh.contains("find 完成"),
-        "zh-Hans search card header should read `find 完成`: {header_zh:?}"
-    );
-    assert!(
-        !header_zh.contains("find done") && !header_zh.contains("read done"),
-        "zh-Hans search card must not leak English done: {header_zh:?}"
-    );
-    assert!(
-        header_zh.contains("Searching for `TranscriptScroll`"),
-        "search label should remain intact in zh-Hans: {header_zh:?}"
-    );
-}
-
-#[test]
-fn exploring_card_read_keeps_read_verb() {
-    use crate::localization::Locale;
-    // The fix only re-verbs search-only cards — a plain read stays `read`.
-    let cell = super::ExploringCell {
-        entries: vec![super::ExploringEntry {
-            label: "Reading src/foo.rs".to_string(),
-            status: ToolStatus::Success,
-        }],
-    };
-    let header_en: String = cell.lines_with_motion_and_locale(80, true, Locale::En)[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(
-        header_en.contains("read done"),
-        "read card header should read `read done`: {header_en:?}"
-    );
-
-    // zh-Hans localization regression
-    let header_zh: String = cell.lines_with_motion_and_locale(80, true, Locale::ZhHans)[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(
-        header_zh.contains("read 完成"),
-        "zh-Hans read card header should read `read 完成`: {header_zh:?}"
-    );
-    assert!(
-        !header_zh.contains("read done"),
-        "zh-Hans read card must not leak English done: {header_zh:?}"
-    );
-}
-
-// === Reasoning treatment tests (v0.6.6 UI redesign) ===
-
-#[test]
-fn render_thinking_uses_dotted_opener_in_header() {
-    let lines = render_thinking("Step one\nStep two", 80, false, Some(2.0), false, true);
-    let header = &lines[0];
-    // First span carries `…` followed by a space.
-    assert!(
-        header.spans[0].content.starts_with(REASONING_OPENER),
-        "header opener: {:?}",
-        header.spans[0].content
-    );
-}
-
-#[test]
-fn render_thinking_body_lines_use_dashed_rail_and_italic() {
-    let lines = render_thinking(
-        "concrete reasoning content",
-        80,
-        /*streaming*/ false,
-        Some(1.0),
-        /*collapsed*/ false,
-        /*low_motion*/ true,
-    );
-    // Header is index 0; first body line is index 1.
-    assert!(lines.len() >= 2, "expected at least one body line");
-    let body = &lines[1];
-    assert_eq!(
-        body.spans[0].content.as_ref(),
-        REASONING_RAIL,
-        "body rail must be the dashed `╎ ` glyph"
-    );
-    // The body span should carry italic.
-    let italic_seen = body
-        .spans
-        .iter()
-        .skip(1)
-        .any(|span| span.style.add_modifier.contains(Modifier::ITALIC));
-    assert!(italic_seen, "body content should carry italic modifier");
-}
-
-#[test]
-fn render_thinking_can_omit_background_highlight() {
-    let lines = render_thinking_with_analysis(
-        "reasoning without a filled surface",
-        80,
-        false,
-        Some(1.0),
-        false,
-        true,
-        false,
-    )
-    .0;
-
-    assert!(
-        lines
-            .iter()
-            .flat_map(|line| line.spans.iter())
-            .all(|span| span.style.bg.is_none()),
-        "disabled thinking highlight must not apply a background to any span"
-    );
-}
-
-#[test]
-fn render_thinking_streaming_appends_cursor_when_motion_allowed() {
-    let lines = render_thinking(
-        "ongoing reasoning...",
-        80,
-        /*streaming*/ true,
-        None,
-        /*collapsed*/ false,
-        /*low_motion*/ false,
-    );
-    // Last line is the most recent body line — cursor lives there.
-    let last = lines.last().expect("body line present");
-    let last_span = last.spans.last().expect("trailing span present");
-    assert!(
-        last_span.content.contains(REASONING_CURSOR),
-        "expected trailing cursor `▎` on last streaming body line, got {:?}",
-        last_span.content
-    );
-}
-
-#[test]
-fn render_thinking_streaming_omits_cursor_when_low_motion() {
-    let lines = render_thinking(
-        "ongoing reasoning...",
-        80,
-        /*streaming*/ true,
-        None,
-        /*collapsed*/ false,
-        /*low_motion*/ true,
-    );
-    let last = lines.last().expect("body line present");
-    let visible: String = last
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(
-        !visible.contains(REASONING_CURSOR),
-        "low_motion must suppress the streaming cursor: {visible:?}"
-    );
-}
-
-// === Theme parity tests ===
-//
-// These lock the visible color/style choices for one plan cell and one
-// tool cell against `deepseek_theme::Theme::dark()`. The render path is
-// unchanged in shape; the assertions just guarantee a future skin swap
-// (or accidental drift) is caught here instead of at runtime.
-
-#[test]
-fn plan_update_cell_renders_with_dark_theme_tokens() {
-    let theme = Theme::dark();
-    let cell = PlanUpdateCell {
-        snapshot: PlanSnapshot {
-            items: vec![
-                crate::tools::plan::PlanItemArg {
-                    step: "scan repo".to_string(),
-                    status: StepStatus::Completed,
-                },
-                crate::tools::plan::PlanItemArg {
-                    step: "extract theme".to_string(),
-                    status: StepStatus::InProgress,
-                },
-                crate::tools::plan::PlanItemArg {
-                    step: "land tests".to_string(),
-                    status: StepStatus::Pending,
-                },
-            ],
-            ..PlanSnapshot::default()
-        },
-        status: ToolStatus::Running,
-    };
-
-    let lines = cell.lines_with_motion(80, true);
-
-    // Header: "<spinner> <family-glyph> <verb> <state>" (v0.6.6 layout).
-    // PlanUpdate has no canonical family yet, so it falls into the
-    // Generic bullet glyph + "tool" verb. The shape and colour wiring
-    // is what matters for the theme parity; the verb text moves with
-    // the redesign.
-    // PlanUpdate does NOT use card-rail wrapping (separate render path).
-    let header = &lines[0];
-    let symbol_span = &header.spans[0];
-    let glyph_span = &header.spans[1];
-    let title_span = &header.spans[2];
-    let state_span = &header.spans[4];
-
-    assert_eq!(
-        symbol_span.style.fg,
-        Some(theme.tool_running_accent),
-        "running header symbol should use the dark theme running accent"
-    );
-    assert_eq!(
-        glyph_span.style.fg,
-        Some(theme.tool_running_accent),
-        "family glyph rides the same status colour as the spinner"
-    );
-    assert_eq!(
-        title_span.content.as_ref(),
-        "tool",
-        "PlanUpdate routes to Generic family → 'tool' verb",
-    );
-    assert_eq!(title_span.style.fg, Some(theme.tool_title_color));
-    assert!(
-        title_span.style.add_modifier.contains(Modifier::BOLD),
-        "tool title should be bold"
-    );
-    assert_eq!(
-        state_span.content.as_ref(),
-        "running",
-        "running PlanUpdate should label state as 'running'"
-    );
-    assert_eq!(state_span.style.fg, Some(theme.tool_running_accent));
-
-    // Each step row: ["▏ ", "<marker>:", " ", "<step>"]
-    let step_line = &lines[1];
-    let label_span = &step_line.spans[1];
-    let value_span = &step_line.spans[3];
-    assert_eq!(
-        label_span.style.fg,
-        Some(theme.tool_label_color),
-        "step label should use theme.tool_label_color"
-    );
-    assert_eq!(
-        value_span.style.fg,
-        Some(theme.tool_value_color),
-        "step value should use theme.tool_value_color"
-    );
-
-    // Plain content stays identical so visible output does not move.
-    let visible = lines
-        .iter()
-        .map(|l| {
-            l.spans
-                .iter()
-                .map(|s| s.content.as_ref())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(visible[1].trim_end(), "▏ done: scan repo");
-    assert_eq!(visible[2].trim_end(), "▏ live: extract theme");
-    assert_eq!(visible[3].trim_end(), "▏ next: land tests");
-}
-
-#[test]
-fn plan_update_cell_renders_rich_artifact_metadata() {
+fn a_plan_card_surfaces_every_populated_artifact_section() {
     let cell = PlanUpdateCell {
         snapshot: PlanSnapshot {
             objective: Some("Make Plan mode reviewable".to_string()),
@@ -2281,1631 +1798,241 @@ fn plan_update_cell_renders_rich_artifact_metadata() {
         status: ToolStatus::Success,
     };
 
-    let visible = cell
-        .lines_with_motion(120, true)
-        .into_iter()
-        .map(|line| {
-            line.spans
-                .into_iter()
-                .map(|span| span.content.into_owned())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let visible = lines_text(&cell.lines_with_motion(120, true));
 
-    assert!(visible.contains("objective:"));
-    assert!(visible.contains("Make Plan mode reviewable"));
-    assert!(visible.contains("source:"));
-    assert!(visible.contains("gh issue view 2691"));
-    assert!(visible.contains("file:"));
-    assert!(visible.contains("verify:"));
-    assert!(visible.contains("handoff:"));
-    assert!(visible.contains("Render artifact sections"));
-}
-
-#[test]
-fn exec_cell_failed_status_renders_with_dark_theme_tokens() {
-    let theme = Theme::dark();
-    let cell = ExecCell {
-        command: "false".to_string(),
-        status: ToolStatus::Failed,
-        output: Some("boom".to_string()),
-        live_output: None,
-        shell_task_id: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: Some(42),
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
-    };
-
-    let lines = cell.lines_with_motion(80, true);
-
-    let header = &lines[0];
-    let symbol_span = &header.spans[1];
-    let glyph_span = &header.spans[2];
-    let title_span = &header.spans[3];
-    let state_span = &header.spans[5];
-
-    assert_eq!(
-        symbol_span.style.fg,
-        Some(theme.tool_failed_accent),
-        "failed exec header symbol should use the dark theme failed accent"
-    );
-    // ExecCell is family Run → glyph `▶ ` and verb `run`.
-    assert!(
-        glyph_span.content.starts_with('\u{25B6}'),
-        "Run family glyph: {:?}",
-        glyph_span.content
-    );
-    assert_eq!(
-        title_span.content.as_ref(),
-        "run",
-        "ExecCell routes to Run family → 'run' verb",
-    );
-    assert_eq!(title_span.style.fg, Some(theme.tool_title_color));
-    assert!(title_span.style.add_modifier.contains(Modifier::BOLD));
-    assert_eq!(state_span.content.as_ref(), "issue");
-    assert_eq!(state_span.style.fg, Some(theme.tool_failed_accent));
-}
-
-// === display_lines (lines_with_options) vs transcript_lines parity ===
-//
-// These lock the contract for CX#8: live view keeps reasoning compact
-// and caps tool output, transcript view shows the full body. Completed
-// reasoning without an explicit Summary stays out of the main flow so it
-// cannot masquerade as user text.
-
-fn line_text(line: &ratatui::text::Line<'static>) -> String {
-    line.spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect()
-}
-
-fn lines_text(lines: &[ratatui::text::Line<'static>]) -> String {
-    lines.iter().map(line_text).collect::<Vec<_>>().join("\n")
-}
-
-#[test]
-fn exec_cell_renders_live_shell_output_before_final_output() {
-    let cell = ExecCell {
-        command: "cargo test".to_string(),
-        status: ToolStatus::Running,
-        output: None,
-        live_output: Some("running line 1\nrunning line 2".to_string()),
-        shell_task_id: Some("shell_live".to_string()),
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: None,
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
-    };
-
-    let live_text = lines_text(&cell.lines_with_motion(80, true));
-    assert!(
-        !live_text.contains("running line 1"),
-        "foreground shell live output belongs in sidebar/jobs, not main transcript: {live_text}"
-    );
-    assert!(
-        live_text.contains("Ctrl+B"),
-        "compact foreground wait must keep Ctrl+B hint: {live_text}"
-    );
-    assert!(!live_text.contains("command:"));
-    assert!(!live_text.contains("Ctrl+B backgrounds this command"));
-    assert!(!live_text.contains("Ctrl+B moves this shell wait to /jobs"));
-
-    let transcript_text = lines_text(&HistoryCell::Tool(ToolCell::Exec(cell)).transcript_lines(80));
-    assert!(
-        !transcript_text.contains("running line 1"),
-        "foreground shell live output belongs in sidebar/jobs, not transcript: {transcript_text}"
-    );
-    assert!(!transcript_text.contains("command:"));
-    assert!(transcript_text.contains("Ctrl+B"));
-}
-
-#[test]
-fn exec_cell_prefers_final_output_over_live_shell_tail() {
-    let cell = ExecCell {
-        command: "cargo test".to_string(),
-        status: ToolStatus::Success,
-        output: Some("final output".to_string()),
-        live_output: Some("stale live tail".to_string()),
-        shell_task_id: Some("shell_live".to_string()),
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: None,
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
-    };
-
-    let text = lines_text(&cell.lines_with_motion(80, true));
-
-    assert!(text.contains("cargo test"));
-    assert!(!text.contains("stale live tail"));
-}
-
-#[test]
-fn long_thinking_display_is_shorter_than_transcript() {
-    // Build a multi-paragraph thinking body so the live view has
-    // something to compress. Without an explicit Summary block, the live
-    // surface should show a bounded preview plus neutral continuation row.
-    let body = "First paragraph lede.\n\
-                Second sentence of the first paragraph.\n\n\
-                Second paragraph: deeper analysis follows.\n\
-                More detail in paragraph two.\n\n\
-                Third paragraph: even more reasoning.\n\
-                With another line.\n\n\
-                Fourth paragraph: the conclusion.\n\
-                And one more line for good measure.\n\n\
-                Fifth paragraph: final verification.\n\
-                One last supporting detail.";
-    let cell = HistoryCell::Thinking {
-        content: body.to_string(),
-        streaming: false,
-        duration_secs: Some(3.2),
-    };
-
-    let live = cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            low_motion: true,
-            ..TranscriptRenderOptions::default()
-        },
-    );
-    let transcript = cell.transcript_lines(80);
-
-    assert!(
-        live.len() < transcript.len(),
-        "live thinking should compress (live = {} lines, transcript = {} lines)",
-        live.len(),
-        transcript.len()
-    );
-
-    let live_text = lines_text(&live);
-    let transcript_text = lines_text(&transcript);
-
-    assert!(
-        transcript_text.contains("First paragraph lede"),
-        "transcript thinking must keep the lede"
-    );
-    assert!(
-        live_text.contains("First paragraph lede"),
-        "live thinking should preview completed reasoning: {live_text}"
-    );
-    assert!(
-        transcript_text.contains("Fifth paragraph"),
-        "transcript thinking must keep the full body"
-    );
-    assert!(
-        !live_text.contains("Fifth paragraph"),
-        "live thinking must drop the tail when collapsed"
-    );
-    assert!(
-        live_text.contains('…'),
-        "collapsed reasoning marks continuation"
-    );
-    assert!(
-        !transcript_text.contains("Ctrl+O:detail"),
-        "transcript thinking must not include the live affordance"
-    );
-}
-
-#[test]
-fn completed_short_thinking_without_summary_stays_visible_in_live_view() {
-    // Short completed reasoning should not become a dead "Full reasoning
-    // in Ctrl+O" card. The reasoning rail and tint already distinguish it
-    // from the user's prompt, so show the useful body inline.
-    let cell = HistoryCell::Thinking {
-        content: "One brief reasoning step.".to_string(),
-        streaming: false,
-        duration_secs: Some(0.4),
-    };
-
-    let live = cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            low_motion: true,
-            ..TranscriptRenderOptions::default()
-        },
-    );
-    let transcript = cell.transcript_lines(80);
-
-    let live_text = lines_text(&live);
-    let transcript_text = lines_text(&transcript);
-
-    assert!(
-        live_text.contains("One brief reasoning step."),
-        "live thinking must preview short completed reasoning: {live_text}"
-    );
-    assert!(
-        transcript_text.contains("One brief reasoning step."),
-        "transcript thinking must keep the full reasoning body"
-    );
-    assert!(
-        !live_text.contains("Ctrl+O:detail"),
-        "complete short reasoning should not need the detail affordance: {live_text}"
-    );
-}
-
-#[test]
-fn completed_reasoning_receipt_shows_verbatim_body_and_expands() {
-    // The old #4146/#4148 scrub could not tell CodeWhale's identifiers from
-    // the user's, and in a coding harness the user's dominate: it rendered
-    // `short_dated_radar.py` as `….py`, `data/market_data/` as `data/…/`, and
-    // every env var and module name as a bare `…`, which made the default
-    // reasoning view unreadable. It also protected nothing — the full body
-    // was always one keypress away on Space/Ctrl+O. A reasoning receipt now
-    // shows the model's own words verbatim; only the line budget truncates.
-    let cell = HistoryCell::Thinking {
-        content: "I will call refresh_catalog_cache to refresh the model list.".to_string(),
-        streaming: false,
-        duration_secs: Some(1.0),
-    };
-
-    // Default collapsed view: the identifier is shown, not scrubbed, and a
-    // short body needs no expand affordance.
-    let collapsed = cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            low_motion: true,
-            ..TranscriptRenderOptions::default()
-        },
-    );
-    let collapsed_text = lines_text(&collapsed);
-    assert!(
-        collapsed_text.contains("refresh_catalog_cache"),
-        "reasoning must be verbatim in the collapsed receipt: {collapsed_text}"
-    );
-    assert!(
-        collapsed_text.contains("refresh the model list"),
-        "surrounding prose must still read: {collapsed_text}"
-    );
-    assert!(
-        !collapsed_text.contains("Ctrl+O:detail"),
-        "a short completed receipt fits the budget and needs no affordance: {collapsed_text}"
-    );
-
-    // A long body truncates at the line budget and offers the expand
-    // affordance; expanding restores every line, identifiers intact.
-    let long_body = (1..=20)
-        .map(|i| format!("step {i:02}: refresh_catalog_cache iteration"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let long_cell = HistoryCell::Thinking {
-        content: long_body.clone(),
-        streaming: false,
-        duration_secs: Some(1.0),
-    };
-    let long_collapsed = long_cell
-        .lines_with_options_folded(
-            80,
-            TranscriptRenderOptions {
-                low_motion: true,
-                ..TranscriptRenderOptions::default()
-            },
-            false,
-        )
-        .0;
-    let long_collapsed_text = lines_text(&long_collapsed);
-    assert!(
-        !long_collapsed_text.contains("Space:") && !long_collapsed_text.contains("Ctrl+O"),
-        "an untargeted receipt must keep neutral chrome: {long_collapsed_text}"
-    );
-    assert!(
-        long_collapsed_text.contains("refresh_catalog_cache"),
-        "the shown head must keep identifiers verbatim: {long_collapsed_text}"
-    );
-
-    // Expanded view (Space toggles the fold relative to the default): every
-    // line is restored.
-    let expanded = long_cell
-        .lines_with_options_folded(
-            80,
-            TranscriptRenderOptions {
-                low_motion: true,
-                ..TranscriptRenderOptions::default()
-            },
-            true,
-        )
-        .0;
-    let expanded_text = lines_text(&expanded);
-    for i in 1..=20 {
-        assert!(
-            expanded_text.contains(&format!("step {i:02}: refresh_catalog_cache iteration")),
-            "expanded reasoning must restore every line ({i}): {expanded_text}"
-        );
+    for needle in [
+        "objective:",
+        "Make Plan mode reviewable",
+        "source:",
+        "gh issue view 2691",
+        "file:",
+        "verify:",
+        "handoff:",
+        "Render artifact sections",
+    ] {
+        assert!(visible.contains(needle), "missing {needle:?}: {visible}");
     }
 }
 
+/// A fan-out tool's per-child prompts get one row each so the user can read
+/// what each child was asked; the inline `args:` summary that would otherwise
+/// say `prompts: <3 items>` is suppressed rather than printed alongside them.
 #[test]
-fn thinking_default_expanded_inverts_but_preserves_the_space_toggle() {
-    // A 20-line body guarantees the collapsed fold actually truncates, so the
-    // Space toggle is observable: default-expanded shows everything, Space
-    // collapses to the 10-line budget with the expand affordance, and both
-    // states show the model's identifiers verbatim (no #4146/#4148 scrub).
-    let long_body = (1..=20)
-        .map(|i| format!("step {i:02}: refresh_catalog_cache iteration"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let cell = HistoryCell::Thinking {
-        content: long_body.clone(),
-        streaming: false,
-        duration_secs: Some(1.0),
-    };
-    let options = TranscriptRenderOptions {
-        thinking_default_expanded: true,
-        low_motion: true,
-        ..TranscriptRenderOptions::default()
-    };
-
-    let expanded = cell.lines_with_options_folded(80, options, false).0;
-    let expanded_text = lines_text(&expanded);
-    for i in 1..=20 {
-        assert!(
-            expanded_text.contains(&format!("step {i:02}: refresh_catalog_cache iteration")),
-            "the configured default must show the full reasoning body ({i}): {expanded_text}"
-        );
-    }
-
-    let collapsed = cell.lines_with_options_folded(80, options, true).0;
-    let collapsed_text = lines_text(&collapsed);
-    assert!(
-        collapsed_text.contains("refresh_catalog_cache"),
-        "Space must still collapse a default-expanded reasoning cell, verbatim: {collapsed_text}"
-    );
-    assert!(
-        !collapsed_text.contains("Space:") && !collapsed_text.contains("Ctrl+O"),
-        "untargeted collapsed state must retain neutral chrome"
-    );
-    assert!(
-        !collapsed_text.contains("step 20:"),
-        "the collapsed fold must truncate the long body"
-    );
-}
-
-/// The live card must spend the whole output budget it advertises.
-///
-/// `selected_output_indices` fills head + tail, then tops up from lines that
-/// look important (error / warning / path). Plain output — a list of names, a
-/// table, a clean build log — matches none of those, so the top-up found
-/// nothing and the card silently forfeited the rest of its budget: it showed
-/// `head + tail` rows and reported the remainder as "omitted". That is the
-/// "even truncated mode over-truncates" complaint.
-#[test]
-fn live_tool_output_spends_its_whole_line_budget_on_unremarkable_output() {
-    let total_output_lines = 40usize;
-    // Deliberately bland: no error/warning keywords, no slashes, no dots, so
-    // `output_importance_rank` returns None for every single line.
-    let output = (0..total_output_lines)
-        .map(|i| format!("row {i:02} plain content"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let cell = HistoryCell::Tool(ToolCell::Exec(ExecCell {
-        command: "list_things".to_string(),
-        status: ToolStatus::Failed,
-        output: Some(output),
-        live_output: None,
-        shell_task_id: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: Some(120),
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
-    }));
-
-    let live = cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            low_motion: true,
-            ..TranscriptRenderOptions::default()
-        },
-    );
-    let live_text = lines_text(&live);
-    let shown = (0..total_output_lines)
-        .filter(|i| live_text.contains(&format!("row {i:02} plain content")))
-        .count();
-
-    assert_eq!(
-        shown, TOOL_OUTPUT_LINE_LIMIT,
-        "a live card promising {TOOL_OUTPUT_LINE_LIMIT} output rows must show \
-         {TOOL_OUTPUT_LINE_LIMIT}, not stop at head+tail: {live_text}"
-    );
-    // The shown region stays readable: a contiguous head, then the tail.
-    for i in 0..TOOL_OUTPUT_HEAD_LINES {
-        assert!(
-            live_text.contains(&format!("row {i:02} plain content")),
-            "head row {i} missing: {live_text}"
-        );
-    }
-    for i in (total_output_lines - TOOL_OUTPUT_TAIL_LINES)..total_output_lines {
-        assert!(
-            live_text.contains(&format!("row {i:02} plain content")),
-            "tail row {i} missing: {live_text}"
-        );
-    }
-}
-
-#[test]
-fn tool_exec_live_caps_failed_output_transcript_does_not() {
-    // A *failed* exec keeps its output in live mode, capped to head+tail
-    // with a "lines omitted" marker. Transcript mode emits it uncapped.
-    let total_output_lines = 30usize;
-    let output = (0..total_output_lines)
-        .map(|i| format!("output line {i:02}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let cell = HistoryCell::Tool(ToolCell::Exec(ExecCell {
-        command: "noisy_script.sh".to_string(),
-        status: ToolStatus::Failed,
-        output: Some(output),
-        live_output: None,
-        shell_task_id: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: Some(120),
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
-    }));
-
-    let live = cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            low_motion: true,
-            ..TranscriptRenderOptions::default()
-        },
-    );
-    let transcript = cell.transcript_lines(80);
-
-    let live_text = lines_text(&live);
-    let transcript_text = lines_text(&transcript);
-
-    assert!(
-        live.len() < transcript.len(),
-        "live exec output must be shorter than transcript exec output (live={}, transcript={})",
-        live.len(),
-        transcript.len()
-    );
-    assert!(
-        live_text.contains("lines omitted"),
-        "live failed-exec output must surface the omission marker: {live_text}"
-    );
-    assert!(
-        !transcript_text.contains("lines omitted"),
-        "transcript exec output must not include the omission marker"
-    );
-    assert!(transcript_text.contains("output line 00"));
-    // The middle should only appear in the transcript, since the live
-    // view truncates the head/tail around the cap.
-    assert!(
-        transcript_text.contains("output line 15"),
-        "transcript must include the middle of the exec output"
-    );
-    // Last line should appear in both because the live view shows
-    // head + tail around an omission marker.
-    let last = format!("output line {:02}", total_output_lines - 1);
-    assert!(transcript_text.contains(&last));
-}
-
-#[test]
-fn tool_exec_live_previews_successful_command_without_its_full_body() {
-    // A *successful* exec does not earn its full body in live mode — no
-    // command echo, and only `TOOL_SUCCESS_OUTPUT_PREVIEW_LINES` of output.
-    // It used to collapse to the bare header, which meant a run card told you
-    // a command finished and nothing whatsoever about what it produced.
-    // Transcript mode still records everything for the pager/clipboard.
-    let output = (0..30usize)
-        .map(|i| format!("output line {i:02}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let cell = HistoryCell::Tool(ToolCell::Exec(ExecCell {
-        command: "noisy_script.sh".to_string(),
-        status: ToolStatus::Success,
-        output: Some(output),
-        live_output: None,
-        shell_task_id: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: Some(120),
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
-    }));
-
-    let live_text = lines_text(&cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            low_motion: true,
-            ..TranscriptRenderOptions::default()
-        },
-    ));
-    let transcript_text = lines_text(&cell.transcript_lines(80));
-
-    // Live: a bounded preview from the top of the output.
-    let previewed = (0..30usize)
-        .filter(|i| live_text.contains(&format!("output line {i:02}")))
-        .count();
-    assert_eq!(
-        previewed, TOOL_SUCCESS_OUTPUT_PREVIEW_LINES,
-        "a successful exec should preview exactly \
-         {TOOL_SUCCESS_OUTPUT_PREVIEW_LINES} output rows: {live_text}"
-    );
-    assert!(
-        live_text.contains("output line 00"),
-        "the preview reads from the top of the output: {live_text}"
-    );
-    assert!(
-        !live_text.contains("output line 29"),
-        "a successful exec must not render its full body in live mode: {live_text}"
-    );
-    assert!(
-        !live_text.contains("command:"),
-        "a successful exec still skips the command echo; the header carries \
-         the summary: {live_text}"
-    );
-    // Transcript still has the full output.
-    assert!(transcript_text.contains("output line 00"));
-    assert!(transcript_text.contains("output line 29"));
-}
-
-#[test]
-fn generic_tool_cell_renders_prompts_as_indexed_rows() {
-    // When prompts are populated by a fan-out tool, each child shows on
-    // its own row instead of the inline `args:` summary so the user can
-    // read what each child was asked.
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Running,
-        input_summary: Some("prompts: <3 items>".to_string()),
-        output: None,
-        prompts: Some(vec![
-            "Summarize the README".to_string(),
-            "List the public types in client.rs".to_string(),
-            "Diff this commit against main".to_string(),
-        ]),
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
-    let text = lines_text(&cell.lines(80));
+fn fan_out_prompts_replace_the_inline_argument_summary() {
+    let mut cell = generic_tool("read_file", ToolStatus::Running);
+    cell.input_summary = Some("prompts: <3 items>".to_string());
+    cell.prompts = Some(vec![
+        "Summarize the README".to_string(),
+        "List the public types in client.rs".to_string(),
+        "Diff this commit against main".to_string(),
+    ]);
+    let text = lines_text(&HistoryCell::Tool(ToolCell::Generic(cell)).lines(80));
 
     assert!(text.contains("[0] Summarize the README"));
     assert!(text.contains("[1] List the public types in client.rs"));
     assert!(text.contains("[2] Diff this commit against main"));
-    // The inline args summary must not also be emitted — we replaced it
-    // with the per-child rows.
     assert!(
         !text.contains("args: prompts:"),
-        "inline `args:` summary must be suppressed when per-prompt rows render"
+        "the summary the rows replaced must not also render: {text}"
     );
-}
 
-#[test]
-fn generic_tool_cell_falls_back_to_args_when_prompts_none() {
-    // Non-fan-out tools keep the existing `args:` summary so behavior
-    // doesn't drift for everything else.
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "file_search".to_string(),
-        status: ToolStatus::Running,
-        input_summary: Some("query: foo".to_string()),
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
-    let text = lines_text(&cell.lines(80));
-    assert!(text.contains("query: foo"));
-}
-
-#[test]
-fn known_generic_tool_hides_raw_name_in_live_mode() {
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "run_verifiers".to_string(),
-        status: ToolStatus::Running,
-        input_summary: Some("profile: auto, level: quick".to_string()),
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
-
-    let text = lines_text(&cell.lines(80));
-    assert!(text.contains("verify running"), "{text}");
+    let mut plain = generic_tool("file_search", ToolStatus::Running);
+    plain.input_summary = Some("query: foo".to_string());
+    let text = lines_text(&HistoryCell::Tool(ToolCell::Generic(plain)).lines(80));
     assert!(
-        !text.contains("name: run_verifiers"),
-        "live card should not spend a row on internal tool id: {text}"
-    );
-    assert!(
-        !text.contains("run_verifiers"),
-        "known tool id should not leak into compact live card: {text}"
+        text.contains("query: foo"),
+        "a non-fan-out tool keeps its argument summary: {text}"
     );
 }
 
+/// A grouped activity row is metadata, not a tool card: exactly one line, and
+/// the synthetic tool name that carries it never reaches the screen.
 #[test]
-fn known_generic_tool_keeps_raw_name_in_transcript_mode() {
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "run_verifiers".to_string(),
-        status: ToolStatus::Running,
-        input_summary: Some("profile: auto, level: quick".to_string()),
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
+fn an_activity_group_renders_as_a_single_metadata_line() {
+    let mut cell = generic_tool("activity_group", ToolStatus::Success);
+    cell.input_summary = Some("Explored 2 files, 1 search".to_string());
 
-    let text = lines_text(&cell.transcript_lines(80));
-    assert!(text.contains("verify running"), "{text}");
-    assert!(
-        text.contains("name: run_verifiers"),
-        "transcript replay should preserve exact tool id: {text}"
-    );
+    let lines = cell.lines_with_mode(120, true, RenderMode::Live);
+
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines_text(&lines), "Explored 2 files, 1 search");
+    assert!(!lines_text(&lines).contains("activity_group"));
 }
 
+// ---------------------------------------------------------------------------
+// Replay — wire messages project to the right typed cell
+// ---------------------------------------------------------------------------
+
+/// The wire carries a `(reasoning omitted)` placeholder for turns whose
+/// reasoning the provider did not return. Replaying it as a reasoning cell
+/// would put words in the model's mouth.
 #[test]
-fn unknown_generic_tool_keeps_raw_name_in_live_mode() {
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "future_private_tool".to_string(),
-        status: ToolStatus::Running,
-        input_summary: Some("query: foo".to_string()),
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
-
-    let text = lines_text(&cell.lines(80));
-    // Unknown/Generic tools collapse to a single header line in live mode.
-    assert!(
-        !text.is_empty(),
-        "collapsed header must still render: {text}"
-    );
-}
-
-#[test]
-fn generic_tool_cell_preserves_multi_line_output_in_transcript() {
-    // Repro for #80: a `git diff --stat`-shaped tool result should keep
-    // its newlines on the transcript surface — one file per row, not
-    // squashed into a single line.
-    let diff_stat = "Cargo.lock                |  1 +\n\
-                     crates/cli/Cargo.toml     |  1 +\n\
-                     crates/cli/src/main.rs    | 47 ++++++\n\
-                     crates/config/src/lib.rs  | 27 ++++\n\
-                     crates/tui/src/mcp.rs     | 384 +++++";
-
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Success,
-        input_summary: Some("command: git diff --stat".to_string()),
-        output: Some(diff_stat.to_string()),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
-
-    let transcript_text = lines_text(&cell.transcript_lines(80));
-
-    // Each file path must appear on its own row in the transcript.
-    for needle in [
-        "Cargo.lock",
-        "crates/cli/Cargo.toml",
-        "crates/cli/src/main.rs",
-        "crates/config/src/lib.rs",
-        "crates/tui/src/mcp.rs",
-    ] {
-        assert!(
-            transcript_text.contains(needle),
-            "transcript missing '{needle}': {transcript_text}"
-        );
-    }
-    // The pre-fix bug: result line containing
-    // "Cargo.lock | 1 + crates/cli/Cargo.toml" — joined into one row.
-    // With the fix, the diff-stat pipes are still present per-line, but
-    // adjacent file paths are on separate rendered rows. Assert that the
-    // first file's line ends before the second begins.
-    let lines: Vec<&str> = transcript_text.lines().collect();
-    let cargo_lock_line = lines
-        .iter()
-        .find(|l| l.contains("Cargo.lock"))
-        .expect("Cargo.lock row must exist");
-    assert!(
-        !cargo_lock_line.contains("crates/cli/Cargo.toml"),
-        "Cargo.lock row must not also contain the second file: {cargo_lock_line}"
-    );
-}
-
-#[test]
-fn generic_tool_cell_expands_failed_multi_line_output_in_live() {
-    // Failed tools should auto-expand in live mode so the command/input summary
-    // and full error output remain immediately visible.
-    let total = 30usize;
-    let output = (0..total)
-        .map(|i| format!("row {i:02}: payload"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Failed,
-        input_summary: Some("command: ls".to_string()),
-        output: Some(output),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
-
-    let live = cell.lines_with_options(80, TranscriptRenderOptions::default());
-    let transcript = cell.transcript_lines(80);
-    let live_text = lines_text(&live);
-    let transcript_text = lines_text(&transcript);
-
-    assert!(live_text.contains("command: ls"), "{live_text}");
-    assert!(
-        !live_text.contains("lines omitted"),
-        "failed output must not be hidden behind an omission marker: {live_text}"
-    );
-    assert!(transcript_text.contains("row 29"));
-    assert!(live_text.contains("row 29"));
-}
-
-#[test]
-fn generic_tool_failed_output_live_renders_card_rail() {
-    let output = (0..24usize)
-        .map(|i| format!("line {i:02}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Failed,
-        input_summary: Some("command: noisy".to_string()),
-        output: Some(output),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
-
-    let live_text = lines_text(&cell.lines_with_options(80, TranscriptRenderOptions::default()));
-
-    // Card-rail wrapping: first line starts with ╭, last with ╰.
-    assert!(
-        live_text.starts_with('\u{256D}'),
-        "live view must start with card-rail top glyph ╭: {live_text}"
-    );
-    assert!(!live_text.contains("lines omitted"), "{live_text}");
-    assert!(live_text.contains("line 00"));
-    assert!(live_text.contains("line 23"));
-}
-
-#[test]
-fn hidden_tool_details_keeps_failed_generic_output_expanded() {
-    let output = (0..30usize)
-        .map(|i| format!("row {i:02}: payload"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Failed,
-        input_summary: Some("command: noisy".to_string()),
-        output: Some(output),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
-
-    let live_text = lines_text(&cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            show_tool_details: false,
-            ..TranscriptRenderOptions::default()
-        },
-    ));
-
-    assert!(
-        !live_text.contains("lines omitted") && !live_text.contains("details"),
-        "failed output must not be hidden behind a details affordance: {live_text}"
-    );
-    assert!(live_text.contains("row 29"), "{live_text}");
-}
-
-#[test]
-fn calm_mode_keeps_failed_generic_output_expanded() {
-    let output = (0..30usize)
-        .map(|i| format!("row {i:02}: payload"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Failed,
-        input_summary: Some("command: noisy".to_string()),
-        output: Some(output),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
-
-    let live_text = lines_text(&cell.lines_with_options(
-        80,
-        TranscriptRenderOptions {
-            calm_mode: true,
-            ..TranscriptRenderOptions::default()
-        },
-    ));
-
-    assert!(
-        !live_text.contains("lines omitted") && !live_text.contains("details"),
-        "failed output must not be hidden behind a details affordance: {live_text}"
-    );
-    assert!(live_text.contains("row 29"), "{live_text}");
-}
-
-#[test]
-fn generic_tool_success_live_collapses_output_transcript_keeps_it() {
-    let output = (0..24usize)
-        .map(|i| format!("row {i:02}: payload"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Success,
-        input_summary: Some("path: crates/tui/src/main.rs".to_string()),
-        output: Some(output),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }));
-
-    let live_text = lines_text(&cell.lines_with_options(80, TranscriptRenderOptions::default()));
-    let transcript_text = lines_text(&cell.transcript_lines(80));
-
-    assert!(
-        !live_text.contains("row 00"),
-        "successful generic tool output should be hidden live: {live_text}"
-    );
-    assert!(
-        !live_text.contains("lines omitted"),
-        "collapsed success should not spend a row on an omission marker: {live_text}"
-    );
-    assert!(transcript_text.contains("row 00"));
-    assert!(transcript_text.contains("row 23"));
-}
-
-#[test]
-fn tool_output_live_preserves_error_card_rail() {
-    let output = [
-        "start",
-        "still starting",
-        "middle noise 1",
-        "fatal: failed to read /tmp/deepseek/config.toml",
-        "middle noise 2",
-        "see https://example.test/build/log for details",
-        "middle noise 3",
-        "almost done",
-        "final line",
-    ]
-    .join("\n");
-    let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: "read_file".to_string(),
-        status: ToolStatus::Failed,
-        input_summary: Some("command: tool".to_string()),
-        output: Some(output),
-        prompts: None,
-        spillover_path: None,
-        output_summary: Some("Error: failed to read config".to_string()),
-        is_diff: false,
-    }));
-
-    let live_text = lines_text(&cell.lines_with_options(80, TranscriptRenderOptions::default()));
-
-    assert!(
-        !live_text.contains("lines omitted"),
-        "failed output must not be hidden behind an omission marker: {live_text}"
-    );
-    assert!(
-        live_text.contains("Error:") || live_text.contains("fatal:"),
-        "live summary should capture error text: {live_text}"
-    );
-    assert!(live_text.contains("final line"), "{live_text}");
-}
-
-// === ErrorEnvelope severity → cell color tests (#66) ===
-
-/// Snapshot: an `Error`-severity cell uses the red status palette token
-/// for both the leading "Error" label glyph and the body. This is the
-/// load-bearing visual signal that distinguishes an error cell from a
-/// neutral system note.
-#[test]
-fn error_severity_cell_renders_in_red() {
-    let cell = HistoryCell::Error {
-        message: "Authentication failed: invalid API key".to_string(),
-        severity: crate::error_taxonomy::ErrorSeverity::Error,
-    };
-    let lines = cell.lines(80);
-    assert!(
-        !lines.is_empty(),
-        "error cell must render at least one line"
-    );
-
-    let head = &lines[0];
-    let label_span = &head.spans[0];
-    assert_eq!(label_span.content.as_ref(), "Error");
-    assert_eq!(label_span.style.fg, Some(palette::STATUS_ERROR));
-    assert!(label_span.style.add_modifier.contains(Modifier::BOLD));
-
-    // The body carries the error message and is rendered in the same red.
-    let body_text = lines
-        .iter()
-        .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
-        .collect::<String>();
-    assert!(body_text.contains("Authentication failed"));
-    // Find a span whose text contains "Authentication" and verify its color.
-    let body_span = lines
-        .iter()
-        .flat_map(|line| line.spans.iter())
-        .find(|span| span.content.contains("Authentication"))
-        .expect("error body span must exist");
-    assert_eq!(body_span.style.fg, Some(palette::STATUS_ERROR));
-}
-
-/// A multiline engine failure may extend below the visible terminal even
-/// though its full text remains in history. The live cell must advertise the
-/// dedicated pager, while pager/transcript rendering must contain the exact
-/// recovery instruction without recursively advertising itself.
-#[test]
-fn error_cell_advertises_full_message_pager_and_preserves_recovery_text() {
-    let recovery = "Refusing insecure base URL 'http://192.168.1.25:8000/v1'.\n\
-Loopback hosts (localhost, 127.0.0.1, [::1]) are auto-allowed.\n\
-Set CODEWHALE_ALLOW_INSECURE_HTTP=1 only for a trusted LAN host.";
-    let cell = HistoryCell::Error {
-        message: recovery.to_string(),
-        severity: crate::error_taxonomy::ErrorSeverity::Error,
-    };
-
-    let live_text = lines_text(&cell.lines(48));
-    let transcript_text = lines_text(&cell.transcript_lines(200));
-    let hint = crate::tui::key_shortcuts::tool_details_shortcut_action_hint("full error");
-
-    assert!(live_text.contains(&hint), "{live_text}");
-    assert!(!transcript_text.contains(&hint), "{transcript_text}");
-    assert!(
-        transcript_text.contains("CODEWHALE_ALLOW_INSECURE_HTTP=1"),
-        "{transcript_text}"
-    );
-    assert!(
-        transcript_text.contains("192.168.1.25"),
-        "{transcript_text}"
-    );
-}
-
-/// `Warning`-severity uses amber, not red — distinguishes a transient
-/// retry hiccup from a hard failure.
-#[test]
-fn warning_severity_cell_renders_in_amber() {
-    let cell = HistoryCell::Error {
-        message: "Stream stalled: no data received for 60s, closing stream".to_string(),
-        severity: crate::error_taxonomy::ErrorSeverity::Warning,
-    };
-    let lines = cell.lines(80);
-    let label_span = &lines[0].spans[0];
-    assert_eq!(label_span.content.as_ref(), "Warn");
-    assert_eq!(label_span.style.fg, Some(palette::STATUS_WARNING));
-}
-
-/// `Critical` severity collapses to the same red as `Error` — both flip
-/// offline mode and both should read as the loudest signal in the
-/// transcript.
-#[test]
-fn critical_severity_cell_renders_in_red() {
-    let cell = HistoryCell::Error {
-        message: "API key expired".to_string(),
-        severity: crate::error_taxonomy::ErrorSeverity::Critical,
-    };
-    let lines = cell.lines(80);
-    let label_span = &lines[0].spans[0];
-    assert_eq!(label_span.content.as_ref(), "Error");
-    assert_eq!(label_span.style.fg, Some(palette::STATUS_ERROR));
-}
-
-/// `Info` severity stays neutral / dim so it doesn't draw the eye away
-/// from real failures sitting alongside it in the transcript.
-#[test]
-fn info_severity_cell_renders_in_dim() {
-    let cell = HistoryCell::Error {
-        message: "Reconnected".to_string(),
-        severity: crate::error_taxonomy::ErrorSeverity::Info,
-    };
-    let lines = cell.lines(80);
-    let label_span = &lines[0].spans[0];
-    assert_eq!(label_span.content.as_ref(), "Info");
-    assert_eq!(label_span.style.fg, Some(palette::TEXT_DIM));
-}
-
-fn success_generic_tool(name: &str) -> HistoryCell {
-    HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: name.to_string(),
-        status: ToolStatus::Success,
-        input_summary: Some(format!("args for {name}")),
-        output: Some(format!("output for {name}")),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }))
-}
-
-fn failed_generic_tool(name: &str) -> HistoryCell {
-    HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: name.to_string(),
-        status: ToolStatus::Failed,
-        input_summary: None,
-        output: Some("failed".to_string()),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }))
-}
-
-fn running_generic_tool(name: &str) -> HistoryCell {
-    HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        name: name.to_string(),
-        status: ToolStatus::Running,
-        input_summary: None,
-        output: None,
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }))
-}
-
-fn shell_tool(command: &str) -> HistoryCell {
-    HistoryCell::Tool(ToolCell::Exec(ExecCell {
-        command: command.to_string(),
-        status: ToolStatus::Success,
-        output: Some("ok".to_string()),
-        live_output: None,
-        shell_task_id: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: None,
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
-    }))
-}
-
-#[test]
-fn detect_tool_runs_finds_contiguous_successful_safe_tools() {
-    let history = vec![
-        HistoryCell::User {
-            content: "go".to_string(),
-        },
-        success_generic_tool("read_file"),
-        success_generic_tool("list_dir"),
-        success_generic_tool("web_search"),
-        HistoryCell::Assistant {
-            content: "done".to_string(),
-            streaming: false,
-        },
-    ];
-
-    let runs = super::detect_tool_runs(&history, 3);
-
-    assert_eq!(runs.len(), 1);
-    assert_eq!(runs[0].start, 1);
-    assert_eq!(runs[0].count, 3);
-    assert_eq!(
-        runs[0].tool_families,
-        vec!["read_file", "list_dir", "web_search"]
-    );
-    assert_eq!(runs[0].activity.files, 2);
-    assert_eq!(runs[0].activity.searches, 1);
-}
-
-#[test]
-fn detect_tool_runs_honors_threshold_and_boundaries() {
-    let short = vec![
-        success_generic_tool("read_file"),
-        success_generic_tool("list_dir"),
-    ];
-    assert!(super::detect_tool_runs(&short, 3).is_empty());
-
-    let with_assistant_boundary = vec![
-        success_generic_tool("read_file"),
-        HistoryCell::Assistant {
-            content: "pause".to_string(),
-            streaming: false,
-        },
-        success_generic_tool("list_dir"),
-        success_generic_tool("web_search"),
-    ];
-    assert!(super::detect_tool_runs(&with_assistant_boundary, 3).is_empty());
-}
-
-#[test]
-fn detect_tool_runs_keeps_failed_running_and_shell_cells_visible() {
-    let history = vec![
-        success_generic_tool("read_file"),
-        success_generic_tool("list_dir"),
-        failed_generic_tool("web_search"),
-        success_generic_tool("read_file"),
-        success_generic_tool("list_dir"),
-        running_generic_tool("web_search"),
-        success_generic_tool("read_file"),
-        success_generic_tool("list_dir"),
-        shell_tool("rm -rf target"),
-        success_generic_tool("read_file"),
-        success_generic_tool("list_dir"),
-        success_generic_tool("web_search"),
-    ];
-
-    let runs = super::detect_tool_runs(&history, 3);
-
-    assert_eq!(runs.len(), 1);
-    assert_eq!(runs[0].start, 9);
-    assert_eq!(runs[0].count, 3);
-}
-
-#[test]
-fn detect_tool_runs_summarizes_safe_command_tools() {
-    let history = vec![
-        success_generic_tool("run_tests"),
-        success_generic_tool("run_verifiers"),
-        success_generic_tool("validate_data"),
-    ];
-
-    let runs = super::detect_tool_runs(&history, 3);
-
-    assert_eq!(runs.len(), 1);
-    assert_eq!(runs[0].start, 0);
-    assert_eq!(runs[0].count, 3);
-    assert_eq!(runs[0].activity.commands, 3);
-    assert_eq!(
-        runs[0].tool_families,
-        vec!["run_tests", "run_verifiers", "validate_data"]
-    );
-    assert_eq!(
-        super::tool_run_summary(&runs[0]),
-        "Ran 3 commands: run_tests, run_verifiers, validate_data"
-    );
-}
-
-#[test]
-fn tool_run_summary_reports_compact_success_group() {
-    let run = super::ToolRun {
-        start: 4,
-        count: 5,
-        tool_families: vec!["read_file".to_string(), "list_dir".to_string()],
-        activity: super::ToolRunActivitySummary {
-            files: 4,
-            searches: 1,
-            ..Default::default()
-        },
-    };
-
-    let summary = super::tool_run_summary(&run);
-
-    assert_eq!(summary, "Explored 4 files, 1 search: read_file, list_dir");
-}
-
-#[test]
-fn tool_run_summary_keeps_git_history_tools_visible() {
-    let history = vec![
-        success_generic_tool("git_log"),
-        success_generic_tool("git_show"),
-        success_generic_tool("git_blame"),
-    ];
-
-    let runs = super::detect_tool_runs(&history, 3);
-
-    assert_eq!(runs.len(), 1);
-    assert_eq!(runs[0].activity.files, 3);
-    assert_eq!(
-        super::tool_run_summary(&runs[0]),
-        "Explored 3 files: git_log, git_show, git_blame"
-    );
-}
-
-#[test]
-fn tool_run_summary_lists_only_command_families_for_command_clause() {
-    let run = super::ToolRun {
-        start: 4,
-        count: 4,
-        tool_families: vec![
-            "read_file".to_string(),
-            "run_tests".to_string(),
-            "validate_data".to_string(),
+fn restored_history_drops_the_wire_reasoning_placeholder() {
+    let message = Message {
+        role: Role::Assistant,
+        content: vec![
+            ContentBlock::Thinking {
+                thinking: "(reasoning omitted)".to_string(),
+                signature: None,
+                state: None,
+            },
+            ContentBlock::Thinking {
+                thinking: "Actual model reasoning".to_string(),
+                signature: None,
+                state: None,
+            },
         ],
-        activity: super::ToolRunActivitySummary {
-            files: 2,
-            commands: 2,
-            ..Default::default()
-        },
     };
 
-    assert_eq!(
-        super::tool_run_summary(&run),
-        "Explored 2 files: read_file, ran 2 commands: run_tests, validate_data"
-    );
+    let cells = super::history_cells_from_message(&message);
+    assert_eq!(cells.len(), 1);
+    assert!(matches!(
+        &cells[0],
+        HistoryCell::Thinking { content, .. } if content == "Actual model reasoning"
+    ));
 }
 
+/// Compaction writes an `<archived_context>` envelope whose attributes are the
+/// only record of what was dropped. Attribute parsing must survive spaces and
+/// punctuation inside the values, or the summary reads with a mangled range.
 #[test]
-fn tool_run_summary_uses_metadata_fallback_for_unknown_groups() {
-    let run = super::ToolRun {
-        start: 4,
-        count: 2,
-        tool_families: vec!["session_sync".to_string()],
-        activity: super::ToolRunActivitySummary {
-            other: 2,
-            ..Default::default()
-        },
-    };
-
-    assert_eq!(super::tool_run_summary(&run), "Updated metadata");
-}
-
-// ---- #4112 / dogfood A5: transcript noise ----
-
-fn agent_cell(
-    action_summary: Option<&str>,
-    status: ToolStatus,
-    output: Option<&str>,
-) -> GenericToolCell {
-    GenericToolCell {
-        name: "agent".to_string(),
-        status,
-        input_summary: action_summary.map(str::to_string),
-        output: output.map(str::to_string),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
-    }
-}
-
-fn joined_lines(cell: &GenericToolCell, mode: super::RenderMode) -> String {
-    cell.lines_with_mode(120, true, mode)
-        .iter()
-        .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
-        .collect()
-}
-
-#[test]
-fn unknown_tool_failure_collapses_to_one_line() {
-    let cell = GenericToolCell {
-        name: "item".to_string(),
-        status: ToolStatus::Failed,
-        input_summary: Some("status: pending".to_string()),
-        output: Some(
-            "Tool 'item' is not available in the current tool catalog. \
-             Checklist entries are not separate tool calls."
+fn archived_context_metadata_survives_spaces_inside_attribute_values() {
+    let msg = Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::Text {
+            text: "<archived_context level=\"1\" range=\"msg 0-128\" tokens=\"2499\" \
+                   density=\"~2,500 tokens\" model=\"deepseek-v4-flash\" \
+                   timestamp=\"2026-04-28T00:00:00Z\">\nSummary body\n</archived_context>"
                 .to_string(),
-        ),
-        prompts: None,
-        spillover_path: None,
-        output_summary: None,
-        is_diff: false,
+            cache_control: None,
+        }],
     };
-    for mode in [super::RenderMode::Live, super::RenderMode::Transcript] {
-        let lines = cell.lines_with_mode(120, true, mode);
-        assert_eq!(
-            lines.len(),
-            1,
-            "unknown-tool failure should be a single header line in {mode:?}: {lines:?}"
-        );
-        let joined = joined_lines(&cell, mode);
-        assert!(
-            joined.contains("Tool 'item' is not available"),
-            "the catalog error is the useful part: {joined:?}"
-        );
-        assert!(
-            !joined.contains("name: item"),
-            "no name:/args:/result: block for unknown tools: {joined:?}"
-        );
-    }
+
+    let cells = super::history_cells_from_message(&msg);
+    assert_eq!(cells.len(), 1);
+    let HistoryCell::ArchivedContext {
+        level,
+        range,
+        tokens,
+        density,
+        model,
+        timestamp,
+        summary,
+    } = &cells[0]
+    else {
+        panic!("expected archived context cell, got {:?}", cells[0]);
+    };
+
+    assert_eq!(*level, 1);
+    assert_eq!(range, "msg 0-128");
+    assert_eq!(tokens, "2499");
+    assert_eq!(density, "~2,500 tokens");
+    assert_eq!(model, "deepseek-v4-flash");
+    assert_eq!(timestamp, "2026-04-28T00:00:00Z");
+    assert_eq!(summary, "Summary body");
 }
 
+/// Two projections that must not become generic assistant prose: a repair
+/// receipt is a system note, and a replayed `update_plan` call rebuilds the
+/// typed plan cell with its snapshot intact.
 #[test]
-fn agent_peek_renders_checked_not_done() {
-    let cell = agent_cell(
-        Some("action: peek agent_id: agent_scout_1"),
-        ToolStatus::Success,
-        Some(r#"{"agent_id":"agent_scout_1","status":"running"}"#),
-    );
-    let joined = joined_lines(&cell, super::RenderMode::Live);
-    assert!(
-        joined.contains("checked") && joined.contains("agent_scout_1"),
-        "peek should read as a check, not a completed delegate: {joined:?}"
-    );
-    assert!(
-        !joined.contains("delegate done"),
-        "peek must not draw the spawn-completion line: {joined:?}"
-    );
-}
+fn replay_routes_repair_receipts_and_plan_calls_to_typed_cells() {
+    let repair = Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::Text {
+            text: "[tool_history_repair] Repaired 1 crashed tool call(s); quarantined 0 \
+                   duplicate and 0 orphan terminal result(s)."
+                .to_string(),
+            cache_control: None,
+        }],
+    };
+    assert!(matches!(
+        super::history_cells_from_message(&repair).as_slice(),
+        [HistoryCell::System { content }] if content.starts_with("[tool_history_repair]")
+    ));
 
-#[test]
-fn agent_wait_renders_waited_label() {
-    let cell = agent_cell(
-        Some("action: wait"),
-        ToolStatus::Success,
-        Some(r#"{"action":"wait","settled":[{"agent_id":"agent_scout_1"}]}"#),
-    );
-    let joined = joined_lines(&cell, super::RenderMode::Live);
-    assert!(
-        joined.contains("waited"),
-        "wait cells should read as a join: {joined:?}"
-    );
-}
-
-#[test]
-fn agent_inspection_stays_compact_in_transcript_mode() {
-    let cell = agent_cell(
-        Some("action: status agent_id: agent_scout_1"),
-        ToolStatus::Success,
-        Some(r#"{"agent_id":"agent_scout_1","status":"running","terminal":false}"#),
-    );
-    let lines = cell.lines_with_mode(120, true, super::RenderMode::Transcript);
+    let plan = Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::ToolUse {
+            id: "plan-1".to_string(),
+            name: "update_plan".to_string(),
+            input: serde_json::json!({
+                "objective": "Make Plan mode reviewable",
+                "sources_used": ["gh issue view 2691"],
+                "critical_files": ["crates/tui/src/tools/plan.rs"],
+                "plan": [
+                    { "step": "render replay card", "status": "completed" }
+                ]
+            }),
+            caller: None,
+            thought_signature: None,
+        }],
+    };
+    let cells = super::history_cells_from_message(&plan);
+    assert_eq!(cells.len(), 1);
+    let HistoryCell::Tool(ToolCell::PlanUpdate(cell)) = &cells[0] else {
+        panic!("expected update_plan replay cell");
+    };
+    assert_eq!(cell.status, ToolStatus::Success);
     assert_eq!(
-        lines.len(),
-        1,
-        "status checks should not dump full projections in the pager: {lines:?}"
+        cell.snapshot.objective.as_deref(),
+        Some("Make Plan mode reviewable")
     );
+    assert_eq!(cell.snapshot.sources_used, vec!["gh issue view 2691"]);
+    assert_eq!(cell.snapshot.items[0].status, StepStatus::Completed);
 }
 
+/// The runtime appends a `<turn_meta>` block to the user's message. It is
+/// scaffolding and must be hidden — but only when it is the trailing block the
+/// runtime appended. A user who types the same tag is quoting, not injecting,
+/// and their text must survive verbatim.
 #[test]
-fn agent_spawn_suppresses_generic_card_in_favor_of_delegate_card() {
-    let cell = agent_cell(
-        Some("prompt: map the repo"),
-        ToolStatus::Success,
-        Some(r#"{"agent_id":"agent_scout_1","status":"running"}"#),
+fn user_history_hides_only_the_trailing_turn_metadata_block() {
+    let visible = "Explain this literal: <turn_meta>example</turn_meta>";
+    let turn_meta = concat!(
+        "<turn_meta>\n",
+        "Current local date: 2026-07-22\n",
+        "Input provenance: external_user\n",
+        "Input authority: external_current_turn\n",
+        "</turn_meta>",
     );
-    for mode in [super::RenderMode::Live, super::RenderMode::Transcript] {
-        let lines = cell.lines_with_mode(120, true, mode);
-        assert!(
-            lines.is_empty(),
-            "spawn generic tool card must yield to DelegateCard (#4133): {mode:?} {lines:?}"
-        );
-    }
-}
-
-#[test]
-fn finished_read_card_names_the_line_count() {
-    use crate::localization::Locale;
-    use crate::tui::widgets::tool_card::ToolFamily;
-
-    // English (en)
-    let zero_en =
-        super::tool_receipt_label(ToolFamily::Read, ToolStatus::Success, Some(""), Locale::En);
-    assert_eq!(zero_en, "done");
-    let one_en = super::tool_receipt_label(
-        ToolFamily::Read,
-        ToolStatus::Success,
-        Some("hello\n"),
-        Locale::En,
-    );
-    assert_eq!(one_en, "1 line");
-    let many_en = super::tool_receipt_label(
-        ToolFamily::Read,
-        ToolStatus::Success,
-        Some("a\nb\nc\n"),
-        Locale::En,
-    );
-    assert_eq!(many_en, "3 lines");
-    let find_en = super::tool_receipt_label(
-        ToolFamily::Find,
-        ToolStatus::Success,
-        Some("match 1\nmatch 2\n"),
-        Locale::En,
-    );
-    assert_eq!(find_en, "2 lines");
-    let running = super::tool_receipt_label(
-        ToolFamily::Read,
-        ToolStatus::Running,
-        Some("a\nb"),
-        Locale::En,
-    );
-    assert_eq!(running, "running");
-
-    // Simplified Chinese (zh-Hans)
-    let zero_zh = super::tool_receipt_label(
-        ToolFamily::Read,
-        ToolStatus::Success,
-        Some(""),
-        Locale::ZhHans,
-    );
-    assert_eq!(zero_zh, "完成");
-    let one_zh = super::tool_receipt_label(
-        ToolFamily::Read,
-        ToolStatus::Success,
-        Some("hello\n"),
-        Locale::ZhHans,
-    );
-    assert_eq!(one_zh, "1 行");
-    let many_zh = super::tool_receipt_label(
-        ToolFamily::Read,
-        ToolStatus::Success,
-        Some("a\nb\nc\n"),
-        Locale::ZhHans,
-    );
-    assert_eq!(many_zh, "3 行");
-    let find_zh = super::tool_receipt_label(
-        ToolFamily::Find,
-        ToolStatus::Success,
-        Some("match 1\nmatch 2\n"),
-        Locale::ZhHans,
-    );
-    assert_eq!(find_zh, "2 行");
-}
-
-#[test]
-fn finished_run_card_does_not_infer_stdio_streams_from_rendered_text() {
-    use crate::localization::Locale;
-    use crate::tui::widgets::tool_card::ToolFamily;
-
-    // English (en) — generic Run truthfulness: always localized done, never stdout/stderr counts
-    let mixed_en = super::tool_receipt_label(
-        ToolFamily::Run,
-        ToolStatus::Success,
-        Some("stdout:\nok\nmore\nstderr:\nbad\n"),
-        Locale::En,
-    );
-    assert_eq!(mixed_en, "done");
-
-    let multiline_en = super::tool_receipt_label(
-        ToolFamily::Run,
-        ToolStatus::Success,
-        Some("line 1\nline 2\nline 3\n"),
-        Locale::En,
-    );
-    assert_eq!(multiline_en, "done");
-
-    // zh-Hans — generic Run truthfulness: always localized done
-    let mixed_zh = super::tool_receipt_label(
-        ToolFamily::Run,
-        ToolStatus::Success,
-        Some("stdout:\nok\nmore\nstderr:\nbad\n"),
-        Locale::ZhHans,
-    );
-    assert_eq!(mixed_zh, "完成");
-
-    let multiline_zh = super::tool_receipt_label(
-        ToolFamily::Run,
-        ToolStatus::Success,
-        Some("line 1\nline 2\nline 3\n"),
-        Locale::ZhHans,
-    );
-    assert_eq!(multiline_zh, "完成");
-}
-
-#[test]
-fn shell_formatter_cases_render_truthful_localized_run_receipts() {
-    use crate::localization::Locale;
-    use crate::tui::history::{ExecCell, ExecSource, RenderMode, ToolStatus};
-
-    // Formatter case 1: printf redirect write preview
-    let printf_cell = ExecCell {
-        command: "printf '%s\\n' 'hello' 'world' > src/main.rs".to_string(),
-        status: ToolStatus::Success,
-        output: Some("printf > src/main.rs\nhello\nworld\n".to_string()),
-        live_output: None,
-        shell_task_id: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: Some(42),
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
+    let msg = Message {
+        role: Role::User,
+        content: vec![
+            ContentBlock::Text {
+                text: visible.to_string(),
+                cache_control: None,
+            },
+            ContentBlock::Text {
+                text: turn_meta.to_string(),
+                cache_control: None,
+            },
+        ],
     };
+    assert!(matches!(
+        super::history_cells_from_message(&msg).as_slice(),
+        [HistoryCell::User { content }] if content == visible
+    ));
 
-    let lines_en = printf_cell.render_with_locale(80, true, RenderMode::Live, Locale::En);
-    let header_en = lines_en[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(
-        header_en.contains("done"),
-        "English shell header must contain localized done: {header_en}"
-    );
-    assert!(
-        !header_en.contains("3 lines") && !header_en.contains("stdout"),
-        "English shell header must not invent counts: {header_en}"
-    );
-
-    let lines_zh = printf_cell.render_with_locale(80, true, RenderMode::Live, Locale::ZhHans);
-    let header_zh = lines_zh[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(
-        header_zh.contains("完成"),
-        "zh-Hans shell header must contain localized done: {header_zh}"
-    );
-    assert!(
-        !header_zh.contains("3 行") && !header_zh.contains("stdout"),
-        "zh-Hans shell header must not invent counts: {header_zh}"
-    );
-
-    // Formatter case 2: logical OR operator fallback
-    let or_cell = ExecCell {
-        command: "cargo build || echo fallback".to_string(),
-        status: ToolStatus::Success,
-        output: Some(
-            "   Compiling pkg v0.1.0\n   Finished dev [unoptimized + debuginfo]\n".to_string(),
-        ),
-        live_output: None,
-        shell_task_id: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        started_at: None,
-        duration_ms: Some(120),
-        stale_elapsed_since_output_ms: None,
-        source: ExecSource::Assistant,
-        interaction: None,
-        output_summary: None,
+    let literal_only = Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: "<turn_meta>user-authored example</turn_meta>".to_string(),
+            cache_control: None,
+        }],
     };
-
-    let or_lines_en = or_cell.render_with_locale(80, true, RenderMode::Live, Locale::En);
-    let or_header_en = or_lines_en[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(
-        or_header_en.contains("done"),
-        "English shell header must contain localized done: {or_header_en}"
-    );
-
-    let or_lines_zh = or_cell.render_with_locale(80, true, RenderMode::Live, Locale::ZhHans);
-    let or_header_zh = or_lines_zh[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-    assert!(
-        or_header_zh.contains("完成"),
-        "zh-Hans shell header must contain localized done: {or_header_zh}"
-    );
+    assert!(matches!(
+        super::history_cells_from_message(&literal_only).as_slice(),
+        [HistoryCell::User { content }]
+            if content == "<turn_meta>user-authored example</turn_meta>"
+    ));
 }
 
+/// "Copy answer" must select the last completed assistant cell and serialize
+/// exactly its authored text — no reasoning, no tool bodies, no runtime status,
+/// no role marker, and never a half-streamed cell.
 #[test]
-fn completed_assistant_answer_projection_excludes_reasoning_tools_and_status() {
-    // The "copy answer" projection must select only a completed assistant
-    // cell, and the clean serializer must return exactly its authored text:
-    // no reasoning, tool calls/results, runtime status, or scaffolding.
+fn the_answer_projection_copies_authored_text_and_nothing_else() {
     use crate::tui::ui_text::history_cell_to_clipboard_text;
 
     let cells = [
@@ -3917,15 +2044,11 @@ fn completed_assistant_answer_projection_excludes_reasoning_tools_and_status() {
             streaming: false,
             duration_secs: Some(1.0),
         },
-        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-            name: "read_file".to_string(),
-            status: ToolStatus::Success,
-            input_summary: Some("src/lib.rs".to_string()),
-            output: Some("raw tool result body".to_string()),
-            prompts: None,
-            spillover_path: None,
-            output_summary: None,
-            is_diff: false,
+        HistoryCell::Tool(ToolCell::Generic({
+            let mut cell = generic_tool("read_file", ToolStatus::Success);
+            cell.input_summary = Some("src/lib.rs".to_string());
+            cell.output = Some("raw tool result body".to_string());
+            cell
         })),
         HistoryCell::System {
             content: "runtime status note".to_string(),
@@ -3961,4 +2084,264 @@ fn completed_assistant_answer_projection_excludes_reasoning_tools_and_status() {
             "answer copy leaked {excluded:?}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Grouping and small parsers
+// ---------------------------------------------------------------------------
+
+fn tool_cell(name: &str, status: ToolStatus) -> HistoryCell {
+    let mut cell = generic_tool(name, status);
+    cell.input_summary = Some(format!("args for {name}"));
+    cell.output = Some(format!("output for {name}"));
+    HistoryCell::Tool(ToolCell::Generic(cell))
+}
+
+/// Collapsing a run of tool cards is only safe when nothing in the run needs
+/// the user's eyes: a failure, an in-flight call, or a shell command must all
+/// break the group and stay individually visible, and a run shorter than the
+/// threshold is not a run at all.
+///
+/// Replaces three tests.
+#[test]
+fn only_contiguous_finished_safe_tool_calls_collapse_into_a_run() {
+    let history = vec![
+        HistoryCell::User {
+            content: "go".to_string(),
+        },
+        tool_cell("read_file", ToolStatus::Success),
+        tool_cell("list_dir", ToolStatus::Success),
+        tool_cell("web_search", ToolStatus::Success),
+        HistoryCell::Assistant {
+            content: "done".to_string(),
+            streaming: false,
+        },
+    ];
+    let runs = super::detect_tool_runs(&history, 3);
+    assert_eq!(runs.len(), 1);
+    assert_eq!((runs[0].start, runs[0].count), (1, 3));
+    assert_eq!(
+        runs[0].tool_families,
+        vec!["read_file", "list_dir", "web_search"]
+    );
+    assert_eq!(runs[0].activity.files, 2);
+    assert_eq!(runs[0].activity.searches, 1);
+
+    assert!(
+        super::detect_tool_runs(
+            &[
+                tool_cell("read_file", ToolStatus::Success),
+                tool_cell("list_dir", ToolStatus::Success),
+            ],
+            3
+        )
+        .is_empty(),
+        "a run below the threshold is not collapsed"
+    );
+
+    assert!(
+        super::detect_tool_runs(
+            &[
+                tool_cell("read_file", ToolStatus::Success),
+                HistoryCell::Assistant {
+                    content: "pause".to_string(),
+                    streaming: false,
+                },
+                tool_cell("list_dir", ToolStatus::Success),
+                tool_cell("web_search", ToolStatus::Success),
+            ],
+            3
+        )
+        .is_empty(),
+        "assistant prose breaks the run"
+    );
+
+    // Each of failure, in-flight and shell breaks the group; only the clean
+    // trailing triple survives.
+    let mut mixed = Vec::new();
+    for breaker in [
+        tool_cell("web_search", ToolStatus::Failed),
+        tool_cell("web_search", ToolStatus::Running),
+        HistoryCell::Tool(ToolCell::Exec({
+            let mut exec = exec_tool("rm -rf target", ToolStatus::Success);
+            exec.output = Some("ok".to_string());
+            exec
+        })),
+    ] {
+        mixed.push(tool_cell("read_file", ToolStatus::Success));
+        mixed.push(tool_cell("list_dir", ToolStatus::Success));
+        mixed.push(breaker);
+    }
+    let tail_start = mixed.len();
+    mixed.push(tool_cell("read_file", ToolStatus::Success));
+    mixed.push(tool_cell("list_dir", ToolStatus::Success));
+    mixed.push(tool_cell("web_search", ToolStatus::Success));
+
+    let runs = super::detect_tool_runs(&mixed, 3);
+    assert_eq!(runs.len(), 1, "only the clean tail collapses: {runs:?}");
+    assert_eq!((runs[0].start, runs[0].count), (tail_start, 3));
+}
+
+/// The one-line summary that replaces a collapsed run is the user's only
+/// record of it, so it must name what actually happened — the right verb, the
+/// right counts, and only the tool families that belong to each clause.
+///
+/// Replaces four tests.
+#[test]
+fn a_collapsed_run_summary_names_what_actually_happened() {
+    let run = |families: &[&str], activity: super::ToolRunActivitySummary| super::ToolRun {
+        start: 4,
+        count: families.len(),
+        tool_families: families.iter().map(|f| f.to_string()).collect(),
+        activity,
+    };
+
+    assert_eq!(
+        super::tool_run_summary(&run(
+            &["read_file", "list_dir"],
+            super::ToolRunActivitySummary {
+                files: 4,
+                searches: 1,
+                ..Default::default()
+            }
+        )),
+        "Explored 4 files, 1 search: read_file, list_dir"
+    );
+
+    assert_eq!(
+        super::tool_run_summary(&run(
+            &["read_file", "run_tests", "validate_data"],
+            super::ToolRunActivitySummary {
+                files: 2,
+                commands: 2,
+                ..Default::default()
+            }
+        )),
+        "Explored 2 files: read_file, ran 2 commands: run_tests, validate_data",
+        "each clause lists only its own families"
+    );
+
+    assert_eq!(
+        super::tool_run_summary(&run(
+            &["session_sync"],
+            super::ToolRunActivitySummary {
+                other: 2,
+                ..Default::default()
+            }
+        )),
+        "Updated metadata",
+        "a run of tools with no user-facing family falls back to a plain note"
+    );
+
+    // Classification is derived from the real cells, not hand-set counters:
+    // command tools count as commands, git history tools count as files.
+    let commands = super::detect_tool_runs(
+        &[
+            tool_cell("run_tests", ToolStatus::Success),
+            tool_cell("run_verifiers", ToolStatus::Success),
+            tool_cell("validate_data", ToolStatus::Success),
+        ],
+        3,
+    );
+    assert_eq!(commands[0].activity.commands, 3);
+    assert_eq!(
+        super::tool_run_summary(&commands[0]),
+        "Ran 3 commands: run_tests, run_verifiers, validate_data"
+    );
+
+    let git = super::detect_tool_runs(
+        &[
+            tool_cell("git_log", ToolStatus::Success),
+            tool_cell("git_show", ToolStatus::Success),
+            tool_cell("git_blame", ToolStatus::Success),
+        ],
+        3,
+    );
+    assert_eq!(git[0].activity.files, 3);
+    assert_eq!(
+        super::tool_run_summary(&git[0]),
+        "Explored 3 files: git_log, git_show, git_blame"
+    );
+}
+
+/// The small pure helpers behind the cards, as one table each. Every row is a
+/// documented input shape or a documented rejection; a helper that guesses on
+/// malformed input is worse than one that declines.
+///
+/// Replaces ten single-case tests.
+#[test]
+fn the_card_helpers_accept_their_documented_forms_and_decline_the_rest() {
+    // Agent ids come out of a JSON body that the renderer must not fully parse.
+    for (input, expected) in [
+        (
+            r#"{"agent_id": "agent-abc12", "nickname": "Beluga"}"#,
+            Some("agent-abc12"),
+        ),
+        (
+            "{\n    \"agent_id\"   :    \"agent-xyz\",\n    \"model\": \"x\"\n}",
+            Some("agent-xyz"),
+        ),
+        (r#"{"nickname": "Orca", "model": "x"}"#, None),
+        (r#"{"agent_id": "", "model": "x"}"#, None),
+        ("(not json)", None),
+        ("", None),
+    ] {
+        assert_eq!(
+            super::extract_agent_id(input),
+            expected,
+            "extract_agent_id({input:?})"
+        );
+    }
+
+    // Checklist update prefixes: both vocabularies, and no guessing.
+    for (input, expected) in [
+        (
+            "Updated todo #3 to in_progress\n{ \"items\": [...] }",
+            Some(super::ChecklistChange {
+                id: 3,
+                status: "in_progress".to_string(),
+            }),
+        ),
+        (
+            "Updated checklist #7 to completed\n{ \"items\": [] }",
+            Some(super::ChecklistChange {
+                id: 7,
+                status: "completed".to_string(),
+            }),
+        ),
+        ("{ \"items\": [] }", None),
+        ("Wrote 5 todos\n{}", None),
+        ("Updated todo #3\n", None),
+        ("Updated todo #foo to done\n", None),
+    ] {
+        assert_eq!(
+            super::parse_update_prefix(input),
+            expected,
+            "parse_update_prefix({input:?})"
+        );
+    }
+
+    // The elapsed badge appears at three seconds and not before, so quick
+    // reads and greps do not visually churn.
+    for secs in [0, 1, 2] {
+        assert_eq!(running_status_label_with_elapsed(secs), "running");
+    }
+    for secs in [3u64, 7, 120] {
+        assert_eq!(
+            running_status_label_with_elapsed(secs),
+            format!("running ({secs}s)")
+        );
+    }
+
+    // A reasoning summary prefers an explicit Summary block, and otherwise is
+    // the reasoning itself rather than nothing.
+    assert_eq!(
+        extract_reasoning_summary("Thinking...\nSummary: First line\nSecond line\n\nTail")
+            .expect("summary"),
+        "First line\nSecond line"
+    );
+    assert_eq!(
+        extract_reasoning_summary("Line one\nLine two").expect("summary"),
+        "Line one\nLine two"
+    );
 }

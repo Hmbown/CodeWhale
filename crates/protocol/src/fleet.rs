@@ -70,6 +70,10 @@ pub struct FleetRun {
     pub worker_specs: Vec<FleetWorkerSpec>,
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
+    /// Legacy replay-only execution policy from pre-0.9.11 ledgers.
+    ///
+    /// New Fleet runs reject this field: Fleet selects identity, while the
+    /// Runtime owns trust, secrets, approvals, sandboxing, and tool authority.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security_policy: Option<FleetSecurityPolicy>,
     pub created_at: String,
@@ -214,11 +218,12 @@ pub struct FleetTaskSpec {
 /// Worker role and tool expectations for a task.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct FleetTaskWorkerProfile {
-    /// Named agent profile/persona posture to layer onto this worker.
+    /// Bounded human selector for one Fleet member.
     ///
-    /// `profile` is accepted as a shorter authoring alias. This is an intent
-    /// reference only; profile loading and permission narrowing happen in the
-    /// Fleet runtime layer.
+    /// Accepts member id/name, semantic role, model id/display name, or an
+    /// explicit `route:<provider>/<model>`. `profile` is accepted as a shorter
+    /// authoring alias. Resolution and permission narrowing happen in the Fleet
+    /// runtime layer.
     #[serde(default, alias = "profile", skip_serializing_if = "Option::is_none")]
     pub agent_profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -234,9 +239,9 @@ pub struct FleetTaskWorkerProfile {
     pub model_class: Option<String>,
     /// Optional explicit model id for this worker.
     ///
-    /// Task-level model overrides are visible authoring data and take
-    /// precedence over the referenced agent profile's model hint. Provider and
-    /// wire-model validation still belong to route resolution.
+    /// Task-level model overrides are visible authoring data. They apply only
+    /// when the selected member does not pin an exact provider/model route;
+    /// conflicting overrides of an exact member route are rejected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -280,6 +285,9 @@ pub struct FleetEnvironmentRequirements {
 pub struct FleetTaskBudget {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u64>,
+    /// Maximum model turns. `None` and `Some(0)` both mean unbounded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_steps: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tool_calls: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -389,6 +397,8 @@ pub struct FleetWorkerSpec {
     pub id: String,
     pub name: String,
     pub host: FleetHostSpec,
+    /// Legacy replay-only host trust label. New runs reject author-supplied
+    /// values and derive execution authority from Runtime policy instead.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trust_level: Option<FleetTrustLevel>,
@@ -438,13 +448,13 @@ pub enum FleetHostSpec {
     },
 }
 
-// ── Security and trust types ────────────────────────────────────────────────
+// ── Legacy Runtime-policy wire compatibility ───────────────────────────────
 
-/// Trust classification assigned to a worker host.
+/// Legacy trust classification retained only to deserialize old Fleet ledgers.
 ///
-/// The trust level determines what a worker is allowed to do and what
-/// secrets it may access. The default for new workers is [`FleetTrustLevel::Sandbox`];
-/// operators must explicitly raise trust for SSH or container workers.
+/// It is not Fleet identity and new run creation rejects it. Current authority
+/// comes from live Runtime policy; these helper predicates describe the old
+/// wire vocabulary only.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum FleetTrustLevel {
@@ -486,11 +496,11 @@ impl FleetTrustLevel {
     }
 }
 
-/// Security policy applied to a fleet run.
+/// Legacy Runtime execution-policy envelope retained for ledger replay.
 ///
-/// A policy defines the default trust level for workers, which secrets
-/// may be resolved, and what capabilities are granted. When a run has no
-/// explicit policy, workers inherit conservative defaults.
+/// This type is accepted while reading older protocol data but is rejected for
+/// new Fleet runs. Fleet membership/selection never grants trust, secrets, or
+/// capabilities; the Runtime derives those from its live policy boundary.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FleetSecurityPolicy {
     /// Default trust level for workers that don't declare one explicitly.
@@ -1171,6 +1181,7 @@ mod tests {
                 context: vec!["release gate".to_string()],
                 budget: Some(FleetTaskBudget {
                     max_tokens: Some(8000),
+                    max_steps: Some(0),
                     max_tool_calls: Some(20),
                     max_seconds: Some(300),
                 }),
@@ -1200,6 +1211,10 @@ mod tests {
             Some("release-checks")
         );
         assert_eq!(back.task_specs.len(), 1);
+        assert_eq!(
+            back.task_specs[0].budget.as_ref().unwrap().max_steps,
+            Some(0)
+        );
         assert_eq!(
             back.task_specs[0].worker.as_ref().unwrap().role.as_deref(),
             Some("release-checker")

@@ -5,7 +5,6 @@ use clap::Parser;
 use codewhale_secrets::account::{
     ACCOUNT_SESSION_SCHEMA_VERSION, AccountSession as AuthSession,
     account_auth_slot as cloud_auth_slot,
-    account_file_session_store_opted_in_value as file_session_store_opted_in_value,
 };
 use codewhale_secrets::{InMemoryKeyringStore, KeyringStore};
 use serde_json::json;
@@ -271,15 +270,6 @@ fn user_codes_and_key_inputs_match_the_server_contract() {
     );
     assert!(validate_label(&"x".repeat(80)).is_ok());
     assert!(validate_label(&"x".repeat(81)).is_err());
-}
-
-#[test]
-fn file_session_store_requires_explicit_one_value() {
-    assert!(!file_session_store_opted_in_value(None));
-    assert!(!file_session_store_opted_in_value(Some("")));
-    assert!(!file_session_store_opted_in_value(Some("true")));
-    assert!(file_session_store_opted_in_value(Some("1")));
-    assert!(file_session_store_opted_in_value(Some(" 1 ")));
 }
 
 #[test]

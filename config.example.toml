@@ -266,6 +266,34 @@ memory_path = "~/.codewhale/memory.md"
 allow_shell = true
 approval_policy = "on-request" # on-request | untrusted | never
 sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-access | external-sandbox
+
+# Whether a workspace-write sandbox also lets shell commands reach the
+# network. Default false: being allowed to edit this repository is not a
+# reason to be allowed to open outbound connections, so `curl`, package
+# installs, and `git fetch` are denied by the OS sandbox unless you opt in.
+# When a command is denied, Codewhale offers an elevation prompt that grants
+# network for that call only; set this to `true` to grant it for the whole
+# session instead. `danger-full-access` and `yolo` are unsandboxed and
+# unaffected by this key. Note that on platforms with no OS sandbox backend
+# (default Linux without bubblewrap, and Windows) nothing is enforced either
+# way -- `/status` and `doctor` both say so.
+# sandbox_network_access = false
+
+# Which other agents' instruction files to import as project instructions.
+# Empty by default. Codewhale reads AGENTS.md (the cross-agent standard) and
+# its own .codewhale/instructions.md without being asked; a CLAUDE.md,
+# .cursorrules, or .github/copilot-instructions.md written as law for a
+# different tool is not treated as law here until you say so. Codewhale's own
+# files always outrank anything imported.
+# Accepts: "claude", "cursor", "cline", "windsurf", "gemini", "copilot",
+# "muse", or "all". Env: CODEWHALE_PROJECT_INSTRUCTION_IMPORTS (comma-separated).
+# project_instruction_imports = ["claude"]
+#
+# Everything that reaches the model as standing project instruction authority —
+# the repository-root -> workspace AGENTS.md chain, the global fallback layer,
+# .codewhale/rules/*.md, and any imported foreign files — shares one 48 KiB
+# aggregate budget. Instructions claim it first and are trimmed from the
+# broadest scope inward, so the nearest-scope file is the last thing dropped.
 # prompt_suggestion = true  # opt-in: show ghost-text follow-up question in composer after each turn
 
 # Optional tab/window title shown as `[title] …` in front of the terminal
@@ -1479,8 +1507,9 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # max_children = 1000
 # # Maximum concurrently live agents inside one run (others wait for a slot).
 # max_concurrent = 16
-# # Maximum nested Workflow / child-orchestration depth.
-# max_depth = 2
+# # Maximum structural nesting depth accepted for Workflow IR (default 5).
+# # This is separate from Runtime child delegation below.
+# max_depth = 5
 # # Default shared token budget for a Workflow run and its children.
 # default_token_budget = 120000
 # # Parallel write children that may share the parent worktree without
@@ -1492,15 +1521,13 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # persist_completed_across_restarts = true
 
 # ─────────────────────────────────────────────────────────────────────────────────
-# Agent Fleet trust, security, and role registry (#3165, #3167)
+# Agent Fleet roster, role registry, and execution requests (#3165, #3167)
 # ─────────────────────────────────────────────────────────────────────────────────
 # [fleet]
-# # Default trust level for fleet workers: "sandbox" | "local" | "remote-verified" | "operator"
-# default_trust_level = "sandbox"
-# # Require SSH host-key verification before granting remote-verified trust
-# require_identity_verification = true
-# # Maximum trust level any worker may have
-# max_trust_level = "operator"
+# # Fleet stores member identity and route intent. Project trust, host identity,
+# # secrets, approvals, sandboxing, filesystem/network reach, and tool authority
+# # are Runtime policy and are deliberately not configured here. Pre-0.9.11
+# # trust keys are accepted only as ignored migration input.
 #
 # # Headless worker execution hardening (#3027)
 # [fleet.exec]
@@ -1508,12 +1535,13 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # allowed_tools = []
 # # Tools always disallowed (overrides role and task spec)
 # disallowed_tools = ["exec_shell"]
-# # Hard ceiling on worker steps (tool calls + model turns)
+# # Optional hard ceiling on worker steps (tool calls + model turns).
+# # Omit or set 0 for the unbounded default; use a positive value to opt in.
 # max_turns = 500
-# # Recursive child-agent depth for fleet workers. Shares ONE recursion axis
-# # with standalone sub-agents (a fleet worker IS a headless sub-agent).
-# # 0 blocks child agents (the root worker still runs); 3 is the default and the
-# # cap, affording at least three nested delegation levels.
+# # Runtime child-agent depth for fleet workers. Shares ONE recursion axis with
+# # standalone sub-agents (a fleet worker IS a headless sub-agent). This is an
+# # execution request, not Fleet member identity. 0 blocks child agents (the
+# # root worker still runs); 3 is the default and 8 is the opt-in hard ceiling.
 # max_spawn_depth = 3
 # # Extra system prompt injected into every headless worker
 # append_system_prompt = "Never modify .git/config or change remotes."
@@ -1536,11 +1564,6 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # description = "Runs linters and formatters"
 # instructions = "Run cargo fmt --check and cargo clippy; never apply fixes."
 #
-# [fleet.profiles.ci-linter.permissions]
-# allow_shell = true          # the only three keys are allow_shell, trust,
-# trust = false               # and approval_required (FleetProfilePermissions
-# approval_required = true    # in crates/config/src/lib.rs)
-#
 # [fleet.profiles.pr-reviewer]
 # slot = "reviewer"
 # loadout = "inherit"
@@ -1555,7 +1578,8 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 #
 # Multiple named Fleets may coexist alongside the default [fleet] table.
 # Each [fleets.<name>] entry must include an `operator` field and may configure
-# its own trust levels, roles, profiles, and exec policy independently.
+# its own roles, profiles, and execution requests independently. Runtime policy
+# remains separate from Fleet identity.
 #
 # Selection precedence (most specific wins):
 #   1. Explicit fleet name  — config.resolve_fleet("name")
@@ -1569,10 +1593,6 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # [fleets.alice-team]
 # # Required: the operator/leader identity for this fleet.
 # operator = "alice"
-# # These fields are identical to [fleet] and use the same defaults.
-# default_trust_level = "local"
-# require_identity_verification = true
-# max_trust_level = "operator"
 #
 # [fleets.alice-team.exec]
 # max_turns = 200
@@ -1591,7 +1611,6 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 #
 # [fleets.bob-team]
 # operator = "bob"
-# default_trust_level = "sandbox"
 #
 # [fleets.bob-team.profiles.implementer]
 # slot = "implementer"

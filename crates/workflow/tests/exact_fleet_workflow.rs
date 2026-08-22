@@ -7,12 +7,11 @@
 use codewhale_workflow::{
     CapturedReasoningRouter, CredentialReadiness, EffectiveReasoning, EffectiveReasoningSource,
     EndpointIdentity, FleetDocument, FleetSearchRoot, FleetSnapshot, NamedFleetError,
-    PermissionCeiling, PreflightedRoute, ProviderEffectiveReasoning, QualifiedFleetId,
-    REASONING_ROUTER_DIR, REASONING_ROUTER_SERVICE_KIND, ReasoningCapability, ReasoningRouterError,
+    PreflightedRoute, ProviderEffectiveReasoning, QualifiedFleetId, REASONING_ROUTER_DIR,
+    REASONING_ROUTER_SERVICE_KIND, ReasoningCapability, ReasoningRouterError,
     ReasoningRouterProfile, ReasoningTier, RequestedReasoning, RouterAvailability,
-    RouterCallReasoning, RouterIdentity, ShellCeiling, bounded_routing_payload,
-    parse_router_decision, resolve_exact_member_reasoning, router_call_plan, router_system_prompt,
-    router_user_message,
+    RouterCallReasoning, RouterIdentity, bounded_routing_payload, parse_router_decision,
+    resolve_exact_member_reasoning, router_call_plan, router_system_prompt, router_user_message,
 };
 
 const GLM_FLEET: &str = r#"
@@ -373,7 +372,7 @@ fn a_missing_router_profile_is_a_local_load_failure() {
 }
 
 #[test]
-fn member_ceilings_clamp_against_a_read_only_session_posture() {
+fn legacy_permissions_do_not_enter_the_member_snapshot() {
     let document = FleetDocument::parse(GLM_FLEET).expect("parse");
     let snapshot = FleetSnapshot::capture(
         fleet_id("glm-pair"),
@@ -383,26 +382,12 @@ fn member_ceilings_clamp_against_a_read_only_session_posture() {
     )
     .expect("capture");
 
-    let session = PermissionCeiling {
-        write: false,
-        network_tool: false,
-        shell: ShellCeiling::ReadOnly,
-        delegation_depth: 0,
-        tools: true,
-    };
-
     let implementer = snapshot.member("implementer").expect("member");
+    let encoded = serde_json::to_value(implementer).expect("serialize member snapshot");
     assert!(
-        implementer.permissions.write,
-        "the saved ceiling allows writes"
+        encoded.get("permissions").is_none(),
+        "Fleet identity/snapshot must not own Runtime authority: {encoded}"
     );
-
-    let effective = implementer.permissions.clamp_to(session);
-    assert!(
-        !effective.write,
-        "a saved fleet must never raise the active session posture"
-    );
-    assert_eq!(effective.shell, ShellCeiling::ReadOnly);
 }
 
 /// The bounded routing summary is transmitted exactly once, and the receipt's

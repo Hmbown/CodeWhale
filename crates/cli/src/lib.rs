@@ -1,6 +1,7 @@
 #![allow(clippy::uninlined_format_args)]
 
 mod cloud;
+mod config_bundles;
 mod credential_handoff;
 mod metrics;
 #[cfg(not(target_env = "ohos"))]
@@ -385,9 +386,7 @@ New integrations should prefer `codewhale app-server`.")]
         after_help = "The browser receives a one-time loopback bootstrap capability, never the Runtime token.\nThe capability is exchanged for a bounded, process-local HttpOnly, SameSite=Strict web session and then invalidated."
     )]
     Web(WebArgs),
-    /// Generate shell completions.
-    Completions(TuiPassthroughArgs),
-    /// Configure provider credentials.
+    /// Sign in to your Codewhale account (browser device flow).
     Login(LoginArgs),
     /// Remove saved authentication state.
     Logout,
@@ -421,7 +420,11 @@ is read from --auth-token, CODEWHALE_RUNTIME_TOKEN, or DEEPSEEK_RUNTIME_TOKEN.
 See docs/RUNTIME_API.md.")]
     AppServer(AppServerArgs),
     /// Generate shell completions.
-    #[command(after_help = r#"Examples:
+    #[command(
+        visible_alias = "completions",
+        after_help = r#"Every script completes both `codewhale` and the `codew` shorthand.
+
+Examples:
   Bash (current shell only):
     source <(codewhale completion bash)
 
@@ -444,7 +447,15 @@ See docs/RUNTIME_API.md.")]
   PowerShell (current shell only):
     codewhale completion powershell | Out-String | Invoke-Expression
 
-The command prints the completion script to stdout; redirect it to a path your shell loads automatically."#)]
+  PowerShell (persistent):
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PROFILE)
+    codewhale completion powershell >> $PROFILE
+
+  Elvish:
+    codewhale completion elvish >> ~/.config/elvish/rc.elv
+
+The command prints the completion script to stdout; redirect it to a path your shell loads automatically."#
+    )]
     Completion {
         #[arg(value_enum)]
         shell: Shell,
@@ -453,6 +464,81 @@ The command prints the completion script to stdout; redirect it to a path your s
     Metrics(MetricsArgs),
     /// Check for and apply updates to the `codewhale` binary.
     Update(UpdateArgs),
+}
+
+/// The name of this crate's `[[bin]]` target, and the command users actually
+/// type. Completion scripts must register *this*, not the in-tree
+/// `codewhale-tui` binary that used to render them (#5526).
+///
+/// GitHub releases do not ship a separately compiled TUI: `release-artifacts.yml`
+/// builds `-p codewhale-cli` and publishes `codewhale` plus a byte-identical
+/// `codew` copy. The `codewhale-tui-*` filenames still attached to the release
+/// are that same binary (a v0.9.4 updater bridge), not a third runtime.
+const COMPLETION_BIN_NAME: &str = "codewhale";
+
+/// Releases publish `codew` as a byte-identical copy of `codewhale`
+/// (`release-artifacts.yml` copies the binary and `cmp`s it), so a completion
+/// script that fires only for `codewhale` is half-installed for anyone who
+/// types the short name.
+const COMPLETION_ALIAS_NAME: &str = "codew";
+
+/// Render the completion script for `shell` from this binary's own clap tree,
+/// registered for both published command names.
+fn render_completion_script(shell: Shell) -> String {
+    let mut cmd = Cli::command();
+    let mut buf = Vec::new();
+    generate(shell, &mut cmd, COMPLETION_BIN_NAME, &mut buf);
+    let script = String::from_utf8_lossy(&buf).into_owned();
+    register_completion_alias(shell, script)
+}
+
+/// Extend a clap_complete script so the `codew` shorthand completes too.
+///
+/// Each shell gets its own idiomatic hook rather than a second copy of the
+/// script: bash re-binds the generated function, zsh widens the `#compdef`
+/// tag line, fish wraps the primary command, PowerShell registers an array
+/// of command names, and Elvish aliases the completer map entry. `Shell` is
+/// non-exhaustive, so any future variant falls through unchanged.
+fn register_completion_alias(shell: Shell, script: String) -> String {
+    let bin = COMPLETION_BIN_NAME;
+    let alias = COMPLETION_ALIAS_NAME;
+    match shell {
+        Shell::Bash => format!(
+            "{script}\n\
+             if [[ \"${{BASH_VERSINFO[0]}}\" -eq 4 && \"${{BASH_VERSINFO[1]}}\" -ge 4 || \"${{BASH_VERSINFO[0]}}\" -gt 4 ]]; then\n    \
+             complete -F _{bin} -o nosort -o bashdefault -o default {alias}\n\
+             else\n    \
+             complete -F _{bin} -o bashdefault -o default {alias}\n\
+             fi\n"
+        ),
+        // Two install paths, two hooks. Autoloaded from `fpath` the tag line
+        // on the first line is what binds the names; sourced directly, the
+        // `compdef` call clap emits at the bottom is. Cover both, and reuse
+        // clap's own `funcstack` guard so the appended call is skipped when
+        // the body runs as the completion function itself.
+        Shell::Zsh => {
+            let tagged = match script.strip_prefix(&format!("#compdef {bin}\n")) {
+                Some(rest) => format!("#compdef {bin} {alias}\n{rest}"),
+                None => script,
+            };
+            format!(
+                "{tagged}\nif [ \"$funcstack[1]\" != \"_{bin}\" ]; then\n    \
+                 compdef _{bin} {alias}\n\
+                 fi\n"
+            )
+        }
+        Shell::Fish => format!("{script}\ncomplete -c {alias} -w {bin}\n"),
+        Shell::PowerShell => script.replacen(
+            &format!("-CommandName '{bin}'"),
+            &format!("-CommandName '{bin}','{alias}'"),
+            1,
+        ),
+        Shell::Elvish => format!(
+            "{script}\n\
+             set edit:completion:arg-completer[{alias}] = $edit:completion:arg-completer[{bin}]\n"
+        ),
+        _ => script,
+    }
 }
 
 fn command_accepts_raw_provider(command: Option<&Commands>) -> bool {
@@ -1432,10 +1518,22 @@ fn remote_setup_tui_args(args: RemoteSetupArgs) -> Vec<String> {
 
 #[derive(Debug, Args)]
 struct LoginArgs {
+    /// Print the verification URL without trying to open a browser.
+    #[arg(long, default_value_t = false)]
+    no_open: bool,
+    /// Maximum time to wait for browser authorization.
+    #[arg(
+        long = "timeout-seconds",
+        default_value_t = cloud::DEFAULT_LOGIN_TIMEOUT_SECONDS,
+        value_parser = clap::value_parser!(u64).range(1..=cloud::MAX_LOGIN_TIMEOUT_SECONDS)
+    )]
+    timeout_seconds: u64,
+    /// Legacy provider-key flag: rejected with a redirect to `auth set`.
+    #[arg(long, hide = true)]
+    api_key: Option<String>,
+    /// Legacy provider flag: rejected with a redirect to `auth set`.
     #[arg(long, value_enum, hide = true)]
     provider: Option<ProviderArg>,
-    #[arg(long)]
-    api_key: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1540,11 +1638,22 @@ struct ConfigArgs {
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
-    Get { key: String },
-    Set { key: String, value: String },
-    Unset { key: String },
+    Get {
+        key: String,
+    },
+    Set {
+        key: String,
+        value: String,
+    },
+    Unset {
+        key: String,
+    },
     List,
     Path,
+    /// Import a portable config bundle from a file, HTTPS URL, or stdin (-).
+    Import(config_bundles::ImportArgs),
+    /// Export a portable, secret-free config bundle.
+    Export(config_bundles::ExportArgs),
 }
 
 #[derive(Debug, Args)]
@@ -1878,11 +1987,16 @@ fn run() -> Result<()> {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             run_tui_server_in_process(&cli, &resolved_runtime, web_serve_passthrough(&args))
         }
-        Some(Commands::Completions(args)) => {
-            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
-            run_tui_in_process(&cli, &resolved_runtime, tui_args("completions", args))
+        Some(Commands::Login(args)) => {
+            reject_legacy_login_provider_args(&args)?;
+            cloud::reject_inline_api_key(cli.api_key.as_deref())?;
+            cloud::run_account_login(
+                args.no_open,
+                args.timeout_seconds,
+                cli.profile.as_deref(),
+                &store,
+            )
         }
-        Some(Commands::Login(args)) => run_login_command(&mut store, args),
         Some(Commands::Logout) => run_logout_command(&mut store),
         Some(Commands::Auth(args)) => match args.command {
             AuthCommand::XaiDevice => {
@@ -1980,8 +2094,9 @@ fn run() -> Result<()> {
             run_app_server_command(&cli, &resolved_runtime, args)
         }
         Some(Commands::Completion { shell }) => {
-            let mut cmd = Cli::command();
-            generate(shell, &mut cmd, "codewhale", &mut io::stdout());
+            let mut stdout = io::stdout();
+            stdout.write_all(render_completion_script(shell).as_bytes())?;
+            stdout.flush()?;
             Ok(())
         }
         Some(Commands::Metrics(args)) => run_metrics_command(args),
@@ -2189,39 +2304,18 @@ fn reject_exec_global_flags(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn run_login_command(store: &mut ConfigStore, args: LoginArgs) -> Result<()> {
-    run_login_command_with_secrets(store, args, &Secrets::auto_detect())
-}
-
-fn run_login_command_with_secrets(
-    store: &mut ConfigStore,
-    args: LoginArgs,
-    secrets: &Secrets,
-) -> Result<()> {
-    let provider: ProviderKind = args.provider.unwrap_or(ProviderArg::Deepseek).into();
-    let api_key = match args.api_key {
-        Some(v) => v,
-        None => read_api_key_from_stdin()?,
-    };
-    let mut credential_store = credential_metadata_store(store)?;
-    let store = credential_store.as_mut().unwrap_or(store);
-    store.config.provider = provider;
-
-    let secret_store_saved = persist_provider_api_key(store, secrets, provider, &api_key)?;
-    let destination = if secret_store_saved {
-        secrets.backend_name().to_string()
-    } else {
-        codewhale_config::quote_os_path(store.path())
-    };
-    if provider == ProviderKind::Deepseek {
-        println!("logged in using API key mode (deepseek); saved key to {destination}");
-    } else {
-        println!(
-            "logged in using API key mode ({}); saved key to {destination}",
-            provider.as_str(),
-        );
+/// `codewhale login` used to configure provider API keys; that surface moved
+/// to `auth set --provider`. The hidden legacy flags stay parseable so the
+/// redirect below can name the replacement instead of an unknown-flag error.
+fn reject_legacy_login_provider_args(args: &LoginArgs) -> Result<()> {
+    if args.api_key.is_none() && args.provider.is_none() {
+        return Ok(());
     }
-    Ok(())
+    bail!(
+        "`codewhale login` now signs in to your Codewhale account via the browser device flow. \
+         To configure a provider key, run `codewhale auth set --provider <provider>` (hidden prompt) \
+         or `codewhale auth set --provider <provider> --api-key-stdin`."
+    )
 }
 
 fn run_logout_command(store: &mut ConfigStore) -> Result<()> {
@@ -4131,6 +4225,11 @@ fn run_config_command(store: &mut ConfigStore, command: ConfigCommand) -> Result
             println!("{}", store.path().display());
             Ok(())
         }
+        ConfigCommand::Import(args) => {
+            let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            config_bundles::run_import(&args, store, &workspace)
+        }
+        ConfigCommand::Export(args) => config_bundles::run_export(&args, store),
     }
 }
 
@@ -4168,6 +4267,16 @@ fn provider_source_label(source: ProviderSource) -> String {
         ProviderSource::Cli => "--provider".to_string(),
         ProviderSource::Env(name) => format!("environment ({name})"),
         ProviderSource::Config => "config".to_string(),
+    }
+}
+
+fn canonical_model_for_set(model: &str) -> &str {
+    match model.to_ascii_lowercase().as_str() {
+        "pro" | "deepseek-v4pro" => "deepseek-v4-pro",
+        "flash" | "deepseek-v4flash" => "deepseek-v4-flash",
+        "flash-vision" | "deepseek-v4flashvisionexp" => "deepseek-v4-flash-vision-exp",
+        "auto" => "auto",
+        _ => model,
     }
 }
 
@@ -4269,12 +4378,7 @@ fn run_model_command(
             if trimmed.is_empty() {
                 bail!("Model name cannot be empty");
             }
-            let canonical = match trimmed.to_ascii_lowercase().as_str() {
-                "pro" | "deepseek-v4pro" => "deepseek-v4-pro",
-                "flash" | "deepseek-v4flash" => "deepseek-v4-flash",
-                "auto" => "auto",
-                _ => trimmed,
-            };
+            let canonical = canonical_model_for_set(trimmed);
             store.config.default_text_model = Some(canonical.to_string());
             store.save()?;
             println!("Default model set to '{canonical}'");
@@ -4449,6 +4553,9 @@ fn run_app_server_command(
     // Legacy in-process app-server HTTP transport (`/healthz`, `/thread`, `/app`,
     // `/prompt`, `/tool`, `/jobs`). Kept for backward compatibility; defaults to
     // 127.0.0.1:8787 to avoid colliding with the runtime API default of :7878.
+    // `/prompt` and `/thread` messages are not served locally: they run a real
+    // turn by bridging to a runtime API child, and fail with an explicit
+    // `runtime_unavailable` when one cannot be started.
     let host = args.host.as_deref().unwrap_or("127.0.0.1");
     let port = args.port.unwrap_or(8787);
     let outcome = format!("{host}:{port}")
@@ -5276,6 +5383,20 @@ mod tests {
     }
 
     #[test]
+    fn model_set_canonicalizes_deepseek_vision_aliases() {
+        for alias in ["flash-vision", "deepseek-v4flashvisionexp"] {
+            assert_eq!(
+                canonical_model_for_set(alias),
+                "deepseek-v4-flash-vision-exp"
+            );
+        }
+        assert_eq!(
+            canonical_model_for_set("deepseek-v4-flash-vision-exp"),
+            "deepseek-v4-flash-vision-exp"
+        );
+    }
+
+    #[test]
     fn parses_thread_command_matrix() {
         let cli = parse_ok(&["deepseek", "thread", "list", "--all", "--limit", "50"]);
         assert!(matches!(
@@ -5398,6 +5519,162 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Completion { shell: Shell::Bash })
+        ));
+    }
+
+    /// The `[[bin]] name` declared in this crate's manifest is the only thing a
+    /// user ever types. Read it from disk rather than restating it, so renaming
+    /// the binary without re-pointing the completion generator fails here
+    /// instead of silently shipping a script nobody's shell loads (#5526).
+    fn declared_bin_name() -> String {
+        let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+            .expect("read crates/cli/Cargo.toml");
+        let bin_section = manifest
+            .split("[[bin]]")
+            .nth(1)
+            .expect("crates/cli/Cargo.toml declares a [[bin]] target");
+        for line in bin_section.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("name") {
+                let value = rest.trim_start().trim_start_matches('=').trim();
+                return value.trim_matches('"').to_string();
+            }
+        }
+        panic!("[[bin]] section has no name key");
+    }
+
+    #[test]
+    fn completion_bin_name_matches_the_declared_bin_target() {
+        assert_eq!(
+            COMPLETION_BIN_NAME,
+            declared_bin_name(),
+            "completion scripts must register the binary this crate actually builds"
+        );
+    }
+
+    /// Issue #5526: `codewhale completions <shell>` used to forward to the
+    /// in-tree `codewhale-tui` binary, so every generated script registered
+    /// `codewhale-tui` — not a GitHub-release command — and exposed the TUI's
+    /// smaller subcommand tree. Pin the registered names per shell.
+    #[test]
+    fn generated_completion_scripts_register_the_published_command_names() {
+        let bin = declared_bin_name();
+        let alias = COMPLETION_ALIAS_NAME;
+
+        // Match whole lines throughout: `codew` is a prefix of `codewhale`,
+        // so a substring check for the alias is satisfied by the primary
+        // binding and would pass on an unfixed build.
+        let has_line =
+            |script: &str, wanted: &str| script.lines().any(|line| line.trim() == wanted);
+
+        let bash = render_completion_script(Shell::Bash);
+        assert!(
+            has_line(
+                &bash,
+                &format!("complete -F _{bin} -o bashdefault -o default {bin}")
+            ),
+            "bash script must bind the real binary name:\n{bash}"
+        );
+        assert!(
+            has_line(
+                &bash,
+                &format!("complete -F _{bin} -o bashdefault -o default {alias}")
+            ),
+            "bash script must bind the {alias} shorthand too"
+        );
+
+        let zsh = render_completion_script(Shell::Zsh);
+        assert_eq!(
+            zsh.lines().next(),
+            Some(format!("#compdef {bin} {alias}").as_str()),
+            "zsh compdef tag line must list both published command names"
+        );
+        assert!(
+            has_line(&zsh, &format!("compdef _{bin} {bin}")),
+            "zsh script must bind {bin} on the sourced path"
+        );
+        assert!(
+            has_line(&zsh, &format!("compdef _{bin} {alias}")),
+            "zsh script must bind {alias} on the sourced path too"
+        );
+
+        let fish = render_completion_script(Shell::Fish);
+        assert!(
+            fish.contains(&format!("complete -c {bin} ")),
+            "fish script must complete the real binary name"
+        );
+        assert!(
+            has_line(&fish, &format!("complete -c {alias} -w {bin}")),
+            "fish script must wrap the {alias} shorthand onto {bin}"
+        );
+
+        let powershell = render_completion_script(Shell::PowerShell);
+        assert!(
+            powershell.contains(&format!(
+                "Register-ArgumentCompleter -Native -CommandName '{bin}','{alias}'"
+            )),
+            "PowerShell script must register both published command names"
+        );
+
+        let elvish = render_completion_script(Shell::Elvish);
+        assert!(
+            has_line(
+                &elvish,
+                &format!("set edit:completion:arg-completer[{bin}] = {{|@words|")
+            ),
+            "elvish script must bind the real binary name:\n{elvish}"
+        );
+        assert!(
+            has_line(
+                &elvish,
+                &format!(
+                    "set edit:completion:arg-completer[{alias}] = $edit:completion:arg-completer[{bin}]"
+                )
+            ),
+            "elvish script must alias the {alias} shorthand onto {bin}"
+        );
+
+        for (shell, script) in [
+            ("bash", &bash),
+            ("zsh", &zsh),
+            ("fish", &fish),
+            ("powershell", &powershell),
+            ("elvish", &elvish),
+        ] {
+            assert!(
+                !script.contains("codewhale-tui"),
+                "{shell} completions leaked the in-tree codewhale-tui name (#5526)"
+            );
+        }
+    }
+
+    /// The other half of #5526: the script has to describe *this* CLI's
+    /// commands. Rendering from a different clap tree would drop or invent
+    /// subcommands, which is exactly how the forwarded script went stale.
+    #[test]
+    fn generated_completion_scripts_cover_the_real_subcommand_surface() {
+        let bash = render_completion_script(Shell::Bash);
+        for sub in Cli::command().get_subcommands() {
+            if sub.is_hide_set() {
+                continue;
+            }
+            let name = sub.get_name();
+            assert!(
+                bash.contains(name),
+                "bash completions omit the `{name}` subcommand"
+            );
+        }
+    }
+
+    /// `completions` is what the issue reporter typed and what the TUI called
+    /// it; keep it working, now as an alias that renders in-process.
+    #[test]
+    fn completions_is_an_alias_for_completion() {
+        assert!(matches!(
+            parse_ok(&["codewhale", "completions", "powershell"]).command,
+            Some(Commands::Completion {
+                shell: Shell::PowerShell
+            })
         ));
     }
 
@@ -6079,7 +6356,7 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_login_uses_isolated_file_store_and_preserves_tui_defaults() {
+    fn auth_set_uses_isolated_file_store_and_preserves_tui_defaults() {
         let _lock = env_lock();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let codewhale_home = dir.path().join("codewhale-home");
@@ -6090,15 +6367,16 @@ mod tests {
         let mut store = ConfigStore::load(Some(path.clone())).expect("store should load");
         let secrets = Secrets::auto_detect();
 
-        run_login_command_with_secrets(
+        run_auth_command_with_secrets(
             &mut store,
-            LoginArgs {
-                provider: Some(ProviderArg::Deepseek),
+            AuthCommand::Set {
+                provider: ProviderArg::Deepseek,
                 api_key: Some("sk-test".to_string()),
+                api_key_stdin: false,
             },
             &secrets,
         )
-        .expect("login should persist credential");
+        .expect("auth set should persist credential");
 
         assert!(store.config.api_key.is_none());
         assert!(store.config.providers.deepseek.api_key.is_none());
@@ -6111,7 +6389,7 @@ mod tests {
         assert!(
             !saved
                 .lines()
-                .any(|line| line.trim_start().starts_with("api_key ="))
+                .any(|line| line.trim_start().starts_with("api_key="))
         );
         assert!(saved.contains("default_text_model = \"deepseek-v4-pro\""));
         assert_eq!(
@@ -6120,57 +6398,77 @@ mod tests {
         );
     }
 
-    /// #5198: with CODEWHALE_CONFIG_PATH pointing at a workspace-scoped
-    /// `<repo>/.codewhale/config.toml`, login must write the provider binding
-    /// and auth markers to the user-global document, never the repo file.
+    /// `codewhale login` now means the Codewhale account device flow: the
+    /// account-login flags parse through and reach the cloud path.
     #[test]
-    fn login_with_repo_scoped_ambient_config_writes_user_global_metadata() {
-        let _lock = env_lock();
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let repo = dir.path().join("repo");
-        std::fs::create_dir_all(repo.join(".git")).expect("git marker");
-        let repo_config_dir = repo.join(".codewhale");
-        std::fs::create_dir_all(&repo_config_dir).expect("repo config dir");
-        let repo_config = repo_config_dir.join("config.toml");
-        std::fs::write(&repo_config, "approval_policy = \"never\"\n").expect("repo config");
+    fn login_parses_account_device_flow_flags() {
+        let cli = parse_ok(&["codewhale", "login", "--no-open", "--timeout-seconds", "5"]);
+        let Some(Commands::Login(args)) = cli.command else {
+            panic!("expected Login");
+        };
+        assert!(args.no_open);
+        assert_eq!(args.timeout_seconds, 5);
+        assert!(args.api_key.is_none());
+        assert!(args.provider.is_none());
 
-        let codewhale_home = dir.path().join("codewhale-home");
-        let _home = ScopedEnvVar::set("CODEWHALE_HOME", &codewhale_home.to_string_lossy());
-        let _config = ScopedEnvVar::set("CODEWHALE_CONFIG_PATH", &repo_config.to_string_lossy());
-        let _legacy_config = ScopedEnvVar::remove("DEEPSEEK_CONFIG_PATH");
-        let _backend = ScopedEnvVar::set("CODEWHALE_SECRET_BACKEND", "file");
-        let mut store = ConfigStore::load(None).expect("ambient store should load");
-        let secrets = Secrets::auto_detect();
+        let cli = parse_ok(&["codewhale", "login"]);
+        let Some(Commands::Login(args)) = cli.command else {
+            panic!("expected Login");
+        };
+        assert!(!args.no_open);
+        assert_eq!(args.timeout_seconds, 600);
+    }
 
-        run_login_command_with_secrets(
-            &mut store,
-            LoginArgs {
-                provider: Some(ProviderArg::Deepseek),
-                api_key: Some("sk-repo-scoped".to_string()),
-            },
-            &secrets,
-        )
-        .expect("login should persist credential");
-
-        assert_eq!(
-            secrets.get("deepseek").expect("read secret").as_deref(),
-            Some("sk-repo-scoped")
-        );
-        let global_config = codewhale_home.join("config.toml");
-        let global = std::fs::read_to_string(&global_config).expect("user-global config");
+    /// The provider-key surface moved to `auth set --provider`; the hidden
+    /// legacy flags must redirect loudly instead of silently configuring a key.
+    #[test]
+    fn login_rejects_legacy_provider_flags_with_redirect() {
+        let err = reject_legacy_login_provider_args(&LoginArgs {
+            no_open: false,
+            timeout_seconds: 600,
+            api_key: Some("sk-x".to_string()),
+            provider: None,
+        })
+        .expect_err("legacy --api-key must be rejected");
+        let rendered = err.to_string();
         assert!(
-            global.contains("auth_mode = \"api_key\""),
-            "user-global config must carry the auth marker: {global}"
+            rendered.contains("auth set --provider"),
+            "redirect must name `auth set --provider`: {rendered}"
+        );
+
+        let err = reject_legacy_login_provider_args(&LoginArgs {
+            no_open: false,
+            timeout_seconds: 600,
+            api_key: None,
+            provider: Some(ProviderArg::Deepseek),
+        })
+        .expect_err("legacy --provider must be rejected");
+        assert!(
+            err.to_string().contains("auth set --provider"),
+            "redirect must name `auth set --provider`"
+        );
+
+        reject_legacy_login_provider_args(&LoginArgs {
+            no_open: false,
+            timeout_seconds: 600,
+            api_key: None,
+            provider: None,
+        })
+        .expect("plain account login carries no legacy flags");
+    }
+
+    /// Root help keeps the `login` token, but its meaning is now the account
+    /// sign-in; the subcommand help must say so.
+    #[test]
+    fn login_help_describes_account_signin() {
+        let help = help_for(&["codewhale", "login", "--help"]);
+        assert!(
+            help.contains("Codewhale account"),
+            "login help must describe account sign-in: {help}"
         );
         assert!(
-            global.contains("provider = \"deepseek\""),
-            "user-global config must carry the provider binding: {global}"
-        );
-        assert!(!global.contains("sk-repo-scoped"), "{global}");
-        let repo_after = std::fs::read_to_string(&repo_config).expect("repo config");
-        assert_eq!(
-            repo_after, "approval_policy = \"never\"\n",
-            "workspace config must stay untouched by credential metadata: {repo_after}"
+            !help.to_lowercase().contains("api key"),
+            "login help must not advertise provider API keys: {help}"
         );
     }
 
@@ -8488,11 +8786,13 @@ mod tests {
                 vec![
                     "<SHELL>",
                     "bash",
+                    "Every script completes both `codewhale` and the `codew` shorthand.",
                     "source <(codewhale completion bash)",
                     "~/.local/share/bash-completion/completions/codewhale",
                     "fpath=(~/.zfunc $fpath)",
                     "codewhale completion fish > ~/.config/fish/completions/codewhale.fish",
                     "codewhale completion powershell | Out-String | Invoke-Expression",
+                    "codewhale completion elvish >> ~/.config/elvish/rc.elv",
                 ],
             ),
             ("metrics", vec!["--json", "--since"]),

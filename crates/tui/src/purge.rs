@@ -14,6 +14,7 @@ use crate::config::ApiProvider;
 use crate::core::events::Event;
 use crate::fast_hash::{FastHashMap, FastHashSet};
 use crate::llm_client::LlmClient;
+use crate::models::Role;
 use crate::models::{ContentBlock, Message, MessageRequest, Tool};
 use crate::regex_cache::compile_user_regex;
 
@@ -545,7 +546,7 @@ pub async fn run_purge(
     // 2. Clone messages and inject the prompt as a user message.
     let mut request_messages = messages.to_vec();
     request_messages.push(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: prompt,
             cache_control: None,
@@ -620,7 +621,7 @@ mod tests {
 
     fn msg_text(role: &str, text: &str) -> Message {
         Message {
-            role: role.to_string(),
+            role: Role::from(role),
             content: vec![ContentBlock::Text {
                 text: text.to_string(),
                 cache_control: None,
@@ -630,7 +631,7 @@ mod tests {
 
     fn msg_tool_use(id: &str, name: &str, input: serde_json::Value) -> Message {
         Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -643,7 +644,7 @@ mod tests {
 
     fn msg_tool_result(id: &str, content: &str) -> Message {
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: id.to_string(),
                 content: content.to_string(),
@@ -783,7 +784,7 @@ mod tests {
     #[test]
     fn prompt_omits_thinking_blocks() {
         let msgs = vec![Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![
                 ContentBlock::Thinking {
                     signature: None,

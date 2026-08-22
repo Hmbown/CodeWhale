@@ -1,31 +1,40 @@
 //! Task commands: add/list/show/cancel
 
-use crate::commands::traits::{CommandInfo, RegisterCommand};
-use crate::localization::MessageId;
-use crate::tui::app::{App, AppAction};
+use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::commands::CommandResult;
+use crate::tui::app::AppAction;
 
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "task",
     aliases: &["tasks"],
     usage: "/task [add <prompt>|list|digest|show <id>|cancel <id>]",
-    description_id: MessageId::CmdTaskDescription,
+    description_key: "cmd_task_description",
 };
 
 pub(in crate::commands) struct TaskCmd;
 
-impl RegisterCommand for TaskCmd {
+impl RegisterCommand<CommandResult> for TaskCmd {
     fn info() -> &'static CommandInfo {
         &COMMAND_INFO
     }
 
-    fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
-        task(app, arg)
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Contextual(task_contextual)
     }
 }
 
-fn task(app: &mut App, args: Option<&str>) -> CommandResult {
+fn task_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
+    let mut parts = contexts.into_parts();
+    let workspace = parts.workspace.as_deref_mut().expect("workspace facet");
+    task(workspace, arg)
+}
+
+fn task(
+    workspace: &mut dyn codewhale_command_contract::facets::CommandWorkspaceContext,
+    args: Option<&str>,
+) -> CommandResult {
     let raw = args.unwrap_or("").trim();
     if raw.is_empty() || raw.eq_ignore_ascii_case("list") {
         return CommandResult::action(AppAction::TaskList);
@@ -45,19 +54,10 @@ fn task(app: &mut App, args: Option<&str>) -> CommandResult {
             })
         }
         "list" => CommandResult::action(AppAction::TaskList),
-        "digest" => {
-            let Some(work) = app.runtime_services.work.as_ref() else {
-                return CommandResult::message("No active operations or to-do items.");
-            };
-            match work.capture(app.current_session_id.as_deref()) {
-                Ok(snapshot) => CommandResult::message(crate::work_graph::format_operation_digest(
-                    snapshot.as_ref(),
-                )),
-                Err(error) => CommandResult::error(format!(
-                    "Operation digest is temporarily unavailable: {error}"
-                )),
-            }
-        }
+        "digest" => match workspace.operation_digest() {
+            Ok(text) => CommandResult::message(text),
+            Err(error) => CommandResult::error(error),
+        },
         "show" => {
             let Some(id) = remainder else {
                 return CommandResult::error("Usage: /task show <id>");
@@ -77,31 +77,43 @@ fn task(app: &mut App, args: Option<&str>) -> CommandResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::tui::app::TuiOptions;
     use std::path::PathBuf;
 
-    fn app() -> App {
-        App::new(
-            TuiOptions {
-                use_alt_screen: false,
-                max_subagents: 2,
-                ..crate::test_support::test_tui_options(PathBuf::from("."))
-            },
-            &Config::default(),
-        )
+    struct FakeWorkspace;
+    impl codewhale_command_contract::facets::CommandWorkspaceContext for FakeWorkspace {
+        fn workspace(&self) -> PathBuf {
+            PathBuf::from(".")
+        }
+        fn work_state_snapshot(&self) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+        fn operation_digest(&mut self) -> Result<String, String> {
+            Ok("No active operations or to-do items.".to_string())
+        }
+    }
+
+    struct FailingWorkspace;
+    impl codewhale_command_contract::facets::CommandWorkspaceContext for FailingWorkspace {
+        fn workspace(&self) -> PathBuf {
+            PathBuf::from(".")
+        }
+        fn work_state_snapshot(&self) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+        fn operation_digest(&mut self) -> Result<String, String> {
+            Err("Operation digest is temporarily unavailable: boom".to_string())
+        }
     }
 
     #[test]
     fn parses_add_and_cancel() {
-        let mut app = app();
-        let add = task(&mut app, Some("add write tests"));
+        let add = task(&mut FakeWorkspace, Some("add write tests"));
         assert!(matches!(
             add.action,
             Some(AppAction::TaskAdd { prompt }) if prompt == "write tests"
         ));
 
-        let cancel = task(&mut app, Some("cancel task_1234"));
+        let cancel = task(&mut FakeWorkspace, Some("cancel task_1234"));
         assert!(matches!(
             cancel.action,
             Some(AppAction::TaskCancel { id }) if id == "task_1234"
@@ -110,20 +122,35 @@ mod tests {
 
     #[test]
     fn validates_usage() {
-        let mut app = app();
-        let result = task(&mut app, Some("add"));
+        let result = task(&mut FakeWorkspace, Some("add"));
         assert!(result.message.is_some());
         assert!(result.action.is_none());
     }
 
     #[test]
     fn digest_uses_canonical_work_runtime_without_another_state_store() {
-        let mut app = app();
-        let result = task(&mut app, Some("digest"));
+        let result = task(&mut FakeWorkspace, Some("digest"));
         assert_eq!(
             result.message.as_deref(),
             Some("No active operations or to-do items.")
         );
         assert!(result.action.is_none());
+
+        let failing = task(&mut FailingWorkspace, Some("digest"));
+        assert!(failing.is_error);
+        assert!(
+            failing
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Operation digest is temporarily unavailable: boom")
+        );
+    }
+
+    #[test]
+    fn handler_is_contextual() {
+        assert!(matches!(TaskCmd::handler(), CommandHandler::Contextual(_)));
+        assert_eq!(TaskCmd::info().description_key, "cmd_task_description");
+        assert_eq!(TaskCmd::info().aliases, &["tasks"]);
     }
 }

@@ -18,6 +18,7 @@ use crate::repl::PythonRuntime;
 
 use super::bridge::{RlmBridge, RlmLlmClient};
 use super::prompt::rlm_system_prompt;
+use crate::models::Role;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -336,14 +337,14 @@ async fn run_rlm_turn_impl(
                         };
                     }
                     messages.push(Message {
-                        role: "assistant".to_string(),
+                        role: Role::Assistant,
                         content: vec![ContentBlock::Text {
                             text: response_text.clone(),
                             cache_control: None,
                         }],
                     });
                     messages.push(Message {
-                        role: "user".to_string(),
+                        role: Role::User,
                         content: vec![ContentBlock::Text {
                             text: "You called FINAL(...) without ever running a ```repl block. \
                                    That defeats the recursive language model — you're guessing \
@@ -398,14 +399,14 @@ async fn run_rlm_turn_impl(
                         };
                     }
                     messages.push(Message {
-                        role: "assistant".to_string(),
+                        role: Role::Assistant,
                         content: vec![ContentBlock::Text {
                             text: response_text.clone(),
                             cache_control: None,
                         }],
                     });
                     messages.push(Message {
-                        role: "user".to_string(),
+                        role: Role::User,
                         content: vec![ContentBlock::Text {
                             text: "Reminder: emit Python inside a ```repl … ``` fence. \
                                    Use `llm_query`, `sub_query_sequence`, or \
@@ -511,7 +512,7 @@ async fn run_rlm_turn_impl(
                     )
                 };
                 messages.push(Message {
-                    role: "assistant".to_string(),
+                    role: Role::Assistant,
                     content: vec![ContentBlock::Text {
                         text: format!("```repl\n{code_to_run}\n```"),
                         cache_control: None,
@@ -576,7 +577,7 @@ async fn run_rlm_turn_impl(
 
             // 4f. Build metadata for next iteration.
             messages.push(Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::Text {
                     text: format!("```repl\n{code_to_run}\n```"),
                     cache_control: None,
@@ -759,7 +760,7 @@ fn build_metadata_message(
     let text = parts.join("\n");
 
     Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text,
             cache_control: None,

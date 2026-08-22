@@ -5,7 +5,8 @@ use super::errors::RouteError;
 use super::ids::{LogicalModelRef, ModelId, NamespaceHint, ProviderId, WireModelId};
 use super::resolver::{RouteRequest, RouteResolver};
 use super::{
-    LimitField, OverrideSource, RequestProtocol, ResolvedAuthSource, SourcedLimitOverride,
+    CapabilityState, LimitField, OverrideSource, RequestProtocol, ResolvedAuthSource,
+    RouteCapabilities, SourcedLimitOverride,
 };
 use crate::ProviderKind;
 use crate::models_dev::ModelsDevCatalog;
@@ -388,6 +389,74 @@ fn resolver_routes_only_official_deepseek_flash_over_responses() {
         .expect("custom compatible Flash route remains pass-through");
     assert_eq!(custom.protocol(), RequestProtocol::ChatCompletions);
     assert_eq!(custom.endpoint().endpoint_key, "chat");
+}
+
+#[test]
+fn resolver_routes_deepseek_vision_exp_over_chat_with_image_input() {
+    for base_url_override in [
+        None,
+        Some("https://api.deepseek.com/v1"),
+        Some("https://api.deepseek.com/beta"),
+    ] {
+        let route = RouteResolver::new()
+            .resolve(&RouteRequest {
+                explicit_provider: Some(ProviderKind::Deepseek),
+                model_selector: Some(LogicalModelRef::from("deepseek-v4-flash-vision-exp")),
+                saved_provider_model: None,
+                base_url_override: base_url_override.map(str::to_string),
+                limit_overrides: Vec::new(),
+            })
+            .expect("experimental vision route resolves");
+
+        assert_eq!(route.provider_kind(), ProviderKind::Deepseek);
+        assert_eq!(
+            route.canonical_model().map(ModelId::as_str),
+            Some("deepseek-v4-flash-vision-exp")
+        );
+        assert_eq!(
+            route.wire_model_id().as_str(),
+            "deepseek-v4-flash-vision-exp"
+        );
+        assert_eq!(route.protocol(), RequestProtocol::ChatCompletions);
+        assert_eq!(route.endpoint().endpoint_key, "chat");
+        assert_eq!(
+            route.capabilities().image_input,
+            CapabilityState::Supported,
+            "official endpoint {base_url_override:?} must retain the exact vision fact"
+        );
+        assert_eq!(route.capabilities().reasoning, CapabilityState::Supported);
+        assert_eq!(
+            route.capabilities().native_tool_calls,
+            CapabilityState::Supported
+        );
+        assert_eq!(route.limits().context_tokens, Some(1_000_000));
+        assert_eq!(route.limits().output_tokens, Some(384_000));
+    }
+}
+
+#[test]
+fn resolver_keeps_custom_deepseek_same_name_capabilities_unverified() {
+    let route = RouteResolver::new()
+        .resolve(&RouteRequest {
+            explicit_provider: Some(ProviderKind::Deepseek),
+            model_selector: Some(LogicalModelRef::from("deepseek-v4-flash-vision-exp")),
+            saved_provider_model: None,
+            base_url_override: Some("https://deepseek-proxy.example.test/v1".to_string()),
+            limit_overrides: Vec::new(),
+        })
+        .expect("same-name custom proxy route resolves");
+
+    assert_eq!(route.protocol(), RequestProtocol::ChatCompletions);
+    assert_eq!(route.endpoint().endpoint_key, "chat");
+    assert_eq!(
+        route.wire_model_id().as_str(),
+        "deepseek-v4-flash-vision-exp"
+    );
+    assert_eq!(
+        route.capabilities(),
+        RouteCapabilities::default(),
+        "a custom proxy cannot inherit first-party capability facts by reusing the model id"
+    );
 }
 
 #[test]
@@ -1371,6 +1440,27 @@ fn priced_offering_yields_token_pricing_sku() {
         }
         other => panic!("expected Some(Token), got {other:?}"),
     }
+}
+
+#[test]
+fn custom_endpoint_does_not_inherit_first_party_pricing() {
+    use super::candidate::PricingSku;
+
+    let out = priced_deepseek_resolver()
+        .resolve(&RouteRequest {
+            explicit_provider: Some(ProviderKind::Deepseek),
+            model_selector: Some(LogicalModelRef::from("deepseek-v4-pro")),
+            saved_provider_model: None,
+            base_url_override: Some("https://deepseek-proxy.example.test/v1".to_string()),
+            limit_overrides: Vec::new(),
+        })
+        .expect("same-name custom proxy route resolves");
+
+    assert!(
+        matches!(out.pricing(), Some(PricingSku::UnknownOrStale)),
+        "a custom proxy cannot inherit first-party pricing by reusing the model id: {:?}",
+        out.pricing()
+    );
 }
 
 #[test]

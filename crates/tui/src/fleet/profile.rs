@@ -68,6 +68,10 @@ pub struct AgentProfile {
     pub id: String,
     pub display_name: Option<String>,
     pub description: Option<String>,
+    /// Closed capability requirements carried by selected v2 Fleet members.
+    /// Legacy/profile sources leave this empty; consumers must never infer a
+    /// capability from the member name or model prefix.
+    pub requires: Vec<String>,
     pub profile: FleetProfile,
     pub source: PathBuf,
     /// Roster layer this profile came from (#fleet-roster cutover (v0.8.67)).
@@ -400,6 +404,7 @@ fn agent_profile_from_toml(path: &Path, parsed: AgentProfileToml) -> Result<Agen
         id,
         display_name: non_empty_trimmed(parsed.display_name.as_deref()).map(str::to_string),
         description,
+        requires: Vec::new(),
         profile,
         source: path.to_path_buf(),
         origin: ProfileOrigin::Workspace,

@@ -43,6 +43,7 @@ use crate::core::engine::{
     exec_shell_ask_rule_decision_for_policy, file_tool_ask_rule_decision_for_policy,
 };
 use crate::llm_client::{LlmClient, StreamEventBox};
+use crate::models::Role;
 use crate::models::{
     ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, StreamEvent, SystemPrompt,
 };
@@ -1238,7 +1239,7 @@ fn tool_result_message_with_blocks(
     content_blocks: Vec<Value>,
 ) -> Message {
     Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::ToolResult {
             tool_use_id: tool_use_id.to_string(),
             content,
@@ -1318,7 +1319,7 @@ where
         }
         if !assistant_content.is_empty() {
             messages.push(Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: assistant_content,
             });
         }
@@ -1594,7 +1595,7 @@ impl AcpServer {
                 .get_mut(&session_id)
                 .ok_or_else(|| AcpError::invalid_params("unknown sessionId"))?;
             session.messages.push(Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: prompt,
                     cache_control: None,
@@ -1868,6 +1869,7 @@ fn build_acp_tool_registry(
         crate::tui::approval::ApprovalMode::Suggest,
         config.sandbox_mode.as_deref(),
         workspace,
+        crate::core::authority::SandboxNetworkAccess::from_config(config.sandbox_network_access),
     );
     let mut context = ToolContext::new(workspace)
         .with_shell_policy(shell_policy)
@@ -2563,7 +2565,7 @@ mod tests {
         {
             let session = server.sessions.get_mut(&session_id).unwrap();
             session.messages.push(Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "1+1".to_string(),
                     cache_control: None,
@@ -2575,7 +2577,7 @@ mod tests {
         {
             let session = server.sessions.get_mut(&session_id).unwrap();
             session.messages.push(Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::Text {
                     text: "2".to_string(),
                     cache_control: None,
@@ -2587,7 +2589,7 @@ mod tests {
         {
             let session = server.sessions.get_mut(&session_id).unwrap();
             session.messages.push(Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "add one more".to_string(),
                     cache_control: None,
@@ -3089,7 +3091,7 @@ mod tests {
         {
             let session = server.sessions.get_mut(&sid1).unwrap();
             session.messages.push(Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "hello".to_string(),
                     cache_control: None,
@@ -3835,7 +3837,7 @@ mod tests {
                 response_id_policy: JsonRpcResponseIdPolicy::Preserve,
             },
             vec![Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "What version is this?".to_string(),
                     cache_control: None,
@@ -3911,7 +3913,7 @@ mod tests {
                 response_id_policy: JsonRpcResponseIdPolicy::Preserve,
             },
             vec![Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "Read receipt.txt".to_string(),
                     cache_control: None,
@@ -3972,7 +3974,7 @@ mod tests {
                 response_id_policy: JsonRpcResponseIdPolicy::Preserve,
             },
             vec![Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "Read both files".to_string(),
                     cache_control: None,
@@ -4040,7 +4042,7 @@ mod tests {
                 response_id_policy: JsonRpcResponseIdPolicy::Preserve,
             },
             vec![Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "Read missing.txt".to_string(),
                     cache_control: None,

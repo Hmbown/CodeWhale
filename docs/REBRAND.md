@@ -18,7 +18,6 @@ cargo uninstall deepseek-tui 2>/dev/null || true
 # 2. Install under the new name.
 npm install -g codewhale            # or:
 cargo install codewhale-cli --locked
-cargo install codewhale-tui --locked
                                     # Homebrew:
                                     # brew tap Hmbown/deepseek-tui
                                     # brew install codewhale
@@ -38,11 +37,10 @@ not deleted. New Codewhale installs prefer `~/.codewhale/`, and legacy
 
 | Surface | Before | After |
 |---|---|---|
-| CLI dispatcher binary | `deepseek` | `codewhale` |
-| TUI runtime binary | `deepseek-tui` | `codewhale-tui` |
+| Installed commands | `deepseek` / `deepseek-tui` | `codewhale` / `codew` |
 | npm wrapper package | `deepseek-tui` | `codewhale` |
 | Crates.io crates | `deepseek-tui-cli` / `deepseek-tui` / `deepseek-*` | `codewhale-cli` / `codewhale-tui` / `codewhale-*` |
-| Release assets | `deepseek-<platform>` / `deepseek-tui-<platform>` | `codewhale-<platform>` / `codew-<platform>` / `codewhale-tui-<platform>` |
+| Release assets | `deepseek-<platform>` / `deepseek-tui-<platform>` | `codewhale-<platform>` / `codew-<platform>`; `codewhale-tui-<platform>` remains a compatibility-only filename |
 | Checksum manifest | `deepseek-artifacts-sha256.txt` | `codewhale-artifacts-sha256.txt` |
 
 ## What changed for local state
@@ -105,15 +103,17 @@ npm install -g codewhale
 cargo uninstall deepseek-tui-cli 2>/dev/null || true
 cargo uninstall deepseek-tui 2>/dev/null || true
 cargo install codewhale-cli --locked
-cargo install codewhale-tui --locked
 ```
 
 Or in a checkout:
 
 ```bash
 cargo install --path crates/cli --locked --force
-cargo install --path crates/tui --locked --force
 ```
+
+Cargo installs the canonical `codewhale` command. Release/npm/Homebrew
+installers also provide the byte-identical `codew` short name; Cargo users can
+add an optional `codew` symlink beside `codewhale`.
 
 ### Legacy `deepseek update`
 
@@ -121,7 +121,9 @@ Current v0.8.x compatibility binaries recognize when they are running under a
 legacy `deepseek` or `deepseek-tui` filename. In that case, `deepseek update`
 or `deepseek-tui update` downloads the canonical Codewhale release assets and
 installs them beside the legacy binary as `codewhale` and `codewhale-tui` when
-the install directory is writable.
+the install directory is writable. That describes the historical v0.8
+compatibility updater, not the current install surface; after upgrading, use
+`codewhale` or `codew`.
 
 If that update path cannot write to the install directory, use the npm, Cargo,
 Homebrew, or manual reinstall commands above. The legacy npm package
@@ -130,7 +132,8 @@ to `npm install -g codewhale`.
 
 ### Homebrew
 
-**Current state (v0.9.9):** The formula is `codewhale`. New installs:
+**Current published state (v0.9.10; workspace source candidate v0.9.11):** The
+formula is `codewhale`. New installs:
 
 ```bash
 brew tap Hmbown/deepseek-tui
@@ -155,9 +158,11 @@ release so existing `brew upgrade deepseek-tui` crontabs keep working.
 `v0.8.41` through `v0.8.x` Releases attached the canonical `codewhale-*` /
 `codewhale-tui-*` assets (plus `codew-*` from v0.8.66 onward) and
 compatibility-only `deepseek-*` / `deepseek-tui-*` shim assets. Starting in
-v0.9.0, Releases attach only the canonical `codewhale-*` / `codew-*` /
-`codewhale-tui-*` assets and the `codewhale-artifacts-sha256.txt` checksum
-manifest. Install or update through `codewhale` before moving to v0.9.0.
+v0.9.0, Releases attach the current `codewhale-*` / `codew-*` assets, the
+`codewhale-artifacts-sha256.txt` checksum manifest, and byte-identical
+`codewhale-tui-*` compatibility filenames required by legacy update clients.
+Those compatibility filenames are not a third installed command. Install or
+update through `codewhale` before moving to v0.9.0.
 
 ### Sessions, skills, and manual workspaces
 
@@ -178,11 +183,12 @@ Renaming the binary does not require starting over:
   absent, Codewhale still reads legacy `~/.deepseek/mcp.json`. To use a custom
   MCP config file, set `mcp_config_path` in `config.toml` or
   `DEEPSEEK_MCP_CONFIG`.
-- **Manual binary installs**: keep the dispatcher and TUI binaries as siblings
-  on your `PATH`: `codewhale`, `codew`, and `codewhale-tui`. On Windows, the
+- **Manual binary installs**: keep the two current command files together on
+  your `PATH`: `codewhale` and `codew`. On Windows, the
   recommended user-local location is `%LOCALAPPDATA%\Programs\CodeWhale\bin`.
   On Unix-like systems, any user-writable `PATH` directory is fine as long as
-  all three binaries are present.
+  both commands are present. Do not install a compatibility-only
+  `codewhale-tui-*` release filename as a third command.
 - **Specified work directories**: running `codewhale` from a project directory,
   or launching it with a specific workspace path, does not move project files.
   Codewhale reads `<workspace>/.codewhale/config.toml` first and falls back to

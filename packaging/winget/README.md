@@ -1,7 +1,9 @@
 # winget packaging for CodeWhale
 
 This directory holds the source winget manifest for `Hmbown.CodeWhale` (resolves #1561).
-The single-binary release (v0.9.5+) ships `codewhale` + `codew` per target — no `codewhale-tui` asset.
+Winget installs the single runtime under `codewhale` + `codew`; it never
+installs a `codewhale-tui` command. GitHub Releases retain byte-identical
+`codewhale-tui-*` filenames only for legacy updater compatibility.
 
 ## Files
 
@@ -44,10 +46,12 @@ The single-binary release (v0.9.5+) ships `codewhale` + `codew` per target — n
 
 ## Single-binary note
 
-Until v0.9.4 the release matrix was 7 targets × 3 binaries (`codewhale`, `codew`, `codewhale-tui`).
-v0.9.5 is 7×1 — each target publishes only `codewhale` + `codew` (Windows also ships `codewhale.bat`
-as a GitHub/npm asset and inside the zip/NSIS layouts). The winget ZIP `NestedInstallerFiles`
-therefore lists only the two PATH commands; `codewhale-tui.exe` is intentionally absent.
+Until v0.9.4 the release matrix installed three commands (`codewhale`, `codew`,
+and `codewhale-tui`). Since v0.9.5 each target installs only the byte-identical
+`codewhale` + `codew` commands (Windows also ships `codewhale.bat`). GitHub
+Releases retain `codewhale-tui-*` compatibility filenames for old updater
+clients, but the winget ZIP `NestedInstallerFiles` lists only the two current
+PATH commands; `codewhale-tui.exe` is intentionally absent.
 
 ## FreeBSD
 
@@ -55,10 +59,9 @@ FreeBSD has no prebuilt GitHub Release asset (see `docs/INSTALL.md` § FreeBSD).
 
 ```bash
 pkg install -y rust pkgconf  # or ports-mgmt/pkg
-cargo install codewhale-cli --locked   # provides `codewhale` and `codew`
+cargo install codewhale-cli --locked   # provides `codewhale`
 ```
 
 The npm wrapper on FreeBSD exits with `Unsupported platform: freebsd` and points to the Cargo path.
 A native `pkg install codewhale` port is tracked as a follow-up to #1097 — contributions welcome
 under `packaging/freebsd/`.
-

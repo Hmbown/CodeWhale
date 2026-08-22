@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:b092c34e8ca3 -->
+<!-- source: README.md sha256:a56bca473dbd -->
 # Codewhale
 
 Codewhale è un agente di programmazione open source per il terminale, sviluppato in Rust e migliorato pubblicamente insieme alle persone che lo utilizzano.
@@ -20,6 +20,8 @@ codewhale
 ```
 
 Al primo avvio, Codewhale ti aiuta a collegare un provider oppure a rimanere offline. Supporta inoltre Cargo, Docker, Nix, Scoop, archivi precompilati, Android/Termux e un mirror CNB. Consulta la [guida all’installazione](docs/INSTALL.md).
+
+Il completamento con Tab si attiva con un solo comando per ogni shell — `codewhale completion bash|zsh|fish|powershell|elvish`. Consulta il [completamento della shell](docs/INSTALL.md#8-shell-completions).
 
 ## Utilizzo
 
@@ -74,4 +76,4 @@ Grazie a ogni persona che ha contribuito e alle comunità open source che hanno 
 
 ## Licenza
 
-[MIT](LICENSE)
+[MIT](LICENSE). Le parti adattate da altri progetti open source sono indicate nelle [note sui componenti di terze parti](docs/THIRD_PARTY_NOTICES.md).

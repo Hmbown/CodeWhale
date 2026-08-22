@@ -781,6 +781,7 @@ impl ModalView for ContextInspectorView {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::models::Role;
 
     #[test]
     fn short_tool_id_never_panics_on_multibyte() {
@@ -874,7 +875,7 @@ mod tests {
     fn inspector_marks_high_context_pressure() {
         let mut app = test_app();
         app.api_messages.push(Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "x".repeat(4_000_000),
                 cache_control: None,

@@ -21,29 +21,28 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use codewhale_command_contract::handler::CommandHandler;
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 use codewhale_release::InstallMethod;
 
 use crate::commands::CommandResult;
-use crate::commands::traits::{CommandInfo, RegisterCommand};
-use crate::localization::MessageId;
-use crate::tui::app::App;
 
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "update",
     aliases: &["upgrade"],
     usage: "/update [check|install]",
-    description_id: MessageId::CmdUpdateDescription,
+    description_key: "cmd_update_description",
 };
 
 pub(in crate::commands) struct UpdateCmd;
 
-impl RegisterCommand for UpdateCmd {
+impl RegisterCommand<CommandResult> for UpdateCmd {
     fn info() -> &'static CommandInfo {
         &COMMAND_INFO
     }
 
-    fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
-        update(app, arg)
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Pure(update)
     }
 }
 
@@ -160,7 +159,7 @@ fn install_preamble(updater: &Path) -> String {
     )
 }
 
-fn update(_app: &mut App, arg: Option<&str>) -> CommandResult {
+fn update(arg: Option<&str>) -> CommandResult {
     let mode = match parse_mode(arg) {
         Ok(mode) => mode,
         Err(message) => return CommandResult::error(message),
@@ -379,5 +378,12 @@ mod tests {
         let bounded = updater_transcript(flood.as_bytes(), b"");
         assert!(bounded.ends_with("… output truncated."));
         assert!(bounded.chars().count() < flood.chars().count());
+    }
+
+    #[test]
+    fn handler_is_pure_and_argument_only() {
+        assert!(matches!(UpdateCmd::handler(), CommandHandler::Pure(_)));
+        assert_eq!(UpdateCmd::info().description_key, "cmd_update_description");
+        assert_eq!(UpdateCmd::info().aliases, &["upgrade"]);
     }
 }

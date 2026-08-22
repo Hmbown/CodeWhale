@@ -53,6 +53,8 @@ pub use codewhale_core::request::{
     ImageUrlContent, Message, MessageRequest, OpaqueReasoningState, SystemBlock, SystemPrompt,
     Tool, ToolCaller,
 };
+#[allow(unused_imports)]
+pub use codewhale_core::role::Role;
 
 /// Container metadata for code-execution style server tools.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -824,7 +826,7 @@ mod tests {
     #[test]
     fn interrupted_assistant_role_round_trips_as_distinct_session_item() {
         let message = Message {
-            role: INTERRUPTED_ASSISTANT_ROLE.to_string(),
+            role: Role::InterruptedAssistant,
             content: vec![ContentBlock::Text {
                 text: "partial output".to_string(),
                 cache_control: None,

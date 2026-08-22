@@ -260,7 +260,15 @@ impl HelpView {
             .as_ref()
             .is_some_and(|focus| focusable.contains(focus))
         {
-            self.focus = focusable.first().cloned();
+            // Prefer the first entry over the group header above it. A header
+            // has no description, and the detail row under the filter reads
+            // the focused entry — so falling back to a header left that row
+            // blank exactly when Help opens and while a query is being typed.
+            self.focus = focusable
+                .iter()
+                .find(|hit| matches!(hit, HelpHit::Entry(_)))
+                .or_else(|| focusable.first())
+                .cloned();
         }
     }
 
@@ -341,6 +349,56 @@ impl HelpView {
         }
 
         rows
+    }
+
+    /// Width of the label column for each group, measured from the labels
+    /// that group actually contains.
+    ///
+    /// The column used to be a flat 28 columns at every terminal size. At 60
+    /// columns that spent 28 of ~53 on a gutter — `/advisor` is eight cells
+    /// wide, so twenty blank columns sat between every command and a
+    /// description that had been cut to 21. Sizing per group keeps the block
+    /// under each header reading as one table while handing the slack back to
+    /// the descriptions; it is stable while scrolling because it does not
+    /// depend on which rows are on screen.
+    fn label_widths(&self, cap: usize) -> std::collections::HashMap<String, usize> {
+        let mut widths: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for entry_idx in self.filtered.iter().copied() {
+            let entry = &self.entries[entry_idx];
+            let width = entry.label.width().min(cap);
+            let slot = widths.entry(group_key(entry)).or_default();
+            *slot = (*slot).max(width);
+        }
+        widths
+    }
+
+    /// Description of the focused entry when the row itself could not hold
+    /// it, at the full width of the panel.
+    ///
+    /// This slot exists to repair a shed, not to repeat one. On a wide
+    /// terminal the inline description already fits, and printing it again
+    /// two rows above would be the same duplication the footer was carrying
+    /// with `type to filter`. The row stays reserved either way so the list
+    /// does not jump as focus moves between shed and unshed rows.
+    fn focused_entry_detail(
+        &self,
+        inner_width: usize,
+        label_cap: usize,
+        label_widths: &std::collections::HashMap<String, usize>,
+    ) -> Option<String> {
+        let HelpHit::Entry(slot) = self.focus.as_ref()? else {
+            return None;
+        };
+        let entry_idx = *self.filtered.get(*slot)?;
+        let entry = &self.entries[entry_idx];
+        let label_width = label_widths
+            .get(&group_key(entry))
+            .copied()
+            .unwrap_or(label_cap);
+        let inline_capacity = inner_width.saturating_sub(label_width + 4);
+        let inline = shed_to_width(&entry.description, inline_capacity);
+        let full = shed_to_width(&entry.description, inner_width);
+        (full != inline && !full.is_empty()).then(|| full.to_string())
     }
 
     fn focusable_rows(&self) -> Vec<HelpHit> {
@@ -590,24 +648,213 @@ fn default_collapsed(ordering: HelpOrdering) -> HashSet<String> {
     }
 }
 
-fn truncate_to_width(text: &str, max_width: usize) -> String {
+/// Joints a one-line description may shed at, longest-binding first. These
+/// are the marks the descriptions already use: a trailing parenthetical (the
+/// alias list), a semicolon or em-dash clause, then ordinary sentence and
+/// comma boundaries.
+const FIELD_JOINTS: [&str; 6] = [" (", "; ", " — ", ". ", ": ", ", "];
+
+/// Fit a description into `max_width` by shedding whole fields, never by
+/// cutting one.
+///
+/// The overlay used to hand every label and description to a
+/// `truncate_to_width` that appended `…`. In a list of two hundred rows an
+/// ellipsis is the worst possible mark: it promises text the row has no way
+/// to reveal, and it lands mid-token — `(aliases: /qin…` leaves an unclosed
+/// parenthesis, and `deepseek-v4-…` names no model, because these strings
+/// share prefixes. So the description sheds its alias parenthetical first,
+/// then trailing clauses at its own joints, and finally itself. The label is
+/// never shed at all: it is the string the user has to type.
+fn shed_to_width(text: &str, max_width: usize) -> Cow<'_, str> {
+    let trimmed = text.trim_end();
     if max_width == 0 {
-        return String::new();
+        return Cow::Borrowed("");
     }
-    if text.width() <= max_width {
-        return text.to_string();
+    if trimmed.width() <= max_width {
+        return Cow::Borrowed(trimmed);
     }
-    let mut out = String::new();
-    let limit = max_width.saturating_sub(1);
-    for ch in text.chars() {
-        let next_width = out.width() + ch.to_string().width();
-        if next_width > limit {
+    let mut best = "";
+    let mut oversize_clause = "";
+    let mut depth = 0usize;
+    for (idx, ch) in trimmed.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        // Only cut where the parentheses balance. `(aliases: /image, /media)`
+        // holds a `: ` and a `, ` that are joints of the alias list, not of
+        // the sentence; cutting there left `(aliases: /image, /media` with the
+        // parenthesis hanging open — no ellipsis, and still a broken row.
+        if depth > 0 {
+            continue;
+        }
+        let rest = &trimmed[idx..];
+        if !FIELD_JOINTS.iter().any(|joint| rest.starts_with(joint)) {
+            continue;
+        }
+        let head = trimmed[..idx].trim_end_matches([' ', ',', ';', ':', '—', '-']);
+        if head.is_empty() {
+            continue;
+        }
+        let width = head.width();
+        if width <= max_width {
+            if width > best.width() {
+                best = head;
+            }
+        } else if width > oversize_clause.width() {
+            // The main clause was one column over, so the joint itself did
+            // not fire. Word-shed that clause rather than the alias list
+            // hanging off it — otherwise `/automation` keeps the adjectives
+            // and loses `automations`.
+            oversize_clause = head;
+        }
+    }
+    if best.is_empty() {
+        // Roughly half of these descriptions are a single clause with no
+        // joint at all — "Toggle background advisor watcher on/off for this
+        // session". Shedding the whole field there left a bare `/advisor`
+        // beside rows that still had text, which reads as a broken renderer
+        // rather than as a decision. So the last resort is the sentence's
+        // own short form: whole words, no mark, and the same text restated
+        // at panel width one row up in the detail slot. What is never done
+        // is append `…`, which
+        // would claim text this overlay has no way to reveal.
+        let source = if oversize_clause.is_empty() {
+            trimmed
+        } else {
+            oversize_clause
+        };
+        shed_to_words(source, max_width)
+    } else {
+        Cow::Borrowed(best)
+    }
+}
+
+/// Longest prefix of `text` that fits `max_width` display columns, cut on a
+/// character boundary. Used when there is no word boundary to cut on.
+fn widest_char_prefix(text: &str, max_width: usize) -> &str {
+    let mut fitted = 0usize;
+    for (idx, ch) in text.char_indices() {
+        let next = idx + ch.len_utf8();
+        if text[..next].width() > max_width {
             break;
         }
-        out.push(ch);
+        fitted = next;
     }
-    out.push('…');
-    out
+    &text[..fitted]
+}
+
+/// Longest whole-word prefix of `text` that fits, with trailing short
+/// function words dropped so the phrase does not end on `to an`.
+///
+/// The scan used to stop on a space, so the last word was never included
+/// even when it fitted, and the two-pass short-word trim then left a simple
+/// verb + modifier + noun phrase without the noun — `/automation` read
+/// `Manage durable scheduled`. If that prefix lost the head noun, intervening
+/// modifiers are dropped so the noun survives.
+fn shed_to_words(text: &str, max_width: usize) -> Cow<'_, str> {
+    let mut end = 0usize;
+    for (idx, ch) in text.char_indices() {
+        if ch == ' ' && text[..idx].width() <= max_width {
+            end = idx;
+        }
+    }
+    // Include the last word when the whole phrase fits. The loop above only
+    // fires on spaces, so without this the head noun was always eaten.
+    if text.width() <= max_width {
+        end = text.len();
+    }
+    if end == 0 {
+        // No usable space boundary. That is the normal case for Japanese,
+        // Chinese and Thai, which do not delimit words with spaces at all —
+        // the loop above can never fire, so this used to return "" and every
+        // description in those locales rendered blank. It also happens in
+        // English whenever the first space falls beyond `max_width`.
+        // Fall back to the widest whole-character prefix that fits.
+        return Cow::Borrowed(
+            widest_char_prefix(text, max_width).trim_end_matches([' ', ',', ';', ':', '—', '-']),
+        );
+    }
+    let mut head = &text[..end];
+    // Two passes at most: enough for `to an`, not enough to eat a real word.
+    for _ in 0..2 {
+        let Some(cut) = head.rfind(' ') else { break };
+        if head.len() - cut - 1 > 3 {
+            break;
+        }
+        head = &head[..cut];
+    }
+    let head = head.trim_end_matches([' ', ',', ';', ':', '—', '-']);
+    if let Some(kept) = keep_simple_head_noun(text, head, max_width) {
+        return kept;
+    }
+    Cow::Borrowed(head)
+}
+
+fn is_short_function_word(word: &str) -> bool {
+    !word.is_empty() && word.len() <= 3
+}
+
+fn is_plain_content_word(word: &str) -> bool {
+    !word.is_empty()
+        && word
+            .chars()
+            .all(|ch| ch.is_ascii_alphabetic() || matches!(ch, '-' | '/'))
+}
+
+/// Restore the head noun of a simple `verb modifier* noun` phrase when the
+/// prefix trim dropped it. Phrases with a short function word after the verb
+/// (`Toggle the background advisor for this session`) stay prefix-trimmed,
+/// as do rows that carry punctuation (`(aliases: /image, /media)`).
+fn keep_simple_head_noun<'a>(
+    text: &'a str,
+    prefix: &'a str,
+    max_width: usize,
+) -> Option<Cow<'a, str>> {
+    let words: Vec<&str> = text.split(' ').filter(|word| !word.is_empty()).collect();
+    if words.len() < 2 {
+        return None;
+    }
+    let noun = *words.last()?;
+    if is_short_function_word(noun) || prefix.ends_with(noun) {
+        return None;
+    }
+    if !words.iter().all(|word| is_plain_content_word(word)) {
+        return None;
+    }
+    if words[1..words.len() - 1]
+        .iter()
+        .any(|word| is_short_function_word(word))
+    {
+        return None;
+    }
+    if noun.width() > max_width {
+        return None;
+    }
+    let verb = words[0];
+    let modifiers = &words[1..words.len() - 1];
+    for skip in 0..=modifiers.len() {
+        let mut candidate = String::from(verb);
+        for modifier in &modifiers[skip..] {
+            candidate.push(' ');
+            candidate.push_str(modifier);
+        }
+        candidate.push(' ');
+        candidate.push_str(noun);
+        if candidate.width() <= max_width {
+            if text.starts_with(&candidate)
+                && text
+                    .as_bytes()
+                    .get(candidate.len())
+                    .is_none_or(|byte| *byte == b' ')
+            {
+                return Some(Cow::Borrowed(&text[..candidate.len()]));
+            }
+            return Some(Cow::Owned(candidate));
+        }
+    }
+    Some(Cow::Borrowed(noun))
 }
 
 impl ModalView for HelpView {
@@ -758,7 +1005,9 @@ impl ModalView for HelpView {
             inner,
             buf,
             &[
-                ActionHint::new("", self.tr(MessageId::HelpFooterTypeFilter)),
+                // `Type to filter` is already printed in the filter row two
+                // lines above; saying it twice on one screen cost the row the
+                // footer wrapped onto at 60 columns.
                 ActionHint::new("", self.tr(MessageId::HelpFooterMove)),
                 ActionHint::new("", self.tr(MessageId::HelpFooterJump)),
                 // Directional tree controls are self-describing and avoid
@@ -770,33 +1019,24 @@ impl ModalView for HelpView {
 
         let mut lines: Vec<Line<'static>> = Vec::new();
 
+        // The filter and the size of what it selected are one fact, so they
+        // share one row: the count used to own a row of its own, and a blank
+        // spacer owned the row under it. At 60x20 that was two of the eight
+        // rows this overlay had left for content.
         let query_label = if self.query.is_empty() {
             self.tr(MessageId::HelpFilterPlaceholder).to_string()
         } else {
             format!("{}{}", self.tr(MessageId::HelpFilterPrefix), self.query)
         };
-        lines.push(Line::from(Span::styled(
-            query_label,
-            Style::default()
-                .fg(palette::WHALE_INFO)
-                .add_modifier(Modifier::BOLD),
-        )));
-
         let match_count = if self.query.is_empty() {
             format!("{} entries", self.entries.len())
         } else {
             format!("{} / {} matches", self.filtered.len(), self.entries.len())
         };
-        lines.push(Line::from(Span::styled(
-            match_count,
-            Style::default()
-                .fg(palette::TEXT_DIM)
-                .add_modifier(Modifier::ITALIC),
-        )));
-        lines.push(Line::from(""));
-
         let rows = self.render_rows();
-        let visible_rows = content.height.saturating_sub(lines.len() as u16) as usize;
+        // Two header rows: the filter with its count, and the detail row
+        // that restates the focused entry's description at panel width.
+        let visible_rows = content.height.saturating_sub(2) as usize;
         let row_start = Self::visible_row_start(&rows, self.focus.as_ref(), visible_rows.max(1));
         // Reserve the rail before calculating column widths. Otherwise the
         // description column writes beneath the rail on compact terminals.
@@ -809,6 +1049,45 @@ impl ModalView for HelpView {
             true,
         );
 
+        // Borders and padding eat 4 cells from each side (border 1 + padding
+        // 1) × 2. The label column is measured from the labels each group
+        // holds rather than fixed at 28, and the descriptions get everything
+        // left over.
+        let inner_width = content.width as usize;
+        let label_cap = 28.min(inner_width.saturating_sub(8));
+        let label_widths = self.label_widths(label_cap);
+
+        // Measured against the rail-adjusted width so the right-aligned count
+        // lands inside the list, not under the scroll rail.
+        let gap = (content.width as usize)
+            .saturating_sub(query_label.width() + match_count.width())
+            .max(2);
+        lines.push(Line::from(vec![
+            Span::styled(
+                query_label,
+                Style::default()
+                    .fg(palette::WHALE_INFO)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" ".repeat(gap)),
+            Span::styled(match_count, Style::default().fg(palette::TEXT_DIM)),
+        ]));
+
+        // A row cannot hold a command and a sentence at sixty columns, so the
+        // list sheds descriptions there rather than cutting them. That is only
+        // honest if the shed text is still reachable, so the focused entry
+        // states its description here at the full width of the panel — where
+        // most of them fit whole, and the rest shed at their own joints
+        // instead of at a column boundary. The slot keeps its row whether or
+        // not it is filled, so the list below does not jump as focus moves.
+        let detail = self
+            .focused_entry_detail(inner_width, label_cap, &label_widths)
+            .unwrap_or_default();
+        lines.push(Line::from(Span::styled(
+            detail,
+            Style::default().fg(palette::TEXT_MUTED),
+        )));
+
         if self.filtered.is_empty() {
             lines.push(Line::from(Span::styled(
                 self.tr(MessageId::HelpNoMatches),
@@ -817,13 +1096,6 @@ impl ModalView for HelpView {
                     .add_modifier(Modifier::ITALIC),
             )));
         } else {
-            // The chord/label column takes up to 28 cols on wide screens;
-            // descriptions fill the remainder. Borders and padding eat 4
-            // cells from each side (border 1 + padding 1) × 2.
-            let inner_width = content.width as usize;
-            let label_width = 28.min(inner_width.saturating_sub(8));
-            let desc_capacity = inner_width.saturating_sub(label_width + 4);
-
             // `content` is the body area above the wrapping footer (the block's
             // border, padding, and footer rows already removed), so budgeting
             // against its height keeps selected rows clear of the footer.
@@ -845,9 +1117,15 @@ impl ModalView for HelpView {
                             Rect::new(content.x, row_y, content.width, 1),
                             HelpHit::Group(key.clone()),
                         ));
+                        // The selection cursor is `▸` and the collapsed
+                        // chevron is `▸`. Printed side by side, a focused
+                        // collapsed group read `▸ ▸ Slash commands (97)` —
+                        // the same glyph twice for two different facts. The
+                        // chevron stays, because it is this row's own state;
+                        // focus is carried by the selection style, which is
+                        // what carries it on every other row here.
                         let marker = if collapsed { "▸" } else { "▾" };
                         let is_focused = self.focus.as_ref() == Some(&HelpHit::Group(key.clone()));
-                        let cursor = crate::tui::glyphs::selection_marker(is_focused);
                         let style = if is_focused {
                             menu_style::selected_row_style()
                         } else {
@@ -856,7 +1134,7 @@ impl ModalView for HelpView {
                                 .add_modifier(Modifier::BOLD)
                         };
                         lines.push(Line::from(Span::styled(
-                            format!("{cursor} {marker} {label} ({count})"),
+                            format!("{marker} {label} ({count})"),
                             style,
                         )));
                     }
@@ -868,17 +1146,39 @@ impl ModalView for HelpView {
                         ));
                         let entry = &self.entries[entry_idx];
                         let is_selected = self.focus.as_ref() == Some(&HelpHit::Entry(slot));
-                        let style = if is_selected {
-                            menu_style::selected_row_style()
-                        } else {
-                            Style::default().fg(palette::TEXT_PRIMARY)
-                        };
                         let cursor =
                             format!("{} ", crate::tui::glyphs::selection_marker(is_selected));
-                        let label = truncate_to_width(&entry.label, label_width);
-                        let desc = truncate_to_width(&entry.description, desc_capacity);
-                        let line_text = format!("{cursor}{label:<label_width$}  {desc}",);
-                        lines.push(Line::from(Span::styled(line_text, style)));
+                        let label_width = label_widths
+                            .get(&group_key(entry))
+                            .copied()
+                            .unwrap_or(label_cap);
+                        let pad = label_width.saturating_sub(entry.label.width());
+                        let desc_capacity =
+                            inner_width.saturating_sub(cursor.width() + label_width + 2);
+                        let desc = shed_to_width(&entry.description, desc_capacity);
+                        // The label is the string you type and the description
+                        // qualifies it. They were both TEXT_PRIMARY, so the
+                        // row said everything at one weight and the eye had
+                        // nothing to skim down.
+                        let (label_style, desc_style) = if is_selected {
+                            (
+                                menu_style::selected_row_style(),
+                                menu_style::selected_row_style(),
+                            )
+                        } else {
+                            (
+                                Style::default().fg(palette::TEXT_PRIMARY),
+                                Style::default().fg(palette::TEXT_DIM),
+                            )
+                        };
+                        let mut spans = vec![
+                            Span::styled(format!("{cursor}{}", entry.label), label_style),
+                            Span::styled(" ".repeat(pad + 2), label_style),
+                        ];
+                        if !desc.is_empty() {
+                            spans.push(Span::styled(desc.to_string(), desc_style));
+                        }
+                        lines.push(Line::from(spans));
                     }
                 }
             }
@@ -1158,17 +1458,20 @@ mod tests {
             focusable.len() >= 3,
             "need at least three visible help rows"
         );
-        assert_eq!(view.focus.as_ref(), focusable.first());
-        // Down reaches the first child; Up returns to its group; another Up
-        // wraps to the final visible row.
-        view.handle_key(key(KeyCode::Down));
+        // Help opens on the first entry, not the header above it: the detail
+        // row under the filter reads the focused entry, and a header has no
+        // description to put there.
         assert_eq!(view.focus.as_ref(), Some(&focusable[1]));
+        // Up returns to its group; another Up wraps to the final visible row.
         view.handle_key(key(KeyCode::Up));
+        assert_eq!(view.focus.as_ref(), focusable.first());
         view.handle_key(key(KeyCode::Up));
         assert_eq!(view.focus.as_ref(), focusable.last());
         // Down from last wraps to first; End still jumps to the last visible row.
         view.handle_key(key(KeyCode::Down));
         assert_eq!(view.focus.as_ref(), focusable.first());
+        view.handle_key(key(KeyCode::Down));
+        assert_eq!(view.focus.as_ref(), Some(&focusable[1]));
         view.handle_key(key(KeyCode::End));
         assert_eq!(view.focus.as_ref(), focusable.last());
     }
@@ -1220,6 +1523,200 @@ mod tests {
                 .iter()
                 .any(|row| matches!(row, HelpRenderRow::Entry { slot, .. } if *slot == selected)),
             "selected help entry should stay in the visible render window"
+        );
+    }
+
+    fn rows_at(view: &HelpView, width: u16, height: u16) -> Vec<String> {
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        (area.top()..area.bottom())
+            .map(|y| {
+                (area.left()..area.right())
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// House rule, and the thing the overlay broke worst. A trailing `…` in a
+    /// list of two hundred rows promises text no keystroke can reveal, and it
+    /// lands mid-token: `(aliases: /qin…` and `deepseek-v4-…` name nothing,
+    /// because these strings share prefixes.
+    #[test]
+    fn no_row_advertises_truncation_at_any_width() {
+        for width in [60u16, 80, 96, 120] {
+            let view = HelpView::new();
+            for row in rows_at(&view, width, 24) {
+                assert!(
+                    !row.contains('…'),
+                    "help must shed, not truncate, at {width} columns: {row:?}"
+                );
+            }
+        }
+    }
+
+    /// A cut inside `(aliases: /image, /media)` leaves the parenthesis hanging
+    /// open — no ellipsis, and still a broken row. Joints only count where the
+    /// parentheses balance.
+    #[test]
+    fn shedding_never_leaves_a_parenthesis_open() {
+        let text = "Attach media  (aliases: /image, /media)";
+        for width in 4..text.len() {
+            let shed = shed_to_width(text, width);
+            let opens = shed.matches('(').count();
+            let closes = shed.matches(')').count();
+            assert_eq!(opens, closes, "unbalanced at width {width}: {shed:?}");
+        }
+    }
+
+    /// A single-clause description has no joint to shed at. Shedding the whole
+    /// field left a bare label beside rows that still had text, which reads as
+    /// a broken renderer; the short form stops on a whole word instead, and
+    /// does not end on a dangling `to an`.
+    #[test]
+    fn a_jointless_description_sheds_to_whole_words() {
+        let text = "Move the active branch to an existing session entry";
+        let shed = shed_to_width(text, 26);
+        assert!(text.starts_with(&*shed), "{shed:?}");
+        assert!(!shed.is_empty());
+        assert!(!shed.ends_with(" an"), "{shed:?}");
+        assert!(!shed.ends_with(" to"), "{shed:?}");
+        assert!(!shed.ends_with('…'), "{shed:?}");
+    }
+
+    /// The label column was a flat 28 columns at every terminal size, so at 60
+    /// columns twenty blank cells sat between `/advisor` and a description cut
+    /// to 21. It is measured from the labels each group holds instead — and
+    /// measured in the rendered row, not just in the helper, because a helper
+    /// the renderer ignores proves nothing.
+    #[test]
+    fn label_column_is_measured_from_the_group_not_fixed() {
+        let view = HelpView::new();
+        let widest = view
+            .entries
+            .iter()
+            .filter(|entry| entry.section == HelpSection::Command)
+            .map(|entry| entry.label.width())
+            .max()
+            .expect("commands exist");
+        assert!(
+            widest < 28,
+            "slash command labels are short; the fixture assumes it"
+        );
+        assert_eq!(view.label_widths(28).get("cmd").copied(), Some(widest));
+
+        let rows = rows_at(&view, 60, 20);
+        let row = rows
+            .iter()
+            .find(|row| row.contains("/advisor"))
+            .expect("advisor row");
+        let label_at = row.find("/advisor").expect("label");
+        let description_at = row[label_at..]
+            .find("Toggle")
+            .map(|offset| label_at + offset)
+            .expect("description follows the label on the same row");
+        assert!(
+            description_at - label_at <= widest + 2,
+            "description must start right after the widest label in the group, \
+             not after a flat 28-column gutter: {row:?}"
+        );
+    }
+
+    /// At 60x20 the description slot is 35 columns. `/automation`'s
+    /// "Manage durable scheduled automations" is 36, so the last-resort
+    /// word shed printed "Manage durable scheduled" — the adjectives
+    /// without the noun that says what is being managed.
+    #[test]
+    fn sixty_column_help_keeps_the_automation_noun() {
+        let view = HelpView::new();
+        let rows = rows_at(&view, 60, 20);
+        let row = rows
+            .iter()
+            .find(|row| row.contains("/automation"))
+            .expect("/automation is a registered command");
+        assert!(
+            row.contains("automations"),
+            "/automation lost the noun it manages: {row:?}"
+        );
+    }
+
+    /// The selection cursor and the collapsed chevron are both `▸`. Printed
+    /// side by side, a focused collapsed group read `▸ ▸ Slash commands (97)`
+    /// — one glyph, twice, for two different facts.
+    #[test]
+    fn a_group_header_spends_one_glyph_on_one_meaning() {
+        let mut view = HelpView::new();
+        view.toggle_group("cmd");
+        assert_eq!(view.focus, Some(HelpHit::Group("cmd".to_string())));
+        let rows = rows_at(&view, 96, 24);
+        let header = rows
+            .iter()
+            .find(|row| row.contains("Slash commands"))
+            .expect("group header row");
+        assert!(!header.contains("▸ ▸"), "{header:?}");
+        assert!(
+            header.contains('▸'),
+            "collapsed state still shown: {header:?}"
+        );
+    }
+
+    /// The detail row repairs a shed; it never repeats one. On a wide terminal
+    /// the inline description already fits, so the slot stays empty rather
+    /// than printing the same sentence twice on one screen.
+    #[test]
+    fn the_detail_row_repairs_a_shed_and_never_repeats_one() {
+        let mut view = HelpView::new();
+        let slot = view
+            .filtered
+            .iter()
+            .position(|idx| view.entries[*idx].label == "/advisor")
+            .expect("/advisor is a registered command");
+        view.set_focus(HelpHit::Entry(slot));
+        let entry = &view.entries[view.filtered[slot]];
+        let description = entry.description.clone();
+
+        let wide = rows_at(&view, 140, 24);
+        let occurrences = wide
+            .iter()
+            .filter(|row| row.contains(description.trim()))
+            .count();
+        assert_eq!(
+            occurrences, 1,
+            "wide terminal must not say it twice: {wide:#?}"
+        );
+
+        let narrow = rows_at(&view, 60, 20);
+        let detail_row = narrow
+            .iter()
+            .position(|row| row.contains("Type to filter"))
+            .expect("filter row")
+            + 1;
+        // The scroll rail paints the last column of every row.
+        let strip_rail = |row: &str| {
+            row.trim_end_matches(['█', '│', '┃', ' '])
+                .trim()
+                .to_string()
+        };
+        let detail = strip_rail(narrow.get(detail_row).expect("detail row"));
+        assert!(
+            !detail.is_empty(),
+            "narrow terminal must repair the shed: {narrow:#?}"
+        );
+        assert!(description.starts_with(&detail), "{detail:?}");
+        let inline = strip_rail(
+            narrow
+                .iter()
+                .find(|row| row.contains("/advisor"))
+                .expect("advisor row"),
+        );
+        let inline_description = inline
+            .split_once("/advisor")
+            .map(|(_, rest)| rest.trim().to_string())
+            .unwrap_or_default();
+        assert!(
+            detail.len() > inline_description.len(),
+            "the detail row must carry more than the row could: {inline_description:?} / {detail:?}"
         );
     }
 
@@ -1476,8 +1973,11 @@ mod tests {
                 .collect();
             let text = rows.join("\n");
 
+            // `type to filter` is deliberately absent: the filter row prints
+            // `Type to filter` two lines above, and at 60 columns saying it
+            // twice pushed the footer onto a second row.
             for label in [
-                "type to filter",
+                "Type to filter",
                 "Up/Down move",
                 "PgUp/PgDn jump",
                 "Esc close",
@@ -1560,6 +2060,9 @@ mod tests {
     #[test]
     fn enter_toggles_the_selected_group() {
         let mut view = HelpView::new_with_ordering(Locale::En, HelpOrdering::KeybindingsFirst);
+        // Focus opens on the first entry, so step up onto its header first.
+        view.handle_key(key(KeyCode::Up));
+        assert!(matches!(view.focus, Some(HelpHit::Group(_))));
         let before = view.visible_entry_slots().len();
         view.handle_key(key(KeyCode::Enter));
         let after = view.visible_entry_slots().len();
@@ -1664,5 +2167,113 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod shed_to_words_script_tests {
+    use super::{shed_to_words, widest_char_prefix};
+    use unicode_width::UnicodeWidthStr;
+
+    /// Japanese, Chinese and Thai do not put spaces between words, so a
+    /// word-boundary scan finds nothing and used to yield an empty string —
+    /// every help description rendered blank in those locales.
+    #[test]
+    fn a_script_without_spaces_still_gets_a_description() {
+        for text in [
+            "バックグラウンドのアドバイザーを切り替える",
+            "切换后台顾问",
+            "切換背景顧問",
+        ] {
+            for width in [8usize, 12, 20, 30] {
+                let shed = shed_to_words(text, width);
+                assert!(
+                    !shed.is_empty(),
+                    "{text:?} at {width}: description rendered blank",
+                );
+                assert!(
+                    shed.width() <= width,
+                    "{text:?} at {width}: {shed:?} overflows ({} cols)",
+                    shed.width(),
+                );
+                assert!(
+                    text.starts_with(&*shed),
+                    "{shed:?} is not a prefix of {text:?}"
+                );
+            }
+        }
+    }
+
+    /// The same hole opens in English whenever the first space sits past the
+    /// budget: the scan never fires and the row goes blank.
+    #[test]
+    fn an_overlong_first_word_sheds_to_characters_rather_than_nothing() {
+        let text = "Internationalisation settings";
+        let shed = shed_to_words(text, 10);
+        assert!(!shed.is_empty(), "long first word rendered blank");
+        assert!(shed.width() <= 10, "{shed:?}");
+    }
+
+    /// Ordinary English is unchanged: still cut on a word boundary, still
+    /// drops a trailing short function word.
+    #[test]
+    fn english_still_sheds_on_word_boundaries() {
+        let text = "Toggle the background advisor for this session";
+        let shed = shed_to_words(text, 24);
+        assert!(shed.width() <= 24, "{shed:?}");
+        assert!(!shed.ends_with(' '), "{shed:?}");
+        assert!(
+            shed.split(' ').count() > 1 && text.starts_with(&*shed),
+            "{shed:?} should be a whole-word prefix",
+        );
+    }
+
+    #[test]
+    fn widest_char_prefix_never_splits_a_character() {
+        let text = "日本語テキスト";
+        for width in 0..=14 {
+            let prefix = widest_char_prefix(text, width);
+            assert!(text.starts_with(prefix));
+            assert!(prefix.width() <= width);
+        }
+    }
+
+    /// The last-resort word shed always ended on a space, so the last word
+    /// of a simple verb + modifier + noun phrase was dropped even when it
+    /// fitted, and when it overflowed by one column the two-pass short-word
+    /// trim left the adjectives without the noun they qualify.
+    #[test]
+    fn a_simple_noun_phrase_keeps_the_head_noun() {
+        let text = "Manage durable scheduled automations";
+        // 24 fits "Manage durable scheduled" exactly and not the noun.
+        // 35 is the description slot at 60 columns (measured).
+        // 36 is the full phrase.
+        for width in [24usize, 28, 32, 35, 36] {
+            let shed = shed_to_words(text, width);
+            assert!(
+                shed.contains("automations"),
+                "width {width} dropped the head noun: {shed:?}"
+            );
+            assert!(
+                shed.width() <= width,
+                "width {width} overflowed: {shed:?} ({} cols)",
+                shed.width()
+            );
+        }
+
+        // Help appends `  (aliases: …)` onto the same row. The joint head is
+        // one column over the 35-column slot, so last-resort word shed must
+        // run on that clause, not on the alias list.
+        let aliased = "Manage durable scheduled automations  (aliases: /automations, /scheduled)";
+        let shed = super::shed_to_width(aliased, 35);
+        assert!(
+            shed.contains("automations"),
+            "aliased row dropped the head noun: {shed:?}"
+        );
+        assert!(
+            !shed.contains("aliases"),
+            "aliased row kept the alias list instead of the clause: {shed:?}"
+        );
+        assert!(shed.width() <= 35, "{shed:?}");
     }
 }

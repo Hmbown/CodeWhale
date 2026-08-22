@@ -131,6 +131,7 @@ mod tests {
     fn member(pin: Option<(&str, &str)>) -> Option<FleetMember> {
         pin.map(|(provider, model)| FleetMember {
             id: "scout".to_string(),
+            display_name: None,
             role: "scout".to_string(),
             provider: Some(provider.to_string()),
             model: Some(model.to_string()),

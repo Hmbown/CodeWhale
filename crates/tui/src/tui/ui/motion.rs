@@ -120,7 +120,10 @@ pub(crate) fn rail_row_budget(
     let composer_floor = MIN_COMPOSER_HEIGHT.saturating_add(u16::from(app.composer_border));
     terminal_height
         .saturating_sub(header_height_for(terminal_height))
+        // Both standing bands bracket the composer now: the identity row
+        // below it and the activity row above it.
         .saturating_sub(crate::tui::phase_strip::height())
+        .saturating_sub(crate::tui::phase_strip::activity_height())
         .saturating_sub(composer_floor)
         .saturating_sub(chat_floor)
 }

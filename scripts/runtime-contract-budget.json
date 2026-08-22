@@ -1,5 +1,5 @@
 {
-  "_comment": "One-way numeric ceilings and exact structural identities for the provider-free runtime contract. Decreases pass; increases or identity changes fail. Lock in decreases with: python3 scripts/check-runtime-contract-budget.py --update The v0.9.8 child-receipt restore grew every production tool surface by 1496 schema bytes / 374 estimated tokens (agent tool). The v0.9.8 workshop read/tool-result byte fields then grew every production tool surface by 371 schema bytes / 93 estimated tokens. Both raises are explicit maintainer decisions; identities stay on the pre-raise digests only if the name set is unchanged \u2014 re-measure on Linux CI if Lint reports identity drift. The v0.9.8 pinned session prefix added the <context_update> sentence to the base prompt (5848 -> 6084 bytes, every representative stage re-hashed), and the host-side Workflow/Goal verbs plus honest child posture grew the tool catalog (active 16531 -> 16602 bytes, full 71473 -> 72371); both are explicit v0.9.8 maintainer decisions measured from the release train. The v0.9.9 configured-skills change hides only custom configured-root paths, preserves discoverable default-root paths, normalizes Windows prompt separators, and trims 50 redundant skills-prompt bytes. The skill/memory/goal/handoff identities were re-measured without raising any ceiling. Explicit maintainer decision for #5473/#5492. The v0.9.10 full surfaces intentionally add the safe read_media tool; their measured schemas remain below the prior byte/token ceilings. Representative prompt byte metrics now use the same host-independent normalized text as their identities; the normalized base is 6089 bytes.",
+  "_comment": "One-way numeric ceilings and exact structural identities for the provider-free runtime contract. Decreases pass; increases or identity changes fail. Lock in decreases with: python3 scripts/check-runtime-contract-budget.py --update The v0.9.8 child-receipt restore grew every production tool surface by 1496 schema bytes / 374 estimated tokens (agent tool). The v0.9.8 workshop read/tool-result byte fields then grew every production tool surface by 371 schema bytes / 93 estimated tokens. Both raises are explicit maintainer decisions; identities stay on the pre-raise digests only if the name set is unchanged \u2014 re-measure on Linux CI if Lint reports identity drift. The v0.9.8 pinned session prefix added the <context_update> sentence to the base prompt (5848 -> 6084 bytes, every representative stage re-hashed), and the host-side Workflow/Goal verbs plus honest child posture grew the tool catalog (active 16531 -> 16602 bytes, full 71473 -> 72371); both are explicit v0.9.8 maintainer decisions measured from the release train. The v0.9.9 configured-skills change hides only custom configured-root paths, preserves discoverable default-root paths, normalizes Windows prompt separators, and trims 50 redundant skills-prompt bytes. The skill/memory/goal/handoff identities were re-measured without raising any ceiling. Explicit maintainer decision for #5473/#5492. The v0.9.10 full surfaces intentionally add the safe read_media tool; their measured schemas remain below the prior byte/token ceilings. Representative prompt byte metrics now use the same host-independent normalized text as their identities; the normalized base is 6089 bytes. The v0.9.11 model-visible sub-agent surface intentionally retires six legacy agents/* tools in favor of the canonical agent tool; all affected schema and prompt metrics decrease.",
   "document_kind": "codewhale.runtime_contract_budget",
   "representative_context": {
     "fixture_id": "representative-v1",
@@ -9,39 +9,39 @@
         "identity_sha256": "e1bbb7a700c2ed6eea8d2aad15e60c86d0ac386f0583afc659cfc2527db8ce58"
       },
       "goal": {
-        "bytes": 8205,
+        "bytes": 8136,
         "delta_bytes": 81,
         "identity_sha256": "ed533e2088da07b6dc09d887bd1b7afb0d6d169ce43b926635731037bc70bd54"
       },
       "handoff": {
-        "bytes": 8593,
+        "bytes": 8524,
         "delta_bytes": 388,
         "identity_sha256": "4e421fbd667404c24d98f82ea74e4eb8c907462d0b3c16d26f137f5b3450162a"
       },
       "instructions": {
-        "bytes": 6494,
+        "bytes": 6475,
         "delta_bytes": 131,
         "identity_sha256": "c95787a13b38144fb13c9c94c1eb2cf8a3804fbee532f2db42ec5cac705f1b9f"
       },
       "memory": {
-        "bytes": 8124,
+        "bytes": 8055,
         "delta_bytes": 963,
         "identity_sha256": "9ff8efdd6ca401b1796bceb82307dca4a0e7381c53580abd8d6deab28d881271"
       },
       "project": {
-        "bytes": 6363,
-        "delta_bytes": 279,
+        "bytes": 6344,
+        "delta_bytes": 255,
         "identity_sha256": "60f8bb0c4387f88917a915fb617a178ccc2d611f4963003a91742a1319d2db74"
       },
       "skill": {
-        "bytes": 7161,
-        "delta_bytes": 667,
+        "bytes": 7092,
+        "delta_bytes": 617,
         "identity_sha256": "95fc85284fb37ac3290231f04c234bd1f7fbabdb373bb02049570c2fd1b5832e"
       }
     },
     "system_prompt_blocks": 6,
-    "total_bytes": 8593,
-    "total_tokens_est": 2149
+    "total_bytes": 8524,
+    "total_tokens_est": 2131
   },
   "schema_version": 1,
   "skill_discovery": {
@@ -85,9 +85,9 @@
     "modes": {
       "act": {
         "active": {
-          "bytes": 16602,
+          "bytes": 12826,
           "identity_sha256": "8411bddfc0d7fce72ec53dfeef341f28e6a3cfe37b98a721dc05b17d53b0a13e",
-          "tokens_est": 4151,
+          "tokens_est": 3207,
           "tool_names": [
             "agent",
             "bash",
@@ -100,20 +100,14 @@
           "tools": 7
         },
         "full": {
-          "bytes": 69304,
-          "identity_sha256": "5d63bd4c072743c10686cd7f36eb1464e699edd3554058aaa0f15537e24c60fc",
-          "tokens_est": 17326,
+          "bytes": 64848,
+          "identity_sha256": "37d9a2329fee3f5b8a69c20d97e048fc11191cc37490a62bcd738f6d995fed81",
+          "tokens_est": 16212,
           "tool_names": [
             "Git",
             "Run",
             "Web",
             "agent",
-            "agents/coordinate",
-            "agents/followup",
-            "agents/interrupt",
-            "agents/list",
-            "agents/message",
-            "agents/wait",
             "apply_patch",
             "automation",
             "bash",
@@ -161,14 +155,14 @@
             "workflow",
             "write"
           ],
-          "tools": 56
+          "tools": 50
         }
       },
       "operate": {
         "active": {
-          "bytes": 16602,
+          "bytes": 12826,
           "identity_sha256": "8411bddfc0d7fce72ec53dfeef341f28e6a3cfe37b98a721dc05b17d53b0a13e",
-          "tokens_est": 4151,
+          "tokens_est": 3207,
           "tool_names": [
             "agent",
             "bash",
@@ -181,20 +175,14 @@
           "tools": 7
         },
         "full": {
-          "bytes": 69304,
-          "identity_sha256": "5d63bd4c072743c10686cd7f36eb1464e699edd3554058aaa0f15537e24c60fc",
-          "tokens_est": 17326,
+          "bytes": 64848,
+          "identity_sha256": "37d9a2329fee3f5b8a69c20d97e048fc11191cc37490a62bcd738f6d995fed81",
+          "tokens_est": 16212,
           "tool_names": [
             "Git",
             "Run",
             "Web",
             "agent",
-            "agents/coordinate",
-            "agents/followup",
-            "agents/interrupt",
-            "agents/list",
-            "agents/message",
-            "agents/wait",
             "apply_patch",
             "automation",
             "bash",
@@ -242,14 +230,14 @@
             "workflow",
             "write"
           ],
-          "tools": 56
+          "tools": 50
         }
       },
       "plan": {
         "active": {
-          "bytes": 16602,
+          "bytes": 12826,
           "identity_sha256": "8411bddfc0d7fce72ec53dfeef341f28e6a3cfe37b98a721dc05b17d53b0a13e",
-          "tokens_est": 4151,
+          "tokens_est": 3207,
           "tool_names": [
             "agent",
             "bash",
@@ -262,19 +250,13 @@
           "tools": 7
         },
         "full": {
-          "bytes": 42298,
-          "identity_sha256": "f99e12f7fe8f963acb4220ec27d51730f3c213b2a5a8ee4362f3907eb8150adf",
-          "tokens_est": 10575,
+          "bytes": 37907,
+          "identity_sha256": "28cf9153a4285ae29959162279193f0251a8090b33e84d380953916fc8c03ad6",
+          "tokens_est": 9477,
           "tool_names": [
             "Git",
             "Web",
             "agent",
-            "agents/coordinate",
-            "agents/followup",
-            "agents/interrupt",
-            "agents/list",
-            "agents/message",
-            "agents/wait",
             "automation",
             "bash",
             "create_goal",
@@ -302,7 +284,7 @@
             "workflow",
             "write"
           ],
-          "tools": 35
+          "tools": 29
         }
       }
     },

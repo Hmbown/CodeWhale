@@ -479,6 +479,7 @@ pub fn auto(app: &mut App, arg: Option<&str>) -> CommandResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Role;
     use std::path::PathBuf;
 
     use crate::tui::app::TuiOptions;
@@ -570,14 +571,14 @@ mod tests {
         assert!(objective.ends_with('…'));
 
         app.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: instruction,
                 cache_control: None,
             }],
         });
         app.api_messages.push(crate::models::Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::Text {
                 text: "Reviewed bounded objective and proposed phases.".to_string(),
                 cache_control: None,
@@ -611,7 +612,7 @@ mod tests {
             panic!("expected WorkflowInstruction action");
         };
         app.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: format!("{instruction}\n\n---\n\nUser request: {display}"),
                 cache_control: None,
@@ -622,7 +623,7 @@ mod tests {
             "a failed or unfinished draft turn is not a reviewed plan"
         );
         app.api_messages.push(crate::models::Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::Text {
                 text: "Objective, phases, workers, and risks. Run /workflow confirm to start."
                     .to_string(),
@@ -648,7 +649,7 @@ mod tests {
         );
 
         app.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: instruction,
                 cache_control: None,
@@ -751,14 +752,14 @@ mod tests {
         );
 
         app.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: instruction,
                 cache_control: None,
             }],
         });
         app.api_messages.push(crate::models::Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::Text {
                 text: "Saved Workflow path and risks reviewed.".to_string(),
                 cache_control: None,

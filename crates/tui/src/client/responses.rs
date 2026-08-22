@@ -19,6 +19,8 @@ use crate::models::{
 };
 use crate::tools::schema_sanitize;
 
+use super::prepared::WireDialect;
+use super::role_placement::{RolePlacement, role_placement};
 use super::{
     DeepSeekClient, ERROR_BODY_MAX_BYTES, bounded_error_text, from_api_tool_name,
     system_to_instructions, to_api_tool_name,
@@ -55,8 +57,12 @@ pub(super) fn build_responses_body_for_provider(
     // Every Responses route receives the same resolved request envelope as
     // Chat and Messages. Omitting this field let auxiliary Responses calls
     // escape the central route cap and made preview unable to prove the wire
-    // allowance.
-    if request.max_tokens > 0 {
+    // allowance. The Codex OAuth backend is the exception: its Responses
+    // endpoint rejects the field outright ("Unsupported parameter:
+    // max_output_tokens"), so its requests carry no client-side output cap
+    // instead of failing every call — the same lesson the Chat path learned
+    // in `apply_provider_token_limit`.
+    if request.max_tokens > 0 && provider != ApiProvider::OpenaiCodex {
         body["max_output_tokens"] = json!(request.max_tokens);
     }
     if is_deepseek {
@@ -682,7 +688,7 @@ pub(super) fn responses_tool_output(content: &str, content_blocks: Option<&[Valu
 }
 
 /// Convert Codewhale messages to Responses API input items.
-fn convert_messages_to_responses_input(
+pub(super) fn convert_messages_to_responses_input(
     request: &MessageRequest,
     provider: ApiProvider,
 ) -> Vec<Value> {
@@ -690,8 +696,11 @@ fn convert_messages_to_responses_input(
     let mut items = Vec::new();
 
     for msg in &request.messages {
-        match msg.role.as_str() {
-            "user" => {
+        // Channel selection lives in the shared placement table; this adapter
+        // owns only the shape of each channel's items.
+        let placement = role_placement(&msg.role, WireDialect::OpenAiResponses);
+        match placement {
+            RolePlacement::User => {
                 let mut content_items = Vec::new();
                 for block in &msg.content {
                     match block {
@@ -739,11 +748,11 @@ fn convert_messages_to_responses_input(
                     }));
                 }
             }
-            "assistant" | crate::models::INTERRUPTED_ASSISTANT_ROLE => {
+            RolePlacement::Assistant | RolePlacement::InterruptedAssistant => {
                 for block in &msg.content {
                     match block {
                         ContentBlock::Text { text, .. } => {
-                            let text = if msg.role == crate::models::INTERRUPTED_ASSISTANT_ROLE {
+                            let text = if placement == RolePlacement::InterruptedAssistant {
                                 format!(
                                     "{}{}",
                                     crate::models::INTERRUPTED_ASSISTANT_CONTEXT_PREFIX,
@@ -804,25 +813,64 @@ fn convert_messages_to_responses_input(
                     }
                 }
             }
-            "tool" => {
-                for block in &msg.content {
-                    if let ContentBlock::ToolResult {
-                        tool_use_id,
-                        content,
-                        content_blocks,
-                        ..
-                    } = block
-                    {
-                        let (call_id, _item_id) = parse_tool_use_id(tool_use_id);
-                        items.push(json!({
-                            "type": "function_call_output",
-                            "call_id": call_id,
-                            "output": responses_tool_output(content, content_blocks.as_deref()),
-                        }));
+            // `System` and `Developer` are typed placements for load-bearing
+            // in-history context. `Omitted` also receives compatible transcript
+            // spellings that predate the closed Role enum; preserve the
+            // representable `tool`, `system`, and `developer` wire shapes
+            // instead of silently deleting them.
+            RolePlacement::System | RolePlacement::Developer | RolePlacement::Omitted => {
+                match msg.role.as_str() {
+                    "tool" => {
+                        for block in &msg.content {
+                            if let ContentBlock::ToolResult {
+                                tool_use_id,
+                                content,
+                                content_blocks,
+                                ..
+                            } = block
+                            {
+                                let (call_id, _item_id) = parse_tool_use_id(tool_use_id);
+                                items.push(json!({
+                                    "type": "function_call_output",
+                                    "call_id": call_id,
+                                    "output": responses_tool_output(
+                                        content,
+                                        content_blocks.as_deref(),
+                                    ),
+                                }));
+                            }
+                        }
+                    }
+                    role @ ("system" | "developer") => {
+                        let content_items: Vec<Value> = msg
+                            .content
+                            .iter()
+                            .filter_map(|block| match block {
+                                ContentBlock::Text { text, .. } => Some(json!({
+                                    "type": "input_text",
+                                    "text": text,
+                                })),
+                                _ => None,
+                            })
+                            .collect();
+                        if !content_items.is_empty() {
+                            items.push(json!({
+                                "type": "message",
+                                "role": role,
+                                "content": content_items,
+                            }));
+                        }
+                    }
+                    other => {
+                        logging::warn(format!(
+                            "Responses adapter dropped a message with unsupported role {other:?}"
+                        ));
                     }
                 }
             }
-            _ => {}
+            // The outbound seam refuses rejected pairs before body building;
+            // keeping this arm empty is fail-closed defense in depth.
+            RolePlacement::Rejected => {}
         }
     }
 

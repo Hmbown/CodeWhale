@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:b092c34e8ca3 -->
+<!-- source: README.md sha256:a56bca473dbd -->
 # Codewhale
 
 Codewhale은 Rust로 만든 터미널용 오픈 소스 코딩 에이전트로, 사용자들과 함께 공개적으로 개선해 나갑니다.
@@ -20,6 +20,8 @@ codewhale
 ```
 
 처음 실행하면 공급자 연결 과정을 안내하며, 오프라인 상태로 계속 사용할 수도 있습니다. Codewhale은 Cargo, Docker, Nix, Scoop, 사전 빌드 아카이브, Android/Termux, CNB 미러도 지원합니다. [설치 안내서](docs/INSTALL.md)를 참조하세요.
+
+각 셸에서 Tab 자동 완성은 명령 한 줄로 설정할 수 있습니다 — `codewhale completion bash|zsh|fish|powershell|elvish`. [셸 자동 완성](docs/INSTALL.md#8-shell-completions)을 참조하세요.
 
 ## 사용법
 
@@ -74,4 +76,4 @@ Codewhale은 `deepseek-tui`로 시작했으며 해당 구성 및 세션과의 �
 
 ## 라이선스
 
-[MIT](LICENSE)
+[MIT](LICENSE). 다른 오픈 소스 프로젝트를 바탕으로 수정한 부분은 [타사 고지](docs/THIRD_PARTY_NOTICES.md)에 기록되어 있습니다.

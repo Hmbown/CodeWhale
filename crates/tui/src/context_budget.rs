@@ -33,9 +33,11 @@
 // `core/engine/context.rs`; `PressureLevel` by `context_report.rs`. It sits on
 // the do-not-delete list in AGENTS.md because a blanket `allow(dead_code)` here,
 // plus a comment that used to claim the module was "not yet referenced," taught
-// several dead-code audits to propose deleting a live file. The allow is now
-// per-item on the three genuinely-unused methods, so anything that goes dead
-// here shows up as a warning instead of hiding behind a module-wide waiver.
+// several dead-code audits to propose deleting a live file. The suppression is
+// now `#[cfg_attr(not(test), expect(dead_code))]` on the three methods unused
+// outside tests, so a suppression that stops matching the lint fails the
+// build instead of hiding behind a module-wide waiver. Tests call them, so
+// a bare `#[expect(dead_code)]` would be unfulfilled under `cfg(test)`.
 
 /// Fraction of the window, expressed as a percentage, at or above which
 /// compaction should be suggested. Mirrors the "high" pressure boundary the
@@ -122,7 +124,7 @@ impl PressureLevel {
     /// Unused by the engine today; kept as the pressure-level counterpart of
     /// `ContextBudget::should_compact` so both live next to their thresholds.
     #[must_use]
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code))]
     pub const fn suggests_compaction(self) -> bool {
         matches!(self, PressureLevel::High | PressureLevel::Critical)
     }
@@ -245,7 +247,7 @@ impl ContextBudget {
     /// Whether current input has reached the compaction trigger and compaction
     /// should be suggested.
     #[must_use]
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code))]
     pub fn should_compact(&self) -> bool {
         self.window_tokens > 0 && self.input_tokens >= self.compaction_trigger_tokens
     }
@@ -253,7 +255,7 @@ impl ContextBudget {
     /// Whether another `additional_input_tokens` of input would fit within the
     /// available budget (i.e. not exceed the reserved boundary).
     #[must_use]
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code))]
     pub fn fits_additional(&self, additional_input_tokens: u64) -> bool {
         additional_input_tokens <= self.available_input_tokens
     }

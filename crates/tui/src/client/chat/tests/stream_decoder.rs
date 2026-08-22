@@ -908,7 +908,7 @@ fn decoder_preserves_upstream_tool_call_id_when_present() {
 #[test]
 fn request_builder_preserves_internal_system_messages() {
     let messages = vec![Message {
-        role: "system".to_string(),
+        role: Role::System,
         content: vec![ContentBlock::Text {
             text: "internal runtime event".to_string(),
             cache_control: None,
@@ -924,7 +924,7 @@ fn request_builder_preserves_internal_system_messages() {
 
 fn tool_use_message(id: &str, name: &str, input: Value) -> Message {
     Message {
-        role: "assistant".to_string(),
+        role: Role::Assistant,
         content: vec![ContentBlock::ToolUse {
             id: id.to_string(),
             name: name.to_string(),
@@ -937,7 +937,7 @@ fn tool_use_message(id: &str, name: &str, input: Value) -> Message {
 
 fn tool_result_message(id: &str, content: &str) -> Message {
     Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::ToolResult {
             tool_use_id: id.to_string(),
             content: content.to_string(),
@@ -949,7 +949,7 @@ fn tool_result_message(id: &str, content: &str) -> Message {
 
 fn user_message_with_turn_meta(turn_meta: &str, task: &str) -> Message {
     Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![
             ContentBlock::Text {
                 text: turn_meta.to_string(),
@@ -965,7 +965,7 @@ fn user_message_with_turn_meta(turn_meta: &str, task: &str) -> Message {
 
 fn user_message_with_tail_turn_meta(task: &str, turn_meta: &str) -> Message {
     Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![
             ContentBlock::Text {
                 text: task.to_string(),
@@ -1021,7 +1021,7 @@ fn request_builder_deduplicates_consecutive_identical_turn_meta_for_wire() {
     let messages = vec![
         user_message_with_turn_meta(turn_meta, "first task"),
         Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::Text {
                 text: "first answer".to_string(),
                 cache_control: None,
@@ -1051,7 +1051,7 @@ fn request_builder_keeps_tail_turn_meta_after_user_text_for_wire() {
     let messages = vec![
         user_message_with_tail_turn_meta("first task", turn_meta),
         Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::Text {
                 text: "first answer".to_string(),
                 cache_control: None,

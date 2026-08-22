@@ -275,6 +275,7 @@ async fn issue_5305_unbuildable_provider_refuses_before_admission() {
             id: "consultant".to_string(),
             display_name: None,
             description: None,
+            requires: Vec::new(),
             profile,
             source: std::path::PathBuf::from("private/profile.toml"),
             origin: crate::fleet::roster::ProfileOrigin::Personal,

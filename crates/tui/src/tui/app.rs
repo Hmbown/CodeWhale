@@ -1281,6 +1281,9 @@ pub struct App {
     /// Effective explicit/managed filesystem scope captured at startup. The
     /// named permission posture supplies the default when this is `None`.
     pub configured_sandbox_mode: Option<String>,
+    /// Configured `sandbox_network_access`. `None`/`Some(false)` keep the
+    /// workspace-write sandbox network-restricted.
+    pub configured_sandbox_network: Option<bool>,
     /// The sandbox backend this platform+config can actually enforce with,
     /// resolved once at startup. `None` means there is NO enforcement
     /// available (default Linux without `prefer_bwrap`, and all Windows), so
@@ -2173,7 +2176,7 @@ impl App {
                 persist_route_as_startup_default(&pending.provider_identity, &pending.model)
             }
             RouteSaveChoice::SessionOnly => {
-                format!("Route {route} kept for this session only — nothing was written.")
+                format!("Model {route} kept for this session only — nothing was written.")
             }
         }
     }
@@ -3219,6 +3222,14 @@ impl App {
             && !self.viewport.transcript_selection.dragging
             && !selection_has_range
             && !self.user_scrolled_during_stream
+            // While a worker's transcript owns the conversation area, its
+            // pin governs the visible viewport: main-conversation activity
+            // must not yank the user's read position in the focused
+            // transcript (same stick-to-bottom rule as the main pane).
+            && self
+                .agent_focus
+                .as_ref()
+                .is_none_or(|focus| focus.scroll_top.is_none())
         {
             self.scroll_to_bottom();
         }
@@ -3683,9 +3694,9 @@ impl App {
         (!name.is_empty() && name != agent.agent_id).then(|| name.to_string())
     }
 
-    /// Resolve the most specific role/profile token for an agent, in priority
-    /// order: the advisory `assignment.role`, the resolved profile name, the
-    /// canonical route role, and finally the Fleet type. `None` only for a
+    /// Resolve the most specific member/role token for an agent, in priority
+    /// order: resolved profile id, advisory assignment role, requested alias,
+    /// canonical route role, then Fleet type. `None` only for a
     /// progress-only agent whose dispatch metadata has not arrived yet.
     fn agent_role_label(&self, agent_id: &str) -> Option<String> {
         let agent = self
@@ -3693,12 +3704,21 @@ impl App {
             .iter()
             .find(|agent| agent.agent_id == agent_id)?;
         agent
-            .assignment
-            .role
-            .as_deref()
+            .child_route
+            .as_ref()
+            .and_then(|route| route.resolved_profile_id.as_deref())
             .map(str::trim)
-            .filter(|role| !role.is_empty())
+            .filter(|profile| !profile.is_empty())
             .map(str::to_string)
+            .or_else(|| {
+                agent
+                    .assignment
+                    .role
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|role| !role.is_empty())
+                    .map(str::to_string)
+            })
             .or_else(|| {
                 agent
                     .child_route
@@ -4392,6 +4412,14 @@ impl App {
             && !self.viewport.transcript_selection.dragging
             && !selection_has_range
             && !self.user_scrolled_during_stream
+            // While a worker's transcript owns the conversation area, its
+            // pin governs the visible viewport: main-conversation activity
+            // must not yank the user's read position in the focused
+            // transcript (same stick-to-bottom rule as the main pane).
+            && self
+                .agent_focus
+                .as_ref()
+                .is_none_or(|focus| focus.scroll_top.is_none())
         {
             self.scroll_to_bottom();
         }
@@ -4412,17 +4440,38 @@ impl App {
         }
     }
 
-    /// Apply a workflow panel event, creating the panel on first `RunStarted`.
+    /// Apply a workflow panel event for one immutable workflow run, creating
+    /// the panel on first `RunStarted`.
     ///
-    /// Returns whether this event should request an immediate repaint.
-    /// Budget-only updates always mutate panel state but leave repaint to the
-    /// caller so high-frequency fan-out budget ticks can be paced (#4095).
+    /// Returns whether the event belonged to the displayed run and was
+    /// applied. Budget-only updates still return `true`, but leave repaint to
+    /// the caller so high-frequency fan-out budget ticks can be paced (#4095).
+    /// A `RunStarted` event may select a different run only when its start is
+    /// strictly newer; every other cross-run event fails closed.
     pub fn apply_workflow_panel_event(
         &mut self,
+        event_run_id: &str,
         event: crate::tui::widgets::workflow_panel::WorkflowPanelEvent,
     ) -> bool {
         use crate::tui::widgets::workflow_panel::{WorkflowPanel, WorkflowPanelEvent};
-        let budget_only = matches!(event, WorkflowPanelEvent::BudgetUpdated { .. });
+        if event_run_id.trim().is_empty() {
+            return false;
+        }
+        if let WorkflowPanelEvent::RunStarted { run_id, .. } = &event
+            && run_id != event_run_id
+        {
+            return false;
+        }
+        if let Some(panel) = self.workflow_panel.as_ref()
+            && panel.run_id != event_run_id
+        {
+            match &event {
+                WorkflowPanelEvent::RunStarted { at_ms, .. } if *at_ms > panel.started_at_ms => {}
+                _ => return false,
+            }
+        }
+
+        let budget_only = matches!(&event, WorkflowPanelEvent::BudgetUpdated { .. });
         match (&mut self.workflow_panel, &event) {
             (
                 None,
@@ -4448,7 +4497,7 @@ impl App {
             (None, _) => {
                 // No panel yet and event is not a start — seed a shell panel
                 // so late events still surface rather than being dropped.
-                let mut panel = WorkflowPanel::new("workflow", "workflow", 0);
+                let mut panel = WorkflowPanel::new(event_run_id, event_run_id, 0);
                 panel.locale = self.ui_locale;
                 panel.apply_event(event);
                 self.workflow_panel = Some(panel);
@@ -4460,7 +4509,7 @@ impl App {
         if !budget_only {
             self.needs_redraw = true;
         }
-        !budget_only
+        true
     }
 
     /// Toggle the workflow panel expand/collapse state. Returns true when a
@@ -4691,6 +4740,14 @@ impl App {
         self.viewport.pending_scroll_delta = 0;
         self.viewport.jump_to_latest_button_area = None;
         self.user_scrolled_during_stream = false;
+        // While a worker's transcript owns the conversation area, the
+        // jump-to-bottom affordances (Ctrl+End, Alt+G, the jump-to-latest
+        // button, sending a follow-up) must release its pin too: the two
+        // surfaces share one command set, so returning to the live tail has
+        // to mean the tail the user is actually looking at.
+        if let Some(focus) = self.agent_focus.as_mut() {
+            focus.scroll_top = None;
+        }
         self.needs_redraw = true;
     }
 

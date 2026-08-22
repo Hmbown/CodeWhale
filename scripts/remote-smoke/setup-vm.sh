@@ -20,7 +20,7 @@
 # Uses prebuilt release binaries instead of a Rust build.
 set -euo pipefail
 
-RELEASE_TAG="${RELEASE_TAG:-v0.9.10}"
+RELEASE_TAG="${RELEASE_TAG:-v0.9.11}"
 REPO_URL="${REPO_URL:-https://github.com/Hmbown/CodeWhale.git}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
 SECRETS_FILE="${SECRETS_FILE:-/tmp/cw-secrets.env}"
@@ -55,17 +55,17 @@ install -d -o codewhale -g codewhale "$BIN_DIR"
 BASE="https://github.com/Hmbown/CodeWhale/releases/download/${RELEASE_TAG}"
 TMP=$(mktemp -d)
 curl -fsSL -o "$TMP/codewhale" "$BASE/codewhale-linux-x64"
-curl -fsSL -o "$TMP/codewhale-tui" "$BASE/codewhale-tui-linux-x64"
+curl -fsSL -o "$TMP/codew" "$BASE/codew-linux-x64"
 curl -fsSL -o "$TMP/sha256.txt" "$BASE/codewhale-artifacts-sha256.txt"
 ( cd "$TMP"
-  grep -E ' (codewhale|codewhale-tui)-linux-x64$' sha256.txt \
-    | sed 's/codewhale-linux-x64/codewhale/; s/codewhale-tui-linux-x64/codewhale-tui/' \
+  grep -E ' (codewhale|codew)-linux-x64$' sha256.txt \
+    | sed 's/codewhale-linux-x64/codewhale/; s/codew-linux-x64/codew/' \
     | sha256sum -c - )
 install -m 0755 -o codewhale -g codewhale "$TMP/codewhale" "$BIN_DIR/codewhale"
-install -m 0755 -o codewhale -g codewhale "$TMP/codewhale-tui" "$BIN_DIR/codewhale-tui"
+install -m 0755 -o codewhale -g codewhale "$TMP/codew" "$BIN_DIR/codew"
 rm -rf "$TMP"
 sudo -u codewhale "$BIN_DIR/codewhale" --version
-sudo -u codewhale "$BIN_DIR/codewhale-tui" --version
+sudo -u codewhale "$BIN_DIR/codew" --version
 
 echo "== [4/8] install services (telegram bridge) =="
 CODEWHALE_BRIDGE=telegram bash /tmp/codewhale/scripts/tencent-lighthouse/install-services.sh

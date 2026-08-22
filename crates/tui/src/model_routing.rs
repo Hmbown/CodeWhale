@@ -12,6 +12,7 @@ use crate::client::DeepSeekClient;
 use crate::config::{ApiProvider, Config, normalize_model_name_for_provider};
 use crate::llm_client::LlmClient;
 use crate::model_inventory::ModelInventory;
+use crate::models::Role;
 use crate::models::{ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt};
 use crate::tui::app::ReasoningEffort;
 
@@ -1001,7 +1002,7 @@ async fn auto_route_inventory_recommendation(
     let request = MessageRequest {
         model: inventory.router_model.to_string(),
         messages: vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: router_prompt,
                 cache_control: None,

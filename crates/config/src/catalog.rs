@@ -711,7 +711,19 @@ fn secret_free_fingerprint_input(base_url: &str) -> String {
             .unwrap_or_default();
         return normalize_base_url(&format!("{scheme}://{authority}{path}"));
     }
-    normalize_base_url(trimmed.split(['?', '#']).next().unwrap_or(REDACTED))
+    // Scheme-less input still has an authority, and it can still carry
+    // `user:pass@` userinfo. Strip it exactly as the scheme branch does, so the
+    // digest input never contains a credential.
+    let without_query = trimmed.split(['?', '#']).next().unwrap_or_default();
+    let authority_end = without_query.find('/').unwrap_or(without_query.len());
+    let authority = &without_query[..authority_end];
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    if authority.is_empty() {
+        return REDACTED.to_string();
+    }
+    normalize_base_url(&format!("{authority}{}", &without_query[authority_end..]))
 }
 
 fn normalize_base_url(base_url: &str) -> String {

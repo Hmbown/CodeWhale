@@ -150,18 +150,18 @@ check_binaries() {
   section "CodeWhale binaries"
   local cargo_bin="/home/${CODEWHALE_USER}/.cargo/bin"
   local codewhale="${cargo_bin}/codewhale"
-  local tui="${cargo_bin}/codewhale-tui"
+  local codew="${cargo_bin}/codew"
   if [[ -x "${codewhale}" ]]; then
     pass "${codewhale} is executable"
     "${codewhale}" --version 2>/dev/null | sed 's/^/[info] codewhale version: /' || warn "codewhale --version failed"
   else
     fail "${codewhale} is missing or not executable"
   fi
-  if [[ -x "${tui}" ]]; then
-    pass "${tui} is executable"
-    "${tui}" --version 2>/dev/null | sed 's/^/[info] codewhale-tui version: /' || warn "codewhale-tui --version failed"
+  if [[ -x "${codew}" ]]; then
+    pass "${codew} is executable"
+    "${codew}" --version 2>/dev/null | sed 's/^/[info] codew version: /' || warn "codew --version failed"
   else
-    fail "${tui} is missing or not executable"
+    fail "${codew} is missing or not executable"
   fi
 }
 

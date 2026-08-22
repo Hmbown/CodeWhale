@@ -30,6 +30,11 @@ use crate::tui::widgets::Renderable;
 const MAX_VISIBLE_ROWS: usize = 8;
 /// Maximum phase summary chips shown in the expanded body.
 const MAX_PHASE_SUMMARY: usize = 6;
+/// Newest rejected dispatches retained by the panel. The workflow journal is
+/// the durable, unbounded source of truth; this is only a compact UI tail.
+const MAX_DISPATCH_FAILURES_RETAINED: usize = 12;
+/// Rejected dispatches shown at once in the live panel/history body.
+const MAX_VISIBLE_DISPATCH_FAILURES: usize = 3;
 
 /// Lifecycle of the active (or most recently completed) workflow run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +42,8 @@ pub enum WorkflowPanelLifecycle {
     Pending,
     Running,
     Succeeded,
+    /// The workflow returned usable output but one or more task slots failed.
+    Degraded,
     Failed,
     Cancelled,
 }
@@ -49,7 +56,10 @@ impl WorkflowPanelLifecycle {
 
     #[must_use]
     pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled)
+        matches!(
+            self,
+            Self::Succeeded | Self::Degraded | Self::Failed | Self::Cancelled
+        )
     }
 
     #[must_use]
@@ -58,8 +68,16 @@ impl WorkflowPanelLifecycle {
             Self::Pending => "pending",
             Self::Running => "running",
             Self::Succeeded => "success",
+            Self::Degraded => "degraded",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
+        }
+    }
+
+    fn display_label(self, locale: Locale) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Degraded => tr(locale, MessageId::WorkflowStatusDegraded),
+            other => std::borrow::Cow::Borrowed(other.label()),
         }
     }
 
@@ -68,6 +86,7 @@ impl WorkflowPanelLifecycle {
             Self::Pending => palette::TEXT_MUTED,
             Self::Running => palette::STATUS_WARNING,
             Self::Succeeded => palette::STATUS_SUCCESS,
+            Self::Degraded => palette::STATUS_WARNING,
             Self::Failed => palette::STATUS_ERROR,
             Self::Cancelled => palette::TEXT_MUTED,
         }
@@ -351,6 +370,41 @@ pub struct WorkflowPanelPhase {
     pub rows: Vec<WorkflowPanelRow>,
 }
 
+/// One workflow task dispatch rejected before a child agent existed.
+///
+/// This deliberately does not reuse [`WorkflowPanelRow`]: counting a rejected
+/// launch as a child would make the panel's child/receipt totals dishonest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowPanelDispatchFailure {
+    pub label: Option<String>,
+    pub phase: Option<String>,
+    pub message: String,
+    pub at_ms: u64,
+}
+
+impl WorkflowPanelDispatchFailure {
+    fn bounded(label: Option<String>, phase: Option<String>, message: String, at_ms: u64) -> Self {
+        let bounded = |value: String| {
+            crate::tui::app::bound_agent_activity_text(&value)
+                .chars()
+                .map(|ch| if ch.is_control() { ' ' } else { ch })
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let label = label.map(&bounded).filter(|value| !value.is_empty());
+        let phase = phase.map(&bounded).filter(|value| !value.is_empty());
+        let message = bounded(message);
+        Self {
+            label,
+            phase,
+            message,
+            at_ms,
+        }
+    }
+}
+
 impl WorkflowPanelPhase {
     fn new(title: impl Into<String>) -> Self {
         Self {
@@ -434,6 +488,12 @@ pub enum WorkflowPanelEvent {
     },
     TaskSchemaValidationFailed {
         task_id: String,
+        message: String,
+        at_ms: u64,
+    },
+    TaskDispatchFailed {
+        label: Option<String>,
+        phase: Option<String>,
         message: String,
         at_ms: u64,
     },
@@ -530,6 +590,12 @@ impl WorkflowPanelEvent {
                 message: opt_str(value, "message").unwrap_or_else(|| "schema failed".to_string()),
                 at_ms,
             }),
+            "task_dispatch_failed" => Some(Self::TaskDispatchFailed {
+                label: opt_str(value, "label"),
+                phase: opt_str(value, "phase"),
+                message: opt_str(value, "message").unwrap_or_default(),
+                at_ms,
+            }),
             "budget_updated" => Some(Self::BudgetUpdated {
                 total: value.get("total").and_then(Value::as_u64),
                 spent: value.get("spent").and_then(Value::as_u64).unwrap_or(0),
@@ -556,6 +622,10 @@ pub struct WorkflowPanel {
     pub phases: Vec<WorkflowPanelPhase>,
     pub selected_phase: usize,
     pub gates: Vec<WorkflowPanelGateLine>,
+    /// Newest rejected launches. These are run failures, not child rows.
+    pub dispatch_failures: Vec<WorkflowPanelDispatchFailure>,
+    /// Monotonic count, including failures older than the retained UI tail.
+    pub dispatch_failure_count: usize,
     pub budget_total: Option<u64>,
     pub budget_spent: u64,
     pub budget_remaining: Option<u64>,
@@ -599,6 +669,8 @@ impl WorkflowPanel {
             phases: Vec::new(),
             selected_phase: 0,
             gates: Vec::new(),
+            dispatch_failures: Vec::new(),
+            dispatch_failure_count: 0,
             budget_total: None,
             budget_spent: 0,
             budget_remaining: None,
@@ -643,8 +715,7 @@ impl WorkflowPanel {
             for event in events {
                 let mut event = event.clone();
                 if let Some(obj) = event.as_object_mut() {
-                    obj.entry("run_id".to_string())
-                        .or_insert_with(|| Value::String(run_id.clone()));
+                    obj.insert("run_id".to_string(), Value::String(run_id.clone()));
                 }
                 panel.apply_json_event(&event);
             }
@@ -746,6 +817,8 @@ impl WorkflowPanel {
             }
         }
 
+        panel.merge_dispatch_failures_from_run_json(value);
+
         if let Some(gates) = value
             .get("gate_status")
             .or_else(|| value.get("gates"))
@@ -829,6 +902,7 @@ impl WorkflowPanel {
             WorkflowPanelLifecycle::Pending => "pending",
             WorkflowPanelLifecycle::Running => "running",
             WorkflowPanelLifecycle::Succeeded => "completed",
+            WorkflowPanelLifecycle::Degraded => "degraded",
             WorkflowPanelLifecycle::Failed => "failed",
             WorkflowPanelLifecycle::Cancelled => "cancelled",
         };
@@ -852,6 +926,15 @@ impl WorkflowPanel {
             "token_budget": self.budget_total,
             "budget_spent": self.budget_spent,
             "budget_remaining": self.budget_remaining,
+            "dispatch_failure_count": self.dispatch_failure_count,
+            "dispatch_failures": self.dispatch_failures.iter().map(|failure| {
+                json!({
+                    "label": failure.label.as_deref(),
+                    "phase": failure.phase.as_deref(),
+                    "message": failure.message.as_str(),
+                    "at_ms": failure.at_ms,
+                })
+            }).collect::<Vec<_>>(),
             "gates": self.gates.iter().map(|gate| {
                 json!({
                     "gate_id": gate.gate_id.as_str(),
@@ -879,7 +962,7 @@ impl WorkflowPanel {
         let phase_word = if phases == 1 { "phase" } else { "phases" };
         let raw = format!(
             "workflow {life} · {total} {child_word} · {phases} {phase_word} · {failed} fail · {elapsed}",
-            life = self.lifecycle.label(),
+            life = self.lifecycle.display_label(self.locale),
         );
         truncate_line_to_width(&raw, width.max(1))
     }
@@ -891,7 +974,10 @@ impl WorkflowPanel {
     pub fn top_bar_chip(&self) -> String {
         let (done, total) = self.done_total();
         let (failed, _cancelled) = self.failure_cancel_counts();
-        let mut chip = format!("wf {} {done}/{total}", self.lifecycle.label());
+        let mut chip = format!(
+            "wf {} {done}/{total}",
+            self.lifecycle.display_label(self.locale)
+        );
         if failed > 0 {
             chip.push_str(&format!(" · {failed} fail"));
         }
@@ -1038,6 +1124,10 @@ impl WorkflowPanel {
                 );
             }
         }
+
+        // Rejected launches are run-level failures rather than child lanes.
+        // Keep their newest bounded details visible in the completed card.
+        lines.extend(self.render_dispatch_failure_lines(content_width));
 
         if self.lifecycle.is_terminal() {
             let (done, total) = self.done_total();
@@ -1199,6 +1289,7 @@ impl WorkflowPanel {
             WorkflowPanelLifecycle::Pending => WorkflowRowStatus::Pending,
             WorkflowPanelLifecycle::Running => WorkflowRowStatus::Running,
             WorkflowPanelLifecycle::Succeeded => WorkflowRowStatus::Succeeded,
+            WorkflowPanelLifecycle::Degraded => WorkflowRowStatus::Failed,
             WorkflowPanelLifecycle::Failed => WorkflowRowStatus::Failed,
             WorkflowPanelLifecycle::Cancelled => WorkflowRowStatus::Cancelled,
         };
@@ -1396,6 +1487,20 @@ impl WorkflowPanel {
                     }
                 }
             }
+            WorkflowPanelEvent::TaskDispatchFailed {
+                label,
+                phase,
+                message,
+                at_ms,
+            } => {
+                self.record_dispatch_failure(label, phase, message, at_ms);
+                // A failed launch can be only one slot in a parallel phase;
+                // keep the run live so surviving siblings can still finish.
+                if self.lifecycle.is_running() {
+                    self.lifecycle = WorkflowPanelLifecycle::Running;
+                    self.expanded = true;
+                }
+            }
             WorkflowPanelEvent::BudgetUpdated {
                 total,
                 spent,
@@ -1411,15 +1516,88 @@ impl WorkflowPanel {
         }
     }
 
-    pub fn apply_json_event(&mut self, value: &Value) {
+    /// Apply one event only when its explicit route identity belongs to this
+    /// panel. A strictly newer `run_started` is the sole event allowed to
+    /// select a different run; legacy direct callers without an id remain
+    /// accepted.
+    pub fn apply_json_event(&mut self, value: &Value) -> bool {
+        let event_type = value.get("type").and_then(Value::as_str);
+        let event_run_id = value
+            .get("run_id")
+            .or_else(|| value.get("workflow_run_id"))
+            .and_then(Value::as_str)
+            .filter(|run_id| !run_id.trim().is_empty());
+        if event_type == Some("run_started")
+            && event_run_id.is_some_and(|run_id| run_id != self.run_id)
+            && value
+                .get("at_ms")
+                .and_then(Value::as_u64)
+                .is_none_or(|at_ms| at_ms <= self.started_at_ms)
+        {
+            return false;
+        }
+        if event_type != Some("run_started")
+            && event_run_id.is_some_and(|run_id| run_id != self.run_id)
+        {
+            return false;
+        }
         if let Some(event) = WorkflowPanelEvent::from_json_value(value) {
             self.apply_event(event);
+            return true;
         }
+        false
     }
 
     pub fn apply_json_events(&mut self, values: &[Value]) {
         for value in values {
             self.apply_json_event(value);
+        }
+    }
+
+    /// Merge the authoritative structured failure ledger carried by a run
+    /// result after its retained event tail has been applied. The tail can
+    /// replay events already seen live; the exact top-level count and newest
+    /// bounded ledger therefore replace, rather than add to, panel state.
+    pub(crate) fn merge_dispatch_failures_from_run_json(&mut self, value: &Value) {
+        let fallback_at_ms = value
+            .get("started_at_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(self.started_at_ms);
+        let ledger = value
+            .get("dispatch_failures")
+            .and_then(Value::as_array)
+            .map(|failures| {
+                let start = failures
+                    .len()
+                    .saturating_sub(MAX_DISPATCH_FAILURES_RETAINED);
+                failures[start..]
+                    .iter()
+                    .map(|failure| {
+                        WorkflowPanelDispatchFailure::bounded(
+                            opt_str(failure, "label"),
+                            opt_str(failure, "phase"),
+                            opt_str(failure, "message").unwrap_or_default(),
+                            failure
+                                .get("at_ms")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(fallback_at_ms),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            });
+        let declared_count = value
+            .get("dispatch_failure_count")
+            .and_then(Value::as_u64)
+            .map(|count| usize::try_from(count).unwrap_or(usize::MAX));
+
+        if let Some(ledger) = ledger {
+            let returned = ledger.len();
+            self.dispatch_failures = ledger;
+            self.dispatch_failure_count = declared_count
+                .map(|count| count.max(returned))
+                .unwrap_or_else(|| self.dispatch_failure_count.max(returned));
+        } else if let Some(count) = declared_count {
+            self.dispatch_failure_count = count;
         }
     }
 
@@ -1483,18 +1661,34 @@ impl WorkflowPanel {
 
     #[must_use]
     pub fn failure_cancel_counts(&self) -> (usize, usize) {
-        let mut failed = 0usize;
+        let mut failed = self.dispatch_failure_count;
         let mut cancelled = 0usize;
         for phase in &self.phases {
             for row in &phase.rows {
                 if row.status.is_failure() {
-                    failed += 1;
+                    failed = failed.saturating_add(1);
                 } else if row.status.is_cancel() {
-                    cancelled += 1;
+                    cancelled = cancelled.saturating_add(1);
                 }
             }
         }
         (failed, cancelled)
+    }
+
+    fn record_dispatch_failure(
+        &mut self,
+        label: Option<String>,
+        phase: Option<String>,
+        message: String,
+        at_ms: u64,
+    ) {
+        let failure = WorkflowPanelDispatchFailure::bounded(label, phase, message, at_ms);
+        self.dispatch_failure_count = self.dispatch_failure_count.saturating_add(1);
+        self.dispatch_failures.push(failure);
+        if self.dispatch_failures.len() > MAX_DISPATCH_FAILURES_RETAINED {
+            let overflow = self.dispatch_failures.len() - MAX_DISPATCH_FAILURES_RETAINED;
+            self.dispatch_failures.drain(..overflow);
+        }
     }
 
     /// Header line: expand glyph, lifecycle, label, done/total, phases,
@@ -1519,10 +1713,53 @@ impl WorkflowPanel {
         let focus = if self.keyboard_focus { "*" } else { "" };
         let raw = format!(
             "{glyph}{focus} workflow {life} · {label} · {done}/{total} · {phases} phases · {failed} fail · {cancelled} cancel · {elapsed}{budget}{cancel_hint}",
-            life = self.lifecycle.label(),
+            life = self.lifecycle.display_label(self.locale),
             label = self.label,
         );
         truncate_line_to_width(&raw, width.max(1))
+    }
+
+    fn render_dispatch_failure_lines(&self, width: usize) -> Vec<Line<'static>> {
+        let shown = self
+            .dispatch_failures
+            .len()
+            .min(MAX_VISIBLE_DISPATCH_FAILURES);
+        let start = self.dispatch_failures.len().saturating_sub(shown);
+        let mut lines = Vec::with_capacity(shown.saturating_add(1));
+        for failure in &self.dispatch_failures[start..] {
+            let slot = match (failure.label.as_deref(), failure.phase.as_deref()) {
+                (Some(label), Some(phase)) if label != phase => {
+                    format!("{} [{}]", short_label(label, 28), short_label(phase, 20))
+                }
+                (Some(label), _) => short_label(label, 28),
+                (None, Some(phase)) => short_label(phase, 28),
+                (None, None) => {
+                    tr(self.locale, MessageId::WorkflowDispatchFallbackTask).into_owned()
+                }
+            };
+            let message = if failure.message.is_empty() {
+                tr(self.locale, MessageId::SetupStatusFailed).into_owned()
+            } else {
+                short_label(&failure.message, 160)
+            };
+            let text = tr(self.locale, MessageId::WorkflowDispatchFailureLine)
+                .replace("{slot}", &slot)
+                .replace("{message}", &message);
+            lines.push(Line::from(Span::styled(
+                truncate_line_to_width(&text, width.max(1)),
+                Style::default().fg(palette::STATUS_ERROR),
+            )));
+        }
+        let omitted = self.dispatch_failure_count.saturating_sub(shown);
+        if omitted > 0 {
+            let text = tr(self.locale, MessageId::WorkflowDispatchFailuresOmitted)
+                .replace("{count}", &omitted.to_string());
+            lines.push(Line::from(Span::styled(
+                truncate_line_to_width(&text, width.max(1)),
+                Style::default().fg(palette::TEXT_MUTED),
+            )));
+        }
+        lines
     }
 
     /// Return the display-column span of the cancel hint in the exact header
@@ -1585,6 +1822,8 @@ impl WorkflowPanel {
             )));
         }
 
+        let mut dispatch_failure_lines = self.render_dispatch_failure_lines(content_width);
+
         // Selected phase rows.
         if let Some(phase) = self.phases.get(self.selected_phase) {
             lines.push(Line::from(Span::styled(
@@ -1603,6 +1842,7 @@ impl WorkflowPanel {
                 let block = self.render_row_lines(row, content_width, now);
                 let more_after = phase.rows.len() > shown + 1;
                 let reserved_tail = usize::from(more_after)
+                    + dispatch_failure_lines.len()
                     + usize::from(self.error.is_some())
                     + usize::from(self.keyboard_focus);
                 if max_height
@@ -1625,6 +1865,8 @@ impl WorkflowPanel {
                 Style::default().fg(palette::TEXT_MUTED),
             )));
         }
+
+        lines.append(&mut dispatch_failure_lines);
 
         if let Some(error) = self.error.as_deref() {
             lines.push(Line::from(Span::styled(
@@ -1839,6 +2081,7 @@ fn lifecycle_from_status(status: &str) -> WorkflowPanelLifecycle {
     match status {
         "running" => WorkflowPanelLifecycle::Running,
         "completed" | "succeeded" | "success" => WorkflowPanelLifecycle::Succeeded,
+        "degraded" => WorkflowPanelLifecycle::Degraded,
         "failed" | "error" => WorkflowPanelLifecycle::Failed,
         "cancelled" | "canceled" => WorkflowPanelLifecycle::Cancelled,
         "pending" => WorkflowPanelLifecycle::Pending,
@@ -2975,6 +3218,259 @@ mod tests {
             .find(|row| row.task_id == "child-1")
             .expect("row recorded");
         assert_eq!(row.label, "typed-label");
+    }
+
+    #[test]
+    fn explicit_event_run_id_cannot_cross_panel_run() {
+        let mut panel = WorkflowPanel::new("run-b", "active run", 2_000);
+
+        assert!(!panel.apply_json_event(&json!({
+            "type": "run_started",
+            "run_id": "run-a",
+            "workflow_goal": "late prior run",
+            "at_ms": 1_500,
+        })));
+        assert!(!panel.apply_json_event(&json!({
+            "type": "phase_started",
+            "run_id": "run-a",
+            "title": "Late A phase",
+            "at_ms": 2_100,
+        })));
+        assert!(panel.phases.is_empty());
+        assert_eq!(panel.run_id, "run-b");
+
+        assert!(panel.apply_json_event(&json!({
+            "type": "phase_started",
+            "run_id": "run-b",
+            "title": "B phase",
+            "at_ms": 2_200,
+        })));
+        assert_eq!(panel.phases.len(), 1);
+        assert_eq!(panel.phases[0].title, "B phase");
+    }
+
+    #[test]
+    fn dispatch_failure_event_surfaces_without_inventing_a_child() {
+        let mut panel = started_panel();
+        panel.apply_json_event(&json!({
+            "type": "task_dispatch_failed",
+            "label": "review docs",
+            "phase": "Analyze",
+            "message": "unknown agent profile reviewer",
+            "at_ms": 1_250,
+        }));
+
+        assert_eq!(panel.done_total(), (0, 1), "rejected launch is not a child");
+        assert_eq!(panel.failure_cancel_counts(), (1, 0));
+        assert_eq!(panel.lifecycle, WorkflowPanelLifecycle::Running);
+        assert!(panel.expanded);
+        assert!(panel.header_text(120).contains("1 fail"));
+
+        let live = panel
+            .render_lines(120)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for expected in [
+            "dispatch failed",
+            "review docs",
+            "Analyze",
+            "unknown agent profile reviewer",
+        ] {
+            assert!(live.contains(expected), "missing {expected}: {live}");
+        }
+
+        let snapshot = panel.to_run_json();
+        assert_eq!(snapshot["dispatch_failure_count"], 1);
+        assert_eq!(
+            snapshot["dispatch_failures"].as_array().map(Vec::len),
+            Some(1)
+        );
+        let restored = WorkflowPanel::from_run_json(&snapshot).expect("panel rehydrates");
+        assert_eq!(restored.done_total(), (0, 1));
+        assert_eq!(restored.failure_cancel_counts(), (1, 0));
+        let history = restored
+            .render_history_card(120, true, &WorkflowHistoryExtras::default())
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        assert!(history.contains("dispatch failed"), "{history}");
+        assert!(
+            history.contains("unknown agent profile reviewer"),
+            "{history}"
+        );
+
+        let mut japanese = restored.clone();
+        japanese.locale = Locale::Ja;
+        let localized = japanese
+            .render_lines(120)
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        assert!(localized.contains("ディスパッチ失敗"), "{localized}");
+        assert!(!localized.contains("dispatch failed"), "{localized}");
+    }
+
+    #[test]
+    fn degraded_run_preserves_partial_success_as_a_distinct_terminal_state() {
+        let mut panel = started_panel();
+        panel.apply_json_event(&json!({
+            "type": "task_completed",
+            "task_id": "t1",
+            "status": "succeeded",
+            "at_ms": 1_300,
+        }));
+        panel.apply_json_event(&json!({
+            "type": "task_dispatch_failed",
+            "label": "review docs",
+            "message": "profile unavailable",
+            "at_ms": 1_350,
+        }));
+        panel.apply_json_event(&json!({
+            "type": "run_completed",
+            "status": "degraded",
+            "error": "completed with dropped slots",
+            "at_ms": 1_400,
+        }));
+
+        assert_eq!(panel.lifecycle, WorkflowPanelLifecycle::Degraded);
+        assert!(panel.lifecycle.is_terminal());
+        assert_eq!(panel.done_total(), (1, 1));
+        assert_eq!(panel.failure_cancel_counts(), (1, 0));
+        assert!(panel.header_text(120).contains("degraded"));
+
+        panel.locale = Locale::Ja;
+        assert!(panel.header_text(120).contains("一部失敗"));
+    }
+
+    #[test]
+    fn dispatch_failure_tail_is_bounded_and_redacted() {
+        let mut panel = WorkflowPanel::new("workflow_abc", "audit", 1_000);
+        for index in 0..20 {
+            panel.apply_json_event(&json!({
+                "type": "task_dispatch_failed",
+                "label": format!("job-{index}"),
+                "message": if index == 19 {
+                    "\u{1b}[31mapi_key=sk-dispatch-secret-1234567890\u{1b}[0m\nfailed"
+                } else {
+                    "profile unavailable"
+                },
+                "at_ms": 1_100 + index,
+            }));
+        }
+
+        assert_eq!(panel.dispatch_failure_count, 20);
+        assert_eq!(
+            panel.dispatch_failures.len(),
+            MAX_DISPATCH_FAILURES_RETAINED
+        );
+        assert_eq!(
+            panel
+                .dispatch_failures
+                .first()
+                .and_then(|failure| failure.label.as_deref()),
+            Some("job-8")
+        );
+        let latest = panel.dispatch_failures.last().expect("latest failure");
+        assert!(!latest.message.contains("sk-dispatch-secret"));
+        assert!(!latest.message.chars().any(char::is_control));
+        let rendered = panel
+            .render_lines(120)
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        assert!(rendered.contains("17 earlier not shown"), "{rendered}");
+        assert!(!rendered.contains("sk-dispatch-secret"), "{rendered}");
+    }
+
+    #[test]
+    fn run_json_overlap_does_not_double_count_dispatch_failure_ledger() {
+        let failure = json!({
+            "type": "task_dispatch_failed",
+            "label": "review docs",
+            "phase": "Analyze",
+            "message": "profile unavailable",
+            "at_ms": 1_250,
+        });
+        let panel = WorkflowPanel::from_run_json(&json!({
+            "run_id": "workflow_abc",
+            "workflow_goal": "audit",
+            "started_at_ms": 1_000,
+            "events": [
+                {
+                    "type": "run_started",
+                    "run_id": "workflow_abc",
+                    "workflow_goal": "audit",
+                    "at_ms": 1_000,
+                },
+                failure.clone(),
+            ],
+            "dispatch_failure_count": 1,
+            "dispatch_failures": [{
+                "label": "review docs",
+                "phase": "Analyze",
+                "message": "profile unavailable",
+                "at_ms": 1_250,
+            }],
+        }))
+        .expect("panel rehydrates");
+
+        assert_eq!(panel.dispatch_failure_count, 1);
+        assert_eq!(panel.dispatch_failures.len(), 1);
+        assert_eq!(panel.failure_cancel_counts(), (1, 0));
+
+        let mut live = WorkflowPanel::new("workflow_abc", "audit", 1_000);
+        live.apply_json_event(&failure);
+        live.apply_json_events(std::slice::from_ref(&failure));
+        live.merge_dispatch_failures_from_run_json(&json!({
+            "dispatch_failure_count": 1,
+            "dispatch_failures": [{
+                "label": "review docs",
+                "phase": "Analyze",
+                "message": "profile unavailable",
+                "at_ms": 1_250,
+            }],
+        }));
+        assert_eq!(
+            live.dispatch_failure_count, 1,
+            "authoritative completion ledger must absorb retained replay"
+        );
+        live.apply_json_events(&[failure.clone(), failure]);
+        live.merge_dispatch_failures_from_run_json(&json!({
+            "dispatch_failure_count": 2,
+            "dispatch_failures": [
+                {
+                    "label": "review docs",
+                    "phase": "Analyze",
+                    "message": "profile unavailable",
+                    "at_ms": 1_250,
+                },
+                {
+                    "label": "review docs",
+                    "phase": "Analyze",
+                    "message": "profile unavailable",
+                    "at_ms": 1_250,
+                },
+            ],
+        }));
+        assert_eq!(
+            live.dispatch_failure_count, 2,
+            "authoritative count must preserve two genuinely identical slots"
+        );
+    }
+
+    #[test]
+    fn imported_max_dispatch_count_cannot_overflow_failed_child_rollup() {
+        let mut panel = started_panel();
+        panel.dispatch_failure_count = usize::MAX;
+        panel.find_row_mut("t1").expect("row").status = WorkflowRowStatus::Failed;
+        assert_eq!(panel.failure_cancel_counts(), (usize::MAX, 0));
     }
 
     #[test]

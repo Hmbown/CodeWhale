@@ -45,8 +45,8 @@ runtime model.
 
 ## 2. First Launch
 
-Install Codewhale with the path that fits your machine. Each supported install
-path provides both the `codewhale` dispatcher and the `codewhale-tui` runtime.
+Install Codewhale with the path that fits your machine. Release installers
+provide the same runtime under the `codewhale` and `codew` command names.
 
 ```bash
 # npm
@@ -54,7 +54,8 @@ npm install -g codewhale
 
 # Cargo
 cargo install codewhale-cli --locked
-cargo install codewhale-tui --locked
+# Optional short name after Cargo install:
+ln -s "$(command -v codewhale)" "$(dirname "$(command -v codewhale)")/codew"
 
 # Homebrew
 brew tap Hmbown/deepseek-tui

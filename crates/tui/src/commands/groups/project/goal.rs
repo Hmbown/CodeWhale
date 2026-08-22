@@ -248,6 +248,7 @@ impl RegisterCommand for GoalCmd {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Role;
 
     fn create_test_app() -> App {
         let options = crate::tui::app::TuiOptions {
@@ -322,7 +323,7 @@ mod tests {
         // create_goal — it must not error with a usage demand.
         let mut app = create_test_app();
         app.api_messages.push(crate::models::Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![crate::models::ContentBlock::Text {
                 text: "make the tests pass".to_string(),
                 cache_control: None,

@@ -2,7 +2,7 @@
   "name": "codewhale-vscode",
   "displayName": "CodeWhale",
   "description": "Official CodeWhale VS Code integration scaffold for local runtime attach and terminal launch.",
-  "version": "0.9.10",
+  "version": "0.9.11",
   "publisher": "codewhale",
   "license": "MIT",
   "repository": {

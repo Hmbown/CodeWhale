@@ -8,6 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::role::Role;
+
 /// Request payload handed to the model-client preparation seam.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MessageRequest {
@@ -101,9 +103,14 @@ pub struct ImageUrlContent {
 }
 
 /// A chat message with role and content blocks.
+///
+/// `role` is a closed [`Role`] rather than a free-form string. It serializes
+/// to exactly the bytes the `String` field produced, so persisted sessions
+/// need no schema bump, and an unfamiliar role from a newer build loads as
+/// [`Role::Unrecognized`] instead of failing the session.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Message {
-    pub role: String,
+    pub role: Role,
     pub content: Vec<ContentBlock>,
 }
 
@@ -249,7 +256,7 @@ mod tests {
         PrimaryTurnRequest {
             model: "deepseek-v4-flash".to_string(),
             messages: vec![Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "inspect the request".to_string(),
                     cache_control: None,
@@ -284,6 +291,33 @@ mod tests {
         assert_eq!(
             first_bytes,
             br#"{"model":"deepseek-v4-flash","messages":[{"role":"user","content":[{"type":"text","text":"inspect the request"}]}],"max_tokens":4096,"system":"system","tools":[{"name":"read_file","description":"Read a file","input_schema":{"zeta":1,"alpha":2,"type":"object"}}],"tool_choice":{"type":"auto"},"reasoning_effort":"high","stream":true}"#
+        );
+    }
+
+    #[test]
+    fn persisted_messages_keep_their_pre_typed_role_bytes() {
+        // `Message::role` became a closed `Role` enum. Saved transcripts are
+        // plain JSON with a free-form role string, so the typed field has to
+        // produce byte-identical output and accept every string it used to —
+        // otherwise every session on disk would need a schema bump, and
+        // `session_manager` refuses a session whose schema_version exceeds
+        // CURRENT with no migration ladder to climb back down.
+        let persisted = br#"[{"role":"user","content":[{"type":"text","text":"a"}]},{"role":"assistant","content":[{"type":"text","text":"b"}]},{"role":"system","content":[{"type":"text","text":"c"}]},{"role":"assistant_interrupted","content":[{"type":"text","text":"d"}]},{"role":"developer","content":[{"type":"text","text":"e"}]}]"#;
+        let decoded: Vec<Message> = serde_json::from_slice(persisted).expect("load transcript");
+        assert_eq!(
+            decoded.iter().map(|m| m.role.clone()).collect::<Vec<_>>(),
+            vec![
+                Role::User,
+                Role::Assistant,
+                Role::System,
+                Role::InterruptedAssistant,
+                Role::Developer,
+            ]
+        );
+        assert_eq!(
+            serde_json::to_vec(&decoded).expect("re-save transcript"),
+            persisted.to_vec(),
+            "re-saving a loaded transcript must not change a single byte",
         );
     }
 

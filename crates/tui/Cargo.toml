@@ -8,6 +8,9 @@ repository.workspace = true
 description = "Terminal UI for open-source and open-weight coding models"
 default-run = "codewhale-tui"
 
+[lints]
+workspace = true
+
 [features]
 default = ["tui", "json", "toml"]
 tui = ["dep:schemaui", "schemaui/tui", "json", "toml"]
@@ -27,19 +30,19 @@ path = "src/main.rs"
 [dependencies]
 ahash = "0.8"
 anyhow.workspace = true
-codewhale-config = { path = "../config", version = "0.9.10" }
-codewhale-command-contract = { path = "../command-contract", version = "0.9.10" }
-codewhale-core = { path = "../core", version = "0.9.10" }
-codewhale-execpolicy = { path = "../execpolicy", version = "0.9.10" }
-codewhale-lane = { path = "../lane", version = "0.9.10" }
-codewhale-paths = { path = "../paths", version = "0.9.10" }
-codewhale-protocol = { path = "../protocol", version = "0.9.10" }
-codewhale-release = { path = "../release", version = "0.9.10" }
-codewhale-secrets = { path = "../secrets", version = "0.9.10" }
-codewhale-telemetry = { path = "../telemetry", version = "0.9.10" }
-codewhale-tools = { path = "../tools", version = "0.9.10" }
-codewhale-workflow = { path = "../workflow", version = "0.9.10" }
-codewhale-workflow-js = { path = "../workflow-js", version = "0.9.10" }
+codewhale-config = { path = "../config", version = "0.9.11" }
+codewhale-command-contract = { path = "../command-contract", version = "0.9.11" }
+codewhale-core = { path = "../core", version = "0.9.11" }
+codewhale-execpolicy = { path = "../execpolicy", version = "0.9.11" }
+codewhale-lane = { path = "../lane", version = "0.9.11" }
+codewhale-paths = { path = "../paths", version = "0.9.11" }
+codewhale-protocol = { path = "../protocol", version = "0.9.11" }
+codewhale-release = { path = "../release", version = "0.9.11" }
+codewhale-secrets = { path = "../secrets", version = "0.9.11" }
+codewhale-telemetry = { path = "../telemetry", version = "0.9.11" }
+codewhale-tools = { path = "../tools", version = "0.9.11" }
+codewhale-workflow = { path = "../workflow", version = "0.9.11" }
+codewhale-workflow-js = { path = "../workflow-js", version = "0.9.11" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"
 async-trait.workspace = true
@@ -108,7 +111,7 @@ shell-words = "1.1.1"
 mimalloc.workspace = true
 
 [build-dependencies]
-codewhale-build-support = { path = "../build-support", version = "0.9.10" }
+codewhale-build-support = { path = "../build-support", version = "0.9.11" }
 
 [dev-dependencies]
 cucumber = "0.23.0"

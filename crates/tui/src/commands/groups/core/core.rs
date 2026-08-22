@@ -717,6 +717,7 @@ mod tests {
     use crate::client::PromptInspection;
     use crate::config::Config;
     use crate::models::Message;
+    use crate::models::Role;
     use crate::tui::app::{App, AppMode, TuiOptions, TurnCacheRecord};
     use crate::tui::history::HistoryCell;
     use std::ffi::OsString;
@@ -903,7 +904,7 @@ mod tests {
             content: "test".to_string(),
         });
         app.api_messages.push(Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![],
         });
         app.session.total_conversation_tokens = 100;
@@ -942,7 +943,7 @@ mod tests {
             content: "keep me".to_string(),
         });
         app.api_messages.push(Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![],
         });
         app.current_session_id = Some("current-session".to_string());
@@ -968,7 +969,7 @@ mod tests {
             content: "keep active turn".to_string(),
         });
         app.api_messages.push(Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![],
         });
         app.current_session_id = Some("active-session".to_string());

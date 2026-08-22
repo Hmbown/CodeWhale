@@ -35,9 +35,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
-use crate::config::{
-    ApiProvider, Config, base_url_uses_local_host, has_api_key_for, provider_is_configured,
-};
+use crate::config::{ApiProvider, Config, base_url_uses_local_host, provider_is_configured};
 use crate::core::ops::ProviderRuntimeStatus;
 use crate::localization::{Locale, MessageId, tr};
 use crate::model_profile::{
@@ -232,6 +230,10 @@ pub struct ProviderDashboardRow {
     external_credential_status: Option<codewhale_config::ExternalCredentialConsentStatus>,
     pub is_active: bool,
     has_key: bool,
+    /// Human-readable name of the place this row's credential resolved from,
+    /// or "not found". Ported from pi-mono's `AuthResult.source`; a label
+    /// only, never secret material.
+    pub(crate) credential_source: String,
     credential_state: CredentialState,
     route_identity: ProviderRouteIdentity,
     route_ok: bool,
@@ -524,11 +526,16 @@ impl ProviderDashboardRow {
             uses_kimi_imported_token.then(|| crate::config::DEFAULT_KIMI_CODE_MODEL.to_string())
         });
         let model_origin = ProviderModelOrigin::for_provider(provider, has_configured_model);
+        // One sourced resolution per row: the picker must be able to say WHERE
+        // it looked, not just that it found nothing (pi-mono's `AuthResult`
+        // source, ported in `crate::credentials`).
+        let credential_resolution = crate::config::resolve_credential_source(config, provider);
         let has_key = if provider == ApiProvider::Custom {
             custom_provider_has_auth(configured)
         } else {
-            has_api_key_for(config, provider)
+            credential_resolution.is_present()
         };
+        let credential_source = credential_resolution.source.label().into_owned();
         let credential_state = credential_state_for_provider(config, provider);
         let auth_mode = config.auth_mode_for_provider(provider);
         let no_auth = crate::config::auth_mode_disables_api_key(auth_mode.as_deref());
@@ -609,6 +616,7 @@ impl ProviderDashboardRow {
                 external_credential_status: None,
                 is_active,
                 has_key,
+                credential_source,
                 credential_state: CredentialState::Legacy,
                 route_identity: route_identity_for_model(
                     config,
@@ -723,7 +731,12 @@ impl ProviderDashboardRow {
                 | ProviderAuthStatus::OAuthMissing
                 | ProviderAuthStatus::ImportedTokenUnavailable
         ) {
-            messages.push(missing_auth_message(provider, configured, &provider_id));
+            messages.push(missing_auth_message(
+                provider,
+                configured,
+                &provider_id,
+                &credential_resolution,
+            ));
         }
         if catalog_status == ProviderCatalogStatus::DefaultOnly {
             messages.push("catalog snapshot missing; using provider default".to_string());
@@ -773,6 +786,7 @@ impl ProviderDashboardRow {
             external_credential_status,
             is_active,
             has_key,
+            credential_source,
             credential_state,
             route_identity,
             route_ok,
@@ -1322,27 +1336,47 @@ fn custom_provider_auth_is_optional(configured: Option<&crate::config::ProviderC
     })
 }
 
+/// The actionable half of a failed credential resolution.
+///
+/// "missing DEEPSEEK_API_KEY" told a user nothing about *where* the picker
+/// looked, which is why a key sitting in the secret store could read as
+/// "missing key" while the request path found it. Every message now carries
+/// the ordered places that were probed and the one command that fixes the
+/// first of them. Places and fixes are labels only — never secret material.
 fn missing_auth_message(
     provider: ApiProvider,
     configured: Option<&crate::config::ProviderConfig>,
     provider_id: &str,
+    resolution: &crate::credentials::CredentialResolution,
 ) -> String {
     if provider == ApiProvider::Moonshot
         && configured.is_some_and(crate::config::provider_config_uses_kimi_imported_token)
     {
         return "Kimi OAuth is unavailable; configure a Kimi API key".to_string();
     }
-    if provider == ApiProvider::Custom {
-        if let Some(env_name) = configured
+    let headline = if provider == ApiProvider::Custom {
+        match configured
             .and_then(|entry| entry.api_key_env.as_deref())
             .map(str::trim)
             .filter(|name| !name.is_empty())
         {
-            return format!("missing {env_name} for custom provider {provider_id}");
+            Some(env_name) => format!("missing {env_name} for custom provider {provider_id}"),
+            None => format!("missing custom provider auth for {provider_id}"),
         }
-        return format!("missing custom provider auth for {provider_id}");
+    } else {
+        format!("missing {}", provider.env_vars_label())
+    };
+    let mut message = headline;
+    let checked = resolution.checked_places();
+    if !checked.is_empty() {
+        message.push_str(" · checked ");
+        message.push_str(&checked);
     }
-    format!("missing {}", provider.env_vars_label())
+    if let Some(fix) = resolution.first_fix() {
+        message.push_str(" · fix: ");
+        message.push_str(fix);
+    }
+    message
 }
 
 fn readiness_for(
@@ -2707,6 +2741,14 @@ impl ProviderPickerView {
                     row.auth_status.label(),
                     row.catalog_label()
                 ),
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
+            // Which place the credential actually came from. A row can read
+            // "key:configured" for four different reasons; naming the one that
+            // won is what lets a user reconcile the picker with a request that
+            // succeeded (or didn't).
+            Line::from(Span::styled(
+                format!("Credential: {}", row.credential_source),
                 Style::default().fg(palette::TEXT_MUTED),
             )),
             Line::from(Span::styled(
@@ -4378,6 +4420,7 @@ fn custom_provider_dashboard_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::has_api_key_for;
     use crate::test_support::EnvVarGuard;
     use crossterm::event::{KeyEvent, KeyModifiers};
 
@@ -6492,6 +6535,73 @@ mod tests {
             row.messages
                 .iter()
                 .any(|message| message.contains("missing OPENROUTER_API_KEY"))
+        );
+    }
+
+    /// The visible payoff of the sourced resolver. Before this change the row
+    /// said "missing OPENROUTER_API_KEY" and nothing else, so a user could not
+    /// tell whether the durable slot had been read and found empty, skipped, or
+    /// never consulted. The note must now name the places that were probed and
+    /// the command that fixes the first of them.
+    #[test]
+    fn missing_key_note_names_the_places_that_were_checked() {
+        let _lock = crate::test_support::lock_test_env();
+        let _openrouter_key = EnvVarGuard::remove("OPENROUTER_API_KEY");
+        let config = Config::default();
+        let row = ProviderDashboardRow::from_config(
+            ApiProvider::Openrouter,
+            ApiProvider::Deepseek,
+            &config,
+        );
+
+        let note = row
+            .messages
+            .iter()
+            .find(|message| message.contains("missing OPENROUTER_API_KEY"))
+            .expect("missing-key note");
+        assert!(
+            note.contains("checked "),
+            "the note must say where it looked: {note}"
+        );
+        assert!(
+            note.contains("secret store \"openrouter\""),
+            "the durable slot must be named: {note}"
+        );
+        assert!(
+            note.contains("fix: "),
+            "the note must offer an action: {note}"
+        );
+        assert!(
+            !note.contains("sk-"),
+            "a credential note must never carry key material: {note}"
+        );
+    }
+
+    /// Every row states which place its credential came from, so a
+    /// "key:configured" row can be reconciled with a request that used a
+    /// different source.
+    #[test]
+    fn every_row_states_its_credential_source() {
+        let _lock = crate::test_support::lock_test_env();
+        let _openrouter_key = EnvVarGuard::remove("OPENROUTER_API_KEY");
+        let config = Config::default();
+        let missing = ProviderDashboardRow::from_config(
+            ApiProvider::Openrouter,
+            ApiProvider::Deepseek,
+            &config,
+        );
+        assert_eq!(missing.credential_source, "not found");
+
+        let _key = EnvVarGuard::set("OPENROUTER_API_KEY", "test-value");
+        let configured = ProviderDashboardRow::from_config(
+            ApiProvider::Openrouter,
+            ApiProvider::Deepseek,
+            &config,
+        );
+        assert_eq!(configured.credential_source, "OPENROUTER_API_KEY");
+        assert!(
+            !configured.credential_source.contains("test-value"),
+            "the source is a label, never the value"
         );
     }
 

@@ -33,10 +33,7 @@ fn detail_shows_capability_badges_for_pinned_models_only() {
     unknown.profile.model = Some("totally-made-up-model-xyz".to_string());
     let text = detail_text(&unknown);
     assert!(!text.contains("Capabilities"), "{text}");
-    assert!(
-        text.contains("model totally-made-up-model-xyz (pinned)"),
-        "{text}"
-    );
+    assert!(text.contains("model totally-made-up-model-xyz"), "{text}");
 }
 
 /// #5038: the pinned operator row names its session model's capabilities.

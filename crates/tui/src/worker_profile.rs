@@ -166,7 +166,8 @@ pub struct WorkerRuntimeProfile {
     /// `max_spawn_depth > 0`; each level decrements it. Clamped to the workspace
     /// ceiling.
     pub max_spawn_depth: u32,
-    /// Finite model-turn budget for this role.
+    /// Optional model-turn cap. Zero means unbounded, matching the normal
+    /// Codex and GrokBuild agent loop; an operator may still set a cap.
     #[serde(default = "default_general_max_steps")]
     pub max_steps: u32,
     /// Whether the worker runs detached (background) or inline (foreground).
@@ -174,12 +175,11 @@ pub struct WorkerRuntimeProfile {
 }
 
 impl WorkerRuntimeProfile {
-    /// Maximum model turns for read-mostly workers.
-    pub const READ_ONLY_MAX_STEPS: u32 = 60;
-    /// Maximum model turns for workers that may implement changes.
-    pub const GENERAL_MAX_STEPS: u32 = 120;
+    /// Default model turns for every role: unbounded unless explicitly capped.
+    pub const READ_ONLY_MAX_STEPS: u32 = 0;
+    pub const GENERAL_MAX_STEPS: u32 = 0;
 
-    /// Return the finite model-turn budget appropriate for this role.
+    /// Return the default model-turn cap for this role (zero = unbounded).
     #[must_use]
     pub const fn default_max_steps(role: FleetRole) -> u32 {
         match role {
@@ -429,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn role_step_budgets_are_finite_and_profile_owned() {
+    fn role_step_budgets_are_unbounded_by_default_and_profile_owned() {
         for role in [
             FleetRole::Scout,
             FleetRole::Reviewer,
@@ -439,7 +439,7 @@ mod tests {
             FleetRole::Worker,
             FleetRole::Custom,
         ] {
-            assert!(WorkerRuntimeProfile::for_role(role.clone()).max_steps > 0);
+            assert_eq!(WorkerRuntimeProfile::for_role(role.clone()).max_steps, 0);
             assert_eq!(
                 WorkerRuntimeProfile::for_role(role.clone()).max_steps,
                 WorkerRuntimeProfile::default_max_steps(role)
@@ -476,7 +476,7 @@ mod tests {
         assert_eq!(
             consultant.max_steps,
             WorkerRuntimeProfile::READ_ONLY_MAX_STEPS,
-            "read-mostly budget, like the other read-only roles"
+            "consultants are unbounded by default like every other role"
         );
     }
 

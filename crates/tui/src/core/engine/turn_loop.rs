@@ -9,6 +9,7 @@ use super::dispatch::normalize_schema_json_containers;
 use super::*;
 use crate::core::authority::{ToolPermission, resolve_tool_permission};
 use crate::core::ops::UserInputProvenance;
+use crate::models::Role;
 use crate::prompt_zones::PinnedPrefix;
 use crate::runtime_handoff::{
     shell_completion_runtime_message, subagent_completion_runtime_message,
@@ -19,6 +20,12 @@ use crate::tools::tool_call_budget::ToolCallBudget;
 use codewhale_core::request::{PrimaryTurnRequest, prepare_primary_turn_request};
 
 const MAX_APPROVAL_INTENT_SUMMARY_CHARS: usize = 2_000;
+
+struct PlannedToolCalls {
+    plans: Vec<ToolExecutionPlan>,
+    hook_contexts: std::collections::HashMap<String, String>,
+    batch_sandbox_policy: crate::sandbox::SandboxPolicy,
+}
 
 struct StreamOutcome {
     current_text_raw: String,
@@ -1421,7 +1428,7 @@ impl Engine {
                             // the transcript and to the provider request
                             // history as a user role.
                             self.add_session_message(Message {
-                                role: "assistant".to_string(),
+                                role: Role::Assistant,
                                 content: resume_blocks,
                             })
                             .await;
@@ -1542,6 +1549,16 @@ impl Engine {
                     ContentBlock::Text { .. } | ContentBlock::ToolUse { .. }
                 )
             });
+            let has_provider_reasoning = content_blocks.iter().any(|block| {
+                matches!(
+                    block,
+                    ContentBlock::Thinking {
+                        thinking,
+                        state,
+                        ..
+                    } if !thinking.trim().is_empty() || state.is_some()
+                )
+            });
 
             // Issue #1727: did this turn produce ONLY a reasoning/thinking
             // block — empty content, no tool calls (e.g. gpt-oss via ollama's
@@ -1552,12 +1569,12 @@ impl Engine {
             // before the turn resumes. Capture the fact and decide later, at
             // the point the turn is certain to be finishing with no sendable
             // content (see the `tool_uses.is_empty()` tail).
-            let thinking_only_no_sendable = !has_sendable_assistant_content;
+            let no_sendable_assistant_content = !has_sendable_assistant_content;
 
             // Add assistant message to session
             if has_sendable_assistant_content {
                 self.add_session_message(Message {
-                    role: "assistant".to_string(),
+                    role: Role::Assistant,
                     content: content_blocks,
                 })
                 .await;
@@ -1959,8 +1976,8 @@ impl Engine {
                     continue;
                 }
 
-                if thinking_only_no_sendable
-                    && should_emit_thinking_only_status(
+                if no_sendable_assistant_content
+                    && should_fail_no_sendable_content(
                         tool_uses.is_empty(),
                         turn_error.is_none(),
                         self.cancel_token.is_cancelled(),
@@ -1968,11 +1985,22 @@ impl Engine {
                         false,
                     )
                 {
-                    let message = "Model returned reasoning but no answer or tool call; \
-                                   turn ended without output. Send a follow-up to retry."
-                        .to_string();
+                    let message = if has_provider_reasoning {
+                        "Model returned reasoning but no answer or tool call; the provider response was incomplete."
+                            .to_string()
+                    } else if let Some(reason) = stop_reason.as_deref() {
+                        format!(
+                            "Model returned terminal stop reason `{reason}` with no answer or tool call."
+                        )
+                    } else {
+                        "Model stream ended with no answer or tool call.".to_string()
+                    };
                     crate::logging::warn(&message);
-                    let _ = self.tx_event.send(Event::status(message)).await;
+                    turn_error = Some(message.clone());
+                    let _ = self
+                        .tx_event
+                        .send(Event::error(ErrorEnvelope::classify(message, true)))
+                        .await;
                 }
 
                 // Honest exit: only now, after every resume check has failed,
@@ -2035,1516 +2063,46 @@ impl Engine {
                 None
             };
 
-            let active_tools_at_batch_start = active_tool_names.clone();
-            let mut deferred_tools_hydrated_this_batch: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
-            let mut deferred_tools_hydrated_in_order = Vec::new();
-            // #3026: `additionalContext` strings from tool_call_before hooks,
-            // keyed by tool id; appended to the tool result sent to the model.
-            let mut hook_contexts: std::collections::HashMap<String, String> =
-                std::collections::HashMap::new();
-            let mut plans: Vec<ToolExecutionPlan> = Vec::with_capacity(tool_uses.len());
-            // Resolve the batch's effective policy once. Ordinary approval
-            // preserves it; an explicit sandbox escalation can replace it for
-            // only the exact call that receives separate user approval.
-            let batch_approval_mode = crate::core::authority::agent_approval_mode_for_turn(
-                self.session.auto_approve,
-                self.session.approval_mode,
-            );
-            let batch_sandbox_policy = crate::core::authority::sandbox_policy_for_turn(
-                self.current_mode,
-                batch_approval_mode,
-                self.api_config.sandbox_mode.as_deref(),
-                &self.session.workspace,
-            );
-            let batch_sandbox_read_only = matches!(
-                &batch_sandbox_policy,
-                crate::sandbox::SandboxPolicy::ReadOnly
-            );
-            for (index, tool) in tool_uses.iter_mut().enumerate() {
-                let tool_id = tool.id.clone();
-                let mut tool_name = tool.name.clone();
-                let mut tool_input = tool.input.clone();
-                let tool_caller = tool.caller.clone();
-                crate::logging::info(format!(
-                    "Planning tool '{tool_name}' with input: {tool_input:?}"
-                ));
-
-                let requested_tool_name = tool_name.clone();
-                let tool_def =
-                    resolve_tool_definition(&mut tool_name, &tool_catalog, tool_registry);
-                if requested_tool_name != tool_name {
-                    tool.name = tool_name.clone();
-                }
-
-                let interactive = (matches!(tool_name.as_str(), "bash" | "Bash" | "exec_shell")
-                    && tool_input
-                        .get("interactive")
-                        .and_then(serde_json::Value::as_bool)
-                        == Some(true))
-                    || tool_name == REQUEST_USER_INPUT_NAME;
-
-                let mut approval_required = false;
-                let mut approval_description = "Tool execution requires approval".to_string();
-                let mut approval_force_prompt = false;
-                let mut supports_parallel = false;
-                let mut read_only = false;
-                let mut detached_start = false;
-                let mut resources = vec![ResourceClaim::GlobalExclusive];
-                let mut blocked_error: Option<ToolError> = None;
-                let mut guard_result: Option<ToolResult> = None;
-                // #3026: set by a hook `ask` decision; applied AFTER the
-                // registry-based approval computation below so it cannot be
-                // clobbered by it.
-                let mut hook_requires_approval = false;
-
-                // #4415: hard per-turn tool-call budget. This gate runs first
-                // so proposal order decides which calls fit: while calls
-                // remain, the call is admitted and the count decrements; once
-                // exhausted, the call is rejected with a typed reason and
-                // never executes — an over-budget batch is truncated to
-                // exactly the calls that still fit, in proposal order.
-                // #5170: the cap counts *admitted* calls — a debited call
-                // stopped by any gate below is refunded before plan
-                // construction, so blocked calls cannot burn the budget.
-                let admission = tool_call_budget.admit();
-                let budget_debited = admission.is_ok();
-                if let Err(exceeded) = admission {
-                    blocked_error = Some(exceeded.into_tool_error(&tool_name));
-                }
-
-                if mode_blocks_command_execution(mode, &tool_name) {
-                    blocked_error = Some(ToolError::permission_denied(format!(
-                        "'{tool_name}' is not available in Plan mode — switch to Work mode (`/mode work`) to run commands and code."
-                    )));
-                }
-
-                if blocked_error.is_none()
-                    && let Some(error) = tool.input_parse_error.clone()
-                {
-                    blocked_error = Some(ToolError::invalid_input(error));
-                }
-
-                // #3027: deny wins over allow — check the deny-list first so a
-                // tool present in both lists is still blocked.
-                if blocked_error.is_none() && tool_policy.denies_tool(&tool_name) {
-                    blocked_error = Some(ToolError::permission_denied(format!(
-                        "Tool '{tool_name}' is in the disallowed-tools list"
-                    )));
-                }
-
-                if blocked_error.is_none() && !tool_policy.passes_allow_list(&tool_name) {
-                    blocked_error = Some(ToolError::permission_denied(format!(
-                        "Tool '{tool_name}' is not in the allowed-tools list for the current command"
-                    )));
-                }
-
-                if blocked_error.is_none()
-                    && !caller_allowed_for_tool(tool_caller.as_ref(), tool_def)
-                {
-                    blocked_error = Some(ToolError::permission_denied(format!(
-                        "Tool '{tool_name}' does not allow caller '{}'",
-                        caller_type_for_tool_use(tool_caller.as_ref())
-                    )));
-                }
-
-                // Fail closed: a tool with no execution path — not MCP, not
-                // code/js/search, and with no registry spec — must be blocked,
-                // NOT run unguarded. Previously this only checked
-                // `tool_def.is_none()`, so a tool present in the model-facing
-                // catalog but absent from the execution registry (or when the
-                // registry itself is None) fell through every approval branch
-                // with approval_required=false and executed with no gate.
-                let registry_has_spec =
-                    tool_registry.is_some_and(|registry| registry.get(&tool_name).is_some());
-                if blocked_error.is_none()
-                    && !registry_has_spec
-                    && !McpPool::is_mcp_tool(&tool_name)
-                    && tool_name != CODE_EXECUTION_TOOL_NAME
-                    && tool_name != JS_EXECUTION_TOOL_NAME
-                    && !is_tool_search_tool(&tool_name)
-                {
-                    blocked_error = Some(ToolError::not_available(missing_tool_error_message(
-                        &tool_name,
-                        &tool_catalog,
-                    )));
-                }
-
-                // Prepare before hooks so every input-specific authority and
-                // scheduling field has one inspectable owner. Preparation is
-                // side-effect free; execution remains below the full gate
-                // stack exactly as before.
-                let mut prepared_policy = match prepare_tool_call(
-                    &tool_name,
-                    tool_input.clone(),
+            let PlannedToolCalls {
+                plans,
+                hook_contexts,
+                batch_sandbox_policy,
+            } = self
+                .plan_tool_calls(
+                    client.as_ref(),
+                    turn,
+                    &tool_policy,
+                    &mut tool_uses,
+                    &tool_catalog,
                     tool_registry,
-                    self.session.auto_approve,
-                ) {
-                    Ok(policy) => Some(policy),
-                    Err(error) => {
-                        if blocked_error.is_none() {
-                            blocked_error = Some(error);
-                        }
-                        None
-                    }
-                };
-                let mut reprepared_after_hook = false;
+                    &mut active_tool_names,
+                    &mut tool_call_budget,
+                    mode,
+                )
+                .await;
 
-                if blocked_error.is_none() {
-                    match run_tool_call_before_hooks(
-                        self.config.hook_executor.as_ref(),
-                        &tool_name,
-                        &tool_id,
-                        &tool_input,
-                        mode,
-                        &self.session.workspace,
-                        &self.config.model,
-                    )
-                    .await
-                    {
-                        Ok(hook_outcome) => {
-                            if hook_outcome.requires_approval {
-                                hook_requires_approval = true;
-                            }
-                            if let Some(updated) = hook_outcome.updated_input {
-                                tool_input = updated;
-                                reprepared_after_hook = true;
-                                prepared_policy = match reprepare_tool_call_after_hook(
-                                    &tool_name,
-                                    tool_input.clone(),
-                                    tool_registry,
-                                    self.session.auto_approve,
-                                ) {
-                                    Ok(policy) => Some(policy),
-                                    Err(error) => {
-                                        blocked_error = Some(error);
-                                        None
-                                    }
-                                };
-                            }
-                            if let Some(context) = hook_outcome.additional_context {
-                                hook_contexts.insert(tool_id.clone(), context);
-                            }
-                        }
-                        Err(error) => blocked_error = Some(error),
-                    }
-                }
+            let outcomes = self
+                .execute_planned_tools(
+                    plans,
+                    &current_text_visible,
+                    &tool_catalog,
+                    &mut active_tool_names,
+                    tool_registry,
+                    tool_exec_lock,
+                    mcp_pool,
+                    &batch_sandbox_policy,
+                    &mut mode,
+                    &mut questions_allowed,
+                )
+                .await;
 
-                if let Some(prepared) = prepared_policy {
-                    let registered_non_bypassable =
-                        registered_tool_forces_prompt(&tool_name, prepared.call.approval);
-                    approval_required = registered_tool_approval_required(
-                        &tool_name,
-                        prepared.call.approval,
-                        prepared.auto_approve,
-                    );
-                    // Non-bypassable holds force a prompt in every posture
-                    // that can open one. Full Access auto-approves instead:
-                    // it already grants everything these calls can do, and a
-                    // gate that cannot open its own approval UI used to
-                    // strand the call entirely (#3866, reversed 2026-08-10).
-                    approval_force_prompt = registered_non_bypassable && !prepared.auto_approve;
-                    approval_description = prepared.call.description;
-                    supports_parallel = prepared.call.supports_parallel;
-                    read_only = prepared.call.read_only;
-                    detached_start = prepared.call.starts_detached;
-                    tool_input = prepared.call.input;
-                    resources = prepared.call.resources;
-
-                    // #5185: in the default Ask posture, a file write whose
-                    // every target stays inside the workspace git work tree —
-                    // off `.git` internals, runtime state, and sensitive files
-                    // — runs without a modal. Everything evaluated after this
-                    // point (typed ask-rules, the built-in safety floor, repo
-                    // law) can still force a prompt; none of them is weakened.
-                    if approval_required
-                        && !approval_force_prompt
-                        && workspace_write_carve_out_applies(
-                            mode,
-                            self.session.approval_mode,
-                            self.session.auto_approve,
-                            &self.session.workspace,
-                            &tool_name,
-                            &tool_input,
-                            prepared.call.approval,
-                        )
-                    {
-                        approval_required = false;
-                        emit_tool_audit(json!({
-                            "event": "tool.workspace_write_carve_out",
-                            "tool_id": tool_id.clone(),
-                            "tool_name": tool_name.clone(),
-                        }));
-                    }
-
-                    let approval = match prepared.call.approval {
-                        ApprovalRequirement::Auto => "auto",
-                        ApprovalRequirement::Suggest => "suggest",
-                        ApprovalRequirement::Required => "required",
-                    };
-                    emit_tool_audit(json!({
-                        "event": "tool.prepared",
-                        "tool_id": tool_id.clone(),
-                        "tool_name": tool_name.clone(),
-                        "read_only": read_only,
-                        "supports_parallel": supports_parallel,
-                        "starts_detached": detached_start,
-                        "approval": approval,
-                        "resources": &resources,
-                        "reprepared_after_hook": reprepared_after_hook,
-                    }));
-                }
-
-                if blocked_error.is_none()
-                    && mode_blocks_write_capable_tool(mode, &tool_name, &tool_input, read_only)
-                {
-                    blocked_error = Some(ToolError::permission_denied(format!(
-                        "'{tool_name}' is not available in Plan mode - switch to Work mode (`/mode work`) to modify files or run write-capable tools."
-                    )));
-                }
-
-                // #3026: a hook `ask` decision forces the approval prompt even
-                // for tools the registry would auto-run. Must stay after the
-                // registry-based computation above, which assigns rather than
-                // ORs `approval_required`.
-                if hook_requires_approval && !self.session.auto_approve {
-                    approval_required = true;
-                }
-
-                if blocked_error.is_none() {
-                    let ask_rule_decision = exec_shell_ask_rule_decision(
-                        &self.config,
-                        &tool_name,
-                        &tool_input,
-                        &self.session.workspace,
-                        self.session.approval_mode,
-                    )
-                    .or_else(|| {
-                        file_tool_ask_rule_decision(
-                            &self.config,
-                            &tool_name,
-                            &tool_input,
-                            &self.session.workspace,
-                            self.session.approval_mode,
-                        )
-                    });
-                    if let Some(decision) = ask_rule_decision {
-                        match decision {
-                            ToolAskRuleDecision::Allow => {
-                                // Remembered grants bypass ordinary registry
-                                // approval only. Hook asks and non-bypassable
-                                // tool requirements remain monotonic, while
-                                // auto-review and repo-law floors below can
-                                // still force review or block.
-                                if !hook_requires_approval && !approval_force_prompt {
-                                    approval_required = false;
-                                }
-                            }
-                            ToolAskRuleDecision::Prompt(reason) => {
-                                // #3790: the mode is the sole authority — a typed
-                                // ask-rule prompts in Agent/Plan but never in YOLO
-                                // (auto_approve). A typed deny rule still blocks
-                                // hard, in every mode.
-                                if !self.session.auto_approve {
-                                    approval_required = true;
-                                    approval_description = reason;
-                                    approval_force_prompt = true;
-                                }
-                            }
-                            ToolAskRuleDecision::Block(reason) => {
-                                approval_required = false;
-                                approval_force_prompt = false;
-                                blocked_error = Some(ToolError::permission_denied(reason));
-                            }
-                        }
-                    }
-                }
-
-                if blocked_error.is_none() {
-                    let review_context = crate::tui::auto_review::AutoReviewContext::from_tool_call(
-                        &tool_name,
-                        &tool_input,
-                        auto_review_run_origin_for_plan(detached_start),
-                        self.session.approval_mode,
-                        crate::config::is_workspace_trusted(&self.session.workspace),
-                        Some(&self.session.workspace),
-                    );
-                    let (decision, audit_event) = auto_review_plan_decision_for_context(
-                        &self.config.auto_review_policy,
-                        &review_context,
-                    );
-                    emit_tool_audit(json!({
-                        "event": "tool.auto_review",
-                        "gate": "deterministic",
-                        "tool_id": tool_id.clone(),
-                        "auto_review": audit_event,
-                    }));
-                    match decision {
-                        AutoReviewPlanDecision::NoChange => {}
-                        AutoReviewPlanDecision::Allow => {
-                            if !hook_requires_approval && !approval_force_prompt {
-                                approval_required = false;
-                            }
-                        }
-                        AutoReviewPlanDecision::ForcePrompt(reason) => {
-                            // The built-in safety floor is deliberately
-                            // non-bypassable. Ask/Auto-Review surface the hold;
-                            // Full Access turns this disposition into a hard
-                            // block below, without opening a modal.
-                            approval_required = true;
-                            approval_description = reason;
-                            approval_force_prompt = true;
-                        }
-                        AutoReviewPlanDecision::Block(reason) => {
-                            approval_required = false;
-                            approval_force_prompt = false;
-                            let _ = self
-                                .tx_event
-                                .send(Event::ToolGateDecision {
-                                    agent_id: None,
-                                    tool_id: tool_id.clone(),
-                                    tool_name: tool_name.clone(),
-                                    gate: crate::core::events::ToolGate::AutoReviewDeterministic,
-                                    decision: crate::core::events::ToolGateVerdict::Denied,
-                                    risk: None,
-                                    reason: crate::core::events::bounded_gate_reason(&reason),
-                                })
-                                .await;
-                            blocked_error = Some(auto_review_block_tool_error(&reason));
-                        }
-                        AutoReviewPlanDecision::ConsultReviewer(held_reason) => {
-                            if let Err(error) = self
-                                .consult_auto_review_guardian(
-                                    client.as_ref(),
-                                    &review_context,
-                                    &tool_input,
-                                    &held_reason,
-                                    &tool_id,
-                                    turn,
-                                )
-                                .await
-                            {
-                                blocked_error = Some(error);
-                            } else if !hook_requires_approval && !approval_force_prompt {
-                                approval_required = false;
-                            }
-                        }
-                    }
-                }
-
-                // Repo law: protected invariants with path globs compile into
-                // mechanical write holds. Like the safety floor, law is not
-                // bypassable by mode — it can only add holds, never remove
-                // one, so this cannot weaken any gate above.
-                if blocked_error.is_none()
-                    && let Some(decision) = crate::repo_law::repo_law_plan_decision(
-                        &self.session.workspace,
-                        &tool_name,
-                        &tool_input,
-                    )
-                {
-                    emit_tool_audit(json!({
-                        "event": "tool.repo_law_decision",
-                        "tool_id": tool_id.clone(),
-                        "decision": match &decision {
-                            crate::repo_law::RepoLawPlanDecision::ForcePrompt(_) => "force_prompt",
-                            crate::repo_law::RepoLawPlanDecision::Block(_) => "block",
-                        },
-                        "reason": match &decision {
-                            crate::repo_law::RepoLawPlanDecision::ForcePrompt(reason)
-                            | crate::repo_law::RepoLawPlanDecision::Block(reason) => reason.clone(),
-                        },
-                    }));
-                    match decision {
-                        crate::repo_law::RepoLawPlanDecision::ForcePrompt(reason) => {
-                            if repo_law_must_block_without_prompt(
-                                self.session.approval_mode,
-                                self.session.auto_approve,
-                            ) {
-                                approval_required = false;
-                                approval_force_prompt = false;
-                                blocked_error = Some(ToolError::permission_denied(format!(
-                                    "Repository law blocked tool '{tool_name}' in {}: {reason}. Switch to Ask to review this protected change.",
-                                    self.session.approval_mode.permission_chip_label(),
-                                )));
-                            } else {
-                                approval_required = true;
-                                approval_description = reason;
-                                approval_force_prompt = true;
-                            }
-                        }
-                        crate::repo_law::RepoLawPlanDecision::Block(reason) => {
-                            approval_required = false;
-                            approval_force_prompt = false;
-                            blocked_error = Some(ToolError::permission_denied(reason));
-                        }
-                    }
-                }
-
-                let should_emit_hydration_status =
-                    !deferred_tools_hydrated_this_batch.contains(&tool_name);
-                if blocked_error.is_none()
-                    && let Some(result) = maybe_hydrate_requested_deferred_tool(
-                        &tool_name,
-                        &tool_input,
-                        &tool_catalog,
-                        &active_tools_at_batch_start,
-                        &mut deferred_tools_hydrated_this_batch,
-                    )
-                {
-                    if should_emit_hydration_status {
-                        // Retain first-proposal order separately from the set
-                        // used to deduplicate calls in this batch. LRU bounds
-                        // must not depend on randomized HashSet iteration.
-                        deferred_tools_hydrated_in_order.push(tool_name.clone());
-                    }
-                    emit_tool_audit(json!({
-                        "event": "tool.schema_hydrated",
-                        "tool_id": tool_id.clone(),
-                        "tool_name": tool_name.clone(),
-                        "auto_retry_same_turn": false,
-                        "metadata": result.metadata,
-                    }));
-                    if should_emit_hydration_status {
-                        let status = if requested_tool_name == tool_name {
-                            format!(
-                                "Loaded deferred tool '{tool_name}'. Retry the call with its visible schema."
-                            )
-                        } else {
-                            format!(
-                                "Loaded deferred tool '{tool_name}' after resolving '{requested_tool_name}'. Retry the call with its visible schema."
-                            )
-                        };
-                        let _ = self.tx_event.send(Event::status(status)).await;
-                    }
-                    // The provider did not advertise this schema in the current
-                    // request. Hydration is discovery, never execution authority:
-                    // return the schema now and require a subsequent model call.
-                    guard_result = Some(result);
-                }
-
-                // Bind escalation last so remembered rules cannot remove its
-                // prompt and later safety/repo-law holds cannot hide what the
-                // elevated approval grants. A hard block above still wins.
-                if blocked_error.is_none() {
-                    match requested_sandbox_escalation(
-                        &tool_name,
-                        &tool_input,
-                        &batch_sandbox_policy,
-                    ) {
-                        Ok(Some((_policy, justification)))
-                            if batch_approval_mode
-                                == crate::tui::approval::ApprovalMode::Suggest =>
-                        {
-                            let escalation_description = format!(
-                                "Sandbox escalation to '{}' for this exact call: {justification}",
-                                tool_input["sandbox_permissions"]
-                                    .as_str()
-                                    .expect("validated sandbox permission")
-                            );
-                            approval_description = if approval_force_prompt {
-                                format!(
-                                    "{escalation_description}. Additional approval gate: {approval_description}"
-                                )
-                            } else {
-                                escalation_description
-                            };
-                            approval_required = true;
-                            approval_force_prompt = true;
-                        }
-                        Ok(Some(_)) => {
-                            blocked_error = Some(ToolError::permission_denied(format!(
-                                "Sandbox escalation requires a one-shot user approval, but the current {} posture cannot provide it. Switch to Ask or continue without escalation.",
-                                batch_approval_mode.permission_chip_label()
-                            )));
-                        }
-                        Ok(None) => {}
-                        Err(error) => blocked_error = Some(error),
-                    }
-                }
-
-                // An ordinary approval does not change the sandbox. Say that
-                // on the gate itself; an explicit sandbox_permissions request
-                // takes the separate exact-call path above. Scoped to shell —
-                // file tools do not execute through the sandbox.
-                if approval_required
-                    && batch_sandbox_read_only
-                    && tool_input.get("sandbox_permissions").is_none()
-                    && matches!(
-                        tool_name.as_str(),
-                        "bash" | "Bash" | "Run" | "exec_shell" | "task_shell_start"
-                    )
-                {
-                    approval_description = format!(
-                        "{approval_description} — note: the execution sandbox is read-only for this session; ordinary approval runs the command without write access (sandbox escalation requires a separate exact-call request)"
-                    );
-                }
-
-                // #5170: a call stopped by any admission gate above never
-                // executes, so hand its debited budget slot back. Only the
-                // budget gate's own rejection leaves nothing to refund —
-                // it never debited in the first place.
-                if blocked_error.is_some() && budget_debited {
-                    tool_call_budget.refund();
-                }
-
-                plans.push(ToolExecutionPlan {
-                    index,
-                    id: tool_id,
-                    name: tool_name,
-                    input: tool_input,
-                    caller: tool_caller,
-                    interactive,
-                    approval_required,
-                    approval_description,
-                    approval_force_prompt,
-                    supports_parallel,
-                    read_only,
-                    detached_start,
-                    resources,
-                    blocked_error,
-                    guard_result,
-                });
-            }
-            let activation = self
-                .session
-                .tool_activation_cache
-                .activate(&tool_catalog, &deferred_tools_hydrated_in_order);
-            super::tool_catalog::remove_evicted_cache_activations(
-                &tool_catalog,
+            self.process_tool_results(
+                outcomes,
+                &mut tool_catalog,
                 &mut active_tool_names,
-                activation.evicted,
-            );
-            active_tool_names.extend(activation.admitted);
-
-            // --- Intent summary for write tools (#2381) ---
-            // When the model invokes write tools, extract its preceding text
-            // as an "intent summary" so the approval view can show *why* the
-            // change is being made, not just *what* will change.
-            let has_write_tools = plans.iter().any(|p| {
-                !p.read_only
-                    && p.approval_required
-                    && p.blocked_error.is_none()
-                    && p.guard_result.is_none()
-            });
-            let intent_summary: Option<String> = if has_write_tools {
-                approval_intent_summary(&current_text_visible)
-            } else {
-                None
-            };
-
-            let plan_count = plans.len();
-            let batches = plan_tool_execution_batches(plans);
-            let parallel_chunks = batches
-                .iter()
-                .filter_map(|batch| match batch {
-                    ToolExecutionBatch::Parallel(plans) if plans.len() > 1 => Some(plans.len()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            if !parallel_chunks.is_empty() {
-                let parallel_tool_count: usize = parallel_chunks.iter().sum();
-                let detached_start_count: usize = batches
-                    .iter()
-                    .filter_map(|batch| match batch {
-                        ToolExecutionBatch::Parallel(plans) if plans.len() > 1 => {
-                            Some(plans.iter().filter(|plan| plan.detached_start).count())
-                        }
-                        _ => None,
-                    })
-                    .sum();
-                let tool_kind = if detached_start_count > 0 {
-                    "read-only/background-start tools"
-                } else {
-                    "read-only tools"
-                };
-                let _ = self
-                    .tx_event
-                    .send(Event::status(format!(
-                        "Executing {parallel_tool_count} {tool_kind} in {} parallel chunk(s)",
-                        parallel_chunks.len(),
-                    )))
-                    .await;
-            } else if plan_count > 1 {
-                let _ = self
-                    .tx_event
-                    .send(Event::status(
-                        "Executing tools sequentially (writes, approvals, or non-parallel tools detected)",
-                    ))
-                    .await;
-            }
-
-            let mut outcomes: Vec<Option<ToolExecOutcome>> = Vec::with_capacity(plan_count);
-            outcomes.resize_with(plan_count, || None);
-
-            for batch in batches {
-                let (parallel_allowed, plans) = match batch {
-                    ToolExecutionBatch::Parallel(plans) => (true, plans),
-                    ToolExecutionBatch::Serial(plan) => (false, vec![*plan]),
-                };
-
-                // Planning can run hooks and other async gates. If policy
-                // changed after this batch was planned, never execute it with
-                // stale approval or sandbox facts. Return one typed retry to
-                // the model; the next call is planned under the new posture.
-                if self.apply_pending_runtime_authority().await {
-                    mode = self.current_mode;
-                    questions_allowed = crate::core::authority::permission_posture_allows_questions(
-                        self.session.approval_mode,
-                    );
-                    for plan in plans {
-                        let result = Err(ToolError::permission_denied(
-                            "Runtime permission posture changed while this tool call was being planned; retry it under the current posture."
-                                .to_string(),
-                        ));
-                        let _ = self
-                            .tx_event
-                            .send(Event::ToolCallComplete {
-                                id: plan.id.clone(),
-                                name: plan.name.clone(),
-                                result: result.clone(),
-                            })
-                            .await;
-                        outcomes[plan.index] = Some(ToolExecOutcome {
-                            index: plan.index,
-                            id: plan.id,
-                            name: plan.name,
-                            input: plan.input,
-                            started_at: Instant::now(),
-                            terminal: ToolExecutionOutcome::from_legacy(result),
-                            content_blocks: Vec::new(),
-                        });
-                    }
-                    continue;
-                }
-
-                // #3216 / #2211: once the turn is cancelled, do not start any
-                // further tool batches. Cancellation arrives out-of-band (the
-                // TUI cancels the shared token directly), so we can observe it
-                // here even while a long serial fan-out — e.g. six `agent`
-                // calls each resolving a model route under the global tool lock
-                // — is mid-flight. Without this check the batch loop ran to
-                // completion (~6×4s) with no way to interrupt, which read as a
-                // hard TUI freeze. We record an interrupted result for every
-                // remaining plan so each `tool_use` keeps a matching
-                // `tool_result` (well-formed transcript), then fall through to
-                // the post-loop cancellation check which ends the turn as
-                // Interrupted. This branch is a no-op on the normal path.
-                if self.cancel_token.is_cancelled() {
-                    for plan in plans {
-                        let terminal = ToolExecutionOutcome::cancelled(interrupted_tool_result());
-                        let result = terminal.legacy_result();
-                        let _ = self
-                            .tx_event
-                            .send(Event::ToolCallComplete {
-                                id: plan.id.clone(),
-                                name: plan.name.clone(),
-                                result: result.clone(),
-                            })
-                            .await;
-                        outcomes[plan.index] = Some(ToolExecOutcome {
-                            index: plan.index,
-                            id: plan.id,
-                            name: plan.name,
-                            input: plan.input,
-                            started_at: Instant::now(),
-                            terminal,
-                            content_blocks: Vec::new(),
-                        });
-                    }
-                    continue;
-                }
-
-                let batch_tool_context = self.live_tool_context(tool_registry);
-
-                if parallel_allowed {
-                    let parallel_plan_receipts: Vec<_> = plans
-                        .iter()
-                        .map(|plan| {
-                            (
-                                plan.index,
-                                plan.id.clone(),
-                                plan.name.clone(),
-                                plan.input.clone(),
-                            )
-                        })
-                        .collect();
-                    let mut tool_tasks = FuturesUnordered::new();
-                    let shell_permits =
-                        Arc::new(tokio::sync::Semaphore::new(MAX_PARALLEL_SHELL_EXEC));
-                    for plan in plans {
-                        if let Some(result) = plan.guard_result.clone() {
-                            let result = Ok(result);
-                            let _ = self
-                                .tx_event
-                                .send(Event::ToolCallComplete {
-                                    id: plan.id.clone(),
-                                    name: plan.name.clone(),
-                                    result: result.clone(),
-                                })
-                                .await;
-                            outcomes[plan.index] = Some(ToolExecOutcome {
-                                index: plan.index,
-                                id: plan.id,
-                                name: plan.name,
-                                input: plan.input,
-                                started_at: Instant::now(),
-                                terminal: ToolExecutionOutcome::from_legacy(result),
-                                content_blocks: Vec::new(),
-                            });
-                            continue;
-                        }
-                        if let Some(err) = plan.blocked_error.clone() {
-                            outcomes[plan.index] = Some(ToolExecOutcome {
-                                index: plan.index,
-                                id: plan.id,
-                                name: plan.name,
-                                input: plan.input,
-                                started_at: Instant::now(),
-                                terminal: ToolExecutionOutcome::from_legacy(Err(err)),
-                                content_blocks: Vec::new(),
-                            });
-                            continue;
-                        }
-                        let registry = tool_registry;
-                        let lock = tool_exec_lock.clone();
-                        let mcp_pool = mcp_pool.clone();
-                        let tx_event = self.tx_event.clone();
-                        let session_id = self.session.id.clone();
-                        let started_at = Instant::now();
-                        let shell_permits = shell_permits.clone();
-                        let workspace = self.session.workspace.clone();
-                        let context_override = batch_tool_context.clone();
-                        let cancel_token = self.cancel_token.clone();
-
-                        tool_tasks.push(async move {
-                            let _shell_permit =
-                                if matches!(plan.name.as_str(), "bash" | "Bash" | "exec_shell") {
-                                    shell_permits.acquire_owned().await.ok()
-                                } else {
-                                    None
-                                };
-                            let mut result = Engine::execute_tool_with_lock(
-                                lock,
-                                plan.supports_parallel || plan.detached_start,
-                                plan.interactive,
-                                tx_event.clone(),
-                                Some(cancel_token),
-                                plan.name.clone(),
-                                plan.input.clone(),
-                                workspace,
-                                registry,
-                                mcp_pool,
-                                context_override,
-                            )
-                            .await;
-
-                            // #500: spill outsized output before fanout (mirror
-                            // of the sequential path below). Emit a
-                            // `tool.spillover` audit event so operators can
-                            // correlate large-output episodes with disk usage.
-                            if let Ok(tool_result) = result.as_mut()
-                                && let Some(path) =
-                                    crate::tools::truncate::apply_spillover_with_artifact(
-                                        &mut tool_result.result,
-                                        &plan.id,
-                                        &plan.name,
-                                        &session_id,
-                                    )
-                            {
-                                emit_tool_audit(json!({
-                                    "event": "tool.spillover",
-                                    "tool_id": plan.id.clone(),
-                                    "tool_name": plan.name.clone(),
-                                    "path": path.display().to_string(),
-                                }));
-                            }
-
-                            let content_blocks = result
-                                .as_ref()
-                                .map(|result| result.content_blocks.clone())
-                                .unwrap_or_default();
-                            let legacy_result = result.map(RichToolResult::into_result);
-                            let _ = tx_event
-                                .send(Event::ToolCallComplete {
-                                    id: plan.id.clone(),
-                                    name: plan.name.clone(),
-                                    result: legacy_result.clone(),
-                                })
-                                .await;
-
-                            ToolExecOutcome {
-                                index: plan.index,
-                                id: plan.id,
-                                name: plan.name,
-                                input: plan.input,
-                                started_at,
-                                terminal: ToolExecutionOutcome::from_legacy(legacy_result),
-                                content_blocks,
-                            }
-                        });
-                    }
-
-                    let mut parallel_cancelled = false;
-                    loop {
-                        tokio::select! {
-                            biased;
-                            () = self.cancel_token.cancelled() => {
-                                parallel_cancelled = true;
-                                break;
-                            }
-                            outcome = tool_tasks.next() => {
-                                let Some(outcome) = outcome else { break; };
-                                let index = outcome.index;
-                                outcomes[index] = Some(outcome);
-                            }
-                        }
-                    }
-                    // Dropping FuturesUnordered drops every still-active tool
-                    // future (including MCP transport calls) instead of merely
-                    // waiting for cooperative cancellation inside each tool.
-                    drop(tool_tasks);
-                    if parallel_cancelled {
-                        for (index, id, name, input) in parallel_plan_receipts {
-                            if outcomes[index].is_some() {
-                                continue;
-                            }
-                            let terminal =
-                                ToolExecutionOutcome::cancelled(interrupted_tool_result());
-                            let result = terminal.legacy_result();
-                            let _ = self
-                                .tx_event
-                                .send(Event::ToolCallComplete {
-                                    id: id.clone(),
-                                    name: name.clone(),
-                                    result: result.clone(),
-                                })
-                                .await;
-                            outcomes[index] = Some(ToolExecOutcome {
-                                index,
-                                id,
-                                name,
-                                input,
-                                started_at: Instant::now(),
-                                terminal,
-                                content_blocks: Vec::new(),
-                            });
-                        }
-                    }
-                } else {
-                    for plan in plans {
-                        let tool_id = plan.id.clone();
-                        let tool_name = plan.name.clone();
-                        let tool_input = plan.input.clone();
-                        let tool_caller = plan.caller.clone();
-
-                        if let Some(result) = plan.guard_result.clone() {
-                            let result = Ok(result);
-                            let _ = self
-                                .tx_event
-                                .send(Event::ToolCallComplete {
-                                    id: tool_id.clone(),
-                                    name: tool_name.clone(),
-                                    result: result.clone(),
-                                })
-                                .await;
-                            outcomes[plan.index] = Some(ToolExecOutcome {
-                                index: plan.index,
-                                id: tool_id,
-                                name: tool_name,
-                                input: tool_input,
-                                started_at: Instant::now(),
-                                terminal: ToolExecutionOutcome::from_legacy(result),
-                                content_blocks: Vec::new(),
-                            });
-                            continue;
-                        }
-
-                        if let Some(err) = plan.blocked_error.clone() {
-                            let result = Err(err);
-                            let _ = self
-                                .tx_event
-                                .send(Event::ToolCallComplete {
-                                    id: tool_id.clone(),
-                                    name: tool_name.clone(),
-                                    result: result.clone(),
-                                })
-                                .await;
-                            outcomes[plan.index] = Some(ToolExecOutcome {
-                                index: plan.index,
-                                id: tool_id,
-                                name: tool_name,
-                                input: tool_input,
-                                started_at: Instant::now(),
-                                terminal: ToolExecutionOutcome::from_legacy(result),
-                                content_blocks: Vec::new(),
-                            });
-                            continue;
-                        }
-
-                        if tool_name == MULTI_TOOL_PARALLEL_NAME {
-                            let started_at = Instant::now();
-                            let cancel_token = self.cancel_token.clone();
-                            let (terminal, content_blocks) = tokio::select! {
-                                biased;
-                                () = cancel_token.cancelled() => {
-                                    (
-                                        ToolExecutionOutcome::cancelled(interrupted_tool_result()),
-                                        Vec::new(),
-                                    )
-                                },
-                                result = self.execute_parallel_tool(
-                                    tool_input.clone(),
-                                    tool_registry,
-                                    tool_exec_lock.clone(),
-                                    batch_tool_context.clone(),
-                                ) => match result {
-                                    Ok(rich) => (
-                                        ToolExecutionOutcome::from_legacy(Ok(rich.result)),
-                                        rich.content_blocks,
-                                    ),
-                                    Err(err) => (
-                                        ToolExecutionOutcome::from_legacy(Err(err)),
-                                        Vec::new(),
-                                    ),
-                                },
-                            };
-                            let result = terminal.legacy_result();
-
-                            let _ = self
-                                .tx_event
-                                .send(Event::ToolCallComplete {
-                                    id: tool_id.clone(),
-                                    name: tool_name.clone(),
-                                    result: result.clone(),
-                                })
-                                .await;
-
-                            outcomes[plan.index] = Some(ToolExecOutcome {
-                                index: plan.index,
-                                id: tool_id,
-                                name: tool_name,
-                                input: tool_input,
-                                started_at,
-                                terminal,
-                                content_blocks,
-                            });
-                            continue;
-                        }
-
-                        if is_tool_search_tool(&tool_name) {
-                            let started_at = Instant::now();
-                            let result = super::tool_catalog::execute_tool_search_with_cache(
-                                &tool_name,
-                                &tool_input,
-                                &tool_catalog,
-                                &mut active_tool_names,
-                                &mut self.session.tool_activation_cache,
-                            );
-
-                            let _ = self
-                                .tx_event
-                                .send(Event::ToolCallComplete {
-                                    id: tool_id.clone(),
-                                    name: tool_name.clone(),
-                                    result: result.clone(),
-                                })
-                                .await;
-
-                            outcomes[plan.index] = Some(ToolExecOutcome {
-                                index: plan.index,
-                                id: tool_id,
-                                name: tool_name,
-                                input: tool_input,
-                                started_at,
-                                terminal: ToolExecutionOutcome::from_legacy(result),
-                                content_blocks: Vec::new(),
-                            });
-                            continue;
-                        }
-
-                        if tool_name == REQUEST_USER_INPUT_NAME {
-                            let started_at = Instant::now();
-                            let result = if questions_allowed {
-                                match UserInputRequest::from_value(&tool_input) {
-                                    Ok(request) => self
-                                        .await_user_input(&tool_id, request)
-                                        .await
-                                        .and_then(|response| {
-                                            ToolResult::json(&response).map_err(|e| {
-                                                ToolError::execution_failed(e.to_string())
-                                            })
-                                        }),
-                                    Err(err) => Err(err),
-                                }
-                            } else {
-                                Ok(ToolResult::success(
-                                    "Auto-Review does not pause for user questions. Decide from the available context and continue autonomously.",
-                                )
-                                .with_metadata(json!({
-                                    "auto_resolved": true,
-                                    "permission_posture": "auto-review",
-                                })))
-                            };
-
-                            let _ = self
-                                .tx_event
-                                .send(Event::ToolCallComplete {
-                                    id: tool_id.clone(),
-                                    name: tool_name.clone(),
-                                    result: result.clone(),
-                                })
-                                .await;
-
-                            outcomes[plan.index] = Some(ToolExecOutcome {
-                                index: plan.index,
-                                id: tool_id,
-                                name: tool_name,
-                                input: tool_input,
-                                started_at,
-                                terminal: ToolExecutionOutcome::from_legacy(result),
-                                content_blocks: Vec::new(),
-                            });
-                            continue;
-                        }
-
-                        // Handle approval flow: returns (result_override, context_override, approval_stamp)
-                        let model_requested_policy = requested_sandbox_escalation(
-                            &tool_name,
-                            &tool_input,
-                            &batch_sandbox_policy,
-                        )
-                        .expect("sandbox escalation was validated while planning")
-                        .map(|(policy, _)| policy);
-                        let (result_override, context_override, approval_stamp): (
-                            Option<Result<ToolResult, ToolError>>,
-                            Option<crate::tools::ToolContext>,
-                            Option<ToolApprovalStamp>,
-                        ) = if plan.approval_required {
-                            emit_tool_audit(json!({
-                                "event": "tool.approval_required",
-                                "tool_id": tool_id.clone(),
-                                "tool_name": tool_name.clone(),
-                            }));
-                            let approval_key = crate::tools::approval_cache::build_approval_key(
-                                &tool_name,
-                                &tool_input,
-                            )
-                            .0;
-                            let approval_grouping_key =
-                                crate::tools::approval_cache::build_approval_grouping_key(
-                                    &tool_name,
-                                    &tool_input,
-                                )
-                                .0;
-                            let approval_event = Event::ApprovalRequired {
-                                id: tool_id.clone(),
-                                tool_name: tool_name.clone(),
-                                input: tool_input.clone(),
-                                description: plan.approval_description.clone(),
-                                approval_key,
-                                approval_grouping_key,
-                                intent_summary: if plan.read_only {
-                                    None
-                                } else {
-                                    intent_summary.clone()
-                                },
-                                approval_force_prompt: plan.approval_force_prompt,
-                            };
-
-                            match self
-                                .request_tool_approval(&tool_id, &tool_name, approval_event)
-                                .await
-                            {
-                                Ok(ApprovalResult::Approved) => {
-                                    let decision = if model_requested_policy.is_some() {
-                                        "approved_with_requested_policy"
-                                    } else {
-                                        "approved"
-                                    };
-                                    emit_tool_audit(json!({
-                                        "event": "tool.approval_decision",
-                                        "tool_id": tool_id.clone(),
-                                        "tool_name": tool_name.clone(),
-                                        "decision": decision,
-                                        "policy": model_requested_policy.as_ref().map(|policy| format!("{policy:?}")),
-                                        "caller": caller_type_for_tool_use(tool_caller.as_ref()),
-                                    }));
-                                    if let Some(policy) = model_requested_policy {
-                                        let elevated_context = Some(
-                                            batch_tool_context
-                                                .clone()
-                                                .expect("registered shell tool context")
-                                                .with_elevated_sandbox_policy(policy),
-                                        );
-                                        (
-                                            None,
-                                            elevated_context,
-                                            Some(ToolApprovalStamp::ApprovedWithPolicy),
-                                        )
-                                    } else {
-                                        (None, None, Some(ToolApprovalStamp::ApprovedByUser))
-                                    }
-                                }
-                                Ok(ApprovalResult::Denied) => {
-                                    emit_tool_audit(json!({
-                                        "event": "tool.approval_decision",
-                                        "tool_id": tool_id.clone(),
-                                        "tool_name": tool_name.clone(),
-                                        "decision": "denied",
-                                        "caller": caller_type_for_tool_use(tool_caller.as_ref()),
-                                    }));
-                                    (
-                                        Some(Err(ToolError::permission_denied(format!(
-                                            // #5146: name the correct next
-                                            // behavior, not a bare denial, so
-                                            // a model that emitted the call as
-                                            // its proposal knows to present
-                                            // the change and wait instead of
-                                            // retrying. Keep the `denied by
-                                            // user` marker — error taxonomy
-                                            // and retry classification match
-                                            // on it.
-                                            "Tool '{tool_name}' denied by user — the call was not approved. Do not retry the same call; present what you intended and wait for the user's approval or new instructions."
-                                        )))),
-                                        None,
-                                        None,
-                                    )
-                                }
-                                Ok(ApprovalResult::RetryWithPolicy(policy)) => {
-                                    emit_tool_audit(json!({
-                                        "event": "tool.approval_decision",
-                                        "tool_id": tool_id.clone(),
-                                        "tool_name": tool_name.clone(),
-                                        "decision": "retry_with_policy",
-                                        "policy": format!("{policy:?}"),
-                                        "caller": caller_type_for_tool_use(tool_caller.as_ref()),
-                                    }));
-                                    let elevated_context =
-                                        batch_tool_context.clone().map(|context| {
-                                            context.with_elevated_sandbox_policy(policy)
-                                        });
-                                    (
-                                        None,
-                                        elevated_context,
-                                        Some(ToolApprovalStamp::ApprovedWithPolicy),
-                                    )
-                                }
-                                Err(err) => (Some(Err(err)), None, None),
-                            }
-                        } else {
-                            (None, None, None)
-                        };
-
-                        // An approval wait can outlive a posture switch. Do
-                        // not start a tool from the stale plan; the
-                        // model can retry immediately under the newly applied
-                        // authority.
-                        let mut result_override = if self.apply_pending_runtime_authority().await {
-                            mode = self.current_mode;
-                            questions_allowed =
-                                crate::core::authority::permission_posture_allows_questions(
-                                    self.session.approval_mode,
-                                );
-                            result_override.or_else(|| {
-                                Some(Err(ToolError::permission_denied(
-                                    "Runtime permission posture changed before this tool call executed; retry it under the current posture."
-                                        .to_string(),
-                                )))
-                            })
-                        } else {
-                            result_override
-                        };
-
-                        // Per-tool snapshot for surgical undo (#384): capture workspace
-                        // state before file-modifying tools execute so `/undo` can
-                        // revert the most recent write_file/edit_file/apply_patch.
-                        // See `should_pre_tool_snapshot` for the gating rationale (#3292).
-                        if should_pre_tool_snapshot(
-                            self.config.snapshots_enabled,
-                            result_override.is_some(),
-                            tool_name.as_str(),
-                            &tool_input,
-                        ) {
-                            let ws = self.session.workspace.clone();
-                            let tid = tool_id.clone();
-                            let cap = self.config.snapshots_max_workspace_bytes;
-                            let sid = self.session.id.clone();
-                            let _ = tokio::task::spawn_blocking(move || {
-                                crate::core::turn::pre_tool_snapshot(&ws, &tid, cap, Some(&sid))
-                            })
-                            .await;
-                        }
-
-                        if self.apply_pending_runtime_authority().await {
-                            mode = self.current_mode;
-                            questions_allowed =
-                                crate::core::authority::permission_posture_allows_questions(
-                                    self.session.approval_mode,
-                                );
-                            result_override.get_or_insert_with(|| {
-                                Err(ToolError::permission_denied(
-                                    "Runtime permission posture changed before this tool call executed; retry it under the current posture."
-                                        .to_string(),
-                                ))
-                            });
-                        }
-
-                        let started_at = Instant::now();
-                        let (mut result, cancelled_before_completion) =
-                            if let Some(result_override) = result_override {
-                                (result_override.map(RichToolResult::plain), false)
-                            } else {
-                                tokio::select! {
-                                    biased;
-                                    () = self.cancel_token.cancelled() => {
-                                        (Ok(RichToolResult::plain(interrupted_tool_result())), true)
-                                    },
-                                    result = Self::execute_tool_with_lock(
-                                        tool_exec_lock.clone(),
-                                        plan.supports_parallel,
-                                        plan.interactive,
-                                        self.tx_event.clone(),
-                                        Some(self.cancel_token.clone()),
-                                        tool_name.clone(),
-                                        tool_input.clone(),
-                                        self.session.workspace.clone(),
-                                        tool_registry,
-                                        mcp_pool.clone(),
-                                        context_override.or_else(|| batch_tool_context.clone()),
-                                    ) => (result, false),
-                                }
-                            };
-
-                        if let Some(approval_stamp) = approval_stamp
-                            && let Ok(tool_result) = result.as_mut()
-                        {
-                            stamp_tool_result_approval(&mut tool_result.result, approval_stamp);
-                        }
-
-                        // #500: spill outsized tool outputs to disk before the
-                        // result fans out to the model context and the UI cell.
-                        // Both consumers see the same artifact reference block +
-                        // metadata pointing at the session-owned full file.
-                        // Emit a discrete `tool.spillover` audit event so
-                        // operators can correlate large-output episodes with
-                        // disk-usage growth in `~/.deepseek/tool_outputs/`.
-                        if let Ok(tool_result) = result.as_mut()
-                            && let Some(path) =
-                                crate::tools::truncate::apply_spillover_with_artifact(
-                                    &mut tool_result.result,
-                                    &tool_id,
-                                    &tool_name,
-                                    &self.session.id,
-                                )
-                        {
-                            emit_tool_audit(json!({
-                                "event": "tool.spillover",
-                                "tool_id": tool_id.clone(),
-                                "tool_name": tool_name.clone(),
-                                "path": path.display().to_string(),
-                            }));
-                        }
-
-                        let content_blocks = result
-                            .as_ref()
-                            .map(|result| result.content_blocks.clone())
-                            .unwrap_or_default();
-                        let legacy_result = result.map(RichToolResult::into_result);
-                        let _ = self
-                            .tx_event
-                            .send(Event::ToolCallComplete {
-                                id: tool_id.clone(),
-                                name: tool_name.clone(),
-                                result: legacy_result.clone(),
-                            })
-                            .await;
-
-                        let terminal = if cancelled_before_completion {
-                            ToolExecutionOutcome::cancelled(
-                                legacy_result
-                                    .expect("cancelled tool result is always model-visible"),
-                            )
-                        } else {
-                            ToolExecutionOutcome::from_legacy(legacy_result)
-                        };
-                        outcomes[plan.index] = Some(ToolExecOutcome {
-                            index: plan.index,
-                            id: tool_id,
-                            name: tool_name,
-                            input: tool_input,
-                            started_at,
-                            terminal,
-                            content_blocks,
-                        });
-                    }
-                }
-            }
-
-            // #dogfood 0.8.67: if the model mutates the goal mid-turn via
-            // create_goal/update_goal, push the change to the sidebar right after
-            // this tool batch instead of waiting for turn end — otherwise the
-            // sidebar "Goal:" line stays stale for the whole (possibly long)
-            // goal-loop turn while get_goal already reflects the new objective.
-            let mut goal_tool_ran = false;
-
-            for outcome in outcomes.into_iter().flatten() {
-                let tool_input = outcome.input.clone();
-                let tool_name_for_ws = outcome.name.clone();
-                let terminal_status = outcome.terminal.status;
-                let result = outcome.terminal.into_legacy_result();
-                if matches!(outcome.name.as_str(), "create_goal" | "update_goal") {
-                    goal_tool_ran = true;
-                }
-                match result {
-                    Ok(output) => {
-                        super::tool_catalog::activate_result_dependencies(
-                            &tool_catalog,
-                            &mut active_tool_names,
-                            &mut self.session.tool_activation_cache,
-                            &output,
-                        );
-                        if output.success {
-                            super::tool_catalog::touch_cached_tool_after_execution(
-                                &tool_catalog,
-                                &mut active_tool_names,
-                                &mut self.session.tool_activation_cache,
-                                &outcome.name,
-                            );
-                        }
-                        // A runtime MCP connection changes the callable tool
-                        // surface. Merge the complete schemas into this turn's
-                        // catalog before the next model request; waiting for the
-                        // next user turn leaves the model with names it cannot
-                        // legally call through the provider API.
-                        let mcp_catalog_changed = output
-                            .metadata
-                            .as_ref()
-                            .and_then(|metadata| metadata.get("mcp_catalog_changed"))
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(false);
-                        if output.success
-                            && mcp_catalog_changed
-                            && let Some(pool) = self.mcp_pool.as_ref().cloned()
-                        {
-                            let refreshed = pool.lock().await.to_api_tools();
-                            merge_new_runtime_mcp_tools(
-                                &mut tool_catalog,
-                                &mut active_tool_names,
-                                refreshed,
-                            );
-                        }
-                        emit_tool_audit(json!({
-                            "event": "tool.result",
-                            "tool_id": outcome.id.clone(),
-                            "tool_name": outcome.name.clone(),
-                            "status": terminal_status.as_str(),
-                            "success": output.success,
-                        }));
-                        let output_for_context = compact_tool_result_for_route(
-                            self.api_provider,
-                            &self.session.model,
-                            self.active_route_limits,
-                            &outcome.name,
-                            &output,
-                        );
-                        let tool_was_executed = output
-                            .metadata
-                            .as_ref()
-                            .and_then(|metadata| metadata.get("executed"))
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(true);
-                        if tool_was_executed {
-                            self.session.working_set.observe_tool_call(
-                                &tool_name_for_ws,
-                                &tool_input,
-                                Some(&output_for_context),
-                                &self.session.workspace,
-                            );
-                        }
-
-                        // #136: post-edit LSP diagnostics hook. We only run
-                        // this on success — failed edits leave the file
-                        // untouched, so polling for diagnostics would just
-                        // surface stale state.
-                        if output.success && tool_was_executed {
-                            self.run_post_edit_lsp_hook(&outcome.name, &tool_input)
-                                .await;
-                        }
-
-                        // #3026: pipe `additionalContext` from tool_call_before
-                        // hooks back to the model alongside the tool result.
-                        // Sanitized per field at the parser and bounded in
-                        // aggregate by the fold, so what lands here is already
-                        // capped — the number of tokens this adds to the turn
-                        // is knowable rather than whatever the hook printed.
-                        let output_for_context = match hook_contexts.get(&outcome.id) {
-                            Some(context) => {
-                                format!("{output_for_context}\n\n[hook context] {context}")
-                            }
-                            None => output_for_context,
-                        };
-
-                        let content_blocks = outcome.content_blocks;
-                        let content_blocks = content_blocks
-                            .iter()
-                            .filter_map(|block| serde_json::to_value(block).ok())
-                            .collect::<Vec<_>>();
-                        self.add_session_message(Message {
-                            role: "user".to_string(),
-                            content: vec![ContentBlock::ToolResult {
-                                tool_use_id: outcome.id,
-                                content: output_for_context,
-                                is_error: None,
-                                content_blocks: (!content_blocks.is_empty())
-                                    .then_some(content_blocks),
-                            }],
-                        })
-                        .await;
-                    }
-                    Err(e) => {
-                        let envelope: ErrorEnvelope = e.clone().into();
-                        emit_tool_audit(json!({
-                            "event": "tool.result",
-                            "tool_id": outcome.id.clone(),
-                            "tool_name": outcome.name.clone(),
-                            "status": terminal_status.as_str(),
-                            "success": false,
-                            "error": e.to_string(),
-                            "category": envelope.category.to_string(),
-                            "severity": envelope.severity.to_string(),
-                        }));
-                        let input_schema = tool_catalog
-                            .iter()
-                            .find(|tool| tool.name == outcome.name)
-                            .map(|tool| &tool.input_schema);
-                        let error = format_tool_error_with_schema(&e, &outcome.name, input_schema);
-                        self.session.working_set.observe_tool_call(
-                            &tool_name_for_ws,
-                            &tool_input,
-                            Some(&error),
-                            &self.session.workspace,
-                        );
-                        self.add_session_message(Message {
-                            role: "user".to_string(),
-                            content: vec![ContentBlock::ToolResult {
-                                tool_use_id: outcome.id,
-                                content: format!("Error: {error}"),
-                                is_error: Some(true),
-                                content_blocks: None,
-                            }],
-                        })
-                        .await;
-                    }
-                }
-            }
-
-            // Reflect a mid-turn goal change on the sidebar immediately (idempotent:
-            // emit_goal_updated only sends when an objective is set, and the UI
-            // applies it behind a `changed` guard).
-            if goal_tool_ran {
-                self.emit_goal_updated().await;
-            }
+                &hook_contexts,
+            )
+            .await;
 
             if !pending_steers.is_empty() {
                 for steer in pending_steers.drain(..) {
@@ -3588,6 +2146,1560 @@ impl Engine {
             return (TurnOutcomeStatus::Failed, Some(err));
         }
         (TurnOutcomeStatus::Completed, None)
+    }
+
+    /// Plan one streamed batch of tool calls without executing the planned tools.
+    ///
+    /// This phase resolves tool definitions and policy, runs planning hooks and
+    /// Auto-Review gates, accounts for the per-turn call budget, and updates
+    /// deferred-tool activation state. It returns the executable plans together
+    /// with the hook context and batch sandbox policy consumed by later phases.
+    #[allow(clippy::too_many_arguments)] // phase fns mirror the turn pipeline shape
+    async fn plan_tool_calls(
+        &mut self,
+        client: &dyn crate::core::model_client::ModelClient,
+        turn: &mut TurnContext,
+        tool_policy: &ToolSurfacePolicy,
+        tool_uses: &mut [ToolUseState],
+        tool_catalog: &[crate::models::Tool],
+        tool_registry: Option<&crate::tools::ToolRegistry>,
+        active_tool_names: &mut std::collections::HashSet<String>,
+        tool_call_budget: &mut ToolCallBudget,
+        mode: AppMode,
+    ) -> PlannedToolCalls {
+        let active_tools_at_batch_start = active_tool_names.clone();
+        let mut deferred_tools_hydrated_this_batch: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut deferred_tools_hydrated_in_order = Vec::new();
+        // #3026: `additionalContext` strings from tool_call_before hooks,
+        // keyed by tool id; appended to the tool result sent to the model.
+        let mut hook_contexts: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let mut plans: Vec<ToolExecutionPlan> = Vec::with_capacity(tool_uses.len());
+        // Resolve the batch's effective policy once. Ordinary approval
+        // preserves it; an explicit sandbox escalation can replace it for
+        // only the exact call that receives separate user approval.
+        let batch_approval_mode = crate::core::authority::agent_approval_mode_for_turn(
+            self.session.auto_approve,
+            self.session.approval_mode,
+        );
+        let batch_sandbox_policy = crate::core::authority::sandbox_policy_for_turn(
+            self.current_mode,
+            batch_approval_mode,
+            self.api_config.sandbox_mode.as_deref(),
+            &self.session.workspace,
+            crate::core::authority::SandboxNetworkAccess::from_config(
+                self.api_config.sandbox_network_access,
+            ),
+        );
+        let batch_sandbox_read_only = matches!(
+            &batch_sandbox_policy,
+            crate::sandbox::SandboxPolicy::ReadOnly
+        );
+        for (index, tool) in tool_uses.iter_mut().enumerate() {
+            let tool_id = tool.id.clone();
+            let mut tool_name = tool.name.clone();
+            let mut tool_input = tool.input.clone();
+            let tool_caller = tool.caller.clone();
+            crate::logging::info(format!(
+                "Planning tool '{tool_name}' with input: {tool_input:?}"
+            ));
+
+            let requested_tool_name = tool_name.clone();
+            let tool_def = resolve_tool_definition(&mut tool_name, tool_catalog, tool_registry);
+            if requested_tool_name != tool_name {
+                tool.name = tool_name.clone();
+            }
+
+            let interactive = (matches!(tool_name.as_str(), "bash" | "Bash" | "exec_shell")
+                && tool_input
+                    .get("interactive")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true))
+                || tool_name == REQUEST_USER_INPUT_NAME;
+
+            let mut approval_required = false;
+            let mut approval_description = "Tool execution requires approval".to_string();
+            let mut approval_force_prompt = false;
+            let mut supports_parallel = false;
+            let mut read_only = false;
+            let mut detached_start = false;
+            let mut resources = vec![ResourceClaim::GlobalExclusive];
+            let mut blocked_error: Option<ToolError> = None;
+            let mut guard_result: Option<ToolResult> = None;
+            // #3026: set by a hook `ask` decision; applied AFTER the
+            // registry-based approval computation below so it cannot be
+            // clobbered by it.
+            let mut hook_requires_approval = false;
+
+            // #4415: hard per-turn tool-call budget. This gate runs first
+            // so proposal order decides which calls fit: while calls
+            // remain, the call is admitted and the count decrements; once
+            // exhausted, the call is rejected with a typed reason and
+            // never executes — an over-budget batch is truncated to
+            // exactly the calls that still fit, in proposal order.
+            // #5170: the cap counts *admitted* calls — a debited call
+            // stopped by any gate below is refunded before plan
+            // construction, so blocked calls cannot burn the budget.
+            let admission = tool_call_budget.admit();
+            let budget_debited = admission.is_ok();
+            if let Err(exceeded) = admission {
+                blocked_error = Some(exceeded.into_tool_error(&tool_name));
+            }
+
+            if mode_blocks_command_execution(mode, &tool_name) {
+                blocked_error = Some(ToolError::permission_denied(format!(
+                    "'{tool_name}' is not available in Plan mode — switch to Work mode (`/mode work`) to run commands and code."
+                )));
+            }
+
+            if blocked_error.is_none()
+                && let Some(error) = tool.input_parse_error.clone()
+            {
+                blocked_error = Some(ToolError::invalid_input(error));
+            }
+
+            // #3027: deny wins over allow — check the deny-list first so a
+            // tool present in both lists is still blocked.
+            if blocked_error.is_none() && tool_policy.denies_tool(&tool_name) {
+                blocked_error = Some(ToolError::permission_denied(format!(
+                    "Tool '{tool_name}' is in the disallowed-tools list"
+                )));
+            }
+
+            if blocked_error.is_none() && !tool_policy.passes_allow_list(&tool_name) {
+                blocked_error = Some(ToolError::permission_denied(format!(
+                    "Tool '{tool_name}' is not in the allowed-tools list for the current command"
+                )));
+            }
+
+            if blocked_error.is_none() && !caller_allowed_for_tool(tool_caller.as_ref(), tool_def) {
+                blocked_error = Some(ToolError::permission_denied(format!(
+                    "Tool '{tool_name}' does not allow caller '{}'",
+                    caller_type_for_tool_use(tool_caller.as_ref())
+                )));
+            }
+
+            // Fail closed: a tool with no execution path — not MCP, not
+            // code/js/search, and with no registry spec — must be blocked,
+            // NOT run unguarded. Previously this only checked
+            // `tool_def.is_none()`, so a tool present in the model-facing
+            // catalog but absent from the execution registry (or when the
+            // registry itself is None) fell through every approval branch
+            // with approval_required=false and executed with no gate.
+            let registry_has_spec =
+                tool_registry.is_some_and(|registry| registry.get(&tool_name).is_some());
+            if blocked_error.is_none()
+                && !registry_has_spec
+                && !McpPool::is_mcp_tool(&tool_name)
+                && tool_name != CODE_EXECUTION_TOOL_NAME
+                && tool_name != JS_EXECUTION_TOOL_NAME
+                && !is_tool_search_tool(&tool_name)
+            {
+                blocked_error = Some(ToolError::not_available(missing_tool_error_message(
+                    &tool_name,
+                    tool_catalog,
+                )));
+            }
+
+            // Prepare before hooks so every input-specific authority and
+            // scheduling field has one inspectable owner. Preparation is
+            // side-effect free; execution remains below the full gate
+            // stack exactly as before.
+            let mut prepared_policy = match prepare_tool_call(
+                &tool_name,
+                tool_input.clone(),
+                tool_registry,
+                self.session.auto_approve,
+            ) {
+                Ok(policy) => Some(policy),
+                Err(error) => {
+                    if blocked_error.is_none() {
+                        blocked_error = Some(error);
+                    }
+                    None
+                }
+            };
+            let mut reprepared_after_hook = false;
+
+            if blocked_error.is_none() {
+                match run_tool_call_before_hooks(
+                    self.config.hook_executor.as_ref(),
+                    &tool_name,
+                    &tool_id,
+                    &tool_input,
+                    mode,
+                    &self.session.workspace,
+                    &self.config.model,
+                )
+                .await
+                {
+                    Ok(hook_outcome) => {
+                        if hook_outcome.requires_approval {
+                            hook_requires_approval = true;
+                        }
+                        if let Some(updated) = hook_outcome.updated_input {
+                            tool_input = updated;
+                            reprepared_after_hook = true;
+                            prepared_policy = match reprepare_tool_call_after_hook(
+                                &tool_name,
+                                tool_input.clone(),
+                                tool_registry,
+                                self.session.auto_approve,
+                            ) {
+                                Ok(policy) => Some(policy),
+                                Err(error) => {
+                                    blocked_error = Some(error);
+                                    None
+                                }
+                            };
+                        }
+                        if let Some(context) = hook_outcome.additional_context {
+                            hook_contexts.insert(tool_id.clone(), context);
+                        }
+                    }
+                    Err(error) => blocked_error = Some(error),
+                }
+            }
+
+            if let Some(prepared) = prepared_policy {
+                let registered_non_bypassable =
+                    registered_tool_forces_prompt(&tool_name, prepared.call.approval);
+                approval_required = registered_tool_approval_required(
+                    &tool_name,
+                    prepared.call.approval,
+                    prepared.auto_approve,
+                );
+                // Non-bypassable holds force a prompt in every posture
+                // that can open one. Full Access auto-approves instead:
+                // it already grants everything these calls can do, and a
+                // gate that cannot open its own approval UI used to
+                // strand the call entirely (#3866, reversed 2026-08-10).
+                approval_force_prompt = registered_non_bypassable && !prepared.auto_approve;
+                approval_description = prepared.call.description;
+                supports_parallel = prepared.call.supports_parallel;
+                read_only = prepared.call.read_only;
+                detached_start = prepared.call.starts_detached;
+                tool_input = prepared.call.input;
+                resources = prepared.call.resources;
+
+                // #5185: in the default Ask posture, a file write whose
+                // every target stays inside the workspace git work tree —
+                // off `.git` internals, runtime state, and sensitive files
+                // — runs without a modal. Everything evaluated after this
+                // point (typed ask-rules, the built-in safety floor, repo
+                // law) can still force a prompt; none of them is weakened.
+                if approval_required
+                    && !approval_force_prompt
+                    && workspace_write_carve_out_applies(
+                        mode,
+                        self.session.approval_mode,
+                        self.session.auto_approve,
+                        &self.session.workspace,
+                        &tool_name,
+                        &tool_input,
+                        prepared.call.approval,
+                    )
+                {
+                    approval_required = false;
+                    emit_tool_audit(json!({
+                        "event": "tool.workspace_write_carve_out",
+                        "tool_id": tool_id.clone(),
+                        "tool_name": tool_name.clone(),
+                    }));
+                }
+
+                let approval = match prepared.call.approval {
+                    ApprovalRequirement::Auto => "auto",
+                    ApprovalRequirement::Suggest => "suggest",
+                    ApprovalRequirement::Required => "required",
+                };
+                emit_tool_audit(json!({
+                    "event": "tool.prepared",
+                    "tool_id": tool_id.clone(),
+                    "tool_name": tool_name.clone(),
+                    "read_only": read_only,
+                    "supports_parallel": supports_parallel,
+                    "starts_detached": detached_start,
+                    "approval": approval,
+                    "resources": &resources,
+                    "reprepared_after_hook": reprepared_after_hook,
+                }));
+            }
+
+            if blocked_error.is_none()
+                && mode_blocks_write_capable_tool(mode, &tool_name, &tool_input, read_only)
+            {
+                blocked_error = Some(ToolError::permission_denied(format!(
+                    "'{tool_name}' is not available in Plan mode - switch to Work mode (`/mode work`) to modify files or run write-capable tools."
+                )));
+            }
+
+            // #3026: a hook `ask` decision forces the approval prompt even
+            // for tools the registry would auto-run. Must stay after the
+            // registry-based computation above, which assigns rather than
+            // ORs `approval_required`.
+            if hook_requires_approval && !self.session.auto_approve {
+                approval_required = true;
+            }
+
+            if blocked_error.is_none() {
+                let ask_rule_decision = exec_shell_ask_rule_decision(
+                    &self.config,
+                    &tool_name,
+                    &tool_input,
+                    &self.session.workspace,
+                    self.session.approval_mode,
+                )
+                .or_else(|| {
+                    file_tool_ask_rule_decision(
+                        &self.config,
+                        &tool_name,
+                        &tool_input,
+                        &self.session.workspace,
+                        self.session.approval_mode,
+                    )
+                });
+                if let Some(decision) = ask_rule_decision {
+                    match decision {
+                        ToolAskRuleDecision::Allow => {
+                            // Remembered grants bypass ordinary registry
+                            // approval only. Hook asks and non-bypassable
+                            // tool requirements remain monotonic, while
+                            // auto-review and repo-law floors below can
+                            // still force review or block.
+                            if !hook_requires_approval && !approval_force_prompt {
+                                approval_required = false;
+                            }
+                        }
+                        ToolAskRuleDecision::Prompt(reason) => {
+                            // #3790: the mode is the sole authority — a typed
+                            // ask-rule prompts in Agent/Plan but never in YOLO
+                            // (auto_approve). A typed deny rule still blocks
+                            // hard, in every mode.
+                            if !self.session.auto_approve {
+                                approval_required = true;
+                                approval_description = reason;
+                                approval_force_prompt = true;
+                            }
+                        }
+                        ToolAskRuleDecision::Block(reason) => {
+                            approval_required = false;
+                            approval_force_prompt = false;
+                            blocked_error = Some(ToolError::permission_denied(reason));
+                        }
+                    }
+                }
+            }
+
+            if blocked_error.is_none() {
+                let review_context = crate::tui::auto_review::AutoReviewContext::from_tool_call(
+                    &tool_name,
+                    &tool_input,
+                    auto_review_run_origin_for_plan(detached_start),
+                    self.session.approval_mode,
+                    crate::config::is_workspace_trusted(&self.session.workspace),
+                    Some(&self.session.workspace),
+                );
+                let (decision, audit_event) = auto_review_plan_decision_for_context(
+                    &self.config.auto_review_policy,
+                    &review_context,
+                );
+                emit_tool_audit(json!({
+                    "event": "tool.auto_review",
+                    "gate": "deterministic",
+                    "tool_id": tool_id.clone(),
+                    "auto_review": audit_event,
+                }));
+                match decision {
+                    AutoReviewPlanDecision::NoChange => {}
+                    AutoReviewPlanDecision::Allow => {
+                        if !hook_requires_approval && !approval_force_prompt {
+                            approval_required = false;
+                        }
+                    }
+                    AutoReviewPlanDecision::ForcePrompt(reason) => {
+                        // The built-in safety floor is deliberately
+                        // non-bypassable. Ask/Auto-Review surface the hold;
+                        // Full Access turns this disposition into a hard
+                        // block below, without opening a modal.
+                        approval_required = true;
+                        approval_description = reason;
+                        approval_force_prompt = true;
+                    }
+                    AutoReviewPlanDecision::Block(reason) => {
+                        approval_required = false;
+                        approval_force_prompt = false;
+                        let _ = self
+                            .tx_event
+                            .send(Event::ToolGateDecision {
+                                agent_id: None,
+                                tool_id: tool_id.clone(),
+                                tool_name: tool_name.clone(),
+                                gate: crate::core::events::ToolGate::AutoReviewDeterministic,
+                                decision: crate::core::events::ToolGateVerdict::Denied,
+                                risk: None,
+                                reason: crate::core::events::bounded_gate_reason(&reason),
+                            })
+                            .await;
+                        blocked_error = Some(auto_review_block_tool_error(&reason));
+                    }
+                    AutoReviewPlanDecision::ConsultReviewer(held_reason) => {
+                        if let Err(error) = self
+                            .consult_auto_review_guardian(
+                                client,
+                                &review_context,
+                                &tool_input,
+                                &held_reason,
+                                &tool_id,
+                                turn,
+                            )
+                            .await
+                        {
+                            blocked_error = Some(error);
+                        } else if !hook_requires_approval && !approval_force_prompt {
+                            approval_required = false;
+                        }
+                    }
+                }
+            }
+
+            // Repo law: protected invariants with path globs compile into
+            // mechanical write holds. Like the safety floor, law is not
+            // bypassable by mode — it can only add holds, never remove
+            // one, so this cannot weaken any gate above.
+            if blocked_error.is_none()
+                && let Some(decision) = crate::repo_law::repo_law_plan_decision(
+                    &self.session.workspace,
+                    &tool_name,
+                    &tool_input,
+                )
+            {
+                emit_tool_audit(json!({
+                    "event": "tool.repo_law_decision",
+                    "tool_id": tool_id.clone(),
+                    "decision": match &decision {
+                        crate::repo_law::RepoLawPlanDecision::ForcePrompt(_) => "force_prompt",
+                        crate::repo_law::RepoLawPlanDecision::Block(_) => "block",
+                    },
+                    "reason": match &decision {
+                        crate::repo_law::RepoLawPlanDecision::ForcePrompt(reason)
+                        | crate::repo_law::RepoLawPlanDecision::Block(reason) => reason.clone(),
+                    },
+                }));
+                match decision {
+                    crate::repo_law::RepoLawPlanDecision::ForcePrompt(reason) => {
+                        if repo_law_must_block_without_prompt(
+                            self.session.approval_mode,
+                            self.session.auto_approve,
+                        ) {
+                            approval_required = false;
+                            approval_force_prompt = false;
+                            blocked_error = Some(ToolError::permission_denied(format!(
+                                "Repository law blocked tool '{tool_name}' in {}: {reason}. Switch to Ask to review this protected change.",
+                                self.session.approval_mode.permission_chip_label(),
+                            )));
+                        } else {
+                            approval_required = true;
+                            approval_description = reason;
+                            approval_force_prompt = true;
+                        }
+                    }
+                    crate::repo_law::RepoLawPlanDecision::Block(reason) => {
+                        approval_required = false;
+                        approval_force_prompt = false;
+                        blocked_error = Some(ToolError::permission_denied(reason));
+                    }
+                }
+            }
+
+            let should_emit_hydration_status =
+                !deferred_tools_hydrated_this_batch.contains(&tool_name);
+            if blocked_error.is_none()
+                && let Some(result) = maybe_hydrate_requested_deferred_tool(
+                    &tool_name,
+                    &tool_input,
+                    tool_catalog,
+                    &active_tools_at_batch_start,
+                    &mut deferred_tools_hydrated_this_batch,
+                )
+            {
+                if should_emit_hydration_status {
+                    // Retain first-proposal order separately from the set
+                    // used to deduplicate calls in this batch. LRU bounds
+                    // must not depend on randomized HashSet iteration.
+                    deferred_tools_hydrated_in_order.push(tool_name.clone());
+                }
+                emit_tool_audit(json!({
+                    "event": "tool.schema_hydrated",
+                    "tool_id": tool_id.clone(),
+                    "tool_name": tool_name.clone(),
+                    "auto_retry_same_turn": false,
+                    "metadata": result.metadata,
+                }));
+                if should_emit_hydration_status {
+                    let status = if requested_tool_name == tool_name {
+                        format!(
+                            "Loaded deferred tool '{tool_name}'. Retry the call with its visible schema."
+                        )
+                    } else {
+                        format!(
+                            "Loaded deferred tool '{tool_name}' after resolving '{requested_tool_name}'. Retry the call with its visible schema."
+                        )
+                    };
+                    let _ = self.tx_event.send(Event::status(status)).await;
+                }
+                // The provider did not advertise this schema in the current
+                // request. Hydration is discovery, never execution authority:
+                // return the schema now and require a subsequent model call.
+                guard_result = Some(result);
+            }
+
+            // Bind escalation last so remembered rules cannot remove its
+            // prompt and later safety/repo-law holds cannot hide what the
+            // elevated approval grants. A hard block above still wins.
+            if blocked_error.is_none() {
+                match requested_sandbox_escalation(&tool_name, &tool_input, &batch_sandbox_policy) {
+                    Ok(Some((_policy, justification)))
+                        if batch_approval_mode == crate::tui::approval::ApprovalMode::Suggest =>
+                    {
+                        let escalation_description = format!(
+                            "Sandbox escalation to '{}' for this exact call: {justification}",
+                            tool_input["sandbox_permissions"]
+                                .as_str()
+                                .expect("validated sandbox permission")
+                        );
+                        approval_description = if approval_force_prompt {
+                            format!(
+                                "{escalation_description}. Additional approval gate: {approval_description}"
+                            )
+                        } else {
+                            escalation_description
+                        };
+                        approval_required = true;
+                        approval_force_prompt = true;
+                    }
+                    Ok(Some(_)) => {
+                        blocked_error = Some(ToolError::permission_denied(format!(
+                            "Sandbox escalation requires a one-shot user approval, but the current {} posture cannot provide it. Switch to Ask or continue without escalation.",
+                            batch_approval_mode.permission_chip_label()
+                        )));
+                    }
+                    Ok(None) => {}
+                    Err(error) => blocked_error = Some(error),
+                }
+            }
+
+            // An ordinary approval does not change the sandbox. Say that
+            // on the gate itself; an explicit sandbox_permissions request
+            // takes the separate exact-call path above. Scoped to shell —
+            // file tools do not execute through the sandbox.
+            if approval_required
+                && batch_sandbox_read_only
+                && tool_input.get("sandbox_permissions").is_none()
+                && matches!(
+                    tool_name.as_str(),
+                    "bash" | "Bash" | "Run" | "exec_shell" | "task_shell_start"
+                )
+            {
+                approval_description = format!(
+                    "{approval_description} — note: the execution sandbox is read-only for this session; ordinary approval runs the command without write access (sandbox escalation requires a separate exact-call request)"
+                );
+            }
+
+            // #5170: a call stopped by any admission gate above never
+            // executes, so hand its debited budget slot back. Only the
+            // budget gate's own rejection leaves nothing to refund —
+            // it never debited in the first place.
+            if blocked_error.is_some() && budget_debited {
+                tool_call_budget.refund();
+            }
+
+            plans.push(ToolExecutionPlan {
+                index,
+                id: tool_id,
+                name: tool_name,
+                input: tool_input,
+                caller: tool_caller,
+                interactive,
+                approval_required,
+                approval_description,
+                approval_force_prompt,
+                supports_parallel,
+                read_only,
+                detached_start,
+                resources,
+                blocked_error,
+                guard_result,
+            });
+        }
+        let activation = self
+            .session
+            .tool_activation_cache
+            .activate(tool_catalog, &deferred_tools_hydrated_in_order);
+        super::tool_catalog::remove_evicted_cache_activations(
+            tool_catalog,
+            active_tool_names,
+            activation.evicted,
+        );
+        active_tool_names.extend(activation.admitted);
+        PlannedToolCalls {
+            plans,
+            hook_contexts,
+            batch_sandbox_policy,
+        }
+    }
+
+    /// Approve and execute a planned tool batch, preserving plan-index order.
+    ///
+    /// Approval prompts, sandbox escalation, cancellation, parallel scheduling,
+    /// snapshots, and tool execution all belong to this phase. It may refresh
+    /// runtime authority and tool-search activation state, but it does not append
+    /// model-visible tool-result messages; those are handled by the result phase.
+    /// The optional outcome slots retain the existing index-based collector shape.
+    #[allow(clippy::too_many_arguments)] // phase fns mirror the turn pipeline shape
+    async fn execute_planned_tools(
+        &mut self,
+        plans: Vec<ToolExecutionPlan>,
+        current_text_visible: &str,
+        tool_catalog: &[crate::models::Tool],
+        active_tool_names: &mut std::collections::HashSet<String>,
+        tool_registry: Option<&crate::tools::ToolRegistry>,
+        tool_exec_lock: Arc<RwLock<()>>,
+        mcp_pool: Option<Arc<AsyncMutex<McpPool>>>,
+        batch_sandbox_policy: &crate::sandbox::SandboxPolicy,
+        mode: &mut AppMode,
+        questions_allowed: &mut bool,
+    ) -> Vec<Option<ToolExecOutcome>> {
+        // --- Intent summary for write tools (#2381) ---
+        // When the model invokes write tools, extract its preceding text
+        // as an "intent summary" so the approval view can show *why* the
+        // change is being made, not just *what* will change.
+        let has_write_tools = plans.iter().any(|p| {
+            !p.read_only
+                && p.approval_required
+                && p.blocked_error.is_none()
+                && p.guard_result.is_none()
+        });
+        let intent_summary: Option<String> = if has_write_tools {
+            approval_intent_summary(current_text_visible)
+        } else {
+            None
+        };
+
+        let plan_count = plans.len();
+        let batches = plan_tool_execution_batches(plans);
+        let parallel_chunks = batches
+            .iter()
+            .filter_map(|batch| match batch {
+                ToolExecutionBatch::Parallel(plans) if plans.len() > 1 => Some(plans.len()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !parallel_chunks.is_empty() {
+            let parallel_tool_count: usize = parallel_chunks.iter().sum();
+            let detached_start_count: usize = batches
+                .iter()
+                .filter_map(|batch| match batch {
+                    ToolExecutionBatch::Parallel(plans) if plans.len() > 1 => {
+                        Some(plans.iter().filter(|plan| plan.detached_start).count())
+                    }
+                    _ => None,
+                })
+                .sum();
+            let tool_kind = if detached_start_count > 0 {
+                "read-only/background-start tools"
+            } else {
+                "read-only tools"
+            };
+            let _ = self
+                .tx_event
+                .send(Event::status(format!(
+                    "Executing {parallel_tool_count} {tool_kind} in {} parallel chunk(s)",
+                    parallel_chunks.len(),
+                )))
+                .await;
+        } else if plan_count > 1 {
+            let _ = self
+                .tx_event
+                .send(Event::status(
+                    "Executing tools sequentially (writes, approvals, or non-parallel tools detected)",
+                ))
+                .await;
+        }
+
+        let mut outcomes: Vec<Option<ToolExecOutcome>> = Vec::with_capacity(plan_count);
+        outcomes.resize_with(plan_count, || None);
+
+        for batch in batches {
+            let (parallel_allowed, plans) = match batch {
+                ToolExecutionBatch::Parallel(plans) => (true, plans),
+                ToolExecutionBatch::Serial(plan) => (false, vec![*plan]),
+            };
+
+            // Planning can run hooks and other async gates. If policy
+            // changed after this batch was planned, never execute it with
+            // stale approval or sandbox facts. Return one typed retry to
+            // the model; the next call is planned under the new posture.
+            if self.apply_pending_runtime_authority().await {
+                *mode = self.current_mode;
+                *questions_allowed = crate::core::authority::permission_posture_allows_questions(
+                    self.session.approval_mode,
+                );
+                for plan in plans {
+                    let result = Err(ToolError::permission_denied(
+                        "Runtime permission posture changed while this tool call was being planned; retry it under the current posture."
+                            .to_string(),
+                    ));
+                    let _ = self
+                        .tx_event
+                        .send(Event::ToolCallComplete {
+                            id: plan.id.clone(),
+                            name: plan.name.clone(),
+                            result: result.clone(),
+                        })
+                        .await;
+                    outcomes[plan.index] = Some(ToolExecOutcome {
+                        index: plan.index,
+                        id: plan.id,
+                        name: plan.name,
+                        input: plan.input,
+                        started_at: Instant::now(),
+                        terminal: ToolExecutionOutcome::from_legacy(result),
+                        content_blocks: Vec::new(),
+                    });
+                }
+                continue;
+            }
+
+            // #3216 / #2211: once the turn is cancelled, do not start any
+            // further tool batches. Cancellation arrives out-of-band (the
+            // TUI cancels the shared token directly), so we can observe it
+            // here even while a long serial fan-out — e.g. six `agent`
+            // calls each resolving a model route under the global tool lock
+            // — is mid-flight. Without this check the batch loop ran to
+            // completion (~6×4s) with no way to interrupt, which read as a
+            // hard TUI freeze. We record an interrupted result for every
+            // remaining plan so each `tool_use` keeps a matching
+            // `tool_result` (well-formed transcript), then fall through to
+            // the post-loop cancellation check which ends the turn as
+            // Interrupted. This branch is a no-op on the normal path.
+            if self.cancel_token.is_cancelled() {
+                for plan in plans {
+                    let terminal = ToolExecutionOutcome::cancelled(interrupted_tool_result());
+                    let result = terminal.legacy_result();
+                    let _ = self
+                        .tx_event
+                        .send(Event::ToolCallComplete {
+                            id: plan.id.clone(),
+                            name: plan.name.clone(),
+                            result: result.clone(),
+                        })
+                        .await;
+                    outcomes[plan.index] = Some(ToolExecOutcome {
+                        index: plan.index,
+                        id: plan.id,
+                        name: plan.name,
+                        input: plan.input,
+                        started_at: Instant::now(),
+                        terminal,
+                        content_blocks: Vec::new(),
+                    });
+                }
+                continue;
+            }
+
+            let batch_tool_context = self.live_tool_context(tool_registry);
+
+            if parallel_allowed {
+                let parallel_plan_receipts: Vec<_> = plans
+                    .iter()
+                    .map(|plan| {
+                        (
+                            plan.index,
+                            plan.id.clone(),
+                            plan.name.clone(),
+                            plan.input.clone(),
+                        )
+                    })
+                    .collect();
+                let mut tool_tasks = FuturesUnordered::new();
+                let shell_permits = Arc::new(tokio::sync::Semaphore::new(MAX_PARALLEL_SHELL_EXEC));
+                for plan in plans {
+                    if let Some(result) = plan.guard_result.clone() {
+                        let result = Ok(result);
+                        let _ = self
+                            .tx_event
+                            .send(Event::ToolCallComplete {
+                                id: plan.id.clone(),
+                                name: plan.name.clone(),
+                                result: result.clone(),
+                            })
+                            .await;
+                        outcomes[plan.index] = Some(ToolExecOutcome {
+                            index: plan.index,
+                            id: plan.id,
+                            name: plan.name,
+                            input: plan.input,
+                            started_at: Instant::now(),
+                            terminal: ToolExecutionOutcome::from_legacy(result),
+                            content_blocks: Vec::new(),
+                        });
+                        continue;
+                    }
+                    if let Some(err) = plan.blocked_error.clone() {
+                        outcomes[plan.index] = Some(ToolExecOutcome {
+                            index: plan.index,
+                            id: plan.id,
+                            name: plan.name,
+                            input: plan.input,
+                            started_at: Instant::now(),
+                            terminal: ToolExecutionOutcome::from_legacy(Err(err)),
+                            content_blocks: Vec::new(),
+                        });
+                        continue;
+                    }
+                    let registry = tool_registry;
+                    let lock = tool_exec_lock.clone();
+                    let mcp_pool = mcp_pool.clone();
+                    let tx_event = self.tx_event.clone();
+                    let session_id = self.session.id.clone();
+                    let started_at = Instant::now();
+                    let shell_permits = shell_permits.clone();
+                    let workspace = self.session.workspace.clone();
+                    let context_override = batch_tool_context.clone();
+                    let cancel_token = self.cancel_token.clone();
+
+                    tool_tasks.push(async move {
+                        let _shell_permit =
+                            if matches!(plan.name.as_str(), "bash" | "Bash" | "exec_shell") {
+                                shell_permits.acquire_owned().await.ok()
+                            } else {
+                                None
+                            };
+                        let mut result = Engine::execute_tool_with_lock(
+                            lock,
+                            plan.supports_parallel || plan.detached_start,
+                            plan.interactive,
+                            tx_event.clone(),
+                            Some(cancel_token),
+                            plan.name.clone(),
+                            plan.input.clone(),
+                            workspace,
+                            registry,
+                            mcp_pool,
+                            context_override,
+                        )
+                        .await;
+
+                        // #500: spill outsized output before fanout (mirror
+                        // of the sequential path below). Emit a
+                        // `tool.spillover` audit event so operators can
+                        // correlate large-output episodes with disk usage.
+                        if let Ok(tool_result) = result.as_mut()
+                            && let Some(path) =
+                                crate::tools::truncate::apply_spillover_with_artifact(
+                                    &mut tool_result.result,
+                                    &plan.id,
+                                    &plan.name,
+                                    &session_id,
+                                )
+                        {
+                            emit_tool_audit(json!({
+                                "event": "tool.spillover",
+                                "tool_id": plan.id.clone(),
+                                "tool_name": plan.name.clone(),
+                                "path": path.display().to_string(),
+                            }));
+                        }
+
+                        let content_blocks = result
+                            .as_ref()
+                            .map(|result| result.content_blocks.clone())
+                            .unwrap_or_default();
+                        let legacy_result = result.map(RichToolResult::into_result);
+                        let _ = tx_event
+                            .send(Event::ToolCallComplete {
+                                id: plan.id.clone(),
+                                name: plan.name.clone(),
+                                result: legacy_result.clone(),
+                            })
+                            .await;
+
+                        ToolExecOutcome {
+                            index: plan.index,
+                            id: plan.id,
+                            name: plan.name,
+                            input: plan.input,
+                            started_at,
+                            terminal: ToolExecutionOutcome::from_legacy(legacy_result),
+                            content_blocks,
+                        }
+                    });
+                }
+
+                let mut parallel_cancelled = false;
+                loop {
+                    tokio::select! {
+                        biased;
+                        () = self.cancel_token.cancelled() => {
+                            parallel_cancelled = true;
+                            break;
+                        }
+                        outcome = tool_tasks.next() => {
+                            let Some(outcome) = outcome else { break; };
+                            let index = outcome.index;
+                            outcomes[index] = Some(outcome);
+                        }
+                    }
+                }
+                // Dropping FuturesUnordered drops every still-active tool
+                // future (including MCP transport calls) instead of merely
+                // waiting for cooperative cancellation inside each tool.
+                drop(tool_tasks);
+                if parallel_cancelled {
+                    for (index, id, name, input) in parallel_plan_receipts {
+                        if outcomes[index].is_some() {
+                            continue;
+                        }
+                        let terminal = ToolExecutionOutcome::cancelled(interrupted_tool_result());
+                        let result = terminal.legacy_result();
+                        let _ = self
+                            .tx_event
+                            .send(Event::ToolCallComplete {
+                                id: id.clone(),
+                                name: name.clone(),
+                                result: result.clone(),
+                            })
+                            .await;
+                        outcomes[index] = Some(ToolExecOutcome {
+                            index,
+                            id,
+                            name,
+                            input,
+                            started_at: Instant::now(),
+                            terminal,
+                            content_blocks: Vec::new(),
+                        });
+                    }
+                }
+            } else {
+                for plan in plans {
+                    let tool_id = plan.id.clone();
+                    let tool_name = plan.name.clone();
+                    let tool_input = plan.input.clone();
+                    let tool_caller = plan.caller.clone();
+
+                    if let Some(result) = plan.guard_result.clone() {
+                        let result = Ok(result);
+                        let _ = self
+                            .tx_event
+                            .send(Event::ToolCallComplete {
+                                id: tool_id.clone(),
+                                name: tool_name.clone(),
+                                result: result.clone(),
+                            })
+                            .await;
+                        outcomes[plan.index] = Some(ToolExecOutcome {
+                            index: plan.index,
+                            id: tool_id,
+                            name: tool_name,
+                            input: tool_input,
+                            started_at: Instant::now(),
+                            terminal: ToolExecutionOutcome::from_legacy(result),
+                            content_blocks: Vec::new(),
+                        });
+                        continue;
+                    }
+
+                    if let Some(err) = plan.blocked_error.clone() {
+                        let result = Err(err);
+                        let _ = self
+                            .tx_event
+                            .send(Event::ToolCallComplete {
+                                id: tool_id.clone(),
+                                name: tool_name.clone(),
+                                result: result.clone(),
+                            })
+                            .await;
+                        outcomes[plan.index] = Some(ToolExecOutcome {
+                            index: plan.index,
+                            id: tool_id,
+                            name: tool_name,
+                            input: tool_input,
+                            started_at: Instant::now(),
+                            terminal: ToolExecutionOutcome::from_legacy(result),
+                            content_blocks: Vec::new(),
+                        });
+                        continue;
+                    }
+
+                    if tool_name == MULTI_TOOL_PARALLEL_NAME {
+                        let started_at = Instant::now();
+                        let cancel_token = self.cancel_token.clone();
+                        let (terminal, content_blocks) = tokio::select! {
+                            biased;
+                            () = cancel_token.cancelled() => {
+                                (
+                                    ToolExecutionOutcome::cancelled(interrupted_tool_result()),
+                                    Vec::new(),
+                                )
+                            },
+                            result = self.execute_parallel_tool(
+                                tool_input.clone(),
+                                tool_registry,
+                                tool_exec_lock.clone(),
+                                batch_tool_context.clone(),
+                            ) => match result {
+                                Ok(rich) => (
+                                    ToolExecutionOutcome::from_legacy(Ok(rich.result)),
+                                    rich.content_blocks,
+                                ),
+                                Err(err) => (
+                                    ToolExecutionOutcome::from_legacy(Err(err)),
+                                    Vec::new(),
+                                ),
+                            },
+                        };
+                        let result = terminal.legacy_result();
+
+                        let _ = self
+                            .tx_event
+                            .send(Event::ToolCallComplete {
+                                id: tool_id.clone(),
+                                name: tool_name.clone(),
+                                result: result.clone(),
+                            })
+                            .await;
+
+                        outcomes[plan.index] = Some(ToolExecOutcome {
+                            index: plan.index,
+                            id: tool_id,
+                            name: tool_name,
+                            input: tool_input,
+                            started_at,
+                            terminal,
+                            content_blocks,
+                        });
+                        continue;
+                    }
+
+                    if is_tool_search_tool(&tool_name) {
+                        let started_at = Instant::now();
+                        let result = super::tool_catalog::execute_tool_search_with_cache(
+                            &tool_name,
+                            &tool_input,
+                            tool_catalog,
+                            active_tool_names,
+                            &mut self.session.tool_activation_cache,
+                        );
+
+                        let _ = self
+                            .tx_event
+                            .send(Event::ToolCallComplete {
+                                id: tool_id.clone(),
+                                name: tool_name.clone(),
+                                result: result.clone(),
+                            })
+                            .await;
+
+                        outcomes[plan.index] = Some(ToolExecOutcome {
+                            index: plan.index,
+                            id: tool_id,
+                            name: tool_name,
+                            input: tool_input,
+                            started_at,
+                            terminal: ToolExecutionOutcome::from_legacy(result),
+                            content_blocks: Vec::new(),
+                        });
+                        continue;
+                    }
+
+                    if tool_name == REQUEST_USER_INPUT_NAME {
+                        let started_at = Instant::now();
+                        let result = if *questions_allowed {
+                            match UserInputRequest::from_value(&tool_input) {
+                                Ok(request) => self
+                                    .await_user_input(&tool_id, request)
+                                    .await
+                                    .and_then(|response| {
+                                        ToolResult::json(&response)
+                                            .map_err(|e| ToolError::execution_failed(e.to_string()))
+                                    }),
+                                Err(err) => Err(err),
+                            }
+                        } else {
+                            Ok(ToolResult::success(
+                                "Auto-Review does not pause for user questions. Decide from the available context and continue autonomously.",
+                            )
+                            .with_metadata(json!({
+                                "auto_resolved": true,
+                                "permission_posture": "auto-review",
+                            })))
+                        };
+
+                        let _ = self
+                            .tx_event
+                            .send(Event::ToolCallComplete {
+                                id: tool_id.clone(),
+                                name: tool_name.clone(),
+                                result: result.clone(),
+                            })
+                            .await;
+
+                        outcomes[plan.index] = Some(ToolExecOutcome {
+                            index: plan.index,
+                            id: tool_id,
+                            name: tool_name,
+                            input: tool_input,
+                            started_at,
+                            terminal: ToolExecutionOutcome::from_legacy(result),
+                            content_blocks: Vec::new(),
+                        });
+                        continue;
+                    }
+
+                    // Handle approval flow: returns (result_override, context_override, approval_stamp)
+                    let model_requested_policy =
+                        requested_sandbox_escalation(&tool_name, &tool_input, batch_sandbox_policy)
+                            .expect("sandbox escalation was validated while planning")
+                            .map(|(policy, _)| policy);
+                    let (result_override, context_override, approval_stamp): (
+                        Option<Result<ToolResult, ToolError>>,
+                        Option<crate::tools::ToolContext>,
+                        Option<ToolApprovalStamp>,
+                    ) = if plan.approval_required {
+                        emit_tool_audit(json!({
+                            "event": "tool.approval_required",
+                            "tool_id": tool_id.clone(),
+                            "tool_name": tool_name.clone(),
+                        }));
+                        let approval_key = crate::tools::approval_cache::build_approval_key(
+                            &tool_name,
+                            &tool_input,
+                        )
+                        .0;
+                        let approval_grouping_key =
+                            crate::tools::approval_cache::build_approval_grouping_key(
+                                &tool_name,
+                                &tool_input,
+                            )
+                            .0;
+                        let approval_event = Event::ApprovalRequired {
+                            id: tool_id.clone(),
+                            tool_name: tool_name.clone(),
+                            input: tool_input.clone(),
+                            description: plan.approval_description.clone(),
+                            approval_key,
+                            approval_grouping_key,
+                            intent_summary: if plan.read_only {
+                                None
+                            } else {
+                                intent_summary.clone()
+                            },
+                            approval_force_prompt: plan.approval_force_prompt,
+                        };
+
+                        match self
+                            .request_tool_approval(&tool_id, &tool_name, approval_event)
+                            .await
+                        {
+                            Ok(ApprovalResult::Approved) => {
+                                let decision = if model_requested_policy.is_some() {
+                                    "approved_with_requested_policy"
+                                } else {
+                                    "approved"
+                                };
+                                emit_tool_audit(json!({
+                                    "event": "tool.approval_decision",
+                                    "tool_id": tool_id.clone(),
+                                    "tool_name": tool_name.clone(),
+                                    "decision": decision,
+                                    "policy": model_requested_policy.as_ref().map(|policy| format!("{policy:?}")),
+                                    "caller": caller_type_for_tool_use(tool_caller.as_ref()),
+                                }));
+                                if let Some(policy) = model_requested_policy {
+                                    let elevated_context = Some(
+                                        batch_tool_context
+                                            .clone()
+                                            .expect("registered shell tool context")
+                                            .with_elevated_sandbox_policy(policy),
+                                    );
+                                    (
+                                        None,
+                                        elevated_context,
+                                        Some(ToolApprovalStamp::ApprovedWithPolicy),
+                                    )
+                                } else {
+                                    (None, None, Some(ToolApprovalStamp::ApprovedByUser))
+                                }
+                            }
+                            Ok(ApprovalResult::Denied) => {
+                                emit_tool_audit(json!({
+                                    "event": "tool.approval_decision",
+                                    "tool_id": tool_id.clone(),
+                                    "tool_name": tool_name.clone(),
+                                    "decision": "denied",
+                                    "caller": caller_type_for_tool_use(tool_caller.as_ref()),
+                                }));
+                                (
+                                    Some(Err(ToolError::permission_denied(format!(
+                                        // #5146: name the correct next
+                                        // behavior, not a bare denial, so
+                                        // a model that emitted the call as
+                                        // its proposal knows to present
+                                        // the change and wait instead of
+                                        // retrying. Keep the `denied by
+                                        // user` marker — error taxonomy
+                                        // and retry classification match
+                                        // on it.
+                                        "Tool '{tool_name}' denied by user — the call was not approved. Do not retry the same call; present what you intended and wait for the user's approval or new instructions."
+                                    )))),
+                                    None,
+                                    None,
+                                )
+                            }
+                            Ok(ApprovalResult::RetryWithPolicy(policy)) => {
+                                emit_tool_audit(json!({
+                                    "event": "tool.approval_decision",
+                                    "tool_id": tool_id.clone(),
+                                    "tool_name": tool_name.clone(),
+                                    "decision": "retry_with_policy",
+                                    "policy": format!("{policy:?}"),
+                                    "caller": caller_type_for_tool_use(tool_caller.as_ref()),
+                                }));
+                                let elevated_context = batch_tool_context
+                                    .clone()
+                                    .map(|context| context.with_elevated_sandbox_policy(policy));
+                                (
+                                    None,
+                                    elevated_context,
+                                    Some(ToolApprovalStamp::ApprovedWithPolicy),
+                                )
+                            }
+                            Err(err) => (Some(Err(err)), None, None),
+                        }
+                    } else {
+                        (None, None, None)
+                    };
+
+                    // An approval wait can outlive a posture switch. Do
+                    // not start a tool from the stale plan; the
+                    // model can retry immediately under the newly applied
+                    // authority.
+                    let mut result_override = if self.apply_pending_runtime_authority().await {
+                        *mode = self.current_mode;
+                        *questions_allowed =
+                            crate::core::authority::permission_posture_allows_questions(
+                                self.session.approval_mode,
+                            );
+                        result_override.or_else(|| {
+                            Some(Err(ToolError::permission_denied(
+                                "Runtime permission posture changed before this tool call executed; retry it under the current posture."
+                                    .to_string(),
+                            )))
+                        })
+                    } else {
+                        result_override
+                    };
+
+                    // Per-tool snapshot for surgical undo (#384): capture workspace
+                    // state before file-modifying tools execute so `/undo` can
+                    // revert the most recent write_file/edit_file/apply_patch.
+                    // See `should_pre_tool_snapshot` for the gating rationale (#3292).
+                    if should_pre_tool_snapshot(
+                        self.config.snapshots_enabled,
+                        result_override.is_some(),
+                        tool_name.as_str(),
+                        &tool_input,
+                    ) {
+                        let ws = self.session.workspace.clone();
+                        let tid = tool_id.clone();
+                        let cap = self.config.snapshots_max_workspace_bytes;
+                        let sid = self.session.id.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            crate::core::turn::pre_tool_snapshot(&ws, &tid, cap, Some(&sid))
+                        })
+                        .await;
+                    }
+
+                    if self.apply_pending_runtime_authority().await {
+                        *mode = self.current_mode;
+                        *questions_allowed =
+                            crate::core::authority::permission_posture_allows_questions(
+                                self.session.approval_mode,
+                            );
+                        result_override.get_or_insert_with(|| {
+                            Err(ToolError::permission_denied(
+                                "Runtime permission posture changed before this tool call executed; retry it under the current posture."
+                                    .to_string(),
+                            ))
+                        });
+                    }
+
+                    let started_at = Instant::now();
+                    let (mut result, cancelled_before_completion) =
+                        if let Some(result_override) = result_override {
+                            (result_override.map(RichToolResult::plain), false)
+                        } else {
+                            tokio::select! {
+                                biased;
+                                () = self.cancel_token.cancelled() => {
+                                    (Ok(RichToolResult::plain(interrupted_tool_result())), true)
+                                },
+                                result = Self::execute_tool_with_lock(
+                                    tool_exec_lock.clone(),
+                                    plan.supports_parallel,
+                                    plan.interactive,
+                                    self.tx_event.clone(),
+                                    Some(self.cancel_token.clone()),
+                                    tool_name.clone(),
+                                    tool_input.clone(),
+                                    self.session.workspace.clone(),
+                                    tool_registry,
+                                    mcp_pool.clone(),
+                                    context_override.or_else(|| batch_tool_context.clone()),
+                                ) => (result, false),
+                            }
+                        };
+
+                    if let Some(approval_stamp) = approval_stamp
+                        && let Ok(tool_result) = result.as_mut()
+                    {
+                        stamp_tool_result_approval(&mut tool_result.result, approval_stamp);
+                    }
+
+                    // #500: spill outsized tool outputs to disk before the
+                    // result fans out to the model context and the UI cell.
+                    // Both consumers see the same artifact reference block +
+                    // metadata pointing at the session-owned full file.
+                    // Emit a discrete `tool.spillover` audit event so
+                    // operators can correlate large-output episodes with
+                    // disk-usage growth in `~/.deepseek/tool_outputs/`.
+                    if let Ok(tool_result) = result.as_mut()
+                        && let Some(path) = crate::tools::truncate::apply_spillover_with_artifact(
+                            &mut tool_result.result,
+                            &tool_id,
+                            &tool_name,
+                            &self.session.id,
+                        )
+                    {
+                        emit_tool_audit(json!({
+                            "event": "tool.spillover",
+                            "tool_id": tool_id.clone(),
+                            "tool_name": tool_name.clone(),
+                            "path": path.display().to_string(),
+                        }));
+                    }
+
+                    let content_blocks = result
+                        .as_ref()
+                        .map(|result| result.content_blocks.clone())
+                        .unwrap_or_default();
+                    let legacy_result = result.map(RichToolResult::into_result);
+                    let _ = self
+                        .tx_event
+                        .send(Event::ToolCallComplete {
+                            id: tool_id.clone(),
+                            name: tool_name.clone(),
+                            result: legacy_result.clone(),
+                        })
+                        .await;
+
+                    let terminal = if cancelled_before_completion {
+                        ToolExecutionOutcome::cancelled(
+                            legacy_result.expect("cancelled tool result is always model-visible"),
+                        )
+                    } else {
+                        ToolExecutionOutcome::from_legacy(legacy_result)
+                    };
+                    outcomes[plan.index] = Some(ToolExecOutcome {
+                        index: plan.index,
+                        id: tool_id,
+                        name: tool_name,
+                        input: tool_input,
+                        started_at,
+                        terminal,
+                        content_blocks,
+                    });
+                }
+            }
+        }
+        outcomes
+    }
+
+    /// Commit collected tool outcomes to the session and related runtime state.
+    ///
+    /// This phase activates result dependencies, refreshes a changed MCP catalog,
+    /// updates the working set, runs post-edit LSP diagnostics, appends success or
+    /// error tool-result messages, and refreshes goal state. Its output is these
+    /// side effects; it never plans or executes another tool call.
+    async fn process_tool_results(
+        &mut self,
+        outcomes: Vec<Option<ToolExecOutcome>>,
+        tool_catalog: &mut Vec<crate::models::Tool>,
+        active_tool_names: &mut std::collections::HashSet<String>,
+        hook_contexts: &std::collections::HashMap<String, String>,
+    ) {
+        // #dogfood 0.8.67: if the model mutates the goal mid-turn via
+        // create_goal/update_goal, push the change to the sidebar right after
+        // this tool batch instead of waiting for turn end — otherwise the
+        // sidebar "Goal:" line stays stale for the whole (possibly long)
+        // goal-loop turn while get_goal already reflects the new objective.
+        let mut goal_tool_ran = false;
+
+        for outcome in outcomes.into_iter().flatten() {
+            let tool_input = outcome.input.clone();
+            let tool_name_for_ws = outcome.name.clone();
+            let terminal_status = outcome.terminal.status;
+            let result = outcome.terminal.into_legacy_result();
+            if matches!(outcome.name.as_str(), "create_goal" | "update_goal") {
+                goal_tool_ran = true;
+            }
+            match result {
+                Ok(output) => {
+                    super::tool_catalog::activate_result_dependencies(
+                        tool_catalog,
+                        active_tool_names,
+                        &mut self.session.tool_activation_cache,
+                        &output,
+                    );
+                    if output.success {
+                        super::tool_catalog::touch_cached_tool_after_execution(
+                            tool_catalog,
+                            active_tool_names,
+                            &mut self.session.tool_activation_cache,
+                            &outcome.name,
+                        );
+                    }
+                    // A runtime MCP connection changes the callable tool
+                    // surface. Merge the complete schemas into this turn's
+                    // catalog before the next model request; waiting for the
+                    // next user turn leaves the model with names it cannot
+                    // legally call through the provider API.
+                    let mcp_catalog_changed = output
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("mcp_catalog_changed"))
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
+                    if output.success
+                        && mcp_catalog_changed
+                        && let Some(pool) = self.mcp_pool.as_ref().cloned()
+                    {
+                        let refreshed = pool.lock().await.to_api_tools();
+                        merge_new_runtime_mcp_tools(tool_catalog, active_tool_names, refreshed);
+                    }
+                    emit_tool_audit(json!({
+                        "event": "tool.result",
+                        "tool_id": outcome.id.clone(),
+                        "tool_name": outcome.name.clone(),
+                        "status": terminal_status.as_str(),
+                        "success": output.success,
+                    }));
+                    let output_for_context = compact_tool_result_for_route(
+                        self.api_provider,
+                        &self.session.model,
+                        self.active_route_limits,
+                        &outcome.name,
+                        &output,
+                    );
+                    let tool_was_executed = output
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("executed"))
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(true);
+                    if tool_was_executed {
+                        self.session.working_set.observe_tool_call(
+                            &tool_name_for_ws,
+                            &tool_input,
+                            Some(&output_for_context),
+                            &self.session.workspace,
+                        );
+                    }
+
+                    // #136: post-edit LSP diagnostics hook. We only run
+                    // this on success — failed edits leave the file
+                    // untouched, so polling for diagnostics would just
+                    // surface stale state.
+                    if output.success && tool_was_executed {
+                        self.run_post_edit_lsp_hook(&outcome.name, &tool_input)
+                            .await;
+                    }
+
+                    // #3026: pipe `additionalContext` from tool_call_before
+                    // hooks back to the model alongside the tool result.
+                    // Sanitized per field at the parser and bounded in
+                    // aggregate by the fold, so what lands here is already
+                    // capped — the number of tokens this adds to the turn
+                    // is knowable rather than whatever the hook printed.
+                    let output_for_context = match hook_contexts.get(&outcome.id) {
+                        Some(context) => {
+                            format!("{output_for_context}\n\n[hook context] {context}")
+                        }
+                        None => output_for_context,
+                    };
+
+                    let content_blocks = outcome.content_blocks;
+                    let content_blocks = content_blocks
+                        .iter()
+                        .filter_map(|block| serde_json::to_value(block).ok())
+                        .collect::<Vec<_>>();
+                    self.add_session_message(Message {
+                        role: Role::User,
+                        content: vec![ContentBlock::ToolResult {
+                            tool_use_id: outcome.id,
+                            content: output_for_context,
+                            is_error: None,
+                            content_blocks: (!content_blocks.is_empty()).then_some(content_blocks),
+                        }],
+                    })
+                    .await;
+                }
+                Err(e) => {
+                    let envelope: ErrorEnvelope = e.clone().into();
+                    emit_tool_audit(json!({
+                        "event": "tool.result",
+                        "tool_id": outcome.id.clone(),
+                        "tool_name": outcome.name.clone(),
+                        "status": terminal_status.as_str(),
+                        "success": false,
+                        "error": e.to_string(),
+                        "category": envelope.category.to_string(),
+                        "severity": envelope.severity.to_string(),
+                    }));
+                    let input_schema = tool_catalog
+                        .iter()
+                        .find(|tool| tool.name == outcome.name)
+                        .map(|tool| &tool.input_schema);
+                    let error = format_tool_error_with_schema(&e, &outcome.name, input_schema);
+                    self.session.working_set.observe_tool_call(
+                        &tool_name_for_ws,
+                        &tool_input,
+                        Some(&error),
+                        &self.session.workspace,
+                    );
+                    self.add_session_message(Message {
+                        role: Role::User,
+                        content: vec![ContentBlock::ToolResult {
+                            tool_use_id: outcome.id,
+                            content: format!("Error: {error}"),
+                            is_error: Some(true),
+                            content_blocks: None,
+                        }],
+                    })
+                    .await;
+                }
+            }
+        }
+
+        // Reflect a mid-turn goal change on the sidebar immediately (idempotent:
+        // emit_goal_updated only sends when an objective is set, and the UI
+        // applies it behind a `changed` guard).
+        if goal_tool_ran {
+            self.emit_goal_updated().await;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3747,11 +3859,12 @@ impl Engine {
                 Ok(e) => {
                     last_progress_mono = Instant::now();
                     last_progress_wall = std::time::SystemTime::now();
-                    // Flip on the first non-MessageStart event — that's
-                    // the moment we cross from "stream not yet productive"
-                    // (eligible for transparent retry) into "DeepSeek has
-                    // billed us / user has seen output" (must surface).
-                    if !any_content_received && !matches!(e, StreamEvent::MessageStart { .. }) {
+                    // Only content-bearing events make a stream productive.
+                    // Ping, usage/terminal deltas, block stops, and MessageStop
+                    // are protocol bookkeeping; counting them as content hid
+                    // empty/truncated provider responses from retry policy and
+                    // produced false time-to-first-token measurements.
+                    if !any_content_received && stream_event_has_actionable_content(&e) {
                         any_content_received = true;
                         first_token_at.get_or_insert_with(Instant::now);
                     }
@@ -4998,18 +5111,18 @@ fn resolve_tool_definition<'a>(
     tool_def
 }
 
-/// Issue #1727: decide whether to surface a "thinking-only, no output" status.
+/// Decide whether a no-sendable-content provider step must fail the turn.
 ///
 /// Reached when the assistant turn had no sendable content (no Text, no
-/// ToolUse — only a reasoning/thinking block). We notify the user *only* when
+/// ToolUse — either reasoning-only or completely empty). We fail *only* when
 /// the turn is genuinely finishing: no tool uses to dispatch, no `turn_error`
 /// already surfaced for this turn, the request wasn't cancelled, AND the turn
 /// is not about to CONTINUE — there are no pending steers and we are not
-/// holding the turn open for running sub-agents. The status must fire at the
+/// holding the turn open for running sub-agents. The failure must fire at the
 /// point the turn truly ends; emitting it earlier (at the persist site) would
-/// show a spurious "turn ended" notice immediately before the turn resumed
-/// for a steer or a sub-agent completion.
-fn should_emit_thinking_only_status(
+/// show a spurious terminal error immediately before the turn resumed for a
+/// steer or a sub-agent completion.
+fn should_fail_no_sendable_content(
     tool_uses_empty: bool,
     turn_error_is_none: bool,
     cancelled: bool,
@@ -5017,6 +5130,31 @@ fn should_emit_thinking_only_status(
     holding_for_subagents: bool,
 ) -> bool {
     tool_uses_empty && turn_error_is_none && !cancelled && !steers_pending && !holding_for_subagents
+}
+
+/// Whether a provider stream event carries answer/tool/reasoning content.
+/// Protocol-only frames must not suppress empty-stream recovery or mint TTFT.
+fn stream_event_has_actionable_content(event: &StreamEvent) -> bool {
+    match event {
+        StreamEvent::ContentBlockStart { content_block, .. } => match content_block {
+            ContentBlockStart::Text { text } => !text.is_empty(),
+            ContentBlockStart::Thinking { thinking } => !thinking.is_empty(),
+            ContentBlockStart::ToolUse { .. } | ContentBlockStart::ServerToolUse { .. } => true,
+        },
+        StreamEvent::ContentBlockDelta { delta, .. } => match delta {
+            Delta::TextDelta { text } => !text.is_empty(),
+            Delta::ThinkingDelta { thinking } => !thinking.is_empty(),
+            Delta::InputJsonDelta { partial_json } => !partial_json.is_empty(),
+            Delta::SignatureDelta { signature } => !signature.is_empty(),
+            Delta::ReasoningStateDelta { .. } => true,
+        },
+        StreamEvent::MessageStart { .. }
+        | StreamEvent::ContentBlockStop { .. }
+        | StreamEvent::MessageDelta { .. }
+        | StreamEvent::MessageStop
+        | StreamEvent::Ping
+        | StreamEvent::Error { .. } => false,
+    }
 }
 
 /// Sentinel reasoning-effort value meaning "let the auto-reasoning system
@@ -5387,7 +5525,7 @@ mod tests {
     ///
     /// This pins the decision: a clean turn end (no tool uses to dispatch, no
     /// `turn_error`, not cancelled, no pending steers, not holding for
-    /// sub-agents) must surface a status. We must NOT spam the status when the
+    /// sub-agents) must fail visibly. We must NOT double-report when the
     /// turn is ending for another reason (error already shown, cancelled),
     /// when there are tool uses still to dispatch, or — critically (the
     /// MEDIUM review finding) — when the turn is about to CONTINUE because a
@@ -5402,42 +5540,62 @@ mod tests {
     /// live steer/sub-agent signals) is reviewed by inspection — consistent
     /// with how the other turn-loop helpers in this module are tested.
     #[test]
-    fn thinking_only_turn_emits_status_only_on_clean_end() {
+    fn no_sendable_content_fails_only_on_clean_end() {
         // Thinking-only response, turn genuinely ending (no tool uses, no
         // error, not cancelled, no steers pending, not holding for
-        // sub-agents) → surface a status so the user isn't left staring at a
-        // hung spinner.
-        assert!(should_emit_thinking_only_status(
+        // sub-agents) → fail visibly so the user is not left with a false
+        // successful completion.
+        assert!(should_fail_no_sendable_content(
             true, true, false, false, false
         ));
 
         // Tool uses still pending → the normal dispatch path handles it; no
-        // thinking-only status.
-        assert!(!should_emit_thinking_only_status(
+        // no-sendable-content failure.
+        assert!(!should_fail_no_sendable_content(
             false, true, false, false, false
         ));
 
         // A turn_error was already surfaced → don't double-report.
-        assert!(!should_emit_thinking_only_status(
+        assert!(!should_fail_no_sendable_content(
             true, false, false, false, false
         ));
 
         // Request was cancelled → cancellation status already covers it.
-        assert!(!should_emit_thinking_only_status(
+        assert!(!should_fail_no_sendable_content(
             true, true, true, false, false
         ));
 
         // A steer is pending → the turn will resume with the steer; emitting
         // "turn ended" now would be a spurious notice right before the turn
         // continues (the MEDIUM correctness finding).
-        assert!(!should_emit_thinking_only_status(
+        assert!(!should_fail_no_sendable_content(
             true, true, false, true, false
         ));
 
         // Sub-agents are still running / completions queued → the turn is
         // held open and will resume; do not claim it ended.
-        assert!(!should_emit_thinking_only_status(
+        assert!(!should_fail_no_sendable_content(
             true, true, false, false, true
+        ));
+    }
+
+    #[test]
+    fn protocol_only_stream_events_do_not_count_as_content_or_ttft() {
+        use crate::llm_client::mock::canned;
+
+        assert!(!stream_event_has_actionable_content(
+            &canned::message_start("protocol-only")
+        ));
+        assert!(!stream_event_has_actionable_content(
+            &canned::message_delta("stop", None)
+        ));
+        assert!(!stream_event_has_actionable_content(&canned::message_stop()));
+        assert!(!stream_event_has_actionable_content(&StreamEvent::Ping));
+        assert!(stream_event_has_actionable_content(&canned::text_delta(
+            0, "answer"
+        )));
+        assert!(stream_event_has_actionable_content(
+            &canned::tool_use_block_start(0, "call-1", "read_file")
         ));
     }
 
@@ -5503,7 +5661,7 @@ mod tests {
     #[test]
     fn resolve_auto_effort_ignores_stored_turn_metadata() {
         let messages = vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![
                 ContentBlock::Text {
                     text: "<turn_meta>\nRecent errors: src/failing.rs\n</turn_meta>".to_string(),
@@ -5532,7 +5690,7 @@ mod tests {
     #[test]
     fn resolve_auto_effort_selects_a_concrete_kimi_code_tier() {
         let messages = vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "inspect this repository and fix the failing tests".to_string(),
                 cache_control: None,

@@ -25,7 +25,23 @@ function sha256(contents: Buffer): string {
   return createHash("sha256").update(contents).digest("hex");
 }
 
-function installFixture(withLegacyTui: boolean) {
+function installFixture(
+  withLegacyTui: boolean,
+  options: {
+    os?: "Darwin" | "Linux";
+    arch?: "x86_64" | "aarch64";
+    version?: string;
+    glibc?: string;
+    expectedStatus?: number;
+  } = {},
+) {
+  const {
+    os = "Darwin",
+    arch = "x86_64",
+    version,
+    glibc = "2.39",
+    expectedStatus = 0,
+  } = options;
   const root = mkdtempSync(path.join(tmpdir(), "codewhale-web-installer-"));
   fixtureRoots.push(root);
   const releaseDir = path.join(root, "release");
@@ -36,7 +52,8 @@ function installFixture(withLegacyTui: boolean) {
   mkdirSync(fakeBin, { recursive: true });
 
   const runtime = executable("codewhale 0.9.5 (fixture)");
-  const assets = ["codewhale-macos-x64", "codew-macos-x64"];
+  const target = `${os === "Darwin" ? "macos" : "linux"}-${arch === "aarch64" ? "arm64" : "x64"}`;
+  const assets = [`codewhale-${target}`, `codew-${target}`];
   for (const asset of assets) {
     writeFileSync(path.join(releaseDir, asset), runtime);
   }
@@ -48,9 +65,9 @@ function installFixture(withLegacyTui: boolean) {
   const fakeUname = [
     "#!/bin/sh",
     'case "${1:-}" in',
-    "  -s) printf '%s\\n' Darwin ;;",
-    "  -m) printf '%s\\n' x86_64 ;;",
-    "  *) printf '%s\\n' Darwin ;;",
+    `  -s) printf '%s\\n' ${os} ;;`,
+    `  -m) printf '%s\\n' ${arch} ;;`,
+    `  *) printf '%s\\n' ${os} ;;`,
     "esac",
     "",
   ].join("\n");
@@ -69,9 +86,15 @@ function installFixture(withLegacyTui: boolean) {
     'cp "$FAKE_RELEASE_DIR/${url##*/}" "$out"',
     "",
   ].join("\n");
+  const fakeGetconf = [
+    "#!/bin/sh",
+    `printf '%s\\n' 'glibc ${glibc}'`,
+    "",
+  ].join("\n");
   for (const [name, contents] of [
     ["uname", fakeUname],
     ["curl", fakeCurl],
+    ["getconf", fakeGetconf],
   ]) {
     const destination = path.join(fakeBin, name);
     writeFileSync(destination, contents);
@@ -90,12 +113,13 @@ function installFixture(withLegacyTui: boolean) {
       ...process.env,
       CODEWHALE_INSTALL_DIR: installDir,
       CODEWHALE_RELEASE_BASE_URL: "https://fixtures.invalid/download",
+      ...(version ? { CODEWHALE_VERSION: version } : {}),
       FAKE_RELEASE_DIR: releaseDir,
       HOME: path.join(root, "home"),
       PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
     },
   });
-  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(expectedStatus);
 
   return { installDir, legacyPath, result, runtime };
 }
@@ -125,5 +149,37 @@ describe.skipIf(process.platform === "win32")("public installer compatibility co
     expect(readFileSync(path.join(installDir, "codew"))).toEqual(runtime);
     expect(existsSync(legacyPath)).toBe(false);
     expect(result.stdout).not.toContain("Refreshed legacy compatibility command:");
+  });
+
+  it.each([undefined, "v0.9.6", "v0.9.11"])(
+    "does not apply a glibc floor to static Linux arm64 version %s",
+    (version) => {
+      const { installDir } = installFixture(false, {
+        os: "Linux",
+        arch: "aarch64",
+        version,
+        glibc: "2.17",
+      });
+
+      expect(existsSync(path.join(installDir, "codewhale"))).toBe(true);
+      expect(existsSync(path.join(installDir, "codew"))).toBe(true);
+    },
+  );
+
+  it("keeps the truthful glibc preflight for an explicitly requested older Linux arm64 release", () => {
+    const { result } = installFixture(false, {
+      os: "Linux",
+      arch: "aarch64",
+      version: "v0.9.5",
+      glibc: "2.35",
+      expectedStatus: 1,
+    });
+
+    expect(result.stderr).toContain(
+      "Codewhale v0.9.5 linux-arm64 assets require glibc 2.39 or newer",
+    );
+    expect(result.stderr).toContain(
+      "Current v0.9.6+ assets are static musl builds",
+    );
   });
 });

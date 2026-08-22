@@ -8,7 +8,7 @@ use tempfile::TempDir;
 
 use crate::commands::{self, CommandResult};
 use crate::config::Config;
-use crate::models::{ContentBlock, Message};
+use crate::models::{ContentBlock, Message, Role};
 use crate::session_manager::{SavedSession, SessionManager, create_saved_session_with_id_and_mode};
 use crate::test_support::{EnvVarGuard, lock_test_env};
 use crate::tui::app::{App, AppAction, TuiOptions};
@@ -74,7 +74,7 @@ fn workspace_with_one_user_message(world: &mut SessionCommandWorld) {
     let tmpdir = TempDir::new().expect("session workflow TempDir");
     let mut app = create_test_app_with_tmpdir(&tmpdir);
     app.api_messages.push(Message {
-        role: "user".to_string(),
+        role: Role::User,
         content: vec![ContentBlock::Text {
             text: "Remember the whale migration".to_string(),
             cache_control: None,

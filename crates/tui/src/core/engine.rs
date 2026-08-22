@@ -82,6 +82,7 @@ use super::ops::{
 use super::session::Session;
 use super::tool_parser;
 use super::turn::{TurnContext, post_turn_snapshot, pre_turn_snapshot};
+use crate::models::Role;
 
 const ENGINE_OP_CHANNEL_CAPACITY: usize = 32;
 const GOAL_CONTINUATION_FAILURE_DETAIL_MAX_BYTES: usize = 512;
@@ -285,7 +286,9 @@ pub struct EngineConfig {
     /// and a post-hoc translation layer replaces remaining English output.
     pub translation_enabled: bool,
     pub verbosity: Option<String>,
-    /// Maximum number of assistant steps before stopping.
+    /// Maximum number of assistant steps before stopping. Ordinary interactive
+    /// hosts use [`UNBOUNDED_MODEL_STEPS`]; explicit test/embed callers may
+    /// still install a finite boundary.
     pub max_steps: u32,
     /// Maximum number of concurrently active subagents.
     pub max_subagents: usize,
@@ -438,6 +441,10 @@ pub struct EngineConfig {
     pub advisor_config: crate::tools::subagent::AdvisorConfig,
 }
 
+/// Sentinel used by ordinary interactive hosts: model work has no hidden
+/// step-budget ceiling. Progress/stationarity controls live at the tool loop.
+pub(crate) const UNBOUNDED_MODEL_STEPS: u32 = u32::MAX;
+
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
@@ -455,12 +462,10 @@ impl Default for EngineConfig {
             instructions: Vec::new(),
             project_context_pack_enabled: false,
             translation_enabled: false,
-            // High backstop rather than a working ceiling: the in-turn
-            // loop_guard that used to brake repetition is gone, so this only
-            // exists to terminate a pathological runaway turn via
-            // `at_max_steps()`. 1000 stays high enough to never gate real work
-            // while still guaranteeing the turn ends.
-            max_steps: 1000,
+            // Ordinary interactive turns have no hidden model-step budget.
+            // Callers that need a finite safety boundary set one explicitly;
+            // progress-based stationarity belongs at the tool-loop layer.
+            max_steps: UNBOUNDED_MODEL_STEPS,
             max_subagents: DEFAULT_MAX_SUBAGENTS,
             max_admitted_subagents: DEFAULT_MAX_SUBAGENTS,
             launch_concurrency: DEFAULT_MAX_SUBAGENTS,
@@ -3060,7 +3065,7 @@ impl Engine {
         let mut messages: Vec<Message> = self.session.messages.clone().into();
         if !current_text.trim().is_empty() {
             messages.push(Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: current_text.to_string(),
                     cache_control: None,
@@ -3138,7 +3143,7 @@ impl Engine {
             return;
         }
         let message = Message {
-            role: crate::models::INTERRUPTED_ASSISTANT_ROLE.to_string(),
+            role: Role::InterruptedAssistant,
             content: vec![ContentBlock::Text {
                 text: text.to_string(),
                 cache_control: None,
@@ -3237,6 +3242,9 @@ impl Engine {
             approval_mode,
             self.api_config.sandbox_mode.as_deref(),
             &self.config.workspace,
+            crate::core::authority::SandboxNetworkAccess::from_config(
+                self.api_config.sandbox_network_access,
+            ),
         );
         let mut lines = vec![
             format!("Current local date: {today}"),
@@ -3369,7 +3377,7 @@ impl Engine {
         let mut content = self.user_content_blocks(text);
         content.push(turn_metadata);
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content,
         }
     }
@@ -3446,7 +3454,7 @@ impl Engine {
         let mut content = self.user_content_blocks(text);
         content.push(turn_metadata);
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content,
         }
     }
@@ -4606,7 +4614,7 @@ impl Engine {
         let context_update = self.refresh_pinned_header_for_turn(&prompt_context);
         if let Some(update) = context_update {
             self.session.add_message(Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: update,
                     cache_control: None,
@@ -5482,6 +5490,9 @@ impl Engine {
         context.elevated_sandbox_policy = Some(authority.sandbox_policy(
             &self.session.workspace,
             self.api_config.sandbox_mode.as_deref(),
+            crate::core::authority::SandboxNetworkAccess::from_config(
+                self.api_config.sandbox_network_access,
+            ),
         ));
         context.shell_network_denied_hint = matches!(authority.mode, AppMode::Plan)
             .then(|| PLAN_SHELL_NETWORK_DENIED_HINT.to_string());
@@ -5590,6 +5601,9 @@ impl Engine {
         let policy = authority.sandbox_policy(
             &self.session.workspace,
             self.api_config.sandbox_mode.as_deref(),
+            crate::core::authority::SandboxNetworkAccess::from_config(
+                self.api_config.sandbox_network_access,
+            ),
         );
         let mut ctx = ctx.with_elevated_sandbox_policy(policy);
         if matches!(authority.mode, AppMode::Plan) {

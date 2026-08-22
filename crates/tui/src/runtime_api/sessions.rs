@@ -20,6 +20,7 @@ use crate::session_peek::{MAX_PEEK_ENTRIES, SessionPeek, build_peek};
 use crate::session_projection::{SessionQuery, SessionSortMode, SessionSummary, project_sessions};
 
 use super::{ApiError, RuntimeApiState, map_thread_err, truncate_text};
+use crate::models::Role;
 
 #[derive(Debug, Serialize)]
 pub(super) struct SessionsResponse {
@@ -525,7 +526,7 @@ pub(super) fn messages_from_thread_detail(detail: &ThreadDetail) -> Vec<Message>
         let flush_assistant = |blocks: &mut Vec<ContentBlock>, msgs: &mut Vec<Message>| {
             if !blocks.is_empty() {
                 msgs.push(Message {
-                    role: "assistant".to_string(),
+                    role: Role::Assistant,
                     content: std::mem::take(blocks),
                 });
             }
@@ -533,7 +534,7 @@ pub(super) fn messages_from_thread_detail(detail: &ThreadDetail) -> Vec<Message>
         let flush_user = |blocks: &mut Vec<ContentBlock>, msgs: &mut Vec<Message>| {
             if !blocks.is_empty() {
                 msgs.push(Message {
-                    role: "user".to_string(),
+                    role: Role::User,
                     content: std::mem::take(blocks),
                 });
             }

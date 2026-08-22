@@ -130,6 +130,7 @@ const SEED_MODEL_IDS: &[(&str, ModelProvider)] = &[
     // Huggingface / Together / Volcengine / WanjieArk / Ollama defaults) ---
     ("deepseek-v4-pro", ModelProvider::DeepSeek),
     ("deepseek-v4-flash", ModelProvider::DeepSeek),
+    ("deepseek-v4-flash-vision-exp", ModelProvider::DeepSeek),
     ("deepseek-ai/deepseek-v4-pro", ModelProvider::DeepSeek),
     ("deepseek-ai/deepseek-v4-flash", ModelProvider::DeepSeek),
     ("deepseek/deepseek-v4-pro", ModelProvider::DeepSeek),

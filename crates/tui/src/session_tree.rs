@@ -1,4 +1,4 @@
-use crate::models::{ContentBlock, Message};
+use crate::models::{ContentBlock, Message, Role};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -53,35 +53,35 @@ impl SessionEntryKind {
         match self {
             Self::Message { message } => Some(message.clone()),
             Self::User { text } => Some(Message {
-                role: "user".into(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: text.clone(),
                     cache_control: None,
                 }],
             }),
             Self::Assistant { text } => Some(Message {
-                role: "assistant".into(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::Text {
                     text: text.clone(),
                     cache_control: None,
                 }],
             }),
             Self::Compaction { summary, .. } => Some(Message {
-                role: "system".into(),
+                role: Role::System,
                 content: vec![ContentBlock::Text {
                     text: format!("[compaction summary] {summary}"),
                     cache_control: None,
                 }],
             }),
             Self::BranchSummary { summary, .. } => Some(Message {
-                role: "system".into(),
+                role: Role::System,
                 content: vec![ContentBlock::Text {
                     text: format!("[branch summary] {summary}"),
                     cache_control: None,
                 }],
             }),
             Self::System { content } => Some(Message {
-                role: "system".into(),
+                role: Role::System,
                 content: vec![ContentBlock::Text {
                     text: content.clone(),
                     cache_control: None,
@@ -476,10 +476,10 @@ pub fn render_tree(journal: &SessionJournal) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{ContentBlock, Message};
+    use crate::models::{ContentBlock, Message, Role};
     fn msg(role: &str, text: &str) -> Message {
         Message {
-            role: role.to_string(),
+            role: Role::from(role),
             content: vec![ContentBlock::Text {
                 text: text.to_string(),
                 cache_control: None,

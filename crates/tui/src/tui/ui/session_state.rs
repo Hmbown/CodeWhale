@@ -1032,10 +1032,11 @@ pub(crate) fn derive_session_title(messages: &[Message]) -> Option<String> {
 #[cfg(test)]
 mod derived_title_tests {
     use super::*;
+    use crate::models::Role;
 
     fn user(text: &str) -> Message {
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: text.to_string(),
                 cache_control: None,

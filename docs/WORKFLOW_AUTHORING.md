@@ -114,26 +114,29 @@ Workflow source, show the plan for the current permission mode, and then let
 the runtime compile and monitor it.
 
 Workflow owns the plan: phases, branches, loops, reducers, and intermediate
-results. Fleet owns the durable sub-agent configuration: slots, profiles,
-models, tool posture, launch concurrency, leases, heartbeats, logs, receipts,
-and resume/stop/restart controls. In other words, a workflow can choose and
-monitor Fleet slots, but it must not become a second executor with its own shell
-or filesystem authority.
+results. Fleet owns the durable roster, member identity, semantic role, and
+saved provider/model pins or inheritance. Runtime owns tool posture, launch
+concurrency, leases, heartbeats, logs, receipts, and resume/stop/restart
+controls. In other words, a workflow can select Fleet members and monitor their
+Runtime runs, but it must not become a second executor with its own shell or
+filesystem authority.
 
-Fleet launch validation applies a conservative default shape before any
-Workflow IR is lowered to workers:
+Workflow-to-Runtime launch validation applies a conservative default shape
+before any Workflow IR is lowered to selected workers:
 
 - up to 1,000 total worker agents per Workflow run;
 - up to 16 live worker agents at once; larger populations queue (block) on the
-  host's per-run concurrency gate until a live slot frees, then route through
-  Fleet;
-- up to 8 recursive Fleet rings (the default user configuration is 3);
+  host's per-run concurrency gate until a live slot frees, then select through
+  Fleet and execute through Runtime;
+- Workflow IR structural nesting no deeper than 5;
+- Runtime child delegation defaults to 3 levels and has an opt-in hard ceiling
+  of 8; that execution budget is independent of Workflow IR shape;
 - loops require `max_iterations`;
 - dynamic `expand` nodes require `max_children` and a template.
 
 Those limits distinguish population from instantaneous launch concurrency. A
-valid 1,000-agent Workflow can still drain through a smaller Fleet
-worker pool. Model selection stays per slot: a DeepSeek preset can suggest
+valid 1,000-agent Workflow can still drain through a smaller Runtime worker
+pool. Model selection stays per member: a DeepSeek preset can suggest
 `deepseek-v4-pro` for the orchestrator and `deepseek-v4-flash` for nearby
 workers, but users and agents may override any slot when the task calls for it.
 

@@ -7,8 +7,9 @@
 #      crate must inherit `version.workspace = true`.
 #   2. Every crate inherits the workspace MSRV through
 #      `rust-version.workspace = true`.
-#   3. Release package manifests and their workspace lock records match the
-#      workspace `version` in the root `Cargo.toml`.
+#   3. Release package manifests, the npm wrapper's binary pin, and their
+#      workspace lock records match the workspace `version` in the root
+#      `Cargo.toml`.
 #      (`npm/deepseek-tui/` still exists only as an unpublished compatibility
 #      notice and must stay private.)
 #   4. Internal `codewhale-*` path dependency pins match the workspace version.
@@ -63,11 +64,16 @@ if [[ -n "${missing_rust_version}" ]]; then
   fail=1
 fi
 
-# 3) Workspace ↔ npm package.json ↔ root package lock.
+# 3) Workspace ↔ npm package.json/version + binary pin ↔ root package lock.
 workspace_version="$(grep -E '^version = "' Cargo.toml | head -n1 | sed -E 's/^version = "([^"]+)".*/\1/')"
 npm_version="$(node -p "require('./npm/codewhale/package.json').version")"
+npm_binary_version="$(node -p "require('./npm/codewhale/package.json').codewhaleBinaryVersion ?? ''")"
 if [[ "${workspace_version}" != "${npm_version}" ]]; then
   echo "::error::npm/codewhale/package.json version (${npm_version}) does not match workspace Cargo.toml (${workspace_version})." >&2
+  fail=1
+fi
+if ! ./scripts/release/check-npm-binary-version.sh \
+  "${workspace_version}" "${npm_binary_version}"; then
   fail=1
 fi
 lock_npm_version="$(node -p "require('./package-lock.json').packages?.['npm/codewhale']?.version ?? ''")"
@@ -307,7 +313,7 @@ if ! cargo metadata --locked --format-version 1 --no-deps >/dev/null 2>&1; then
 fi
 
 if [[ "${fail}" -eq 0 ]]; then
-  echo "Version state OK: workspace=${workspace_version}, npm=${npm_version}, lockfile in sync."
+  echo "Version state OK: workspace=${workspace_version}, npm=${npm_version}, npm-binary=${npm_binary_version}, lockfile in sync."
 fi
 
 exit "${fail}"

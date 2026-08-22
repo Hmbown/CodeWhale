@@ -108,7 +108,15 @@ test("managed Fleet helpers send explicit launch metadata and reconnect cursors"
     workflow: {
       id: "review",
       kind: "parallel",
-      tasks: [{ id: "review", name: "Review", instructions: "Review.", worker: { role: "reviewer" } }],
+      tasks: [
+        {
+          id: "review",
+          name: "Review",
+          instructions: "Review.",
+          worker: { role: "reviewer" },
+          budget: { max_steps: 0 },
+        },
+      ],
     },
   };
 
@@ -116,6 +124,7 @@ test("managed Fleet helpers send explicit launch metadata and reconnect cursors"
   await client.replayFleetEvents("run-1", { after: "fev1_cursor_worker", limit: 25 });
 
   assert.deepEqual(JSON.parse(fetch.calls[0].init.body), spec);
+  assert.equal(JSON.parse(fetch.calls[0].init.body).workflow.tasks[0].budget.max_steps, 0);
   const replayUrl = new URL(fetch.calls[1].url);
   assert.equal(replayUrl.pathname, "/v1/fleet/runs/run-1/events/replay");
   assert.equal(replayUrl.searchParams.get("after"), "fev1_cursor_worker");

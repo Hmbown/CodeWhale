@@ -7,5 +7,8 @@ license.workspace = true
 repository.workspace = true
 description = "Prototype command capability and dispatch shapes for the staged TUI command extraction"
 
+[lints]
+workspace = true
+
 [dependencies]
-codewhale-core = { path = "../core", version = "0.9.10" }
+codewhale-core = { path = "../core", version = "0.9.11" }

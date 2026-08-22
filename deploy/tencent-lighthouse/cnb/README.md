@@ -8,8 +8,9 @@ The active root `.cnb.yml` does two things:
 
 - runs Feishu bridge and version-drift checks when CNB receives `main`;
 - builds Linux x64 release assets from `v*` tags, creates the CNB release, and
-  uploads `codewhale-linux-x64`, `codewhale-tui-linux-x64`, and
-  `deepseek-artifacts-sha256.txt`.
+  uploads the current `codewhale-linux-x64` and `codew-linux-x64` commands,
+  the compatibility-only `codewhale-tui-linux-x64` release filename, and
+  `codewhale-artifacts-sha256.txt`.
 
 The files in this directory are retained as deploy-button templates for Tencent
 Lighthouse. Copy only the deploy environment file after the Lighthouse instance

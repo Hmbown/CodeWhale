@@ -1151,7 +1151,9 @@ impl MockWorkflowExecutor {
                 artifacts: Vec::new(),
             };
         }
-        if self.max_leaf_steps == Some(self.leaf_steps_executed) || spec.budget.max_steps == Some(0)
+        if self
+            .max_leaf_steps
+            .is_some_and(|max| max > 0 && self.leaf_steps_executed >= max)
         {
             return MockLeafOutcome {
                 status: WorkflowRunStatus::BudgetExceeded,
@@ -3404,7 +3406,7 @@ mod tests {
     }
 
     #[test]
-    fn mock_executor_honors_zero_step_leaf_budget() {
+    fn mock_executor_treats_zero_step_budgets_as_unbounded() {
         let workflow = workflow_spec(vec![WorkflowNode::BranchSet(BranchSpec {
             id: "verify".to_string(),
             description: None,
@@ -3426,21 +3428,16 @@ mod tests {
             ],
         })]);
 
-        let mut executor = MockWorkflowExecutor::new();
+        let mut executor = MockWorkflowExecutor::new().with_max_leaf_steps(0);
         let execution = executor.run(&workflow).expect("mock workflow should run");
 
-        assert_eq!(execution.status, WorkflowRunStatus::BudgetExceeded);
-        assert_eq!(execution.leaf_results.len(), 1);
-        assert_eq!(
-            execution.leaf_results[0].status,
-            WorkflowRunStatus::BudgetExceeded
-        );
+        assert_eq!(execution.status, WorkflowRunStatus::Succeeded);
+        assert_eq!(execution.leaf_results.len(), 2);
         assert!(
-            execution.leaf_results[0]
-                .output
-                .as_deref()
-                .unwrap_or_default()
-                .contains("budget exhausted")
+            execution
+                .leaf_results
+                .iter()
+                .all(|result| result.status == WorkflowRunStatus::Succeeded)
         );
     }
 

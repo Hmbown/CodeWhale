@@ -238,7 +238,7 @@ fn turn_payload(app: &App, index: usize) -> Result<(&'static str, Value, Value),
 }
 
 fn message_payload(message: &Message, index: usize) -> Value {
-    if is_internal_role(&message.role) {
+    if is_internal_role(message.role.as_str()) {
         return json!({
             "index": index,
             "role": message.role,
@@ -1238,6 +1238,7 @@ fn caps_value(caps: &Caps) -> Value {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::models::Role;
     use crate::models::{ImageUrlContent, ToolCaller};
     use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
     use crate::tui::app::TuiOptions;
@@ -1273,14 +1274,14 @@ mod tests {
     fn seed_transcript(app: &mut App) {
         app.api_messages = vec![
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::Text {
                     text: "please run the fetch".to_string(),
                     cache_control: None,
                 }],
             },
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![
                     ContentBlock::Thinking {
                         thinking: "private chain of thought".to_string(),
@@ -1303,7 +1304,7 @@ mod tests {
                 ],
             },
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: "call-7".to_string(),
                     content: "Authorization: Bearer result-secret-token\nfetch ok".to_string(),
@@ -1367,14 +1368,14 @@ mod tests {
         let mut app = test_app(&tmpdir);
         app.api_messages = vec![
             Message {
-                role: "system".to_string(),
+                role: Role::System,
                 content: vec![ContentBlock::Text {
                     text: "must not be copied".to_string(),
                     cache_control: None,
                 }],
             },
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::ImageUrl {
                     image_url: ImageUrlContent {
                         url: "data:image/png;base64,private".to_string(),
@@ -1455,7 +1456,7 @@ mod tests {
         let mut app = test_app(&tmpdir);
         app.api_messages = vec![
             Message {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 content: vec![ContentBlock::ToolUse {
                     id: "call-unknown".to_string(),
                     name: "exec_command".to_string(),
@@ -1466,7 +1467,7 @@ mod tests {
                 }],
             },
             Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: "call-unknown".to_string(),
                     content: "no error flag was recorded".to_string(),
@@ -1811,7 +1812,7 @@ mod tests {
             format!("at {workspace}/src"): 5,
         });
         app.api_messages = vec![Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: "call-keys".to_string(),
                 name: "exec_command".to_string(),
@@ -1880,7 +1881,7 @@ mod tests {
         let tmpdir = TempDir::new().expect("tempdir");
         let mut app = test_app(&tmpdir);
         app.api_messages = vec![Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: "call-obfuscated-keys".to_string(),
                 name: "exec_command".to_string(),
@@ -1949,7 +1950,7 @@ mod tests {
         let exact = "x".repeat(MAX_KEY_BYTES);
         let same_after_flatten = format!("{exact}\n");
         app.api_messages = vec![Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: "call-reserve".to_string(),
                 name: "exec_command".to_string(),
@@ -2031,7 +2032,7 @@ mod tests {
         let mut app = test_app(&tmpdir);
         let workspace = tmpdir.path().to_string_lossy().into_owned();
         app.api_messages = vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: format!(
                     "escaped \\\"api_key\\\": \\\"sk-escapedsecret99\\\"\n\
@@ -2261,7 +2262,7 @@ mod tests {
         let mut app = test_app(&tmpdir);
         let call_id = "call=/opt/customer/private-id";
         app.api_messages = vec![Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: call_id.to_string(),
                 name: "exec_command".to_string(),
@@ -2296,7 +2297,7 @@ mod tests {
         let tmpdir = TempDir::new().expect("tempdir");
         let mut app = test_app(&tmpdir);
         app.api_messages = vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "emoji cluster test: 👨‍👩‍👧‍👦🏳️‍🌈 repeated many times over".repeat(20),
                 cache_control: None,
@@ -2365,7 +2366,7 @@ mod tests {
         let tmpdir = TempDir::new().expect("tempdir");
         let mut app = test_app(&tmpdir);
         app.api_messages = vec![Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text {
                 text: "a longer body that cannot fit".to_string(),
                 cache_control: None,
@@ -2422,7 +2423,7 @@ mod tests {
         let tmpdir = TempDir::new().expect("tempdir");
         let mut app = test_app(&tmpdir);
         app.api_messages = vec![Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: "call-deep".to_string(),
                 name: "exec_command".to_string(),
@@ -2462,7 +2463,7 @@ mod tests {
         // Two strings and two array items live below the depth cut, plus one
         // string and one array item above it.
         app.api_messages = vec![Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: "call-counts".to_string(),
                 name: "exec_command".to_string(),
@@ -2534,7 +2535,7 @@ mod tests {
         let long_a = format!("{}A", "private-key-name-".repeat(32));
         let long_b = format!("{}B", "private-key-name-".repeat(32));
         app.api_messages = vec![Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: "call-deep-keys".to_string(),
                 name: "exec_command".to_string(),

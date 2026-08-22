@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::models::Role;
 use crate::models::{ContentBlock, Message};
 
 const CRASH_REPAIR_CONTENT: &str =
@@ -159,7 +160,7 @@ fn repair_tool_call_pairs_inner(
 
         if !missing_after_message.is_empty() {
             rebuilt.push(Message {
-                role: "user".to_string(),
+                role: Role::User,
                 content: missing_after_message
                     .into_iter()
                     .map(|tool_use_id| ContentBlock::ToolResult {
@@ -175,7 +176,7 @@ fn repair_tool_call_pairs_inner(
 
     if append_visible_receipt {
         rebuilt.push(Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::Text {
                 text: receipt.visible_message(),
                 cache_control: None,
@@ -216,7 +217,7 @@ mod tests {
 
     fn tool_call(id: &str) -> Message {
         Message {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: vec![ContentBlock::ToolUse {
                 id: id.to_string(),
                 name: "read_file".to_string(),
@@ -229,7 +230,7 @@ mod tests {
 
     fn tool_result(id: &str, content: &str) -> Message {
         Message {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: id.to_string(),
                 content: content.to_string(),
@@ -241,7 +242,7 @@ mod tests {
 
     fn text(role: &str, content: &str) -> Message {
         Message {
-            role: role.to_string(),
+            role: Role::from(role),
             content: vec![ContentBlock::Text {
                 text: content.to_string(),
                 cache_control: None,

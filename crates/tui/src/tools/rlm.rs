@@ -863,6 +863,7 @@ fn _assert_var_handle_shape(_: Option<VarHandle>) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Role;
     use crate::models::{ContentBlock, Message, SystemPrompt};
     use crate::rlm::session::SessionObjectSnapshot;
     use crate::tools::handle::HandleReadTool;
@@ -881,14 +882,14 @@ mod tests {
             Some(SystemPrompt::Text("You are CodeWhale.".to_string())),
             vec![
                 Message {
-                    role: "user".to_string(),
+                    role: Role::User,
                     content: vec![ContentBlock::Text {
                         text: "Please inspect the RLM surface.".to_string(),
                         cache_control: None,
                     }],
                 },
                 Message {
-                    role: "assistant".to_string(),
+                    role: Role::Assistant,
                     content: vec![ContentBlock::Text {
                         text: "I will use symbolic session objects.".to_string(),
                         cache_control: None,
