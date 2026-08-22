@@ -130,7 +130,13 @@ impl codewhale_command_contract::metadata::RegisterCommand<CommandResult> for Fe
     }
 
     fn handler() -> codewhale_command_contract::handler::CommandHandler<CommandResult> {
-        codewhale_command_contract::handler::CommandHandler::Contextual(feat015_contextual)
+        use codewhale_command_contract::handler::{CommandCapabilities, CommandHandler};
+        CommandHandler::Contextual {
+            capabilities: CommandCapabilities::WORKSPACE
+                .union(CommandCapabilities::MODE_POLICY)
+                .union(CommandCapabilities::COST),
+            handler: feat015_contextual,
+        }
     }
 }
 
@@ -260,19 +266,21 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         } else {
             arg
         };
-        // FEAT-015 dual-path seam (D2): a migrated entry with a
-        // capability-scoped handler receives the envelope built from `app`;
-        // everything else keeps the legacy `execute(app, args)` path. No
-        // production entry is migrated in FEAT-015, so the contextual branch
-        // is only reachable by the test-only fixture (D6).
+        // FEAT-015 introduced this dual-path seam (D2); FEAT-018 is the first
+        // production slice to use it. A migrated entry receives only its
+        // declared capabilities, while every unmigrated entry keeps the
+        // legacy `execute(app, args)` path.
         if let Some(handler) = command_object.contextual_handler() {
-            let mut bundle = app.command_contexts();
             return match handler {
                 codewhale_command_contract::handler::CommandHandler::Pure(pure_fn) => {
                     pure_fn(command_arg)
                 }
-                codewhale_command_contract::handler::CommandHandler::Contextual(contextual) => {
-                    contextual(bundle.contexts(), command_arg)
+                codewhale_command_contract::handler::CommandHandler::Contextual {
+                    capabilities,
+                    handler: contextual,
+                } => {
+                    let mut bundle = app.command_contexts();
+                    contextual(bundle.contexts(capabilities), command_arg)
                 }
             };
         }
@@ -1860,10 +1868,22 @@ mod tests {
 
     #[test]
     fn feat015_all_production_entries_remain_legacy() {
-        // Every non-fixture registered command must still use the legacy
-        // concrete-App path (no production group is migrated in FEAT-015).
+        // FEAT-015 shipped no production contextual command, so the assertion
+        // below used to exclude nothing. FEAT-018 migrates the utility group;
+        // the remaining non-fixture commands must still use the legacy
+        // concrete-App path. The seven utility entries are asserted separately
+        // by the FEAT-018 public-dispatch and inventory tests (Phase 6).
+        const FEAT_018_UTILITY: &[&str] = &[
+            "attach",
+            "automation",
+            "jobs",
+            "mcp",
+            "network",
+            "task",
+            "update",
+        ];
         for info in command_infos() {
-            if info.name == "feat015ctx" {
+            if info.name == "feat015ctx" || FEAT_018_UTILITY.contains(&info.name) {
                 continue;
             }
             assert!(
@@ -1872,5 +1892,104 @@ mod tests {
                 info.name
             );
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // FEAT-018: public pure/contextual dispatch and seven-entry inventory
+    // (Task 6.2). These tests enter through the public registry/dispatch seam
+    // and prove both handler variants plus all seven utility metadata records.
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn feat018_all_seven_utility_entries_are_registered_with_portable_handlers() {
+        for name in [
+            "attach",
+            "automation",
+            "jobs",
+            "mcp",
+            "network",
+            "task",
+            "update",
+        ] {
+            let info = registry()
+                .get_info(name)
+                .unwrap_or_else(|| panic!("/{name} must be registered"));
+            assert_eq!(info.name, name, "canonical name");
+            assert!(
+                registry().has_contextual_handler(name),
+                "/{name} must carry a portable handler"
+            );
+        }
+    }
+
+    #[test]
+    fn feat018_pure_utility_command_dispatches_through_public_seam() {
+        let mut app = create_test_app();
+        // /jobs is a Pure handler: it must execute without building an
+        // envelope and return the same action as the parser.
+        let result = execute("/jobs list", &mut app);
+        assert!(!result.is_error, "{result:?}");
+        assert!(
+            matches!(
+                result.action,
+                Some(crate::tui::app::AppAction::ShellJob(
+                    crate::tui::app::ShellJobAction::List
+                ))
+            ),
+            "{result:?}"
+        );
+
+        // /update is Pure too; a bare check should reach the plan resolver and
+        // return a message (or a safe error in a test environment), never a panic.
+        let result = execute("/update", &mut app);
+        assert!(result.message.is_some() || result.is_error, "{result:?}");
+    }
+
+    #[test]
+    fn feat018_contextual_utility_commands_dispatch_through_public_seam() {
+        let mut app = create_test_app();
+
+        // /automation (contextual, presentation facet): list action.
+        let automation = execute("/automation list", &mut app);
+        assert!(
+            matches!(
+                automation.action,
+                Some(crate::tui::app::AppAction::Automation(
+                    crate::tui::app::AutomationAction::List
+                ))
+            ),
+            "{automation:?}"
+        );
+
+        // /task (contextual, workspace facet): digest without a runtime must
+        // produce the canonical no-active text.
+        let task = execute("/task digest", &mut app);
+        assert_eq!(
+            task.message.as_deref(),
+            Some("No active operations or to-do items."),
+            "{task:?}"
+        );
+
+        // /mcp (contextual, presentation facet): status maps to Show action.
+        let mcp = execute("/mcp status", &mut app);
+        assert!(
+            matches!(
+                mcp.action,
+                Some(crate::tui::app::AppAction::Mcp(
+                    crate::tui::app::McpUiAction::Show
+                ))
+            ),
+            "{mcp:?}"
+        );
+
+        // /attach (contextual, workspace + media facets): missing path is a
+        // safe error, never a panic, and the composer is untouched.
+        let attach = execute("/attach", &mut app);
+        assert!(attach.is_error, "{attach:?}");
+        assert!(app.input.is_empty(), "composer must stay unchanged");
+
+        // /network (pure): list produces a message.
+        let network = execute("/network list", &mut app);
+        assert!(network.message.is_some() || network.is_error, "{network:?}");
     }
 }

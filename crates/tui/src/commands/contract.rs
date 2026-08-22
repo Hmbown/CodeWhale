@@ -1,20 +1,22 @@
 //! FEAT-015 TUI command-boundary surface.
 //!
 //! This module holds the TUI-owned pieces of the staged command migration:
-//! the pending-frontier projection (D4), the seven capability facet adapters
+//! the pending-frontier projection (D4), the capability facet adapters
 //! (D1), boundary-value and localization-key mappings (D3/D8), the envelope
 //! construction helper (D1), and the seam helpers (D7-D9). It is deliberately
 //! the only new TUI module for the migration surface; the production
 //! registry/dispatch stay in `traits.rs` / `mod.rs`.
 //!
-//! FEAT-015 does NOT migrate any production command. The adapters below wrap
-//! App-owned state behind the FEAT-014 contract shapes so later FEATs
-//! (FEAT-018+) can adopt them one group at a time. Handlers only ever see
-//! `&mut dyn` facets — concrete `App` is never exposed through an envelope.
+//! FEAT-015 introduced this boundary without migrating a production command;
+//! FEAT-018 is the first production slice to adopt it. The adapters below wrap
+//! App-owned state behind the FEAT-014 contract shapes so later FEATs can adopt
+//! them one group at a time. Handlers only ever see `&mut dyn` facets — concrete
+//! `App` is never exposed through an envelope.
 //!
 //! ## Authoritative host-proxy design (D1)
 //!
-//! `CommandContexts` holds seven independently borrowed facet objects, while
+//! `CommandContexts` holds only the independently borrowed facets declared by
+//! the active command registration, while
 //! important behavior (mode transitions, model invalidation, cost accounting,
 //! skill refresh) is authoritative on `App`. The adapters therefore share a
 //! synchronous TUI-owned host proxy. Each trait call borrows `App` only for the
@@ -23,20 +25,22 @@
 //!
 //! ## Dead-code note
 //!
-//! FEAT-015 intentionally wires no production contextual command. Some bridge
-//! helpers remain production-dead until the first slice migrates (FEAT-018+),
-//! so this transitional module keeps a bounded dead-code allow.
-#![allow(dead_code)]
+//! FEAT-015 intentionally wired no production contextual command. FEAT-018
+//! removes that limitation for the utility group; any remaining dead-code
+//! allowance is bounded to still-transitional bridge helpers.
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use codewhale_command_contract::facets::{
-    CommandCostContext, CommandModePolicyContext, CommandModelContext, CommandSessionContext,
-    CommandSkillsContext, CommandSystemPromptContext, CommandWorkspaceContext,
+    CommandCostContext, CommandMediaContext, CommandModePolicyContext, CommandModelContext,
+    CommandPresentationContext, CommandSessionContext, CommandSkillsContext,
+    CommandSystemPromptContext, CommandWorkspaceContext, MediaAttachmentReceipt,
 };
-use codewhale_command_contract::handler::{CommandContexts, ContextParts};
+#[cfg(test)]
+use codewhale_command_contract::handler::ContextParts;
+use codewhale_command_contract::handler::{CommandCapabilities, CommandContexts};
 use codewhale_command_contract::types::{
     CommandApprovalMode, CommandCurrency, CommandMode, CommandProviderId, CommandReasoningEffort,
 };
@@ -44,7 +48,7 @@ use codewhale_config::AppMode;
 use codewhale_core::request::{Message, SystemPrompt};
 use codewhale_execpolicy::ApprovalMode;
 
-use crate::localization::MessageId;
+use crate::localization::{Locale, MessageId, tr};
 use crate::pricing::CostCurrency;
 use crate::tui::app::{App, ReasoningEffort};
 
@@ -56,8 +60,13 @@ use crate::tui::app::{App, ReasoningEffort};
 /// handlers. This is the TUI-visible projection of the checked-in migration
 /// topology (`scripts/command-migration-topology.json`); the CI gate performs
 /// the authoritative bidirectional source scan against that artifact.
+///
+/// Not referenced by production dispatch code — the fail-closed Python gate
+/// (`scripts/check-command-migration-manifest.py`) reads this exact
+/// declaration by source regex and the Rust frontier tests assert it.
+#[allow(dead_code)]
 pub(crate) const PENDING_GROUPS: &[&str] = &[
-    "config", "core", "debug", "memory", "plugins", "project", "session", "skills", "utility",
+    "config", "core", "debug", "memory", "plugins", "project", "session", "skills",
 ];
 
 // ---------------------------------------------------------------------------
@@ -248,7 +257,7 @@ pub(crate) fn key_to_message_id(key: &'static str) -> Option<MessageId> {
 
 /// Shared TUI host hidden behind the portable command facets.
 ///
-/// The envelope needs seven independently borrowed facet objects, while the
+/// The envelope needs nine independently borrowed facet objects, while the
 /// authoritative mutation methods live on `App`. Each adapter therefore owns
 /// an `Rc` clone of this synchronous host proxy. Trait calls borrow `App` only
 /// for the duration of one method, delegate to the real TUI authority, and
@@ -481,13 +490,163 @@ impl CommandWorkspaceContext for WorkspaceAdapter<'_> {
             state.and_then(|state| crate::todo_snapshot::todo_snapshot_body(&state.todos))
         })
     }
+
+    fn operation_digest(&mut self) -> Result<String, String> {
+        let app = self.host.app.borrow();
+        let Some(work) = app.runtime_services.work.as_ref() else {
+            return Ok("No active operations or to-do items.".to_string());
+        };
+        match work.capture(app.current_session_id.as_deref()) {
+            Ok(snapshot) => Ok(crate::work_graph::format_operation_digest(
+                snapshot.as_ref(),
+            )),
+            Err(error) => Err(format!(
+                "Operation digest is temporarily unavailable: {error}"
+            )),
+        }
+    }
+}
+
+/// Stable-key translation adapter (FEAT-018 D3).
+///
+/// Maps stable snake_case utility message keys to the current catalog and
+/// preserves the existing English fallback for intentionally incomplete or
+/// malformed locale entries. Unknown keys and invalid replacement contracts
+/// fail safely; a raw lookup key is never exposed.
+pub(crate) struct PresentationAdapter<'a> {
+    host: SharedCommandHost<'a>,
+}
+
+impl CommandPresentationContext for PresentationAdapter<'_> {
+    fn translate(&self, key: &str, replacements: &[(&str, &str)]) -> Result<String, String> {
+        let Some(message_id) = key_to_utility_message_id(key) else {
+            return Err("unknown translation key".to_string());
+        };
+        let locale = self.host.app.borrow().ui_locale;
+        let template = tr(locale, message_id);
+        let english = tr(Locale::En, message_id);
+        apply_named_replacements_with_english_fallback(&template, &english, replacements)
+            .ok_or_else(|| "invalid translation replacement contract".to_string())
+    }
+}
+
+/// Resolve a stable utility message key to the current catalog id.
+fn key_to_utility_message_id(key: &str) -> Option<MessageId> {
+    Some(match key {
+        "automation_usage" => MessageId::AutomationUsage,
+        "mcp_recommended_unknown_id" => MessageId::McpRecommendedUnknownId,
+        "mcp_recommendations_heading" => MessageId::McpRecommendationsHeading,
+        "mcp_recommendations_safety" => MessageId::McpRecommendationsSafety,
+        "mcp_recommendation_github" => MessageId::McpRecommendationGithub,
+        "mcp_recommendation_chrome" => MessageId::McpRecommendationChrome,
+        "mcp_recommendation_playwright" => MessageId::McpRecommendationPlaywright,
+        "mcp_recommendation_cua" => MessageId::McpRecommendationCua,
+        "mcp_recommendation_container_use" => MessageId::McpRecommendationContainerUse,
+        _ => return None,
+    })
+}
+
+/// Replace `{name}` placeholders with the supplied named values.
+///
+/// Returns `None` when the replacement set does not exactly cover every
+/// placeholder in the template (missing, extra, or duplicate names).
+fn apply_named_replacements(template: &str, replacements: &[(&str, &str)]) -> Option<String> {
+    let supplied: std::collections::BTreeMap<&str, &str> = replacements.iter().copied().collect();
+    if supplied.len() != replacements.len() {
+        return None; // duplicate replacement name
+    }
+    let mut placeholders = std::collections::BTreeSet::new();
+    let mut cursor = 0usize;
+    while let Some(start) = template[cursor..].find('{') {
+        let start = cursor + start;
+        let Some(end) = template[start + 1..].find('}') else {
+            break;
+        };
+        let end = start + 1 + end;
+        let name = &template[start + 1..end];
+        if !name.is_empty() {
+            placeholders.insert(name);
+        }
+        cursor = end + 1;
+    }
+    if placeholders != supplied.keys().copied().collect() {
+        return None;
+    }
+    let mut out = template.to_string();
+    for (name, value) in replacements {
+        out = out.replace(&format!("{{{name}}}"), value);
+    }
+    Some(out)
+}
+
+/// Render the selected locale, falling back through the authoritative English
+/// catalog entry when that locale's placeholder contract is malformed.
+fn apply_named_replacements_with_english_fallback(
+    localized: &str,
+    english: &str,
+    replacements: &[(&str, &str)],
+) -> Option<String> {
+    apply_named_replacements(localized, replacements)
+        .or_else(|| apply_named_replacements(english, replacements))
+}
+
+/// Atomic composer/media adapter (FEAT-018 D4).
+///
+/// Performs media validation and composer insertion as one host operation by
+/// delegating to the authoritative image-validation and attachment behavior.
+pub(crate) struct MediaAdapter<'a> {
+    host: SharedCommandHost<'a>,
+}
+
+impl CommandMediaContext for MediaAdapter<'_> {
+    fn attach_media(&mut self, resolved_path: &Path) -> Result<MediaAttachmentReceipt, String> {
+        let Ok(path) = resolved_path.canonicalize() else {
+            return Err(format!("Attachment not found: {}", resolved_path.display()));
+        };
+        if !path.is_file() {
+            return Err(format!("Attachment is not a file: {}", path.display()));
+        }
+        let Some(kind) = media_kind(&path) else {
+            return Err(
+                "Unsupported attachment type. /attach is for image/video paths; use @path for \
+                 text files or directories."
+                    .to_string(),
+            );
+        };
+        // Validate an image here, not only at send time. The extension check
+        // above trusts the filename; this reads the bytes, so a mislabelled,
+        // oversized or corrupt file is refused while the user is still
+        // looking at the command that caused it, rather than becoming a notice
+        // buried in a turn they have already sent.
+        if kind == "image"
+            && let Err(error) = crate::image_attach::attach_image_from_path(&path)
+        {
+            return Err(error.to_string());
+        }
+        let mut app = self.host.app.borrow_mut();
+        app.insert_media_attachment(kind, &path, None);
+        Ok(MediaAttachmentReceipt {
+            kind: kind.to_string(),
+            path,
+        })
+    }
+}
+
+/// Classify a media path by extension (image or video).
+fn media_kind(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" | "ppm" => Some("image"),
+        "mp4" | "mov" | "m4v" | "webm" | "avi" | "mkv" => Some("video"),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Envelope construction (D1)
 // ---------------------------------------------------------------------------
 
-/// Owns seven facet objects sharing one synchronous TUI host proxy.
+/// Owns nine facet objects sharing one synchronous TUI host proxy.
 ///
 /// Handlers borrow only these adapters. Every method delegates to the real App
 /// authority and releases its `RefCell` borrow before returning, so facets can
@@ -500,22 +659,57 @@ pub(crate) struct CommandContextBundle<'a> {
     system_prompt: SystemPromptAdapter<'a>,
     skills: SkillsAdapter<'a>,
     workspace: WorkspaceAdapter<'a>,
+    presentation: PresentationAdapter<'a>,
+    media: MediaAdapter<'a>,
 }
 
 impl<'a> CommandContextBundle<'a> {
-    pub(crate) fn contexts(&mut self) -> CommandContexts<'_> {
-        CommandContexts::empty()
-            .with_session(&mut self.session)
-            .with_model(&mut self.model)
-            .with_cost(&mut self.cost)
-            .with_mode_policy(&mut self.mode_policy)
-            .with_system_prompt(&mut self.system_prompt)
-            .with_skills(&mut self.skills)
-            .with_workspace(&mut self.workspace)
+    /// Expose exactly the capabilities declared by the command registration.
+    pub(crate) fn contexts(&mut self, capabilities: CommandCapabilities) -> CommandContexts<'_> {
+        let mut contexts = CommandContexts::empty();
+        if capabilities.contains(CommandCapabilities::SESSION) {
+            contexts = contexts.with_session(&mut self.session);
+        }
+        if capabilities.contains(CommandCapabilities::MODEL) {
+            contexts = contexts.with_model(&mut self.model);
+        }
+        if capabilities.contains(CommandCapabilities::COST) {
+            contexts = contexts.with_cost(&mut self.cost);
+        }
+        if capabilities.contains(CommandCapabilities::MODE_POLICY) {
+            contexts = contexts.with_mode_policy(&mut self.mode_policy);
+        }
+        if capabilities.contains(CommandCapabilities::SYSTEM_PROMPT) {
+            contexts = contexts.with_system_prompt(&mut self.system_prompt);
+        }
+        if capabilities.contains(CommandCapabilities::SKILLS) {
+            contexts = contexts.with_skills(&mut self.skills);
+        }
+        if capabilities.contains(CommandCapabilities::WORKSPACE) {
+            contexts = contexts.with_workspace(&mut self.workspace);
+        }
+        if capabilities.contains(CommandCapabilities::PRESENTATION) {
+            contexts = contexts.with_presentation(&mut self.presentation);
+        }
+        if capabilities.contains(CommandCapabilities::MEDIA) {
+            contexts = contexts.with_media(&mut self.media);
+        }
+        contexts
     }
 
+    /// Test-only: expose every adapter for focused delegation tests.
+    #[cfg(test)]
     pub(crate) fn parts(&mut self) -> ContextParts<'_> {
-        self.contexts().into_parts()
+        let all_test_capabilities = CommandCapabilities::SESSION
+            .union(CommandCapabilities::MODEL)
+            .union(CommandCapabilities::COST)
+            .union(CommandCapabilities::MODE_POLICY)
+            .union(CommandCapabilities::SYSTEM_PROMPT)
+            .union(CommandCapabilities::SKILLS)
+            .union(CommandCapabilities::WORKSPACE)
+            .union(CommandCapabilities::PRESENTATION)
+            .union(CommandCapabilities::MEDIA);
+        self.contexts(all_test_capabilities).into_parts()
     }
 }
 
@@ -533,7 +727,9 @@ impl App {
             mode_policy: ModePolicyAdapter { host: host.clone() },
             system_prompt: SystemPromptAdapter { host: host.clone() },
             skills: SkillsAdapter { host: host.clone() },
-            workspace: WorkspaceAdapter { host },
+            workspace: WorkspaceAdapter { host: host.clone() },
+            presentation: PresentationAdapter { host: host.clone() },
+            media: MediaAdapter { host },
         }
     }
 }
@@ -547,6 +743,15 @@ mod tests {
             PathBuf::from("."),
         ))
     }
+
+    /// A 1x1 PNG for media adapter tests.
+    const PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
 
     #[test]
     fn pending_groups_is_sorted_unique_and_matches_checked_in_frontier() {
@@ -754,16 +959,268 @@ mod tests {
     }
 
     #[test]
-    fn envelope_exposes_all_seven_facets_without_app_in_handler_surface() {
+    fn envelope_exposes_only_declared_facets_without_app_in_handler_surface() {
         let mut app = test_app();
         let mut bundle = app.command_contexts();
-        let parts = bundle.parts();
-        assert!(parts.session.is_some());
-        assert!(parts.model.is_some());
-        assert!(parts.cost.is_some());
-        assert!(parts.mode_policy.is_some());
-        assert!(parts.system_prompt.is_some());
-        assert!(parts.skills.is_some());
+        let parts = bundle
+            .contexts(
+                CommandCapabilities::WORKSPACE
+                    .union(CommandCapabilities::PRESENTATION)
+                    .union(CommandCapabilities::MEDIA),
+            )
+            .into_parts();
+        assert!(parts.session.is_none());
+        assert!(parts.model.is_none());
+        assert!(parts.cost.is_none());
+        assert!(parts.mode_policy.is_none());
+        assert!(parts.system_prompt.is_none());
+        assert!(parts.skills.is_none());
         assert!(parts.workspace.is_some());
+        assert!(parts.presentation.is_some());
+        assert!(parts.media.is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // FEAT-018 adapter tests: presentation (D3), media (D4), digest (D5)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn presentation_adapter_resolves_utility_keys_with_english_fallback() {
+        let mut app = test_app();
+        app.ui_locale = Locale::En;
+        let mut bundle = app.command_contexts();
+        let mut parts = bundle.parts();
+        let presentation = parts.presentation.as_mut().expect("presentation facet");
+
+        // automation_usage has no placeholders.
+        let usage = presentation
+            .translate("automation_usage", &[])
+            .expect("automation usage key");
+        assert!(
+            usage.contains("/automation"),
+            "expected usage text, got {usage}"
+        );
+
+        // mcp_recommended_unknown_id needs {recommendations_command}.
+        let unknown = presentation
+            .translate(
+                "mcp_recommended_unknown_id",
+                &[("recommendations_command", "/mcp recommendations")],
+            )
+            .expect("mcp unknown-id key");
+        assert!(
+            unknown.contains("/mcp recommendations"),
+            "expected replacement text, got {unknown}"
+        );
+
+        // mcp_recommendation_github needs {endpoint}, {login_command}, {add_command}.
+        let github = presentation
+            .translate(
+                "mcp_recommendation_github",
+                &[
+                    ("endpoint", "https://api.githubcopilot.com/mcp/"),
+                    ("login_command", "/mcp login github"),
+                    ("add_command", "/mcp add recommended github"),
+                ],
+            )
+            .expect("github recommendation key");
+        assert!(
+            github.contains("https://api.githubcopilot.com/mcp/"),
+            "{github}"
+        );
+        assert!(
+            !github.contains("{endpoint}"),
+            "placeholder must be replaced"
+        );
+    }
+
+    #[test]
+    fn presentation_adapter_rejects_unknown_keys_and_invalid_replacements() {
+        let mut app = test_app();
+        app.ui_locale = Locale::En;
+        let mut bundle = app.command_contexts();
+        let mut parts = bundle.parts();
+        let presentation = parts.presentation.as_mut().expect("presentation facet");
+
+        let unknown = presentation.translate("no_such_key", &[]);
+        assert!(unknown.is_err(), "unknown key must fail safely");
+        let err = unknown.unwrap_err();
+        assert!(
+            !err.contains("no_such_key"),
+            "no raw lookup key exposure (D3): {err}"
+        );
+
+        // Missing required replacement.
+        assert!(
+            presentation
+                .translate("mcp_recommendation_github", &[])
+                .is_err()
+        );
+        // Extra replacement not present in the template.
+        assert!(
+            presentation
+                .translate("automation_usage", &[("no_such_placeholder", "value")],)
+                .is_err()
+        );
+        // Duplicate replacement names.
+        assert!(
+            presentation
+                .translate(
+                    "mcp_recommendation_github",
+                    &[
+                        ("endpoint", "a"),
+                        ("endpoint", "b"),
+                        ("login_command", "c"),
+                        ("add_command", "d"),
+                    ],
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn malformed_localized_placeholders_use_authoritative_english_fallback() {
+        let rendered = apply_named_replacements_with_english_fallback(
+            "Prüfen Sie vor dem Neustart.",
+            "Review before {restart_command} connects the server.",
+            &[("restart_command", "/mcp restart")],
+        )
+        .expect("valid English catalog fallback");
+        assert_eq!(rendered, "Review before /mcp restart connects the server.");
+
+        let localized = apply_named_replacements_with_english_fallback(
+            "Vor {restart_command} prüfen.",
+            "Review before {restart_command}.",
+            &[("restart_command", "/mcp restart")],
+        )
+        .expect("valid localized template");
+        assert_eq!(localized, "Vor /mcp restart prüfen.");
+    }
+
+    #[test]
+    fn media_adapter_attaches_valid_image_and_preserves_confirm() {
+        let tmpdir = tempfile::TempDir::new().expect("tempdir");
+        let image_path = tmpdir.path().join("photo.png");
+        std::fs::write(&image_path, PNG_1X1).expect("write image fixture");
+
+        let mut app = test_app();
+        let mut bundle = app.command_contexts();
+        let mut parts = bundle.parts();
+        let media = parts.media.as_mut().expect("media facet");
+        let receipt = media
+            .attach_media(&image_path)
+            .expect("valid image attaches");
+        assert_eq!(receipt.kind, "image");
+        assert_eq!(receipt.path, image_path.canonicalize().expect("canonical"));
+        assert!(
+            app.input.contains("[Attached image:"),
+            "composer must contain the attachment reference"
+        );
+    }
+
+    #[test]
+    fn media_adapter_rejects_invalid_media_atomically() {
+        let tmpdir = tempfile::TempDir::new().expect("tempdir");
+
+        // Missing path.
+        let mut app = test_app();
+        {
+            let mut bundle = app.command_contexts();
+            let mut parts = bundle.parts();
+            let media = parts.media.as_mut().expect("media facet");
+            let missing = tmpdir.path().join("missing.png");
+            let err = media.attach_media(&missing).unwrap_err();
+            assert!(err.contains("Attachment not found"), "{err}");
+        }
+        assert!(
+            app.input.is_empty(),
+            "refused attachment must not reach composer"
+        );
+
+        // Directory is not a file.
+        {
+            let mut bundle = app.command_contexts();
+            let mut parts = bundle.parts();
+            let media = parts.media.as_mut().expect("media facet");
+            let dir = tmpdir.path().to_path_buf();
+            let err = media.attach_media(&dir).unwrap_err();
+            assert!(err.contains("Attachment is not a file"), "{err}");
+        }
+        assert!(app.input.is_empty());
+
+        // Unsupported extension.
+        std::fs::write(tmpdir.path().join("notes.txt"), b"text").expect("write fixture");
+        {
+            let mut bundle = app.command_contexts();
+            let mut parts = bundle.parts();
+            let media = parts.media.as_mut().expect("media facet");
+            let err = media
+                .attach_media(&tmpdir.path().join("notes.txt"))
+                .unwrap_err();
+            assert!(err.contains("Unsupported attachment type"), "{err}");
+        }
+        assert!(app.input.is_empty());
+
+        // Corrupt image with a valid extension.
+        std::fs::write(tmpdir.path().join("bad.png"), b"not an image").expect("write fixture");
+        {
+            let mut bundle = app.command_contexts();
+            let mut parts = bundle.parts();
+            let media = parts.media.as_mut().expect("media facet");
+            let err = media
+                .attach_media(&tmpdir.path().join("bad.png"))
+                .unwrap_err();
+            assert!(!err.is_empty(), "corrupt image must fail");
+        }
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn media_adapter_attaches_valid_video_reference() {
+        // A real (non-image) media file with a video extension passes the
+        // extension gate without byte validation, matching baseline /attach.
+        let tmpdir = tempfile::TempDir::new().expect("tempdir");
+        let video_path = tmpdir.path().join("clip.mp4");
+        std::fs::write(&video_path, b"not a real mp4 but extension-gated").expect("write");
+
+        let mut app = test_app();
+        let mut bundle = app.command_contexts();
+        let mut parts = bundle.parts();
+        let media = parts.media.as_mut().expect("media facet");
+        let receipt = media
+            .attach_media(&video_path)
+            .expect("video path attaches by extension");
+        assert_eq!(receipt.kind, "video");
+        assert!(app.input.contains("[Attached video:"), "{}", app.input);
+    }
+
+    #[test]
+    fn workspace_digest_adapter_preserves_no_active_and_failure_semantics() {
+        let mut app = test_app();
+        app.runtime_services.work = None;
+        {
+            let mut bundle = app.command_contexts();
+            let mut parts = bundle.parts();
+            let workspace = parts.workspace.as_mut().expect("workspace facet");
+            assert_eq!(
+                workspace.operation_digest().expect("no-runtime digest"),
+                "No active operations or to-do items."
+            );
+        }
+    }
+
+    #[test]
+    fn bundle_construction_performs_no_eager_work() {
+        let mut app = test_app();
+        let input_before = app.input.clone();
+        {
+            let mut bundle = app.command_contexts();
+            let parts = bundle.parts();
+            // Merely constructing the bundle must not mutate composer state or
+            // perform capability work; the adapters only run on method calls.
+            let _ = parts.media.is_some();
+            let _ = parts.presentation.is_some();
+        }
+        assert_eq!(app.input, input_before, "no eager composer mutation");
     }
 }

@@ -153,16 +153,12 @@ impl ModalView for StatusPickerView {
             {
                 // Quality-of-life: 'a' selects all so the user can quickly
                 // see every chip available before paring back.
-                for slot in &mut self.selected {
-                    *slot = true;
-                }
+                self.selected.fill(true);
                 ViewAction::Emit(self.live_preview_event())
             }
             KeyCode::Char('n') | KeyCode::Char('N') => {
                 // 'n' clears all so the user can build up from scratch.
-                for slot in &mut self.selected {
-                    *slot = false;
-                }
+                self.selected.fill(false);
                 ViewAction::Emit(self.live_preview_event())
             }
             _ => ViewAction::None,

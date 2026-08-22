@@ -5,7 +5,7 @@
 //! `codewhale-tui` one command group at a time. Only after every group uses
 //! these shapes will groups move physically into a commands crate.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use codewhale_core::request::{Message, SystemPrompt};
 
@@ -73,4 +73,41 @@ pub trait CommandSkillsContext {
 pub trait CommandWorkspaceContext {
     fn workspace(&self) -> PathBuf;
     fn work_state_snapshot(&self) -> Result<Option<String>, String>;
+    /// Session-aware canonical operation digest. Returns the final user-facing
+    /// digest text or a safe explicit error; never a serialized snapshot.
+    /// No-active-work and temporary-unavailability semantics are preserved by
+    /// the host implementation (FEAT-018 D5).
+    fn operation_digest(&mut self) -> Result<String, String>;
+}
+
+/// Stable-key translation with named replacements (FEAT-018 D3).
+///
+/// Message identity uses stable snake_case keys plus named replacements. The
+/// TUI host maps those keys to the current catalog and preserves the existing
+/// English fallback for intentionally incomplete locale packs. Unknown keys or
+/// invalid replacement contracts fail safely and produce a command error; they
+/// never panic and never display a raw lookup key.
+pub trait CommandPresentationContext {
+    /// Resolve a stable message key with its named replacements.
+    fn translate(&self, key: &str, replacements: &[(&str, &str)]) -> Result<String, String>;
+}
+
+/// Portable receipt for a successful atomic media attachment (FEAT-018 D4).
+/// Carries only the information needed for the existing confirmation text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaAttachmentReceipt {
+    pub kind: String,
+    pub path: std::path::PathBuf,
+}
+
+/// Atomic composer/media capability (FEAT-018 D4).
+///
+/// The host performs media validation and composer insertion as one atomic
+/// operation. Rejected, missing, unsupported, corrupt, or oversized media
+/// leaves composer state unchanged and returns a safe error. Only portable
+/// success information crosses the boundary; composer markup, mutable input
+/// text, decoder internals, and TUI types never do.
+pub trait CommandMediaContext {
+    /// Validate and insert a resolved media path atomically.
+    fn attach_media(&mut self, resolved_path: &Path) -> Result<MediaAttachmentReceipt, String>;
 }

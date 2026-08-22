@@ -1164,6 +1164,9 @@ pub type RetryCallback = Box<dyn Fn(&LlmError, u32, Duration) + Send + Sync>;
 ///     })),
 /// ).await;
 /// ```
+// RetryError intentionally preserves the concrete LlmError for callers that
+// inspect provider-specific failures; boxing it here would change that API.
+#[allow(clippy::result_large_err)]
 pub async fn with_retry<F, Fut, T>(
     config: &RetryConfig,
     mut operation: F,

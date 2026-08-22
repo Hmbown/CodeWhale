@@ -5,15 +5,52 @@
 //! `CommandHandler<crate::commands::CommandResult>`.
 
 use crate::facets::{
-    CommandCostContext, CommandModePolicyContext, CommandModelContext, CommandSessionContext,
-    CommandSkillsContext, CommandSystemPromptContext, CommandWorkspaceContext,
+    CommandCostContext, CommandMediaContext, CommandModePolicyContext, CommandModelContext,
+    CommandPresentationContext, CommandSessionContext, CommandSkillsContext,
+    CommandSystemPromptContext, CommandWorkspaceContext,
 };
+
+/// Exact host capabilities exposed to one contextual command handler.
+///
+/// The set lives in the external contract crate so command registrations can
+/// declare least authority without naming the TUI host. The dispatcher uses
+/// the declaration to populate only those slots in [`CommandContexts`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CommandCapabilities(u16);
+
+impl CommandCapabilities {
+    pub const NONE: Self = Self(0);
+    pub const SESSION: Self = Self(1 << 0);
+    pub const MODEL: Self = Self(1 << 1);
+    pub const COST: Self = Self(1 << 2);
+    pub const MODE_POLICY: Self = Self(1 << 3);
+    pub const SYSTEM_PROMPT: Self = Self(1 << 4);
+    pub const SKILLS: Self = Self(1 << 5);
+    pub const WORKSPACE: Self = Self(1 << 6);
+    pub const PRESENTATION: Self = Self(1 << 7);
+    pub const MEDIA: Self = Self(1 << 8);
+
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    pub const fn contains(self, capability: Self) -> bool {
+        self.0 & capability.0 == capability.0
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
 
 /// A command handler that is either argument-only or capability-scoped.
 #[derive(Clone, Copy)]
 pub enum CommandHandler<R> {
     Pure(fn(Option<&str>) -> R),
-    Contextual(fn(CommandContexts<'_>, Option<&str>) -> R),
+    Contextual {
+        capabilities: CommandCapabilities,
+        handler: fn(CommandContexts<'_>, Option<&str>) -> R,
+    },
 }
 
 /// Transport envelope with one independently optional facet slot.
@@ -25,6 +62,8 @@ pub struct CommandContexts<'a> {
     system_prompt: Option<&'a mut dyn CommandSystemPromptContext>,
     skills: Option<&'a mut dyn CommandSkillsContext>,
     workspace: Option<&'a mut dyn CommandWorkspaceContext>,
+    presentation: Option<&'a mut dyn CommandPresentationContext>,
+    media: Option<&'a mut dyn CommandMediaContext>,
 }
 
 /// Consumed envelope used when one handler needs several independent facets.
@@ -36,6 +75,8 @@ pub struct ContextParts<'a> {
     pub system_prompt: Option<&'a mut dyn CommandSystemPromptContext>,
     pub skills: Option<&'a mut dyn CommandSkillsContext>,
     pub workspace: Option<&'a mut dyn CommandWorkspaceContext>,
+    pub presentation: Option<&'a mut dyn CommandPresentationContext>,
+    pub media: Option<&'a mut dyn CommandMediaContext>,
 }
 
 impl<'a> CommandContexts<'a> {
@@ -48,6 +89,8 @@ impl<'a> CommandContexts<'a> {
             system_prompt: None,
             skills: None,
             workspace: None,
+            presentation: None,
+            media: None,
         }
     }
 
@@ -60,6 +103,8 @@ impl<'a> CommandContexts<'a> {
             system_prompt: self.system_prompt,
             skills: self.skills,
             workspace: self.workspace,
+            presentation: self.presentation,
+            media: self.media,
         }
     }
 
@@ -112,6 +157,22 @@ impl<'a> CommandContexts<'a> {
         assert!(
             self.workspace.replace(value).is_none(),
             "workspace facet already set"
+        );
+        self
+    }
+
+    pub fn with_presentation(mut self, value: &'a mut dyn CommandPresentationContext) -> Self {
+        assert!(
+            self.presentation.replace(value).is_none(),
+            "presentation facet already set"
+        );
+        self
+    }
+
+    pub fn with_media(mut self, value: &'a mut dyn CommandMediaContext) -> Self {
+        assert!(
+            self.media.replace(value).is_none(),
+            "media facet already set"
         );
         self
     }

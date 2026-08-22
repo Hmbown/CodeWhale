@@ -221,7 +221,7 @@ impl Command for FunctionCommand {
     }
 }
 
-/// A registry entry that carries an optional capability-scoped handler.
+/// A registry entry that carries an optional least-capability handler.
 ///
 /// FEAT-015's dual-path seam (D2): migrated registrations may supply a
 /// `CommandHandler<CommandResult>` (App-free; built from `CommandContexts`),
@@ -229,27 +229,16 @@ impl Command for FunctionCommand {
 /// This entry type is App-free — only the dispatcher in `commands/mod.rs`
 /// touches `App` when it builds the envelope from the bundle.
 ///
-/// FEAT-015 ships no production contextual registration, so in production
-/// builds this type is only referenced through the trait; the test fixture
-/// (D6) constructs it under `#[cfg(test)]`. The allow is removed once a
-/// production group migrates (FEAT-018+).
-#[allow(dead_code)]
+/// FEAT-015 shipped no production contextual registration. FEAT-018 is the
+/// first production group to construct this bridge, while the original D6
+/// fixture remains available under `#[cfg(test)]`.
 pub(crate) struct ContextualCommand {
     info: &'static CommandInfo,
     handler: Option<codewhale_command_contract::handler::CommandHandler<CommandResult>>,
     legacy: Option<CommandHandler>,
 }
 
-#[allow(dead_code)]
 impl ContextualCommand {
-    pub(crate) const fn legacy(info: &'static CommandInfo, legacy: CommandHandler) -> Self {
-        Self {
-            info,
-            handler: None,
-            legacy: Some(legacy),
-        }
-    }
-
     pub(crate) const fn contextual(
         info: &'static CommandInfo,
         handler: codewhale_command_contract::handler::CommandHandler<CommandResult>,
@@ -263,14 +252,28 @@ impl ContextualCommand {
 
     /// Bridge one portable contract registration into the TUI-owned registry.
     ///
-    /// The command supplies only contract metadata and an App-free handler;
-    /// the TUI resolves the localization key and owns the resulting registry
-    /// entry. This is the dependency inversion later command crates reuse.
+    /// The command supplies only contract metadata and an App-free handler.
+    /// Contextual handlers carry their exact external capability set; the TUI
+    /// resolves localization and exposes only those declared facets. This is
+    /// the dependency inversion later command crates reuse.
     pub(crate) fn from_contract<C>() -> Result<Self, String>
     where
         C: codewhale_command_contract::metadata::RegisterCommand<CommandResult>,
     {
         let portable = C::info();
+        let handler = C::handler();
+        if matches!(
+            handler,
+            codewhale_command_contract::handler::CommandHandler::Contextual {
+                capabilities,
+                ..
+            } if capabilities.is_empty()
+        ) {
+            return Err(format!(
+                "contextual command /{} must declare at least one capability; use Pure otherwise",
+                portable.name
+            ));
+        }
         let description_id = super::contract::key_to_message_id(portable.description_key)
             .ok_or_else(|| {
                 format!(
@@ -284,19 +287,7 @@ impl ContextualCommand {
             usage: portable.usage,
             description_id,
         }));
-        Ok(Self::contextual(info, C::handler()))
-    }
-
-    /// The capability-scoped handler, if this entry is migrated.
-    pub(crate) fn command_handler(
-        &self,
-    ) -> Option<codewhale_command_contract::handler::CommandHandler<CommandResult>> {
-        self.handler.clone()
-    }
-
-    /// Whether this entry still uses the legacy concrete-App path.
-    pub(crate) fn is_legacy(&self) -> bool {
-        self.handler.is_none()
+        Ok(Self::contextual(info, handler))
     }
 }
 impl Command for ContextualCommand {
@@ -367,9 +358,8 @@ impl CommandRegistry {
     }
 
     /// FEAT-015: whether the named entry has a capability-scoped handler.
-    /// Used by test assertions under `#[cfg(test)]`; production builds have
-    /// no contextual entries, so the method is dead there until a group
-    /// migrates (FEAT-018+).
+    /// Used by migration-boundary tests to distinguish contextual entries
+    /// from commands that still use the concrete-App path.
     #[allow(dead_code)]
     pub(crate) fn has_contextual_handler(&self, name: &str) -> bool {
         self.get(name)
@@ -382,5 +372,56 @@ impl CommandRegistry {
 
     pub fn infos(&self) -> Vec<&'static CommandInfo> {
         self.iter().map(Command::info).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codewhale_command_contract::handler::{
+        CommandCapabilities, CommandContexts, CommandHandler as PortableHandler,
+    };
+    use codewhale_command_contract::metadata::{
+        CommandInfo as PortableCommandInfo, RegisterCommand as PortableRegisterCommand,
+    };
+
+    struct EmptyCapabilityCommand;
+
+    fn empty_capability_handler(
+        _contexts: CommandContexts<'_>,
+        _args: Option<&str>,
+    ) -> CommandResult {
+        CommandResult::message("unused")
+    }
+
+    impl PortableRegisterCommand<CommandResult> for EmptyCapabilityCommand {
+        fn info() -> &'static PortableCommandInfo {
+            static INFO: PortableCommandInfo = PortableCommandInfo {
+                name: "empty-capability",
+                aliases: &[],
+                usage: "/empty-capability",
+                description_key: "cmd_workspace_description",
+            };
+            &INFO
+        }
+
+        fn handler() -> PortableHandler<CommandResult> {
+            PortableHandler::Contextual {
+                capabilities: CommandCapabilities::NONE,
+                handler: empty_capability_handler,
+            }
+        }
+    }
+
+    #[test]
+    fn portable_bridge_rejects_contextual_handler_without_capabilities() {
+        let error = ContextualCommand::from_contract::<EmptyCapabilityCommand>()
+            .err()
+            .expect("empty contextual capability declaration must be rejected");
+        assert!(
+            error.contains("must declare at least one capability"),
+            "{error}"
+        );
+        assert!(error.contains("use Pure otherwise"), "{error}");
     }
 }

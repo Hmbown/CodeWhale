@@ -27,7 +27,10 @@ fn runs_offline_tool_loop_successfully() {
     assert!(run.metrics.success, "expected success metrics: {run:#?}");
     assert_eq!(run.metrics.tool_errors, 0);
     assert_eq!(run.metrics.steps, 6);
-    assert!(run.metrics.duration.as_millis() > 0);
+    // Nanosecond granularity: the offline loop performs real fs/tempdir work,
+    // so a sub-millisecond total is legitimate; `as_millis() > 0` flaked under
+    // saturated test runs (pre-existing timing flake, fixed for FEAT-018).
+    assert!(run.metrics.duration.as_nanos() > 0);
     assert!(!run.scenario_name.is_empty());
     assert!(run.workspace_summary.file_count >= 3);
 
