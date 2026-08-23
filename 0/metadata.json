@@ -1,0 +1,124 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0RCJ5QEBVYQ07KEQT7DNZC0",
+  "session_id": "55c680d8-f681-4ec7-a19b-ba4c13d7f913",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-23T22:41:20.940275Z",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "crates/tui/src/commands/groups/core/core.rs",
+    "crates/tui/src/tui/app.rs",
+    "crates/tui/src/tui/app/init.rs",
+    "crates/tui/src/tui/context_inspector.rs",
+    "crates/tui/src/tui/ui/apply.rs",
+    "crates/tui/src/tui/ui/compaction_flow.rs",
+    "crates/tui/src/tui/ui/event_loop.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "fa447df7528c",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 502,
+    "cache_creation_tokens": 472758,
+    "cache_read_tokens": 59981815,
+    "output_tokens": 153370,
+    "api_call_count": 251
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01AZiqG3Pb1AVpbX6Wd93CQF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:systematic-debugging"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "fa447df7528c",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 27,
+        "end": 28,
+        "entry_ids": [
+          "3d526a1d-38a0-410e-a077-7be088cc2a4b"
+        ],
+        "tool_use_id": "toolu_01AZiqG3Pb1AVpbX6Wd93CQF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01AZiqG3Pb1AVpbX6Wd93CQF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:systematic-debugging",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-23T22:41:20.851008Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 40,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 40,
+    "total_lines_changed": 41,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 22253,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409,
+        "codewhale-inference/.dev.vars.example": 6,
+        "codewhale-inference/.gitignore": 7,
+        "codewhale-inference/README.md": 110,
+        "codewhale-inference/docs/API.md": 118,
+        "codewhale-inference/docs/ARCHITECTURE.md": 108,
+        "codewhale-inference/docs/FLASH-LAUNCH-VERDICT-2026-08-20.md": 69,
+        "codewhale-inference/docs/FLASH-LOCAL-VERIFICATION-2026-08-20.md": 46,
+        "codewhale-inference/docs/HOSTING.md": 83,
+        "codewhale-inference/docs/PARETO-ROUTER-AND-COMPETITIVE-PLAN-2026-08-20.md": 253,
+        "codewhale-inference/docs/VERCEL_TEST.md": 76,
+        "codewhale-inference/package-lock.json": 2746,
+        "codewhale-inference/package.json": 23,
+        "codewhale-inference/scripts/vercel-catalog-check.mjs": 29,
+        "codewhale-inference/scripts/vercel-smoke.mjs": 59,
+        "codewhale-inference/src/auth.ts": 60,
+        "codewhale-inference/src/billing.ts": 89,
+        "codewhale-inference/src/http.ts": 90,
+        "codewhale-inference/src/index.ts": 553,
+        "codewhale-inference/src/models.ts": 119,
+        "codewhale-inference/src/provider.ts": 372,
+        "codewhale-inference/src/wallet.ts": 673,
+        "codewhale-inference/test/api.spec.ts": 304,
+        "codewhale-inference/test/env.d.ts": 3,
+        "codewhale-inference/test/provider.spec.ts": 76,
+        "codewhale-inference/test/tsconfig.json": 8,
+        "codewhale-inference/test/wallet.spec.ts": 156,
+        "codewhale-inference/tsconfig.json": 21,
+        "codewhale-inference/vitest.config.ts": 20,
+        "codewhale-inference/worker-configuration.d.ts": 14891,
+        "codewhale-inference/wrangler.jsonc": 42,
+        "docs/research/CODEWHALE_INFERENCE_DILIGENCE_2026-08-19.md": 593,
+        "t": 1
+      }
+    }
+  ]
+}
