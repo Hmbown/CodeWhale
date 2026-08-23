@@ -33,6 +33,11 @@ pub struct FleetTaskSpecDocument {
     pub workers: Vec<FleetWorkerSpec>,
     #[serde(default)]
     pub tasks: Vec<FleetTaskSpec>,
+    /// Optional run-wide usage ceiling (R6, #5567), e.g.
+    /// `usage_ceiling = { max_total_tokens = 2_000_000 }`.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_ceiling: Option<codewhale_protocol::fleet::FleetUsageCeiling>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -58,6 +63,7 @@ impl FleetTaskSpecFile {
                 security_policy: None,
                 workers: Vec::new(),
                 tasks,
+                usage_ceiling: None,
             },
             Self::Single(task) => FleetTaskSpecDocument {
                 name: Some(fallback_name),
@@ -65,6 +71,7 @@ impl FleetTaskSpecFile {
                 security_policy: None,
                 workers: Vec::new(),
                 tasks: vec![*task],
+                usage_ceiling: None,
             },
         }
     }
@@ -889,6 +896,7 @@ mod tests {
             security_policy: None,
             workers: Vec::new(),
             tasks: vec![doc],
+            usage_ceiling: None,
         })
         .unwrap_err()
         .to_string();
@@ -906,6 +914,7 @@ mod tests {
             security_policy: Some(FleetSecurityPolicy::default()),
             workers: Vec::new(),
             tasks: vec![task("review", None)],
+            usage_ceiling: None,
         };
         let error = validate_task_spec_document(&security_doc)
             .unwrap_err()

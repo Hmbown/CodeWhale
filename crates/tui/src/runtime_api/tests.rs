@@ -1855,6 +1855,7 @@ async fn fleet_status_runtime_api_exposes_state_and_actions() -> Result<()> {
             security_policy: None,
             workers: Vec::new(),
             tasks: vec![task],
+            usage_ceiling: None,
         },
         1,
     )?;
@@ -8573,6 +8574,7 @@ async fn fleet_receipt_api_list_and_get_round_trip() -> Result<()> {
             security_policy: None,
             workers: Vec::new(),
             tasks: vec![task],
+            usage_ceiling: None,
         },
         1,
     )?;

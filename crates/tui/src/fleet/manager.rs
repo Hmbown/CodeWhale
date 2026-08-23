@@ -417,6 +417,7 @@ impl FleetManager {
             workflow: descriptor.workflow,
             roles: descriptor.roles,
             max_workers: Some(max_workers),
+            usage_ceiling: doc.usage_ceiling.clone(),
             task_specs: doc.tasks.clone(),
             worker_specs: doc.workers.clone(),
             labels: doc.labels,
@@ -2682,6 +2683,7 @@ mod tests {
                     security_policy: None,
                     workers: vec![worker],
                     tasks: vec![nested],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -2731,6 +2733,7 @@ mod tests {
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![spec],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -2759,6 +2762,7 @@ mod tests {
                     security_policy: None,
                     workers: vec![resume_worker_spec("worker\r\nforged")],
                     tasks: vec![task("task-a")],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -2790,6 +2794,7 @@ mod tests {
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![task("task-a")],
+                    usage_ceiling: None,
                 },
                 1,
                 ManagedFleetRunDescriptor {
@@ -2878,6 +2883,7 @@ mod tests {
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![task("task-a")],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -2932,6 +2938,7 @@ mod tests {
                         security_policy: None,
                         workers: Vec::new(),
                         tasks: vec![write_task(task_id)],
+                        usage_ceiling: None,
                     },
                     1,
                 )
@@ -2983,6 +2990,7 @@ mod tests {
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![spec],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -3261,6 +3269,7 @@ mod tests {
                 workflow: None,
                 roles: Vec::new(),
                 max_workers: Some(workers.len().max(1)),
+                usage_ceiling: None,
                 task_specs: tasks.to_vec(),
                 worker_specs: workers.to_vec(),
                 labels: BTreeMap::new(),
@@ -3555,6 +3564,7 @@ mod tests {
             security_policy: None,
             workers: Vec::new(),
             tasks: vec![task],
+            usage_ceiling: None,
         };
 
         let err = manager
@@ -4384,6 +4394,7 @@ esac
                 default_local_worker("local-verifier"),
             ],
             tasks: vec![task_failed, transport, verifier_failed],
+            usage_ceiling: None,
         };
 
         let report = manager.create_run(doc, 3).unwrap();
@@ -4437,6 +4448,7 @@ printf '%s\n' '{"type":"done"}'
                     security_policy: None,
                     workers: vec![],
                     tasks: vec![task("route-drift")],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -4515,6 +4527,7 @@ printf '%s\n' '{"type":"done"}'
                     security_policy: None,
                     workers: vec![],
                     tasks: vec![task("invalid-route")],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -4641,6 +4654,7 @@ esac
                     security_policy: None,
                     workers: vec![],
                     tasks,
+                    usage_ceiling: None,
                 },
                 3,
             )
@@ -5036,6 +5050,7 @@ esac
                     security_policy: None,
                     workers: vec![],
                     tasks,
+                    usage_ceiling: None,
                 },
                 2,
             )
@@ -5106,6 +5121,7 @@ esac
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![task("task-a")],
+                    usage_ceiling: None,
                 },
                 1,
             )

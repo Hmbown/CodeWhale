@@ -765,6 +765,9 @@ struct CreateFleetRunRequest {
     security_policy: Option<FleetSecurityPolicy>,
     #[serde(default)]
     max_workers: Option<usize>,
+    /// Optional run-wide usage ceiling (R6, #5567).
+    #[serde(default)]
+    usage_ceiling: Option<codewhale_protocol::fleet::FleetUsageCeiling>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1629,6 +1632,7 @@ fn prepare_managed_fleet_run(
             security_policy: None,
             workers: Vec::new(),
             tasks,
+            usage_ceiling: request.usage_ceiling,
         },
         ManagedFleetRunDescriptor {
             target: Some(request.target),
@@ -2483,6 +2487,10 @@ fn fleet_event_label(payload: &FleetWorkerEventPayload) -> String {
             .map(|kind| format!("workflow_event run_id={workflow_run_id} type={kind}"))
             .unwrap_or_else(|| format!("workflow_event run_id={workflow_run_id}")),
         FleetWorkerEventPayload::Heartbeat { .. } => "heartbeat".to_string(),
+        FleetWorkerEventPayload::UsageReport {
+            input_tokens,
+            output_tokens,
+        } => format!("usage_report input={input_tokens} output={output_tokens}"),
         FleetWorkerEventPayload::Artifact(artifact) => {
             format!("artifact kind={}", artifact_kind_label(&artifact.kind))
         }
