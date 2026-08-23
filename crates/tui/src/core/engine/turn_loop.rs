@@ -573,6 +573,11 @@ impl Engine {
         // Cleared when the loop continues only for optional runtime work
         // (a goal continuation) after the model already delivered an answer.
         let mut step_budget_exhaustion_is_terminal = true;
+        // A1: one soft-landing notice at ~80% of a finite step budget.
+        let mut soft_landing_sent = false;
+        // A2: one final report turn after the budget is exhausted, so a child
+        // that owes work never finishes silently.
+        let mut final_report_sent = false;
         let mut context_recovery_attempts = 0u8;
         let mut tool_policy = tool_policy;
         let mut mode = tool_policy.mode;
@@ -672,19 +677,60 @@ impl Engine {
             // must see mid-turn (LSP diagnostics, steer input, subagent
             // completions) are appended to history above, never spliced into
             // the frozen prefix.
-            if turn.at_max_steps() {
-                // Exhausting the step budget while the model still owes work
-                // is a real failure. Exhausting it after a delivered answer,
-                // on an optional runtime continuation, is a finished turn.
-                if !step_budget_exhaustion_is_terminal {
-                    break;
-                }
-                let error = format!(
-                    "Maximum model steps reached before completion (limit: {})",
-                    self.config.max_steps
+            // A1 soft landing: with a finite step budget, once ~80% of it is
+            // spent tell the model once to stop exploring and write its final
+            // report. Savings proved out by the grok-style parity work (ops
+            // A1): a step-faithful harness ends mid-report far too often.
+            if !soft_landing_sent
+                && self.config.max_steps > 0
+                && turn.steps_used() >= ((self.config.max_steps as f32 * 0.8).floor() as u32).max(1)
+            {
+                soft_landing_sent = true;
+                let notice = format!(
+                    "Step budget soft landing: you have used about {}% of your {} step budget. Stop exploring; write your final, complete report now, in final form, with evidence.",
+                    80, self.config.max_steps,
                 );
-                let _ = self.tx_event.send(Event::status(error.clone())).await;
-                return (TurnOutcomeStatus::Failed, Some(error));
+                self.add_session_message(self.user_text_message_with_turn_metadata(notice))
+                    .await;
+                let _ = self
+                    .tx_event
+                    .send(Event::status(
+                        "Soft landing: wrap up with your final report",
+                    ))
+                    .await;
+            }
+
+            if turn.at_max_steps() {
+                // A2 report-on-exhaustion: the budget died while the model
+                // still owes work. Never finish silently — grant exactly one
+                // final provider turn to write a bounded report, then let the
+                // natural no-tool termination close the turn. A model that
+                // keeps issuing tools after the report hits the hard limit
+                // below.
+                if step_budget_exhaustion_is_terminal && !final_report_sent {
+                    final_report_sent = true;
+                    let notice = format!(
+                        "Your model-step budget was exhausted (limit: {}). You cannot continue working. Write your final report now: what you did, what you proved or found, what remains, and exact evidence. This is your last turn.",
+                        self.config.max_steps,
+                    );
+                    self.add_session_message(self.user_text_message_with_turn_metadata(notice))
+                        .await;
+                    let _ = self
+                        .tx_event
+                        .send(Event::status(
+                            "Model budget exhausted — final report requested",
+                        ))
+                        .await;
+                } else if !step_budget_exhaustion_is_terminal {
+                    break;
+                } else {
+                    let error = format!(
+                        "Maximum model steps reached before completion (limit: {})",
+                        self.config.max_steps
+                    );
+                    let _ = self.tx_event.send(Event::status(error.clone())).await;
+                    return (TurnOutcomeStatus::Failed, Some(error));
+                }
             }
 
             // A tool-producing response can spend the remaining goal budget

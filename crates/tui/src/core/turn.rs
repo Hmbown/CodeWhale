@@ -84,6 +84,12 @@ impl TurnContext {
         self.step >= self.max_steps
     }
 
+    /// Model steps consumed so far (for soft-landing and reporting).
+    #[must_use]
+    pub fn steps_used(&self) -> u32 {
+        self.step
+    }
+
     /// Cancel the turn
     #[allow(dead_code)]
     pub fn cancel(&mut self) {
