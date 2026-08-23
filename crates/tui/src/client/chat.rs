@@ -3802,6 +3802,22 @@ fn parse_sse_chunk_with_reasoning_style(
 ) -> Vec<StreamEvent> {
     let mut events = Vec::new();
 
+    // OpenAI-compatible providers surface mid-stream failures as a chunk-level
+    // `error` object (sometimes with `type: "error"`), delivered before
+    // `[DONE]`. Silently dropping it turned rate-limit / context-length /
+    // server errors into a truncated turn that looked successful — the frame
+    // is now surfaced through the same `StreamEvent::Error` contract the
+    // Anthropic path uses (#3014, ops R3).
+    if let Some(error) = chunk.get("error") {
+        let error = match error {
+            Value::Object(_) => error.clone(),
+            Value::String(message) => serde_json::json!({ "message": message }),
+            _ => serde_json::json!({ "message": "provider stream error" }),
+        };
+        events.push(StreamEvent::Error { error });
+        return events;
+    }
+
     let Some(choices) = chunk.get("choices").and_then(Value::as_array) else {
         // Usage-only chunk (sent at end with stream_options)
         if let Some(usage_val) = chunk.get("usage") {
@@ -4116,6 +4132,65 @@ mod stream_diagnostics_tests {
             message,
             "SSE stream idle timeout after 240s — no data received \
              (bytes_received=8192, stream_age_ms=73500, ms_since_last_chunk=41250)"
+        );
+    }
+
+    #[test]
+    fn chat_completions_error_frames_surface_as_stream_events() {
+        let mut content_index = 0u32;
+        let mut text_started = false;
+        let mut thinking_started = false;
+        let mut tool_indices = std::collections::HashMap::new();
+        let mut reasoning_buffers = std::collections::HashMap::new();
+        for chunk in [
+            json!({ "error": { "message": "rate limit exceeded", "type": "rate_limit_error" } }),
+            json!({ "type": "error", "error": { "message": "context length exceeded" } }),
+            json!({ "error": "server error" }),
+        ] {
+            let events = parse_sse_chunk(
+                &chunk,
+                &mut content_index,
+                &mut text_started,
+                &mut thinking_started,
+                &mut tool_indices,
+                &mut reasoning_buffers,
+                false,
+            );
+            assert_eq!(
+                events.len(),
+                1,
+                "a chunk-level error frame must not be swallowed ({chunk})"
+            );
+            match &events[0] {
+                StreamEvent::Error { error } => assert!(
+                    !error.is_null()
+                        && (error.get("message").and_then(Value::as_str).is_some()
+                            || error.is_string()),
+                    "the provider error message must survive parsing: {error}"
+                ),
+                other => panic!("expected StreamEvent::Error, got {other:?}"),
+            }
+        }
+        // A normal content chunk still parses as a delta after the error path.
+        let deltas = parse_sse_chunk(
+            &json!({"choices": [{"index": 0, "delta": {"content": "ok"}}]}),
+            &mut content_index,
+            &mut text_started,
+            &mut thinking_started,
+            &mut tool_indices,
+            &mut reasoning_buffers,
+            false,
+        );
+        assert!(
+            deltas.iter().any(|event| {
+                matches!(
+                    event,
+                    StreamEvent::ContentBlockDelta {
+                        delta: Delta::TextDelta { text }, ..
+                    } if text == "ok"
+                )
+            }),
+            "content deltas still parse: {deltas:?}"
         );
     }
 
