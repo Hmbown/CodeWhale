@@ -1332,6 +1332,144 @@ async fn exec_shell_wait_without_wait_arg_returns_running_at_timeout() {
 }
 
 #[tokio::test]
+async fn exec_shell_wait_many_until_any_returns_when_the_first_task_settles() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let short = BashTool::new("Bash")
+        .execute(
+            json!({"command": sleep_command(1), "background": true}),
+            &ctx,
+        )
+        .await
+        .expect("start short");
+    let long = BashTool::new("Bash")
+        .execute(
+            json!({"command": sleep_command(30), "background": true}),
+            &ctx,
+        )
+        .await
+        .expect("start long");
+    let short_id = short
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("task_id"))
+        .and_then(Value::as_str)
+        .expect("short id")
+        .to_string();
+    let long_id = long
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("task_id"))
+        .and_then(Value::as_str)
+        .expect("long id")
+        .to_string();
+
+    let started = Instant::now();
+    let result = BashTool::new("Bash")
+        .execute(
+            json!({
+                "action": "wait",
+                "task_ids": [short_id, long_id],
+                "until": "any",
+                "timeout_ms": 8_000
+            }),
+            &ctx,
+        )
+        .await
+        .expect("multi wait");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "until=any must not wait for the long task"
+    );
+    let statuses = result
+        .metadata
+        .as_ref()
+        .expect("metadata")
+        .get("statuses")
+        .expect("statuses");
+    assert_eq!(statuses[short_id.as_str()], "Completed");
+    assert_eq!(statuses[long_id.as_str()], "Running");
+    assert_eq!(
+        result.metadata.as_ref().and_then(|m| m.get("until")),
+        Some(&json!("any"))
+    );
+    assert_eq!(
+        result.metadata.as_ref().and_then(|m| m.get("timed_out")),
+        Some(&json!(false))
+    );
+}
+
+#[tokio::test]
+async fn exec_shell_wait_many_all_reports_timeout_and_still_running() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let first = BashTool::new("Bash")
+        .execute(
+            json!({"command": sleep_command(30), "background": true}),
+            &ctx,
+        )
+        .await
+        .expect("start first");
+    let second = BashTool::new("Bash")
+        .execute(
+            json!({"command": sleep_command(30), "background": true}),
+            &ctx,
+        )
+        .await
+        .expect("start second");
+    let first_id = first
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("task_id"))
+        .and_then(Value::as_str)
+        .expect("first id")
+        .to_string();
+    let second_id = second
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("task_id"))
+        .and_then(Value::as_str)
+        .expect("second id")
+        .to_string();
+
+    let result = BashTool::new("Bash")
+        .execute(
+            json!({ "action": "wait", "task_ids": [first_id, second_id], "timeout_ms": 1_500 }),
+            &ctx,
+        )
+        .await
+        .expect("multi wait times out");
+    assert_eq!(
+        result.metadata.as_ref().and_then(|m| m.get("timed_out")),
+        Some(&json!(true))
+    );
+    assert!(result.content.contains("still running"));
+    let statuses = result
+        .metadata
+        .as_ref()
+        .expect("metadata")
+        .get("statuses")
+        .expect("statuses");
+    assert_eq!(statuses[first_id.as_str()], "Running");
+    assert_eq!(statuses[second_id.as_str()], "Running");
+}
+
+#[tokio::test]
+async fn exec_shell_wait_many_rejects_an_unknown_task_id() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let err = BashTool::new("Bash")
+        .execute(
+            json!({ "action": "wait", "task_ids": ["nope-1", "nope-2"], "wait": false }),
+            &ctx,
+        )
+        .await
+        .expect_err("unknown ids must fail the same way as the single-task path");
+    assert!(err.to_string().contains("nope-1"), "{err}");
+}
+
+#[tokio::test]
 async fn background_start_advertises_task_status_completion() {
     let tmp = tempdir().expect("tempdir");
     let ctx = ToolContext::new(tmp.path());

@@ -4507,6 +4507,16 @@ impl ToolSpec for BashTool {
                     "type": "string",
                     "description": "Task ID for action=wait/interact/cancel. Also accepted as `id`."
                 },
+                "task_ids": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "For action=wait: wait on several background task ids at once (alternative to `task_id`)."
+                },
+                "until": {
+                    "type": "string",
+                    "enum": ["any", "all"],
+                    "description": "For action=wait with `task_ids`: return as soon as any task is terminal (`any`) or when every task is terminal (`all`, default)."
+                },
                 "id": {
                     "type": "string",
                     "description": "Alias for `task_id`."
@@ -5329,6 +5339,23 @@ impl BashTool {
         input: &serde_json::Value,
         context: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
+        // Multi-task wait (#5549): task_ids + until=any|all. The validated
+        // single-task path stays unchanged below when task_ids is absent.
+        if let Some(task_ids) = input.get("task_ids") {
+            let ids = task_ids
+                .as_array()
+                .ok_or_else(|| type_mismatch("task_ids", task_ids, "an array of strings"))?;
+            let ids = ids
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .ok_or_else(|| type_mismatch("task_ids", value, "strings"))
+                        .map(str::to_string)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            return self.execute_wait_many(input, context, &ids).await;
+        }
         let task_id = required_task_id(input)?;
         let wait = match first_present_field(input, &["wait", "block"]) {
             None => true,
@@ -5373,6 +5400,156 @@ impl BashTool {
         }
 
         Ok(result)
+    }
+
+    /// Wait on several background tasks at once (#5549).
+    ///
+    /// `until` selects the completion condition: `any` returns as soon as one
+    /// task is terminal, `all` waits for every one. Unknown task ids fail the
+    /// call (same contract as the single-task path); a timeout reports the
+    /// still-running ids so the caller can cancel or wait again.
+    async fn execute_wait_many(
+        &self,
+        input: &serde_json::Value,
+        context: &ToolContext,
+        task_ids: &[String],
+    ) -> Result<ToolResult, ToolError> {
+        let until = match input.get("until").and_then(serde_json::Value::as_str) {
+            None | Some("all") => "all",
+            Some("any") => "any",
+            Some(other) => {
+                return Err(ToolError::invalid_input(format!(
+                    "until must be \"any\" or \"all\", got {other}"
+                )));
+            }
+        };
+        let wait = match first_present_field(input, &["wait", "block"]) {
+            None => true,
+            Some((name, value)) => value
+                .as_bool()
+                .ok_or_else(|| type_mismatch(name, value, "a boolean"))?,
+        };
+        let timeout_ms = wait_timeout_ms(input)?;
+        let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let mut timed_out = false;
+        let mut wait_canceled = false;
+
+        let snapshot =
+            |manager: &mut ShellManager| -> Result<Vec<(String, ShellStatus)>, ToolError> {
+                task_ids
+                    .iter()
+                    .map(|id| {
+                        let detail = manager
+                            .inspect_job(id)
+                            .map_err(|err| ToolError::execution_failed(err.to_string()))?;
+                        Ok((id.clone(), detail.snapshot.status))
+                    })
+                    .collect()
+            };
+
+        let statuses = loop {
+            let current = {
+                let mut manager = context
+                    .shell_manager
+                    .lock()
+                    .map_err(|_| ToolError::execution_failed("shell manager lock poisoned"))?;
+                snapshot(&mut manager)?
+            };
+            if context
+                .cancel_token
+                .as_ref()
+                .is_some_and(|token| token.is_cancelled())
+            {
+                wait_canceled = true;
+                break current;
+            }
+            let running = current
+                .iter()
+                .filter(|(_, status)| *status == ShellStatus::Running)
+                .count();
+            let terminal = current.len().saturating_sub(running);
+            let satisfied = if until == "any" {
+                terminal >= 1
+            } else {
+                running == 0
+            };
+            if !wait || satisfied {
+                break current;
+            }
+            if std::time::Instant::now() >= deadline {
+                timed_out = true;
+                break current;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+
+        let running_after = statuses
+            .iter()
+            .filter(|(_, status)| *status == ShellStatus::Running)
+            .count();
+        let settled = statuses.len().saturating_sub(running_after);
+        let lines: Vec<String> = statuses
+            .iter()
+            .map(|(id, status)| format!("{id}: {status:?}"))
+            .collect();
+        let still_running: Vec<&str> = statuses
+            .iter()
+            .filter(|(_, status)| *status == ShellStatus::Running)
+            .map(|(id, _)| id.as_str())
+            .collect();
+        let summary = if timed_out {
+            format!(
+                "wait timed out after {}ms; still running: {}",
+                timeout_ms,
+                if still_running.is_empty() {
+                    "none".to_string()
+                } else {
+                    still_running.join(", ")
+                }
+            )
+        } else if wait_canceled {
+            format!(
+                "wait canceled; still running: {}",
+                if still_running.is_empty() {
+                    "none".to_string()
+                } else {
+                    still_running.join(", ")
+                }
+            )
+        } else {
+            format!(
+                "{settled} of {} background command{} settled; remaining running: {}",
+                statuses.len(),
+                if statuses.len() == 1 { "" } else { "s" },
+                if still_running.is_empty() {
+                    "none".to_string()
+                } else {
+                    still_running.join(", ")
+                }
+            )
+        };
+        let content = format!("{summary}\n{}\n", lines.join("\n"));
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(
+            "statuses".to_string(),
+            serde_json::Value::Object(
+                statuses
+                    .iter()
+                    .map(|(id, status)| (id.clone(), serde_json::json!(format!("{status:?}"))))
+                    .collect::<serde_json::Map<_, _>>(),
+            ),
+        );
+        metadata.insert("wait_timeout_ms".to_string(), json!(timeout_ms));
+        metadata.insert("until".to_string(), json!(until));
+        metadata.insert("timed_out".to_string(), json!(timed_out));
+        if wait_canceled {
+            metadata.insert("wait_canceled".to_string(), json!(true));
+        }
+        Ok(ToolResult {
+            content: content.trim().to_string(),
+            success: true,
+            metadata: Some(serde_json::Value::Object(metadata)),
+        })
     }
 
     async fn execute_interact(
