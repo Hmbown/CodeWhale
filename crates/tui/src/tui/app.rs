@@ -1779,6 +1779,13 @@ pub struct App {
     pub streaming_state: StreamingState,
     /// Live approximate output tokens for the current assistant stream.
     pub streaming_output_token_estimate: u64,
+    /// Provider-billed prompt tokens from the most recent parent model call
+    /// (per-step `TurnUsage`). The context meter takes the max of this and
+    /// the local estimate — the same rule the auto-compaction trigger uses —
+    /// so the two can never disagree about pressure (#5577). Cleared when
+    /// compaction rewrites history, since the receipt describes the
+    /// pre-compaction context.
+    pub last_billed_input_tokens: Option<u32>,
     /// Accumulated reasoning text
     pub reasoning_buffer: String,
     /// Live reasoning header extracted from bold text

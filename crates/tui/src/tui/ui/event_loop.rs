@@ -2966,6 +2966,19 @@ pub(crate) async fn run_event_loop(
                             first_token_ms,
                             request_ms,
                         );
+                        // Billed prompt receipt for the context meter: what
+                        // the provider says the model actually processed
+                        // (#5577). Reviewer/REPL child receipts also arrive
+                        // here, but their prompt is never larger than the
+                        // parent context, and the meter takes a max.
+                        if usage.input_tokens > 0 {
+                            app.last_billed_input_tokens = Some(
+                                app.last_billed_input_tokens
+                                    .map_or(usage.input_tokens, |prior| {
+                                        prior.max(usage.input_tokens)
+                                    }),
+                            );
+                        }
                         // Live cost: price this call against the route that
                         // was actually dispatched so the cost surfaces move
                         // during a long agentic turn instead of only at its

@@ -3070,6 +3070,9 @@ pub(crate) fn apply_loaded_session_with_goal(
         cny: session.metadata.cost.subagent_cost_cny,
     }
     .sanitized();
+    // A restored session has no live billed receipt; the estimate rules the
+    // meter until the next model call reports one.
+    app.last_billed_input_tokens = None;
     app.session.session_cost = restored_parent.usd;
     app.session.session_cost_cny = restored_parent.cny;
     app.session.subagent_cost = restored_background.usd;

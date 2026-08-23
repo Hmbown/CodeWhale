@@ -242,7 +242,18 @@ fn context_usage(app: &App) -> (usize, u32, f64) {
     // overflow estimator was ~1.5x larger, so the meter showed the trigger
     // point as "free" while compaction was still far away (ops T1) — and vice
     // versa the meter read "free" as negative when the engine was only halfway.
-    let used = estimate_input_tokens_for_pressure(&app.api_messages, app.system_prompt.as_ref());
+    let estimated =
+        estimate_input_tokens_for_pressure(&app.api_messages, app.system_prompt.as_ref());
+    // The trigger decides on max(estimate, provider-billed prompt); the meter
+    // must too, or a provider billing above the local estimate (non-ASCII
+    // text, server-side framing) makes the meter under-show real pressure
+    // (#5577). The billed receipt is per model call, so it goes stale only
+    // until the next step or compaction updates it.
+    let used = estimated.max(
+        app.last_billed_input_tokens
+            .map(|tokens| tokens as usize)
+            .unwrap_or(0),
+    );
     let percent = ((used as f64 / f64::from(max)) * 100.0).clamp(0.0, 100.0);
     (used, max, percent)
 }

@@ -273,6 +273,10 @@ pub(crate) fn add_compaction_receipt(app: &mut App, message: &str) {
 
 pub(crate) fn apply_compaction_completed(app: &mut App, id: &str, auto: bool, message: String) {
     if settle_compaction(app, id, auto) {
+        // The billed prompt receipt described the pre-compaction context;
+        // after the rewrite the local estimate is the honest signal until
+        // the next model call bills the new, smaller prompt (#5577).
+        app.last_billed_input_tokens = None;
         add_compaction_receipt(app, &message);
         set_explicit_compaction_status(app, message, StatusToastLevel::Success, false);
     }
