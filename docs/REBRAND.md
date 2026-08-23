@@ -62,8 +62,10 @@ Anything that targets the DeepSeek provider API stays exactly as it was:
   the planet.
 - **Model IDs**: `deepseek-v4-pro`, `deepseek-v4-flash`, and the legacy
   aliases `deepseek-chat` and `deepseek-reasoner`.
-- **Hosts**: `api.deepseek.com` (global) and `api.deepseeki.com` (China
-  fallback).
+- **Hosts**: `api.deepseek.com` (global). The legacy typo host
+  `api.deepseeki.com` is not an official DeepSeek endpoint; it is only
+  still accepted in URL heuristics for existing configs and is not
+  offered as a fallback (#1079).
 - **GitHub repository URL**: `https://github.com/Hmbown/CodeWhale`.
   The old `Hmbown/DeepSeek-TUI` URL redirects there during the transition.
 - **Homebrew tap and formula**: the formula is `codewhale`. The tap GitHub
