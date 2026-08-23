@@ -1,0 +1,13 @@
+hello can you please look up the new ox alpha model and figure out how we could get it workign in codewhale?
+
+---
+
+how do i set a model name manually in codewhale
+
+---
+
+ah wait yeah isn't it a million?
+
+---
+
+can you set that please lol sorry
