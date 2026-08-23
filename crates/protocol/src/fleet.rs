@@ -1223,6 +1223,7 @@ mod tests {
             created_at: "2026-06-12T17:00:00Z".to_string(),
             updated_at: None,
             completed_at: None,
+            usage_ceiling: None,
         };
         let json = serde_json::to_string(&run).unwrap();
         let back: FleetRun = serde_json::from_str(&json).unwrap();
