@@ -1551,6 +1551,20 @@ fn build_default_headers(
         };
         headers.insert(header_name.clone(), header_value);
     }
+    // OpenRouter app attribution: these two headers are how apps appear on
+    // openrouter.ai's app rankings — there is no manual submission. They
+    // identify the app, never the user, and a user-configured header of the
+    // same name below still wins (the extra-header loop overwrites).
+    if api_provider == ApiProvider::Openrouter {
+        headers.insert(
+            HeaderName::from_static("http-referer"),
+            HeaderValue::from_static("https://codewhale.net"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-title"),
+            HeaderValue::from_static("Codewhale"),
+        );
+    }
     for (name, value) in extra_headers {
         let name = name.trim();
         let value = value.trim();
@@ -3988,6 +4002,68 @@ mod tests {
     use serde_json::json;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// OpenRouter app attribution: the two headers that put an app on
+    /// openrouter.ai's rankings are sent for OpenRouter routes only, and a
+    /// user-configured header of the same name wins.
+    #[test]
+    fn openrouter_routes_carry_app_attribution_headers() {
+        let headers = build_default_headers(
+            "sk-or-key",
+            &HashMap::new(),
+            ApiProvider::Openrouter,
+            "https://openrouter.ai/api/v1",
+            WireFormat::ChatCompletions,
+            false,
+        )
+        .expect("headers");
+        assert_eq!(
+            headers.get("http-referer").and_then(|v| v.to_str().ok()),
+            Some("https://codewhale.net")
+        );
+        assert_eq!(
+            headers.get("x-title").and_then(|v| v.to_str().ok()),
+            Some("Codewhale")
+        );
+
+        // Attribution identifies this app to OpenRouter's rankings and has
+        // no business on any other route, whichever provider that is.
+        for provider in [
+            ApiProvider::Deepseek,
+            ApiProvider::Moonshot,
+            ApiProvider::Zai,
+            ApiProvider::Openai,
+            ApiProvider::Custom,
+        ] {
+            let other = build_default_headers(
+                "sk-key",
+                &HashMap::new(),
+                provider,
+                "https://example.invalid/v1",
+                WireFormat::ChatCompletions,
+                false,
+            )
+            .expect("headers");
+            assert!(
+                other.get("http-referer").is_none() && other.get("x-title").is_none(),
+                "{provider:?} must not receive OpenRouter attribution headers"
+            );
+        }
+
+        let overridden = build_default_headers(
+            "sk-or-key",
+            &HashMap::from([("X-Title".to_string(), "My Fork".to_string())]),
+            ApiProvider::Openrouter,
+            "https://openrouter.ai/api/v1",
+            WireFormat::ChatCompletions,
+            false,
+        )
+        .expect("headers");
+        assert_eq!(
+            overridden.get("x-title").and_then(|v| v.to_str().ok()),
+            Some("My Fork")
+        );
+    }
 
     #[test]
     fn openrouter_pricing_maps_cache_write_per_token_to_per_million() {
