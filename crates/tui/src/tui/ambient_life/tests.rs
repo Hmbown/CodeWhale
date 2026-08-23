@@ -58,8 +58,57 @@ fn frame_at(t: u128) -> FrameMarks {
         &[],
         AmbientCursor::default(),
         WhaleCameo::default(),
+        AmbientActivity::Baseline,
         &mut stats,
     )
+}
+
+#[test]
+fn subagent_activity_surfaces_a_whale_pod() {
+    let whale = WhaleCameo {
+        elapsed_ms: Some(500), // Spout phase
+        anchor_x: 50,
+        anchor_y: 20,
+    };
+    let render = |activity: AmbientActivity| -> Vec<String> {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, 30));
+        render_ambient_life(
+            buf.area,
+            &mut buf,
+            (Color::Cyan, Color::Blue),
+            &[],
+            12_000,
+            1.0,
+            AmbientCursor::default(),
+            whale,
+            activity,
+        );
+        buf.content
+            .iter()
+            .filter(|cell| cell.symbol().contains('≈'))
+            .map(|cell| cell.symbol().to_string())
+            .collect()
+    };
+    let baseline = render(AmbientActivity::Baseline);
+    let pod = render(AmbientActivity::Subagents);
+    assert!(
+        pod.len() > baseline.len(),
+        "a subagent pod must surface more whale marks ({}) than the single cameo ({})",
+        pod.len(),
+        baseline.len(),
+    );
+}
+
+#[test]
+fn reasoning_activity_slows_the_ocean_clock() {
+    // Same scene, twice the elapsed time: the reasoning clock must read like
+    // the deep (0.6x), so position at t under Reasoning equals position at
+    // 0.6t under Baseline.
+    let scaled = AmbientActivity::Reasoning.scaled_time_ms(10_000);
+    assert_eq!(scaled, 6_000);
+    let tools = AmbientActivity::Tools.scaled_time_ms(10_000);
+    assert_eq!(tools, 12_500);
+    assert_eq!(AmbientActivity::Baseline.scaled_time_ms(10_000), 10_000);
 }
 
 #[test]
@@ -270,6 +319,7 @@ fn short_transcript_rows_leave_a_safe_ocean_corridor() {
         1.0,
         AmbientCursor::default(),
         WhaleCameo::default(),
+        AmbientActivity::Baseline,
     );
     let rendered: String = (0..area.height)
         .map(|row| {
@@ -322,6 +372,7 @@ fn a_jellyfish_needs_water_deep_enough_to_hold_it_and_the_school() {
             &lines,
             AmbientCursor::default(),
             WhaleCameo::default(),
+            AmbientActivity::Baseline,
             &mut stats,
         );
         for mark in &frame.marks {
@@ -368,6 +419,7 @@ fn sparse_water_gets_a_compact_jellyfish() {
             &[],
             AmbientCursor::default(),
             WhaleCameo::default(),
+            AmbientActivity::Baseline,
             &mut stats,
         );
         for mark in &frame.marks {
@@ -422,6 +474,7 @@ fn motion_is_a_deterministic_function_of_elapsed_time() {
             &[],
             AmbientCursor::default(),
             WhaleCameo::default(),
+            AmbientActivity::Baseline,
             &mut stats,
         )
     };
@@ -488,6 +541,7 @@ fn frame_stats_account_for_every_mark() {
         1.0,
         AmbientCursor::default(),
         WhaleCameo::default(),
+        AmbientActivity::Baseline,
     );
     assert_eq!(
         stats.marks_built,
@@ -527,6 +581,7 @@ fn frame_stats_stay_within_the_render_budget() {
         1.0,
         AmbientCursor::default(),
         whale,
+        AmbientActivity::Baseline,
     );
     assert!(
         stats.marks_built <= MAX_FRAME_MARKS,
@@ -573,6 +628,7 @@ fn frame_stats_never_overwrite_text() {
             anchor_x: 10,
             anchor_y: 20,
         },
+        AmbientActivity::Baseline,
     );
     assert!(
         stats.marks_skipped_text > 0,

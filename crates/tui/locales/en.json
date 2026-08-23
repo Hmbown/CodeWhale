@@ -1168,6 +1168,7 @@
   "PhaseReasoning": "reasoning",
   "PhaseReading": "reading",
   "PhaseUsingTool": "using tool",
+  "PhaseSubagents": "working on subagents",
   "PhaseVerifying": "verifying",
   "PhaseWaitingOnYou": "waiting on you",
   "PhaseDone": "done",

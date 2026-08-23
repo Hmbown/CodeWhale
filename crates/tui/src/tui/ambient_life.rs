@@ -212,6 +212,63 @@ pub struct WhaleCameo {
     pub anchor_y: u16,
 }
 
+/// How the ambient scene is shaped by live agent activity. The underwater
+/// used to be phase-agnostic: same fish, same pace, whether the agent was
+/// thinking, running tools, or orchestrating sub-agents. Each treatment is a
+/// bounded parameter shift — never a second scene graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AmbientActivity {
+    #[default]
+    Baseline,
+    Reasoning,
+    Tools,
+    Subagents,
+    Verifying,
+}
+
+impl AmbientActivity {
+    #[must_use]
+    pub fn from_kind(kind: crate::tui::underwater::LiveActivityKind) -> Self {
+        match kind {
+            crate::tui::underwater::LiveActivityKind::Reasoning => Self::Reasoning,
+            crate::tui::underwater::LiveActivityKind::UsingTool => Self::Tools,
+            crate::tui::underwater::LiveActivityKind::UsingSubagents => Self::Subagents,
+            crate::tui::underwater::LiveActivityKind::Verifying => Self::Verifying,
+            _ => Self::Baseline,
+        }
+    }
+
+    /// Ocean-clock speed factor: thinking reads as the slow deep, tool work
+    /// as the fast current.
+    fn speed(self) -> f32 {
+        match self {
+            Self::Reasoning => 0.6,
+            Self::Tools | Self::Subagents => 1.25,
+            Self::Verifying => 1.0,
+            Self::Baseline => 1.0,
+        }
+    }
+
+    fn scaled_time_ms(self, elapsed_ms: u128) -> u128 {
+        let speed = self.speed();
+        if (speed - 1.0).abs() < f32::EPSILON {
+            elapsed_ms
+        } else {
+            ((elapsed_ms as f64) * f64::from(speed)) as u128
+        }
+    }
+
+    /// A sub-agent run surfaces as a pod: the completion cameo becomes three
+    /// whales at staggered offsets instead of one.
+    fn pod_cameo(self) -> bool {
+        self == Self::Subagents
+    }
+
+    fn pod_offsets(self) -> &'static [i16] {
+        if self.pod_cameo() { &[-5, 0, 5] } else { &[0] }
+    }
+}
+
 const WHALE_CAMEO_MS: u128 = 2_400;
 
 /// Render ambient life into empty water cells of `area`.
@@ -228,17 +285,25 @@ pub fn render_ambient_life(
     presence: f32,
     cursor: AmbientCursor,
     whale: WhaleCameo,
+    activity: AmbientActivity,
 ) -> AmbientFrameStats {
     if area.width < AMBIENT_MIN_WIDTH || area.height < AMBIENT_MIN_HEIGHT {
         return AmbientFrameStats::default();
     }
+
+    // Activity shifts the ocean clock: reading feels like the deep (slow
+    // drift), tool work like a brighter current (faster), verification stays
+    // on the metered pulse. Density stays bounded by MAX_FRAME_MARKS.
+    let elapsed_ms = activity.scaled_time_ms(elapsed_ms);
 
     let density = LifeDensity::from_area(area);
     let mut stats = AmbientFrameStats::default();
     // Positions always ride the live monotonic clock; `presence` fades the
     // marks in and out, so the animated/static boundary eases instead of
     // snapping fish between t=0 and their mid-path positions.
-    let frame = build_frame_marks(area, elapsed_ms, density, lines, cursor, whale, &mut stats);
+    let frame = build_frame_marks(
+        area, elapsed_ms, density, lines, cursor, whale, activity, &mut stats,
+    );
     paint_marks(area, buf, inks, lines, &frame, presence, &mut stats);
     stats
 }
@@ -251,6 +316,7 @@ fn build_frame_marks(
     lines: &[Line<'static>],
     cursor: AmbientCursor,
     whale: WhaleCameo,
+    activity: AmbientActivity,
     stats: &mut AmbientFrameStats,
 ) -> FrameMarks {
     let mut marks = Vec::with_capacity(48);
@@ -527,10 +593,20 @@ fn build_frame_marks(
 
     // --- Rare whale cameo (completion only) ---
     if let Some(cameo_ms) = whale.elapsed_ms.filter(|ms| *ms < WHALE_CAMEO_MS) {
-        let phase = whale_cameo_phase(cameo_ms);
-        if phase != WhaleCameoPhase::Hidden {
+        for (pod_index, offset) in activity.pod_offsets().iter().enumerate() {
+            // Pod members ride the same cameo breath, staggered so a sub-agent
+            // completion reads as a group surfacing rather than one whale.
+            let pod_cameo_ms = cameo_ms.saturating_add((pod_index as u128) * 240);
+            if pod_cameo_ms >= WHALE_CAMEO_MS {
+                continue;
+            }
+            let phase = whale_cameo_phase(pod_cameo_ms);
+            if phase == WhaleCameoPhase::Hidden {
+                continue;
+            }
             let ax = whale
                 .anchor_x
+                .saturating_add_signed(*offset)
                 .saturating_sub(area.x)
                 .min(area.width.saturating_sub(4));
             let ay = whale

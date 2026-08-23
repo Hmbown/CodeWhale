@@ -1168,6 +1168,7 @@
   "PhaseReasoning": "추론 중",
   "PhaseReading": "읽는 중",
   "PhaseUsingTool": "도구 사용 중",
+  "PhaseSubagents": "서브에이전트 실행 중",
   "PhaseVerifying": "검증 중",
   "PhaseWaitingOnYou": "응답 대기",
   "PhaseDone": "완료",

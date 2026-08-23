@@ -60,6 +60,8 @@ pub struct ChatWidget {
     jump_to_latest_button: Option<Rect>,
     background: Color,
     ocean_column: Option<crate::tui::ocean::OceanColumn>,
+    /// Live-activity shape of the ambient scene (thinking/tools/subagents).
+    ocean_activity: crate::tui::ambient_life::AmbientActivity,
     /// Ink for idle fish/bubbles. Present for every underwater treatment —
     /// flat and Terminal-owned keep ambient life without the ombre field.
     ambient_inks: Option<(Color, Color)>,
@@ -220,6 +222,9 @@ impl ChatWidget {
                 jump_to_latest_button: None,
                 background,
                 ocean_column,
+                ocean_activity: crate::tui::ambient_life::AmbientActivity::from_kind(
+                    crate::tui::underwater::LiveActivity::from_app(app).kind(),
+                ),
                 ambient_inks,
                 ocean_elapsed_ms,
                 ocean_animated,
@@ -612,6 +617,9 @@ impl ChatWidget {
             jump_to_latest_button,
             background,
             ocean_column,
+            ocean_activity: crate::tui::ambient_life::AmbientActivity::from_kind(
+                crate::tui::underwater::LiveActivity::from_app(app).kind(),
+            ),
             ambient_inks,
             ocean_elapsed_ms,
             ocean_animated,
@@ -1004,6 +1012,7 @@ impl ChatWidget {
                 self.ocean_presence_f32(),
                 cursor,
                 whale,
+                self.ocean_activity,
             );
             if let Some(column) = self.ocean_column {
                 crate::tui::ambient_life::apply_caustic_shimmer(

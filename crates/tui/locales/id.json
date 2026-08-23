@@ -1145,6 +1145,7 @@
   "PhaseReasoning": "menalar",
   "PhaseReading": "membaca",
   "PhaseUsingTool": "memakai tool",
+  "PhaseSubagents": "subagen berjalan",
   "PhaseVerifying": "memverifikasi",
   "PhaseWaitingOnYou": "menunggu Anda",
   "PhaseDone": "selesai",

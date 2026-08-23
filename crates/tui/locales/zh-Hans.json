@@ -1168,6 +1168,7 @@
   "PhaseReasoning": "推理中",
   "PhaseReading": "读取中",
   "PhaseUsingTool": "使用工具中",
+  "PhaseSubagents": "正在使用子代理",
   "PhaseVerifying": "校验中",
   "PhaseWaitingOnYou": "等你处理",
   "PhaseDone": "完成",

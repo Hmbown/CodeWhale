@@ -1168,6 +1168,7 @@
   "PhaseReasoning": "思考中",
   "PhaseReading": "読込中",
   "PhaseUsingTool": "ツール実行中",
+  "PhaseSubagents": "サブエージェント実行中",
   "PhaseVerifying": "検証中",
   "PhaseWaitingOnYou": "応答待ち",
   "PhaseDone": "完了",
