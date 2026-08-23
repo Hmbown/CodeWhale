@@ -226,7 +226,18 @@ impl McpOAuthRuntime {
         if !token_needs_refresh(expires_at) {
             return Ok(());
         }
+        self.refresh_and_persist().await
+    }
 
+    /// Force a token refresh regardless of the local expiry clock (T4): a
+    /// 401/403 means the server no longer accepts the token — clock skew,
+    /// server-side revocation, or rotation — so the expiry-based gate must
+    /// not decide alone.
+    pub(crate) async fn force_refresh(&self) -> Result<()> {
+        self.refresh_and_persist().await
+    }
+
+    async fn refresh_and_persist(&self) -> Result<()> {
         let refresh_result = {
             let guard = self.inner.manager.lock().await;
             guard.refresh_token().await
