@@ -524,6 +524,8 @@ struct WorkerStream {
     pending: Vec<u8>,
     terminal: bool,
     terminal_route: TerminalRouteEvidence,
+    /// When this worker process was started, for per-task wall-clock limits (R5).
+    started_at: std::time::Instant,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -686,6 +688,7 @@ impl FleetExecutor {
                 pending: Vec::new(),
                 terminal: false,
                 terminal_route: TerminalRouteEvidence::default(),
+                started_at: std::time::Instant::now(),
             },
         );
         Ok(handle)
@@ -703,6 +706,15 @@ impl FleetExecutor {
         self.streams
             .get(worker_id)
             .and_then(|stream| stream.attempt.clone())
+    }
+
+    /// Wall-clock time this worker process has been running (R5). `None` when
+    /// the worker is not tracked.
+    #[must_use]
+    pub fn worker_running_for(&self, worker_id: &str) -> Option<std::time::Duration> {
+        self.streams
+            .get(worker_id)
+            .map(|stream| stream.started_at.elapsed())
     }
 
     /// Stop a tracked worker at the host boundary.
@@ -958,6 +970,7 @@ mod tests {
                 pending: Vec::new(),
                 terminal: false,
                 terminal_route: TerminalRouteEvidence::default(),
+                started_at: std::time::Instant::now(),
             },
         );
     }
