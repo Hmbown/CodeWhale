@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0RFAJ610EM9C6C00Y5ABWPV",
+  "strategy": "manual-commit",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/tui/src/tools/workflow.rs",
+    "crates/tui/src/tui/work_surface/model.rs",
+    "crates/tui/src/work_graph/events.rs",
+    "crates/tui/src/work_graph/reducer.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 728,
+    "cache_creation_tokens": 588812,
+    "cache_read_tokens": 111745825,
+    "output_tokens": 206468,
+    "api_call_count": 364
+  }
+}
