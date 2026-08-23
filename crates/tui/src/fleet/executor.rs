@@ -306,6 +306,8 @@ fn build_worker_exec_command_from_prompt(
         "--auto".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
+        // R7: the worker shuts itself down when the manager dies (stdin EOF).
+        "--parent-death-watch".to_string(),
     ]);
 
     // Non-secret thinking tier only (#4137). This is profile metadata and
@@ -1348,8 +1350,14 @@ mod tests {
             cmd.args
         );
         assert_eq!(
-            &cmd.args[exec_idx..exec_idx + 4],
-            ["exec", "--auto", "--output-format", "stream-json"],
+            &cmd.args[exec_idx..exec_idx + 5],
+            [
+                "exec",
+                "--auto",
+                "--output-format",
+                "stream-json",
+                "--parent-death-watch"
+            ],
             "exec flags must remain behind the subcommand: {:?}",
             cmd.args
         );

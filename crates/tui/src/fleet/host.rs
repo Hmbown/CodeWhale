@@ -181,6 +181,8 @@ struct LocalWorkerProcess {
     child: Child,
     #[cfg(unix)]
     session_id: libc::pid_t,
+    #[cfg(unix)]
+    parent_death_writer: Option<std::io::PipeWriter>,
     #[cfg(windows)]
     windows_job: FleetWindowsJob,
     host_kind: FleetHostKind,
@@ -223,9 +225,24 @@ impl LocalProcessFleetHostAdapter {
             .map_err(|err| FleetHostError::retryable(format!("cloning worker log: {err}")))?;
 
         let mut command = Command::new(&request.command.program);
+        // Parent-death watch (R7): the worker's stdin is the read end of a pipe
+        // whose write end lives only in this adapter process. If the manager
+        // dies (crash, kill, power loss), the kernel closes the write end, the
+        // worker sees stdin EOF, and `--parent-death-watch` shuts the worker
+        // tree down instead of letting it spend forever. Windows workers are
+        // contained in a Job Object that the OS terminates on parent death.
+        #[cfg(unix)]
+        let (parent_death_writer, stdin) = {
+            let (reader, writer) = std::io::pipe().map_err(|err| {
+                FleetHostError::retryable(format!("creating parent-death pipe: {err}"))
+            })?;
+            (Some(writer), std::process::Stdio::from(reader))
+        };
+        #[cfg(not(unix))]
+        let (parent_death_writer, stdin) = (None, Stdio::null());
         command
             .args(&request.command.args)
-            .stdin(Stdio::null())
+            .stdin(stdin)
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(stderr))
             .env_clear()
@@ -273,8 +290,12 @@ impl LocalProcessFleetHostAdapter {
             LocalWorkerProcess {
                 request,
                 child,
+                // SAFETY: `setsid` is async-signal-safe and the closure does not
+                // touch allocator or parent-held state between fork and exec.
                 #[cfg(unix)]
                 session_id: pid as libc::pid_t,
+                #[cfg(unix)]
+                parent_death_writer,
                 #[cfg(windows)]
                 windows_job,
                 host_kind,
