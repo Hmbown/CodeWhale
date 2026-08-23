@@ -82,8 +82,11 @@
 //! table changes nothing. Unix-only: on non-unix platforms the config key
 //! parses but binding is refused at runtime.
 
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io;
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -107,19 +110,24 @@ use crate::tui::ui::{DispatchRecovery, dispatch_composer_message, escape_cancel_
 pub(crate) const SOCKET_FILE_NAME: &str = "control.sock";
 
 /// Hard cap on one request line (initial-request bound).
+#[cfg(unix)]
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 /// Accept-loop poll interval while the listener is idle.
+#[cfg(unix)]
 const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// A client that connects and never sends is dropped after this long.
+#[cfg(unix)]
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Response writes give up after this long rather than blocking forever.
+#[cfg(unix)]
 const RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long a verb may wait for the event loop to handle it
 /// (`APP_RESPONSE_TIMEOUT`).
+#[cfg(unix)]
 const DISPATCH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Minimum pause between bind retries after a refused takeover, so another
@@ -134,6 +142,11 @@ const BIND_RETRY_BACKOFF: Duration = Duration::from_millis(200);
 // ── Protocol ────────────────────────────────────────────────────────────────
 
 /// One request line: `{"id": … , "method": … , "params": …}`.
+/// Windows builds construct this type only in the portable protocol tests;
+/// the plain Windows lib build leaves it unreachable, so the lint allowance
+/// below is scoped to exactly that case (unix builds use it via the socket
+/// runtime, and CI denies dead code on the MSVC test gate).
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug, Deserialize)]
 struct Request {
     id: String,
@@ -141,6 +154,7 @@ struct Request {
     method: Method,
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 enum Method {
@@ -150,11 +164,13 @@ enum Method {
     Status(EmptyParams),
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug, Deserialize)]
 struct MessageParams {
     text: String,
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug, Deserialize)]
 struct EmptyParams {}
 
@@ -166,6 +182,7 @@ pub(crate) struct PendingCommand {
     pub(crate) respond_to: mpsc::Sender<String>,
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) enum ControlCommand {
     Message { text: String },
@@ -203,6 +220,7 @@ struct SuccessResponse {
     result: ResponseResult,
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ResponseResult {
