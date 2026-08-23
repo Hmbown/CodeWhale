@@ -14,7 +14,7 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use crate::compaction::estimate_input_tokens_conservative;
+use crate::compaction::estimate_input_tokens_for_pressure;
 use crate::localization::{Locale, MessageId, tr};
 use crate::models::SystemPrompt;
 use crate::palette;
@@ -26,7 +26,6 @@ use crate::tui::views::{
     ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,
     render_underwater_surface,
 };
-use crate::utils::estimate_message_chars;
 
 /// Marker used by per-turn working-set metadata. Replicated here so the
 /// context inspector can distinguish stable prompt blocks from volatile
@@ -205,10 +204,13 @@ fn context_usage(app: &App) -> (usize, u32, f64) {
         app.effective_model_for_budget(),
         app.active_route_limits,
     );
-    let estimated =
-        estimate_input_tokens_conservative(&app.api_messages, app.system_prompt.as_ref());
-    let total_chars = estimate_message_chars(&app.api_messages);
-    let used = estimated.max(total_chars / 4);
+    // The meter must show the SAME pressure signal the auto-compaction trigger
+    // decides on (compaction::estimate_input_tokens_for_pressure, the
+    // non-inflated estimate with framing overhead). The old conservative
+    // overflow estimator was ~1.5x larger, so the meter showed the trigger
+    // point as "free" while compaction was still far away (ops T1) — and vice
+    // versa the meter read "free" as negative when the engine was only halfway.
+    let used = estimate_input_tokens_for_pressure(&app.api_messages, app.system_prompt.as_ref());
     let percent = ((used as f64 / f64::from(max)) * 100.0).clamp(0.0, 100.0);
     (used, max, percent)
 }
@@ -569,7 +571,7 @@ impl ContextInspectorView {
 
     pub(crate) fn refresh_from_app(&mut self, app: &App) {
         let (used, max, percent) = context_usage(app);
-        let system_tokens = estimate_input_tokens_conservative(&[], app.system_prompt.as_ref());
+        let system_tokens = estimate_input_tokens_for_pressure(&[], app.system_prompt.as_ref());
         let message_tokens = used.saturating_sub(system_tokens);
         let free_tokens = usize::try_from(max)
             .unwrap_or(usize::MAX)
