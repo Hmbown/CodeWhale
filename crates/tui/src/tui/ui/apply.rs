@@ -2197,11 +2197,18 @@ pub(crate) async fn apply_approval_decision(
     event: ApprovalDecisionEvent,
 ) {
     if event.decision == ReviewDecision::ApprovedForSession {
-        // Store the tool name (backward compat) and the lossy grouping key so
-        // later flag variants of the same command family are also auto-approved
-        // (v0.8.37).
-        app.approval_session_approved
-            .insert(event.tool_name.clone());
+        // Only the lossy grouping key is stored: a session grant is scoped to
+        // the command family (e.g. `shell:git status`), never to the whole
+        // tool — approving one shell command must not approve every shell
+        // command for the session (ops R2). The tool name is recorded as
+        // audit evidence, not as a grant.
+        crate::audit::log_sensitive_event(
+            "tool.approval.session_grant",
+            serde_json::json!({
+                "tool_name": event.tool_name,
+                "grouping_key": event.approval_grouping_key,
+            }),
+        );
         app.approval_session_approved
             .insert(event.approval_grouping_key.clone());
     }

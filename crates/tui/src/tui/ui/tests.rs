@@ -5239,14 +5239,20 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
 }
 
 #[test]
-fn session_approved_cache_keeps_tool_name_session_grants() {
+fn session_approved_cache_does_not_promote_tool_name_grants_to_whole_tool() {
     let mut app = create_test_app();
     app.approval_session_approved
         .insert("edit_file".to_string());
 
     assert!(
+        !is_session_approved_for_tool(&app, "edit_file", "file:edit_file:fresh"),
+        "a bare tool-name grant must not cover future calls of the same tool (ops R2)"
+    );
+    app.approval_session_approved
+        .insert("file:edit_file:fresh".to_string());
+    assert!(
         is_session_approved_for_tool(&app, "edit_file", "file:edit_file:fresh"),
-        "approve-for-session should still cover future calls of the same tool"
+        "a grouping-key grant still covers its command family"
     );
 }
 

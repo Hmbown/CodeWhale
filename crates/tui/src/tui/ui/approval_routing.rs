@@ -7,9 +7,16 @@ use crate::tui::app::{App, AppMode, StatusToastLevel};
 use crate::tui::approval::ApprovalMode;
 use crate::tui::history::HistoryCell;
 
-pub(super) fn is_session_approved_for_tool(app: &App, tool_name: &str, grouping_key: &str) -> bool {
+pub(super) fn is_session_approved_for_tool(
+    app: &App,
+    _tool_name: &str,
+    grouping_key: &str,
+) -> bool {
+    // Session grants match the grouping key only (command family / host /
+    // patch paths). A bare tool name is never session-wide: approving one
+    // shell command used to auto-approve the entire shell tool for the
+    // session. The `contains(tool_name)` clause was the escalation (ops R2).
     app.approval_session_approved.contains(grouping_key)
-        || app.approval_session_approved.contains(tool_name)
 }
 
 pub(super) fn is_session_denied_for_key(app: &App, approval_key: &str) -> bool {
