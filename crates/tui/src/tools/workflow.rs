@@ -180,14 +180,7 @@ impl WorkflowWorkLifecycle {
                 .ok()
             })
         });
-        let state = match record.status {
-            WorkflowRunStatus::Running => OwnerState::Running,
-            // Degraded still finished and produced output; the run record and
-            // report carry the dropped-slot truth.
-            WorkflowRunStatus::Completed | WorkflowRunStatus::Degraded => OwnerState::Completed,
-            WorkflowRunStatus::Failed => OwnerState::Failed,
-            WorkflowRunStatus::Cancelled => OwnerState::Cancelled,
-        };
+        let state = owner_state_for_run_status(record.status);
         let mut snapshot = OperationOwnerSnapshot::new(
             self.external.clone(),
             state,
@@ -232,6 +225,21 @@ impl WorkflowWorkLifecycle {
                 checked_at: i64::try_from(now_ms()).unwrap_or(i64::MAX),
             },
         );
+    }
+}
+
+/// Owner-snapshot projection of a workflow run status. Total and lossless
+/// for terminal truth: Degraded stays Degraded — collapsing it into
+/// Completed let dashboards and automation read a partial workflow as an
+/// ordinary success (#5582). The run record and report keep the per-slot
+/// detail either way.
+fn owner_state_for_run_status(status: WorkflowRunStatus) -> OwnerState {
+    match status {
+        WorkflowRunStatus::Running => OwnerState::Running,
+        WorkflowRunStatus::Completed => OwnerState::Completed,
+        WorkflowRunStatus::Degraded => OwnerState::Degraded,
+        WorkflowRunStatus::Failed => OwnerState::Failed,
+        WorkflowRunStatus::Cancelled => OwnerState::Cancelled,
     }
 }
 
@@ -5126,6 +5134,21 @@ mod journal {
     mod tests {
         use super::super::{WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED, WorkflowUiEventKind};
         use super::*;
+
+        /// #5582: a degraded run must never project as an ordinary success
+        /// to owner-level consumers.
+        #[test]
+        fn owner_snapshot_keeps_degraded_distinct_from_completed() {
+            use crate::work_graph::OwnerState;
+            assert_eq!(
+                crate::tools::workflow::owner_state_for_run_status(WorkflowRunStatus::Degraded),
+                OwnerState::Degraded
+            );
+            assert_eq!(
+                crate::tools::workflow::owner_state_for_run_status(WorkflowRunStatus::Completed),
+                OwnerState::Completed
+            );
+        }
 
         fn sample_record(run_id: &str, status: WorkflowRunStatus) -> WorkflowRunRecord {
             WorkflowRunRecord {
