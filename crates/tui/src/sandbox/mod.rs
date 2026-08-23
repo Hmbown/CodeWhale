@@ -58,7 +58,11 @@ pub use policy::SandboxPolicy;
 /// Public OS-sandbox capability labels consumed by the website facts
 /// generator. Keep this list limited to wrappers that the command execution
 /// path can actually select and apply.
-#[allow(dead_code)] // Parsed from source by web/scripts/facts-lib.mjs.
+#[allow(dead_code)]
+// EXTERNAL CONTRACT — zero Rust references by design: the website's docs
+// drift gate parses this const out of the source text (web/lib/facts-drift.ts
+// and web/scripts/facts-lib.mjs match the literal declaration). Deleting or
+// renaming it silently breaks that gate.
 pub const PUBLIC_SANDBOX_BACKENDS: &[&str] = &[
     "seatbelt (macOS, when available)",
     "bubblewrap (Linux, opt-in when installed)",

@@ -10,7 +10,6 @@ use std::process::Command;
 use crate::models::{ContentBlock, Message};
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
-use serde_json::Value;
 use std::io;
 
 /// A writer that counts bytes written without storing them.
@@ -723,13 +722,6 @@ where
 pub fn ensure_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path)
         .with_context(|| format!("Failed to create directory: {}", path.display()))
-}
-
-/// Render JSON with pretty formatting, falling back to a compact string on error.
-#[must_use]
-#[allow(dead_code)]
-pub fn pretty_json(value: &Value) -> String {
-    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
 /// Truncate a string to a maximum length, adding an ellipsis if truncated.

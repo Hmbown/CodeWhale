@@ -36,9 +36,6 @@ use crate::tui::app::{App, AppAction};
 
 /// Transcription model requested from the provider's chat-completions API.
 const ASR_MODEL: &str = "mimo-v2.5-asr";
-/// Free ASR: Groq Whisper (cloud, free tier) — fast, cross-platform, no local model download.
-#[allow(dead_code)]
-const GROQ_ASR_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
 const GROQ_ASR_MODEL: &str = "whisper-large-v3-turbo";
 /// Local whisper binary names to probe (whisper.cpp, faster-whisper, OpenAI whisper).
 const LOCAL_WHISPER_BINS: &[&str] = &["whisper", "whisper.cpp", "whisper-cpp", "faster-whisper"];
