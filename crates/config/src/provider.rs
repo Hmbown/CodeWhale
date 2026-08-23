@@ -760,7 +760,11 @@ provider!(
     "NVIDIA NIM",
     DEFAULT_NVIDIA_NIM_BASE_URL,
     DEFAULT_NVIDIA_NIM_MODEL,
-    ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"],
+    // DEEPSEEK_API_KEY was listed here as a third fallback and silently
+    // transmitted a DeepSeek credential to NVIDIA's endpoint when a user
+    // with that variable exported switched providers. Removed (#5588);
+    // the legacy root api_key compatibility path stays DeepSeek-scoped.
+    ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"],
     "nvidia_nim",
     aliases: ["nvidia", "nvidia_nim", "nim"]
 );

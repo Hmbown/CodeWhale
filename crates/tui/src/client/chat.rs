@@ -1141,7 +1141,10 @@ impl DeepSeekClient {
                 status.as_u16(),
                 &raw_error_text,
             );
-            anyhow::bail!("Failed to call DeepSeek Chat API: HTTP {status}: {error_text}");
+            anyhow::bail!(
+                "Failed to call {} Chat Completions API: HTTP {status}: {error_text}",
+                self.api_provider.display_name()
+            );
         }
 
         let response_text = response
