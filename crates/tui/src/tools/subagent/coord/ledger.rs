@@ -566,6 +566,48 @@ impl CoordinationLedger {
         Ok(record)
     }
 
+    /// Release write claims whose owner is not a live claimant (#5562).
+    ///
+    /// Claims are durable records and legitimately outlive the agents that
+    /// registered them; that is fine for history, but a stale claim must never
+    /// keep blocking a later writer. An optional owner restricts the sweep to
+    /// one claim owner; live claimants are never removed. Returns the released
+    /// owners (one entry per claim, in ledger order).
+    pub fn release_stale_claims<F>(
+        &mut self,
+        owner: Option<&str>,
+        mut owner_is_active: F,
+    ) -> Result<Vec<String>, String>
+    where
+        F: FnMut(&str) -> bool,
+    {
+        self.validate_schema()?;
+        let owner_filter = match owner {
+            Some(value) => Some(bounded_coordination_atom("write claim owner", value)?),
+            None => None,
+        };
+        let mut released = Vec::new();
+        self.write_claims.retain(|record| {
+            if owner_filter
+                .as_deref()
+                .is_some_and(|wanted| wanted != record.claim.owner)
+            {
+                return true;
+            }
+            if owner_is_active(&record.claim.owner) {
+                return true;
+            }
+            released.push(record.claim.owner.clone());
+            false
+        });
+        // A release is a mutation: advance the ledger sequence so receipts
+        // stamped by the caller stay coherent (coordinator contract).
+        if !released.is_empty() {
+            self.next_sequence();
+        }
+        Ok(released)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn reconcile(
         &mut self,
@@ -1312,6 +1354,87 @@ mod records_tests {
             contracts: vec![],
         };
         assert!(a.overlaps(&b));
+    }
+
+    #[test]
+    fn release_stale_claims_releases_only_inactive_owners_and_honours_an_owner_filter() {
+        let mut ledger = CoordinationLedger::default();
+        for (owner, root) in [
+            ("live-builder", "src/live"),
+            ("zombie-builder", "src/zombie"),
+            ("prior-session-builder", "src/prior"),
+        ] {
+            ledger
+                .register_claim(
+                    WriteScopeClaim {
+                        owner: owner.into(),
+                        roots: vec![root.into()],
+                        exact_files: Vec::new(),
+                        contracts: Vec::new(),
+                    },
+                    false,
+                    |candidate| candidate == "live-builder",
+                )
+                .expect("non-overlapping claim registers");
+        }
+        assert_eq!(ledger.write_claims.len(), 3);
+
+        let released = ledger
+            .release_stale_claims(None, |candidate| candidate == "live-builder")
+            .expect("release sweeps stale claims");
+        assert_eq!(released, vec!["zombie-builder", "prior-session-builder"]);
+        assert_eq!(ledger.write_claims.len(), 1);
+        assert_eq!(ledger.write_claims[0].claim.owner, "live-builder");
+
+        // A second sweep is idempotent and never touches a live claimant.
+        let released = ledger
+            .release_stale_claims(None, |candidate| candidate == "live-builder")
+            .expect("idempotent sweep");
+        assert!(released.is_empty());
+    }
+
+    #[test]
+    fn release_stale_claims_refuses_to_remove_an_owner_filter_for_a_live_claimant() {
+        let mut ledger = CoordinationLedger::default();
+        ledger
+            .register_claim(
+                WriteScopeClaim {
+                    owner: "live-builder".into(),
+                    roots: vec!["src/live".into()],
+                    exact_files: Vec::new(),
+                    contracts: Vec::new(),
+                },
+                false,
+                |candidate| candidate == "live-builder",
+            )
+            .expect("claim registers");
+        let released = ledger
+            .release_stale_claims(Some("live-builder"), |candidate| {
+                candidate == "live-builder"
+            })
+            .expect("a live claimant is never released");
+        assert!(released.is_empty());
+
+        // A stale owner named in the filter IS released; other stale owners are not touched.
+        ledger
+            .register_claim(
+                WriteScopeClaim {
+                    owner: "zombie-builder".into(),
+                    roots: vec!["src/zombie".into()],
+                    exact_files: Vec::new(),
+                    contracts: Vec::new(),
+                },
+                false,
+                |candidate| candidate == "live-builder",
+            )
+            .expect("claim registers");
+        let released = ledger
+            .release_stale_claims(Some("zombie-builder"), |candidate| {
+                candidate == "live-builder"
+            })
+            .expect("filtered release");
+        assert_eq!(released, vec!["zombie-builder"]);
+        assert_eq!(ledger.write_claims.len(), 1);
     }
 
     #[test]

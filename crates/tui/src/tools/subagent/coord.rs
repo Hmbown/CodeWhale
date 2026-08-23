@@ -1078,14 +1078,14 @@ impl ToolSpec for AgentsCoordinateTool {
     }
 
     fn description(&self) -> &'static str {
-        "Record or inspect bounded coordination state: propose/accept/supersede decisions, expand the caller's write claim before mutation, or reconcile multiple decision records into one neutral fan-in receipt."
+        "Record or inspect bounded coordination state: propose/accept/supersede decisions, expand the caller's write claim before mutation, reconcile multiple decision records into one neutral fan-in receipt, or release stale write-claims whose owner is no longer running."
     }
 
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "action": { "type": "string", "enum": ["inspect", "propose", "accept", "supersede", "claim", "reconcile"] },
+                "action": { "type": "string", "enum": ["inspect", "propose", "accept", "supersede", "claim", "reconcile", "release"] },
                 "decision_id": { "type": "string" },
                 "subject": { "type": "string" },
                 "expected_version": { "type": "integer", "minimum": 1 },
@@ -1095,6 +1095,7 @@ impl ToolSpec for AgentsCoordinateTool {
                 "roots": { "type": "array", "items": { "type": "string" } },
                 "exact_files": { "type": "array", "items": { "type": "string" } },
                 "contracts": { "type": "array", "items": { "type": "string" } },
+                "owner": { "type": "string" },
                 "input_decisions": { "type": "array", "items": { "type": "string" } },
                 "outcome": { "type": "string" },
                 "candidate_handles": { "type": "array", "items": { "type": "string" } },
@@ -1169,7 +1170,7 @@ impl ToolSpec for AgentsCoordinateTool {
         }
         if !matches!(
             action,
-            "propose" | "accept" | "supersede" | "claim" | "reconcile"
+            "propose" | "accept" | "supersede" | "claim" | "reconcile" | "release"
         ) {
             return Err(ToolError::invalid_input(format!(
                 "unknown coordination action '{action}'"
@@ -1292,6 +1293,22 @@ impl ToolSpec for AgentsCoordinateTool {
                     serde_json::to_value(receipt)
                         .map_err(|e| ToolError::execution_failed(e.to_string()))
                 }),
+            "release" => {
+                let owner = input
+                    .get("owner")
+                    .and_then(Value::as_str)
+                    .map(|value| value.to_string());
+                let released = manager
+                    .release_stale_write_claims(owner)
+                    .map_err(ToolError::invalid_input)?;
+                let sequence = manager.coordination.sequence;
+                serde_json::to_value(json!({
+                    "released": released.len(),
+                    "owners": released,
+                    "sequence": sequence
+                }))
+                .map_err(|e| ToolError::execution_failed(e.to_string()))
+            }
             _ => unreachable!("coordination action validated above"),
         };
         let value = match mutation {
@@ -1622,6 +1639,71 @@ mod tests {
             replayed.coordination.decisions[0].decision_id,
             "durable-decision"
         );
+    }
+
+    #[tokio::test]
+    async fn release_action_clears_only_stale_write_claims_and_persists() {
+        let tmp = tempdir().unwrap();
+        let state_path = tmp.path().join("subagents.v1.json");
+        let manager = Arc::new(tokio::sync::RwLock::new(
+            super::super::SubAgentManager::new(tmp.path().to_path_buf(), 4)
+                .with_state_path(state_path.clone()),
+        ));
+        let live = {
+            let mut guard = manager.write().await;
+            let live = guard.insert_test_running_agent("live-builder", tmp.path());
+            let active = [live.clone()].into_iter().collect::<BTreeSet<_>>();
+            for claim in [
+                WriteScopeClaim {
+                    owner: live.clone(),
+                    roots: vec!["src/live".into()],
+                    exact_files: Vec::new(),
+                    contracts: Vec::new(),
+                },
+                WriteScopeClaim {
+                    owner: "zombie-builder".into(),
+                    roots: vec!["src/zombie".into()],
+                    exact_files: Vec::new(),
+                    contracts: Vec::new(),
+                },
+            ] {
+                guard
+                    .coordination
+                    .register_claim(claim, false, |candidate| active.contains(candidate))
+                    .expect("initial claim");
+            }
+            let _ = guard.persist_state_synchronously();
+            live
+        };
+
+        let result = AgentsCoordinateTool::new(Arc::clone(&manager), None)
+            .execute(
+                json!({ "action": "release" }),
+                &ToolContext::new(tmp.path()),
+            )
+            .await
+            .expect("release sweeps stale claims");
+        let body: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(body["released"], json!(1));
+        assert_eq!(body["owners"], json!(["zombie-builder"]));
+
+        // The sweep is durable: reloading the ledger keeps only the live claim.
+        let mut replayed = super::super::SubAgentManager::new(tmp.path().to_path_buf(), 4)
+            .with_state_path(state_path);
+        replayed.load_state().expect("reload released ledger");
+        assert_eq!(replayed.coordination.write_claims.len(), 1);
+        assert_eq!(replayed.coordination.write_claims[0].claim.owner, live);
+
+        // Named-owner release of a live claimant is a no-op and still succeeds.
+        let noop = AgentsCoordinateTool::new(Arc::clone(&manager), None)
+            .execute(
+                json!({ "action": "release", "owner": live }),
+                &ToolContext::new(tmp.path()),
+            )
+            .await
+            .expect("live release is a no-op");
+        let body: Value = serde_json::from_str(&noop.content).unwrap();
+        assert_eq!(body["released"], json!(0));
     }
 
     #[tokio::test]

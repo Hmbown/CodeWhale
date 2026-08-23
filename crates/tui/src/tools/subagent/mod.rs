@@ -3967,6 +3967,26 @@ impl SubAgentManager {
             })
     }
 
+    /// Release write claims whose owner is no longer a live claimant.
+    ///
+    /// The operator-of-record path for #5562: `coordinate inspect` shows the
+    /// standing claims, and `coordinate release` clears the stale ones after
+    /// the manager agrees no live claimant is being touched. An optional owner
+    /// restricts the sweep to one agent; live claims are never removed.
+    pub(crate) fn release_stale_write_claims(
+        &mut self,
+        owner: Option<String>,
+    ) -> Result<Vec<String>, String> {
+        self.ensure_coordination_process_lock()?;
+        let active = self.active_coordination_owners();
+        let released = self
+            .coordination
+            .release_stale_claims(owner.as_deref(), |candidate| active.contains(candidate))?;
+        self.persist_state_synchronously()
+            .map_err(|error| error.to_string())?;
+        Ok(released)
+    }
+
     fn validate_write_scope(&self, owner: &str, paths: &[String]) -> Result<(), String> {
         let Some(claim) = self
             .coordination
@@ -4015,6 +4035,12 @@ impl SubAgentManager {
     /// since finished, and the contention only ever grew. A terminal owner
     /// cannot write anything, so its claim cannot contend.
     ///
+    /// The same single predicate as claim admission (#5562): an agent restored
+    /// `Running` from a prior session (crash leftover) and an owner whose agent
+    /// record is not loaded are both non-live — the per-workspace coordination
+    /// process lock means no other process is writing concurrently, so there is
+    /// no live peer to fail closed against.
+    ///
     /// Worktree-isolated peers are excluded too: they write into their own
     /// checkout and can never contend for these paths.
     fn has_peer_shared_write_claim(&self, owner: &str) -> bool {
@@ -4022,14 +4048,7 @@ impl SubAgentManager {
             .write_claims
             .iter()
             .filter(|record| record.claim.owner != owner && !record.isolated_worktree)
-            .any(|record| {
-                // Unknown owners stay contended: a claim whose agent is not in
-                // this map may predate the current session, and failing closed
-                // is the safe direction for a write gate.
-                self.agents
-                    .get(&record.claim.owner)
-                    .is_none_or(|agent| matches!(agent.status, SubAgentStatus::Running))
-            })
+            .any(|record| self.is_live_coordination_owner(&record.claim.owner))
     }
 
     /// Classify an agent by its `session_boot_id`: `true` when the
@@ -4753,6 +4772,29 @@ impl SubAgentManager {
         self.coordination = snapshot.coordination;
         self.persist_state_synchronously()
             .map_err(|error| format!("failed to persist Fleet coordination rollback: {error}"))
+    }
+
+    /// The single definition of a live coordination claimant.
+    ///
+    /// One predicate, two callers: claim admission (`active_coordination_owners`)
+    /// and the shared-checkout peer gate (`has_peer_shared_write_claim`). They
+    /// used to disagree, which let a claim from a crashed prior session (an
+    /// agent record restored as `Running` with a different boot id, or an owner
+    /// whose record was never loaded at all) keep looking like a live writer
+    /// forever — every later builder/worker was then denied all command
+    /// execution (issue #5562: "stale write-claims persist forever and
+    /// cascade-lock other agents"). A claim cannot contend for an owner that
+    /// cannot write.
+    fn is_live_coordination_owner(&self, id: &str) -> bool {
+        self.agents.get(id).is_some_and(|agent| {
+            agent.status == SubAgentStatus::Running && !self.is_from_prior_session(agent)
+        }) || self.worker_records.get(id).is_some_and(|record| {
+            !record.status.is_terminal()
+                && !self
+                    .agents
+                    .get(id)
+                    .is_some_and(|agent| self.is_from_prior_session(agent))
+        })
     }
 
     fn active_coordination_owners(&self) -> std::collections::HashSet<String> {
@@ -15746,7 +15788,7 @@ const CONSULTANT_AGENT_INTRO: &str = concat!(
 );
 
 const VERIFIER_AGENT_INTRO: &str = concat!(
-    "You are a trusted Fleet verifier (role: `verifier`). Your job is to run the requested gates and report results, and stay read-only.\n",
+    "You are a trusted Fleet verifier (role: `verifier`). Your job is to run the requested gates with your bounded validation tools — the allowed test/check selections — and report results. You never write: patching the workspace is denied. Unbounded shell forms are refused; use the verification surface.\n",
     "Report PASS/FAIL/FLAKY at the top of SUMMARY with exact command evidence.\n",
     "Capture failing assertion and file:line; put obvious fixes under RISKS.\n",
     "You may use more tool calls than quick exploration, but stop after decisive pass/fail evidence.\n",
