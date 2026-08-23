@@ -649,6 +649,13 @@ fn redact_model_bound_text(text: &str, exact_secret_values: &[String]) -> String
 /// Maximum bytes to read from an error response body (64 KB).
 pub(super) const ERROR_BODY_MAX_BYTES: usize = 64 * 1024;
 
+/// Read/overall timeout for the shared client's non-streaming requests
+/// (`/models` listing, catalog refresh, health probes). Streaming requests
+/// keep their own idle-timeout envelope; without this, a provider that accepts
+/// the connection and never answers hangs model-list, catalog refresh, and
+/// health checks forever (ops R4).
+pub(super) const NON_STREAMING_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Read an error response body with a size limit to prevent unbounded allocation.
 pub(super) async fn bounded_error_text(response: reqwest::Response, max_bytes: usize) -> String {
     use futures_util::StreamExt;
@@ -2212,7 +2219,13 @@ impl DeepSeekClient {
     /// List available models from the provider.
     pub async fn list_models(&self) -> Result<Vec<AvailableModel>> {
         let url = api_url(&self.base_url, "models");
-        let response = self.send_with_retry(|| self.http_client.get(&url)).await?;
+        let response = self
+            .send_with_retry(|| {
+                self.http_client
+                    .get(&url)
+                    .timeout(NON_STREAMING_HTTP_TIMEOUT)
+            })
+            .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -2265,6 +2278,7 @@ impl DeepSeekClient {
         let response = self
             .http_client
             .get(&url)
+            .timeout(NON_STREAMING_HTTP_TIMEOUT)
             .send()
             .await
             .map_err(|_| CatalogRefreshError::Network)?;
@@ -2574,7 +2588,12 @@ impl DeepSeekClient {
             return;
         }
         let health_url = api_url(&self.base_url, "models");
-        let probe = self.http_client.get(health_url).send().await;
+        let probe = self
+            .http_client
+            .get(health_url)
+            .timeout(NON_STREAMING_HTTP_TIMEOUT)
+            .send()
+            .await;
         match probe {
             Ok(resp) if resp.status().is_success() => {
                 // Consume the response body so the connection can be returned to the pool.
@@ -2867,7 +2886,12 @@ impl LlmClient for DeepSeekClient {
         }
         let health_url = api_url(&self.base_url, "models");
         self.wait_for_rate_limit().await;
-        let response = self.http_client.get(health_url).send().await;
+        let response = self
+            .http_client
+            .get(health_url)
+            .timeout(NON_STREAMING_HTTP_TIMEOUT)
+            .send()
+            .await;
         match response {
             Ok(resp) if resp.status().is_success() => {
                 // Consume the response body so the connection can be returned to the pool.
