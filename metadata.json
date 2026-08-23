@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0RBPC2XFM4QPJ12Q8K4BRJ3",
+  "strategy": "manual-commit",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/tui/src/commands/groups/core/voice.rs",
+    "crates/tui/src/commands/groups/skills/skills.rs",
+    "crates/tui/src/config/scope_tests.rs",
+    "crates/tui/src/hooks/config.rs",
+    "crates/tui/src/palette/adapt.rs",
+    "crates/tui/src/tui/hot_tail.rs",
+    "crates/tui/src/tui/motion/mode.rs",
+    "crates/tui/src/utils.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 452,
+    "cache_creation_tokens": 453735,
+    "cache_read_tokens": 50388968,
+    "output_tokens": 140073,
+    "api_call_count": 226
+  }
+}
