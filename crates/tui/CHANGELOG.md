@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Optional machine-readable lifecycle event outbox
+  (`[lifecycle_outbox]` config table): opt-in JSONL event stream
+  (`turn_start` / `turn_end` / `turn_stalled` / `subagent_spawn` /
+  `subagent_complete` / `session_start` / `session_end`) for interactive TUI
+  sessions and headless `codewhale exec` runs, with an optional webhook fan-out
+  of the same events. Unset or empty `path` keeps the feature off and behavior
+  unchanged. Every payload carries the resolved `workspace` for routing;
+  subagent events additionally carry `subagent`. `seq` is monotonic across
+  processes sharing one outbox file (exclusive-lock appends + tail recovery),
+  and a session owns its turn boundaries: catchable-signal shutdown appends a
+  synthetic `turn_end` for open turns, and boot reconciliation pairs turns a
+  SIGKILLed session left unpaired. Bounded preview/redaction rules apply to
+  every field. Design record: `docs/rfcs/1365-lifecycle-outbox.md` (#5531).
+
 ## [0.9.11] - 2026-08-22
 
 Codewhale v0.9.11 tightens the long-running agent loop, makes workflow
