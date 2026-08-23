@@ -4,12 +4,11 @@
 **Status:** Implemented; pending upstream PR
 **Date:** 2026-08-20
 **Reference:** the shipped contract lives in
-[docs/CONFIGURATION.md](../CONFIGURATION.md) ("Lifecycle Outbox") and the
-build log is [docs/changelog-lifecycle-outbox.md](../changelog-lifecycle-outbox.md).
-This RFC converts that changelog into the review artifact, modeled
-on [1364-hooks-lifecycle.md](1364-hooks-lifecycle.md). Where the three
-disagree, this RFC is the proposal, `CONFIGURATION.md` is the shipped
-contract, and the changelog is the build log.
+[docs/CONFIGURATION.md](../CONFIGURATION.md) ("Lifecycle Outbox").
+This RFC is the review artifact, modeled
+on [1364-hooks-lifecycle.md](1364-hooks-lifecycle.md). Where the two
+disagree, this RFC is the proposal and `CONFIGURATION.md` is the shipped
+contract.
 
 **Scope:** everything below covers the **TUI runtime** and headless
 **`codewhale exec`** v1. The app-server / ACP surfaces are **out of scope**
