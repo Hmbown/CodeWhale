@@ -1,0 +1,803 @@
+hello please note all of this work needs to take place offline / locally and we don't want to do anything on github publicly until around 6pm pacific today ok? but we need to continue working all day on getting 0.9.11 complete • You are taking over CodeWhale v0.9.11. The objective is to land every concern below in v0.9.11; none
+  may be silently deferred to a later release. Continue autonomously through all reversible local
+  implementation, testing, documentation, and integration preparation. Stop only at explicit external-
+  action gates.
+
+  Repository and authority
+
+  - Workspace root: /Volumes/VIXinSSD/CW
+  - Repository: /Volumes/VIXinSSD/CW/codewhale
+  - Read the current repository and scoped AGENTS.md files completely.
+  - Read the live private codewhale-ops state. Do not trust this prompt, memory, or an old handoff for
+    perishable branch, PR, CI, release, or process facts.
+
+  - Start with /Volumes/VIXinSSD/CW/scripts/workspace-status.sh and /Volumes/VIXinSSD/CW/
+    WORKSPACE_STATUS.md. These live at the CW root, not inside the CodeWhale checkout.
+
+  - Reconcile current origin/main, tags, open PRs, checks, worktrees, dirty files, untracked files, and
+    relevant processes before editing.
+
+  - Use rg to verify behavior already present on current main before rebuilding anything.
+  - Preserve human authorship and canonical identities from .github/AUTHOR_MAP. Never add bot or tool
+    Co-authored-by trailers.
+
+  - Use one controlled integration owner. Independent read-only audits or isolated implementation
+    worktrees may run concurrently, but never let multiple writers collide.
+
+  Known starting state to refresh
+
+  - Clean v0.9.11 lane:
+    /Volumes/VIXinSSD/CW/worktrees/cw-0911-turnloop-stages-20260820
+    branch codex/v0911-turnloop-stages-20260820
+    recorded HEAD 369868d23e593acd71da51db30058b512175e08d
+
+  - PR #5523 review tree:
+    /Volumes/VIXinSSD/CW/worktrees/cw-pr-5523-review-20260820
+    recorded PR head 24a174b386
+
+  - Recorded origin/main and v0.9.10 tag: 369868d23
+  - Treat all recorded facts as stale until refreshed.
+
+  Do not touch
+
+  - /Volumes/VIXinSSD/CW/codewhale is a stale, dirty checkout in the middle of a cherry-pick with
+    unresolved conflicts, staged files, untracked directories, and old local commits. Do not edit,
+    reset, clean, stash, abort, continue, or otherwise alter it.
+
+  - Do not signal or interfere with Hunter’s CodeWhale, codew, tmux, Cursor, ChatGPT CUA, or other
+    existing processes.
+
+  - Do not rewrite published history, retag v0.9.10, force-push, delete worktrees, or discard
+    contributor work.
+
+  External-action boundary
+
+  This prompt authorizes read-only inspection and all reversible local implementation, commits, tests,
+  builds, generated-file refreshes, and release preparation in isolated v0.9.11 worktrees.
+
+  It does not authorize:
+
+  - Posting GitHub reviews or comments.
+  - Pushing branches.
+  - Merging, rebasing, or closing remote PRs.
+  - Triggering workflow_dispatch or other discretionary CI runs.
+  - Tagging or publishing v0.9.11.
+  - npm, crates.io, GHCR, Homebrew, deployment, or spending actions.
+  - Modifying contributor branches directly.
+
+  Prepare exact postable text and exact commands at those gates, then request Hunter’s approval.
+  Continue other useful local work while an external gate is pending.
+
+  Required v0.9.11 work
+
+  1. Integrate PR #5523 correctly
+
+  PR #5523 by Sun Zhenyuan/bistack extracts stages from the turn-loop monolith. It was previously
+  reviewed as substantively safe:
+
+  - About 84% of its 2,851-line churn appeared to be indentation.
+  - Real changes were a PlannedToolCalls struct, three invocations, borrow-adapted signatures, a byte-
+    identical relocated loop tail, and rustfmt reflow.
+
+  - Previous evidence: 10,845 TUI library tests passed; 60 focused turn-loop tests passed on both trees;
+    formatting and PR CI were green.
+
+  - Non-blocking issues: missing Signed-off-by, no changelog entry, and an outdated base.
+
+  Refresh the PR and review evidence. Verify the intent is not already on main. Re-run proportionate
+  focused checks. Treat the contributor PR as the preferred integration path; do not duplicate or erase
+  the contributor’s authorship by casually cherry-picking it into a maintainer commit.
+
+  Prepare a respectful review requesting Signed-off-by and a v0.9.11 changelog entry. If Hunter
+  authorizes merging as-is, preserve Sun Zhenyuan’s authorship through the selected GitHub merge
+  strategy. If later work depends on the extraction before remote merge approval, build it in an
+  explicitly dependent isolated worktree without publishing duplicate history.
+
+  2. Repair the Windows ARM64 nightly failure
+
+  Refresh the nightly history and confirm whether Windows ARM64 still fails with native rustc
+  STATUS_STACK_OVERFLOW while compiling codewhale-tui.
+
+  The recorded regression window is:
+
+  - 5ac75add4: last green
+  - 8880682c6: first red
+  - 138 commits
+  - Nightly failed from August 16 through August 20.
+  - release-artifacts.yml uses --profile dist with fat LTO.
+  - nightly.yml overrides LTO=off and codegen-units=16, provoking full per-crate code generation.
+
+  Do not assume the workflow flag is the root cause merely because removing it may hide the failure.
+  Inspect workflow configuration, profile inheritance, crate size, compiler flags, and the regression
+  window. First evaluate the narrow target-specific change that stops overriding LTO for Windows ARM64.
+  Also evaluate whether module size, recursion, generated code, macro expansion, stack configuration, or
+  a particular commit is the actual trigger.
+
+  Produce the smallest truthful fix for v0.9.11. Validate workflow syntax and all locally reproducible
+  configuration behavior. CI-only proof must be labelled CI-only and requires Hunter’s approval before
+  triggering or pushing. Do not call the problem fixed solely from YAML inspection.
+
+  3. Repair PR #5524 generated-facts drift
+
+  Refresh PR #5524. Confirm whether web/src/generated/facts.generated.ts or its current equivalent is
+  stale because the PR adds a tool without running:
+
+  cd web
+  npm run prebuild
+
+  Reproduce the generator locally using the repository’s existing dependencies. Inspect the generated
+  diff and ensure the tool-count change is legitimate, deterministic, and limited to expected generated
+  facts. Prepare a respectful contributor comment with the exact regeneration command and resulting
+  expected change. Do not post it without approval.
+
+  If the contributor updates the PR, re-review the new head rather than assuming only the generated file
+  changed.
+
+  4. Correct the instruction-authority model
+
+  The current system prompt says the user’s request outranks the constitution and project law. That is
+  structurally wrong for APIs where system/developer instructions outrank user input.
+
+  Required outcome:
+
+  - Remove the “user wins over constitution” hierarchy.
+  - Represent authority in code and message roles, not only prose.
+  - Keep immutable runtime, approval, sandbox, safety, and host law at the highest supported role.
+  - Represent project instructions and standing application instructions as trusted developer context
+    where the provider supports it.
+
+  - Keep the current request as user content.
+  - For providers without a developer role, map the typed authority layers into the strongest truthful
+    provider-native structure without claiming user text outranks host law.
+
+  - Preserve the good parts of BASE_PROMPT: evidence, scope control, truthful completion, approval
+    boundaries, and mechanism-backed guarantees.
+
+  - Add focused transport and prompt-composition tests proving untrusted user content cannot alter the
+    role assigned to higher-authority instructions.
+
+  5. Default workspace-write networking to restricted
+
+  CodeWhale currently creates ordinary workspace-write policies with network_access: true. Change the
+  default to restricted/false.
+
+  Required outcome:
+
+  - Editing the workspace must not automatically grant outbound network access.
+  - Network use must come from an explicit permission profile, policy, allowlist, or approval path.
+  - Preserve deliberate Yolo/bypass semantics where authorized.
+  - Preserve useful temporary-directory behavior unless evidence shows a separate defect.
+  - Test Agent, Ask, Plan, Yolo, configured overrides, and external-sandbox behavior.
+  - Verify the application-level network policy and the OS sandbox agree instead of relying on one to
+    compensate for an overly broad other layer.
+
+  6. Bound and simplify project instruction ingestion
+
+  CodeWhale currently permits approximately 200 KiB of chained project context plus 500 KiB of rules
+  before skills, memory, history, tools, and other context. It also auto-imports rule formats belonging
+  to many other agents.
+
+  Required outcome:
+
+  - Introduce one aggregate project-instruction budget, initially targeting 32–64 KiB unless repository
+    evidence justifies another bound.
+
+  - The bound must cover canonical project law and all additional rule formats together.
+  - Default to AGENTS.md and explicit CodeWhale instruction files.
+  - Make Claude, Cursor, Cline, Windsurf, Gemini, Copilot, Muse, and similar foreign-agent formats opt-
+    in rather than silently authoritative.
+
+  - Preserve nearest-scope traversal, repository-root stopping, symlink safety, truncation markers, and
+    provenance.
+
+  - Avoid injecting the same instruction through multiple loaders.
+  - Keep optional secondary material searchable or loadable on demand.
+  - Add tests for aggregate budgeting, precedence, duplicate suppression, opt-in behavior, truncation,
+    and symlink boundaries.
+
+  - Document the migration and configuration behavior for v0.9.11.
+
+  7. Enforce the single model-facing agent surface
+
+  Repository contracts say the sole model-facing subagent surface is agent, but the runtime also
+  registers searchable agents/list, agents/message, agents/followup, agents/interrupt, agents/
+  coordinate, and agents/wait tools.
+
+  Required outcome:
+
+  - Only agent may appear in the model-visible or tool_search catalog for subagent lifecycle and
+    coordination.
+
+  - Preserve old names internally only where required for persisted transcript replay or non-model
+    operator compatibility.
+
+  - Route agent actions to typed internal handlers.
+  - Ensure start, status, peek, message, followup, interrupt, wait, cancel, and required write-claim
+    coordination remain available through one coherent schema.
+
+  - If claim coordination needs a new agent action, add the smallest action required rather than
+    retaining a second tool family.
+
+  - Split the 15,000-line subagent implementation into action-focused internal modules without
+    reintroducing the removed agent_open/agent_eval/agent_close/delegate_to_agent machinery.
+
+  - Add catalog tests proving agents/* cannot be initially visible, found through tool_search, or taught
+    in prompt descriptions.
+
+  8. Make /prompt truthful or remove it
+
+  The legacy /prompt HTTP route and prompt/request and prompt/run JSON-RPC methods currently return HTTP
+  200 and a synthetic assistant payload without calling a model.
+
+  Required outcome:
+
+  - Prefer routing these endpoints through the same canonical session/turn engine used by real agent
+    turns.
+
+  - If that cannot be made correct for v0.9.11, remove the advertised capability and return an explicit
+    410 or 501 response. Fake success is prohibited.
+
+  - Do not store configuration echoes as assistant messages.
+  - Update capability discovery, HTTP, stdio, SDK, and runtime API documentation consistently.
+  - Add end-to-end tests using a local fake provider that prove a successful prompt executes a genuine
+    model turn, or prove the retired endpoint fails explicitly.
+
+  - Audit adjacent legacy app-server routes for similar success-shaped placeholders.
+
+  9. Complete the core turn-runtime ownership migration
+
+  The architecture claims core owns the agent loop, but live turns still execute from the TUI crate and
+  the current core TurnExecutor is mostly a placeholder.
+
+  This migration must be completed for v0.9.11, not merely documented or represented by more empty
+  boundary types.
+
+  Required outcome:
+
+  - Core owns session creation, turn execution, tool admission, approvals, streaming retries, steering,
+    compaction, history normalization, and provider-neutral request construction.
+
+  - TUI, exec, app-server, and tests consume the same core session/turn service.
+  - Terminal rendering and Ratatui-specific state remain in TUI.
+  - Do not keep two functioning turn loops.
+  - Do not add another compatibility call site for convenience.
+  - Use PR #5523’s extraction where appropriate, but understand it before building on it.
+  - Break high-change files into coherent modules, keeping invariants and focused tests near their
+    owners.
+
+  - Update docs/ARCHITECTURE.md only after the implementation makes its ownership claims true.
+  - Add cross-surface tests proving equivalent turn, approval, cancellation, tool, and event behavior
+    through TUI/headless/app-server entrypoints.
+
+  A rewrite of the affected runtime is in scope if it is safer and clearer than migrating the monolith
+  mechanically. Preserve observable contracts and contributor credit.
+
+  10. Type the provider-neutral request boundary
+
+  Message roles and reasoning posture are currently stringly typed, while provider-specific DeepSeek
+  semantics leak into the neutral request DTO.
+
+  Required outcome:
+
+  - Introduce typed semantic message roles.
+  - Introduce a typed provider-neutral reasoning posture/capability model.
+  - Reject invalid role and request combinations before transport serialization.
+  - Keep provider-specific fields inside Chat, Responses, Anthropic, DeepSeek, and other adapters.
+  - Preserve exact-provider/API/model restrictions for opaque reasoning replay.
+  - Add adapter tests covering role mapping, unsupported capability handling, reasoning mapping,
+    interrupted-assistant history, and serialization compatibility.
+
+  - Provide a deliberate persisted-state migration or compatibility decoder where necessary.
+
+  Release integration requirements
+
+  - Every item above must have a v0.9.11 changelog entry or be covered by a coherent v0.9.11 release
+    note.
+
+  - Use one reviewable concern per commit with a substantive body.
+  - Mark commits WIP unless the claimed behavior was actually verified.
+  - Preserve unrelated edits and contributor authorship.
+  - Do not blanket-stage.
+  - Do not use reset, clean, stash, or destructive checkout operations.
+  - Search current main for behavior, not old commits, before rebuilding.
+  - If a stale branch contains useful intent, preserve provenance and rebuild from current main rather
+    than resolving hundreds of conflicts.
+
+  Verification
+
+  Run formatting first where required, then targeted tests for each concern. Before proposing release
+  readiness, run the repository’s current required gates, including:
+
+  - cargo fmt --all -- --check
+  - Targeted crate and integration tests for each changed area.
+  - cargo test -p codewhale-config -p codewhale-protocol
+  - cargo test --workspace
+  - cargo build --release -p codewhale-cli -p codewhale-tui
+  - Web prebuild/generated-facts verification.
+  - Runtime API tests with a local fake provider.
+  - Prompt-role and instruction-budget tests.
+  - Sandbox/network policy tests.
+  - Tool-catalog and tool_search visibility tests.
+  - Cross-surface core-engine parity tests.
+  - Exact Windows ARM64 nightly CI after Hunter authorizes the required push or workflow run.
+
+  Read the output, not merely exit codes. Keep source review, local tests, packaged artifacts, CI,
+  provider behavior, deployment, and public release state explicitly separate.
+
+  Final handoff
+
+  Do not declare v0.9.11 ready until all ten concerns are either implemented and verified or blocked
+  solely by an explicit external gate.
+
+  Report:
+
+  - Exact repository, branch, worktree, and SHA.
+  - Dirty/untracked state before and after.
+  - Commits created, with authorship and dependency order.
+  - Files and behavior changed for every concern.
+  - Exact commands and results.
+  - Runtime journeys directly exercised.
+  - CI evidence versus local-only evidence.
+  - PR #5523 and #5524 disposition and prepared postable text.
+  - Windows ARM64 diagnosis and the evidence supporting the fix.
+  - Remaining external approvals needed.
+  - Exact push, merge, CI-trigger, tag, and publication commands proposed—but do not execute them
+    without Hunter’s approval.
+ so every concern here + whatever you find
+
+---
+
+<task-notification>
+<task-id>a5201b1ce0fd00129</task-id>
+<tool-use-id>toolu_01FtFSDaa3sZ1AQFVZhMtCw9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/a5201b1ce0fd00129.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit agent tool surface" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Here is the map.
+
+---
+
+# 1. The `agent` tool — definition and registration
+
+| Item | Location |
+|---|---|
+| `pub struct AgentTool` | `/Volumes/VIXinSSD/CW/worktrees/cw-0911-turnloop-stages-20260820/crates/tui/src/tools/subagent/mod.rs:8031` |
+| `impl AgentTool` (ctor) | `crates/tui/src/tools/subagent/mod.rs:8047` |
+| `enum AgentToolAction` | `crates/tui/src/tools/subagent/mod.rs:8059` |
+| `fn parse_agent_tool_action` | `crates/tui/src/tools/subagent/mod.rs:8070` |
+| `impl ToolSpec for AgentTool` | `crates/tui/src/tools/subagent/mod.rs:8153` |
+| `fn name()` → `"agent"` | `crates/tui/src/tools/subagent/mod.rs:8155-8157` |
+| `fn description()` | `crates/tui/src/tools/subagent/mod.rs:8159-8177` |
+| `fn input_schema()` | `crates/tui/src/tools/subagent/mod.rs:8188-8306` |
+| `capabilities()` = `ExecutesCode`, `RequiresApproval` | `crates/tui/src/tools/subagent/mod.rs:8308-8313` |
+| `approval_requirement_for` (status/peek/wait → Auto; read-only-role start → Auto) | `crates/tui/src/tools/subagent/mod.rs:8326-8336` |
+| `starts_detached_for` | `crates/tui/src/tools/subagent/mod.rs:8341-8344` |
+| `is_read_only_for` | `crates/tui/src/tools/subagent/mod.rs:8358-8363` |
+| `execute()` action dispatch | `crates/tui/src/tools/subagent/mod.rs:8365-8420` |
+| read-only-role approval carve-out helper `start_requests_read_only_role` | `crates/tui/src/tools/subagent/mod.rs:8107-8151` |
+
+**Registration:** `ToolRegistryBuilder::with_subagent_tools` at `crates/tui/src/tools/registry.rs:1386`; the `AgentTool` `with_tool` call is `crates/tui/src/tools/registry.rs:1407-1410`. It is reached from `with_full_agent_surface_options` (`crates/tui/src/tools/registry.rs:1328-1340`) and directly from the engine at `crates/tui/src/core/engine.rs:4128`.
+
+**Actions supported** (schema enum, `mod.rs:8206`): `start`, `status`, `peek`, `message`, `followup`, `interrupt`, `wait`, `cancel`. `until` enum (`mod.rs:8210`): `completion | all | activity`.
+**Schema fields (12)**: `action`, `until`, `agent_id`, `message`, `name`, `prompt`, `detached`, `type`, `profile`, `worktree`, `write_roots`, `resume_from`, plus an action-discriminated `dependentSchemas` tree (`mod.rs:8260-8300`) and `"required": ["action"]` (`mod.rs:8304`).
+
+---
+
+# 2. Every `agents/*` registration
+
+All six live in `crates/tui/src/tools/subagent/coord.rs`. All are registered by one function.
+
+**Single registration site:** `pub fn register_coordination_tools` — `crates/tui/src/tools/subagent/coord.rs:967-993`, called from `crates/tui/src/tools/registry.rs:1411`.
+
+| Tool | struct | `fn name()` | `with_tool` line | capabilities / approval |
+|---|---|---|---|---|
+| `agents/list` | `coord.rs:40` | `coord.rs:53-55` | `coord.rs:987` | `ReadOnly` (`coord.rs:78-79`), `Auto` (`coord.rs:82`), `is_read_only_for → true` (`coord.rs:86`) |
+| `agents/message` | `coord.rs:138` | `coord.rs:161-163` | `coord.rs:988` | `RequiresApproval` (`coord.rs:186-187`), `Required` (`coord.rs:190`) |
+| `agents/followup` | `coord.rs:248` | `coord.rs:281-283` | `coord.rs:989` | `RequiresApproval` (`coord.rs:306-307`), `Required` (`coord.rs:310`) |
+| `agents/interrupt` | `coord.rs:428` | `coord.rs:459-461` | `coord.rs:990` | `RequiresApproval` (`coord.rs:484-485`), `Required` (`coord.rs:488`) |
+| `agents/coordinate` | `coord.rs:3174` | `coord.rs:3188-3190` | `coord.rs:991` | `WritesFiles` (`coord.rs:3224-3230`), `Auto` (`coord.rs:3232`), `is_read_only_for` only for `action=inspect` (`coord.rs:3236`) |
+| `agents/wait` | `coord.rs:545` | `coord.rs:557-560` | `coord.rs:992` | `ReadOnly` (`coord.rs:590-591`), `Auto` (`coord.rs:594`) |
+
+**Model-visible?** Yes — all six. None of them override `ToolSpec::model_visible()` (grep for `fn model_visible` returns no hit in `coord.rs` or `subagent/mod.rs`), so they inherit the default `true` at `crates/tui/src/tools/spec.rs:1420-1422` and therefore survive the `.filter(|tool| tool.model_visible())` in `ToolRegistry::build_api_tools` (`crates/tui/src/tools/registry.rs:272`).
+
+**Discoverable via `tool_search`?** Yes — and *only* via `tool_search`. None of them override `defer_loading()` either, but the engine overwrites that field unconditionally: `apply_native_tool_deferral` (`crates/tui/src/core/engine/tool_catalog.rs:139-143`) sets `defer_loading = should_default_defer_tool(name, always_load)`, and `should_default_defer_tool` (`tool_catalog.rs:124-137`) returns `true` for anything not in `DEFAULT_ACTIVE_NATIVE_TOOLS` and not in the user's `tools_always_load`. `DEFAULT_ACTIVE_NATIVE_TOOLS` (`tool_catalog.rs:47-50`) is exactly `["read", "write", "edit", "bash", "agent", "todo_write"]` — no `agents/*` entry. So each `agents/*` tool ships in the catalog with `defer_loading: Some(true)`, is excluded from `initial_active_tools` (`tool_catalog.rs:357-371`), and is only reachable after `discover_tools_with_regex` / `discover_tools_with_bm25_like` return it (`tool_catalog.rs:730-757` / `758+`) — both of which skip any tool where `!tool.defer_loading.unwrap_or(false)`.
+
+**Per-role visibility inside children** is a second, independent filter: read-only roles see only `agents/list` and `agents/wait`; write/full-shell roles see all six. Driven by `role_posture_permits` (`crates/tui/src/tools/subagent/mod.rs:13769-13781`) applied at `mod.rs:14370`, `14392`, `14678`, because `message`/`followup`/`interrupt` declare `ApprovalRequirement::Required` (needs `ShellPolicy::Full`) and `coordinate` declares `WritesFiles`. The expected sets are frozen in `every_named_role_has_one_complete_capability_based_surface` (`crates/tui/src/tools/subagent/tests.rs:6299`, sets at 6303-6404).
+
+`is_internal_coordination_state_tool` (`crates/tui/src/tools/subagent/mod.rs:15092-15108`) is the only other place all six names are enumerated together.
+
+There are **no other registrations** — no ACP/app-server/MCP surface registers `agents/*` (grep for `agents/` across `crates/` finds only the tui crate hits above, plus unrelated `.agents/` directory paths and `.codewhale/agents/*.toml` roster paths).
+
+---
+
+# 3. How the catalog is built; visible vs searchable-only
+
+Two layers.
+
+**Layer 1 — registry → API tools (`model_visible`).**
+`ToolRegistry::to_api_tools` (`crates/tui/src/tools/registry.rs:245-249`) memoises `build_api_tools` (`registry.rs:258-301`). It sorts by name (prefix-cache stability), then filters `tool.model_visible()` (`registry.rs:272`), then read-only-authority and network filters (`registry.rs:273-282`), then emits `models::Tool { …, defer_loading: Some(tool.defer_loading()), … }` (`registry.rs:295`). A tool with `model_visible() == false` is registered and executable by name (saved-transcript replay) but never advertised — e.g. `rlm` (`crates/tui/src/tools/rlm.rs:167`), `exec_shell` (`crates/tui/src/tools/shell.rs:4406`), the `todo_write` aliases (`registry.rs:1343-1367`).
+
+**Layer 2 — catalog shaping (`defer_loading`).**
+`build_model_tool_catalog_with_surface` (`crates/tui/src/core/engine/tool_catalog.rs:183-206`), called from `crates/tui/src/core/engine.rs:4178`:
+1. `apply_native_tool_deferral` (`tool_catalog.rs:139-143`) → `should_default_defer_tool` (`tool_catalog.rs:124-137`).
+2. `apply_mcp_tool_deferral` (`tool_catalog.rs:145-157`) — every MCP tool is deferred unless in `tools_always_load`.
+3. `apply_tool_surface_budget` (`tool_catalog.rs:234-249`) — `Compact` budget additionally defers `Run`, `tasks`, `Web`.
+4. `ensure_advanced_tooling` (`tool_catalog.rs:271+`) injects the synthetic `tool_search` entry with `defer_loading: Some(false)` (`tool_catalog.rs:350`).
+
+**The controlling struct/field:** `crate::models::Tool` and its field `defer_loading: Option&lt;bool&gt;` (set at `registry.rs:295`, overwritten at `tool_catalog.rs:141`, `154-156`, `247`). The trait-level defaults are `ToolSpec::defer_loading()` (`crates/tui/src/tools/spec.rs:1412-1414`, default `false`) and `ToolSpec::model_visible()` (`crates/tui/src/tools/spec.rs:1420-1422`, default `true`). Only three concrete overrides of `defer_loading` exist: `crates/tui/src/tools/read_media.rs:222` (`true`), `crates/tui/src/tools/registry.rs:1498` (MCP adapter: defer unless a discovery helper), `crates/tui/src/tools/dynamic.rs:45` (from the dynamic spec).
+
+**Initially visible** = present in the catalog with `defer_loading != Some(true)`, i.e. it lands in `initial_active_tools` (`tool_catalog.rs:357-371`). In practice: `read, write, edit, bash, agent, todo_write, tool_search`.
+**Searchable only** = in the catalog with `defer_loading == Some(true)`; the schema is withheld until `tool_search` returns a `tool_reference` and `execute_tool_search_inner` (`tool_catalog.rs:1273-1355`) inserts the name into `active_tools`. Activation is bounded by `ToolActivationCache` — 8 names / 16 KiB of added schema (`crates/tui/src/core/session.rs:17,19`, `activate` at `session.rs:99`); over-budget matches come back as `unavailable_tool_references` (`tool_catalog.rs:1338-1344`).
+
+Sub-agent children have their own copy of this pipeline: `deferred_catalog_for_model` (`crates/tui/src/tools/subagent/mod.rs:14702-14720`) and `execute_from_surface` hydrate/activate path (`mod.rs:14893-14930`).
+
+---
+
+# 4. Size and location of the sub-agent implementation
+
+`wc -l`, directory `crates/tui/src/tools/subagent/`:
+
+```
+   15528  crates/tui/src/tools/subagent/mod.rs
+   19754  crates/tui/src/tools/subagent/tests.rs
+    3800  crates/tui/src/tools/subagent/coord.rs
+     655  crates/tui/src/tools/subagent/mailbox.rs
+     605  crates/tui/src/tools/subagent/advisor.rs
+     473  crates/tui/src/tools/subagent/naming.rs
+     406  crates/tui/src/tools/subagent/tests/launch_receipt.rs
+     345  crates/tui/src/tools/subagent/worktree.rs
+   41566  total
+```
+
+The "~15,000 lines" claim matches `mod.rs` alone: **15,528 lines**, and it is essentially all production code — `grep -c '#\[test\]\|#\[tokio::test\]' mod.rs` = **0**; its `#[cfg(test)]` blocks (`mod.rs:60, 84, 105, 342, 7647, 7925, 8993, 9772, 10078, 10098, 10105, 13135, 13300, 15344, 15524, 15527`) are single test-helper fns plus the `#[path = "tests.rs"] mod tests` include at 15527.
+
+`coord.rs` (3,800) is roughly 1,283 production lines (1-994 and 3171-3460) and ~2,517 test lines — inline `#[cfg(test)] mod tests` at `coord.rs:995` and `coord.rs:3461`, 33 test fns.
+
+Adjacent surfaces, for scale:
+```
+   11135  crates/tui/src/tools/workflow.rs      (workflow tool, same registration fn)
+   28205  crates/tui/src/fleet/**/*.rs          (roles, roster, ledger, worker_runtime)
+    3684  crates/tui/src/fleet/worker_runtime.rs (largest single fleet file)
+    2508  crates/agent/src/lib.rs
+    1618  crates/tui/src/tools/registry.rs
+    1420  crates/tui/src/core/engine/tool_catalog.rs
+```
+Production sub-agent code (subagent dir minus test files, minus coord's inline tests) ≈ **19,000 lines**; including tests, **41,566** in the subagent dir and ~69,800 counting `fleet/`.
+
+---
+
+# 5. Write-claim / coordination logic
+
+Exists, and it is exposed by exactly one tool: **`agents/coordinate`**.
+
+- Tool: `AgentsCoordinateTool` — `crates/tui/src/tools/subagent/coord.rs:3174`, schema `coord.rs:3196-3222`.
+- Actions: `inspect | propose | accept | supersede | claim | reconcile` (`coord.rs:3199`). Claim fields: `roots`, `exact_files`, `contracts` (`coord.rs:3208-3210`).
+- Claim dispatch: `coord.rs:3369` → `SubAgentManager::expand_write_claim` (`crates/tui/src/tools/subagent/mod.rs:3912-3990`).
+- Ledger types: `PersistedWriteClaim` (`coord.rs:2065`), `write_claims` vectors (`coord.rs:2179`, `2212`), claim insert/evict logic (`coord.rs:2391-2480`), retention floor (`coord.rs:2717`, `2772`).
+- Enforcement (the fail-closed path): `crates/tui/src/tools/subagent/mod.rs:3983` — `"write '{path}' is outside agent '{owner}' scope (roots: …, files: …); expand it first with agents/coordinate action=claim"`.
+- Child-prompt statement of the scope: `crates/tui/src/tools/subagent/mod.rs:6424`.
+- Launch-time scope comes from the `agent` tool's `write_roots` field (`mod.rs:8243-8246`); `WriteScopeClaim` / `write_claim` on the snapshot at `mod.rs:820`, `mod.rs:1583`.
+- Note `agents/coordinate` is *not* mentioned in the `agent` tool's own description list of narrow twins (`mod.rs:8171` lists list/message/followup/interrupt/wait only), and `agent` has no `coordinate` action — claim expansion is only reachable through `agents/coordinate`, which is deferred/searchable-only.
+
+---
+
+# 6. Residual references to removed machinery
+
+No Rust code references `agent_open`, `agent_eval`, `agent_close`, or `delegate_to_agent`. Only prose:
+
+| File:line | Kind |
+|---|---|
+| `crates/tui/src/tools/subagent/coord.rs:5` | doc comment: "retired lifecycle theater (`agent_open` / `agent_eval` / …)" |
+| `AGENTS.md:35` | prose |
+| `docs/ARCHITECTURE.md:153` | prose |
+| `docs/SUBAGENTS.md:35` | prose ("The removed `agent_open`/`agent_eval`/`agent_close` lifecycle") |
+| `docs/CHANGELOG_ARCHIVE.md:397, 398, 408, 4199` | historical changelog |
+| `CHANGELOG.md:4602, 5348, 6339, 6380, 6395, 6397` | historical changelog |
+
+No symbol, string literal, match arm, or alias remains.
+
+---
+
+# 7. Tests covering the tool catalog / visibility / `tool_search`
+
+**`crates/tui/src/core/engine/tool_catalog/tests.rs`** (283 lines)
+- `code_execution_description_does_not_claim_process_sandboxing` :34
+- `published_synthetic_names_agree_with_the_synthetic_predicate` :44
+- `first_turn_surface_is_stable_across_plan_work_and_full_access` :72 — pins `DEFAULT_ACTIVE_NATIVE_TOOLS` and the eager set
+- `mcp_tools_are_searchable_not_eager_in_every_mode` :116
+- `cache_eviction_does_not_hide_a_tool_that_became_eager` :130
+- `successful_cached_execution_updates_lru_without_granting_uncached_names` :146
+- `searching_for_an_eager_tool_is_not_reported_as_cache_rejected` :184
+- `allow_and_deny_rules_cover_visible_and_hidden_compat_aliases_symmetrically` :207
+- `native_file_and_shell_allowlist_can_skip_mcp_startup` :237
+- `unknown_and_wildcard_allowlists_keep_mcp_startup` :244
+- `compact_surface_keeps_the_exact_eager_agent_head` :254
+- `registry_first_guidance_does_not_expand_contract_bash_schema_text` :276
+
+**`crates/tui/src/core/engine/tests.rs`**
+- `tool_catalog_filter_applies_allow_and_deny_gates` :3975
+- `tool_catalog_shell_only_benchmark_surface_hides_native_tools` :3994
+- `tool_catalog_filter_is_inert_without_gates` :4026
+- `request_snapshot_reports_registry_provenance_for_the_transmitted_catalog` :5169
+- `runtime_mcp_refresh_only_activates_new_catalog_entries` :7063
+- `non_yolo_mode_retains_default_defer_policy` :8402
+- `default_defer_lookup_matches_linear_scan_over_active_native_tools` :8428
+- `model_tool_catalog_applies_native_and_mcp_deferral` :8463
+- `capability_compact_surface_defers_nonessential_core_tools` :8548
+- `catalog_consistency_self_check_flags_registered_core_tool_missing_from_catalog` :8688
+- `regex_tool_search_does_not_discover_hidden_exec_shell_alias` :8750
+- `bm25_tool_search_does_not_discover_hidden_exec_shell_alias` :8755
+- `tools_always_load_overrides_mcp_deferral` :8760
+- `tools_always_load_overrides_default_native_deferral` :8776
+- `deferred_apply_patch_first_use_hydrates_schema_without_execution` :9444
+- `model_tool_catalog_defers_non_core_native_tools_in_yolo_mode` :9510
+- `request_user_input_stays_deferred_but_can_be_dynamically_activated` :9532
+- `model_tool_catalog_sorts_each_partition_for_prefix_cache_stability` :9623
+- `active_tool_list_pushes_deferred_activations_to_the_tail` :9654
+- `model_catalog_exposes_work_update_as_sole_progress_surface` :9718
+- `deferred_tool_preflight_skips_already_active_tools` :11667
+- `plan_mode_toggle_preserves_catalog_byte_stability` :11741 (expected head at :11810)
+- `plan_mode_registry_can_expose_agent_launcher_without_shell_tools` :11887
+- `mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata` :11930
+- `tool_search_activates_discovered_deferred_tools` :16306
+- `tool_search_can_discover_request_user_input_modal_tool` :16346
+- `tool_search_defaults_to_eight_results_for_regex_and_bm25` :16400
+- `tool_search_respects_and_caps_max_results` :16418
+- `tool_search_schema_exposes_max_results_default_and_cap` :16443
+- `plan_mode_catalog_skips_code_execution_tool_but_agent_keeps_it` :16496
+
+**`crates/tui/src/tools/registry/tests.rs`**
+- `machine_verifier_catalog_and_dispatch_add_only_bounded_run` :715
+- `machine_readonly_catalog_is_exactly_the_evidence_profile` :1388
+- `agent_runtime_surface_gates_verify_on_option` :1270
+- alias-resolution guard that names `agents/interrupt` :296-308
+
+**`crates/tui/src/tools/workflow.rs`**
+- `subagent_tool_surface_registers_workflow_and_agent` :8050 — the only test asserting all six `agents/*` names are registered (`registry.contains(...)` at :8068-8073). It asserts registration, not catalog membership.
+
+**`crates/tui/src/tools/subagent/tests.rs`**
+- `agent_description_explains_background_child_and_transcript_handle` :2608
+- `every_named_role_has_one_complete_capability_based_surface` :6299 — per-role `agents/*` surfaces
+- `read_only_roles_expose_and_dispatch_lowercase_bash_only` :7268
+- `child_write_tool_fails_closed_outside_registered_scope` :10842 (claim enforcement)
+- `lone_shared_writer_keeps_unbounded_shell` :11045
+- `model_catalog_only_advertises_canonical_subagent_tools` :14395 — asserts `agent` appears exactly once in `to_api_tools()`; it does **not** assert anything about the six `agents/*` entries that are also in that same `to_api_tools()` output
+- `parent_agent_surface_stays_within_measured_ceiling` :18426 (prompt+catalog byte ceiling)
+
+**Other**
+- `crates/tui/src/tools/rlm.rs:920` `rlm_tool_is_compatibility_only_not_model_visible`
+- `crates/tui/src/tool_inspection.rs:867` `catalog_digest_is_the_request_manifest_digest_not_a_second_definition`
+- `crates/tui/src/client.rs:7740` `prompt_inspect_tracks_tool_catalog_in_static_prefix_hash`</result>
+<usage><subagent_tokens>114488</subagent_tokens><tool_uses>61</tool_uses><duration_ms>432848</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bp30ozwuc</task-id>
+<tool-use-id>toolu_017yCpxxf11nFKTkSU1QLhKb</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/bp30ozwuc.output</output-file>
+<status>completed</status>
+<summary>Background command "Re-run lib suite with correct stack" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+yep your /goal is to do as much work for 0.9.11 as possible starting with this and then using your best judgment seeing how grokbuild codex kimicode and piagent function as well as using computer use and intracting with codewhale yourself (you can use deepseek) to make sure everything works as intended and the user onboarding experience is comfortable and logical in every language
+
+---
+
+<task-notification>
+<task-id>bjdyv0lrh</task-id>
+<tool-use-id>toolu_01Adxo2N1m1yQq2dyCDvXQL8</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/bjdyv0lrh.output</output-file>
+<status>completed</status>
+<summary>Background command "Full lib suite for concern 6" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7t1p3gu4</task-id>
+<tool-use-id>toolu_01NTDpq8zDZMfvf9eQ93QiCD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/b7t1p3gu4.output</output-file>
+<status>completed</status>
+<summary>Background command "Full suite after CJK fix" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7t7rpzb9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/b7t7rpzb9.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch CI on new main commit" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>baicqagxz</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/baicqagxz.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch CI on changelog fix" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7pvt5h6x</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/b7pvt5h6x.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch CI on guard fix" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bfu62p8el</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/bfu62p8el.output</output-file>
+<status>completed</status>
+<summary>Background command "Run definitive sweep with visible output" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b68zn04hg</task-id>
+<tool-use-id>toolu_01NSBtwLGq8MLGuK8E9EKkaH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/b68zn04hg.output</output-file>
+<status>completed</status>
+<summary>Background command "Build combined three-lane tree" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Great can you keep looking for ways to improve the overall ui ux experience everything feels cluttered and it’s like we just need to be more deliberate. I don’t know if that’s font or sizing or spacing or motion or a combination of all of them but please 🙏 let’s aim for something truly special.
+
+---
+
+Yes use ultra code and go for it
+
+---
+
+<task-notification>
+<task-id>wqytnj2bl</task-id>
+<tool-use-id>toolu_01Ka6yaLvhZQ6WqrvWXWwr1b</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/wqytnj2bl.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Make the CodeWhale TUI deliberate: rail, chrome, motion, and provider rows, each in its own worktree" completed</summary>
+<result>[{"lane":"rail","branch":"codex/v0911-ui-rail-20260820","dir":"cw-0911-ui-rail","impl":{"lane":"ui-rail — crates/tui/src/tui/phase_strip.rs (bottom status rail)","branch":"codex/v0911-ui-rail-20260820 (worktree /Volumes/VIXinSSD/CW/worktrees/cw-0911-ui-rail, based on 4c3a60ede)","commits":[{"sha":"d74f159f9","subject":"fix(tui): give the status rail a grammar instead of a run-on sentence"}],"before_frames":"All captured with the PTY harness against a binary built from 4c3a60ede\n(surface2.py + a `settled` variant that waits out the 12 s telemetry receipt).\n\nRAIL ROW ONLY — before, 120x32 / 80x24 / 60x20:\n\n120 idle    |▌· idle · Ollama · deepseek-v4-flash · max · Anonymous usage counts are on. …  ⌥V:output · /context:context · fn+F1:keys|\n120 typed   |▌› draft · Ollama · deepseek-v4-flash · max                                    ⌥V:output · /context:context · fn+F1:keys|\n120 help    |▌› draft · Ollama · deepseek-v4-flash · max · Cleared · Ctrl+Z restores        ⌥V:output · /context:context · fn+F1:keys|\n\n 80 idle    |▌· idle · Ollama · deepseek-v4-flash · max · Anonymous usage counts …|\n 80 typed   |▌› draft · Ollama · deepseek-v4-flash · max               ⌥V:output · fn+F1:keys|\n 80 help    |▌› draft · Ollama · deepseek-v4-flash · max · Cleared · Ctrl+Z restor…|\n\n 60 idle    |▌· idle · Ollama · deepseek-v4-flash · max · Anonymous usage|\n 60 typed   |▌› draft · Ollama · deepseek-v4-flash · max|\n 60 help    |▌› draft · Ollama · deepseek-v4-flash · max · Cleared · Ctrl|\n\nNotes on what those rows are actually doing:\n - 80 idle / 80 help: the notice dangles on an ellipsis and the key hints are\n   silently dropped entirely (left run overran, so the right-align branch never\n   fired).\n - 60 idle / 60 help: NO ellipsis — the row simply overflowed 60 columns and was\n   clipped mid-word by the terminal. Worse than dangling: it does not even admit\n   it was cut.\n - 60 typed: hints gone at 60 columns; the row ends at column 43 and never tells\n   you how to reach the key list.\n\nFULL FRAME, before, 80x24, working surface (the \"typed\" state):\n\ncw  work · ask · files: workspace                             3K/1.0M [▰▱▱▱▱] 0%\n────────────────────────────────────────────────────────────────────────────────\n                                   ˚\n                                 ▗▄▄▟▄▄▄▄▄▖  ▚△▞\n                                ▐█·████████▙▄▄▞\n                                 ▝▀▀▀▀▀▀▀▀▘\n\n                                   Codewhale\n                             …/before/ws2 · no git\n\n                        What do you want to accomplish?\n────────────────────────────────────────────────────────────────────────────────\n❯ summarize this repo\n────────────────────────────────────────────────────────────────────────────────\n▌› draft · Ollama · deepseek-v4-flash · max               ⌥V:output · fn+F1:keys\n\nUNIT PROBE, before — live turn + metrics + a real warning (the PTY harness has no\nmodel, so these came from a throwaway `--nocapture` test that renders `render()`\ninto a TestBackend):\n\nworking 120|▌◐ using tool · ×1 · Esc to interrupt · DeepSeek · deepseek-v4-flash · max │ …|\nwarn     80|▌· idle · DeepSeek · deepseek-v4-flash · max · Auto-denied exec_shell: den…|","after_frames":"Same harness, same widths, binary built from d74f159f9.\n\nRAIL ROW ONLY — after:\n\n120 idle    |▌· idle   Anonymous usage counts are on. Conversations and code are never collected.              ⌥V:output · fn+F1:keys|\n120 typed   |▌› draft   Ollama · deepseek-v4-flash · max                                                       ⌥V:output · fn+F1:keys|\n120 help    |▌› draft   Cleared · Ctrl+Z restores                                                              ⌥V:output · fn+F1:keys|\n\n 80 idle    |▌· idle   Anonymous usage counts are on.                  ⌥V:output · fn+F1:keys|\n 80 typed   |▌› draft   Ollama · deepseek-v4-flash · max               ⌥V:output · fn+F1:keys|\n 80 help    |▌› draft   Cleared · Ctrl+Z restores                      ⌥V:output · fn+F1:keys|\n\n 60 idle    |▌· idle   Anonymous usage counts are on.|\n 60 typed   |▌› draft   deepseek-v4-flash · max    ⌥V:output · fn+F1:keys|\n 60 help    |▌› draft   Cleared · Ctrl+Z restores  ⌥V:output · fn+F1:keys|\n\n - No ellipsis at any width; no row exceeds its terminal.\n - 60 typed: the identity group sheds `Ollama` so the key hints fit — at 60\n   columns you now learn how to open the key list, which you could not before.\n - 60 idle: the telemetry clause is too wide to share with hints, so the hints\n   (the only group optional twice over) yield, and the sentence lands whole.\n\nFULL FRAME, after, 80x24, working surface (\"typed\"):\n\ncw  work · ask · files: workspace                             3K/1.0M [▰▱▱▱▱] 0%\n────────────────────────────────────────────────────────────────────────────────\n                                   ˚\n          ˚                      ▗▄▄▟▄▄▄▄▄▖  ▚△▞\n                                ▐█·████████▙▄▄▞\n                                 ▝▀▀▀▀▀▀▀▀▘\n\n                                   Codewhale\n                          …/settled-after/ws2 · no git\n\n                        What do you want to accomplish?               °\n                                                       &gt;&lt;&gt;&gt;&lt;o&gt;\n                                                &gt;&lt;&gt;  &gt;&lt;&gt;          .'-.'\n                                                                  (___)\n                                                                   \\\\\\\n────────────────────────────────────────────────────────────────────────────────\n❯ summarize this repo\n────────────────────────────────────────────────────────────────────────────────\n▌› draft   Ollama · deepseek-v4-flash · max               ⌥V:output · fn+F1:keys\n\nUNIT PROBE, after — working phase, idle-with-metrics, and the clause-less warning:\n\nworking 120|▌⣦ working · 1m 15s · Esc to interrupt   DeepSeek · deepseek-v4-flash · max │ LLM 3.5s │ Cache hit 99% │ Input 9.3M     |\nworking  80|▌⣦ working · 1m 15s · Esc to interrupt   DeepSeek · deepseek-v4-flash · max     |\nworking  60|▌⣦ working · 1m 15s · Esc to interrupt   deepseek-v4-flash  |\nidle    120|▌· idle   DeepSeek · deepseek-v4-flash · max   4 turns │ LLM 3.5s │ Cache hit 99% │ Input 9.3M    ⌥V:output · fn+F1:keys|\nidle     80|▌· idle   DeepSeek · deepseek-v4-flash · max              ⌥V:output · fn+F1:keys|\nidle     60|▌· idle   deepseek-v4-flash · max     ⌥V:output · fn+F1:keys|\nidle     50|▌· idle   deepseek-v4-flash · max          F1:keys|\nwarn    120|▌· idle   Auto-denied exec_shell: denied earlier; restart Codewhale to re-enable it.              ⌥V:output · fn+F1:keys|\nwarn     80|▌· idle   Auto-denied exec_shell: denied earlier          ⌥V:output · fn+F1:keys|\nwarn     60|▌· idle   Auto-denied exec_shell: denied earlier            |\n\nJAPANESE, after, 120x32 (PTY, locale=ja) — wide-character widths and the\nno-Latin-space rejoin:\n\nidle    |▌· 待機   匿名の利用状況集計はオンです。会話やコードは一切収集しません。/settings で変更できます。  ⌥V:出力 · fn+F1:キー|\nhelp    |▌› 下書き   クリアしました · Ctrl+Z で復元                                                          ⌥V:出力 · fn+F1:キー|","decisions":["GROUP BY MEANING, NOT BY SEPARATOR. Every join on the rail was ` · ` in MetadataDim, so live state, route identity, a privacy notice and keyboard hints read as one list of peers. A middle dot now separates peers *inside* a group; a blank gutter of the same three columns separates groups. Same width, no extra ink, and the eye finally has a place to land: `▌· idle   Ollama · deepseek-v4-flash · max`.","ONE WEIGHT PER MEANING, inside the existing ChromeInk families — no new colours. The model name (the field a mid-session glance is actually hunting for) went from Metadata to MetadataValue, one step brighter than the provider and effort that narrow it. `Esc to interrupt` moved from MetadataDim (the separator weight) to MetadataHint, the same weight as the right-hand chords — it is a key hint that happens
+... (truncated 107403 chars, full result in /private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/wqytnj2bl.output)</result>
+<diagnostics>Per-agent results: /Users/hunterbown/.claude/projects/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/subagents/workflows/wf_4a7ff187-a01/journal.jsonl — one {"type":"result",...} line per completed agent with its full return value.
+If the result above is empty or unexpected, Read this file BEFORE diagnosing — do not assume agents returned non-empty results.
+To re-run with edited post-processing: Workflow({scriptPath: '/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/scratchpad/wf/ui.js', resumeFromRunId: 'wf_4a7ff187-a01'}) — agents whose (prompt, opts) are unchanged replay from cache.</diagnostics>
+<usage><agent_count>8</agent_count><agents_done>8</agents_done><agents_error>0</agents_error><agents_skipped>0</agents_skipped><agents_empty_result>0</agents_empty_result><subagent_tokens>1147083</subagent_tokens><tool_uses>487</tool_uses><duration_ms>4196098</duration_ms></usage>
+</task-notification>
+
+---
+
+Take them on yourself or use grok cli and get help
+
+---
+
+Great job please keep working on everything popping up and just remember nothing on GitHub online yet
+
+---
+
+Actually please do look at the oauth flows they are overly complicated atm  study pi and execute changing codewhqle to that aerup
+
+---
+
+Yes fix it please 
+Ok 
+Got it 
+Well figure out the plan and just keep the idea of what we should do 
+Here’s another question 
+What are rust innovations or new parts of rust we may not be using?
+
+---
+
+Ok that’s smart can you get a grok build to update all of this?
+
+---
+
+<task-notification>
+<task-id>w866l0086</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/w866l0086.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Repair the picker lane, survey test bankruptcy, fix the completions bug, and press further on UI density" completed</summary>
+<result>[{"lane":"picker","branch":"codex/v0911-w3-picker-20260820","dir":"cw-0911-w3-picker","impl":{"lane":"W3 provider picker — finish the picker: detail pane, local model column, 40-column readiness, status_cell split","branch":"codex/v0911-w3-picker-20260820","commits":[{"sha":"484df224f","subject":"feat(tui): give the provider rows a scannable three-column grid (inherited, rebased onto ad921888e)"},{"sha":"d4a9f7bcf","subject":"fix(tui): let the picker's advertised capital shortcuts actually fire (inherited, rebased onto ad921888e)"},{"sha":"f53f85685","subject":"fix(tui): give the provider detail pane its grouping labels back"},{"sha":"73c70b3aa","subject":"fix(tui): stop the provider row eating an instruction and a unit"},{"sha":"e212ab928","subject":"fix(tui): keep a provider row's readiness at every width the modal has"},{"sha":"33cf7985e","subject":"test(tui): pin the widest readiness label against the picker grid"}],"what_changed":["Critique #1 (detail pane regressed): restored group labels in detail_facts() and stripped the value stutters. The pane went from five labelled lines followed by seven unlabelled ones to Credential:/Usage:/Origin:/Capabilities:/Reasoning:/Models: (plus Requests:/Maturity: when present). This was not cosmetic: unlabelled, `stream:y` (streams responses) sat two lines above `stream:unknown` (reasoning stream visibility unknown), and `local (self-hosted)` sat directly under the readiness line `local · not checked`, reading as the same sentence twice.","Labelling made the Capabilities line wrap, which pushed the custom provider's `Note: ... EXAMPLE_API_KEY` off a 120x20 pane (an existing test caught it). Notes now render above the fact block — the instruction is not what a wrap should push off.","Critique #2 (local model column vanishes): two causes, both fixed. `bare_model()` sheds the vendor namespace the row already implies (`deepseek-ai/DeepSeek-V4-Pro` -&gt; `DeepSeek-V4-Pro`); the detail pane's Route line keeps the id whole. And the shed order is now per view — in Local the model is the fact that differs and `no cloud key` is the invariant, so the model outranks readiness when only one fits.","Critique #3 (40 columns shows names only): added a compact readiness phrasing (`no key`, `no login`, `consent`, ...) right-aligned to the pane edge when the grid cannot hold both a 26-column provider name and an 11-column readiness phrase. It is a rewrite, not a truncation — no ellipsis anywhere. Also stopped reserving the two-column active-route mark on lists where no visible row is active.","Critique #4 (status_cell splits on any ' · '): now strips the exact ` · not checked` suffix only. `external consent · select to check` and `models endpoint 2xx · model not checked` stay whole.","Open question (trailing column mixes three kinds of fact): decided they belong in one column — a rate, a quota and a billing model are three shapes of one answer, and a provider bills in exactly one, so no row shows two. What they could not share was a missing unit, so `mtok` is back on the rates: `$1.25/$4.25 mtok`.","Six regression tests added, all in crates/tui/src/tui/provider_picker.rs; the existing no-ellipsis sweep now runs 40 and 48 as well as 56..120."],"evidence":"PTY harness (grid.py reconstruction, drivers at /private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/scratchpad/onboarding/{picker.py,ob_catalog.py}), release binary at /Volumes/VIXinSSD/CW/.cargo-target/v0911-w3-picker/release/codewhale-tui.\n\n=== #1 DETAIL PANE, 120x32 /provider ===\nBEFORE                                        AFTER\nOllama                                        Ollama\nlocal · not checked                           local · not checked\nRoute: deepseek-v4-flash                      Route: deepseek-v4-flash\nEndpoint: http://localhost:11434/v1           Endpoint: http://localhost:11434/v1\nProtocol: chat                                Protocol: chat\nlocal (self-hosted)                           Credential: local (self-hosted)\ncost: local                                   Usage: local\norigin:default                                Origin: default\nctx:1M(fallback) out:384K tools:y json:?      Capabilities: ctx:1M(fallback) out:384K\n  stream:y cache:n                              tools:y json:? stream:y cache:n vision:?\nvision:?                                      Reasoning: unknown stream:unknown\nreasoning:unknown stream:unknown              Models: default-only\ncatalog:default-only                          Note: catalog snapshot missing; using\nNote: catalog snapshot missing; ...             provider default\n\n=== #2 LOCAL VIEW MODEL COLUMN, 120x32 /provider (L) ===\nBEFORE\n │ ▸ Ollama *  no cloud key                        ┌ Details ──…\n │   SGLang    no cloud key                        │Ollama\n │   vLLM      no cloud key                        │local · not checked\nAFTER\n │ ▸ Ollama *  no cloud key  deepseek-v4-flash     ┌ Details ──…\n │   SGLang    no cloud key  DeepSeek-V4-Pro       │Ollama\n │   vLLM      no cloud key  DeepSeek-V4-Pro       │local · not checked\n\n=== #3 40x12 ONBOARDING CATALOG (A from the provider step) ===\nBEFORE                                   AFTER\n ┌ Choose your model provider ────────┐   ┌ Choose your model provider ────────┐\n │   Ollama Cloud                     │   │   Ollama Cloud               no key│\n │   OpenAI Codex (ChatGPT)           │   │   OpenAI Codex (ChatGPT)   no login│\n │   OpenAI-compatible                │   │   OpenAI-compatible          no key│\n │   OpenCode Go                      │   │   OpenCode Go                no key│\n │   OpenCode Zen                     │   │   OpenCode Zen               no key│\n │ ▸ OpenModel                        │   │ ▸ OpenModel                  no key│\n │ ↑↓ move  Enter set key             │   │ ↑↓ move  Enter set key             │\nBoth captures report 0 overflow at 40 columns.\n\n=== unit restore, 80x24 catalog ===\nBEFORE  │   Meta Model API   missing key    $1.25/$4.25      │\nAFTER   │   Meta Model API   missing key    $1.25/$4.25 mtok │\n\n=== TESTS (RUST_MIN_STACK=16777216, CARGO_TARGET_DIR=.../v0911-w3-picker) ===\ncargo test -p codewhale-tui --lib  -&gt;  10894 passed; 0 failed; 13 ignored\n  (run three times across the lane: 10893, 10893, 10894 — no flakes)\ncargo fmt --all --check -&gt; clean\nRUSTFLAGS=-Dwarnings cargo clippy -p codewhale-tui --all-targets -&gt; clean\n/tmp/version-drift-gate.sh -&gt; VERSION-DRIFT GATE: ALL PASS\n\n=== EVERY NEW TEST VERIFIED TO FAIL WITHOUT ITS CHANGE (revert, run, restore) ===\nstatus_cell_drops_the_caveat_and_keeps_the_instruction\n  reverted to split_once(\" · \") -&gt;\n  left: \"external consent\"  right: \"external consent · select to check\"  FAILED\nthe_cost_column_states_a_cost_and_a_rate_keeps_its_unit\n  reverted the mtok strip -&gt; 'a price without its unit is a pair of numbers: \"$3.00/$15.00\"'  FAILED\nprovider_detail_names_the_group_each_fact_belongs_to\n  reverted to the unlabelled join -&gt; 'detail pane lost \"Credential: \"'  FAILED\nlocal_rows_keep_the_default_model_next_to_the_detail_pane  (both halves checked separately)\n  without bare_model -&gt; 'must keep readiness and model together: \" │   SGLang  deepseek-ai/DeepSeek-V4-Pro ...\"'  FAILED\n  without the per-view shed order -&gt; 'local rows lost the model column at 100'  FAILED\ncatalog_states_readiness_on_every_row_at_forty_columns\n  with ragged_status = false -&gt; 'row states no readiness at 40 columns: \" │   MiniMax                          │ \"'  FAILED\na_long_readiness_label_never_costs_the_other_rows_their_status\n  with ragged_status = false -&gt; 'the other rows lost their readiness at 40: \" │   Anthropic                        │ \"'  FAILED","not_done":["No locale work. The compact readiness vocabulary (`no key`, `no login`, `consent`, `saved`, `imported`, `no auth`, `local`, `ready`, `endpoint ok`, `failed`, `bad route`, `legacy`) is hardcoded English in provider_picker.rs, 
+... (truncated 75255 chars, full result in /private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/w866l0086.output)</result>
+<diagnostics>Per-agent results: /Users/hunterbown/.claude/projects/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/subagents/workflows/wf_30262658-bcc/journal.jsonl — one {"type":"result",...} line per completed agent with its full return value.
+If the result above is empty or unexpected, Read this file BEFORE diagnosing — do not assume agents returned non-empty results.
+To re-run with edited post-processing: Workflow({scriptPath: '/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/scratchpad/wf/wave3.js', resumeFromRunId: 'wf_30262658-bcc'}) — agents whose (prompt, opts) are unchanged replay from cache.</diagnostics>
+<usage><agent_count>8</agent_count><agents_done>8</agents_done><agents_error>0</agents_error><agents_skipped>0</agents_skipped><agents_empty_result>0</agents_empty_result><subagent_tokens>1282110</subagent_tokens><tool_uses>630</tool_uses><duration_ms>6955945</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bwvzi8jr8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/bwvzi8jr8.output</output-file>
+<status>completed</status>
+<summary>Background command "Run grok build on Rust modernization" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Keep using grok for more help and working continuously on codewhale
+
+---
+
+Great and keep sending models out we want to try to basically improve every single file in the repo lol
+
+---
+
+<task-notification>
+<task-id>wy2mby6ln</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/wy2mby6ln.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Give CodeWhale one device-code primitive and thin per-provider flows, following pi-mono (MIT)" completed</summary>
+<result>{"impl":{"branch":"codex/v0911-oauth-20260820 (worktree /Volumes/VIXinSSD/CW/worktrees/cw-0911-oauth, branched from 2bd481358)","commits":[{"sha":"2b19dee42","subject":"feat(config): add one shared RFC 8628 device-code polling primitive"},{"sha":"c9283773f","subject":"refactor(tui): make xAI device login a thin caller of the shared poller"},{"sha":"0f3423497","subject":"refactor(cli): fold the account device poller into the shared primitive"},{"sha":"2bb294e6c","subject":"docs(changelog): note the shared device-code primitive and the URI check"},{"sha":"22d70db67","subject":"refactor(tui): build the xAI OAuth HTTP client in one place"},{"sha":"795750841","subject":"fix(tui): stop xAI OAuth types from printing bearer material via Debug"}],"lines_before_after":"Production lines (test modules excluded, same measurement both sides), 2bd481358 -&gt; HEAD:\n\n  crates/config/src/device_code.rs          0 -&gt; 249  (new, shared)\n  crates/tui/src/xai_oauth.rs            1350 -&gt; 1423\n  crates/cli/src/cloud.rs                1056 -&gt; 1053\n  crates/config/src/xai_credentials.rs   1565 -&gt; 1565 (untouched)\n  crates/tui/src/mcp/oauth.rs            1150 -&gt; 1150 (untouched, out of scope)\n  crates/tui/src/external_credentials.rs  682 -&gt; 682  (untouched)\n  crates/tui/src/agy_credentials.rs       227 -&gt; 227  (untouched)\n  crates/tui/src/oauth.rs                 197 -&gt; 197  (untouched)\n  TOTAL                                  6227 -&gt; 6546   (+319)\n\nThis did NOT reduce line count, and I am not going to dress that up. Breakdown of the +319:\n\n  +249  new shared primitive (device_code.rs; 157 non-comment lines). It replaces\n        ~80 lines of duplicated loop across the two callers, and carries four\n        behaviours neither caller had.\n  -50   deleted from xai_oauth.rs: the hand-rolled loop, device_poll_backoff,\n        DEVICE_POLL_DEFAULT_SECS, DEVICE_SLOW_DOWN_STEP_SECS, and four\n        copy-pasted reqwest client builders.\n  +38   added to xai_oauth.rs by the fixes: verification-URI validation call,\n        slow_down timeout message, typed poll classification, docs.\n  +85   redacting Debug impls in xai_oauth.rs (a security fix, not consolidation).\n  -3    cloud.rs.\n\nConsolidation alone, with both security fixes backed out, would still be roughly\n+175. Two ~40-line loops becoming one ~160-line primitive that is strictly more\ncorrect is not a line win, and claiming otherwise would be false.\n\nThe reason CodeWhale is ~6.2k here and pi is 2973 for ten providers is not the\npoller. It is credential-generation lifecycle with file locks (xai_credentials.rs,\n1565), MCP OAuth delegated to rmcp (1150, out of scope), external-credential\nconsent grants (682 + 227), and inside xai_oauth.rs the OIDC discovery hardening\n(origin match, downgrade refusal, credential-in-URL refusal), 64 KiB body limits,\nbounded error text, and atomic config-pointer commit under lock. Those are\nsecurity properties and features pi does not have. A device-code primitive cannot\ndelete them; arguing they should go is a separate and much larger argument.\n\nWhat did go from 2 to 1: implementations of RFC 8628 polling.","shared_primitive":"crates/config/src/device_code.rs — `codewhale_config::device_code`, in the config crate because both codewhale-cli and codewhale-tui already depend on it.\n\nPorted from pi's packages/ai/src/auth/oauth/device-code.ts (`pollOAuthDeviceCodeFlow`) and the `validateVerificationUri` half of packages/ai/src/auth/oauth/xai.ts. MIT, Copyright (c) 2025 Mario Zechner. Attribution is at the top of the module by upstream path, and the full licence text is in a new /Volumes/VIXinSSD/CW/worktrees/cw-0911-oauth/THIRD_PARTY_NOTICES.md.\n\nAPI — `DeviceCodePoll::new(lifetime, timeout_message)` with chained\n`.interval_seconds(Option&lt;u64&gt;)`, `.max_interval_seconds(u64)`,\n`.wait_before_first_poll(bool)`, `.slow_down_timeout_message(..)`, then\n`.run(sleep, poll)`. Generic over the poll result T; `poll` returns\n`Result&lt;DevicePollOutcome&lt;T&gt;&gt;` where `Complete(T)` / `Pending` /\n`SlowDown { interval_seconds }` are values and `Err` is terminal. It does no I/O:\nthe caller supplies both the poll and the sleep, which is what makes it testable\nwithout waiting in real time.\n\nBehaviours carried over from pi that CodeWhale did not have:\n  - slow_down PREFERS a server-supplied interval over the client-tracked one.\n    CodeWhale always added 5s and discarded what the server said, which is the\n    WSL/VM clock-drift bug pi's comment calls out.\n  - a distinct timeout message once any slow_down was seen.\n  - RFC 8628 3.2 default of 5s on omitted interval, and never sleeping past the\n    deadline, which CodeWhale's xAI loop already had and which is preserved.\n\n`DevicePollOutcome` deliberately does not derive Debug, so token material has no\nprintable path through it. 12 unit tests in-module.","behaviours_preserved":["xAI: same OIDC discovery, same discovered-endpoint validation (issuer match, no HTTPS downgrade, no credentials in URL, same origin), same documented-endpoint fallback","xAI: same client id (GROK_OIDC_CLIENT_ID), same scopes (DEFAULT_SCOPES), same env overrides (GROK_/XAI_ OIDC_ISSUER/CLIENT_ID/SCOPES, CODEWHALE_XAI_OAUTH_NO_BROWSER), same form fields on the device and token requests","xAI: same stderr banner, same timeout text ('xAI device-code authorization timed out. Re-run device login and approve the code before it expires.'), same denial/expired/non-JSON error text, same 64 KiB body limit and bounded error detail, still never echoes error_description on credential-bearing requests","xAI: still sleeps one interval BEFORE the first poll, still never sleeps past the device code's expiry","xAI: on-disk credential format unchanged. GrokAuthEntry and the {issuer}::{client_id}-keyed AuthFile are byte-identical; the new `interval` field lives only on the wire type TokenResponse, which derives Deserialize but NOT Serialize, so it cannot reach disk","xAI: generation lifecycle untouched — staged write under the lifecycle lock, atomic config pointer commit, stage cleanup on failure, superseded-generation removal only after commit, #5032 dangling-pointer recovery","cloud: same endpoint and body, same validate_device_code / validate_auth_bundle, same deadline min(--timeout-seconds, expires_in clamped 1..=3600), same interval clamp 1..=10, same 'Codewhale account login timed out; run `codewhale account login` to try again' text that account_login_timeout_fails_the_command matches on","cloud: still polls IMMEDIATELY and sleeps afterwards (the service answers HTTP 202 while pending), unlike xAI. Session still saved before poll_device returns","External-credential consent untouched: external_credentials.rs and agy_credentials.rs have zero diff. Read-only grants, explicit consent, and never-refresh-another-CLI's-file all unchanged","crates/tui/src/mcp/oauth.rs: zero diff, as instructed","crates/tui/src/tui/**: zero diff, as instructed"],"https_check":"CodeWhale did NOT have it. This was a real gap.\n\nBefore this branch, crates/tui/src/xai_oauth.rs did:\n\n    let verify = device.verification_uri_complete.clone()\n        .or(device.verification_uri.clone())\n        .unwrap_or_else(|| format!(\"{issuer}/device\"));\n    ...\n    if open_browser &amp;&amp; let Err(err) = webbrowser::open(&amp;verify) { ... }\n\nThat string went from the device-code response straight to `webbrowser::open`\nwith no parse, no scheme check, and no credential check. A spoofed or\ncompromised issuer could hand the platform \"open this\" call a `file:` path, a\ncustom application scheme (`vscode://`, `slack://`, ...), or a credential-bearing\nURL. pi validates this and explicitly says why; CodeWhale did not.\n\nPorted as `codewhale_config::device_code::validate_browser_verification_uri`,\ncalled in device_code_login_with before the URI is printed or opened. pi requires\n`https:`; I additionally allow `http:` on a loopback host, because CodeWhale
+... (truncated 16313 chars, full result in /private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/wy2mby6ln.output)</result>
+<diagnostics>Per-agent results: /Users/hunterbown/.claude/projects/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/subagents/workflows/wf_436f716b-e88/journal.jsonl — one {"type":"result",...} line per completed agent with its full return value.
+If the result above is empty or unexpected, Read this file BEFORE diagnosing — do not assume agents returned non-empty results.
+To re-run with edited post-processing: Workflow({scriptPath: '/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/scratchpad/wf/oauth.js', resumeFromRunId: 'wf_436f716b-e88'}) — agents whose (prompt, opts) are unchanged replay from cache.</diagnostics>
+<usage><agent_count>2</agent_count><agents_done>2</agents_done><agents_error>0</agents_error><agents_skipped>0</agents_skipped><agents_empty_result>0</agents_empty_result><subagent_tokens>271109</subagent_tokens><tool_uses>107</tool_uses><duration_ms>3380298</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>wl6o70wag</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/wl6o70wag.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Defect-first sweep across six untouched areas of the repo" completed</summary>
+<result>[{"lane":"client","branch":"codex/v0911-sw-client-20260820","dir":"cw-0911-sw-client","impl":{"lane":"client (crates/tui/src/client.rs + crates/tui/src/client/**)","branch":"codex/v0911-sw-client-20260820","lines_read":"~7,500 lines read closely: anthropic.rs non-test in full (~950), responses.rs in full (1018), cloud_code.rs in full (435), stream_entry.rs (~300), deepseek_effort.rs (190), provider_native_search.rs (~400), prepared.rs non-test (~690), chat.rs selected non-test regions (~1,900: 150-1500, 1960-2140, 2270-2760, 2880-3070, 3480-3620, 3760-4070), client.rs non-test (~1,300: 250-760, 1690-1730, 2380-2900, 3600-3918). Plus corroborating reads outside the lane to establish reachability: session_tree.rs, session_manager.rs, prompt_zones.rs, client/chat/tests/stream_decoder.rs.","defects_found":["Responses adapter (convert_messages_to_responses_input) silently deletes every message whose role is not user/assistant/interrupted/tool via `_ =&gt; {}`. `system`-role turns legitimately reach MessageRequest::messages (SessionJournal compaction summaries, branch summaries, imported-journal system entries → session_manager.messages), and the Chat Completions adapter deliberately preserves them, so this is a silent cross-dialect data loss, not a no-op.","Anthropic adapter (message_to_anthropic) forwards message.role verbatim except for the interrupted-assistant marker. messages[].role is a closed enum on the Messages API — a `system`-role history turn produces a hard 400 for the whole conversation on every retry, not just for the offending turn.","TokenBucket::delay_until_available floored the balance at zero instead of carrying the deficit. Because wait_for_rate_limit releases the bucket lock before sleeping and a cloned DeepSeekClient shares one Arc&lt;AsyncMutex&lt;TokenBucket&gt;&gt; across sub-agents, every waiter queued while the bucket was empty got the same delay and they all woke and fired at the same instant — the limiter degraded into a burst generator.","The Chat Completions SSE decode loop `break`s out of the line-drain loop at SSE_MAX_LINES_PER_CHUNK (256) and only resumes when another transport chunk arrives. One chunk routinely carries more than 256 lines (small token deltas / heartbeats are tens of bytes), so a backlog accrues and whatever is still buffered at stream end is never decoded — flush_sse_line deliberately treats the whole remainder as ONE unterminated line, so a remainder holding many complete lines yields nothing. The tail of a response (last tokens, finish_reason, usage) was dropped with no error."],"defects_fixed":[{"defect":"Responses adapter silently deleted in-history `system`-role turns (compaction summaries, branch summaries, imported journal system entries). Fixed by carrying `system`/`developer` natively as Responses input message items (the input schema accepts both roles) and warning on any remaining unrecognized role instead of vanishing it.","test":"client::responses::tests::responses_input_keeps_system_role_history_messages (crates/tui/src/client/responses/tests.rs)","fails_without_fix":"Panics on the parent commit with `system-role history message survives conversion` — no item with role \"system\" exists in the converted input at all. Passes with the fix."},{"defect":"Anthropic adapter emitted `role: \"system\"` on the Messages wire, which the API rejects with a 400 for the entire conversation. Fixed with a new `anthropic_wire_role` that projects assistant/interrupted onto \"assistant\" and user/system/developer onto \"user\" (text untouched, position preserved), warning on genuinely unknown roles.","test":"client::anthropic::tests::system_role_history_message_is_not_emitted_verbatim_on_the_messages_wire (crates/tui/src/client/anthropic.rs)","fails_without_fix":"Panics on the parent commit with `Messages API rejects role \"system\"`. Passes with the fix, and the summary text is asserted to still be present in the body."},{"defect":"TokenBucket floored its balance at zero, handing every queued waiter the same wake time so they stampeded. Fixed by keeping the deficit (allowing a negative balance); refill's clamp to capacity still bounds banked credit.","test":"client::tests::token_bucket_queues_concurrent_waiters_instead_of_stacking_them (crates/tui/src/client.rs)","fails_without_fix":"On the parent commit the third caller is told to wake at 999.978666ms — the same instant as the second — instead of ~2s. Passes with the fix; the pre-existing token_bucket_enforces_delay_when_empty still passes unchanged."},{"defect":"Chat Completions SSE drain loop stranded buffered complete lines at the per-chunk cap and discarded them at stream end. Fixed by yielding to the executor at the cap and continuing to drain, restoring the invariant flush_sse_line already assumes (at most a partial line buffered when the outer loop awaits).","test":"client::tests::chat_stream_drains_chunks_carrying_more_lines_than_the_per_chunk_cap (crates/tui/src/client.rs)","fails_without_fix":"A heartbeat-padded SSE body whose single data frame sits past the cap decodes to \"\" on the parent commit (assertion `left: \"\"` / `right: \"pong\"`). Passes with the fix."}],"commits":[{"sha":"3e6647c4722e1f65a3714ff3cb2f8868b3966a1b","subject":"fix(client): keep in-history system turns on the Responses wire"},{"sha":"03902c132346a7d78b8db68a280f6529b0ecb765","subject":"fix(client): stop emitting role \"system\" on the Anthropic Messages wire"},{"sha":"1b2ae5c0df10af533e243f7c099a56dda7f2e9ce","subject":"fix(client): keep the rate-limiter deficit so queued waiters do not stampede"},{"sha":"976a8e4d39d796421d2b632347df1a1d9f99b46b","subject":"fix(client): drain buffered SSE lines instead of stranding them at the cap"}],"evidence":"Baseline on 2bd481358: `cargo test -p codewhale-tui --lib` → 10886 passed; 0 failed; 13 ignored (144.43s). After all four commits: 10890 passed; 0 failed; 13 ignored (131.69s) — baseline + my 4 new tests, no regressions. Every fix was written test-first: each test was added and observed FAILING on the parent commit (exact panic text quoted in each defects_fixed entry and in each commit body) before the corresponding source change. `cargo fmt --all` clean. `RUSTFLAGS=-Dwarnings cargo clippy -p codewhale-tui --all-targets` clean after forcing a recheck of the crate (only the pre-existing `linker_messages` note about __eh_frame, which the lint itself says ignores -D warnings). `./scripts/sync-changelog.sh` rewrote crates/tui/CHANGELOG.md with no resulting diff, and `/tmp/version-drift-gate.sh` printed `VERSION-DRIFT GATE: ALL PASS`. Working tree clean. Diff touches only lane files: client.rs, client/anthropic.rs, client/chat.rs, client/responses.rs, client/responses/tests.rs (271 insertions, 13 deletions).","considered_and_left_alone":["chat.rs build_chat_messages_with_reasoning: a message with a genuinely unknown role (not user/assistant/interrupted/system) has its text dropped with no diagnostic. I could not name a production path that produces such a role, so it is a latent hazard rather than a live defect. Reported, not touched.","cloud_code.rs uses take_sse_line only, so an unterminated final SSE line at stream end is discarded, unlike anthropic.rs/responses.rs which use next_sse_line(buffer, ended). The SSE spec says an unterminated final block is discarded, so the asymmetry is defensible; I could not call either side wrong.","anthropic.rs apply_anthropic_cache_breakpoints collects raw `*mut Value` pointers and dereferences them in an unsafe block to trim excess breakpoints. It is sound in practice (exclusive borrow of `body`, distinct nodes) and behaviourally correct; rewriting it would be taste, not a defect.","parse_usage / parse_anthropic_usage / parse_responses_usage saturate u64→u32. This is deliberate and pinned by parse_usage_saturates_every_u64_token_field; a &gt;4.29e9 token count is not a real payload.","responses.rs handle_responses_message drops malformed accumulated tool-call argument JSON (`if let Ok(parsed) 
+... (truncated 106050 chars, full result in /private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/wl6o70wag.output)</result>
+<diagnostics>Per-agent results: /Users/hunterbown/.claude/projects/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/subagents/workflows/wf_0945550b-352/journal.jsonl — one {"type":"result",...} line per completed agent with its full return value.
+If the result above is empty or unexpected, Read this file BEFORE diagnosing — do not assume agents returned non-empty results.
+To re-run with edited post-processing: Workflow({scriptPath: '/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/scratchpad/wf/sweep.js', resumeFromRunId: 'wf_0945550b-352'}) — agents whose (prompt, opts) are unchanged replay from cache.</diagnostics>
+<usage><agent_count>12</agent_count><agents_done>12</agents_done><agents_error>0</agents_error><agents_skipped>0</agents_skipped><agents_empty_result>0</agents_empty_result><subagent_tokens>1827907</subagent_tokens><tool_uses>823</tool_uses><duration_ms>3758423</duration_ms></usage>
+</task-notification>
+
+---
+
+ok give me text only prompt for next model to continue w all of this - yes that's fine to do to merge
+
+---
+
+<task-notification>
+<task-id>biu2j1u4t</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/34267917-11f4-4d15-911a-2a8acd5c49e1/tasks/biu2j1u4t.output</output-file>
+<status>completed</status>
+<summary>Background command "Build release binaries" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok can we also make sure we add something like - a hint after an update to run something that shows them what the udpate had? also can we make it so they can just do ctrl + u or something else to update when there's an update available?  and remake the prmopt entirely and include the grok work in the prompt so they're aware of it ok?
+
+---
+
+can you actually make it an md file in codewhale ops
+
+---
+
+<task-notification>
+<task-id>b3bshw9qo</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<status>stopped</status>
+<summary>No completion record was found for this background shell command from the previous session. It may have been stopped (via the UI, Monitor timeout, or agent teardown — these leave no transcript marker), or it may have been running when the previous Claude Code process exited. Check the output file for partial results before assuming it completed.</summary>
+</task-notification>

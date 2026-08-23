@@ -3,7 +3,7 @@
   "checkpoint_id": "01M0QXSSXDW107FT699DY7NSMF",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 4,
+  "checkpoints_count": 33,
   "files_touched": [
     "crates/secrets/src/account.rs",
     "crates/secrets/src/lib.rs"
@@ -15,13 +15,27 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 90,
-    "cache_creation_tokens": 104295,
-    "cache_read_tokens": 4330093,
-    "output_tokens": 18808,
-    "api_call_count": 45
+    "input_tokens": 1280,
+    "cache_creation_tokens": 3916870,
+    "cache_read_tokens": 339095682,
+    "output_tokens": 562273,
+    "api_call_count": 641,
+    "subagent_tokens": {
+      "input_tokens": 524,
+      "cache_creation_tokens": 777770,
+      "cache_read_tokens": 19460575,
+      "output_tokens": 179766,
+      "api_call_count": 262
+    }
   }
 }

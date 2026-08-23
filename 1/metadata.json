@@ -1,0 +1,470 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0QXSSXDW107FT699DY7NSMF",
+  "session_id": "34267917-11f4-4d15-911a-2a8acd5c49e1",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-23T18:23:24.167963Z",
+  "branch": "main",
+  "checkpoints_count": 29,
+  "save_step_count": 29,
+  "files_touched": [
+    "crates/secrets/src/account.rs",
+    "crates/secrets/src/lib.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "043e40812585",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1190,
+    "cache_creation_tokens": 3812575,
+    "cache_read_tokens": 334765589,
+    "output_tokens": 543465,
+    "api_call_count": 596,
+    "subagent_tokens": {
+      "input_tokens": 524,
+      "cache_creation_tokens": 777770,
+      "cache_read_tokens": 19460575,
+      "output_tokens": 179766,
+      "api_call_count": 262
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VLzZX43z6ha8fqUVJ7xME4",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "taste"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "043e40812585",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2134,
+        "end": 2135,
+        "entry_ids": [
+          "d5320f5c-2ede-4f87-a6f8-dae8c73be172"
+        ],
+        "tool_use_id": "toolu_01VLzZX43z6ha8fqUVJ7xME4"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VLzZX43z6ha8fqUVJ7xME4"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: taste",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 29
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-23T18:23:23.880795Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 60,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 60,
+    "total_lines_changed": 66,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 22409,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409,
+        "CHANGELOG.md": 114,
+        "codewhale-inference/.dev.vars.example": 5,
+        "codewhale-inference/.gitignore": 7,
+        "codewhale-inference/README.md": 86,
+        "codewhale-inference/docs/API.md": 106,
+        "codewhale-inference/docs/ARCHITECTURE.md": 95,
+        "codewhale-inference/docs/HOSTING.md": 83,
+        "codewhale-inference/docs/VERCEL_TEST.md": 76,
+        "codewhale-inference/package-lock.json": 2746,
+        "codewhale-inference/package.json": 23,
+        "codewhale-inference/scripts/vercel-catalog-check.mjs": 29,
+        "codewhale-inference/scripts/vercel-smoke.mjs": 59,
+        "codewhale-inference/src/auth.ts": 60,
+        "codewhale-inference/src/billing.ts": 94,
+        "codewhale-inference/src/http.ts": 90,
+        "codewhale-inference/src/index.ts": 482,
+        "codewhale-inference/src/models.ts": 119,
+        "codewhale-inference/src/provider.ts": 291,
+        "codewhale-inference/src/wallet.ts": 314,
+        "codewhale-inference/test/api.spec.ts": 226,
+        "codewhale-inference/test/env.d.ts": 3,
+        "codewhale-inference/test/tsconfig.json": 8,
+        "codewhale-inference/test/wallet.spec.ts": 49,
+        "codewhale-inference/tsconfig.json": 21,
+        "codewhale-inference/vitest.config.ts": 20,
+        "codewhale-inference/worker-configuration.d.ts": 14889,
+        "codewhale-inference/wrangler.jsonc": 40,
+        "config.example.toml": 8,
+        "crates/tui/CHANGELOG.md": 114,
+        "crates/tui/locales/ca.json": 4,
+        "crates/tui/locales/de.json": 4,
+        "crates/tui/locales/en.json": 4,
+        "crates/tui/locales/es-419.json": 4,
+        "crates/tui/locales/fr.json": 4,
+        "crates/tui/locales/hi.json": 4,
+        "crates/tui/locales/id.json": 4,
+        "crates/tui/locales/ja.json": 4,
+        "crates/tui/locales/ko.json": 4,
+        "crates/tui/locales/pt-BR.json": 4,
+        "crates/tui/locales/ru.json": 4,
+        "crates/tui/locales/uk.json": 4,
+        "crates/tui/locales/vi.json": 4,
+        "crates/tui/locales/zh-Hans.json": 4,
+        "crates/tui/locales/zh-Hant.json": 4,
+        "crates/tui/src/commands/groups/config/config.rs": 29,
+        "crates/tui/src/commands/groups/core/core.rs": 1,
+        "crates/tui/src/commands/groups/session/rename.rs": 36,
+        "crates/tui/src/commands/groups/session/session.rs": 7,
+        "crates/tui/src/commands/groups/session/title.rs": 390,
+        "crates/tui/src/config.rs": 9,
+        "crates/tui/src/config/tests.rs": 33,
+        "crates/tui/src/runtime_api/tests.rs": 1,
+        "crates/tui/src/session_manager.rs": 10,
+        "crates/tui/src/tui/app.rs": 30,
+        "crates/tui/src/tui/app/init.rs": 2,
+        "crates/tui/src/tui/notifications.rs": 83,
+        "crates/tui/src/tui/ui/apply.rs": 1,
+        "crates/tui/src/tui/ui/frame.rs": 1,
+        "crates/tui/src/tui/ui/tests.rs": 16,
+        "crates/tui/src/tui/underwater.rs": 61,
+        "crates/tui/tests/pty/release_runtime_qa.rs": 340,
+        "docs/research/CODEWHALE_INFERENCE_DILIGENCE_2026-08-19.md": 593
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 839,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21570,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409,
+        "crates/tui/src/commands/groups/session/title.rs": 390
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21960,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21960,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21960,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21960,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21960,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21960,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21960,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 10,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21960,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 11,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21960,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 12,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21960,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 13,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21960,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 14,
+      "user_lines_added": 479,
+      "user_lines_removed": 1,
+      "agent_lines_added": 21960,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409,
+        "crates/secrets/src/account.rs": 12,
+        "crates/secrets/src/lib.rs": 18
+      },
+      "user_removed_per_file": {
+        "crates/secrets/src/account.rs": 1
+      }
+    },
+    {
+      "checkpoint_number": 15,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 16,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 17,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 18,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 19,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 20,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 21,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 22,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 23,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 24,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 25,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 26,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 27,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 28,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    },
+    {
+      "checkpoint_number": 29,
+      "user_lines_added": 449,
+      "user_lines_removed": 0,
+      "agent_lines_added": 21990,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409
+      }
+    }
+  ]
+}
