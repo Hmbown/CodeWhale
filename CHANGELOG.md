@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- New `/relaunch` command: save like `/exit`, then self-exec `resume
+  <session-id>` so a session switches to the current binary in one step. The
+  executable path falls back to `argv[0]` when `current_exe` resolves to a
+  deleted or renamed path (the updater's rename-replacement case); if the
+  replacement fails the session is already saved and the error names the
+  `resume` command to continue with. Unix-only by design — Windows keeps the
+  documented manual-restart behavior (#5532).
+
 ## [0.9.11] - 2026-08-22
 
 Codewhale v0.9.11 tightens the long-running agent loop, makes workflow
