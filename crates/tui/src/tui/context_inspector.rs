@@ -159,6 +159,38 @@ pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
             crate::session_manager::truncate_id(session_id)
         );
     }
+    // Real provider-token cache hit rate from the same records /cache
+    // aggregates (C3): only provider-reported cache telemetry counts, so the
+    // number is what the user actually paid to keep, not a predicted guess.
+    let mut cache_turns = 0u64;
+    let (cache_hit, cache_miss) =
+        app.session
+            .turn_cache_history
+            .iter()
+            .fold((0u64, 0u64), |(hit, miss), record| {
+                let Some(hit_tokens_u32) = record.cache_hit_tokens else {
+                    return (hit, miss);
+                };
+                let hit_tokens = u64::from(hit_tokens_u32);
+                let miss_tokens = u64::from(
+                    record
+                        .cache_miss_tokens
+                        .unwrap_or(record.input_tokens.saturating_sub(hit_tokens_u32)),
+                );
+                cache_turns += 1;
+                (hit + hit_tokens, miss + miss_tokens)
+            });
+    let cache_total = cache_hit + cache_miss;
+    if cache_turns > 0 && cache_total > 0 {
+        let cache_percent = (cache_hit as f64 / cache_total as f64 * 100.0).clamp(0.0, 100.0);
+        let _ = writeln!(
+            out,
+            "Provider cache hit rate: {cache_percent:.1}% over {cache_turns} cache-aware turn{}",
+            if cache_turns == 1 { "" } else { "s" },
+        );
+    } else {
+        let _ = writeln!(out, "Provider cache hit rate: no cache telemetry yet");
+    }
     let status_label = match context_status(percent) {
         ContextPressure::Critical => tr(locale, MessageId::CtxInspCritical),
         ContextPressure::High => tr(locale, MessageId::CtxInspHigh),
@@ -826,6 +858,38 @@ mod tests {
         app.active_route_limits = None;
         app.active_context_window_override = None;
         app
+    }
+
+    #[test]
+    fn inspector_reports_the_provider_cache_hit_rate() {
+        let mut app = test_app();
+        for (input, hit) in [(1_000u32, 800u32), (1_000, 500)] {
+            app.session
+                .turn_cache_history
+                .push_back(crate::tui::app::TurnCacheRecord {
+                    provider: None,
+                    provider_identity: None,
+                    model: None,
+                    auto_model: false,
+                    input_tokens: input,
+                    output_tokens: 0,
+                    cache_hit_tokens: Some(hit),
+                    cache_miss_tokens: None,
+                    reasoning_replay_tokens: None,
+                    cache_write_tokens: None,
+                    reasoning_tokens: None,
+                    cost_audit: None,
+                    recorded_at: std::time::Instant::now(),
+                });
+        }
+        let text = build_context_inspector_text(&app, Locale::En);
+        assert!(
+            text.contains("Provider cache hit rate: 65.0% over 2 cache-aware turns"),
+            "{text}"
+        );
+
+        let empty = build_context_inspector_text(&test_app(), Locale::En);
+        assert!(empty.contains("no cache telemetry yet"), "{empty}");
     }
 
     #[test]
