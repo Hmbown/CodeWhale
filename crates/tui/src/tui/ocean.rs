@@ -73,6 +73,7 @@ pub fn ambient_inks_for_activity(
     // `mix(sky, base, t)`: larger `t` sits closer to the background — dimmer.
     let (toward_base_a, toward_base_b) = match activity {
         AmbientActivity::Reasoning => (0.58, 0.44),
+        AmbientActivity::Reading => (0.50, 0.36),
         AmbientActivity::Tools => (0.30, 0.18),
         AmbientActivity::Subagents => (0.34, 0.22),
         AmbientActivity::Verifying | AmbientActivity::Baseline => (0.42, 0.28),
@@ -278,13 +279,7 @@ impl OceanColumn {
                 self.phase,
                 ShellPhase::Waiting | ShellPhase::Approval | ShellPhase::Failed
             ) {
-                return self.ramp.color_at_attention(
-                    row,
-                    self.height,
-                    self.elapsed_ms,
-                    self.phase,
-                    self.animated,
-                );
+                return self.ramp.color_at_attention(row, self.height, self.phase);
             }
             // Ease between the static gradient and the phase treatment by
             // life presence, so mood/activity changes blend instead of snap.
@@ -475,7 +470,7 @@ impl OceanRamp {
             phase,
             ShellPhase::Waiting | ShellPhase::Approval | ShellPhase::Failed
         ) {
-            return self.color_at_attention(row, height, elapsed_ms, phase, true);
+            return self.color_at_attention(row, height, phase);
         }
         let cycle = (elapsed_ms % 90_000) as f32 / 90_000.0;
         let breath = (cycle * std::f32::consts::TAU).sin() * 0.5 + 0.5;
@@ -492,20 +487,12 @@ impl OceanRamp {
 
     /// Water tint for the states that need to read from across the room.
     ///
-    /// Waiting/Approval warm the field toward `attention` on a slow breath —
-    /// alive but held, asking for a person. The warmth concentrates near the
-    /// surface, where the eye lands first. Under reduced motion the breath
-    /// flattens to a steady tint: motion is opt-in, visibility is not.
-    /// Failed casts a steady `failure` tone — an outcome, not a request.
+    /// Waiting/Approval warm the field toward `attention`, concentrated near
+    /// the surface where the eye lands first; Failed casts a steady `failure`
+    /// tone. Deliberately time-invariant: the color itself is the signal, and
+    /// a slow breath read as flicker rather than intent.
     #[must_use]
-    pub fn color_at_attention(
-        self,
-        row: u16,
-        height: u16,
-        elapsed_ms: u128,
-        phase: ShellPhase,
-        animated: bool,
-    ) -> Color {
+    pub fn color_at_attention(self, row: u16, height: u16, phase: ShellPhase) -> Color {
         let base = self.color_at(row, height);
         let depth = if height <= 1 {
             0.0
@@ -514,14 +501,7 @@ impl OceanRamp {
         };
         match phase {
             ShellPhase::Waiting | ShellPhase::Approval => {
-                let amount = if animated {
-                    let cycle = (elapsed_ms % 2_800) as f32 / 2_800.0;
-                    let breath = (cycle * std::f32::consts::TAU).sin() * 0.5 + 0.5;
-                    0.05 + 0.09 * breath
-                } else {
-                    0.10
-                };
-                mix_colors(base, self.attention, amount * (0.6 + 0.4 * (1.0 - depth)))
+                mix_colors(base, self.attention, 0.10 * (0.6 + 0.4 * (1.0 - depth)))
             }
             ShellPhase::Failed => mix_colors(base, self.failure, 0.09),
             _ => base,

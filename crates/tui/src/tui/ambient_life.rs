@@ -221,6 +221,9 @@ pub enum AmbientActivity {
     #[default]
     Baseline,
     Reasoning,
+    /// Read-shaped exploration: quieter than generic tool work, brighter
+    /// than hidden reasoning — skimming, not digging.
+    Reading,
     Tools,
     Subagents,
     Verifying,
@@ -231,6 +234,7 @@ impl AmbientActivity {
     pub fn from_kind(kind: crate::tui::underwater::LiveActivityKind) -> Self {
         match kind {
             crate::tui::underwater::LiveActivityKind::Reasoning => Self::Reasoning,
+            crate::tui::underwater::LiveActivityKind::Reading => Self::Reading,
             crate::tui::underwater::LiveActivityKind::UsingTool => Self::Tools,
             crate::tui::underwater::LiveActivityKind::UsingSubagents => Self::Subagents,
             crate::tui::underwater::LiveActivityKind::Verifying => Self::Verifying,
@@ -243,6 +247,7 @@ impl AmbientActivity {
     fn speed(self) -> f32 {
         match self {
             Self::Reasoning => 0.6,
+            Self::Reading => 0.8,
             Self::Tools | Self::Subagents => 1.25,
             Self::Verifying => 1.0,
             Self::Baseline => 1.0,

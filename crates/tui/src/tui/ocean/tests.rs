@@ -296,13 +296,9 @@ fn attention_phases_tint_the_water_even_when_life_has_settled() {
     assert_ne!(failed.color_at_y(0), idle.color_at_y(0));
     assert_ne!(waiting.color_at_y(0), failed.color_at_y(0));
 
-    // Under motion, the waiting tint breathes; reduced motion holds steady.
-    let animated_a = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Approval, true, 0);
-    let animated_b = OceanColumn::new(ramp, viewport, 700, None, ShellPhase::Approval, true, 0);
-    assert_ne!(animated_a.color_at_y(0), animated_b.color_at_y(0));
-    let still_a = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Approval, false, 0);
-    let still_b = OceanColumn::new(ramp, viewport, 700, None, ShellPhase::Approval, false, 0);
-    assert_eq!(still_a.color_at_y(0), still_b.color_at_y(0));
+    // The tint is steady across time and motion settings alike.
+    let later = OceanColumn::new(ramp, viewport, 700, None, ShellPhase::Approval, true, 0);
+    assert_eq!(waiting.color_at_y(0), later.color_at_y(0));
 }
 
 #[test]
@@ -327,20 +323,20 @@ fn shimmer_is_subtle_and_concentrated_near_the_surface() {
 #[test]
 fn attention_phases_carry_their_own_water_and_work_phases_have_distinct_depth_bias() {
     let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
-    // Waiting/Approval breathe: the field warms and eases on a slow cycle so
-    // "blocked on you" is visible in peripheral vision. Sampling half the
-    // 2.8s cycle apart guarantees different breath amplitudes.
-    for phase in [ShellPhase::Waiting, ShellPhase::Approval] {
-        assert_ne!(
+    // Attention tints are steady — the color itself is the signal, and a
+    // slow breath read as flicker rather than intent — but never neutral:
+    // each attention phase differs from the plain water.
+    for phase in [
+        ShellPhase::Waiting,
+        ShellPhase::Approval,
+        ShellPhase::Failed,
+    ] {
+        assert_eq!(
             ramp.color_at_phase(4, 20, 0, phase),
-            ramp.color_at_phase(4, 20, 700, phase)
+            ramp.color_at_phase(4, 20, 45_000, phase)
         );
+        assert_ne!(ramp.color_at_phase(4, 20, 0, phase), ramp.color_at(4, 20));
     }
-    // Failed is a steady cast — an outcome, not a request.
-    assert_eq!(
-        ramp.color_at_phase(4, 20, 0, ShellPhase::Failed),
-        ramp.color_at_phase(4, 20, 45_000, ShellPhase::Failed)
-    );
     assert_ne!(
         ramp.color_at_phase(10, 20, 22_500, ShellPhase::Working),
         ramp.color_at_phase(10, 20, 22_500, ShellPhase::Verifying)
