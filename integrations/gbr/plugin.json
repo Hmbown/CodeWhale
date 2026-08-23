@@ -1,0 +1,8 @@
+{
+  "name": "gbr",
+  "version": "0.6.1",
+  "description": "Pair a phone running Build Remote Agent (gbr/1). Spectator via gbr-mcp and 127.0.0.1:8788.",
+  "homepage": "https://grokbuildremote.com/",
+  "license": "MIT",
+  "keywords": ["mcp", "mobile", "pairing"]
+}

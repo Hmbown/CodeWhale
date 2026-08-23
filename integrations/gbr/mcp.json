@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "gbr": {
+      "command": "node",
+      "args": [
+        "GrokBuildRemote-Agents/mcp/gbr-mcp/bin/gbr-mcp.js"
+      ]
+    }
+  }
+}
