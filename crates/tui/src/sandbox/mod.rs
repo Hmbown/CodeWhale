@@ -438,12 +438,8 @@ impl BwrapMountExtensions {
     }
 }
 
-/// The `SandboxManager` is responsible for:
-/// - Detecting available sandbox technologies
-/// - Transforming `CommandSpecs` into sandboxed `ExecEnvs`
-/// - Detecting sandbox denials from command output
 /// Expand a leading `~` or `~/` to the user's home directory. Paths without
-/// the prefix — and any path when no home directory is resolvable — pass
+/// the prefix (and any path when no home directory is resolvable) pass
 /// through unchanged.
 fn expand_home_prefix(path: PathBuf) -> PathBuf {
     let Some(text) = path.to_str() else {
@@ -460,6 +456,10 @@ fn expand_home_prefix(path: PathBuf) -> PathBuf {
     path
 }
 
+/// The `SandboxManager` is responsible for:
+/// - Detecting available sandbox technologies
+/// - Transforming `CommandSpecs` into sandboxed `ExecEnvs`
+/// - Detecting sandbox denials from command output
 #[derive(Debug, Default)]
 pub struct SandboxManager {
     /// Cached sandbox availability check.
