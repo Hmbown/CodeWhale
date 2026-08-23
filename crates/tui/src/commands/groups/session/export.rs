@@ -206,19 +206,55 @@ fn export_usage(reason: &str) -> String {
 
 fn copy_to_clipboard(app: &mut App, label: &str, markdown: &str) -> CommandResult {
     let terminal_client = app.clipboard.requires_terminal_paste();
+    let last_copy = write_last_copy(markdown);
+    let copy_hint = |path: Option<PathBuf>| match path {
+        Some(path) => {
+            format!("; a copy is at {}", path.display())
+        }
+        None => String::new(),
+    };
     match app.clipboard.write_text(markdown) {
         Ok(()) if terminal_client => CommandResult::message(format!(
-            "{label} sent to the terminal-client clipboard over SSH via tmux/OSC 52 ({} lines); terminal support and settings determine whether the client accepts it",
-            markdown.lines().count()
+            "{label} sent to the terminal-client clipboard over SSH via tmux/OSC 52 ({} lines){}; terminal support and settings determine whether the client accepts it",
+            markdown.lines().count(),
+            copy_hint(last_copy)
         )),
         Ok(()) => CommandResult::message(format!(
-            "{label} copied to the local clipboard ({} lines; a terminal clipboard fallback may have been used)",
-            markdown.lines().count()
+            "{label} copied to the local clipboard ({} lines; a terminal clipboard fallback may have been used){}",
+            markdown.lines().count(),
+            copy_hint(last_copy)
         )),
-        Err(err) => CommandResult::error(format!(
-            "Clipboard export failed: {err}. No file was written; use `/export file <path>` to choose an explicit destination"
-        )),
+        Err(err) => match last_copy {
+            Some(path) => CommandResult::error(format!(
+                "Clipboard export failed: {err}. The full export was written to {}; /export file <path> writes it where you choose",
+                path.display()
+            )),
+            None => CommandResult::error(format!(
+                "Clipboard export failed: {err}. No file was written; use `/export file <path>` to choose an explicit destination"
+            )),
+        },
     }
+}
+
+/// Write the export to a predictable last-copy file under the Codewhale home
+/// (#5555): a clipboard-only export on SSH/headless must never dead-end the
+/// user, so the same content lands at `<home>/exports/last-copy.md` and every
+/// failure message names it. Returns the path when the write succeeded.
+fn write_last_copy(markdown: &str) -> Option<PathBuf> {
+    let home = crate::config::effective_home_dir()?;
+    write_last_copy_to(&Path::new(&home).join("exports"), markdown)
+        .ok()
+        .map(|_| Path::new(&home).join("exports").join("last-copy.md"))
+}
+
+fn write_last_copy_to(exports_dir: &Path, markdown: &str) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(exports_dir)?;
+    let path = exports_dir.join("last-copy.md");
+    // Write-then-rename keeps a crash from leaving a truncated last-copy.
+    let tmp = exports_dir.join("last-copy.md.tmp");
+    std::fs::write(&tmp, markdown)?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(path)
 }
 
 fn render_conversation(app: &App) -> String {
@@ -923,6 +959,25 @@ mod tests {
     }
 
     #[test]
+    fn last_copy_writes_the_export_without_leaving_a_temp_artifact() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = tmp.path().join("exports");
+        let path = write_last_copy_to(&dir, "# export\n\nhello\n").expect("write");
+        assert_eq!(path, dir.join("last-copy.md"));
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "# export\n\nhello\n"
+        );
+        assert!(
+            !dir.join("last-copy.md.tmp").exists(),
+            "the temp file must be renamed away"
+        );
+        // The next export overwrites the same predictable path.
+        write_last_copy_to(&dir, "# second\n").expect("rewrite");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "# second\n");
+    }
+
+    #[test]
     fn default_clipboard_export_preserves_structure_and_redacts_secrets() {
         let tmpdir = TempDir::new().expect("tempdir");
         let mut app = test_app(&tmpdir);
@@ -1053,6 +1108,17 @@ mod tests {
     #[test]
     fn clipboard_export_reports_ssh_terminal_client_and_failure_honestly() {
         let tmpdir = TempDir::new().expect("tempdir");
+        // Point HOME at the tempdir so the last-copy backup lands in the test
+        // sandbox instead of the real user home. lock_test_env serializes env
+        // access with the other HOME-scoped tests (prompts, snapshot).
+        let _env_lock = crate::test_support::lock_test_env();
+        let previous_home = std::env::var_os("HOME");
+        let test_home = tmpdir.path().join("home");
+        std::fs::create_dir_all(&test_home).expect("home dir");
+        // Safety: HOME is restored below and env access is serialized.
+        unsafe {
+            std::env::set_var("HOME", &test_home);
+        }
         let mut app = test_app(&tmpdir);
         app.clipboard = ClipboardHandler::for_test(true, true);
         let ssh = execute_export(&mut app, Some("clipboard"));
@@ -1063,14 +1129,34 @@ mod tests {
                 .unwrap_or_default()
                 .contains("terminal-client clipboard over SSH")
         );
+        assert!(
+            ssh.message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("last-copy.md"),
+            "success must name the backup copy: {:?}",
+            ssh.message
+        );
 
         app.clipboard = ClipboardHandler::unavailable_for_test(false);
         let failed = execute_export(&mut app, Some("clipboard"));
         assert!(failed.is_error);
         let message = failed.message.as_deref().unwrap_or_default();
-        assert!(message.contains("No file was written"), "{message}");
+        assert!(
+            message.contains("The full export was written to"),
+            "{message}"
+        );
+        assert!(message.contains("last-copy.md"), "{message}");
         assert!(message.contains("/export file <path>"), "{message}");
         assert!(!tmpdir.path().join("chat_export.md").exists());
+        assert!(test_home.join("exports/last-copy.md").exists());
+        // Safety: restore the previous HOME after the assertions.
+        unsafe {
+            match previous_home {
+                Some(home) => std::env::set_var("HOME", home),
+                None => std::env::remove_var("HOME"),
+            }
+        }
     }
 
     #[test]
