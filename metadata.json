@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0R9CMH4SS6BQ0DMH9DEWX3J",
+  "strategy": "manual-commit",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/tui/src/tui/ambient_life.rs",
+    "crates/tui/src/tui/ambient_life/tests.rs",
+    "crates/tui/src/tui/ocean.rs",
+    "crates/tui/src/tui/ocean/tests.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 37735,
+    "cache_read_tokens": 6074159,
+    "output_tokens": 18209,
+    "api_call_count": 25
+  }
+}
