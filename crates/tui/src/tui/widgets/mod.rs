@@ -134,7 +134,15 @@ impl ChatWidget {
             .is_ombre()
             .then(|| crate::tui::ocean::OceanRamp::for_theme(&app.ui_theme))
             .flatten();
-        let ambient_inks = Some(crate::tui::ocean::ambient_inks(&app.ui_theme));
+        // Ink hue carries the live activity (reasoning deep-dim, tools bright,
+        // sub-agents seafoam) so the marks read the state at a glance.
+        let ocean_activity = crate::tui::ambient_life::AmbientActivity::from_kind(
+            crate::tui::underwater::LiveActivity::from_app(app).kind(),
+        );
+        let ambient_inks = Some(crate::tui::ocean::ambient_inks_for_activity(
+            &app.ui_theme,
+            ocean_activity,
+        ));
         // The completion breath is authored decorative motion, so it rides the
         // same motion gate as everything else in the water. Both the column's
         // settle flourish and ambient life's presence read this one clock:
@@ -222,9 +230,7 @@ impl ChatWidget {
                 jump_to_latest_button: None,
                 background,
                 ocean_column,
-                ocean_activity: crate::tui::ambient_life::AmbientActivity::from_kind(
-                    crate::tui::underwater::LiveActivity::from_app(app).kind(),
-                ),
+                ocean_activity,
                 ambient_inks,
                 ocean_elapsed_ms,
                 ocean_animated,
@@ -617,9 +623,7 @@ impl ChatWidget {
             jump_to_latest_button,
             background,
             ocean_column,
-            ocean_activity: crate::tui::ambient_life::AmbientActivity::from_kind(
-                crate::tui::underwater::LiveActivity::from_app(app).kind(),
-            ),
+            ocean_activity,
             ambient_inks,
             ocean_elapsed_ms,
             ocean_animated,
