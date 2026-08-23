@@ -587,6 +587,94 @@ async fn pipeline_surfaces_response_schema_errors_instead_of_null() {
 }
 
 #[tokio::test]
+async fn parallel_fail_fast_rejects_with_the_typed_slot_error() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("beta", FakeReply::Fail("boom".to_string()));
+    let value = run(
+        &driver,
+        r#"
+        try {
+            await parallel([
+                () => task({ description: "alpha" }),
+                () => task({ description: "beta" }),
+            ], { mode: "fail-fast" });
+            return "no-error";
+        } catch (err) {
+            return (err && err.kind) + ":" + (err && err.message);
+        }
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+    let text = value.as_str().unwrap();
+    assert!(
+        text.starts_with("task:") && text.contains("boom"),
+        "fail-fast must reject with the typed slot error: {text}"
+    );
+    assert!(
+        driver.events().iter().any(|event| matches!(
+            event,
+            ProgressEvent::Log { message } if message.contains("fail-fast slot error")
+        )),
+        "fail-fast must leave a breadcrumb with the slot error"
+    );
+}
+
+#[tokio::test]
+async fn task_errors_carry_typed_kinds() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("budget", FakeReply::BudgetExhausted("limit 10".to_string()));
+    driver.on("cancelled", FakeReply::Cancelled);
+    driver.on("admission", FakeReply::Reject("admission cap".to_string()));
+    let value = run(
+        &driver,
+        r#"
+        const kinds = {};
+        for (const description of ["budget", "cancelled", "admission"]) {
+            try {
+                await task({ description });
+                kinds[description] = "none";
+            } catch (err) {
+                kinds[description] = err && err.kind;
+            }
+        }
+        return kinds;
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        value,
+        json!({"budget": "budget", "cancelled": "cancelled", "admission": "admission"})
+    );
+}
+
+#[tokio::test]
+async fn pipeline_fail_fast_rejects_instead_of_nulling_the_item() {
+    let value = run(
+        &Arc::new(FakeDriver::new()),
+        r#"
+        const stage = async (value) => {
+            if (value === 1) throw new Error("stage boom");
+            return value * 2;
+        };
+        try {
+            await pipeline([1, 2], { stages: [stage], mode: "fail-fast" });
+            return "no-error";
+        } catch (err) {
+            return (err && err.kind) + ":" + (err && err.message);
+        }
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+    assert_eq!(value, json!("task:stage boom"));
+}
+
+#[tokio::test]
 async fn parallel_enforces_the_1000_item_cap_without_spawning() {
     let driver = Arc::new(FakeDriver::new());
     let value = run(

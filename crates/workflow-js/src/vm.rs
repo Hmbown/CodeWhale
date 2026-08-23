@@ -1052,9 +1052,25 @@ const PRELUDE_TEMPLATE: &str = r#""use strict";
 
   const MAX_ITEMS = __MAX_ITEMS__;
   const taskErrorText = (err) => String(err && err.message !== undefined ? err.message : err);
-  const isFatalTaskError = (err) => {
+  // Typed error kinds (R9): fatal-vs-recoverable used to be a substring
+  // match; now every error thrown by task() carries a stable `kind` and the
+  // classifiers resolve kind-first with the legacy text prefixes as fallback
+  // so pre-existing envelopes still classify.
+  const formatTaskErrorKind = (err) => {
+    if (err && typeof err === "object" && typeof err.kind === "string") {
+      return err.kind;
+    }
     const text = taskErrorText(err);
-    return text.includes("responseSchema") || text.includes("run cancelled");
+    if (text.includes("run cancelled") || text.includes("subagent cancelled")) return "cancelled";
+    if (text.includes("budget exhausted")) return "budget";
+    if (text.includes("responseSchema")) return "schema";
+    if (text.includes("spawn rejected")) return "admission";
+    if (text.includes("driver unavailable") || text.includes("driver dropped")) return "driver";
+    return "task";
+  };
+  const isFatalTaskError = (err) => {
+    const kind = formatTaskErrorKind(err);
+    return kind === "cancelled" || kind === "schema";
   };
 
   globalThis.task = async (opts) => {
@@ -1063,28 +1079,46 @@ const PRELUDE_TEMPLATE: &str = r#""use strict";
     }
     const envelope = JSON.parse(await hostTask(JSON.stringify(opts)));
     if (envelope.error !== undefined) {
-      throw new Error(envelope.error);
+      const err = new Error(envelope.error);
+      err.kind = envelope.error_kind || formatTaskErrorKind(err);
+      throw err;
     }
     return envelope.value;
   };
 
-  globalThis.parallel = (thunks) => {
+  globalThis.parallel = (thunks, opts) => {
     if (!Array.isArray(thunks)) {
       throw new TypeError("parallel(): expected an array of thunks");
     }
     if (thunks.length > MAX_ITEMS) {
       throw new Error("parallel(): max " + MAX_ITEMS + " items per call");
     }
+    const failFast = opts !== null && typeof opts === "object" && opts.mode === "fail-fast";
+    const dropOrReject = (err) => {
+      if (isFatalTaskError(err)) throw err;
+      if (failFast) {
+        if (err && typeof err === "object") {
+          err.kind = err.kind || formatTaskErrorKind(err);
+        }
+        hostLog("parallel(): fail-fast slot error: " + taskErrorText(err));
+        throw err;
+      }
+      hostLog("parallel(): dropped a failed slot as null: " + taskErrorText(err));
+      return null;
+    };
     return Promise.all(thunks.map((thunk) => {
       try {
-        return Promise.resolve(typeof thunk === "function" ? thunk() : thunk).catch((err) => {
-          if (isFatalTaskError(err)) throw err;
-          hostLog("parallel(): dropped a failed slot as null: " + String((err && err.message) || err));
-          return null;
-        });
+        return Promise.resolve(typeof thunk === "function" ? thunk() : thunk).catch(dropOrReject);
       } catch (err) {
         if (isFatalTaskError(err)) return Promise.reject(err);
-        hostLog("parallel(): dropped a failed slot as null: " + String((err && err.message) || err));
+        if (failFast) {
+          if (err && typeof err === "object") {
+            err.kind = err.kind || formatTaskErrorKind(err);
+          }
+          hostLog("parallel(): fail-fast slot error: " + taskErrorText(err));
+          return Promise.reject(err);
+        }
+        hostLog("parallel(): dropped a failed slot as null: " + taskErrorText(err));
         return null;
       }
     }));
@@ -1097,6 +1131,17 @@ const PRELUDE_TEMPLATE: &str = r#""use strict";
     if (items.length > MAX_ITEMS) {
       throw new Error("pipeline(): max " + MAX_ITEMS + " items per call");
     }
+    // Options overload: pipeline(items, { stages: [...], mode: "fail-fast" }).
+    let mode = "settled";
+    if (
+      stages.length === 1 &&
+      stages[0] !== null &&
+      typeof stages[0] === "object" &&
+      Array.isArray(stages[0].stages)
+    ) {
+      mode = stages[0].mode === "fail-fast" ? "fail-fast" : "settled";
+      stages = stages[0].stages;
+    }
     return Promise.all(items.map(async (item, index) => {
       let value = item;
       for (const stage of stages) {
@@ -1104,7 +1149,15 @@ const PRELUDE_TEMPLATE: &str = r#""use strict";
           value = await stage(value, item, index);
         } catch (err) {
           if (isFatalTaskError(err)) throw err;
-          hostLog("pipeline(): dropped item " + index + " as null: " + String((err && err.message) || err));
+          const failFast = mode === "fail-fast";
+          if (failFast) {
+            if (err && typeof err === "object") {
+              err.kind = err.kind || formatTaskErrorKind(err);
+            }
+            hostLog("pipeline(): fail-fast stage error on item " + index + ": " + taskErrorText(err));
+            throw err;
+          }
+          hostLog("pipeline(): dropped item " + index + " as null: " + taskErrorText(err));
           return null;
         }
       }
