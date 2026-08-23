@@ -1215,8 +1215,15 @@ pub fn apply_caustic_shimmer(
             let cell = &mut buf[(area.x + local_x, area.y + local_y)];
             // Soften toward ambient ink without replacing semantic glyphs.
             if cell.symbol() == " " || cell.symbol().is_empty() {
-                let shimmer =
-                    ocean::scale_color(row_bg, caustic_brightness(elapsed_ms, local_x, local_y));
+                // Sunlight dissolves with depth instead of stopping: full
+                // amplitude at the surface easing to zero at the band's
+                // floor. The former hard cutoff at `band` drew a visible
+                // horizontal line across tall windows.
+                let depth_fade = 1.0 - f32::from(local_y) / f32::from(band.max(1));
+                let shimmer = ocean::scale_color(
+                    row_bg,
+                    caustic_brightness(elapsed_ms, local_x, local_y, depth_fade * depth_fade),
+                );
                 cell.set_bg(shimmer);
             }
         }
@@ -1227,7 +1234,7 @@ pub fn apply_caustic_shimmer(
 /// toggled cells fully on/off at 12.5 Hz; truecolor made that quantization look
 /// like dropped frames. A narrow cosine crest preserves the same sparse light
 /// band while cross-fading every sampled cell between frames.
-fn caustic_brightness(elapsed_ms: u128, local_x: u16, local_y: u16) -> f32 {
+fn caustic_brightness(elapsed_ms: u128, local_x: u16, local_y: u16, depth_fade: f32) -> f32 {
     const CYCLE_MS: f64 = 960.0;
     const SPATIAL_SLOTS: f64 = 4.0;
     let time = (elapsed_ms % CYCLE_MS as u128) as f64 / CYCLE_MS;
@@ -1237,7 +1244,7 @@ fn caustic_brightness(elapsed_ms: u128, local_x: u16, local_y: u16) -> f32 {
     let slot = (u32::from(local_x / 3) + u32::from(local_y)) % 4;
     let phase = (time + f64::from(slot) / SPATIAL_SLOTS) * std::f64::consts::TAU;
     let crest = ((phase.cos() + 1.0) * 0.5).powi(8);
-    (1.0 + 0.08 * crest) as f32
+    1.0 + 0.08 * (crest as f32) * depth_fade.clamp(0.0, 1.0)
 }
 
 /// Cached ocean row colors invalidated only when phase/dimensions/palette/breath tick.

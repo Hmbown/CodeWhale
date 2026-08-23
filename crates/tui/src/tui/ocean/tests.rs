@@ -344,6 +344,23 @@ fn attention_phases_carry_their_own_water_and_work_phases_have_distinct_depth_bi
 }
 
 #[test]
+fn tall_columns_darken_continuously_without_an_anchor_shelf() {
+    // The old two-segment ramp met at 0.42 with zero color velocity on both
+    // sides: on a tall window that shelf read as a horizontal seam. The
+    // Bézier column must keep moving through the former anchor zone.
+    let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
+    let height = 120;
+    let anchor = 50; // ~0.42 of 120
+    let above = ramp.color_at(anchor - 6, height);
+    let at = ramp.color_at(anchor, height);
+    let below = ramp.color_at(anchor + 6, height);
+    assert_ne!(above, at, "water must still darken entering the old anchor");
+    assert_ne!(at, below, "water must still darken leaving the old anchor");
+    assert_eq!(ramp.color_at(0, height), ramp.surface);
+    assert_eq!(ramp.color_at(height - 1, height), ramp.deep);
+}
+
+#[test]
 fn completion_breath_peaks_once_then_settles() {
     let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
     let start = ramp.color_at_completion(0, 20, 0);

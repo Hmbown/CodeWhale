@@ -443,13 +443,14 @@ impl OceanRamp {
             return self.surface;
         }
         let position = f32::from(row.min(height - 1)) / f32::from(height - 1);
-        if position <= 0.42 {
-            // Ease into each depth anchor so large empty regions read as calm
-            // water bands rather than a mechanically uniform color ramp.
-            mix_colors(self.surface, self.middle, smoothstep(position / 0.42))
-        } else {
-            mix_colors(self.middle, self.deep, smoothstep((position - 0.42) / 0.58))
-        }
+        // One continuous darkening curve (quadratic Bézier through
+        // surface → middle → deep, via de Casteljau). The former two eased
+        // segments met at a 0.42 anchor where the color velocity dropped to
+        // zero on both sides — on a tall window that shelf of unchanging
+        // middle color read as a horizontal seam across the water.
+        let toward_middle = mix_colors(self.surface, self.middle, position);
+        let toward_deep = mix_colors(self.middle, self.deep, position);
+        mix_colors(toward_middle, toward_deep, position)
     }
 
     #[must_use]
