@@ -1097,7 +1097,7 @@ fn local_context_from_file_mentions(
         // message-send hot path. Accept the rare symlink-aliasing dedup
         // miss as the cost of avoiding a syscall (Gemini code-review).
         let (mut path, mut display_path, mut exists) =
-            resolve_mention_for_send(&ws, &mention_path, completion_index);
+            resolve_mention_for_send(&ws, mention_path, completion_index);
         if !exists && let Some((path_part, parsed)) = split_mention_range(&mention) {
             let (ranged_path, ranged_display, ranged_exists) =
                 resolve_mention_for_send(&ws, path_part, completion_index);
