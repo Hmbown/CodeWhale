@@ -2141,6 +2141,24 @@ pub(crate) fn apply_workspace_runtime_state(app: &mut App, config: &Config, work
     ) {
         tracing::warn!(target: "plugins", "{error}");
     }
+    // A plugin that failed to load used to be invisible until someone
+    // happened to open /plugin. Surface a one-line hint instead of leaving
+    // the discovery result buried in the trace log; warnings stay quiet.
+    let plugin_load_errors = app
+        .plugin_registry
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.level == crate::plugins::types::PluginDiagnosticLevel::Error
+        })
+        .count();
+    if plugin_load_errors > 0 {
+        app.status_message = Some(if plugin_load_errors == 1 {
+            "1 plugin failed to load — /plugin for details".to_string()
+        } else {
+            format!("{plugin_load_errors} plugins failed to load — /plugin for details")
+        });
+    }
     app.active_skill = None;
     app.active_skill_provenance = None;
     // Switching workspace reloads the hook set (project hooks are per-repo)
