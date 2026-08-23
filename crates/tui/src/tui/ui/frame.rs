@@ -275,6 +275,7 @@ pub(crate) fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             read_only_roots: config.bwrap_ro_roots.clone(),
             device_roots: config.bwrap_dev_roots.clone(),
         },
+        denied_read_subpaths: config.sandbox_denied_read_paths.clone(),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
         speech_output_dir: config.speech_output_dir(),

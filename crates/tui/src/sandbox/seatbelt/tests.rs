@@ -23,8 +23,8 @@ fn file_provider_extensions_intersect_each_workspace_root_and_exclusions() {
         exclude_tmpdir: true,
         exclude_slash_tmp: true,
     };
-    let workspace_write = generate_policy(&policy, &workspace);
-    let read_only = generate_policy(&SandboxPolicy::ReadOnly, &workspace);
+    let workspace_write = generate_policy(&policy, &workspace, &[]);
+    let read_only = generate_policy(&SandboxPolicy::ReadOnly, &workspace, &[]);
 
     for policy in [&workspace_write, &read_only] {
         assert!(policy.contains("(version 1)"));
@@ -60,7 +60,7 @@ fn file_provider_extensions_intersect_each_workspace_root_and_exclusions() {
     assert_eq!(read_only.matches(read_write_extension).count(), 1);
     assert!(!read_only.contains("WRITABLE_ROOT"));
 
-    let args = create_seatbelt_args(vec!["/usr/bin/true".to_string()], &policy, &workspace);
+    let args = create_seatbelt_args(vec!["/usr/bin/true".to_string()], &policy, &workspace, &[]);
     let output = Command::new(SANDBOX_EXEC_PATH)
         .args(args)
         .current_dir(&workspace)
@@ -152,7 +152,7 @@ fn file_provider_synthetic_operations_are_independent_under_seatbelt() {
             }
         };
 
-        let args = create_seatbelt_args(command, &SandboxPolicy::default(), &workspace);
+        let args = create_seatbelt_args(command, &SandboxPolicy::default(), &workspace, &[]);
         let output = Command::new(SANDBOX_EXEC_PATH)
             .args(args)
             .current_dir(&workspace)
@@ -182,4 +182,63 @@ fn file_provider_synthetic_operations_are_independent_under_seatbelt() {
         "independent sandbox operations failed:\n{}",
         failures.join("\n")
     );
+}
+
+/// S1 (#5568): the opt-in read deny-list must actually stop reads that the
+/// full-disk-read posture would otherwise allow — live, with sandbox-exec —
+/// and an empty list must leave the generated profile byte-identical.
+#[test]
+fn denied_read_subpaths_block_reads_under_every_sandboxed_posture() {
+    assert!(
+        is_available(),
+        "UNRUN: macOS sandbox-exec is unavailable; no deny-list evidence collected"
+    );
+
+    let secret_dir = tempfile::tempdir().expect("secret dir");
+    let secret_file = secret_dir.path().join("id_ed25519");
+    std::fs::write(&secret_file, "PRIVATE KEY MATERIAL").expect("write secret");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let read_cmd = vec![
+        "/bin/cat".to_string(),
+        secret_file.to_string_lossy().into_owned(),
+    ];
+
+    for policy in [SandboxPolicy::ReadOnly, SandboxPolicy::default()] {
+        // Without the deny-list the read succeeds (full-disk read posture).
+        let open_args = create_seatbelt_args(read_cmd.clone(), &policy, workspace.path(), &[]);
+        let open = Command::new(SANDBOX_EXEC_PATH)
+            .args(open_args)
+            .current_dir(workspace.path())
+            .output()
+            .expect("run un-denied read");
+        assert!(
+            open.status.success(),
+            "baseline read should pass under {policy:?}: {}",
+            String::from_utf8_lossy(&open.stderr)
+        );
+
+        // With the parent directory denied, the same read must fail. The
+        // rule set comes from the manager's setter, which canonicalizes:
+        // macOS tempdirs live behind the /var -> /private/var symlink, and
+        // Seatbelt matches the kernel-resolved path, so a literal-only rule
+        // silently never fires (caught live by this very test).
+        let mut manager = crate::sandbox::SandboxManager::new();
+        manager.set_denied_read_subpaths(vec![secret_dir.path().to_path_buf()]);
+        let denied_args = create_seatbelt_args(
+            read_cmd.clone(),
+            &policy,
+            workspace.path(),
+            manager.denied_read_subpaths_for_test(),
+        );
+        let denied = Command::new(SANDBOX_EXEC_PATH)
+            .args(denied_args)
+            .current_dir(workspace.path())
+            .output()
+            .expect("run denied read");
+        assert!(
+            !denied.status.success(),
+            "deny-listed read must fail under {policy:?}, stdout: {}",
+            String::from_utf8_lossy(&denied.stdout)
+        );
+    }
 }

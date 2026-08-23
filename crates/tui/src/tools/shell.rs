@@ -1833,6 +1833,12 @@ impl ShellManager {
         self.sandbox_manager.set_bwrap_extensions(extensions);
     }
 
+    /// Forward the opt-in sandbox read deny-list (S1, #5568) to the sandbox
+    /// manager; `~` prefixes expand there.
+    pub fn set_denied_read_subpaths(&mut self, paths: Vec<std::path::PathBuf>) {
+        self.sandbox_manager.set_denied_read_subpaths(paths);
+    }
+
     /// Return the OS sandbox wrapper this shell manager is configured and able
     /// to apply to commands.
     pub fn configured_sandbox_type(&self) -> Option<SandboxType> {

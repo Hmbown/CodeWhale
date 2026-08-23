@@ -6822,6 +6822,7 @@ impl RuntimeThreadManager {
                     read_only_roots: cfg.bwrap_ro_roots.clone(),
                     device_roots: cfg.bwrap_dev_roots.clone(),
                 },
+                denied_read_subpaths: cfg.sandbox_denied_read_paths.clone(),
                 memory_enabled: cfg.memory_enabled(),
                 memory_path: cfg.memory_path(),
                 speech_output_dir: cfg.speech_output_dir(),

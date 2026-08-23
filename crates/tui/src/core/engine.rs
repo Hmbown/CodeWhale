@@ -420,6 +420,10 @@ pub struct EngineConfig {
     /// User-configured bwrap mount extensions (#5410): extra read-only roots
     /// and writable device nodes such as `/dev/null`.
     pub bwrap_extensions: crate::sandbox::BwrapMountExtensions,
+    /// Opt-in sandbox read deny-list (S1, #5568): subpaths sandboxed shell
+    /// commands must not read even under full-disk-read postures. `~` expands
+    /// at the sandbox boundary. Empty keeps today's behavior.
+    pub denied_read_subpaths: Vec<std::path::PathBuf>,
     /// Tool override and plugin configuration (`[tools]` table in config.toml).
     /// Applied to the per-turn tool registry after built-in tools are registered.
     /// When `None`, no overrides or plugin loading occurs.
@@ -517,6 +521,7 @@ impl Default for EngineConfig {
             tools_always_load: HashSet::new(),
             prefer_bwrap: false,
             bwrap_extensions: crate::sandbox::BwrapMountExtensions::default(),
+            denied_read_subpaths: Vec::new(),
             verbosity: None,
             tools: None,
             workspace_follow_symlinks: false,
@@ -1443,11 +1448,13 @@ impl Engine {
             Ok(mut manager) => {
                 manager.set_prefer_bwrap(config.prefer_bwrap);
                 manager.set_bwrap_extensions(config.bwrap_extensions.clone());
+                manager.set_denied_read_subpaths(config.denied_read_subpaths.clone());
             }
             Err(poisoned) => {
                 let mut manager = poisoned.into_inner();
                 manager.set_prefer_bwrap(config.prefer_bwrap);
                 manager.set_bwrap_extensions(config.bwrap_extensions.clone());
+                manager.set_denied_read_subpaths(config.denied_read_subpaths.clone());
             }
         }
         let file_read_tracker = new_shared_file_read_tracker();

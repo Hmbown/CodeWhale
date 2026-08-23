@@ -2934,6 +2934,15 @@ pub struct Config {
     /// provides fresh device nodes, so most users never need this.
     #[serde(default, alias = "bwrapDevRoots")]
     pub bwrap_dev_roots: Vec<std::path::PathBuf>,
+    /// Opt-in sandbox read deny-list (S1, #5568). Listed subpaths are
+    /// unreadable inside sandboxed shell commands even though the sandbox
+    /// otherwise grants full-disk read: Seatbelt appends last-match-wins
+    /// deny rules; bubblewrap masks each existing path with an empty tmpfs
+    /// (directories) or a /dev/null bind (files). A leading `~` expands to
+    /// the user's home. Empty (the default) preserves current behavior.
+    /// Example: `sandbox_denied_read_paths = ["~/.ssh", "~/.aws"]`.
+    #[serde(default, alias = "sandboxDeniedReadPaths")]
+    pub sandbox_denied_read_paths: Vec<std::path::PathBuf>,
     #[serde(alias = "managedConfigPath")]
     pub managed_config_path: Option<String>,
     #[serde(alias = "requirementsPath")]
@@ -10113,6 +10122,11 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
             base.bwrap_dev_roots
         } else {
             override_cfg.bwrap_dev_roots
+        },
+        sandbox_denied_read_paths: if override_cfg.sandbox_denied_read_paths.is_empty() {
+            base.sandbox_denied_read_paths
+        } else {
+            override_cfg.sandbox_denied_read_paths
         },
         managed_config_path: override_cfg
             .managed_config_path

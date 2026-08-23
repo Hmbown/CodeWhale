@@ -442,6 +442,24 @@ impl BwrapMountExtensions {
 /// - Detecting available sandbox technologies
 /// - Transforming `CommandSpecs` into sandboxed `ExecEnvs`
 /// - Detecting sandbox denials from command output
+/// Expand a leading `~` or `~/` to the user's home directory. Paths without
+/// the prefix — and any path when no home directory is resolvable — pass
+/// through unchanged.
+fn expand_home_prefix(path: PathBuf) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path;
+    };
+    if text == "~" {
+        return dirs::home_dir().unwrap_or(path);
+    }
+    if let Some(rest) = text.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
+    }
+    path
+}
+
 #[derive(Debug, Default)]
 pub struct SandboxManager {
     /// Cached sandbox availability check.
@@ -458,6 +476,12 @@ pub struct SandboxManager {
     /// User-configured bwrap bind-mount extensions (#5410): extra
     /// read-only roots and writable device nodes.
     bwrap_extensions: BwrapMountExtensions,
+
+    /// Opt-in read deny-list (S1, #5568): paths sandboxed commands must not
+    /// be able to read even though the sandbox otherwise grants full-disk
+    /// read (Seatbelt appends last-match-wins deny rules; bubblewrap masks
+    /// each path). Empty by default — today's behavior unchanged.
+    denied_read_subpaths: Vec<PathBuf>,
 }
 
 impl SandboxManager {
@@ -487,6 +511,35 @@ impl SandboxManager {
     /// roots and writable device nodes such as `/dev/null`.
     pub fn set_bwrap_extensions(&mut self, extensions: BwrapMountExtensions) {
         self.bwrap_extensions = extensions;
+    }
+
+    /// Set the opt-in read deny-list (S1, #5568). A leading `~` in a path
+    /// expands to the user's home directory here, and each existing path is
+    /// ALSO recorded in canonicalized form when that differs: macOS Seatbelt
+    /// matches the kernel-resolved path, so a rule written against
+    /// `/var/...` alone never fires for the real `/private/var/...` file —
+    /// the deny must name both spellings to actually deny.
+    pub fn set_denied_read_subpaths(&mut self, paths: Vec<PathBuf>) {
+        let mut resolved: Vec<PathBuf> = Vec::with_capacity(paths.len());
+        for path in paths.into_iter().map(expand_home_prefix) {
+            if let Ok(canonical) = std::fs::canonicalize(&path)
+                && canonical != path
+                && !resolved.contains(&canonical)
+            {
+                resolved.push(canonical);
+            }
+            if !resolved.contains(&path) {
+                resolved.push(path);
+            }
+        }
+        self.denied_read_subpaths = resolved;
+    }
+
+    /// Test-only view of the resolved deny-list (post home-expansion and
+    /// canonicalization).
+    #[cfg(test)]
+    pub fn denied_read_subpaths_for_test(&self) -> &[PathBuf] {
+        &self.denied_read_subpaths
     }
 
     /// Check if sandboxing is available.
@@ -532,7 +585,7 @@ impl SandboxManager {
             SandboxType::None => Self::prepare_unsandboxed(spec),
 
             #[cfg(target_os = "macos")]
-            SandboxType::MacosSeatbelt => Self::prepare_seatbelt(spec),
+            SandboxType::MacosSeatbelt => self.prepare_seatbelt(spec),
 
             #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
             SandboxType::LinuxBubblewrap => self.prepare_bwrap(spec),
@@ -559,14 +612,18 @@ impl SandboxManager {
 
     /// Prepare a Seatbelt-sandboxed execution environment (macOS).
     #[cfg(target_os = "macos")]
-    fn prepare_seatbelt(spec: &CommandSpec) -> ExecEnv {
+    fn prepare_seatbelt(&self, spec: &CommandSpec) -> ExecEnv {
         // Build the original command
         let mut original_command = vec![spec.program.clone()];
         original_command.extend(spec.args.clone());
 
         // Generate sandbox-exec arguments
-        let seatbelt_args =
-            seatbelt::create_seatbelt_args(original_command, &spec.sandbox_policy, &spec.cwd);
+        let seatbelt_args = seatbelt::create_seatbelt_args(
+            original_command,
+            &spec.sandbox_policy,
+            &spec.cwd,
+            &self.denied_read_subpaths,
+        );
 
         // Prepend sandbox-exec to the command
         let mut command = vec![seatbelt::SANDBOX_EXEC_PATH.to_string()];
@@ -608,6 +665,7 @@ impl SandboxManager {
             &writable_roots,
             spec.sandbox_policy.has_network_access(),
             &self.bwrap_extensions,
+            &self.denied_read_subpaths,
         );
 
         let mut env = spec.env.clone();
