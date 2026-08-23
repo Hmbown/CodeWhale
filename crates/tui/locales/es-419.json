@@ -1298,6 +1298,7 @@
   "ProviderExternalDormant": "inactivo",
   "ProviderExternalOwnerPath": "Propietario/ruta: {owner} | {path}",
   "ProviderExternalPinnedPathWarning": "Advertencia: cambió la ruta de credenciales detectada para {owner}; el consentimiento sigue fijado a {path}.",
+  "ToolProjectionWarning": "Advertencia: {provider} omitió herramientas incompatibles en esta solicitud: {tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | revocar: {revoke}",
   "ProviderExternalRevoke": "revocar: {revoke}",
   "ProviderExternalChoiceTitle": " Acceso a credencial externa · {provider} ",

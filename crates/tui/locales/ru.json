@@ -1275,6 +1275,7 @@
   "ProviderExternalDormant": "неактивен",
   "ProviderExternalOwnerPath": "Владелец/путь: {owner} | {path}",
   "ProviderExternalPinnedPathWarning": "Внимание: путь учётных данных {owner} изменился; согласие остаётся привязанным к {path}.",
+  "ToolProjectionWarning": "Внимание: {provider} исключил несовместимые инструменты для этого запроса: {tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | отзыв: {revoke}",
   "ProviderExternalRevoke": "отзыв: {revoke}",
   "ProviderExternalChoiceTitle": " Доступ к внешним учётным данным · {provider} ",

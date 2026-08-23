@@ -1298,6 +1298,7 @@
   "ProviderExternalDormant": "không hoạt động",
   "ProviderExternalOwnerPath": "Chủ sở hữu/đường dẫn: {owner} | {path}",
   "ProviderExternalPinnedPathWarning": "Cảnh báo: đường dẫn thông tin xác thực hiện tại của {owner} đã thay đổi; sự đồng ý vẫn được ghim vào {path}.",
+  "ToolProjectionWarning": "Cảnh báo: {provider} đã bỏ qua các công cụ không tương thích trong yêu cầu này: {tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | thu hồi: {revoke}",
   "ProviderExternalRevoke": "thu hồi: {revoke}",
   "ProviderExternalChoiceTitle": " Truy cập thông tin xác thực ngoài · {provider} ",

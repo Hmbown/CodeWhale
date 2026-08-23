@@ -1298,6 +1298,7 @@
   "ProviderExternalDormant": "休眠",
   "ProviderExternalOwnerPath": "所有者/路径：{owner} | {path}",
   "ProviderExternalPinnedPathWarning": "警告：{owner} 当前的凭据路径已更改；授权仍固定到 {path}。",
+  "ToolProjectionWarning": "警告：{provider} 已在本次请求中省略不兼容的工具：{tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | 撤销：{revoke}",
   "ProviderExternalRevoke": "撤销：{revoke}",
   "ProviderExternalChoiceTitle": " 外部凭据访问 · {provider} ",

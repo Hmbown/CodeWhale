@@ -1298,6 +1298,7 @@
   "ProviderExternalDormant": "휴면",
   "ProviderExternalOwnerPath": "소유자/경로: {owner} | {path}",
   "ProviderExternalPinnedPathWarning": "경고: {owner}의 현재 자격 증명 경로가 변경되었습니다. 동의는 계속 {path}에 고정됩니다.",
+  "ToolProjectionWarning": "경고: {provider}가 이 요청에서 호환되지 않는 도구를 제외했습니다: {tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | 취소: {revoke}",
   "ProviderExternalRevoke": "취소: {revoke}",
   "ProviderExternalChoiceTitle": " 외부 자격 증명 접근 · {provider} ",

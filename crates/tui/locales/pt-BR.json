@@ -1298,6 +1298,7 @@
   "ProviderExternalDormant": "inativo",
   "ProviderExternalOwnerPath": "Proprietário/caminho: {owner} | {path}",
   "ProviderExternalPinnedPathWarning": "Aviso: o caminho atual de credenciais de {owner} mudou; o consentimento continua fixado em {path}.",
+  "ToolProjectionWarning": "Aviso: {provider} omitiu ferramentas incompatíveis nesta solicitação: {tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | revogar: {revoke}",
   "ProviderExternalRevoke": "revogar: {revoke}",
   "ProviderExternalChoiceTitle": " Acesso a credencial externa · {provider} ",

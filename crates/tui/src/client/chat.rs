@@ -9,7 +9,7 @@ use std::io::Write;
 use std::pin::Pin;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::time::timeout as tokio_timeout;
@@ -942,38 +942,62 @@ fn mirror_minimax_reasoning_details_for_body(body: &mut Value, provider: ApiProv
     mirror_minimax_reasoning_details_for_messages(messages);
 }
 
-fn sanitize_moonshot_chat_tools(chat_tools: &mut [Value]) -> Result<()> {
-    for tool in chat_tools {
+/// Sanitize every Moonshot chat tool in place, dropping only the tools whose
+/// parameters cannot pass MFJS compatibility validation.
+///
+/// Per-tool degradation: a single incompatible tool (e.g. a third-party MCP
+/// server whose schema uses keywords outside the MFJS whitelist) is excluded
+/// from this request with a warning instead of failing the whole request
+/// before transport. The tool name is safe to log — it is already visible in
+/// the UI — while the error's `Display` deliberately carries no schema values.
+///
+/// Returns the names of the dropped tools, in catalog order.
+fn sanitize_moonshot_chat_tools(chat_tools: &mut Vec<Value>) -> Vec<String> {
+    let mut dropped = Vec::new();
+    chat_tools.retain_mut(|tool| {
         let Some(function) = tool
             .as_object_mut()
             .and_then(|tool| tool.get_mut("function"))
             .and_then(Value::as_object_mut)
         else {
-            continue;
+            return true;
         };
         let Some(parameters) = function.get_mut("parameters") else {
-            continue;
+            return true;
         };
-        let note = crate::tools::schema_sanitize::sanitize_for_kimi_parameters(parameters)
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "Moonshot function parameters failed safe compatibility validation: {error}"
-                )
-            })?;
-        if let Some(note) = note {
-            let description = function
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let description = if description.is_empty() {
-                note
-            } else {
-                format!("{description} {note}")
-            };
-            function.insert("description".to_string(), json!(description));
+        match crate::tools::schema_sanitize::sanitize_for_kimi_parameters(parameters) {
+            Ok(note) => {
+                if let Some(note) = note {
+                    let description = function
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let description = if description.is_empty() {
+                        note
+                    } else {
+                        format!("{description} {note}")
+                    };
+                    function.insert("description".to_string(), json!(description));
+                }
+                true
+            }
+            Err(error) => {
+                let name = function
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("<unnamed>")
+                    .to_string();
+                tracing::warn!(
+                    tool = %name,
+                    error = %error,
+                    "dropping Moonshot tool from this request: parameters failed safe compatibility validation"
+                );
+                dropped.push(name);
+                false
+            }
         }
-    }
-    Ok(())
+    });
+    dropped
 }
 
 /// The final Chat Completions wire payload for one request.
@@ -997,6 +1021,10 @@ pub(crate) struct ChatWireBody {
     /// `reasoning_content`. Only computed on the streaming path, which is the
     /// only path that runs the replay sanitizer today.
     pub(crate) replay_input_tokens: Option<u32>,
+    /// Wire-normalized tool names omitted because Moonshot's MFJS validator
+    /// rejected their parameter schemas. Kept outside the wire body so the
+    /// caller can surface one bounded diagnostic without leaking schema data.
+    pub(crate) omitted_tool_names: Vec<String>,
 }
 
 /// Build the Chat Completions wire body for `request`.
@@ -1042,16 +1070,18 @@ pub(crate) fn build_chat_wire_body(
     if let Some(top_p) = request.top_p {
         body["top_p"] = json!(top_p);
     }
+    let mut omitted_tool_names = Vec::new();
     if let Some(tools) = request.tools.as_ref() {
         let mut chat_tools: Vec<_> = tools
             .iter()
             .map(|tool| tool_to_chat_for_base_url(tool, base_url))
             .collect();
         // Moonshot function parameters must end at a plain object root.
-        // Flatten root composition, preserve valid nested anyOf, and fail
-        // closed before transport when an internal root ref is unsafe.
+        // Flatten root composition, preserve valid nested anyOf, and drop
+        // only the tools whose parameters cannot pass MFJS validation so one
+        // incompatible tool never sinks the whole request.
         if matches!(provider, crate::config::ApiProvider::Moonshot) {
-            sanitize_moonshot_chat_tools(&mut chat_tools)?;
+            omitted_tool_names = sanitize_moonshot_chat_tools(&mut chat_tools);
         }
         // xAI rejects a parameters root that is not a plain object schema
         // (e.g. apply_patch's root `oneOf` required-groups) with a 400.
@@ -1079,13 +1109,28 @@ pub(crate) fn build_chat_wire_body(
                 }
             }
         }
-        body["tools"] = json!(chat_tools);
+        // When per-tool degradation (or the caller) left no tools, omit the
+        // key entirely: an empty `tools` array — or a `tool_choice` pointing
+        // at a dropped tool — is itself a fresh 400 on strict providers.
+        if !chat_tools.is_empty() {
+            body["tools"] = json!(chat_tools);
+        }
     }
     if should_send_tool_choice_for_chat(provider, request.reasoning_effort.as_deref())
         && let Some(choice) = request.tool_choice.as_ref()
         && let Some(mapped) = map_tool_choice_for_chat(choice)
     {
-        body["tool_choice"] = mapped;
+        if matches!(provider, crate::config::ApiProvider::Moonshot)
+            && let Some(name) = mapped.pointer("/function/name").and_then(Value::as_str)
+            && omitted_tool_names.iter().any(|omitted| omitted == name)
+        {
+            bail!(
+                "Moonshot cannot force tool '{name}' because its input schema is incompatible with this route"
+            );
+        }
+        if body.get("tools").is_some() {
+            body["tool_choice"] = mapped;
+        }
     }
     apply_route_reasoning_controls(
         &mut body,
@@ -1122,6 +1167,7 @@ pub(crate) fn build_chat_wire_body(
         body,
         model,
         replay_input_tokens,
+        omitted_tool_names,
     })
 }
 

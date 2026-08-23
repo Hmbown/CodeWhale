@@ -1126,6 +1126,7 @@
   "ProviderExternalOwnerLabel": "所屬CLI",
   "ProviderExternalOwnerPath": "所有者/路徑：{owner} | {path}",
   "ProviderExternalPinnedPathWarning": "警告：{owner} 目前的憑據路徑已更改；授權仍固定到 {path}。",
+  "ToolProjectionWarning": "警告：{provider} 已在本次請求中省略不相容的工具：{tools}",
   "ProviderExternalReadOnlyDetail": "僅限一個確切檔案；下一步需要明確確認",
   "ProviderExternalReadOnlyLabel": "唯讀",
   "ProviderExternalReadOnlySemantics": "僅讀取這一確切檔案；不重新整理、不發起身份提供商或發現請求、不寫入或重寫外部檔案；向所選提供商發起的正常請求可以使用該令牌",

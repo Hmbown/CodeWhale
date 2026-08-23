@@ -12006,6 +12006,18 @@ async fn run_exec_agent(
                 // Exec stream-json intentionally omits reasoning deltas; the
                 // TUI transcript retains its existing Activity Detail surface.
             }
+            Event::ToolProjectionWarning {
+                provider,
+                omitted_tool_names,
+            } if !json_output => {
+                eprintln!(
+                    "{}",
+                    crate::core::events::tool_projection_warning_message(
+                        &provider,
+                        &omitted_tool_names,
+                    )
+                );
+            }
             Event::ToolCallStarted { id, name, input } => {
                 let started_at = chrono::Utc::now().to_rfc3339();
                 tool_starts.insert(id.clone(), (Instant::now(), started_at.clone()));

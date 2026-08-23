@@ -2037,7 +2037,8 @@ impl DeepSeekClient {
                     requested_effort,
                     wire.replay_input_tokens,
                     entrypoint,
-                ))
+                )
+                .with_omitted_tool_names(wire.omitted_tool_names))
             }
             WireFormat::AnthropicMessages => {
                 let body = self.build_anthropic_body(&request, stream);
@@ -2247,6 +2248,23 @@ impl DeepSeekClient {
     ) -> crate::llm_client::StreamEventBox {
         Box::pin(async_stream::stream! {
             let _permit = permit;
+            let mut stream = stream;
+            while let Some(event) = stream.next().await {
+                yield event;
+            }
+        })
+    }
+
+    fn prepend_tool_projection_warning(
+        stream: crate::llm_client::StreamEventBox,
+        provider: String,
+        omitted_tool_names: Vec<String>,
+    ) -> crate::llm_client::StreamEventBox {
+        Box::pin(async_stream::stream! {
+            yield Ok(crate::models::StreamEvent::ToolProjectionWarning {
+                provider,
+                omitted_tool_names,
+            });
             let mut stream = stream;
             while let Some(event) = stream.next().await {
                 yield event;
@@ -3074,6 +3092,12 @@ impl LlmClient for DeepSeekClient {
                 stream, inference,
             ));
         }
+        let projection_warning = (!prepared.omitted_tool_names.is_empty()).then(|| {
+            (
+                prepared.endpoint.provider_display.clone(),
+                prepared.omitted_tool_names.clone(),
+            )
+        });
         let stream = match prepared.dialect {
             WireDialect::OpenAiResponses => self.handle_responses_stream(&prepared).await?,
             WireDialect::AnthropicMessages => self.handle_anthropic_stream(&prepared).await?,
@@ -3081,6 +3105,12 @@ impl LlmClient for DeepSeekClient {
             WireDialect::GoogleCloudCode => {
                 unreachable!("Antigravity streams before dialect match")
             }
+        };
+        let stream = match projection_warning {
+            Some((provider, omitted_tool_names)) => {
+                Self::prepend_tool_projection_warning(stream, provider, omitted_tool_names)
+            }
+            None => stream,
         };
         let stream = Self::hold_provider_request_permit_for_stream(stream, permit);
         Ok(Self::hold_remote_control_inference_permit_for_stream(
@@ -5698,13 +5728,12 @@ mod tests {
         );
     }
 
-    async fn assert_kimi_code_invalid_root_ref_fails_before_transport(streaming: bool) {
-        let server = MockServer::start().await;
-        let client = moonshot_request_boundary_client(
-            crate::config::DEFAULT_KIMI_CODE_BASE_URL,
-            crate::config::KIMI_CODE_K3_MODEL,
-            server.uri(),
-        );
+    // Per-tool degradation regression: the old behavior failed the whole
+    // request before transport when any tool's parameters failed MFJS
+    // validation; now only the incompatible tool is dropped from the wire
+    // body and the request still sends, so one bad MCP server cannot sink
+    // every Moonshot-routed turn.
+    async fn assert_kimi_code_invalid_root_ref_drops_only_that_tool(streaming: bool) {
         let mut request =
             k3_request_fixture(crate::config::KIMI_CODE_K3_MODEL, Some("low"), streaming);
         let mut tool = test_tool("private_schema_tool");
@@ -5713,45 +5742,29 @@ mod tests {
             "$defs": {}
         });
         request.tools = Some(vec![tool]);
+        request.tool_choice = Some(json!("auto"));
 
-        let error = if streaming {
-            match client.create_message_stream(request).await {
-                Ok(_) => panic!("invalid streaming parameters reached transport"),
-                Err(error) => error,
-            }
-        } else {
-            match client.create_message(request).await {
-                Ok(_) => panic!("invalid non-streaming parameters reached transport"),
-                Err(error) => error,
-            }
-        };
-        let diagnostic = error.to_string();
+        let body = capture_moonshot_chat_request_body(
+            crate::config::DEFAULT_KIMI_CODE_BASE_URL,
+            crate::config::KIMI_CODE_K3_MODEL,
+            request,
+        )
+        .await;
         assert!(
-            diagnostic.contains("failed safe compatibility validation"),
-            "{diagnostic}"
+            body.get("tools").is_none(),
+            "the only tool was dropped, so the wire body must omit tools entirely: {body}"
         );
         assert!(
-            diagnostic.contains("unresolved internal root reference"),
-            "{diagnostic}"
+            body.get("tool_choice").is_none(),
+            "tool_choice must not be sent when every tool was dropped: {body}"
         );
-        assert!(!diagnostic.contains("private-root-name-3158"));
         assert!(
-            server
-                .received_requests()
-                .await
-                .expect("request log")
-                .is_empty(),
-            "invalid parameters must fail before transport"
+            !body.to_string().contains("private-root-name-3158"),
+            "the wire body must not leak the private $ref value: {body}"
         );
     }
 
-    async fn assert_kimi_code_untyped_default_fails_before_transport(streaming: bool) {
-        let server = MockServer::start().await;
-        let client = moonshot_request_boundary_client(
-            crate::config::DEFAULT_KIMI_CODE_BASE_URL,
-            crate::config::KIMI_CODE_K3_MODEL,
-            server.uri(),
-        );
+    async fn assert_kimi_code_untyped_default_drops_only_that_tool(streaming: bool) {
         let mut request =
             k3_request_fixture(crate::config::KIMI_CODE_K3_MODEL, Some("low"), streaming);
         let mut tool = test_tool("private_default_tool");
@@ -5765,36 +5778,22 @@ mod tests {
         });
         request.tools = Some(vec![tool]);
 
-        let error = if streaming {
-            match client.create_message_stream(request).await {
-                Ok(_) => panic!("untyped streaming parameters reached transport"),
-                Err(error) => error,
-            }
-        } else {
-            match client.create_message(request).await {
-                Ok(_) => panic!("untyped non-streaming parameters reached transport"),
-                Err(error) => error,
-            }
-        };
-        let diagnostic = error.to_string();
+        let body = capture_moonshot_chat_request_body(
+            crate::config::DEFAULT_KIMI_CODE_BASE_URL,
+            crate::config::KIMI_CODE_K3_MODEL,
+            request,
+        )
+        .await;
         assert!(
-            diagnostic.contains("failed safe compatibility validation"),
-            "{diagnostic}"
+            body.get("tools").is_none(),
+            "the only tool was dropped, so the wire body must omit tools entirely: {body}"
         );
         assert!(
-            diagnostic.contains("without a concrete type"),
-            "{diagnostic}"
+            body.get("tool_choice").is_none(),
+            "tool_choice must not be sent when every tool was dropped: {body}"
         );
-        assert!(!diagnostic.contains("private-field-4401"));
-        assert!(!diagnostic.contains("private-default-value-4402"));
-        assert!(
-            server
-                .received_requests()
-                .await
-                .expect("request log")
-                .is_empty(),
-            "untyped parameters must fail before transport"
-        );
+        assert!(!body.to_string().contains("private-field-4401"));
+        assert!(!body.to_string().contains("private-default-value-4402"));
     }
 
     async fn assert_kimi_code_streams_mfjs_safe_deferred_dynamic_tool() {
@@ -6049,23 +6048,199 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_message_request_rejects_invalid_kimi_root_ref_before_transport() {
-        assert_kimi_code_invalid_root_ref_fails_before_transport(false).await;
+    async fn create_message_request_drops_invalid_kimi_root_ref_tool() {
+        assert_kimi_code_invalid_root_ref_drops_only_that_tool(false).await;
     }
 
     #[tokio::test]
-    async fn create_message_stream_rejects_invalid_kimi_root_ref_before_transport() {
-        assert_kimi_code_invalid_root_ref_fails_before_transport(true).await;
+    async fn create_message_stream_drops_invalid_kimi_root_ref_tool() {
+        assert_kimi_code_invalid_root_ref_drops_only_that_tool(true).await;
     }
 
     #[tokio::test]
-    async fn create_message_request_rejects_untyped_kimi_default_before_transport() {
-        assert_kimi_code_untyped_default_fails_before_transport(false).await;
+    async fn create_message_request_drops_untyped_kimi_default_tool() {
+        assert_kimi_code_untyped_default_drops_only_that_tool(false).await;
     }
 
     #[tokio::test]
-    async fn create_message_stream_rejects_untyped_kimi_default_before_transport() {
-        assert_kimi_code_untyped_default_fails_before_transport(true).await;
+    async fn create_message_stream_drops_untyped_kimi_default_tool() {
+        assert_kimi_code_untyped_default_drops_only_that_tool(true).await;
+    }
+
+    #[tokio::test]
+    async fn moonshot_drops_only_incompatible_tool() {
+        for streaming in [false, true] {
+            let mut request =
+                k3_request_fixture(crate::config::KIMI_CODE_K3_MODEL, Some("low"), streaming);
+            let good = test_tool("compatible_lookup");
+            let mut bad = test_tool("mcp_pattern_tool");
+            bad.input_schema = json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "pattern": "^private-regex-7701$"}
+                }
+            });
+            request.tools = Some(vec![good, bad]);
+            request.tool_choice = Some(json!("auto"));
+
+            let body = capture_moonshot_chat_request_body(
+                crate::config::DEFAULT_KIMI_CODE_BASE_URL,
+                crate::config::KIMI_CODE_K3_MODEL,
+                request,
+            )
+            .await;
+            let tools = body["tools"]
+                .as_array()
+                .expect("compatible tool must stay on the wire");
+            assert_eq!(
+                tools.len(),
+                1,
+                "only the incompatible tool may be dropped (streaming={streaming}): {body}"
+            );
+            assert_eq!(tools[0]["function"]["name"], "compatible_lookup");
+            assert_eq!(
+                body["tool_choice"],
+                json!("auto"),
+                "tool_choice survives while any tool remains: {body}"
+            );
+            assert!(
+                !body.to_string().contains("private-regex-7701"),
+                "the dropped tool's private schema values must not reach the wire: {body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn moonshot_rejects_named_choice_for_omitted_tool() {
+        for streaming in [false, true] {
+            let server = MockServer::start().await;
+            let client = moonshot_request_boundary_client(
+                crate::config::DEFAULT_KIMI_CODE_BASE_URL,
+                crate::config::KIMI_CODE_K3_MODEL,
+                server.uri(),
+            );
+            let mut request =
+                k3_request_fixture(crate::config::KIMI_CODE_K3_MODEL, Some("low"), streaming);
+            let good = test_tool("compatible_lookup");
+            let mut bad = test_tool("mcp_pattern_tool");
+            bad.input_schema = json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "pattern": "^private-regex-8801$"}
+                }
+            });
+            request.tools = Some(vec![good, bad]);
+            request.tool_choice = Some(json!({
+                "type": "tool",
+                "name": "mcp_pattern_tool"
+            }));
+
+            let error = if streaming {
+                match client.create_message_stream(request).await {
+                    Ok(_) => {
+                        panic!("a named choice for an omitted tool must fail before transport")
+                    }
+                    Err(error) => error,
+                }
+            } else {
+                match client.create_message(request).await {
+                    Ok(_) => {
+                        panic!("a named choice for an omitted tool must fail before transport")
+                    }
+                    Err(error) => error,
+                }
+            };
+            let diagnostic = error.to_string();
+            assert!(
+                diagnostic.contains("cannot force tool 'mcp_pattern_tool'"),
+                "streaming={streaming}: {diagnostic}"
+            );
+            assert!(
+                !diagnostic.contains("private-regex-8801"),
+                "schema values must not leak into the user-visible diagnostic: {diagnostic}"
+            );
+            assert!(
+                server
+                    .received_requests()
+                    .await
+                    .expect("request log")
+                    .is_empty(),
+                "dangling named tool_choice must fail locally (streaming={streaming})"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn moonshot_stream_emits_one_projection_warning() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string("data: [DONE]\n\n"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = moonshot_request_boundary_client(
+            crate::config::DEFAULT_KIMI_CODE_BASE_URL,
+            crate::config::KIMI_CODE_K3_MODEL,
+            server.uri(),
+        );
+        let mut request = k3_request_fixture(crate::config::KIMI_CODE_K3_MODEL, Some("low"), true);
+        let good = test_tool("compatible_lookup");
+        let mut bad = test_tool("mcp_pattern_tool");
+        bad.input_schema = json!({
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "pattern": "^private-regex-9901$"}
+            }
+        });
+        request.tools = Some(vec![good, bad]);
+        request.tool_choice = Some(json!("auto"));
+
+        let mut stream = client
+            .create_message_stream(request)
+            .await
+            .expect("compatible tools keep the request sendable");
+        let first = stream
+            .next()
+            .await
+            .expect("projection warning precedes provider SSE")
+            .expect("projection warning is not a stream error");
+        let (provider, omitted_tool_names) = match first {
+            crate::models::StreamEvent::ToolProjectionWarning {
+                provider,
+                omitted_tool_names,
+            } => (provider, omitted_tool_names),
+            other => panic!("first event must be the projection warning, got {other:?}"),
+        };
+        assert!(provider.contains("Moonshot"), "{provider}");
+        assert_eq!(omitted_tool_names, vec!["mcp_pattern_tool"]);
+
+        let mut additional_warnings = 0;
+        while let Some(event) = stream.next().await {
+            if matches!(
+                event.expect("captured SSE response remains valid"),
+                crate::models::StreamEvent::ToolProjectionWarning { .. }
+            ) {
+                additional_warnings += 1;
+            }
+        }
+        assert_eq!(
+            additional_warnings, 0,
+            "warning must be emitted once per request"
+        );
+
+        let requests = server.received_requests().await.expect("recorded request");
+        assert_eq!(requests.len(), 1);
+        let body: Value = serde_json::from_slice(&requests[0].body).expect("request JSON");
+        assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
+        assert!(
+            !body.to_string().contains("private-regex-9901"),
+            "omitted schema values must not reach the wire: {body}"
+        );
     }
 
     #[tokio::test]

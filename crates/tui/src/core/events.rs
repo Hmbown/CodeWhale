@@ -163,6 +163,13 @@ impl AgentProgressEventMeta {
 /// Events emitted by the engine to update the UI.
 #[derive(Debug, Clone)]
 pub enum Event {
+    /// A route compatibility check omitted tools from the provider request.
+    /// Names are wire-safe and bounded by the request catalog; schemas and
+    /// validator details never cross this user-visible boundary.
+    ToolProjectionWarning {
+        provider: String,
+        omitted_tool_names: Vec<String>,
+    },
     // === Streaming Events ===
     /// A new message block has started
     MessageStarted { index: usize },
@@ -593,6 +600,14 @@ pub enum Event {
         /// `<context_update>` snapshots appended this session.
         context_updates: u64,
     },
+}
+
+#[must_use]
+pub fn tool_projection_warning_message(provider: &str, omitted_tool_names: &[String]) -> String {
+    format!(
+        "Warning: {provider} omitted incompatible tools for this request: {}",
+        omitted_tool_names.join(", ")
+    )
 }
 
 impl Event {

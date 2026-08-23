@@ -1275,6 +1275,7 @@
   "ProviderExternalDormant": "adormit",
   "ProviderExternalOwnerPath": "Propietari/camí: {owner} | {path}",
   "ProviderExternalPinnedPathWarning": "Avís: el camí de credencials ambient de {owner} ha canviat; el consentiment continua fixat a {path}.",
+  "ToolProjectionWarning": "Avís: {provider} ha omès eines incompatibles en aquesta sol·licitud: {tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | revoca: {revoke}",
   "ProviderExternalRevoke": "revoca: {revoke}",
   "ProviderExternalChoiceTitle": " Accés a credencials externes · {provider} ",

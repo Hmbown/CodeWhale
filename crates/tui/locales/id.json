@@ -1275,6 +1275,7 @@
   "ProviderExternalDormant": "dorman",
   "ProviderExternalOwnerPath": "Pemilik/path: {owner} | {path}",
   "ProviderExternalPinnedPathWarning": "Peringatan: path kredensial ambient {owner} berubah; persetujuan tetap terkunci pada {path}.",
+  "ToolProjectionWarning": "Peringatan: {provider} menghilangkan alat yang tidak kompatibel untuk permintaan ini: {tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | cabut: {revoke}",
   "ProviderExternalRevoke": "cabut: {revoke}",
   "ProviderExternalChoiceTitle": " Akses kredensial eksternal · {provider} ",

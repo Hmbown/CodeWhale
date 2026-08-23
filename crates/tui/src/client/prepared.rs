@@ -296,6 +296,10 @@ pub(crate) struct PreparedOutboundRequest {
     /// Which transport entry point prepared this request. Never a substitute
     /// for [`Self::wire_stream_field`], which is the wire truth.
     pub(crate) entrypoint: CallerStreamMode,
+    /// Wire-normalized tool names omitted by a route-specific compatibility
+    /// check. This stopgap receipt is intentionally not a projection layer;
+    /// it only transports a bounded user-visible warning.
+    pub(crate) omitted_tool_names: Vec<String>,
 }
 
 impl PreparedOutboundRequest {
@@ -317,7 +321,14 @@ impl PreparedOutboundRequest {
             reasoning,
             replay_input_tokens,
             entrypoint,
+            omitted_tool_names: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_omitted_tool_names(mut self, names: Vec<String>) -> Self {
+        self.omitted_tool_names = names;
+        self
     }
 
     /// The `stream` field **as it appears on the finished body**, or `None`
