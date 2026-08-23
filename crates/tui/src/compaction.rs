@@ -537,12 +537,17 @@ pub fn compaction_decision_with_billed(
     // The execution path mechanically prunes old verbose tool results before
     // asking the model for a summary. Local pruning alone may be enough to
     // clear pressure even when the transcript is too small for an LLM pass.
-    let mut projected_messages = messages.to_vec();
-    let pruned_bytes =
-        prune_tool_results_until(&mut projected_messages, KEEP_RECENT_MESSAGES, |_, _| false);
-    if pruned_bytes > 0 && !compaction_pressure_reached(&projected_messages, system_prompt, config)
-    {
-        return CompactionDecision::Compact;
+    // Project that outcome from the measured plan — per-block deltas use the
+    // estimator's own arithmetic, so this equals re-estimating a pruned copy
+    // without cloning a multi-megabyte transcript on every step.
+    let prune_plan = plan_tool_result_prunes(messages, KEEP_RECENT_MESSAGES);
+    if !prune_plan.is_empty() {
+        let reclaimed_tokens: usize = prune_plan.iter().map(PlannedPrune::tokens_reclaimed).sum();
+        let projected = estimate_input_tokens_for_pressure(messages, system_prompt)
+            .saturating_sub(reclaimed_tokens);
+        if projected < config.token_threshold {
+            return CompactionDecision::Compact;
+        }
     }
 
     if messages.len() < MIN_SUMMARIZE_MESSAGES {
@@ -667,9 +672,68 @@ fn prune_tool_results_until<F>(
 where
     F: FnMut(&[Message], usize) -> bool,
 {
+    let plan = plan_tool_result_prunes(messages, protected_window);
+    let mut bytes_saved = 0usize;
+    for planned in plan {
+        if let ContentBlock::ToolResult {
+            content,
+            content_blocks,
+            ..
+        } = &mut messages[planned.message_idx].content[planned.block_idx]
+        {
+            bytes_saved = bytes_saved.saturating_add(planned.bytes_reclaimed());
+            *content = planned.summary;
+            *content_blocks = None;
+
+            if should_stop(messages, bytes_saved) {
+                break;
+            }
+        }
+    }
+    bytes_saved
+}
+
+/// One tool-result replacement the pruner has decided on, measured up front
+/// so eligibility checks can project the outcome without cloning a
+/// multi-megabyte transcript ([`compaction_decision_with_billed`] used to
+/// copy the entire message list every over-pressure step just to ask "would
+/// pruning be enough?").
+struct PlannedPrune {
+    message_idx: usize,
+    block_idx: usize,
+    summary: String,
+    content_len: usize,
+    blocks_len: usize,
+    image_count: usize,
+}
+
+impl PlannedPrune {
+    /// Byte reduction this replacement realizes, matching the pruner's
+    /// accounting exactly.
+    fn bytes_reclaimed(&self) -> usize {
+        self.content_len
+            .saturating_sub(self.summary.len())
+            .saturating_add(self.blocks_len)
+    }
+
+    /// Estimator-token reduction, using the same per-block arithmetic as
+    /// [`estimate_tokens_for_message`] so a projection built from these
+    /// deltas equals re-estimating the pruned transcript.
+    fn tokens_reclaimed(&self) -> usize {
+        let before = self.content_len / 4 + self.image_count * IMAGE_TOKEN_ESTIMATE;
+        let after = self.summary.len() / 4;
+        before.saturating_sub(after)
+    }
+}
+
+/// Decide, without mutating anything, which old tool results pruning would
+/// replace. The most recent `protected_window` messages stay untouched; older
+/// duplicate results keep the freshest full body; non-duplicates are replaced
+/// only when they exceed the summary snippet size.
+fn plan_tool_result_prunes(messages: &[Message], protected_window: usize) -> Vec<PlannedPrune> {
     let cutoff = messages.len().saturating_sub(protected_window);
     if cutoff == 0 {
-        return 0;
+        return Vec::new();
     }
 
     let tool_uses = collect_tool_uses(messages);
@@ -706,13 +770,13 @@ where
         }
     }
 
-    // The maps above are fully populated before pruning starts, so the order below
-    // only changes which message bytes are rewritten first. Pruning from newest to
-    // oldest lets callers stop as soon as enough bytes were saved, preserving the
-    // earlier JSON request prefix for byte-level KV caches.
+    // The maps above are fully populated before planning completes, so the order
+    // below only changes which message bytes are rewritten first. Planning from
+    // newest to oldest lets the pruner stop as soon as enough bytes were saved,
+    // preserving the earlier JSON request prefix for byte-level KV caches.
     candidates.reverse();
 
-    let mut bytes_saved = 0usize;
+    let mut plan = Vec::new();
     for candidate in candidates {
         let duplicate_count = count_by_key.get(&candidate.key).copied().unwrap_or(0);
         let is_latest_duplicate = duplicate_count > 1
@@ -732,25 +796,31 @@ where
             continue;
         }
 
-        if let ContentBlock::ToolResult {
+        let ContentBlock::ToolResult {
             content,
             content_blocks,
             ..
-        } = &mut messages[candidate.message_idx].content[candidate.block_idx]
-        {
-            bytes_saved = bytes_saved
-                .saturating_add(content.len().saturating_sub(summary.len()))
-                .saturating_add(tool_result_content_blocks_len(content_blocks.as_deref()));
-            *content = summary;
-            *content_blocks = None;
-
-            if should_stop(messages, bytes_saved) {
-                break;
-            }
-        }
+        } = &messages[candidate.message_idx].content[candidate.block_idx]
+        else {
+            continue;
+        };
+        plan.push(PlannedPrune {
+            message_idx: candidate.message_idx,
+            block_idx: candidate.block_idx,
+            summary,
+            content_len: content.len(),
+            blocks_len: tool_result_content_blocks_len(content_blocks.as_deref()),
+            image_count: content_blocks.as_ref().map_or(0, |blocks| {
+                blocks
+                    .iter()
+                    .filter(|block| {
+                        block.get("type").and_then(serde_json::Value::as_str) == Some("image")
+                    })
+                    .count()
+            }),
+        });
     }
-
-    bytes_saved
+    plan
 }
 
 fn truncate_retained_block(label: &str, content: &mut String, max_chars: usize) -> bool {
