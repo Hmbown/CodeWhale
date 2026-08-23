@@ -697,6 +697,9 @@ pub struct ViewportState {
     pub transcript_scrollbar_dragging: bool,
     pub last_transcript_area: Option<Rect>,
     pub last_composer_area: Option<Rect>,
+    /// Last left-click trace over the composer, for double/triple-click
+    /// word/line selection (crossterm does not decode click counts).
+    pub composer_click_trace: Option<crate::tui::mouse_ui::ComposerClickTrace>,
     /// Painted band occupied by the active inline approval. Stored so wheel
     /// routing can prefer the visible card over side surfaces underneath it.
     pub last_approval_area: Option<Rect>,
@@ -731,6 +734,7 @@ impl Default for ViewportState {
             transcript_scrollbar_dragging: false,
             last_transcript_area: None,
             last_composer_area: None,
+            composer_click_trace: None,
             last_approval_area: None,
             last_workflow_panel_area: None,
             last_workflow_cancel_area: None,
