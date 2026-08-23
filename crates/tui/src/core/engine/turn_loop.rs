@@ -953,6 +953,26 @@ impl Engine {
                     crate::prefix_cache::system_prompt_text(self.session.system_prompt.as_ref());
                 let tools_ref: Option<&[crate::models::Tool]> = active_tools.as_deref();
                 let outcome = pm.check(&system_text, tools_ref, declared_change.as_deref());
+                // C5: request N's prefix may only diverge from N-1 across a
+                // DECLARED change. An undeclared drift means the pinned header
+                // moved without stamping a context update — the failure that
+                // silently kills the provider cache while stability claims
+                // still read well. The first check initializes the pin, so it
+                // is exempt.
+                #[cfg(debug_assertions)]
+                if pm.check_count() > 1
+                    && declared_change.is_none()
+                    && matches!(
+                        outcome,
+                        crate::prefix_cache::PrefixCheck::Drift { .. }
+                            | crate::prefix_cache::PrefixCheck::Repinned { .. }
+                    )
+                {
+                    debug_assert!(
+                        false,
+                        "prefix drift without a declared change (C5): the system prompt or tool catalog changed but no context update was stamped"
+                    );
+                }
                 let pinned_hash = pm
                     .pinned_fingerprint()
                     .map(|fp| fp.combined_sha256.clone())
