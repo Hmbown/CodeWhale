@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Optional per-session control socket (`[control_socket]` config table,
+  Unix, off by default): when enabled, the interactive TUI binds a
+  newline-framed JSON-RPC socket at `<sessions-dir>/<session-id>/control.sock`
+  (0600) with the verbs `message`, `interrupt`, `relaunch`, and `status`,
+  typed error codes, bounded request sizes and dispatch timeouts, and
+  socket lifecycle riding the session lifecycle (stale-file takeover,
+  live-bind refusal with retry backoff). Windows parses the key but refuses
+  to bind with a clear error (#5533).
+
 ## [0.9.11] - 2026-08-22
 
 Codewhale v0.9.11 tightens the long-running agent loop, makes workflow
