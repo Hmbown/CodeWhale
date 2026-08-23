@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0RB93BQ2C31T70X0A56N39T",
+  "strategy": "manual-commit",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/tui/src/config.rs",
+    "crates/tui/src/core/engine.rs",
+    "crates/tui/src/lib.rs",
+    "crates/tui/src/runtime_threads.rs",
+    "crates/tui/src/sandbox/bwrap.rs",
+    "crates/tui/src/sandbox/mod.rs",
+    "crates/tui/src/sandbox/seatbelt.rs",
+    "crates/tui/src/sandbox/seatbelt/tests.rs",
+    "crates/tui/src/tools/shell.rs",
+    "crates/tui/src/tui/ui/frame.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 100,
+    "cache_creation_tokens": 75703,
+    "cache_read_tokens": 16013008,
+    "output_tokens": 28863,
+    "api_call_count": 50
+  }
+}
