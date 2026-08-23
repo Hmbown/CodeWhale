@@ -472,6 +472,32 @@ pub fn should_compact(
     should_compact_with_billed(messages, system_prompt, prepared, None)
 }
 
+/// Why an over-pressure context still did not start an automatic pass.
+///
+/// A refusal is not a bug by itself — each guard exists for a reason — but a
+/// silent refusal is: the user watches a full context meter while
+/// auto-compaction appears broken (#5577). Callers surface these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionRefusal {
+    /// Too few messages for a summary pass to mean anything.
+    TooFewMessages { count: usize },
+    /// The conservative retained floor (system prompt + kept messages +
+    /// summary allowance) cannot get below the trigger, so a pass would
+    /// recur on every step without relieving pressure.
+    RetainedFloor { floor: usize, threshold: usize },
+}
+
+/// Outcome of the automatic-compaction eligibility check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionDecision {
+    /// Disabled, or pressure not reached: nothing to do, nothing to explain.
+    NotNeeded,
+    /// Start a pass.
+    Compact,
+    /// Pressure is real but a guard declined; the reason names the guard.
+    Refused(CompactionRefusal),
+}
+
 /// Eligibility check that honors provider-billed prompt tokens for the
 /// pressure gate, mirroring [`compaction_pressure_reached_with_billed`].
 pub fn should_compact_with_billed(
@@ -480,9 +506,24 @@ pub fn should_compact_with_billed(
     prepared: &PreparedCompactionEnvelope,
     billed_input_tokens: Option<u64>,
 ) -> bool {
+    matches!(
+        compaction_decision_with_billed(messages, system_prompt, prepared, billed_input_tokens),
+        CompactionDecision::Compact
+    )
+}
+
+/// Full eligibility decision, including *why* an over-pressure context was
+/// refused, so hosts can tell the user instead of silently holding.
+#[must_use]
+pub fn compaction_decision_with_billed(
+    messages: &[Message],
+    system_prompt: Option<&SystemPrompt>,
+    prepared: &PreparedCompactionEnvelope,
+    billed_input_tokens: Option<u64>,
+) -> CompactionDecision {
     let config = &prepared.config;
     if !config.enabled {
-        return false;
+        return CompactionDecision::NotNeeded;
     }
     if !compaction_pressure_reached_with_billed(
         messages,
@@ -490,7 +531,7 @@ pub fn should_compact_with_billed(
         config,
         billed_input_tokens,
     ) {
-        return false;
+        return CompactionDecision::NotNeeded;
     }
 
     // The execution path mechanically prunes old verbose tool results before
@@ -501,18 +542,27 @@ pub fn should_compact_with_billed(
         prune_tool_results_until(&mut projected_messages, KEEP_RECENT_MESSAGES, |_, _| false);
     if pruned_bytes > 0 && !compaction_pressure_reached(&projected_messages, system_prompt, config)
     {
-        return true;
+        return CompactionDecision::Compact;
     }
 
     if messages.len() < MIN_SUMMARIZE_MESSAGES {
-        return false;
+        return CompactionDecision::Refused(CompactionRefusal::TooFewMessages {
+            count: messages.len(),
+        });
     }
 
     // Reclaimability guard: do not start a pass whose replacement request
     // (system prompt + retained user messages + summary allowance)
     // cannot get below the trigger, or a large stable prefix would cause
     // auto-compaction on every tool step.
-    estimate_retained_floor_conservative(messages, system_prompt, prepared) < config.token_threshold
+    let floor = estimate_retained_floor_conservative(messages, system_prompt, prepared);
+    if floor >= config.token_threshold {
+        return CompactionDecision::Refused(CompactionRefusal::RetainedFloor {
+            floor,
+            threshold: config.token_threshold,
+        });
+    }
+    CompactionDecision::Compact
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> &str {
@@ -2252,6 +2302,89 @@ mod tests {
             })
             .collect();
         assert!(!should_compact(&messages, None, &prepared(&config)));
+    }
+
+    /// The #5577 acceptance case: a session whose provider bills 842K prompt
+    /// tokens on a 1M window (threshold 800K) MUST compact even when the
+    /// local estimate is far lower — the bounded working list undercounts
+    /// what the provider actually saw, and billed truth wins.
+    #[test]
+    fn billed_842k_on_a_1m_window_compacts_despite_a_small_estimate() {
+        let config = CompactionConfig {
+            enabled: true,
+            token_threshold: 800_000,
+            ..Default::default()
+        };
+        let messages: Vec<Message> = (0..40)
+            .map(|i| Message {
+                role: if i % 2 == 0 {
+                    Role::User
+                } else {
+                    Role::Assistant
+                },
+                content: vec![ContentBlock::Text {
+                    text: format!("short message {i}"),
+                    cache_control: None,
+                }],
+            })
+            .collect();
+        // Estimate alone stays far under the trigger…
+        assert!(!should_compact(&messages, None, &prepared(&config)));
+        // …but the provider's billed prompt total decides.
+        assert_eq!(
+            compaction_decision_with_billed(&messages, None, &prepared(&config), Some(842_000)),
+            CompactionDecision::Compact
+        );
+    }
+
+    /// A refusal under real pressure must name its guard so the host can
+    /// tell the user, instead of the silent hold that reads as a broken
+    /// auto-compactor (#5577).
+    #[test]
+    fn refusals_under_pressure_name_their_guard() {
+        let config = CompactionConfig {
+            enabled: true,
+            token_threshold: 100,
+            ..Default::default()
+        };
+        // Too few messages to summarize: over-pressure, short transcript.
+        let few: Vec<Message> = (0..3)
+            .map(|i| Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: format!("message {i} {}", "x".repeat(300)),
+                    cache_control: None,
+                }],
+            })
+            .collect();
+        assert_eq!(
+            compaction_decision_with_billed(&few, None, &prepared(&config), None),
+            CompactionDecision::Refused(CompactionRefusal::TooFewMessages { count: few.len() })
+        );
+
+        // Retained floor above the trigger: a giant system prompt no pass
+        // can reclaim. The refusal carries the numbers the user needs.
+        let many: Vec<Message> = (0..12)
+            .map(|i| Message {
+                role: if i % 2 == 0 {
+                    Role::User
+                } else {
+                    Role::Assistant
+                },
+                content: vec![ContentBlock::Text {
+                    text: format!("message {i} {}", "y".repeat(200)),
+                    cache_control: None,
+                }],
+            })
+            .collect();
+        let system = SystemPrompt::Text("s".repeat(4_000));
+        match compaction_decision_with_billed(&many, Some(&system), &prepared(&config), None) {
+            CompactionDecision::Refused(CompactionRefusal::RetainedFloor { floor, threshold }) => {
+                assert_eq!(threshold, 100);
+                assert!(floor >= threshold, "floor {floor} must be over {threshold}");
+            }
+            other => panic!("expected a retained-floor refusal, got {other:?}"),
+        }
     }
 
     /// v0.8.11: message-count is no longer a compaction trigger. Long

@@ -771,13 +771,52 @@ impl Engine {
                 None
             };
 
-            if let Some(prepared) = prepared
-                && crate::compaction::should_compact_with_billed(
+            let compaction_go = match prepared.as_ref() {
+                None => false,
+                Some(prepared) => match crate::compaction::compaction_decision_with_billed(
                     &self.session.messages,
                     self.session.system_prompt.as_ref(),
-                    &prepared,
+                    prepared,
                     billed_input_tokens,
-                )
+                ) {
+                    crate::compaction::CompactionDecision::Compact => true,
+                    crate::compaction::CompactionDecision::NotNeeded => false,
+                    crate::compaction::CompactionDecision::Refused(reason) => {
+                        // A silent refusal looks like broken auto-compaction:
+                        // the meter is full and nothing happens (#5577). Name
+                        // the guard once per turn, in both the transcript
+                        // status line and the trace.
+                        if !turn.compaction_refusal_notified {
+                            turn.compaction_refusal_notified = true;
+                            let message = match reason {
+                                crate::compaction::CompactionRefusal::TooFewMessages { count } => {
+                                    format!(
+                                        "Context pressure is high but auto-compaction held: only {count} messages — nothing meaningful to summarize yet"
+                                    )
+                                }
+                                crate::compaction::CompactionRefusal::RetainedFloor {
+                                    floor,
+                                    threshold,
+                                } => format!(
+                                    "Context pressure is high but auto-compaction held: retained context (~{}K tokens) cannot fall below the {}K trigger — /compact to force a pass, or trim pinned context",
+                                    floor / 1000,
+                                    threshold / 1000
+                                ),
+                            };
+                            tracing::warn!(
+                                target: "compaction",
+                                ?reason,
+                                billed = ?billed_input_tokens,
+                                "auto-compaction refused under pressure"
+                            );
+                            let _ = self.tx_event.send(Event::status(message)).await;
+                        }
+                        false
+                    }
+                },
+            };
+            if let Some(prepared) = prepared
+                && compaction_go
             {
                 let compaction_id = format!("compact_{}", &uuid::Uuid::new_v4().to_string()[..8]);
                 let compaction_cancel = self

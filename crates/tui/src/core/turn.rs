@@ -49,6 +49,11 @@ pub struct TurnContext {
     /// parent step and programmatic child call for billing.
     pub(crate) latest_parent_input_tokens: Option<u32>,
 
+    /// One-shot latch: an automatic-compaction refusal has already been
+    /// surfaced this turn. Pressure is re-checked every step, and repeating
+    /// the same refusal on each of a long turn's steps would be noise.
+    pub(crate) compaction_refusal_notified: bool,
+
     /// Route facts resolved for this turn but not timestamped until the first
     /// provider request is actually dispatched.
     pub(crate) pending_route: Option<TurnRoute>,
@@ -69,6 +74,7 @@ impl TurnContext {
                 ..Usage::default()
             },
             latest_parent_input_tokens: None,
+            compaction_refusal_notified: false,
             pending_route: None,
         }
     }
