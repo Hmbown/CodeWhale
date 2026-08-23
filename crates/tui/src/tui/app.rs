@@ -776,6 +776,13 @@ pub struct HostGoalState {
 pub struct SessionState {
     pub session_cost: f64,
     pub session_cost_cny: f64,
+    /// Priced estimate accumulated from the in-flight turn's per-step
+    /// `TurnUsage` receipts, so the cost surfaces move while a long agentic
+    /// turn is still running. Display-only: cleared at `TurnComplete`, which
+    /// re-prices the whole turn's cumulative usage authoritatively into
+    /// `session_cost`. Never persisted.
+    pub pending_turn_cost: f64,
+    pub pending_turn_cost_cny: f64,
     pub subagent_cost: f64,
     pub subagent_cost_cny: f64,
     /// Child usage envelopes already accrued, keyed by child and the stable
@@ -959,6 +966,8 @@ impl Default for SessionState {
         Self {
             session_cost: 0.0,
             session_cost_cny: 0.0,
+            pending_turn_cost: 0.0,
+            pending_turn_cost_cny: 0.0,
             subagent_cost: 0.0,
             subagent_cost_cny: 0.0,
             subagent_usage_sources: HashSet::new(),
@@ -3419,6 +3428,31 @@ impl App {
         self.refresh_displayed_cost_high_water();
     }
 
+    /// Fold one in-flight model call's priced receipt into the pending-turn
+    /// estimate so cost surfaces move during a long agentic turn rather than
+    /// only when it completes. The turn's authoritative price still lands via
+    /// `accrue_session_cost_estimate` at `TurnComplete`; callers must
+    /// `clear_pending_turn_cost` there first so nothing counts twice.
+    pub fn accrue_pending_turn_cost_estimate(&mut self, estimate: CostEstimate) {
+        let total = CostEstimate {
+            usd: self.session.pending_turn_cost,
+            cny: self.session.pending_turn_cost_cny,
+        }
+        .saturating_add(estimate);
+        self.session.pending_turn_cost = total.usd;
+        self.session.pending_turn_cost_cny = total.cny;
+        self.refresh_displayed_cost_high_water();
+    }
+
+    /// Drop the in-flight turn's provisional estimate. Called at
+    /// `TurnComplete` (any outcome) immediately before the authoritative
+    /// cumulative price accrues; the display stays monotonic through the
+    /// swap via the high-water mark (#244).
+    pub fn clear_pending_turn_cost(&mut self) {
+        self.session.pending_turn_cost = 0.0;
+        self.session.pending_turn_cost_cny = 0.0;
+    }
+
     /// Add `delta` to the running sub-agent cost and bump the displayed
     /// high-water mark so the footer total never reverses (#244).
     #[allow(dead_code)]
@@ -3480,6 +3514,10 @@ impl App {
             cny: self.session.session_cost_cny,
         }
         .saturating_add(CostEstimate {
+            usd: self.session.pending_turn_cost,
+            cny: self.session.pending_turn_cost_cny,
+        })
+        .saturating_add(CostEstimate {
             usd: self.session.subagent_cost,
             cny: self.session.subagent_cost_cny,
         });
@@ -3508,6 +3546,10 @@ impl App {
                     cny: 0.0,
                 }
                 .saturating_add(CostEstimate {
+                    usd: self.session.pending_turn_cost,
+                    cny: 0.0,
+                })
+                .saturating_add(CostEstimate {
                     usd: self.session.subagent_cost,
                     cny: 0.0,
                 })
@@ -3521,6 +3563,10 @@ impl App {
                 }
                 .saturating_add(CostEstimate {
                     usd: 0.0,
+                    cny: self.session.pending_turn_cost_cny,
+                })
+                .saturating_add(CostEstimate {
+                    usd: 0.0,
                     cny: self.session.subagent_cost_cny,
                 })
                 .cny;
@@ -3529,10 +3575,14 @@ impl App {
         }
     }
 
+    /// The session's own display share: settled turns plus the in-flight
+    /// turn's provisional estimate (the running turn's money is session
+    /// money, so the sidebar breakdown keeps summing to the displayed total
+    /// mid-turn).
     pub fn session_cost_for_currency(&self, currency: CostCurrency) -> f64 {
         match self.cost_display_currency(currency) {
-            CostCurrency::Usd => self.session.session_cost,
-            CostCurrency::Cny => self.session.session_cost_cny,
+            CostCurrency::Usd => self.session.session_cost + self.session.pending_turn_cost,
+            CostCurrency::Cny => self.session.session_cost_cny + self.session.pending_turn_cost_cny,
         }
     }
 

@@ -1453,6 +1453,9 @@ pub(crate) async fn run_event_loop(
                         }
                     }
                     EngineEvent::TurnStarted { turn_id, .. } => {
+                        // A prior turn that died without its `TurnComplete`
+                        // must not leak its provisional estimate into this one.
+                        app.clear_pending_turn_cost();
                         app.goal_continuation_waiting = false;
                         app.session.last_tool_request_snapshot = None;
                         app.ocean_completion_started_at = None;
@@ -1515,6 +1518,11 @@ pub(crate) async fn run_event_loop(
                             transcript_batch_updated = true;
                         }
                         let completed_turn = app.active_turn.take();
+                        // The in-flight provisional estimate hands off to the
+                        // authoritative cumulative price accrued below; the
+                        // high-water mark keeps the displayed total monotonic
+                        // through the swap (#244).
+                        app.clear_pending_turn_cost();
                         app.session.last_tool_catalog = tool_catalog;
                         // The endpoint this turn's client actually used. Kept
                         // separately from the mutable session/config surfaces
@@ -2949,16 +2957,31 @@ pub(crate) async fn run_event_loop(
                         first_token_ms,
                         request_ms,
                     } => {
-                        // Per-step usage receipt. The TUI's token surfaces
-                        // are driven by the cumulative `TurnComplete` usage;
-                        // the session metrics strip folds each model call's
-                        // timing (stream time, TTFT, whole-call time) here.
+                        // Per-step usage receipt. The session metrics strip
+                        // folds each model call's timing (stream time, TTFT,
+                        // whole-call time) here.
                         app.session_metrics.record_model_call(
                             usage.output_tokens,
                             duration_ms,
                             first_token_ms,
                             request_ms,
                         );
+                        // Live cost: price this call against the route that
+                        // was actually dispatched so the cost surfaces move
+                        // during a long agentic turn instead of only at its
+                        // end. Provisional by design — `TurnComplete` clears
+                        // this and lands the authoritative cumulative price
+                        // through the same audit path, so nothing counts
+                        // twice and the two can never disagree on route.
+                        let step_cost = app
+                            .active_turn
+                            .as_ref()
+                            .and_then(|turn| turn.route.as_ref())
+                            .and_then(crate::core::events::TurnRoute::cost_envelope)
+                            .and_then(|route| route.audit(&usage).estimate);
+                        if let Some(cost) = step_cost {
+                            app.accrue_pending_turn_cost_estimate(cost);
+                        }
                     }
                     EngineEvent::AdvisoryNote { note, .. } => {
                         // Advisor background watcher note. Display as a
