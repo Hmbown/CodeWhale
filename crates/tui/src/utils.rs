@@ -2,6 +2,8 @@
 
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -276,6 +278,27 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 /// # Errors
 /// Same failure modes as [`write_atomic`].
 pub fn write_atomic_workspace(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    // Hard-link guard (issue #5569): a workspace path that shares its inode
+    // with another name cannot be proven to stay inside the writable root by
+    // path checks. Atomic rename would replace the directory entry (leaving
+    // the outside link on the old inode), but that silently splits the pair
+    // and would not block a future non-atomic writer. Fail closed. Windows
+    // std has no link-count introspection; its atomic rename still replaces
+    // the directory entry rather than the inode.
+    #[cfg(unix)]
+    if let Ok(metadata) = std::fs::metadata(path)
+        && metadata.is_file()
+        && metadata.nlink() > 1
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "refusing to rewrite {}: the file has {} hard links and path checks cannot prove the other links stay inside the workspace; copy it to a new name to break the link",
+                path.display(),
+                metadata.nlink(),
+            ),
+        ));
+    }
     write_atomic_with_permissions(path, contents, AtomicWritePermissions::Workspace)
 }
 
@@ -976,6 +999,40 @@ mod atomic_write_tests {
         assert!(
             tmp_files.is_empty(),
             "temp files left behind: {tmp_files:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_workspace_refuses_a_hard_linked_target() {
+        let dir = tempdir().expect("tempdir");
+        let outside = dir.path().join("outside.txt");
+        fs::write(&outside, b"outside").expect("outside state");
+        let linked = dir.path().join("linked.txt");
+        fs::hard_link(&outside, &linked).expect("hard link");
+
+        let err = write_atomic_workspace(&linked, b"new").expect_err("must refuse");
+        assert!(
+            err.to_string().contains("hard links"),
+            "the refusal must name the hard-link reason: {err}"
+        );
+        assert_eq!(
+            fs::read_to_string(&outside).expect("outside read"),
+            "outside",
+            "the outside file must stay untouched"
+        );
+        assert_eq!(
+            fs::read_to_string(&linked).expect("linked read"),
+            "outside",
+            "the workspace entry must stay untouched too"
+        );
+        // Breaking the link re-enables normal writes.
+        fs::remove_file(&linked).expect("break link");
+        write_atomic_workspace(&linked, b"fresh").expect("single-link write");
+        assert_eq!(fs::read_to_string(&linked).expect("fresh read"), "fresh");
+        assert_eq!(
+            fs::read_to_string(&outside).expect("outside read"),
+            "outside"
         );
     }
 
