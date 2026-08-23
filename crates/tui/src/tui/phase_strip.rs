@@ -390,7 +390,8 @@ fn ledger_spans(app: &App, tier: ShellTier, available: usize) -> Vec<Span<'stati
     if tier != ShellTier::Compact
         && let Some(amount) = match &chip {
             crate::route_billing::UsageChip::Money(amount) => Some(amount.clone()),
-            crate::route_billing::UsageChip::PricedSubtotal { .. } => {
+            crate::route_billing::UsageChip::PricedSubtotal { .. }
+            | crate::route_billing::UsageChip::Unknown => {
                 crate::route_billing::format_usage_chip(&chip)
             }
             _ => None,
