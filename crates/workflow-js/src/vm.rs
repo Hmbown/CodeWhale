@@ -1247,12 +1247,25 @@ const PRELUDE_TEMPLATE: &str = r#""use strict";
     if (thunks.length > MAX_ITEMS) {
       throw new Error("parallel(): max " + MAX_ITEMS + " items per call");
     }
-    const failFast = opts !== null && typeof opts === "object" && opts.mode === "fail-fast";
+    const mode = opts !== null && typeof opts === "object" ? opts.mode : undefined;
+    const failFast = mode === "fail-fast";
+    // Explicitly-configured partial success (#5583): a schema-contract slot
+    // failure becomes a structured { __taskError: { kind, message } } value
+    // instead of failing the run, so a reviewer fan-out can complete and the
+    // script can inspect per-slot outcomes. Cancellation still cancels the
+    // run, and the structured value never masquerades as a success.
+    const partial = mode === "partial";
     const dropOrReject = (err) => {
+      const kind = formatTaskErrorKind(err);
+      if (kind === "cancelled") throw err;
+      if (partial && kind === "schema") {
+        hostLog("parallel(): partial mode kept a schema slot failure as __taskError: " + taskErrorText(err));
+        return { __taskError: { kind: kind, message: taskErrorText(err) } };
+      }
       if (isFatalTaskError(err)) throw err;
       if (failFast) {
         if (err && typeof err === "object") {
-          err.kind = err.kind || formatTaskErrorKind(err);
+          err.kind = err.kind || kind;
         }
         hostLog("parallel(): fail-fast slot error: " + taskErrorText(err));
         throw err;
@@ -1264,10 +1277,16 @@ const PRELUDE_TEMPLATE: &str = r#""use strict";
       try {
         return Promise.resolve(typeof thunk === "function" ? thunk() : thunk).catch(dropOrReject);
       } catch (err) {
+        const kind = formatTaskErrorKind(err);
+        if (kind === "cancelled") return Promise.reject(err);
+        if (partial && kind === "schema") {
+          hostLog("parallel(): partial mode kept a schema slot failure as __taskError: " + taskErrorText(err));
+          return { __taskError: { kind: kind, message: taskErrorText(err) } };
+        }
         if (isFatalTaskError(err)) return Promise.reject(err);
         if (failFast) {
           if (err && typeof err === "object") {
-            err.kind = err.kind || formatTaskErrorKind(err);
+            err.kind = err.kind || kind;
           }
           hostLog("parallel(): fail-fast slot error: " + taskErrorText(err));
           return Promise.reject(err);

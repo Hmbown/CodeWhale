@@ -571,6 +571,107 @@ async fn parallel_surfaces_response_schema_errors_instead_of_null() {
 }
 
 #[tokio::test]
+async fn parallel_partial_mode_keeps_schema_failures_as_structured_slots() {
+    let driver = Arc::new(FakeDriver::new());
+    // Repair is disabled per-task so each slot fails terminally on its own
+    // reply; the mixed fan-out then exercises partial mode directly.
+    driver.on(
+        "good slot",
+        FakeReply::Complete(r#"{"refuted": true}"#.to_string()),
+    );
+    driver.on(
+        "bad slot",
+        FakeReply::Complete("not json at all".to_string()),
+    );
+    driver.on("dead slot", FakeReply::Fail("boom".to_string()));
+
+    let value = run(
+        &driver,
+        r#"
+        const results = await parallel([
+            () => task({
+                description: "good slot",
+                responseSchema: { "type": "object" },
+            }),
+            () => task({
+                description: "bad slot",
+                schemaRepairAttempts: 0,
+                responseSchema: { "type": "object" },
+            }),
+            () => task({ description: "dead slot" }),
+        ], { mode: "partial" });
+        return results.map((slot) =>
+            slot && typeof slot === "object" && slot.__taskError !== undefined
+                ? "schema:" + slot.__taskError.kind
+                : slot === null
+                  ? "null"
+                  : "value:" + JSON.stringify(slot)
+        );
+        "#,
+        json!(null),
+    )
+    .await
+    .expect("partial mode completes the fan-out");
+
+    assert_eq!(
+        value,
+        json!([
+            "value:{\"refuted\":true}",
+            // The JS-level kind is the fatal "schema"; the finer decode kind
+            // (json_parse) lives on the receipt events, asserted below.
+            "schema:schema",
+            "null"
+        ])
+    );
+    // Every failed slot still leaves its terminal receipt.
+    assert!(
+        driver.events().iter().any(|event| matches!(
+            event,
+            ProgressEvent::TaskSchemaValidationFailed { kind, .. } if kind == "json_parse"
+        )),
+        "partial mode must not swallow the schema-failure receipt"
+    );
+}
+
+#[tokio::test]
+async fn parallel_partial_mode_still_fails_the_run_on_cancellation() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("hang", FakeReply::Never);
+    let cancel = WorkflowRunCancel::new();
+    let run_cancel = cancel.clone();
+    let run_driver = driver.clone();
+    let handle = tokio::spawn(async move {
+        WorkflowVm::new()
+            .run_script_with_cancel(
+                r#"
+                await parallel([
+                    () => task({ description: "hang", responseSchema: { "type": "object" } }),
+                ], { mode: "partial" });
+                "#,
+                json!(null),
+                run_driver as Arc<dyn codewhale_workflow_js::WorkflowDriver>,
+                run_cancel,
+            )
+            .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while driver.spawn_count() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("task should start");
+    cancel.cancel();
+
+    let result = handle.await.expect("VM task should join");
+    assert!(
+        matches!(result, Err(WorkflowJsError::Cancelled)),
+        "partial mode must not downgrade cancellation into a slot value: {result:?}"
+    );
+}
+
+#[tokio::test]
 async fn pipeline_surfaces_response_schema_errors_instead_of_null() {
     let driver = Arc::new(FakeDriver::new());
     driver.on(
