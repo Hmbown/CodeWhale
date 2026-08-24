@@ -1675,10 +1675,26 @@ pub(crate) fn provider_api_key_verification_is_observed(api_provider: ApiProvide
     !api_provider_skips_models_probe(api_provider)
 }
 
+/// Outcome of a `/models` key probe. `Verified` is a proven 2xx from the
+/// route the key will be saved for. `Unverifiable` means the route offers
+/// no `/models` surface — a skip-listed provider, or an endpoint that
+/// answered 404/405 — which says nothing about the key either way: several
+/// first-party gateways (MiniMax subscription routes, Xiaomi MiMo) only
+/// implement chat completions, and blocking setup on their missing
+/// `/models` rejected valid keys (#5601).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyProbeOutcome {
+    Verified,
+    Unverifiable,
+}
+
 /// Verify a provider API key by hitting the `/models` endpoint
 /// (#3875). Builds a minimal HTTP client with the canonical auth
 /// headers for `provider`, issues a single GET, and returns
-/// `Ok(())` on a 2xx response or `Err(reason)` on any failure.
+/// `Ok(KeyProbeOutcome::Verified)` on a 2xx response,
+/// `Ok(KeyProbeOutcome::Unverifiable)` when the route has no `/models`
+/// surface (skip-listed provider, or HTTP 404/405), or `Err(reason)` on
+/// a failure that does indict the key or the connection.
 ///
 /// This is intentionally a one-shot call — no retry, no rate-limit
 /// wait — so a bad key is surfaced immediately.
@@ -1686,11 +1702,11 @@ pub async fn verify_provider_api_key(
     provider: ApiProvider,
     api_key: &str,
     base_url: &str,
-) -> Result<(), String> {
+) -> Result<KeyProbeOutcome, String> {
     if api_provider_skips_models_probe(provider) {
         // Providers without a /models endpoint can't be verified this
         // way; accept the key optimistically (same as health_check).
-        return Ok(());
+        return Ok(KeyProbeOutcome::Unverifiable);
     }
     let headers = build_default_headers(
         api_key,
@@ -1739,7 +1755,12 @@ pub async fn verify_provider_api_key(
         {
             crate::provider_lake::merge_live_offerings(offerings);
         }
-        Ok(())
+        Ok(KeyProbeOutcome::Verified)
+    } else if matches!(status.as_u16(), 404 | 405) {
+        // The route has no /models surface. That is a property of the
+        // endpoint, not of the key — auth failures are 401/403 — so the
+        // key is accepted unverified instead of dead-ending setup (#5601).
+        Ok(KeyProbeOutcome::Unverifiable)
     } else {
         let body = response.text().await.unwrap_or_default();
         let summary = if body.chars().count() > 200 {
@@ -9488,9 +9509,23 @@ mod tests {
             .mount(&server)
             .await;
 
-        verify_provider_api_key(ApiProvider::Openrouter, "test-key", &server.uri())
+        let outcome = verify_provider_api_key(ApiProvider::Openrouter, "test-key", &server.uri())
             .await
             .expect("mocked /models success should verify");
+        assert_eq!(outcome, KeyProbeOutcome::Verified);
+    }
+
+    /// #5601: MiniMax subscription routes and Xiaomi MiMo answer 404 on
+    /// `/models` even for valid keys. That must not block key entry.
+    #[tokio::test]
+    async fn verify_provider_api_key_treats_missing_models_route_as_unverifiable() {
+        let server = MockServer::start().await;
+        mount_models_json(&server, 404, json!({"error": "not found"})).await;
+
+        let outcome = verify_provider_api_key(ApiProvider::Minimax, "valid-key", &server.uri())
+            .await
+            .expect("a 404 /models route must not indict the key");
+        assert_eq!(outcome, KeyProbeOutcome::Unverifiable);
     }
 
     #[tokio::test]

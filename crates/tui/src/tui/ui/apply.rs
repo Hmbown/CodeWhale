@@ -2615,12 +2615,23 @@ pub(crate) async fn apply_provider_picker_test_connection_with_verifier(
     let base_url = scoped_config.deepseek_base_url();
     let model = scoped_config.default_model();
     match verifier.verify(provider, &api_key, &base_url).await {
-        Ok(()) => {
+        Ok(crate::client::KeyProbeOutcome::Verified) => {
             app.provider_health
                 .record_models_probe_success(&scoped_config, provider, &model);
             app.push_status_toast(
                 app.tr(MessageId::ProviderConnectionChecked).into_owned(),
                 StatusToastLevel::Success,
+                Some(8_000),
+            );
+        }
+        Ok(crate::client::KeyProbeOutcome::Unverifiable) => {
+            // The endpoint answered but has no /models surface (404/405).
+            // That indicts neither the key nor the connection, so record
+            // nothing rather than a false failure (#5601).
+            app.push_status_toast(
+                app.tr(MessageId::ProviderTestConnectionNoEndpoint)
+                    .replace("{provider}", &identity.key),
+                StatusToastLevel::Warning,
                 Some(8_000),
             );
         }
@@ -2691,14 +2702,16 @@ pub(crate) async fn apply_provider_picker_api_key_with_verifier(
     // the ordinary Moonshot endpoint.
     let base_url = scoped_config.deepseek_base_url();
     match verifier.verify(provider, &api_key, &base_url).await {
-        Ok(()) => {
+        Ok(outcome) => {
             // Keep the readiness row aligned with the live check the wizard
             // just completed. This probe only proves the endpoint and
             // credentials are reachable: the model is chosen after the probe,
             // so record a distinct connection-checked state rather than
-            // claiming the model is ready. Providers without a real `/models`
-            // probe remain unchecked.
-            if crate::client::provider_api_key_verification_is_observed(provider) {
+            // claiming the model is ready. Routes without a real `/models`
+            // surface (skip-listed, or the endpoint answered 404/405) remain
+            // unchecked but still continue to the model pick — a missing
+            // roster route says nothing about the key (#5601).
+            if outcome == crate::client::KeyProbeOutcome::Verified {
                 let verified_model = scoped_config.default_model();
                 app.provider_health.record_models_probe_success(
                     &scoped_config,
@@ -2725,10 +2738,14 @@ pub(crate) async fn apply_provider_picker_api_key_with_verifier(
                 })
             {
                 app.view_stack.push(picker);
-                app.status_message = Some(
-                    app.tr(MessageId::ProviderConnectionCheckedPickModel)
+                app.status_message = Some(match outcome {
+                    crate::client::KeyProbeOutcome::Verified => app
+                        .tr(MessageId::ProviderConnectionCheckedPickModel)
                         .into_owned(),
-                );
+                    crate::client::KeyProbeOutcome::Unverifiable => app
+                        .tr(MessageId::ProviderTestConnectionNoEndpoint)
+                        .replace("{provider}", provider.as_str()),
+                });
             } else {
                 app.status_message = Some(format!(
                     "{} connection checked (/models returned 2xx), but the guided setup could not be re-opened.",

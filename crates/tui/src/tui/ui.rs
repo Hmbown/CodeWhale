@@ -1053,7 +1053,8 @@ fn ignore_stale_stream_event_while_idle(event: &EngineEvent) -> bool {
     )
 }
 
-type ProviderKeyVerification<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+type ProviderKeyVerification<'a> =
+    Pin<Box<dyn Future<Output = Result<crate::client::KeyProbeOutcome, String>> + Send + 'a>>;
 
 pub(crate) fn request_foreground_shell_background(app: &mut App) {
     if !app.is_loading {
@@ -1325,12 +1326,12 @@ mod provider_key_validation_tests {
     }
 
     struct MockProviderKeyVerifier {
-        result: Result<(), String>,
+        result: Result<crate::client::KeyProbeOutcome, String>,
         calls: std::sync::Mutex<Vec<(ApiProvider, String, String)>>,
     }
 
     impl MockProviderKeyVerifier {
-        fn new(result: Result<(), String>) -> Self {
+        fn new(result: Result<crate::client::KeyProbeOutcome, String>) -> Self {
             Self {
                 result,
                 calls: std::sync::Mutex::new(Vec::new()),
@@ -1436,7 +1437,7 @@ mod provider_key_validation_tests {
         let mut app = create_test_app();
         let mut engine = mock_engine_handle();
         let mut config = openrouter_config("https://mock.openrouter.test/v1");
-        let verifier = MockProviderKeyVerifier::new(Ok(()));
+        let verifier = MockProviderKeyVerifier::new(Ok(crate::client::KeyProbeOutcome::Verified));
         let identity = picker_provider_identity(&config, ApiProvider::Openrouter, None)
             .expect("OpenRouter identity");
 
@@ -1525,7 +1526,7 @@ mod provider_key_validation_tests {
         if let Some(providers) = config.providers.as_mut() {
             providers.openrouter.api_key = Some("sk-saved".to_string());
         }
-        let verifier = MockProviderKeyVerifier::new(Ok(()));
+        let verifier = MockProviderKeyVerifier::new(Ok(crate::client::KeyProbeOutcome::Verified));
         let identity = picker_provider_identity(&config, ApiProvider::Openrouter, None)
             .expect("OpenRouter identity");
 
@@ -1591,7 +1592,7 @@ mod provider_key_validation_tests {
         let mut app = create_test_app();
         let mut engine = mock_engine_handle();
         let mut config = openrouter_config("https://mock.openrouter.test/v1");
-        let verifier = MockProviderKeyVerifier::new(Ok(()));
+        let verifier = MockProviderKeyVerifier::new(Ok(crate::client::KeyProbeOutcome::Verified));
         let identity = picker_provider_identity(&config, ApiProvider::Openrouter, None)
             .expect("OpenRouter identity");
 
@@ -1700,7 +1701,7 @@ mod provider_key_validation_tests {
         let mut app = create_test_app();
         let mut engine = mock_engine_handle();
         let mut config = Config::default();
-        let verifier = MockProviderKeyVerifier::new(Ok(()));
+        let verifier = MockProviderKeyVerifier::new(Ok(crate::client::KeyProbeOutcome::Verified));
         let identity = picker_provider_identity(&config, ApiProvider::Stepfun, None)
             .expect("StepFun identity");
 
@@ -1820,7 +1821,7 @@ auth_mode = "kimi_oauth"
         };
         let identity = picker_provider_identity(&config, ApiProvider::Moonshot, None)
             .expect("Moonshot identity");
-        let verifier = MockProviderKeyVerifier::new(Ok(()));
+        let verifier = MockProviderKeyVerifier::new(Ok(crate::client::KeyProbeOutcome::Verified));
 
         apply_provider_picker_api_key_with_verifier(
             &mut app,
