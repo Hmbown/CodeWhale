@@ -1,7 +1,7 @@
 //! Per-session control socket — the supervised-operation control surface.
 //!
 //! This module is the codewhale side of "session control/communication API
-//! for supervised operation" (upstream issue #3 candidate). When the
+//! for supervised operation" (#5533). When the
 //! `[control_socket]` config table sets `enabled = true`, the interactive
 //! TUI binds one unix domain socket per *running* session at
 //!
