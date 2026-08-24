@@ -6459,13 +6459,13 @@ impl Config {
         // named/custom-table routes so a stale root key is not sent elsewhere.
         //
         // However, when the CLI dispatcher forwards an explicit `--api-key`
-        // through `DEEPSEEK_API_KEY` with the dispatcher source marker, that
+        // through the provider-neutral CLI bridge with its source marker, that
         // intentional override must win over the saved root key. This is
         // essential for DeepSeek-compatible subscription endpoints where the
         // user runs something like:
         //   codewhale --provider deepseek --api-key ark-... --base-url ... --model auto
         if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
-            && std::env::var("DEEPSEEK_API_KEY_SOURCE").as_deref() == Ok("cli")
+            && cli_api_key_source().as_deref() == Some("cli")
             && let Some(env_key) = explicit_cli_key
                 .as_ref()
                 .cloned()
@@ -11964,13 +11964,21 @@ pub(crate) fn explicit_launch_provider_override() -> Option<String> {
 }
 
 pub(crate) fn explicit_cli_api_key_override() -> Option<String> {
-    (std::env::var("DEEPSEEK_API_KEY_SOURCE").as_deref() == Ok("cli"))
+    (cli_api_key_source().as_deref() == Some("cli"))
         .then(|| {
-            std::env::var("CODEWHALE_CLI_API_KEY")
+            std::env::var(codewhale_config::CLI_API_KEY_ENV)
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
         .flatten()
+}
+
+pub(crate) fn cli_api_key_source() -> Option<String> {
+    codewhale_env_var(
+        codewhale_config::CLI_API_KEY_SOURCE_ENV,
+        codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV,
+    )
+    .ok()
 }
 
 fn missing_provider_api_key_message(provider: ApiProvider) -> Result<String> {

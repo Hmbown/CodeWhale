@@ -4948,14 +4948,11 @@ fn apply_tui_env(cli: &Cli, resolved_runtime: &ResolvedRuntimeOptions, passthrou
         && let Some(api_key) = keyring_bridge_api_key
     {
         unsafe {
-            std::env::set_var("DEEPSEEK_API_KEY", api_key);
             for var in provider_env_vars(keyring_bridge_provider) {
-                if *var != "DEEPSEEK_API_KEY" {
-                    std::env::set_var(var, api_key);
-                }
+                std::env::set_var(var, api_key);
             }
             std::env::set_var(
-                "DEEPSEEK_API_KEY_SOURCE",
+                codewhale_config::CLI_API_KEY_SOURCE_ENV,
                 RuntimeApiKeySource::Keyring.as_env_value(),
             );
         }
@@ -5022,20 +5019,17 @@ fn apply_tui_env(cli: &Cli, resolved_runtime: &ResolvedRuntimeOptions, passthrou
     }
     if let Some(api_key) = cli.api_key.as_ref() {
         unsafe {
-            std::env::set_var("CODEWHALE_CLI_API_KEY", api_key);
+            std::env::set_var(codewhale_config::CLI_API_KEY_ENV, api_key);
         }
         if !uses_raw_tui_provider && (cli.profile.is_none() || cli.provider.is_some()) {
             unsafe {
-                std::env::set_var("DEEPSEEK_API_KEY", api_key);
                 for var in provider_env_vars(resolved_runtime.provider) {
-                    if *var != "DEEPSEEK_API_KEY" {
-                        std::env::set_var(var, api_key);
-                    }
+                    std::env::set_var(var, api_key);
                 }
             }
         }
         unsafe {
-            std::env::set_var("DEEPSEEK_API_KEY_SOURCE", "cli");
+            std::env::set_var(codewhale_config::CLI_API_KEY_SOURCE_ENV, "cli");
         }
     }
     if let Some(base_url) = cli.base_url.as_ref() {
@@ -5233,6 +5227,122 @@ mod tests {
             yolo: None,
             verbosity: None,
             http_headers: std::collections::BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn tui_credential_handoff_stays_with_the_selected_provider() {
+        let _lock = env_lock();
+        let mut names = ProviderKind::ALL
+            .into_iter()
+            .flat_map(provider_env_vars)
+            .copied()
+            .collect::<Vec<_>>();
+        names.extend([
+            codewhale_config::CLI_API_KEY_ENV,
+            codewhale_config::CLI_API_KEY_SOURCE_ENV,
+            codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV,
+            "CODEWHALE_PROVIDER",
+            "DEEPSEEK_PROVIDER",
+            "CODEWHALE_TELEMETRY",
+            "DEEPSEEK_TELEMETRY",
+            codewhale_config::TELEMETRY_FLOOR_ENV,
+        ]);
+        names.sort_unstable();
+        names.dedup();
+        let _clean_env = names
+            .into_iter()
+            .map(ScopedEnvVar::remove)
+            .collect::<Vec<_>>();
+        let _deepseek_key = ScopedEnvVar::set("DEEPSEEK_API_KEY", "existing-deepseek-key");
+
+        let clear_bridge = || {
+            // Safety: this test holds env_lock() and the guards above restore
+            // every touched variable.
+            unsafe {
+                for var in ProviderKind::ALL
+                    .into_iter()
+                    .flat_map(provider_env_vars)
+                    .filter(|var| **var != "DEEPSEEK_API_KEY")
+                {
+                    std::env::remove_var(var);
+                }
+                std::env::remove_var(codewhale_config::CLI_API_KEY_ENV);
+                std::env::remove_var(codewhale_config::CLI_API_KEY_SOURCE_ENV);
+                std::env::remove_var(codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV);
+            }
+        };
+
+        for (provider_arg, provider) in [
+            ("nvidia-nim", ProviderKind::NvidiaNim),
+            ("openrouter", ProviderKind::Openrouter),
+            ("anthropic", ProviderKind::Anthropic),
+        ] {
+            clear_bridge();
+            let keyring_key = format!("{provider_arg}-keyring-key");
+            let mut keyring_runtime = resolved_runtime_for_test(provider, ProviderSource::Cli);
+            keyring_runtime.api_key = Some(keyring_key.clone());
+            keyring_runtime.api_key_source = Some(RuntimeApiKeySource::Keyring);
+            let keyring_cli = parse_ok(&["codewhale", "--provider", provider_arg]);
+
+            apply_tui_env(&keyring_cli, &keyring_runtime, &[]);
+
+            assert_eq!(
+                std::env::var("DEEPSEEK_API_KEY").as_deref(),
+                Ok("existing-deepseek-key"),
+                "{provider_arg} keyring handoff replaced DeepSeek's credential"
+            );
+            for var in provider_env_vars(provider) {
+                assert_eq!(
+                    std::env::var(var).as_deref(),
+                    Ok(keyring_key.as_str()),
+                    "{provider_arg} keyring handoff missed {var}"
+                );
+            }
+            assert_eq!(
+                std::env::var(codewhale_config::CLI_API_KEY_SOURCE_ENV).as_deref(),
+                Ok("keyring")
+            );
+            assert!(std::env::var(codewhale_config::CLI_API_KEY_ENV).is_err());
+            assert!(
+                std::env::var(codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV).is_err(),
+                "new dispatchers must not write the retired vendor-named marker"
+            );
+
+            clear_bridge();
+            let explicit_key = format!("{provider_arg}-explicit-key");
+            let explicit_cli = parse_ok(&[
+                "codewhale",
+                "--provider",
+                provider_arg,
+                "--api-key",
+                explicit_key.as_str(),
+            ]);
+            let explicit_runtime = resolved_runtime_for_test(provider, ProviderSource::Cli);
+
+            apply_tui_env(&explicit_cli, &explicit_runtime, &[]);
+
+            assert_eq!(
+                std::env::var("DEEPSEEK_API_KEY").as_deref(),
+                Ok("existing-deepseek-key"),
+                "{provider_arg} --api-key handoff replaced DeepSeek's credential"
+            );
+            for var in provider_env_vars(provider) {
+                assert_eq!(
+                    std::env::var(var).as_deref(),
+                    Ok(explicit_key.as_str()),
+                    "{provider_arg} --api-key handoff missed {var}"
+                );
+            }
+            assert_eq!(
+                std::env::var(codewhale_config::CLI_API_KEY_ENV).as_deref(),
+                Ok(explicit_key.as_str())
+            );
+            assert_eq!(
+                std::env::var(codewhale_config::CLI_API_KEY_SOURCE_ENV).as_deref(),
+                Ok("cli")
+            );
+            assert!(std::env::var(codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV).is_err());
         }
     }
 

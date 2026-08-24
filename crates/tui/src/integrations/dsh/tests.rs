@@ -865,10 +865,20 @@ fn bundle_client_js_is_deterministic_override_tokens_and_not_a_stylesheet() {
 #[test]
 fn launch_strips_only_codewhale_injected_credentials() {
     let none = launch_env_strip_list(None, &["ZAI_API_KEY".to_string()]);
-    assert_eq!(none, ["CODEWHALE_CLI_API_KEY", "DEEPSEEK_API_KEY_SOURCE"]);
+    assert_eq!(
+        none,
+        [
+            "CODEWHALE_CLI_API_KEY",
+            "CODEWHALE_CLI_API_KEY_SOURCE",
+            "DEEPSEEK_API_KEY_SOURCE"
+        ]
+    );
     let cli = launch_env_strip_list(Some("cli"), &["ZAI_API_KEY".to_string()]);
-    assert!(cli.contains(&"DEEPSEEK_API_KEY".to_string()));
     assert!(cli.contains(&"ZAI_API_KEY".to_string()));
+    assert!(
+        !cli.contains(&"DEEPSEEK_API_KEY".to_string()),
+        "a bridged Z.ai credential must not claim or strip DeepSeek's slot"
+    );
     let env = launch_env_strip_list(Some("env"), &["ZAI_API_KEY".to_string()]);
     assert!(
         !env.contains(&"DEEPSEEK_API_KEY".to_string()),

@@ -3800,8 +3800,8 @@ fn deepseek_dispatcher_env_key_overrides_config_key() -> Result<()> {
 #[test]
 fn provider_neutral_cli_key_wins_after_profile_provider_switch() -> Result<()> {
     let _lock = lock_test_env();
-    let _source = EnvVarGuard::set("DEEPSEEK_API_KEY_SOURCE", "cli");
-    let _cli_key = EnvVarGuard::set("CODEWHALE_CLI_API_KEY", "explicit-profile-key");
+    let _source = EnvVarGuard::set(codewhale_config::CLI_API_KEY_SOURCE_ENV, "cli");
+    let _cli_key = EnvVarGuard::set(codewhale_config::CLI_API_KEY_ENV, "explicit-profile-key");
     let _anthropic_env = EnvVarGuard::remove("ANTHROPIC_API_KEY");
     let mut providers = ProvidersConfig::default();
     providers.anthropic.api_key = Some("saved-anthropic-key".to_string());
@@ -3820,8 +3820,9 @@ fn provider_neutral_cli_key_wins_after_profile_provider_switch() -> Result<()> {
 #[test]
 fn provider_neutral_cli_key_requires_dispatcher_source_marker() -> Result<()> {
     let _lock = lock_test_env();
-    let _source = EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
-    let _cli_key = EnvVarGuard::set("CODEWHALE_CLI_API_KEY", "untrusted-generic-key");
+    let _source = EnvVarGuard::remove(codewhale_config::CLI_API_KEY_SOURCE_ENV);
+    let _legacy_source = EnvVarGuard::remove(codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV);
+    let _cli_key = EnvVarGuard::set(codewhale_config::CLI_API_KEY_ENV, "untrusted-generic-key");
     let _anthropic_env = EnvVarGuard::remove("ANTHROPIC_API_KEY");
     let mut providers = ProvidersConfig::default();
     providers.anthropic.api_key = Some("saved-anthropic-key".to_string());
@@ -4911,8 +4912,8 @@ default_text_model = "deepseek-chat"
         "DEEPSEEK_BASE_URL",
         "https://explicit-cli-gateway.example.test/v1",
     );
-    let _source = EnvVarGuard::set("DEEPSEEK_API_KEY_SOURCE", "cli");
-    let _cli_key = EnvVarGuard::set("CODEWHALE_CLI_API_KEY", "explicit-cli-key");
+    let _source = EnvVarGuard::set(codewhale_config::CLI_API_KEY_SOURCE_ENV, "cli");
+    let _cli_key = EnvVarGuard::set(codewhale_config::CLI_API_KEY_ENV, "explicit-cli-key");
 
     let config = Config::load(Some(config_path), None)?;
     assert_eq!(config.deepseek_api_key()?, "explicit-cli-key");
