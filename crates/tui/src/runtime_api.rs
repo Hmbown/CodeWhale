@@ -845,10 +845,11 @@ pub async fn run_http_server(
         bail!("Codewhale web requires Runtime authentication; remove --insecure");
     }
 
+    let task_default_model = config.default_model();
     let task_cfg = TaskManagerConfig::from_runtime(
         &config,
         workspace.clone(),
-        config.default_text_model.clone(),
+        Some(task_default_model),
         Some(options.workers),
     );
     let (runtime_threads, _workshop_activation) = open_runtime_threads_for_server(
@@ -1286,6 +1287,10 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
+fn runtime_request_model(config: &Config, requested: Option<&str>) -> String {
+    requested.map_or_else(|| config.default_model(), str::to_string)
+}
+
 async fn create_task(
     State(state): State<RuntimeApiState>,
     Json(mut req): Json<NewTaskRequest>,
@@ -1297,14 +1302,7 @@ async fn create_task(
         req.workspace = Some(state.workspace.clone());
     }
     if req.model.is_none() {
-        req.model = Some(
-            state
-                .config
-                .read()
-                .default_text_model
-                .clone()
-                .unwrap_or_else(|| DEFAULT_TEXT_MODEL.to_string()),
-        );
+        req.model = Some(runtime_request_model(&state.config.read(), None));
     }
     let task = state
         .task_manager
@@ -4614,14 +4612,7 @@ async fn stream_turn(
         return Err(ApiError::bad_request("prompt is required"));
     }
 
-    let model = req.model.clone().unwrap_or_else(|| {
-        state
-            .config
-            .read()
-            .default_text_model
-            .clone()
-            .unwrap_or_else(|| DEFAULT_TEXT_MODEL.to_string())
-    });
+    let model = runtime_request_model(&state.config.read(), req.model.as_deref());
     let workspace = req
         .workspace
         .clone()

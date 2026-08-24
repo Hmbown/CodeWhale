@@ -69,6 +69,65 @@ fn web_launcher_failure_is_a_recoverable_manual_bootstrap_warning() {
     assert!(warning.contains("open the bootstrap URL above manually"));
 }
 
+fn provider_default_model_cases() -> Vec<(&'static str, Config, &'static str)> {
+    let deepseek = Config {
+        provider: Some("deepseek".to_string()),
+        api_key: Some("deepseek-test-key".to_string()),
+        base_url: Some("http://127.0.0.1:1/v1".to_string()),
+        default_text_model: Some("deepseek-v4-flash".to_string()),
+        ..Config::default()
+    };
+
+    let mut zai_providers = crate::config::ProvidersConfig::default();
+    zai_providers.zai.api_key = Some("zai-test-key".to_string());
+    let zai = Config {
+        provider: Some("zai".to_string()),
+        // A saved DeepSeek root default must not leak onto the active Z.ai route.
+        default_text_model: Some(DEFAULT_TEXT_MODEL.to_string()),
+        providers: Some(zai_providers),
+        ..Config::default()
+    };
+
+    let mut custom_providers = crate::config::ProvidersConfig::default();
+    custom_providers.custom.insert(
+        "acme".to_string(),
+        crate::config::ProviderConfig {
+            api_key: Some("acme-test-key".to_string()),
+            base_url: Some("http://127.0.0.1:1/v1".to_string()),
+            model: Some("acme-coder".to_string()),
+            kind: Some("openai-compatible".to_string()),
+            ..crate::config::ProviderConfig::default()
+        },
+    );
+    let custom = Config {
+        provider: Some("acme".to_string()),
+        providers: Some(custom_providers),
+        ..Config::default()
+    };
+
+    vec![
+        ("deepseek", deepseek, "deepseek-v4-flash"),
+        ("zai", zai, crate::config::DEFAULT_ZAI_MODEL),
+        ("custom", custom, "acme-coder"),
+    ]
+}
+
+#[test]
+fn runtime_request_model_uses_the_active_provider_default() {
+    for (label, config, expected) in provider_default_model_cases() {
+        assert_eq!(
+            runtime_request_model(&config, None),
+            expected,
+            "{label} omitted-model resolution"
+        );
+        assert_eq!(
+            runtime_request_model(&config, Some("explicit-model")),
+            "explicit-model",
+            "{label} explicit model"
+        );
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn http_and_web_server_thread_manager_installs_configured_workshop_byte_budgets() -> Result<()>
 {
@@ -800,6 +859,7 @@ async fn spawn_test_server_with_root_token_mobile_workspace(
 struct TestServerOverrides {
     sub_agent_manager: Option<SharedSubAgentManager>,
     fleet_codewhale_binary: Option<String>,
+    config: Option<Config>,
     config_path: Option<PathBuf>,
     config_profile: Option<String>,
     web: Option<web::RuntimeWebState>,
@@ -854,7 +914,9 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
     let _ = rustls::crypto::ring::default_provider().install_default();
     fs::create_dir_all(&sessions_dir)?;
     fs::create_dir_all(&workspace)?;
-    let mut config = if let Some(path) = overrides.config_path.clone() {
+    let mut config = if let Some(config) = overrides.config.clone() {
+        config
+    } else if let Some(path) = overrides.config_path.clone() {
         Config::load(Some(path), None)?
     } else {
         Config {
@@ -1269,6 +1331,69 @@ async fn health_and_tasks_endpoints_work() -> Result<()> {
         .await?;
 
     handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn omitted_runtime_models_use_the_active_provider_default() -> Result<()> {
+    for (label, config, expected) in provider_default_model_cases() {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join(label);
+        let sessions_dir = root.join("sessions");
+        let workspace = root.join("workspace");
+        let (hook_tx, mut hook_rx) = mpsc::unbounded_channel();
+        let Some((addr, runtime_threads, handle)) =
+            spawn_test_server_with_root_token_mobile_workspace_and_overrides(
+                root,
+                sessions_dir,
+                None,
+                false,
+                workspace,
+                TestServerOverrides {
+                    config: Some(config),
+                    compat_stream_test_hook: Some(hook_tx),
+                    ..TestServerOverrides::default()
+                },
+            )
+            .await?
+        else {
+            return Ok(());
+        };
+
+        let created: serde_json::Value = crate::tls::reqwest_client()
+            .post(format!("http://{addr}/v1/tasks"))
+            .json(&json!({ "prompt": format!("{label} omitted model") }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        assert_eq!(created["model"], expected, "{label} durable task model");
+
+        let stream_client = crate::tls::reqwest_client();
+        let stream_task = tokio::spawn(async move {
+            stream_client
+                .post(format!("http://{addr}/v1/stream"))
+                .json(&json!({ "prompt": format!("{label} omitted stream model") }))
+                .send()
+                .await
+        });
+        let created = tokio::time::timeout(ci_scaled(Duration::from_secs(2)), hook_rx.recv())
+            .await
+            .with_context(|| format!("{label} compatibility stream did not create its thread"))?
+            .with_context(|| format!("{label} compatibility stream test hook closed"))?;
+        let (thread_id, _resume) = match created {
+            CompatStreamTestPoint::ThreadCreated { thread_id, resume } => (thread_id, resume),
+            CompatStreamTestPoint::SubscribedBeforeReplay { .. }
+            | CompatStreamTestPoint::ReplayLoaded { .. } => {
+                bail!("{label} compatibility stream advanced before thread inspection")
+            }
+        };
+        let thread = runtime_threads.get_thread(&thread_id).await?;
+        assert_eq!(thread.model, expected, "{label} compatibility stream model");
+        stream_task.abort();
+        handle.abort();
+    }
     Ok(())
 }
 
