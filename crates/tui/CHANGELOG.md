@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Heavy pull requests now run the real Linux workspace nextest, doctest, and
   lockfile lanes directly on GitHub Actions instead of reporting a green
   placeholder while waiting for a branch-specific CNB mirror (#5547).
+- The context inspector now attributes bounded tool-schema cost to the built-in
+  catalog and each discovered MCP server without changing prompt assembly or
+  cache behavior (#5553).
 - The goal-continuation quiet period (`[goal] continuation_delay_seconds`,
   added in #5508) now applies on every dispatch path. Previously the
   within-turn dispatch hook fired the next continuation prompt immediately
