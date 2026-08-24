@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0TNMJBH04PWSRWF71AY6ZSK",
+  "session_id": "cf08c155-5012-4f32-8202-e432dc01fa1d",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-24T19:58:24.977434Z",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "crates/tui/src/lib.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "d1c66054af51",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1996,
+    "cache_creation_tokens": 80936,
+    "cache_read_tokens": 1838893,
+    "output_tokens": 22431,
+    "api_call_count": 24
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-24T19:58:24.963664Z",
+    "agent_lines": 0,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 3,
+    "human_removed": 1365,
+    "total_committed": 1,
+    "total_lines_changed": 1369,
+    "agent_percentage": 0.07304601899196494,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 26070,
+      "user_lines_removed": 1369,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409,
+        "codewhale-inference/.dev.vars.example": 6,
+        "codewhale-inference/.gitignore": 7,
+        "codewhale-inference/README.md": 110,
+        "codewhale-inference/docs/API.md": 118,
+        "codewhale-inference/docs/ARCHITECTURE.md": 108,
+        "codewhale-inference/docs/FLASH-LAUNCH-VERDICT-2026-08-20.md": 69,
+        "codewhale-inference/docs/FLASH-LOCAL-VERIFICATION-2026-08-20.md": 46,
+        "codewhale-inference/docs/HOSTING.md": 83,
+        "codewhale-inference/docs/PARETO-ROUTER-AND-COMPETITIVE-PLAN-2026-08-20.md": 253,
+        "codewhale-inference/docs/VERCEL_TEST.md": 76,
+        "codewhale-inference/package-lock.json": 2746,
+        "codewhale-inference/package.json": 23,
+        "codewhale-inference/scripts/vercel-catalog-check.mjs": 29,
+        "codewhale-inference/scripts/vercel-smoke.mjs": 59,
+        "codewhale-inference/src/auth.ts": 60,
+        "codewhale-inference/src/billing.ts": 89,
+        "codewhale-inference/src/http.ts": 90,
+        "codewhale-inference/src/index.ts": 553,
+        "codewhale-inference/src/models.ts": 119,
+        "codewhale-inference/src/provider.ts": 372,
+        "codewhale-inference/src/wallet.ts": 673,
+        "codewhale-inference/test/api.spec.ts": 304,
+        "codewhale-inference/test/env.d.ts": 3,
+        "codewhale-inference/test/provider.spec.ts": 76,
+        "codewhale-inference/test/tsconfig.json": 8,
+        "codewhale-inference/test/wallet.spec.ts": 156,
+        "codewhale-inference/tsconfig.json": 21,
+        "codewhale-inference/vitest.config.ts": 20,
+        "codewhale-inference/worker-configuration.d.ts": 14891,
+        "codewhale-inference/wrangler.jsonc": 42,
+        "crates/tui/src/cli_args.rs": 1392,
+        "crates/tui/src/lib.rs": 5,
+        "docs/research/CODEWHALE_INFERENCE_DILIGENCE_2026-08-19.md": 593,
+        "t": 1,
+        "web/app/[locale]/benchmarks/terminal-bench-2-1/page.tsx": 291,
+        "web/app/globals.css": 181,
+        "web/app/sitemap.ts": 1,
+        "web/lib/benchmarks/terminal-bench-2-1.json": 1606,
+        "web/lib/content/benchmarks.ts": 121,
+        "web/scripts/export-tb21-results.mjs": 220
+      },
+      "user_removed_per_file": {
+        "crates/tui/src/lib.rs": 1368,
+        "web/app/sitemap.ts": 1
+      }
+    }
+  ]
+}
