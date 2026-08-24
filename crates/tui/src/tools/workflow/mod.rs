@@ -10664,45 +10664,45 @@ SOURCE EVIDENCE
 - crates/cli/src/lib.rs: load_named_fleet
 - crates/workflow/src/role_resolve.rs: resolve_workflow_agent
 - crates/cli/src/lib.rs: start_lane
-- crates/tui/src/tools/workflow.rs: record_task_started
-- crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::GateUpdated
-- crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
+- crates/tui/src/tools/workflow/mod.rs: record_task_started
+- crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::GateUpdated
+- crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
 - crates/lane/src/runtime.rs: process_exit_receipt -> lane_reconciled"#,
             r#"APPROVE
 PLAN
 - fleets/stopship.toml: name = "stopship" -> named Fleet loading
 - crates/workflow/src/role_resolve.rs: resolve_workflow_agent -> role resolution
 - crates/cli/src/lib.rs: start_lane -> tmux Lane launch
-- crates/tui/src/tools/workflow.rs: record_task_started -> typed task_started
-- crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::GateUpdated -> gate promotion
-- crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
+- crates/tui/src/tools/workflow/mod.rs: record_task_started -> typed task_started
+- crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::GateUpdated -> gate promotion
+- crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
 - crates/lane/src/runtime.rs: process_exit_receipt -> tmux Lane reconciliation"#,
             r#"APPROVE
 EVIDENCE REVIEW
 - fleets/stopship.toml: name = "stopship"
 - crates/workflow/src/role_resolve.rs: resolve_workflow_agent
 - crates/cli/src/lib.rs: start_lane
-- crates/tui/src/tools/workflow.rs: record_task_started
-- crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::GateUpdated
-- crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
+- crates/tui/src/tools/workflow/mod.rs: record_task_started
+- crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::GateUpdated
+- crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
 - crates/lane/src/runtime.rs: process_exit_receipt -> lane_reconciled"#,
             r#"APPROVE
 EVIDENCE MATRIX
 - fleet_load: fleets/stopship.toml: name = "stopship"
 - role_resolution: crates/workflow/src/role_resolve.rs: resolve_workflow_agent
 - lane_launch: crates/cli/src/lib.rs: start_lane
-- task_started: crates/tui/src/tools/workflow.rs: record_task_started
-- gate_updated: crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::GateUpdated
-- run_completed: crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
+- task_started: crates/tui/src/tools/workflow/mod.rs: record_task_started
+- gate_updated: crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::GateUpdated
+- run_completed: crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
 - lane_exit: crates/lane/src/runtime.rs: process_exit_receipt -> lane_reconciled"#,
             r#"APPROVE
 FINAL RECEIPT
 - fleet_load: fleets/stopship.toml: name = "stopship"
 - role_resolution: crates/workflow/src/role_resolve.rs: resolve_workflow_agent
 - lane_launch: crates/cli/src/lib.rs: start_lane
-- task_started: crates/tui/src/tools/workflow.rs: record_task_started
-- gate_updated: crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::GateUpdated
-- run_completed: crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
+- task_started: crates/tui/src/tools/workflow/mod.rs: record_task_started
+- gate_updated: crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::GateUpdated
+- run_completed: crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
 - lane_exit: crates/lane/src/runtime.rs: process_exit_receipt -> lane_reconciled"#,
         ];
         let (client, calls) = fake_chat_client_responses(&responses).await;
