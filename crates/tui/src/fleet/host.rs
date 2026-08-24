@@ -239,7 +239,7 @@ impl LocalProcessFleetHostAdapter {
             (Some(writer), std::process::Stdio::from(reader))
         };
         #[cfg(not(unix))]
-        let (parent_death_writer, stdin) = (None, Stdio::null());
+        let stdin = Stdio::null();
         command
             .args(&request.command.args)
             .stdin(stdin)
