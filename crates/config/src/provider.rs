@@ -146,6 +146,12 @@ pub const OLLAMA_CLOUD_API_KEY_URL: &str = "https://ollama.com/settings/keys";
 /// Ollama Cloud's exact OpenAI-compatible API base URL.
 pub const OLLAMA_CLOUD_BASE_URL: &str = DEFAULT_OLLAMA_CLOUD_BASE_URL;
 
+/// OpenAI's default model for its first-party API endpoint.
+///
+/// Public consumers should use this provider-owned value instead of copying
+/// the default into another configuration layer.
+pub const OPENAI_DEFAULT_MODEL: &str = DEFAULT_OPENAI_MODEL;
+
 /// Static metadata for a built-in model provider.
 pub trait Provider: Send + Sync {
     /// Provider enum variant represented by this entry.

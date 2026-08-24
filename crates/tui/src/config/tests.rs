@@ -6538,6 +6538,22 @@ fn model_completion_names_for_deepseek_api_are_deduplicated_bare_ids() {
 }
 
 #[test]
+fn model_completion_names_for_openai_are_native_to_its_default_endpoint() {
+    let models = model_completion_names_for_provider(ApiProvider::Openai);
+
+    assert_eq!(models.first().copied(), Some("gpt-5.6"));
+    assert!(models.iter().all(|model| !model.contains("deepseek")));
+}
+
+#[test]
+fn model_completion_names_for_atlascloud_keep_its_provider_owned_default() {
+    assert_eq!(
+        model_completion_names_for_provider(ApiProvider::Atlascloud),
+        vec![DEFAULT_ATLASCLOUD_MODEL]
+    );
+}
+
+#[test]
 fn model_completion_names_for_together_include_provider_owned_models() {
     assert_eq!(
         model_completion_names_for_provider(ApiProvider::Together),
@@ -7388,8 +7404,13 @@ fn openai_provider_uses_openai_compatible_defaults() -> Result<()> {
 
     config.validate()?;
     assert_eq!(config.api_provider(), ApiProvider::Openai);
-    assert_eq!(config.default_model(), DEFAULT_OPENAI_MODEL);
-    assert_eq!(config.deepseek_base_url(), DEFAULT_OPENAI_BASE_URL);
+    assert_eq!(config.default_model(), "gpt-5.6");
+    assert_eq!(config.deepseek_base_url(), "https://api.openai.com/v1");
+    assert_eq!(
+        codewhale_config::provider::provider_for_kind(codewhale_config::ProviderKind::Openai)
+            .default_model(),
+        DEFAULT_OPENAI_MODEL
+    );
     Ok(())
 }
 
