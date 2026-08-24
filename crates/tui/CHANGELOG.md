@@ -140,6 +140,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variables (the route-budget test removes the overrides; the prompts test
   points `HOME`/`USERPROFILE` at a scratch dir). Assertions unchanged.
 
+- TUI sessions now apply a subtle OSC 12 cursor accent only on explicitly
+  supported terminals and restore the terminal default through normal, panic,
+  and signal cleanup paths (#5554).
+
 ## [0.9.11] - 2026-08-22
 
 Codewhale v0.9.11 tightens the long-running agent loop, makes workflow

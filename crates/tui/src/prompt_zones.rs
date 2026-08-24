@@ -286,14 +286,14 @@ impl std::ops::Deref for AppendLog {
 /// Per-turn ephemeral data. Cleared at every turn boundary.
 ///
 /// **Phase 1 scaffolding** — not yet wired into the engine request path.
-#[cfg_attr(not(test), expect(dead_code))]
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Default)]
 pub struct TurnScratch {
     pub working_set: Vec<String>,
     pub user_message: Option<Message>,
 }
 
-#[cfg_attr(not(test), expect(dead_code))]
+#[cfg_attr(not(test), allow(dead_code))]
 impl TurnScratch {
     pub fn new() -> Self {
         Self::default()

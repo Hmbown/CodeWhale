@@ -32,6 +32,7 @@ pub mod composer_ui;
 pub mod context_inspector;
 pub mod context_menu;
 pub(crate) mod coordination_detail;
+pub(crate) mod cursor_accent;
 pub mod diff_render;
 pub mod display_refresh;
 pub mod event_broker;

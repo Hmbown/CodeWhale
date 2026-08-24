@@ -308,6 +308,10 @@ pub async fn run_tui(
     let mut config = config.clone();
     let config = &mut config;
     let mut app = App::new_with_plugin_registry(options.clone(), config, plugin_registry);
+    let _cursor_accent_guard = crate::tui::cursor_accent::CursorAccentGuard::install(
+        app.low_motion || !app.fancy_animations,
+        app.ui_theme.accent_primary,
+    );
     crate::startup_trace::mark("app_constructed");
     sync_config_provider_from_app(config, &app);
     surface_prompt_override_notices(&mut app);
@@ -622,6 +626,7 @@ pub async fn run_tui(
     }
 
     cleanup_guard.defused = true;
+    crate::tui::cursor_accent::restore_cursor_accent();
     pop_keyboard_enhancement_flags(terminal.backend_mut());
     disable_alternate_scroll_mode(terminal.backend_mut());
     execute!(terminal.backend_mut(), DisableFocusChange)?;
