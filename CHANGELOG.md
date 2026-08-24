@@ -155,6 +155,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The context inspector now attributes bounded tool-schema cost to the built-in
   catalog and each discovered MCP server without changing prompt assembly or
   cache behavior (#5553).
+- Fleet roster members in a selected Fleet now expose a visible edit affordance
+  and a direct `m` model-picker shortcut, while the coordinator row remains
+  read-only (#5589).
 - The goal-continuation quiet period (`[goal] continuation_delay_seconds`,
   added in #5508) now applies on every dispatch path. Previously the
   within-turn dispatch hook fired the next continuation prompt immediately

@@ -202,14 +202,18 @@ impl FleetRosterView {
         } else {
             "setup profile"
         };
-        vec![
+        let mut hints = vec![
             ActionHint::new("↑/↓", "move"),
             ActionHint::new("s/Enter", edit_label),
             ActionHint::new("f", "saved Fleets"),
             ActionHint::new("w", tr(self.locale, MessageId::FleetRosterWorkers)),
             ActionHint::new("PgUp/PgDn", "scroll detail"),
             ActionHint::new("Esc", "close"),
-        ]
+        ];
+        if self.selected_fleet.is_some() && !self.operator_selected() {
+            hints.insert(2, ActionHint::new("m", "model"));
+        }
+        hints
     }
 }
 
@@ -246,6 +250,14 @@ impl ModalView for FleetRosterView {
                     // says so).
                     ViewAction::None
                 }
+            }
+            KeyCode::Char('m') if self.selected_fleet.is_some() => {
+                let Some(member) = self.selected_member() else {
+                    return ViewAction::None;
+                };
+                ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenModelRequested {
+                    member_id: member.id.clone(),
+                })
             }
             KeyCode::Char('w') => {
                 ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenWorkersRequested)
@@ -418,6 +430,11 @@ impl FleetRosterView {
                 // glance even before the detail pane opens.
                 let species = member_species(member);
                 let badge_cells = whales::BADGE_WIDTH + 1;
+                let edit_marker = if is_selected && self.selected_fleet.is_some() {
+                    "[edit] "
+                } else {
+                    ""
+                };
                 let member_name = member
                     .display_name
                     .as_deref()
@@ -428,7 +445,7 @@ impl FleetRosterView {
                         |name| format!("{name} ({})", member.id),
                     );
                 let text = format!(
-                    "{pointer}{mark} {}{}  {}",
+                    "{pointer}{edit_marker}{mark} {}{}  {}",
                     member_name,
                     shadow_badge.as_deref().unwrap_or(""),
                     member_routing(member)
@@ -439,7 +456,7 @@ impl FleetRosterView {
                 } else {
                     Style::default().fg(palette::TEXT_PRIMARY)
                 };
-                let split = pointer.len() + mark.len() + 1;
+                let split = pointer.len() + edit_marker.len() + mark.len() + 1;
                 let (head, tail) = if text.len() >= split && text.is_char_boundary(split) {
                     text.split_at(split)
                 } else {
