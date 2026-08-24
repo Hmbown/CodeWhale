@@ -3,11 +3,139 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use encoding_rs::{CoderResult, Decoder, UTF_8};
+use encoding_rs::{CoderResult, Decoder, Encoding};
 
 const BOUNDED_OUTPUT_MAX_LINES: usize = 2_000;
 const BOUNDED_OUTPUT_MAX_BYTES: usize = 50 * 1024;
 const BOUNDED_OUTPUT_RETAIN_BYTES: usize = BOUNDED_OUTPUT_MAX_BYTES + 4;
+
+/// Stateful UTF-8 decoder with a best-effort Windows ANSI-code-page fallback.
+/// Decoder state keeps characters split across pipe reads intact. The ACP is
+/// only a heuristic for native Windows programs; it cannot identify OEM code
+/// pages or an arbitrary encoding selected independently by a child process.
+pub(super) struct ShellOutputDecoder {
+    pending_utf8: Vec<u8>,
+    legacy_encoding: Option<&'static Encoding>,
+    legacy_decoder: Option<Decoder>,
+    finished: bool,
+}
+
+impl ShellOutputDecoder {
+    fn new(legacy_encoding: Option<&'static Encoding>) -> Self {
+        Self {
+            pending_utf8: Vec::new(),
+            legacy_encoding,
+            legacy_decoder: None,
+            finished: false,
+        }
+    }
+
+    pub(super) fn decode(&mut self, bytes: &[u8], last: bool) -> String {
+        if self.finished {
+            return String::new();
+        }
+        if let Some(decoder) = self.legacy_decoder.as_mut() {
+            let decoded = decode_chunk(decoder, bytes, last);
+            self.finished = last;
+            return decoded;
+        }
+
+        self.pending_utf8.extend_from_slice(bytes);
+        match std::str::from_utf8(&self.pending_utf8) {
+            Ok(valid) => {
+                let decoded = valid.to_string();
+                self.pending_utf8.clear();
+                self.finished = last;
+                decoded
+            }
+            Err(error) if error.error_len().is_none() && !last => {
+                let valid_up_to = error.valid_up_to();
+                let decoded = std::str::from_utf8(&self.pending_utf8[..valid_up_to])
+                    .expect("Utf8Error::valid_up_to must delimit valid UTF-8")
+                    .to_string();
+                self.pending_utf8.drain(..valid_up_to);
+                decoded
+            }
+            Err(_) => {
+                let decoded = if let Some(encoding) = self.legacy_encoding {
+                    let mut decoder = encoding.new_decoder_without_bom_handling();
+                    let decoded = decode_chunk(&mut decoder, &self.pending_utf8, last);
+                    self.legacy_decoder = Some(decoder);
+                    decoded
+                } else {
+                    String::from_utf8_lossy(&self.pending_utf8).into_owned()
+                };
+                self.pending_utf8.clear();
+                self.finished = last;
+                decoded
+            }
+        }
+    }
+}
+
+impl Default for ShellOutputDecoder {
+    fn default() -> Self {
+        Self::new(system_legacy_encoding())
+    }
+}
+
+fn decode_chunk(decoder: &mut Decoder, mut bytes: &[u8], last: bool) -> String {
+    let capacity = decoder
+        .max_utf8_buffer_length(bytes.len())
+        .unwrap_or_else(|| bytes.len().saturating_mul(4).saturating_add(16));
+    let mut output = String::with_capacity(capacity);
+    loop {
+        let (result, read, _) = decoder.decode_to_string(bytes, &mut output, last);
+        bytes = &bytes[read..];
+        match result {
+            CoderResult::InputEmpty => return output,
+            CoderResult::OutputFull => output.reserve(capacity.max(16)),
+        }
+    }
+}
+
+pub(super) fn decode_shell_bytes(bytes: &[u8], last: bool) -> String {
+    decode_shell_bytes_with_legacy(bytes, system_legacy_encoding(), last)
+}
+
+fn decode_shell_bytes_with_legacy(
+    bytes: &[u8],
+    legacy_encoding: Option<&'static Encoding>,
+    last: bool,
+) -> String {
+    ShellOutputDecoder::new(legacy_encoding).decode(bytes, last)
+}
+
+#[cfg(windows)]
+fn system_legacy_encoding() -> Option<&'static Encoding> {
+    // SAFETY: GetACP takes no arguments and has no caller-owned lifetime.
+    legacy_encoding_for_code_page(unsafe { windows::Win32::Globalization::GetACP() })
+}
+
+#[cfg(not(windows))]
+fn system_legacy_encoding() -> Option<&'static Encoding> {
+    None
+}
+
+fn legacy_encoding_for_code_page(code_page: u32) -> Option<&'static Encoding> {
+    match code_page {
+        874 => Some(encoding_rs::WINDOWS_874),
+        932 => Some(encoding_rs::SHIFT_JIS),
+        936 => Some(encoding_rs::GBK),
+        949 => Some(encoding_rs::EUC_KR),
+        950 => Some(encoding_rs::BIG5),
+        1250 => Some(encoding_rs::WINDOWS_1250),
+        1251 => Some(encoding_rs::WINDOWS_1251),
+        1252 => Some(encoding_rs::WINDOWS_1252),
+        1253 => Some(encoding_rs::WINDOWS_1253),
+        1254 => Some(encoding_rs::WINDOWS_1254),
+        1255 => Some(encoding_rs::WINDOWS_1255),
+        1256 => Some(encoding_rs::WINDOWS_1256),
+        1257 => Some(encoding_rs::WINDOWS_1257),
+        1258 => Some(encoding_rs::WINDOWS_1258),
+        _ => None,
+    }
+}
 
 #[derive(Debug)]
 pub(super) struct BoundedOutputSnapshot {
@@ -28,7 +156,7 @@ pub(super) struct BoundedOutputAccumulator {
     last_line_bytes: usize,
     front_clipped: bool,
     last_byte: Option<u8>,
-    decoder: Decoder,
+    decoder: ShellOutputDecoder,
     stream_finished: bool,
     stream_error: Option<String>,
     temp: Option<tempfile::NamedTempFile>,
@@ -47,6 +175,13 @@ impl BoundedOutputAccumulator {
     /// is a convenience, not a precondition for executing `echo ok`. Tests
     /// pass a nonexistent dir to fault-inject the failure.
     pub(super) fn new_in(spill_dir: Option<&std::path::Path>) -> Self {
+        Self::new_in_with_legacy(spill_dir, system_legacy_encoding())
+    }
+
+    fn new_in_with_legacy(
+        spill_dir: Option<&std::path::Path>,
+        legacy_encoding: Option<&'static Encoding>,
+    ) -> Self {
         let mut builder = tempfile::Builder::new();
         builder.prefix("codewhale-bash-");
         let temp = match spill_dir {
@@ -72,7 +207,7 @@ impl BoundedOutputAccumulator {
             last_line_bytes: 0,
             front_clipped: false,
             last_byte: None,
-            decoder: UTF_8.new_decoder_without_bom_handling(),
+            decoder: ShellOutputDecoder::new(legacy_encoding),
             stream_finished: false,
             stream_error: None,
             temp,
@@ -87,25 +222,6 @@ impl BoundedOutputAccumulator {
         self.spill_unavailable.as_deref()
     }
 
-    fn decode(&mut self, bytes: &[u8], last: bool) -> String {
-        let capacity = self
-            .decoder
-            .max_utf8_buffer_length(bytes.len())
-            .unwrap_or(bytes.len().saturating_mul(3).saturating_add(3));
-        let mut decoded = String::with_capacity(capacity);
-        let mut offset = 0;
-        loop {
-            let (result, read, _) =
-                self.decoder
-                    .decode_to_string(&bytes[offset..], &mut decoded, last);
-            offset += read;
-            if result == CoderResult::InputEmpty {
-                return decoded;
-            }
-            decoded.reserve(capacity.max(4));
-        }
-    }
-
     pub(super) fn append(&mut self, raw: &[u8]) -> io::Result<()> {
         if self.stream_finished {
             return Err(io::Error::other(
@@ -115,14 +231,14 @@ impl BoundedOutputAccumulator {
         if let Some(temp) = self.temp.as_mut() {
             temp.write_all(raw)?;
         }
-        let decoded = self.decode(raw, false);
+        let decoded = self.decoder.decode(raw, false);
         self.append_decoded(decoded.as_bytes());
         Ok(())
     }
 
     pub(super) fn finish(&mut self) -> io::Result<()> {
         if !self.stream_finished {
-            let decoded = self.decode(&[], true);
+            let decoded = self.decoder.decode(&[], true);
             self.append_decoded(decoded.as_bytes());
             if let Some(temp) = self.temp.as_mut() {
                 temp.flush()?;
@@ -388,7 +504,7 @@ pub(super) struct RawOutputBuffer {
     data: Vec<u8>,
     dropped: usize,
     cap: usize,
-    abandoned: bool,
+    closed: bool,
 }
 
 impl RawOutputBuffer {
@@ -401,7 +517,7 @@ impl RawOutputBuffer {
             data: Vec::new(),
             dropped: 0,
             cap: cap.max(1),
-            abandoned: false,
+            closed: false,
         }
     }
 
@@ -413,9 +529,7 @@ impl RawOutputBuffer {
     /// runs — and retains its buffer — for the life of the process (#5472
     /// finding 2).
     pub(super) fn append(&mut self, bytes: &[u8]) -> bool {
-        if self.abandoned {
-            // Keep the total honest even though the bytes are discarded.
-            self.dropped = self.dropped.saturating_add(bytes.len());
+        if self.closed {
             return false;
         }
         self.data.extend_from_slice(bytes);
@@ -425,15 +539,10 @@ impl RawOutputBuffer {
         true
     }
 
-    /// Give up on this stream: release everything held and stop accepting more.
-    ///
-    /// Called when the bounded reader join times out. The shell is already
-    /// terminal and its result already delivered, so nothing can consume these
-    /// bytes; holding them until the writer eventually closes is pure residency.
-    pub(super) fn abandon(&mut self) {
-        self.abandoned = true;
-        self.dropped = self.dropped.saturating_add(self.data.len());
-        self.data = Vec::new();
+    /// Stop accepting reader bytes while preserving the exact retained cutoff.
+    /// Memory is reduced separately by `release_to_tail`, only after delivery.
+    pub(super) fn seal(&mut self) {
+        self.closed = true;
     }
 
     /// Total bytes this stream has produced, including bytes no longer held.
@@ -441,13 +550,25 @@ impl RawOutputBuffer {
         self.dropped.saturating_add(self.data.len())
     }
 
-    /// Leading bytes discarded by the in-flight cap or by `release_to_tail`.
+    /// Leading bytes discarded by the in-flight cap or post-delivery release.
     pub(super) fn dropped(&self) -> usize {
+        self.dropped
+    }
+
+    fn retained_start(&self) -> usize {
         self.dropped
     }
 
     pub(super) fn retained(&self) -> &[u8] {
         &self.data
+    }
+
+    pub(super) fn mark_closed(&mut self) {
+        self.closed = true;
+    }
+
+    pub(super) fn is_closed(&self) -> bool {
+        self.closed
     }
 
     /// Collapse to at most `keep` trailing bytes and give the allocation back.
@@ -461,13 +582,8 @@ impl RawOutputBuffer {
     }
 
     fn drop_front_to(&mut self, keep: usize) {
-        let mut start = self.data.len().saturating_sub(keep);
-        // Snap forward off a UTF-8 continuation byte so the retained slice
-        // never begins mid-character (the leading-U+FFFD bug guarded against
-        // in `tail_from_buffer`).
-        while start < self.data.len() && (self.data[start] & 0xC0) == 0x80 {
-            start += 1;
-        }
+        let raw_start = self.data.len().saturating_sub(keep);
+        let start = stable_utf8_tail_start(&self.data, raw_start, false).unwrap_or(raw_start);
         self.data.drain(..start);
         self.dropped = self.dropped.saturating_add(start);
     }
@@ -488,14 +604,17 @@ pub(super) fn new_shared_raw_output() -> SharedRawOutput {
 pub(super) fn take_delta_from_buffer(
     buffer: &SharedRawOutput,
     cursor: &mut usize,
-) -> (Vec<u8>, usize) {
+) -> (Vec<u8>, usize, bool) {
     let guard = buffer.lock().unwrap_or_else(|e| e.into_inner());
     let total = guard.total_len();
     // The cursor is an absolute offset into the stream. Bytes the bound already
     // discarded can never be delivered as a delta, so skip forward over them
     // rather than re-sending the retained tail as if it were new.
-    let start_abs = (*cursor).max(guard.dropped()).min(total);
-    let start = start_abs - guard.dropped();
+    let retained_end = guard
+        .retained_start()
+        .saturating_add(guard.retained().len());
+    let start_abs = (*cursor).max(guard.retained_start()).min(retained_end);
+    let start = start_abs - guard.retained_start();
     let retained = guard.retained();
     // Clone only the unread portion (the delta), not the entire accumulated buffer.
     // Long-running processes can produce megabytes of output; cloning the full
@@ -508,14 +627,19 @@ pub(super) fn take_delta_from_buffer(
     // sequence in the buffer for the next poll. Bytes that are genuinely invalid
     // rather than merely unfinished still pass through, so binary output cannot
     // stall the cursor, and the final result is read from the whole buffer.
-    let consumed = match std::str::from_utf8(unread) {
-        Ok(_) => unread.len(),
-        Err(error) if error.error_len().is_none() => error.valid_up_to(),
-        Err(_) => unread.len(),
+    let closed = guard.is_closed();
+    let consumed = if closed {
+        unread.len()
+    } else {
+        match std::str::from_utf8(unread) {
+            Ok(_) => unread.len(),
+            Err(error) if error.error_len().is_none() => error.valid_up_to(),
+            Err(_) => unread.len(),
+        }
     };
     let delta = unread[..consumed].to_vec();
-    *cursor = start_abs + consumed;
-    (delta, total)
+    *cursor = if closed { total } else { start_abs + consumed };
+    (delta, total, closed)
 }
 
 /// Read only the tail of a byte buffer and return (total_len, tail_string).
@@ -531,17 +655,53 @@ pub(super) fn tail_from_buffer(buffer: &SharedRawOutput, max_tail_chars: usize) 
     // printed less than it did.
     let total = guard.total_len();
     let retained = guard.retained();
-    let retained_len = retained.len();
-    // Over-estimate byte count (4 bytes per char worst case for UTF-8).
-    let mut tail_start = retained_len.saturating_sub(max_tail_chars.saturating_mul(4));
-    // Snap forward to the next valid UTF-8 codepoint boundary so we don't
-    // pass a slice beginning with continuation bytes (0x80-0xBF) to
-    // from_utf8_lossy, which would emit a leading U+FFFD replacement char.
-    while tail_start < retained_len && (retained[tail_start] & 0xC0) == 0x80 {
-        tail_start += 1;
+    (
+        total,
+        tail_from_bytes(retained, max_tail_chars, guard.is_closed()),
+    )
+}
+
+fn tail_from_bytes(bytes: &[u8], max_tail_chars: usize, last: bool) -> String {
+    tail_from_bytes_with_legacy(bytes, max_tail_chars, last, system_legacy_encoding())
+}
+
+fn tail_from_bytes_with_legacy(
+    bytes: &[u8],
+    max_tail_chars: usize,
+    last: bool,
+    legacy_encoding: Option<&'static Encoding>,
+) -> String {
+    let raw_start = bytes
+        .len()
+        .saturating_sub(max_tail_chars.saturating_mul(4).saturating_add(16));
+    let start = stable_utf8_tail_start(bytes, raw_start, last).unwrap_or(raw_start);
+    let decoded = decode_shell_bytes_with_legacy(&bytes[start..], legacy_encoding, last);
+    tail_text(&decoded, max_tail_chars)
+}
+
+fn stable_utf8_tail_start(bytes: &[u8], raw_start: usize, last: bool) -> Option<usize> {
+    let mut aligned_start = raw_start;
+    while aligned_start < bytes.len() && (bytes[aligned_start] & 0xC0) == 0x80 {
+        aligned_start += 1;
     }
-    let tail_str = String::from_utf8_lossy(&retained[tail_start..]).into_owned();
-    (total, tail_text(&tail_str, max_tail_chars))
+    if aligned_start != raw_start {
+        if aligned_start == bytes.len() {
+            return None;
+        }
+        let mut character_start = raw_start;
+        let lower_bound = raw_start.saturating_sub(3);
+        while character_start > lower_bound && (bytes[character_start] & 0xC0) == 0x80 {
+            character_start -= 1;
+        }
+        if std::str::from_utf8(&bytes[character_start..aligned_start]).is_err() {
+            return None;
+        }
+    }
+    match std::str::from_utf8(&bytes[aligned_start..]) {
+        Ok(_) => Some(aligned_start),
+        Err(error) if !last && error.error_len().is_none() => Some(aligned_start),
+        Err(_) => None,
+    }
 }
 
 pub(super) fn tail_text(text: &str, max_chars: usize) -> String {
@@ -563,8 +723,9 @@ pub(super) fn tail_text(text: &str, max_chars: usize) -> String {
 mod tests {
     use super::{
         BOUNDED_OUTPUT_MAX_BYTES, BOUNDED_OUTPUT_MAX_LINES, BoundedOutputAccumulator,
-        RAW_STREAM_MAX_BYTES, RawOutputBuffer, SharedRawOutput, tail_from_buffer,
-        take_delta_from_buffer,
+        RAW_STREAM_MAX_BYTES, RawOutputBuffer, SharedRawOutput, ShellOutputDecoder,
+        decode_shell_bytes_with_legacy, legacy_encoding_for_code_page, tail_from_buffer,
+        tail_from_bytes_with_legacy, take_delta_from_buffer,
     };
     use std::sync::{Arc, Mutex};
 
@@ -579,6 +740,123 @@ mod tests {
     }
 
     #[test]
+    fn decoder_preserves_utf8_and_legacy_characters_split_across_reads() {
+        let utf8 = "中文".as_bytes();
+        let mut decoder = ShellOutputDecoder::new(None);
+        let parts = [
+            decoder.decode(&utf8[..1], false),
+            decoder.decode(&utf8[1..4], false),
+            decoder.decode(&utf8[4..], true),
+        ];
+        assert_eq!(parts.concat(), "中文");
+
+        let (gbk, _, _) = encoding_rs::GBK.encode("中文");
+        let mut decoder = ShellOutputDecoder::new(Some(encoding_rs::GBK));
+        let parts = [
+            decoder.decode(b"status: ", false),
+            decoder.decode(&gbk[..1], false),
+            decoder.decode(&gbk[1..3], false),
+            decoder.decode(&gbk[3..], true),
+        ];
+        assert_eq!(parts.concat(), "status: 中文");
+    }
+
+    #[test]
+    fn complete_and_bounded_decoders_share_legacy_fallback() {
+        let (gbk, _, _) = encoding_rs::GBK.encode("中文");
+        assert_eq!(
+            decode_shell_bytes_with_legacy(&gbk, Some(encoding_rs::GBK), true),
+            "中文"
+        );
+
+        let mut output = BoundedOutputAccumulator::new_in_with_legacy(None, Some(encoding_rs::GBK));
+        output.append(&gbk[..1]).expect("first byte");
+        output.append(&gbk[1..]).expect("remaining bytes");
+        output.finish().expect("finish");
+        assert_eq!(output.snapshot(true).expect("snapshot").content, "中文");
+    }
+
+    #[test]
+    fn raw_background_delta_uses_the_stateful_legacy_decoder() {
+        let (gbk, _, _) = encoding_rs::GBK.encode("中文");
+        let buffer = raw(&gbk[..1]);
+        let mut cursor = 0;
+        let mut decoder = ShellOutputDecoder::new(Some(encoding_rs::GBK));
+
+        let (first, _, first_closed) = take_delta_from_buffer(&buffer, &mut cursor);
+        assert!(!first_closed);
+        assert!(decoder.decode(&first, false).is_empty());
+        append(&buffer, &gbk[1..]);
+        buffer.lock().unwrap().mark_closed();
+        let (second, _, second_closed) = take_delta_from_buffer(&buffer, &mut cursor);
+
+        assert!(second_closed);
+        assert_eq!(decoder.decode(&second, second_closed), "中文");
+    }
+
+    #[test]
+    fn process_status_cannot_finalize_before_late_reader_bytes_and_eof() {
+        let buffer = raw(b"ready ");
+        append(&buffer, &[0xE4]);
+        let mut cursor = 0;
+        let mut decoder = ShellOutputDecoder::new(None);
+
+        let (first, _, closed) = take_delta_from_buffer(&buffer, &mut cursor);
+        assert!(!closed);
+        assert_eq!(decoder.decode(&first, closed), "ready ");
+
+        // A process may already be terminal here, but only the reader owns EOF.
+        let (before_late_bytes, _, closed) = take_delta_from_buffer(&buffer, &mut cursor);
+        assert!(!closed);
+        assert!(decoder.decode(&before_late_bytes, closed).is_empty());
+
+        append(&buffer, &[0xB8, 0xAD]);
+        let (late, _, closed) = take_delta_from_buffer(&buffer, &mut cursor);
+        assert!(!closed);
+        assert_eq!(decoder.decode(&late, closed), "中");
+
+        buffer.lock().unwrap().mark_closed();
+        let (eof, _, closed) = take_delta_from_buffer(&buffer, &mut cursor);
+        assert!(closed);
+        assert!(decoder.decode(&eof, closed).is_empty());
+        assert!(decoder.decode(&[], true).is_empty(), "EOF flushes once");
+    }
+
+    #[test]
+    fn tail_flushes_an_incomplete_sequence_only_after_reader_close() {
+        let buffer = raw(b"ok \xE4");
+        assert_eq!(tail_from_buffer(&buffer, 20).1, "ok ");
+
+        buffer.lock().unwrap().mark_closed();
+        let final_tail = tail_from_buffer(&buffer, 20).1;
+        assert!(final_tail.starts_with("ok "));
+        assert_ne!(final_tail, "ok ");
+    }
+
+    #[test]
+    fn windows_ansi_code_page_mapping_is_explicit_and_bounded() {
+        assert_eq!(
+            legacy_encoding_for_code_page(874).map(|encoding| encoding.name()),
+            Some(encoding_rs::WINDOWS_874.name())
+        );
+        assert_eq!(
+            legacy_encoding_for_code_page(936).map(|encoding| encoding.name()),
+            Some(encoding_rs::GBK.name())
+        );
+        assert_eq!(legacy_encoding_for_code_page(65001), None);
+        assert_eq!(legacy_encoding_for_code_page(437), None);
+    }
+
+    #[test]
+    fn legacy_tail_does_not_treat_cp1252_bytes_as_utf8_continuations() {
+        let bytes = vec![0x80; 64];
+        assert_eq!(
+            tail_from_bytes_with_legacy(&bytes, 4, true, Some(encoding_rs::WINDOWS_1252)),
+            "...€€€€"
+        );
+    }
+
+    #[test]
     fn delta_holds_back_an_incomplete_trailing_utf8_sequence() {
         // "宽" is three bytes; deliver two of them, then the rest.
         let wide = "宽".as_bytes();
@@ -586,7 +864,7 @@ mod tests {
         append(&buffer, &wide[..2]);
         let mut cursor = 0usize;
 
-        let (delta, total) = take_delta_from_buffer(&buffer, &mut cursor);
+        let (delta, total, _) = take_delta_from_buffer(&buffer, &mut cursor);
         assert_eq!(
             String::from_utf8(delta).expect("delta must be whole characters"),
             "ok "
@@ -595,7 +873,7 @@ mod tests {
         assert_eq!(cursor, 3, "the split character stays unread");
 
         append(&buffer, &wide[2..]);
-        let (delta, _) = take_delta_from_buffer(&buffer, &mut cursor);
+        let (delta, _, _) = take_delta_from_buffer(&buffer, &mut cursor);
         assert_eq!(
             String::from_utf8(delta).expect("delta must be whole characters"),
             "宽"
@@ -608,7 +886,7 @@ mod tests {
         // binary output flowing instead of parking the cursor forever.
         let buffer = raw(&[b'a', 0xFF, b'b']);
         let mut cursor = 0usize;
-        let (delta, total) = take_delta_from_buffer(&buffer, &mut cursor);
+        let (delta, total, _) = take_delta_from_buffer(&buffer, &mut cursor);
         assert_eq!(delta, vec![b'a', 0xFF, b'b']);
         assert_eq!(cursor, total);
     }
@@ -680,7 +958,7 @@ mod tests {
         let buffer = Arc::new(Mutex::new(RawOutputBuffer::with_cap(16)));
         append(&buffer, b"first-chunk-that-will-be-dropped-entirely");
         let mut cursor = 0usize;
-        let (delta, total) = take_delta_from_buffer(&buffer, &mut cursor);
+        let (delta, total, _) = take_delta_from_buffer(&buffer, &mut cursor);
         let dropped = buffer.lock().unwrap().dropped();
         assert!(dropped > 0, "the cap must have clipped the front");
         assert_eq!(cursor, total, "cursor lands at the stream's true position");
@@ -691,7 +969,7 @@ mod tests {
         );
 
         append(&buffer, b"tail");
-        let (delta, _) = take_delta_from_buffer(&buffer, &mut cursor);
+        let (delta, _, _) = take_delta_from_buffer(&buffer, &mut cursor);
         assert_eq!(
             delta,
             b"tail".to_vec(),
@@ -710,27 +988,46 @@ mod tests {
     }
 
     #[test]
-    fn abandoning_a_stream_releases_it_and_stops_the_reader() {
+    fn sealing_a_stream_preserves_the_cutoff_and_stops_the_reader() {
         let mut buffer = RawOutputBuffer::new();
         assert!(buffer.append(&[b'a'; 5_000]), "a live stream keeps reading");
-        buffer.abandon();
+        buffer.seal();
 
-        assert_eq!(buffer.retained().len(), 0, "held bytes are released");
+        assert!(buffer.is_closed(), "detach is a terminal consumer cutoff");
+        assert_eq!(buffer.retained(), &[b'a'; 5_000]);
+        assert_eq!(buffer.dropped(), 0, "sealing does not rewrite the cutoff");
         assert_eq!(
             buffer.total_len(),
             5_000,
-            "the stream's length survives the release"
+            "the stream's length survives the seal"
         );
         assert!(
             !buffer.append(&[b'b'; 100]),
-            "an abandoned stream tells the reader thread to exit"
+            "a sealed stream tells the reader thread to exit"
         );
-        assert_eq!(buffer.retained().len(), 0, "and retains nothing further");
+        assert_eq!(buffer.retained(), &[b'a'; 5_000]);
+        assert_eq!(buffer.dropped(), 0, "rejected bytes are past the cutoff");
         assert_eq!(
             buffer.total_len(),
-            5_100,
-            "bytes that arrive after the give-up are still counted, not hidden"
+            5_000,
+            "the public total freezes at the deliverable cutoff"
         );
+
+        let buffer = Arc::new(Mutex::new(buffer));
+        let mut cursor = 5_000;
+        let (delta, total, closed) = take_delta_from_buffer(&buffer, &mut cursor);
+        assert!(closed);
+        assert!(
+            delta.is_empty(),
+            "rejected trailing bytes must not resend the tail"
+        );
+        assert_eq!(cursor, total);
+
+        let mut buffer = buffer.lock().unwrap();
+        buffer.release_to_tail(1_000);
+        assert_eq!(buffer.retained(), &[b'a'; 1_000]);
+        assert_eq!(buffer.dropped(), 4_000);
+        assert_eq!(buffer.total_len(), 5_000);
     }
 
     #[test]

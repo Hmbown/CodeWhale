@@ -3130,6 +3130,11 @@ fn killed_shell_does_not_wait_for_blocked_reader_threads() {
     let stdout_thread = std::thread::spawn(move || {
         let _ = release_rx.recv();
     });
+    let stdout_buffer = super::new_shared_raw_output();
+    stdout_buffer
+        .lock()
+        .expect("stdout buffer")
+        .append(b"before-kill");
     let now = std::time::Instant::now();
     let mut shell = BackgroundShell {
         id: "killed-reader".to_string(),
@@ -3146,11 +3151,13 @@ fn killed_shell_does_not_wait_for_blocked_reader_threads() {
         ownership: ShellOwnership::Managed,
         linked_task_id: None,
         owner_agent: None,
-        stdout_buffer: super::new_shared_raw_output(),
+        stdout_buffer: std::sync::Arc::clone(&stdout_buffer),
         stderr_buffer: None,
         heavy_permit: None,
         stdout_cursor: 0,
         stderr_cursor: 0,
+        stdout_decoder: ShellOutputDecoder::default(),
+        stderr_decoder: ShellOutputDecoder::default(),
         completion_reported: false,
         bounded_output: None,
         stdin: None,
@@ -3171,6 +3178,17 @@ fn killed_shell_does_not_wait_for_blocked_reader_threads() {
         started.elapsed() < std::time::Duration::from_secs(1),
         "killed shell must not synchronously join a blocked reader"
     );
+    let killed = shell.snapshot().expect("killed snapshot");
+    assert_eq!(killed.stdout, "before-kill");
+    let mut output = stdout_buffer.lock().expect("stdout buffer");
+    assert!(output.is_closed());
+    assert_eq!(output.retained(), b"before-kill");
+    assert_eq!(output.dropped(), 0);
+    assert!(!output.append(b"late"));
+    assert_eq!(output.retained(), b"before-kill");
+    assert_eq!(output.dropped(), 0);
+    assert_eq!(output.total_len(), b"before-kill".len());
+    drop(output);
     release_tx.send(()).expect("release detached reader");
 }
 
