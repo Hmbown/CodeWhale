@@ -4256,3 +4256,21 @@ fn a_finished_job_reports_its_duration_not_a_growing_elapsed() {
         "the frozen value must be the real duration, not the timeout: {second}ms"
     );
 }
+
+/// #5595 (Windows leg): POSIX splitting unescapes `\`, corrupting absolute
+/// Windows operands (`C:\ws`, canonicalized `\\?\C:\ws`) before the
+/// workspace boundary check and mangling the executed argv. The
+/// Windows-style splitter must keep backslashes literal and quotes grouping.
+#[test]
+fn windows_style_split_keeps_backslash_paths_literal() {
+    let argv = split_command_windows_style(r"git -C C:\ws\repo log").expect("split");
+    assert_eq!(argv, vec!["git", "-C", r"C:\ws\repo", "log"]);
+
+    let argv = split_command_windows_style(r"cat \\?\C:\Users\dev\ws\inside.txt").expect("split");
+    assert_eq!(argv, vec!["cat", r"\\?\C:\Users\dev\ws\inside.txt"]);
+
+    let argv = split_command_windows_style(r#"cat "C:\My Files\notes.txt""#).expect("split");
+    assert_eq!(argv, vec!["cat", r"C:\My Files\notes.txt"]);
+
+    split_command_windows_style(r#"cat "unterminated"#).expect_err("unmatched quote must fail");
+}

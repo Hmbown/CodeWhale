@@ -196,18 +196,18 @@ pub(crate) fn build_plan(
         mcp_candidates,
         ..ClaudeImportPlan::default()
     };
-    if let Some(claude) = claude.as_ref() {
-        if let Some(projects) = claude.get("projects").and_then(Value::as_object) {
-            for (path, project) in projects {
-                if let Some(servers) = project.get("mcpServers").and_then(Value::as_object) {
-                    for name in servers.keys() {
-                        plan.per_project_mcp
-                            .push(format!("{name} (project {path})"));
-                    }
+    if let Some(claude) = claude.as_ref()
+        && let Some(projects) = claude.get("projects").and_then(Value::as_object)
+    {
+        for (path, project) in projects {
+            if let Some(servers) = project.get("mcpServers").and_then(Value::as_object) {
+                for name in servers.keys() {
+                    plan.per_project_mcp
+                        .push(format!("{name} (project {path})"));
                 }
-                if plan.claude_projects.len() < 8 {
-                    plan.claude_projects.push(path.clone());
-                }
+            }
+            if plan.claude_projects.len() < 8 {
+                plan.claude_projects.push(path.clone());
             }
         }
     }

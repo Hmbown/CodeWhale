@@ -3763,8 +3763,68 @@ fn exec_shell_input_is_parallel_readonly_shape(input: &serde_json::Value) -> boo
         .is_some()
 }
 
+/// Split a classifier-approved read-only command into argv.
+///
+/// `shell_words` implements POSIX splitting, where `\` escapes the next
+/// character. On Windows `\` is the path separator, so POSIX unescaping
+/// silently corrupts absolute operands (`C:\ws`, canonicalized `\\?\C:\ws`)
+/// before the workspace boundary check and mangles the argv that is later
+/// executed (#5595). The Windows splitter keeps backslashes literal; quotes
+/// still group tokens and there is no escape character.
+fn split_readonly_command(command: &str) -> std::result::Result<Vec<String>, String> {
+    if cfg!(windows) {
+        split_command_windows_style(command)
+    } else {
+        shell_words::split(command).map_err(|error| error.to_string())
+    }
+}
+
+/// Windows-style splitting: whitespace separates, quotes group, backslashes
+/// stay literal. Compiled on every platform so the behavior is unit-tested
+/// where CI actually runs, not only on the Windows matrix leg.
+fn split_command_windows_style(command: &str) -> std::result::Result<Vec<String>, String> {
+    let mut argv = Vec::new();
+    let mut current = String::new();
+    let mut in_token = false;
+    let mut quote: Option<char> = None;
+    for ch in command.chars() {
+        match quote {
+            Some(open) => {
+                if ch == open {
+                    quote = None;
+                } else {
+                    current.push(ch);
+                }
+            }
+            None => match ch {
+                '"' | '\'' => {
+                    quote = Some(ch);
+                    in_token = true;
+                }
+                ch if ch.is_whitespace() => {
+                    if in_token {
+                        argv.push(std::mem::take(&mut current));
+                        in_token = false;
+                    }
+                }
+                ch => {
+                    current.push(ch);
+                    in_token = true;
+                }
+            },
+        }
+    }
+    if quote.is_some() {
+        return Err("unmatched quote".to_string());
+    }
+    if in_token {
+        argv.push(current);
+    }
+    Ok(argv)
+}
+
 fn hardened_readonly_argv(command: &str) -> Result<(String, Vec<String>)> {
-    let mut argv = shell_words::split(command)
+    let mut argv = split_readonly_command(command)
         .map_err(|error| anyhow!("could not parse classifier-approved read command: {error}"))?;
     if argv.is_empty() {
         return Err(anyhow!("classifier-approved read command was empty"));
@@ -3829,7 +3889,7 @@ fn enforce_readonly_workspace_operands(
     workspace: &std::path::Path,
     effective_cwd: &std::path::Path,
 ) -> Result<(), ToolError> {
-    let argv = shell_words::split(command).map_err(|error| {
+    let argv = split_readonly_command(command).map_err(|error| {
         ToolError::invalid_input(format!(
             "Could not parse read-only command arguments: {error}"
         ))
