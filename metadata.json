@@ -4,10 +4,7 @@
   "strategy": "manual-commit",
   "branch": "codex/v0912-integration-20260823",
   "checkpoints_count": 2,
-  "files_touched": [
-    "crates/tui/CHANGELOG.md",
-    "crates/tui/src/tools/subagent/tests.rs"
-  ],
+  "files_touched": null,
   "sessions": [
     {
       "metadata": "/0/metadata.json",
@@ -18,17 +15,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 354,
-    "cache_creation_tokens": 254728,
-    "cache_read_tokens": 33550499,
-    "output_tokens": 95568,
-    "api_call_count": 177,
-    "subagent_tokens": {
-      "input_tokens": 10,
-      "cache_creation_tokens": 62470,
-      "cache_read_tokens": 208403,
-      "output_tokens": 6571,
-      "api_call_count": 5
-    }
+    "input_tokens": 358,
+    "cache_creation_tokens": 255808,
+    "cache_read_tokens": 34117009,
+    "output_tokens": 96126,
+    "api_call_count": 179
   }
 }
