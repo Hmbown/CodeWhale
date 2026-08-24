@@ -66,8 +66,8 @@ use crate::work_graph::{
 use crate::worker_profile::ShellPolicy;
 use output::{
     BoundedOutputAccumulator, BoundedOutputSnapshot, RAW_STREAM_SETTLED_TAIL_BYTES,
-    RawOutputBuffer, SharedRawOutput, new_shared_raw_output, tail_from_buffer, tail_text,
-    take_delta_from_buffer,
+    RawOutputBuffer, SharedRawOutput, ShellOutputDecoder, decode_shell_bytes,
+    new_shared_raw_output, tail_from_buffer, tail_text, take_delta_from_buffer,
 };
 
 const READONLY_ENV_MARKER: &str = "CODEWHALE_INTERNAL_READONLY_ARGV";
@@ -778,7 +778,7 @@ fn spawn_reader_thread<R: Read + Send + 'static>(
                     // `RawOutputBuffer::append` enforces the in-flight ceiling
                     // here, at the only writer, so a chatty command cannot grow
                     // the process without bound while it runs (#5472). It
-                    // returns false once the stream has been abandoned, which
+                    // returns false once the stream has been sealed, which
                     // is this thread's only exit when a descendant holds the
                     // pipe open and EOF never arrives.
                     let keep_reading = buffer
@@ -792,6 +792,10 @@ fn spawn_reader_thread<R: Read + Send + 'static>(
                 Err(_) => break,
             }
         }
+        buffer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .mark_closed();
     })
 }
 
@@ -945,6 +949,8 @@ pub struct BackgroundShell {
     heavy_permit: Option<HeavyCommandPermit>,
     stdout_cursor: usize,
     stderr_cursor: usize,
+    stdout_decoder: ShellOutputDecoder,
+    stderr_decoder: ShellOutputDecoder,
     completion_reported: bool,
     stdin: Option<StdinWriter>,
     child: Option<ShellChild>,
@@ -1267,15 +1273,21 @@ impl BackgroundShell {
         if let Some(snapshot) = self.bounded_output_snapshot(false).ok().flatten() {
             return (snapshot.content, String::new(), snapshot.total_bytes, 0);
         }
-        let (stdout_bytes, stderr_bytes, stdout_omitted, stderr_omitted) =
-            self.retained_output_bytes_with_omissions();
+        let (
+            stdout_bytes,
+            stderr_bytes,
+            stdout_omitted,
+            stderr_omitted,
+            stdout_closed,
+            stderr_closed,
+        ) = self.retained_output_bytes_with_omissions();
         // Report what the stream produced, not what is still held.
         let stdout_len = stdout_bytes.len().saturating_add(stdout_omitted);
         let stderr_len = stderr_bytes.len().saturating_add(stderr_omitted);
 
         (
-            String::from_utf8_lossy(&stdout_bytes).to_string(),
-            String::from_utf8_lossy(&stderr_bytes).to_string(),
+            decode_shell_bytes(&stdout_bytes, stdout_closed),
+            decode_shell_bytes(&stderr_bytes, stderr_closed),
             stdout_len,
             stderr_len,
         )
@@ -1284,27 +1296,41 @@ impl BackgroundShell {
     /// Retained bytes for both streams plus how many leading bytes the memory
     /// bound discarded. Callers that publish these bytes as evidence must
     /// declare the omission rather than presenting a clipped stream as exact.
-    fn retained_output_bytes_with_omissions(&self) -> (Vec<u8>, Vec<u8>, usize, usize) {
+    fn retained_output_bytes_with_omissions(&self) -> (Vec<u8>, Vec<u8>, usize, usize, bool, bool) {
         if let Some(snapshot) = self.bounded_output_snapshot(false).ok().flatten() {
             let omitted = snapshot.total_bytes.saturating_sub(snapshot.retained_bytes);
-            return (snapshot.content.into_bytes(), Vec::new(), omitted, 0);
+            return (
+                snapshot.content.into_bytes(),
+                Vec::new(),
+                omitted,
+                0,
+                false,
+                true,
+            );
         }
-        let (stdout_bytes, stdout_omitted) = self
+        let (stdout_bytes, stdout_omitted, stdout_closed) = self
             .stdout_buffer
             .lock()
-            .map(|data| (data.retained().to_vec(), data.dropped()))
+            .map(|data| (data.retained().to_vec(), data.dropped(), data.is_closed()))
             .unwrap_or_default();
-        let (stderr_bytes, stderr_omitted) = self
+        let (stderr_bytes, stderr_omitted, stderr_closed) = self
             .stderr_buffer
             .as_ref()
             .and_then(|buffer| {
                 buffer
                     .lock()
                     .ok()
-                    .map(|data| (data.retained().to_vec(), data.dropped()))
+                    .map(|data| (data.retained().to_vec(), data.dropped(), data.is_closed()))
             })
-            .unwrap_or_default();
-        (stdout_bytes, stderr_bytes, stdout_omitted, stderr_omitted)
+            .unwrap_or_else(|| (Vec::new(), 0, true));
+        (
+            stdout_bytes,
+            stderr_bytes,
+            stdout_omitted,
+            stderr_omitted,
+            stdout_closed,
+            stderr_closed,
+        )
     }
 
     fn take_delta(&mut self) -> (String, String, usize, usize, usize, usize) {
@@ -1326,13 +1352,14 @@ impl BackgroundShell {
             }
             return (String::new(), String::new(), 0, 0, snapshot.total_bytes, 0);
         }
-        let (stdout_delta, stdout_total) =
+        let (stdout_delta, stdout_total, stdout_closed) =
             take_delta_from_buffer(&self.stdout_buffer, &mut self.stdout_cursor);
-        let (stderr_delta, stderr_total) = if let Some(buffer) = self.stderr_buffer.as_ref() {
-            take_delta_from_buffer(buffer, &mut self.stderr_cursor)
-        } else {
-            (Vec::new(), 0)
-        };
+        let (stderr_delta, stderr_total, stderr_closed) =
+            if let Some(buffer) = self.stderr_buffer.as_ref() {
+                take_delta_from_buffer(buffer, &mut self.stderr_cursor)
+            } else {
+                (Vec::new(), 0, true)
+            };
 
         let stdout_delta_len = stdout_delta.len();
         let stderr_delta_len = stderr_delta.len();
@@ -1343,8 +1370,8 @@ impl BackgroundShell {
         }
 
         (
-            String::from_utf8_lossy(&stdout_delta).to_string(),
-            String::from_utf8_lossy(&stderr_delta).to_string(),
+            self.stdout_decoder.decode(&stdout_delta, stdout_closed),
+            self.stderr_decoder.decode(&stderr_delta, stderr_closed),
             stdout_delta_len,
             stderr_delta_len,
             stdout_total,
@@ -1564,7 +1591,7 @@ impl BackgroundShell {
 
     fn completion_evidence(&self) -> ShellCompletionEvidence {
         let event = self.completion_event();
-        let (stdout, stderr, stdout_omitted, stderr_omitted) =
+        let (stdout, stderr, stdout_omitted, stderr_omitted, _, _) =
             self.retained_output_bytes_with_omissions();
         ShellCompletionEvidence {
             event,
@@ -1596,6 +1623,12 @@ fn finish_background_reader(
     // so their final output is collected before the shell is discarded.
     #[cfg(windows)]
     if *status == ShellStatus::Killed {
+        if let Some(buffer) = buffer {
+            buffer
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .seal();
+        }
         drop(handle);
         return;
     }
@@ -1622,14 +1655,14 @@ fn finish_background_reader(
     // The reader is still blocked in `read()` on a pipe a descendant refuses to
     // close. Previously both it and the helper thread above stayed alive for the
     // life of the process, the reader still appending into a buffer nobody would
-    // ever read (#5472 finding 2). Abandoning the stream releases what it holds
-    // and gives the reader an exit on its next wakeup, which also lets the
-    // helper's `join` return.
+    // ever read (#5472 finding 2). Sealing preserves the deliverable cutoff and
+    // gives the reader an exit on its next wakeup; the normal post-delivery
+    // `release_to_tail` path remains responsible for memory reduction.
     if let Some(buffer) = buffer {
         buffer
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .abandon();
+            .seal();
     }
 }
 
@@ -1798,6 +1831,8 @@ impl ShellManager {
                 heavy_permit: None,
                 stdout_cursor: 0,
                 stderr_cursor: 0,
+                stdout_decoder: ShellOutputDecoder::default(),
+                stderr_decoder: ShellOutputDecoder::default(),
                 completion_reported: false,
                 stdin: None,
                 child: None,
@@ -2205,8 +2240,8 @@ impl ShellManager {
             terminate_and_close_windows_job(windows_job);
             let stdout = recv_sync_reader_output(&stdout_rx);
             let stderr = recv_sync_reader_output(&stderr_rx);
-            let stdout_str = String::from_utf8_lossy(&stdout).to_string();
-            let stderr_str = String::from_utf8_lossy(&stderr).to_string();
+            let stdout_str = decode_shell_bytes(&stdout, true);
+            let stderr_str = decode_shell_bytes(&stderr, true);
             let exit_code = status
                 .code
                 .and_then(|code| i32::try_from(code).ok())
@@ -2253,8 +2288,8 @@ impl ShellManager {
             let status = child.wait().ok();
             let stdout = recv_sync_reader_output(&stdout_rx);
             let stderr = recv_sync_reader_output(&stderr_rx);
-            let stdout_str = String::from_utf8_lossy(&stdout).to_string();
-            let stderr_str = String::from_utf8_lossy(&stderr).to_string();
+            let stdout_str = decode_shell_bytes(&stdout, true);
+            let stderr_str = decode_shell_bytes(&stderr, true);
             let (stdout, stdout_meta) = truncate_with_meta(&stdout_str);
             let (stderr, stderr_meta) = truncate_with_meta(&stderr_str);
 
@@ -2630,6 +2665,8 @@ impl ShellManager {
             heavy_permit,
             stdout_cursor: 0,
             stderr_cursor: 0,
+            stdout_decoder: ShellOutputDecoder::default(),
+            stderr_decoder: ShellOutputDecoder::default(),
             completion_reported: false,
             stdin,
             child: Some(child),
