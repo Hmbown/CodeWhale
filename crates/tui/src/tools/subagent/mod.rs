@@ -14167,6 +14167,14 @@ impl SubAgentToolRegistry {
     /// arbitrary shell needs the parent auto-approved. `None` when the call
     /// clears the role-based delegation rules on its own.
     fn delegation_refusal(&self, name: &str, input: &Value) -> Option<String> {
+        // #5595/#5438: session approval is transport, not a second shell
+        // classifier. Scout/Reviewer/Planner calls already proven by the exact
+        // predicate used at posture, envelope, and execute boundaries are
+        // delegated reads even though lowercase `bash` deliberately keeps the
+        // stricter parent-parallel classifier as its generic approval baseline.
+        if self.bounded_readonly_bash_evidence(name, input) {
+            return None;
+        }
         let spec = self.registry.get(name)?;
         match spec.approval_requirement_for(input) {
             ApprovalRequirement::Auto => None,
@@ -15048,8 +15056,14 @@ impl SubAgentToolRegistry {
         // the parent session is auto-approved. This closes the auto-approve
         // bypass where a read-only child could quietly write or shell out.
         if !self.posture_permits_tool(name, Some(&input)) {
+            if self.allows_bounded_readonly_bash(name) {
+                return Err(anyhow!(
+                    "[shell.readonly.command] Tool {name} input did not match the bounded read-only shell grammar for Fleet role `{role}`. Use read-only inspection commands, or a `builder`/`worker` role for mutation or arbitrary execution.",
+                    role = self.agent_type.as_str()
+                ));
+            }
             return Err(anyhow!(
-                "Tool {name} is not permitted for the read-only Fleet role `{role}`. Use a `builder` or `worker` role (or `custom` with an explicit allowed_tools list) to mutate the workspace or run shell commands.",
+                "[role.posture.denied] Tool {name} is not permitted for the read-only Fleet role `{role}`. Use a `builder` or `worker` role (or `custom` with an explicit allowed_tools list) to mutate the workspace or run shell commands.",
                 role = self.agent_type.as_str()
             ));
         }

@@ -3698,7 +3698,13 @@ fn exec_shell_input_agent_readonly(input: &serde_json::Value) -> bool {
 /// posture gate can admit a proven-readonly call without ever widening past
 /// the execute-time refusal.
 pub(crate) fn agent_readonly_bash_input(input: &serde_json::Value) -> bool {
-    exec_shell_input_agent_readonly(input)
+    // Canonical lowercase `bash` advertises `timeout` in seconds, while the
+    // internal executor contract uses `timeout_ms`. Normalize through the same
+    // translator the concrete tool uses so posture, session approval, envelope,
+    // and execute judge one input (#5595). Legacy/internal shapes fall back to
+    // their existing direct classification.
+    let translated = contract_bash_legacy_input(input).unwrap_or_else(|_| input.clone());
+    exec_shell_input_agent_readonly(&translated)
 }
 
 fn exec_shell_input_is_parallel_readonly(input: &serde_json::Value) -> bool {
@@ -3845,14 +3851,14 @@ fn enforce_readonly_workspace_operands(
     })?;
     if !effective_cwd.starts_with(&workspace) {
         return Err(ToolError::permission_denied(
-            "Read-only Scout shell working directory resolves outside the workspace.",
+            "[shell.readonly.cwd.outside_workspace] Read-only Scout shell working directory resolves outside the workspace.",
         ));
     }
 
     for token in argv.iter().skip(1) {
         if token.starts_with('-') && (token.contains('/') || token.contains('\\')) {
             return Err(ToolError::permission_denied(format!(
-                "Read-only Scout shell options may not carry attached paths; refused {token:?}. Use the bounded File read/search actions for project evidence."
+                "[shell.readonly.option.attached_path] Read-only Scout shell options may not carry attached paths; refused {token:?}. Use the bounded File read/search actions for project evidence."
             )));
         }
         let value = token
@@ -3870,6 +3876,25 @@ fn enforce_readonly_workspace_operands(
                 || candidate
                     .components()
                     .any(|component| matches!(component, std::path::Component::Prefix(_)));
+
+        // #5595: an absolute operand is safe by resolved location, not by
+        // spelling. This is the canonical `git -C /absolute/workspace log`
+        // case. Requiring canonicalization also keeps nonexistent output-like
+        // targets fail-closed, while symlinks are judged by their destination.
+        if candidate.is_absolute() {
+            let resolved = candidate.canonicalize().map_err(|error| {
+                ToolError::permission_denied(format!(
+                    "[shell.readonly.operand.unresolved] Could not prove absolute read-only operand {value:?} stays inside the workspace because it could not be resolved: {error}"
+                ))
+            })?;
+            if !resolved.starts_with(&workspace) {
+                return Err(ToolError::permission_denied(format!(
+                    "[shell.readonly.operand.outside_workspace] Read-only Scout shell operand {value:?} resolves outside the workspace. Use the bounded File read/search actions for project evidence."
+                )));
+            }
+            continue;
+        }
+
         if value.starts_with('~')
             || value.contains('\\')
             || windows_prefixed
@@ -3879,7 +3904,7 @@ fn enforce_readonly_workspace_operands(
                 .any(|component| matches!(component, std::path::Component::ParentDir))
         {
             return Err(ToolError::permission_denied(format!(
-                "Read-only Scout shell operands must stay inside the workspace; refused {value:?}. Use the bounded File read/search actions for project evidence."
+                "[shell.readonly.operand.shape] Read-only Scout shell operands must stay inside the workspace; refused {value:?}. Use the bounded File read/search actions for project evidence."
             )));
         }
 
@@ -3887,12 +3912,12 @@ fn enforce_readonly_workspace_operands(
         if joined.exists() {
             let resolved = joined.canonicalize().map_err(|error| {
                 ToolError::permission_denied(format!(
-                    "Could not prove read-only operand {value:?} stays in the workspace: {error}"
+                    "[shell.readonly.operand.unresolved] Could not prove read-only operand {value:?} stays in the workspace: {error}"
                 ))
             })?;
             if !resolved.starts_with(&workspace) {
                 return Err(ToolError::permission_denied(format!(
-                    "Read-only Scout shell operand {value:?} resolves outside the workspace. Use the bounded File read/search actions for project evidence."
+                    "[shell.readonly.operand.outside_workspace] Read-only Scout shell operand {value:?} resolves outside the workspace. Use the bounded File read/search actions for project evidence."
                 )));
             }
         }

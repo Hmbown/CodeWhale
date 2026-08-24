@@ -7313,6 +7313,108 @@ fn scout_posture_gate_admits_agent_readonly_bash_commands() {
     );
 }
 
+/// #5595: catalog admission, role posture, and the execution envelope are not
+/// enough. The concrete read-only executor must accept the canonical Git shape
+/// agents use when the repository is not their process cwd. This is the exact
+/// end-to-end gap from the v0.9.11 dogfood failure.
+#[tokio::test]
+async fn read_only_inspection_roles_execute_pwd_and_absolute_git_log() {
+    let tmp = tempdir().expect("tempdir");
+    init_claim_repo(tmp.path());
+    let workspace = tmp.path().canonicalize().expect("canonical workspace");
+    let git_log = format!("git -C {} log --oneline -20", workspace.to_string_lossy());
+
+    for role in [FleetRole::Scout, FleetRole::Reviewer, FleetRole::Planner] {
+        let mut runtime =
+            stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
+        runtime.context = ToolContext::new(workspace.clone());
+        runtime.worker_profile = WorkerRuntimeProfile::for_role(role.clone());
+        seed_read_only_role_deny_list(&mut runtime);
+        let registry = SubAgentToolRegistry::new(
+            runtime,
+            role.clone(),
+            None,
+            crate::tools::todo::new_shared_todo_list(),
+            crate::tools::plan::new_shared_plan_state(),
+        );
+
+        for input in [
+            json!({"command": "pwd"}),
+            json!({"command": git_log.as_str()}),
+            json!({"command": git_log.as_str(), "timeout": 5}),
+        ] {
+            let command = input["command"]
+                .as_str()
+                .expect("command string")
+                .to_string();
+            assert!(
+                registry.posture_permits_tool("bash", Some(&input)),
+                "{role:?} posture must admit {command}"
+            );
+            assert!(
+                registry.envelope_refusal("bash", &input).is_none(),
+                "{role:?} envelope must admit {command}"
+            );
+            let output = registry
+                .execute("agent_read_only_e2e", "bash", input)
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("{role:?} concrete executor must run {command}: {error}")
+                });
+            assert!(!output.trim().is_empty(), "{role:?} {command}");
+        }
+    }
+}
+
+/// Read-only text filters may transform stdout, but they must not reach their
+/// file-output or helper-program forms through the same bounded bash carve-out.
+#[tokio::test]
+async fn read_only_inspection_roles_cannot_write_through_text_filters() {
+    for role in [FleetRole::Scout, FleetRole::Reviewer, FleetRole::Planner] {
+        let tmp = tempdir().expect("tempdir");
+        let input_path = tmp.path().join("input.txt");
+        std::fs::write(&input_path, "b\na\n").expect("input fixture");
+        let output_path = tmp.path().join("filter-output.txt");
+        let mut runtime =
+            stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
+        runtime.context = ToolContext::new(tmp.path().to_path_buf());
+        runtime.worker_profile = WorkerRuntimeProfile::for_role(role.clone());
+        seed_read_only_role_deny_list(&mut runtime);
+        let registry = SubAgentToolRegistry::new(
+            runtime,
+            role.clone(),
+            None,
+            crate::tools::todo::new_shared_todo_list(),
+            crate::tools::plan::new_shared_plan_state(),
+        );
+
+        let call = json!({"command": "sort -o filter-output.txt input.txt"});
+        let envelope_refusal = registry
+            .envelope_refusal("bash", &call)
+            .expect("the envelope must independently refuse the write-capable filter");
+        assert!(
+            envelope_refusal.contains("[execution_envelope.executes.write_denied]"),
+            "{role:?} envelope refusal did not identify its failed rule: {envelope_refusal}"
+        );
+
+        let posture_refusal = registry
+            .execute("agent_read_only_filter", "bash", call)
+            .await
+            .expect_err("a read-only inspection role must not write through sort")
+            .to_string();
+        assert!(
+            posture_refusal.contains("[shell.readonly.command]"),
+            "{role:?} posture refusal did not identify its failed rule: {posture_refusal}"
+        );
+        assert!(
+            !output_path.exists(),
+            "{role:?} read-only filter created {} from {}",
+            output_path.display(),
+            input_path.display()
+        );
+    }
+}
+
 #[test]
 fn explore_catalog_inherits_web_but_hides_write_shell_and_fim_tools() {
     let tmp = tempdir().expect("tempdir");

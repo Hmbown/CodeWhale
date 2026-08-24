@@ -379,7 +379,7 @@ pub(crate) fn enforce_execution_envelope(
                 Ok(())
             } else {
                 Err(format!(
-                    "Tool {name} starts a test or verifier process, and this agent has no shell \
+                    "[execution_envelope.verification.shell_denied] Tool {name} starts a test or verifier process, and this agent has no shell \
                      authority under its clamped permission ceiling. That holds for the default, \
                      argument-free form too: running the workspace's own checks still forks a \
                      process, which a `shell = \"none\"` posture was never granted. Use a member \
@@ -393,7 +393,7 @@ pub(crate) fn enforce_execution_envelope(
                 Ok(())
             } else {
                 Err(format!(
-                    "Tool {name} was called with operator-supplied commands or arguments that can \
+                    "[execution_envelope.verification.unbounded] Tool {name} was called with operator-supplied commands or arguments that can \
                      name a program or redirect what runs, which is arbitrary execution however \
                      it is spelled. This agent runs read-only under its clamped permission \
                      ceiling. The default verification gates, and test-selection arguments \
@@ -405,7 +405,7 @@ pub(crate) fn enforce_execution_envelope(
         CallClass::Executes => {
             if !envelope.write {
                 return Err(format!(
-                    "Tool {name} runs a program or a child process, which mutates the workspace \
+                    "[execution_envelope.executes.write_denied] Tool {name} runs a program or a child process, which mutates the workspace \
                      just as directly as a file write. This agent runs read-only under its \
                      clamped permission ceiling, so arbitrary execution is refused however it is \
                      spelled — shell, verification gate, automation, plugin, or MCP server. The \
@@ -415,7 +415,7 @@ pub(crate) fn enforce_execution_envelope(
             }
             if !envelope.shell {
                 return Err(format!(
-                    "Tool {name} runs a program or a child process, and this agent has no shell \
+                    "[execution_envelope.executes.shell_denied] Tool {name} runs a program or a child process, and this agent has no shell \
                      authority under its clamped permission ceiling. Use a member whose saved \
                      ceiling grants `shell = \"full\"`."
                 ));
@@ -427,7 +427,7 @@ pub(crate) fn enforce_execution_envelope(
                 Ok(())
             } else {
                 Err(format!(
-                    "Tool {name} mutates state and this agent runs read-only under its clamped \
+                    "[execution_envelope.mutates.write_denied] Tool {name} mutates state and this agent runs read-only under its clamped \
                      permission ceiling."
                 ))
             }
@@ -437,7 +437,7 @@ pub(crate) fn enforce_execution_envelope(
                 Ok(())
             } else {
                 Err(format!(
-                    "Tool {name} reaches the network and this agent runs with no network \
+                    "[execution_envelope.network.denied] Tool {name} reaches the network and this agent runs with no network \
                      capability (`network_tool = false`) under its clamped permission ceiling."
                 ))
             }

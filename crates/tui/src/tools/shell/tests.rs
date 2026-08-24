@@ -951,6 +951,32 @@ fn readonly_operands_are_workspace_bounded_and_symlink_aware() {
 
     enforce_readonly_workspace_operands("cat inside.txt", workspace.path(), workspace.path())
         .expect("in-workspace operand");
+    let inside_absolute = workspace
+        .path()
+        .join("inside.txt")
+        .canonicalize()
+        .expect("canonical inside file");
+    enforce_readonly_workspace_operands(
+        &format!("cat {}", inside_absolute.display()),
+        workspace.path(),
+        workspace.path(),
+    )
+    .expect("absolute in-workspace operand");
+
+    let outside_absolute = outside
+        .path()
+        .join("secret.txt")
+        .canonicalize()
+        .expect("canonical outside file");
+    let error = enforce_readonly_workspace_operands(
+        &format!("cat {}", outside_absolute.display()),
+        workspace.path(),
+        workspace.path(),
+    )
+    .expect_err("absolute outside operand must fail")
+    .to_string();
+    assert!(error.contains("operand.outside_workspace"), "{error}");
+
     for command in [
         "cat ../secret.txt",
         "cat ~/.ssh/id_rsa",
