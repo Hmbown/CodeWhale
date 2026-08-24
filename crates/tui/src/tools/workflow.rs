@@ -4264,7 +4264,9 @@ impl WorkflowDriver for SubAgentWorkflowDriver {
                     ),
                 )
             }
-            ProgressEvent::TaskSchemaValidationFailed { task_id, message } => {
+            ProgressEvent::TaskSchemaValidationFailed {
+                task_id, message, ..
+            } => {
                 self.record_schema_validation_failure(&task_id, message.clone());
                 schema_error = Some(WorkflowSchemaError {
                     task_id: task_id.clone(),
@@ -4275,6 +4277,25 @@ impl WorkflowDriver for SubAgentWorkflowDriver {
                     WorkflowUiEvent::new(
                         &self.owner_session_id,
                         WorkflowUiEventKind::TaskSchemaValidationFailed { task_id, message },
+                    ),
+                )
+            }
+            // #5583: a failed decode with a repair still to come. The full
+            // receipt (kind, attempt, raw preview, artifact) lands with the
+            // schema-error ledger; for now the live surfaces see the repair
+            // as a progress line so operators know a re-ask is happening.
+            ProgressEvent::TaskSchemaRepairAttempted {
+                task_id, attempt, ..
+            } => {
+                let message = format!(
+                    "schema decode failed for {task_id} (attempt {attempt}); \
+                     dispatching a bounded repair"
+                );
+                (
+                    format!("log: {message}"),
+                    WorkflowUiEvent::new(
+                        &self.owner_session_id,
+                        WorkflowUiEventKind::Log { message },
                     ),
                 )
             }
@@ -6489,6 +6510,7 @@ mod tests {
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: Some("fix".to_string()),
             phase: Some("implement".to_string()),
         };
@@ -6550,6 +6572,7 @@ permissions = "read_only"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: None,
             phase: None,
         }
@@ -7437,6 +7460,7 @@ permissions = "read_only"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: None,
             phase: None,
         };
@@ -9090,6 +9114,7 @@ reviewer = "reviewer"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: Some("fix".to_string()),
             phase: None,
         };
@@ -9267,6 +9292,7 @@ reviewer = "reviewer"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: Some("fix".to_string()),
             phase: None,
         };
@@ -9390,6 +9416,7 @@ reviewer = "reviewer"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: Some("blocked".to_string()),
             phase: None,
         };
@@ -9523,6 +9550,7 @@ reviewer = "reviewer"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: Some("blocked".to_string()),
             phase: None,
         };
@@ -9844,6 +9872,7 @@ reviewer = "reviewer"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: Some("verify".to_string()),
             phase: None,
         };
