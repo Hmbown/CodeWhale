@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0TQMJAH851166XWS59QHFQP",
+  "session_id": "670e3a3c-98aa-4266-849e-0b610ad39bfb",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-24T20:33:22.440946Z",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 5,
+  "save_step_count": 1,
+  "files_touched": [
+    "crates/config/src/lib.rs",
+    "crates/tui/src/tui/ui/tests.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "10f5a4aa581a",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 382,
+    "cache_creation_tokens": 786373,
+    "cache_read_tokens": 37037999,
+    "output_tokens": 105505,
+    "api_call_count": 191
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-24T20:33:22.340842Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 55,
+    "human_modified": 44,
+    "human_removed": 0,
+    "total_committed": 55,
+    "total_lines_changed": 99,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
