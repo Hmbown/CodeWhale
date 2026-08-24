@@ -12343,6 +12343,12 @@ fn update_notice_names_the_command_for_the_actual_install_method() {
             .contains("brew upgrade codewhale"),
         "toast names the Homebrew command"
     );
+    assert!(
+        notice
+            .toast_line(codewhale_release::InstallMethod::Omarchy)
+            .contains("omarchy update"),
+        "toast names the Omarchy update command"
+    );
 
     // A plain release binary keeps the self-updater.
     assert!(
