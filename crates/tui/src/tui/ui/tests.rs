@@ -3370,6 +3370,9 @@ fn composer_mouse_first_visible_character_maps_to_zero_after_prompt_gutter() {
         "the first rendered character must not inherit the prompt's two-column inset"
     );
 
+    // Exercise a second independent caret mapping, not the intentional
+    // adjacent-click word-selection gesture.
+    app.viewport.composer_click_trace = None;
     assert!(handle_composer_mouse(
         &mut app,
         MouseEvent {
