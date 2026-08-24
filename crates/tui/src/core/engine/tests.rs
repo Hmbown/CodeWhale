@@ -3845,7 +3845,16 @@ async fn host_managed_engine_defers_idle_subagent_completion_to_explicit_turn() 
         runtime_services,
         ..EngineConfig::default()
     };
-    let (engine, handle) = Engine::new(engine_config, &config);
+    // This branch grants a zero-step host turn exactly one A2 report request
+    // (see host_managed_engine_does_not_self_dispatch_goal_continuation,
+    // which asserts that single dispatch). Script the response the same way
+    // so the turn completes deterministically instead of dialing the loopback
+    // route fixture that nothing serves in this test.
+    let mock = Arc::new(crate::llm_client::mock::MockLlmClient::new(vec![
+        crate::llm_client::mock::canned::simple_text_turn("drained host turn"),
+    ]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let (engine, handle) = Engine::new_with_model_client(engine_config, &config, client);
     let owner_session_id = engine.session.id.clone();
     let tx_subagent_completion = engine.tx_subagent_completion.clone();
     let run_task = tokio::spawn(engine.run());
