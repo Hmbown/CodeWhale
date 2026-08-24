@@ -433,8 +433,10 @@ codewhale --version
 
 `codewhale-bin` packages the same checksum-pinned Linux release archives as the
 other binary install paths and provides both `codewhale` and `codew`. It does
-not carry a separate Codewhale version. Package updates arrive through
-`omarchy update`; the in-app updater leaves the pacman-owned binary to Omarchy.
+not carry a separate Codewhale version; the existing `codewhale-tui`
+compatibility command remains an alias to the same runtime. Package updates
+arrive through `omarchy update`; the in-app updater leaves the pacman-owned
+binary to Omarchy.
 
 The AUR update follows the matching Codewhale tag and release assets, so it may
 appear after the GitHub release while its generated `PKGBUILD` and `.SRCINFO`

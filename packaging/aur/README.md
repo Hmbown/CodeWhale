@@ -57,8 +57,10 @@ namcap PKGBUILD codewhale-bin-*.pkg.tar.zst
 ```
 
 Inspect the package contents before installation. They should contain
-`/usr/bin/codewhale`, `/usr/bin/codew`, and the MIT license, with no legacy
-third command. After a test install, verify both entrypoints report `X.Y.Z`.
+`/usr/bin/codewhale`, `/usr/bin/codew`, the existing `codewhale-tui`
+compatibility symlink to `codewhale`, and the MIT license. After a test install,
+verify the canonical entrypoints report `X.Y.Z` and the compatibility symlink
+resolves to the same runtime.
 
 Publishing the generated files to the `codewhale-bin` AUR repository requires
 separate authorization from an AUR maintainer. Regenerate `.SRCINFO` whenever

@@ -35,6 +35,7 @@ package() {
         "${pkgdir}/usr/bin/codewhale"
     install -Dm755 "${srcdir}/codewhale-linux-${release_arch}/codew" \
         "${pkgdir}/usr/bin/codew"
+    ln -s codewhale "${pkgdir}/usr/bin/codewhale-tui"
     install -Dm644 "${srcdir}/LICENSE-${pkgver}" \
         "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }

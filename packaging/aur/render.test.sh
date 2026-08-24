@@ -101,6 +101,8 @@ for arch_case in 'x86_64:x64' 'aarch64:arm64'; do
   cmp \
     "${stage_dir}/codewhale-linux-${release_arch}/codew" \
     "${package_root}/usr/bin/codew"
+  test -L "${package_root}/usr/bin/codewhale-tui"
+  test "$(readlink "${package_root}/usr/bin/codewhale-tui")" = codewhale
   cmp "${repo_root}/LICENSE" \
     "${package_root}/usr/share/licenses/codewhale-bin/LICENSE"
 done
