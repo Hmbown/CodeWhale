@@ -8419,7 +8419,7 @@ impl ToolSpec for AgentTool {
                 },
                 "detached": {
                     "type": "boolean",
-                    "description": "False (default): the active turn owns this child's non-detached subtree, asks the parent to join it once, then parks any survivors with resumable checkpoints before ending. true: explicitly detached work remains running and inspectable after the parent turn ends; cancel it with agent(action=cancel)."
+                    "description": "False (default): the turn owns this child's non-detached subtree; the parent gets one chance to join before resumable parking. true: detached work outlives the turn; inspect or cancel it with agent(action=cancel)."
                 },
                 "type": {
                     "type": "string",
