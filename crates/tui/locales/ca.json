@@ -306,6 +306,7 @@
   "CmdChangeTranslationUnavailable": "Les notes de la versió en anglès es mostren a sota. La traducció no està disponible perquè la sessió actual no té clau d'API o està fora de línia.",
   "CmdChangePreviousVersion": "Versió anterior: {version} — executa `/change {version}` per veure-la",
   "CmdBalanceDescription": "Consulta el saldo del compte del proveïdor actiu",
+  "CmdImportClaudeDescription": "Planifica una importació revisable de la configuració i els servidors MCP de Claude Code",
   "CmdClearDescription": "Esborra l'historial de la conversació",
   "CmdCompactDescription": "Dispara la compactació del context per alliberar espai",
   "CmdPurgeDescription": "Permet que l'agent podi quirúrgicament l'historial de la conversació per alliberar espai de context",

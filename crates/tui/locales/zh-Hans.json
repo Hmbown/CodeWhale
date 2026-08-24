@@ -309,6 +309,7 @@
   "CmdChangeTranslationUnavailable": "下面显示英文发布说明。当前会话没有 API Key 或处于离线状态，无法翻译。",
   "CmdChangePreviousVersion": "上一个版本: {version} —— 输入 `/change {version}` 查看",
   "CmdBalanceDescription": "查看当前提供商账户余额",
+  "CmdImportClaudeDescription": "生成可审阅的 Claude Code 设置与 MCP 服务器导入计划",
   "CmdClearDescription": "清除对话历史",
   "CmdCompactDescription": "触发上下文压缩以释放空间",
   "CmdPurgeDescription": "让 Agent 分析对话历史，精确保留有用信息并移除冗余内容",

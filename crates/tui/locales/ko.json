@@ -309,6 +309,7 @@
   "CmdChangeTranslationUnavailable": "아래는 영어 릴리스 노트입니다. 현재 세션에 API 키가 없거나 오프라인 상태라 번역을 사용할 수 없습니다.",
   "CmdChangePreviousVersion": "이전 버전: {version} — `/change {version}`으로 확인하세요",
   "CmdBalanceDescription": "현재 프로바이더 계정 잔액을 확인합니다",
+  "CmdImportClaudeDescription": "Claude Code 설정과 MCP 서버의 검토 가능한 가져오기 계획을 생성합니다",
   "CmdClearDescription": "대화 기록을 지웁니다",
   "CmdCompactDescription": "컨텍스트 압축을 실행해 공간을 확보합니다",
   "CmdPurgeDescription": "에이전트가 대화 기록을 선별적으로 정리해 컨텍스트 공간을 확보하게 합니다",

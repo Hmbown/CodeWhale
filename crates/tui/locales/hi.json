@@ -306,6 +306,7 @@
   "CmdChangeTranslationUnavailable": "English रिलीज़ नोट्स नीचे दिखाए गए हैं। वर्तमान सत्र में API कुंजी न होने या ऑफ़लाइन होने के कारण अनुवाद अनुपलब्ध है।",
   "CmdChangePreviousVersion": "पिछला संस्करण: {version} — देखने के लिए `/change {version}` चलाएँ",
   "CmdBalanceDescription": "सक्रिय प्रोवाइडर खाता शेष जाँचें",
+  "CmdImportClaudeDescription": "Claude Code की सेटिंग्स और MCP सर्वरों के लिए समीक्षा-योग्य आयात योजना बनाएं",
   "CmdClearDescription": "वार्तालाप इतिहास साफ़ करें",
   "CmdCompactDescription": "जगह खाली करने के लिए संदर्भ कॉम्पैक्शन चलाएँ",
   "CmdPurgeDescription": "एजेंट को संदर्भ जगह खाली करने के लिए वार्तालाप इतिहास चुनिंदा काटने दें",

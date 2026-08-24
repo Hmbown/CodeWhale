@@ -306,6 +306,7 @@
   "CmdChangeTranslationUnavailable": "Unten stehen die englischen Release Notes. Übersetzung nicht verfügbar, da die aktuelle Sitzung keinen API-Schlüssel hat oder offline ist.",
   "CmdChangePreviousVersion": "Vorherige Version: {version} — `/change {version}` zum Anzeigen ausführen",
   "CmdBalanceDescription": "Kontostand des aktiven Providers prüfen",
+  "CmdImportClaudeDescription": "Einen prüfbaren Import der Claude-Code-Einstellungen und MCP-Server planen",
   "CmdClearDescription": "Gesprächsverlauf löschen",
   "CmdCompactDescription": "Kontextkomprimierung auslösen, um Platz freizugeben",
   "CmdPurgeDescription": "Den Agenten den Gesprächsverlauf gezielt kürzen lassen, um Kontextplatz freizugeben",

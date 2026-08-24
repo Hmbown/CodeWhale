@@ -309,6 +309,7 @@
   "CmdChangeTranslationUnavailable": "English release notes are shown below. Translation is unavailable because the current session has no API key or is offline.",
   "CmdChangePreviousVersion": "Previous version: {version} — run `/change {version}` to view it",
   "CmdBalanceDescription": "Check the active provider account balance",
+  "CmdImportClaudeDescription": "Plan a reviewable import of Claude Code settings and MCP servers",
   "CmdClearDescription": "Clear conversation history",
   "CmdCompactDescription": "Trigger context compaction to free up space",
   "CmdPurgeDescription": "Let the agent surgically prune conversation history to free context space",

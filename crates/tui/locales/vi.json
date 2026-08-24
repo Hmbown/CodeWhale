@@ -309,6 +309,7 @@
   "CmdChangeTranslationUnavailable": "Ghi chú phát hành bằng tiếng Anh hiển thị bên dưới. Bản dịch không khả dụng vì phiên hiện tại không có mã khóa API hoặc đang ngoại tuyến.",
   "CmdChangePreviousVersion": "Phiên bản trước: {version} — chạy `/change {version}` để xem",
   "CmdBalanceDescription": "Kiểm tra số dư tài khoản của nhà cung cấp dịch vụ đang hoạt động",
+  "CmdImportClaudeDescription": "Lập kế hoạch nhập có thể xem lại cho cài đặt và máy chủ MCP của Claude Code",
   "CmdClearDescription": "Xóa lịch sử trò chuyện",
   "CmdCompactDescription": "Kích hoạt nén ngữ cảnh để giải phóng không gian",
   "CmdPurgeDescription": "Cho agent cắt gọn lịch sử trò chuyện để giải phóng ngữ cảnh",

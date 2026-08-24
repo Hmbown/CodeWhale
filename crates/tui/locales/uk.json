@@ -306,6 +306,7 @@
   "CmdChangeTranslationUnavailable": "Нижче наведено англійські нотатки до випуску. Переклад недоступний, бо в поточному сеансі немає ключа API або немає з'єднання.",
   "CmdChangePreviousVersion": "Попередня версія: {version} — виконайте `/change {version}`, щоб переглянути її",
   "CmdBalanceDescription": "Перевірити баланс рахунку активного провайдера",
+  "CmdImportClaudeDescription": "Спланувати перевірний імпорт налаштувань Claude Code і серверів MCP",
   "CmdClearDescription": "Очистити історію розмови",
   "CmdCompactDescription": "Запустити стиснення контексту, щоб звільнити місце",
   "CmdPurgeDescription": "Дозволити агенту вибірково скоротити історію розмови, щоб звільнити контекст",

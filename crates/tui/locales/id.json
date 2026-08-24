@@ -306,6 +306,7 @@
   "CmdChangeTranslationUnavailable": "Catatan rilis bahasa Inggris ditampilkan di bawah. Terjemahan tidak tersedia karena sesi ini tidak memiliki kunci API atau sedang offline.",
   "CmdChangePreviousVersion": "Versi sebelumnya: {version} — jalankan `/change {version}` untuk melihatnya",
   "CmdBalanceDescription": "Periksa saldo akun penyedia aktif",
+  "CmdImportClaudeDescription": "Rencanakan impor yang dapat ditinjau untuk pengaturan dan server MCP Claude Code",
   "CmdClearDescription": "Hapus riwayat percakapan",
   "CmdCompactDescription": "Picu pemadatan konteks untuk mengosongkan ruang",
   "CmdPurgeDescription": "Biarkan agen memangkas riwayat percakapan secara selektif untuk mengosongkan konteks",

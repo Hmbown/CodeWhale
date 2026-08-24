@@ -306,6 +306,7 @@
   "CmdChangeTranslationUnavailable": "Les notes de version anglaises sont affichées ci-dessous. La traduction est indisponible car la session en cours n'a pas de clé API ou est hors ligne.",
   "CmdChangePreviousVersion": "Version précédente : {version} — exécutez `/change {version}` pour la voir",
   "CmdBalanceDescription": "Vérifier le solde du compte du fournisseur actif",
+  "CmdImportClaudeDescription": "Planifier une importation vérifiable des réglages et serveurs MCP de Claude Code",
   "CmdClearDescription": "Effacer l'historique de la conversation",
   "CmdCompactDescription": "Déclencher la compaction du contexte pour libérer de l'espace",
   "CmdPurgeDescription": "Laisser l'agent élaguer chirurgicalement l'historique pour libérer du contexte",

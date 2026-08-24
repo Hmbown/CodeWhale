@@ -61,6 +61,7 @@ mod goal_loop;
 mod hashing;
 mod hooks;
 mod image_attach;
+mod import_claude;
 mod integrations;
 mod lane_control;
 mod llm_client;

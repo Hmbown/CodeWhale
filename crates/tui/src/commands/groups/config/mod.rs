@@ -5,6 +5,7 @@
 // migration scaffolding; see docs/architecture/command-dispatch.md.
 #[allow(clippy::module_inception)]
 pub mod config;
+mod import_claude;
 mod permissions;
 mod status;
 
@@ -19,6 +20,7 @@ impl CommandGroup for ConfigCommands {
     fn commands(&self) -> &'static [Box<dyn Command>] {
         cached_command_list!(vec![
             Box::new(FunctionCommand::new(&CONFIG_INFO, run_config)),
+            Box::new(FunctionCommand::new(&IMPORT_CLAUDE_INFO, run_import_claude)),
             Box::new(FunctionCommand::new(&PERMISSIONS_INFO, run_permissions)),
             Box::new(FunctionCommand::new(&AUTH_INFO, run_auth)),
             Box::new(FunctionCommand::new(&RAIL_INFO, run_rail)),
@@ -41,6 +43,12 @@ static CONFIG_INFO: CommandInfo = CommandInfo {
     aliases: &["experiments", "experimental"],
     usage: "/config [ask-rules|status|<key> [value]]",
     description_id: MessageId::CmdConfigDescription,
+};
+static IMPORT_CLAUDE_INFO: CommandInfo = CommandInfo {
+    name: "import-claude",
+    aliases: &["import_claude"],
+    usage: "/import-claude",
+    description_id: MessageId::CmdImportClaudeDescription,
 };
 static PERMISSIONS_INFO: CommandInfo = CommandInfo {
     name: "permissions",
@@ -115,6 +123,9 @@ fn run_registered(app: &mut App, name: &str, arg: Option<&str>) -> CommandResult
 
 fn run_config(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "config", arg)
+}
+fn run_import_claude(app: &mut App, arg: Option<&str>) -> CommandResult {
+    import_claude::import_claude_command(app, arg)
 }
 fn run_permissions(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "permissions", arg)

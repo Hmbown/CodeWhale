@@ -226,6 +226,7 @@
   "AutomationDeleteConfirmationStale": "刪除確認與自動化 {id} 的目前狀態不再匹配，未刪除任何內容。請用 {command} 檢視目前狀態。",
   "AutomationDeleted": "已刪除自動化 {id}（{name}）。已刪除的執行記錄: {run_count}。",
   "CmdBalanceDescription": "檢視目前提供商帳戶餘額",
+  "CmdImportClaudeDescription": "產生可審閱的 Claude Code 設定與 MCP 伺服器匯入計畫",
   "CmdCacheAdvice": "第 3 輪起命中率穩定在 ~70% 以上即表示前綴快取穩定；\n長工作階段中明顯偏低則意味着前綴有抖動，值得排查（#263）。",
   "CmdCacheDescription": "顯示最近 N 輪的前綴快取命中/未命中統計",
   "CmdEffortDescription": "設定模型的推理等級（也可用 /thinking）",

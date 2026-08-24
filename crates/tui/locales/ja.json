@@ -309,6 +309,7 @@
   "CmdChangeTranslationUnavailable": "英語のリリースノートを以下に表示します。現在のセッションに API キーがないかオフラインのため、翻訳は利用できません。",
   "CmdChangePreviousVersion": "前のバージョン: {version} — `/change {version}` で表示",
   "CmdBalanceDescription": "アクティブなプロバイダーのアカウント残高を確認",
+  "CmdImportClaudeDescription": "Claude Code の設定と MCP サーバーの確認可能なインポート計画を作成",
   "CmdClearDescription": "会話履歴をクリア",
   "CmdCompactDescription": "コンテキスト圧縮で容量を確保",
   "CmdPurgeDescription": "エージェントに会話履歴を分析させ、不要なメッセージを削除・要約",
