@@ -1771,8 +1771,15 @@ impl Engine {
             // A truncated response with no tool call cannot continue through
             // tool execution: surface the truncation as a bounded observation
             // and resume the loop so the model can act on it instead of the
-            // turn silently ending on a cut-off answer.
-            if output_limit_truncated.is_some() && tool_uses.is_empty() {
+            // turn silently ending on a cut-off answer. Resume only when the
+            // truncated response actually delivered partial content — a
+            // reasoning-only length stop delivered nothing to continue from,
+            // and re-issuing it would only reproduce the same stop instead of
+            // failing the turn honestly.
+            if output_limit_truncated.is_some()
+                && tool_uses.is_empty()
+                && has_sendable_assistant_content
+            {
                 let reason = output_limit_truncated
                     .take()
                     .expect("output_limit_truncated checked above");
@@ -2170,13 +2177,21 @@ impl Engine {
                     continue;
                 }
 
-                if let Some(continuation) = self
-                    .goal_continuation_message_if_needed(
-                        tool_registry,
-                        &mut goal_continuations_this_turn,
-                        &turn.usage,
-                    )
-                    .await
+                // A goal continuation is optional work on top of a productive
+                // step. A response that produced nothing sendable and ran no
+                // tools is a failed step (incomplete/length-stopped provider
+                // response): continuing would re-issue the exact request that
+                // just failed — for an output-length stop it can only
+                // reproduce — instead of failing the turn honestly.
+                let step_produced_nothing = no_sendable_assistant_content && tool_uses.is_empty();
+                if !step_produced_nothing
+                    && let Some(continuation) = self
+                        .goal_continuation_message_if_needed(
+                            tool_registry,
+                            &mut goal_continuations_this_turn,
+                            &turn.usage,
+                        )
+                        .await
                 {
                     // The model already delivered a complete answer this step;
                     // the continuation is optional runtime work on top of it.
