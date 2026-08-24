@@ -1,0 +1,126 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0TTVC19KSA63N4902Z3QKT8",
+  "session_id": "94a99196-13a1-4b18-b94a-887ca18b892e",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-24T21:29:31.472986Z",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/tui/src/client.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "96b5445537a2",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 5566,
+    "cache_creation_tokens": 172819,
+    "cache_read_tokens": 2093096,
+    "output_tokens": 33978,
+    "api_call_count": 20
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01X9A1eXAzfTUe86UFQ3mcAZ",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:brainstorming"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "96b5445537a2",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 29,
+        "end": 30,
+        "entry_ids": [
+          "16a111fa-aa33-4540-8bf2-96e3a359e058"
+        ],
+        "tool_use_id": "toolu_01X9A1eXAzfTUe86UFQ3mcAZ"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9A1eXAzfTUe86UFQ3mcAZ"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:brainstorming",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "initial_attribution": {
+    "calculated_at": "2026-08-24T21:29:31.441405Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 2,
+    "human_removed": 155,
+    "total_committed": 0,
+    "total_lines_changed": 157,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 24845,
+      "user_lines_removed": 158,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".cursor/hooks.json": 40,
+        ".plans/2026-06-09-repo-cleanup.md": 409,
+        "codewhale-inference/.dev.vars.example": 6,
+        "codewhale-inference/.gitignore": 7,
+        "codewhale-inference/README.md": 110,
+        "codewhale-inference/docs/API.md": 118,
+        "codewhale-inference/docs/ARCHITECTURE.md": 108,
+        "codewhale-inference/docs/FLASH-LAUNCH-VERDICT-2026-08-20.md": 69,
+        "codewhale-inference/docs/FLASH-LOCAL-VERIFICATION-2026-08-20.md": 46,
+        "codewhale-inference/docs/HOSTING.md": 83,
+        "codewhale-inference/docs/PARETO-ROUTER-AND-COMPETITIVE-PLAN-2026-08-20.md": 253,
+        "codewhale-inference/docs/VERCEL_TEST.md": 76,
+        "codewhale-inference/package-lock.json": 2746,
+        "codewhale-inference/package.json": 23,
+        "codewhale-inference/scripts/vercel-catalog-check.mjs": 29,
+        "codewhale-inference/scripts/vercel-smoke.mjs": 59,
+        "codewhale-inference/src/auth.ts": 60,
+        "codewhale-inference/src/billing.ts": 89,
+        "codewhale-inference/src/http.ts": 90,
+        "codewhale-inference/src/index.ts": 553,
+        "codewhale-inference/src/models.ts": 119,
+        "codewhale-inference/src/provider.ts": 372,
+        "codewhale-inference/src/wallet.ts": 673,
+        "codewhale-inference/test/api.spec.ts": 304,
+        "codewhale-inference/test/env.d.ts": 3,
+        "codewhale-inference/test/provider.spec.ts": 76,
+        "codewhale-inference/test/tsconfig.json": 8,
+        "codewhale-inference/test/wallet.spec.ts": 156,
+        "codewhale-inference/tsconfig.json": 21,
+        "codewhale-inference/vitest.config.ts": 20,
+        "codewhale-inference/worker-configuration.d.ts": 14891,
+        "codewhale-inference/wrangler.jsonc": 42,
+        "crates/tui/src/client.rs": 2,
+        "crates/tui/src/client/redaction.rs": 170,
+        "docs/research/CODEWHALE_INFERENCE_DILIGENCE_2026-08-19.md": 593,
+        "t": 1,
+        "web/app/[locale]/benchmarks/terminal-bench-2-1/page.tsx": 291,
+        "web/app/globals.css": 181,
+        "web/app/sitemap.ts": 1,
+        "web/lib/benchmarks/terminal-bench-2-1.json": 1606,
+        "web/lib/content/benchmarks.ts": 121,
+        "web/scripts/export-tb21-results.mjs": 220
+      },
+      "user_removed_per_file": {
+        "crates/tui/src/client.rs": 157,
+        "web/app/sitemap.ts": 1
+      }
+    }
+  ]
+}
