@@ -7489,6 +7489,22 @@ fn scout_posture_gate_admits_agent_readonly_bash_commands() {
     );
 }
 
+/// The absolute-path spelling an agent actually types. Windows
+/// `canonicalize()` yields a `\\?\`-verbatim path, but agents send the plain
+/// `C:\` form; the posture classifier's glob blocklist rejects `?` by design,
+/// so a verbatim spelling is (correctly) refused at posture while the plain
+/// spelling resolves to the same canonical target in the operand gate.
+fn agent_typed_path(path: &std::path::Path) -> String {
+    let text = path.to_string_lossy().into_owned();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        text
+    }
+}
+
 /// #5595: catalog admission, role posture, and the execution envelope are not
 /// enough. The concrete read-only executor must accept the canonical Git shape
 /// agents use when the repository is not their process cwd. This is the exact
@@ -7498,7 +7514,7 @@ async fn read_only_inspection_roles_execute_pwd_and_absolute_git_log() {
     let tmp = tempdir().expect("tempdir");
     init_claim_repo(tmp.path());
     let workspace = tmp.path().canonicalize().expect("canonical workspace");
-    let git_log = format!("git -C {} log --oneline -20", workspace.to_string_lossy());
+    let git_log = format!("git -C {} log --oneline -20", agent_typed_path(&workspace));
 
     for role in [FleetRole::Scout, FleetRole::Reviewer, FleetRole::Planner] {
         let mut runtime =

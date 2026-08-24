@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added `/import-claude` (#5557): reads `~/.claude.json` and
+  `~/.claude/settings.json` read-only and renders an explicit, reviewable
+  migration plan plus a written report. MCP servers route through the
+  existing `/mcp import <name> --approve` consent flow, allowlisted env keys
+  become an unapplied portable bundle for `codewhale config import`, and
+  permissions/hooks map to manual follow-ups; secret-shaped values are named
+  but never echoed or imported.
+- Added the token-weighted provider-reported cache hit rate to the `/context`
+  detail, sourced from the same telemetry `/cache` aggregates, with an honest
+  "no cache telemetry yet" placeholder (IMPROVEMENT-PLAN-0912 C3, DSH #3).
+  Previously the number existed only in `/cache` and the status strip.
+- Added the managed Chat relay: account-owned Chat commands now execute on the
+  native runtime thread engine through a new `runtime_chat_relay` module
+  instead of a second execution path. Each Chat thread is a dedicated,
+  isolated runtime thread with an empty model-visible tool allowlist, a
+  chat-only system prompt, and no workspace, memory, skill, credential, or
+  local-path context; the active interactive TUI thread is never reused. The
+  relay keeps one durable state file per scope behind a session-wide owner
+  lock, binds a saved session permanently to its first remote target, replays
+  exact duplicate commands from retained results instead of starting a second
+  inference turn, terminalizes orphaned reservations on restart, and rejects
+  (never queues into) a busy local Work turn with an immediate retryable
+  result. Stop commands require the exact run and turn identity, and a worker
+  aborts on any account or target mismatch during token refresh.
+
 - Added a verified Omarchy/AUR packaging path: `packaging/aur` now carries a
   `PKGBUILD` template, `.SRCINFO` renderer and tests, release-candidate
   render step, and docs; the live AUR compatibility alias `codewhale-tui ->
@@ -68,6 +93,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed first-run provider setup rejecting valid MiniMax and Xiaomi MiMo API
+  keys (#5601): those first-party routes answer 404 on the `GET /models`
+  probe because they only implement chat completions, and the wizard treated
+  any probe failure as a bad key. A 404/405 probe now counts as
+  "unverifiable" — setup continues to the model pick without recording a
+  false readiness verdict — while real auth failures (401/403) still block.
+- Fixed a debug-build stack overflow parsing config files whose
+  `[profiles.*]` tables nest the full config schema: every `ConfigFile` TOML
+  parse now runs on a dedicated thread with an explicit 16 MiB stack, so
+  config loads and `/v1/config/reload` no longer depend on the calling
+  thread's stack budget.
 - Fixed detached interactive agents reporting worker usage after the parent
   turn ends with the usage missing from the session/live `/cost` total
   (#5597): interactive turns acquire an owner-scoped runtime usage lease,

@@ -513,7 +513,7 @@ mod tests {
         let (_dir, home) = temp_home("bad");
         std::fs::write(home.join(".claude.json"), "not json").expect("bad json");
         let (sources, claude, _settings) = read_sources(&home);
-        assert!(matches!(claude, None));
+        assert!(claude.is_none());
         assert!(
             sources
                 .iter()
