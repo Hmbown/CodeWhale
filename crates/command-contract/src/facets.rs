@@ -111,3 +111,125 @@ pub trait CommandMediaContext {
     /// Validate and insert a resolved media path atomically.
     fn attach_media(&mut self, resolved_path: &Path) -> Result<MediaAttachmentReceipt, String>;
 }
+
+// ---------------------------------------------------------------------------
+// Memory (FEAT-019 D1/D2/D8/D9)
+// ---------------------------------------------------------------------------
+
+/// Portable semantic hit for a native-memory search or get result.
+///
+/// Carries only the typed location and text the handler consumes for
+/// formatting; the TUI-owned `NativeMemoryHit` never crosses the boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryHit {
+    pub source: PathBuf,
+    pub line_start: usize,
+    pub line_end: usize,
+    pub text: String,
+}
+
+/// Portable native-memory location summary (status operation).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryStatus {
+    pub root: PathBuf,
+    pub source: PathBuf,
+    pub index: PathBuf,
+}
+
+/// Portable result of a successful remember operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryRemembered {
+    pub source: PathBuf,
+    pub line_start: usize,
+}
+
+/// Portable import outcome: imported (with destination) or skipped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryImportOutcome {
+    Imported { destination: PathBuf },
+    Skipped,
+}
+
+/// Portable get outcome: found hit or explicit not-found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryGetOutcome {
+    Found(MemoryHit),
+    NotFound,
+}
+
+/// Portable export payload — the exported memory document itself, never a
+/// preformatted command response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryExport {
+    pub content: String,
+}
+
+/// Portable reindex entry count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryReindex {
+    pub entry_count: usize,
+}
+
+/// Zero-field success value for delete operations (D2): the handler already
+/// owns the selected scope and needs no additional success data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MemoryDelete;
+
+/// Typed remember target (D9): the handler resolves workspace identity through
+/// the workspace facet and passes the resulting typed ID here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryRememberTarget {
+    Global,
+    Workspace { workspace_id: String },
+}
+
+/// Typed delete scope for the non-workspace delete method (D8/D9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryDeleteScope {
+    /// Delete every memory entry (global and all workspace scopes).
+    All,
+    /// Delete only the global scope entries.
+    Global,
+}
+
+/// Host memory data for the memory command group (FEAT-019 D1).
+///
+/// Exposes the resolved user-memory file path, the enablement flag, and one
+/// typed method per exposed native-memory operation. All results are
+/// contract-owned portable values; implementation errors cross as safe text.
+/// Workspace-scoped operations take the borrowed workspace path as their first
+/// argument (D8); non-workspace operations never receive workspace authority
+/// and the facet never captures or retains workspace state internally.
+pub trait CommandMemoryContext {
+    /// The resolved user-memory file path.
+    fn memory_path(&self) -> PathBuf;
+    /// Whether the `[memory] enabled` / `DEEPSEEK_MEMORY=on` flag is set.
+    fn memory_enabled(&self) -> bool;
+    /// Native-memory root, global source, and index paths.
+    fn status(&self) -> Result<MemoryStatus, String>;
+    /// The native-memory root path.
+    fn path(&self) -> Result<PathBuf, String>;
+    /// Workspace identity for the given workspace path.
+    fn workspace_id(&self, workspace: &Path) -> Result<String, String>;
+    /// Workspace-scoped search over the native-memory store.
+    fn search(&self, workspace: &Path, query: &str, limit: usize)
+    -> Result<Vec<MemoryHit>, String>;
+    /// Append a reviewed note to the typed global or workspace target.
+    fn remember(
+        &self,
+        target: MemoryRememberTarget,
+        note: &str,
+    ) -> Result<MemoryRemembered, String>;
+    /// Import legacy memory; distinguishes imported from skipped.
+    fn import(&self) -> Result<MemoryImportOutcome, String>;
+    /// Workspace-scoped get by entry id; not-found is a typed outcome.
+    fn get(&self, workspace: &Path, id: i64) -> Result<MemoryGetOutcome, String>;
+    /// Export the native-memory document content.
+    fn export(&self) -> Result<MemoryExport, String>;
+    /// Reindex the native-memory store; returns the indexed entry count.
+    fn reindex(&self) -> Result<MemoryReindex, String>;
+    /// Delete all or global scope; never receives workspace authority.
+    fn delete(&self, scope: MemoryDeleteScope) -> Result<MemoryDelete, String>;
+    /// Delete the given workspace scope; workspace path is the first argument.
+    fn delete_workspace(&self, workspace: &Path) -> Result<MemoryDelete, String>;
+}
