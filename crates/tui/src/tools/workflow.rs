@@ -20,8 +20,9 @@ use codewhale_workflow::{
     resolve_workflow_agent,
 };
 use codewhale_workflow_js::{
-    BudgetSnapshot, DriverError, ProgressEvent, SpawnedTask, TaskCompletion, TaskRequest,
-    WORKFLOW_MAX_CONCURRENT, WorkflowDriver, WorkflowRunCancel, WorkflowVm,
+    BudgetSnapshot, DriverError, ProgressEvent, SCHEMA_RAW_PREVIEW_CHARS, SpawnedTask,
+    TaskCompletion, TaskRequest, WORKFLOW_MAX_CONCURRENT, WorkflowDriver, WorkflowRunCancel,
+    WorkflowVm,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -289,6 +290,10 @@ struct WorkflowRunSummary {
     token_budget: Option<u64>,
     child_count: usize,
     schema_error_count: usize,
+    /// Failed `responseSchema` decodes a bounded repair followed (#5583),
+    /// including succeeded ones.
+    #[serde(default)]
+    schema_repair_count: u64,
     dispatch_failure_count: u64,
     progress_count: u64,
     last_progress: Option<String>,
@@ -312,6 +317,52 @@ struct WorkflowRunSummary {
 struct WorkflowSchemaError {
     task_id: String,
     message: String,
+    /// Which decode stage failed (#5583): `json_parse` or
+    /// `schema_validation`. Journals written before the split existed
+    /// default to the validation bucket — the common failure shape.
+    #[serde(default = "legacy_schema_failure_kind")]
+    kind: String,
+    /// 1-based attempt that failed terminally (1 = no repair was tried).
+    #[serde(default = "legacy_schema_failure_attempt")]
+    attempt: u32,
+    /// Bounded preview of the raw reply; the full text lives in `artifact`
+    /// when one was written.
+    #[serde(default)]
+    raw_preview: String,
+    /// True when the carried raw text was capped at the carry limit.
+    #[serde(default)]
+    raw_truncated: bool,
+    /// Path of the durable raw-output artifact, when the reply exceeded the
+    /// preview bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    artifact: Option<String>,
+}
+
+/// One failed `responseSchema` decode that a bounded repair followed
+/// (#5583). Recorded even when the repair succeeds, so a repaired run shows
+/// exactly what was repaired and why.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorkflowSchemaRepairAttempt {
+    task_id: String,
+    #[serde(default = "legacy_schema_failure_kind")]
+    kind: String,
+    /// 1-based number of the attempt that failed.
+    attempt: u32,
+    message: String,
+    #[serde(default)]
+    raw_preview: String,
+    #[serde(default)]
+    raw_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    artifact: Option<String>,
+}
+
+fn legacy_schema_failure_kind() -> String {
+    "schema_validation".to_string()
+}
+
+fn legacy_schema_failure_attempt() -> u32 {
+    1
 }
 
 /// One `task()` dispatch the driver rejected before any child agent existed.
@@ -618,6 +669,13 @@ struct WorkflowRunRecord {
     #[serde(default)]
     events: Vec<WorkflowUiEvent>,
     schema_errors: Vec<WorkflowSchemaError>,
+    /// Failed `responseSchema` decodes that a bounded repair followed
+    /// (#5583), including repairs that succeeded. Structured tail of a
+    /// monotonic `schema_repair_count`.
+    #[serde(default)]
+    schema_repairs: Vec<WorkflowSchemaRepairAttempt>,
+    #[serde(default)]
+    schema_repair_count: u64,
     /// Task dispatches the driver rejected before any child ran (#5035).
     /// This is the exact, saturating total; `dispatch_failures` is only the
     /// newest structured tail.
@@ -677,6 +735,8 @@ impl WorkflowRunRecord {
             progress: Vec::new(),
             events: Vec::new(),
             schema_errors: Vec::new(),
+            schema_repairs: Vec::new(),
+            schema_repair_count: 0,
             dispatch_failure_count: 0,
             dispatch_failures: Vec::new(),
             result: None,
@@ -765,6 +825,7 @@ impl WorkflowRunRecord {
             token_budget: self.token_budget,
             child_count: self.child_ids.len(),
             schema_error_count: self.schema_errors.len(),
+            schema_repair_count: self.schema_repairs.len() as u64,
             dispatch_failure_count: self.dispatch_failure_count,
             progress_count: self.progress_count,
             last_progress: self.progress.last().cloned(),
@@ -1191,6 +1252,7 @@ async fn start_workflow(
         token_budget,
         fleet,
         gate_specs,
+        context.workspace.clone(),
     );
     let vm_cancel = WorkflowRunCancel::new();
     let controller = Arc::new(WorkflowRunController::new(
@@ -1952,6 +2014,61 @@ fn write_run_report_artifact(workspace: &Path, record: &WorkflowRunRecord) {
     }
 }
 
+/// Bounded preview of a raw `responseSchema` reply for run records and
+/// reports (#5583): the first [`SCHEMA_RAW_PREVIEW_CHARS`] chars on a char
+/// boundary, with an explicit marker when the text is longer.
+fn bounded_raw_preview(raw: &str) -> String {
+    if raw.chars().count() <= SCHEMA_RAW_PREVIEW_CHARS {
+        return raw.to_string();
+    }
+    let kept: String = raw.chars().take(SCHEMA_RAW_PREVIEW_CHARS).collect();
+    format!("{kept}\n…[preview truncated; full reply in the schema artifact]")
+}
+
+/// Write the full raw reply of a failed `responseSchema` attempt as a
+/// durable artifact beside the run report (#5583), returning its path.
+/// `None` (with a warning) when the write fails — the bounded preview
+/// remains either way.
+fn write_schema_raw_artifact(
+    workspace: &Path,
+    run_id: &str,
+    task_id: &str,
+    attempt: u32,
+    raw: &str,
+) -> Option<String> {
+    // Run/task ids are generated slugs, but never trust one as a path segment.
+    let safe = |text: &str| {
+        text.chars()
+            .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+            .collect::<String>()
+    };
+    let (safe_run, safe_task) = (safe(run_id), safe(task_id));
+    if safe_run.is_empty() || safe_task.is_empty() {
+        return None;
+    }
+    let dir = workspace.join(".codewhale").join("reports");
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        crate::logging::warn(format!(
+            "workflow schema artifact dir {} not created: {err}",
+            dir.display()
+        ));
+        return None;
+    }
+    let path = dir.join(format!(
+        "{safe_run}.schema.{safe_task}.attempt{attempt}.txt"
+    ));
+    match std::fs::write(&path, raw) {
+        Ok(()) => Some(path.display().to_string()),
+        Err(err) => {
+            crate::logging::warn(format!(
+                "workflow schema artifact {} not written: {err}",
+                path.display()
+            ));
+            None
+        }
+    }
+}
+
 fn render_run_report(record: &WorkflowRunRecord) -> String {
     let mut out = String::new();
     out.push_str(&format!("# Workflow run {}\n\n", record.run_id));
@@ -2012,6 +2129,43 @@ fn render_run_report(record: &WorkflowRunRecord) -> String {
             "\n## Schema errors ({})\n\n",
             record.schema_errors.len()
         ));
+        for error in &record.schema_errors {
+            out.push_str(&format!(
+                "- `{}` attempt {}: [{}] {}\n",
+                error.task_id, error.attempt, error.kind, error.message
+            ));
+            if !error.raw_preview.is_empty() {
+                out.push_str(&format!(
+                    "  - raw reply ({}):\n",
+                    if error.raw_truncated {
+                        "bounded preview; carried text was capped"
+                    } else {
+                        "bounded preview"
+                    }
+                ));
+                for line in error.raw_preview.lines() {
+                    out.push_str(&format!("      {line}\n"));
+                }
+            }
+            if let Some(artifact) = &error.artifact {
+                out.push_str(&format!("  - full reply: {artifact}\n"));
+            }
+        }
+    }
+    if !record.schema_repairs.is_empty() {
+        out.push_str(&format!(
+            "\n## Schema repairs ({}, including succeeded ones)\n\n",
+            record.schema_repair_count
+        ));
+        for repair in &record.schema_repairs {
+            out.push_str(&format!(
+                "- `{}` attempt {}: [{}] a bounded repair followed\n",
+                repair.task_id, repair.attempt, repair.kind
+            ));
+            if let Some(artifact) = &repair.artifact {
+                out.push_str(&format!("  - full reply: {artifact}\n"));
+            }
+        }
     }
     if let Some(result) = record.result.as_ref() {
         out.push_str("\n## Result\n\n```json\n");
@@ -2105,6 +2259,7 @@ fn workflow_result_for(
         "terminal": summary.status != WorkflowRunStatus::Running,
         "child_count": summary.child_count,
         "schema_error_count": summary.schema_error_count,
+        "schema_repair_count": summary.schema_repair_count,
         "dispatch_failure_count": summary.dispatch_failure_count,
         "event_count": summary.event_count,
         "events_returned": bounds.events_returned,
@@ -3422,6 +3577,9 @@ struct SubAgentWorkflowDriver {
     /// fleet this holds the immutable snapshot every task launch reads from,
     /// which is why editing `fleets/<name>.toml` mid-run cannot move a route.
     fleet: WorkflowFleetBinding,
+    /// Workspace root, for durable `responseSchema` raw-output artifacts
+    /// written beside the run report (#5583).
+    workspace: PathBuf,
 }
 
 impl SubAgentWorkflowDriver {
@@ -3435,6 +3593,7 @@ impl SubAgentWorkflowDriver {
         total_budget: Option<u64>,
         fleet: WorkflowFleetBinding,
         gate_specs: Vec<GateSpec>,
+        workspace: PathBuf,
     ) -> Arc<Self> {
         let fleet_name = fleet.name();
         let (completion_tx, completion_rx) = mpsc::unbounded_channel();
@@ -3460,6 +3619,7 @@ impl SubAgentWorkflowDriver {
             spawn_permits: Mutex::new(HashMap::new()),
             fleet_name,
             fleet,
+            workspace,
         });
         spawn_completion_pump(driver.clone(), completion_rx);
         driver
@@ -3978,6 +4138,26 @@ impl SubAgentWorkflowDriver {
         }
     }
 
+    /// Bounded preview + durable artifact for a failed `responseSchema`
+    /// attempt's raw reply (#5583). The record keeps a preview; the full
+    /// text goes to a `.txt` artifact beside the run report when it is
+    /// larger than the preview, so the journal stays small while the
+    /// evidence stays durable.
+    fn schema_raw_receipt(
+        &self,
+        task_id: &str,
+        attempt: u32,
+        raw: &str,
+    ) -> (String, Option<String>) {
+        let preview = bounded_raw_preview(raw);
+        let artifact = if raw.chars().count() > SCHEMA_RAW_PREVIEW_CHARS {
+            write_schema_raw_artifact(&self.workspace, &self.run_id, task_id, attempt, raw)
+        } else {
+            None
+        };
+        (preview, artifact)
+    }
+
     fn task_records_snapshot(&self) -> Vec<RuntimeTaskRecord> {
         self.task_records
             .lock()
@@ -4236,6 +4416,7 @@ impl WorkflowDriver for SubAgentWorkflowDriver {
 
     fn progress(&self, event: ProgressEvent) {
         let mut schema_error = None;
+        let mut schema_repair = None;
         let (message, ui_event) = match event {
             // Pre-spawn rejections share the dispatch-failure ledger so the
             // completion classifier sees every requested slot, whether the VM
@@ -4265,37 +4446,65 @@ impl WorkflowDriver for SubAgentWorkflowDriver {
                 )
             }
             ProgressEvent::TaskSchemaValidationFailed {
-                task_id, message, ..
+                task_id,
+                kind,
+                attempt,
+                message,
+                raw,
+                raw_truncated,
             } => {
                 self.record_schema_validation_failure(&task_id, message.clone());
+                let (raw_preview, artifact) = self.schema_raw_receipt(&task_id, attempt, &raw);
                 schema_error = Some(WorkflowSchemaError {
                     task_id: task_id.clone(),
                     message: message.clone(),
+                    kind,
+                    attempt,
+                    raw_preview,
+                    raw_truncated,
+                    artifact,
                 });
                 (
-                    format!("schema validation failed for {task_id}: {message}"),
+                    format!(
+                        "schema validation failed for {task_id} (attempt {attempt}): {message}"
+                    ),
                     WorkflowUiEvent::new(
                         &self.owner_session_id,
                         WorkflowUiEventKind::TaskSchemaValidationFailed { task_id, message },
                     ),
                 )
             }
-            // #5583: a failed decode with a repair still to come. The full
-            // receipt (kind, attempt, raw preview, artifact) lands with the
-            // schema-error ledger; for now the live surfaces see the repair
-            // as a progress line so operators know a re-ask is happening.
+            // #5583: a failed decode with a repair still to come. Receipted
+            // on the schema-repair ledger (visible even when the repair
+            // succeeds); the live surfaces see it as a progress line so
+            // operators know a bounded re-ask is happening.
             ProgressEvent::TaskSchemaRepairAttempted {
-                task_id, attempt, ..
+                task_id,
+                kind,
+                attempt,
+                message,
+                raw,
+                raw_truncated,
             } => {
-                let message = format!(
-                    "schema decode failed for {task_id} (attempt {attempt}); \
+                let (raw_preview, artifact) = self.schema_raw_receipt(&task_id, attempt, &raw);
+                schema_repair = Some(WorkflowSchemaRepairAttempt {
+                    task_id: task_id.clone(),
+                    kind,
+                    attempt,
+                    message: message.clone(),
+                    raw_preview,
+                    raw_truncated,
+                    artifact,
+                });
+                let note = format!(
+                    "schema decode failed for {task_id} (attempt {attempt}): {message}; \
                      dispatching a bounded repair"
                 );
                 (
-                    format!("log: {message}"),
+                    format!("log: {note}"),
                     WorkflowUiEvent::new(
                         &self.owner_session_id,
-                        WorkflowUiEventKind::Log { message },
+                        WorkflowUiEventKind::Log { message: note },
                     ),
                 )
             }
@@ -4307,6 +4516,10 @@ impl WorkflowDriver for SubAgentWorkflowDriver {
             record.push_event(ui_event.clone());
             if let Some(schema_error) = schema_error {
                 record.schema_errors.push(schema_error);
+            }
+            if let Some(schema_repair) = schema_repair {
+                record.schema_repair_count = record.schema_repair_count.saturating_add(1);
+                record.schema_repairs.push(schema_repair);
             }
         }
         self.state.record_progress(&self.run_id, &message);
@@ -5188,6 +5401,8 @@ mod journal {
                 progress: Vec::new(),
                 events: Vec::new(),
                 schema_errors: Vec::new(),
+                schema_repairs: Vec::new(),
+                schema_repair_count: 0,
                 dispatch_failure_count: 0,
                 dispatch_failures: Vec::new(),
                 result: None,
@@ -6793,6 +7008,7 @@ permissions = "read_only"
             None,
             WorkflowFleetBinding::None,
             gates,
+            tmp.path().to_path_buf(),
         );
 
         // The upstream scout fails, which puts the gate into a blocking state.
@@ -7003,6 +7219,7 @@ permissions = "read_only"
             None,
             WorkflowFleetBinding::None,
             Vec::new(),
+            tmp.path().to_path_buf(),
         );
 
         let operation = exact_workflow(EXACT_GLM_FLEET);
@@ -9079,6 +9296,7 @@ reviewer = "reviewer"
             None,
             WorkflowFleetBinding::None,
             gates,
+            tmp.path().to_path_buf(),
         );
 
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
@@ -9257,6 +9475,7 @@ reviewer = "reviewer"
             None,
             WorkflowFleetBinding::None,
             gates,
+            tmp.path().to_path_buf(),
         );
 
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
@@ -9381,6 +9600,7 @@ reviewer = "reviewer"
             None,
             WorkflowFleetBinding::None,
             gates,
+            tmp.path().to_path_buf(),
         );
 
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
@@ -9514,6 +9734,7 @@ reviewer = "reviewer"
             None,
             WorkflowFleetBinding::None,
             gates,
+            tmp.path().to_path_buf(),
         );
         driver.gate_board.lock().expect("gate board").lane_id = "wrong-lane".to_string();
 
@@ -9837,6 +10058,7 @@ reviewer = "reviewer"
             None,
             WorkflowFleetBinding::None,
             gates,
+            tmp.path().to_path_buf(),
         );
 
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
@@ -10118,6 +10340,143 @@ reviewer = "reviewer"
                         .as_str()
                         .is_some_and(|message| message.contains("responseSchema validation"))),
             "schema validation event should be visible in the typed receipt: {run_payload}"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn schema_failure_repairs_and_the_receipt_survives_journal_reload() {
+        let _retry_guard = workflow_test_retry_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+        // The #5583 report shape: attempt 1 wraps valid JSON in prose (a
+        // parse failure), the bounded repair answers with bare corrected
+        // JSON. Two model calls, no more — the fake server panics on extras.
+        let (client, calls) = fake_chat_client_responses(&[
+            "Sure — here it is:\n```json\n{\"refuted\": true}\n```\nDone!",
+            "{\"refuted\": true}",
+        ])
+        .await;
+        let runtime = SubAgentRuntime::new(
+            client,
+            "deepseek-v4-flash".to_string(),
+            ctx.clone(),
+            true,
+            None,
+            manager.clone(),
+        );
+        let tool = WorkflowTool::new(manager, runtime);
+
+        let run = tool
+            .execute(
+                json!({
+                    "action": "run",
+                    "script": r#"
+                    return await task({
+                        description: "Return the schema fixture.",
+                        responseSchema: {
+                            type: "object",
+                            properties: { refuted: { type: "boolean" } },
+                            required: ["refuted"],
+                        },
+                    });
+                    "#
+                }),
+                &ctx,
+            )
+            .await
+            .expect("workflow run returns a record");
+        let run_payload: Value = serde_json::from_str(&run.content).expect("run json");
+
+        assert_eq!(run_payload["status"], "completed", "{run_payload}");
+        assert_eq!(run_payload["result"]["refuted"], json!(true));
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "one repair re-ask");
+        assert_eq!(
+            run.metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("schema_repair_count"))
+                .and_then(Value::as_u64),
+            Some(1),
+            "the repair should be counted in the run metadata"
+        );
+        assert!(
+            run_payload["progress"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|message| message
+                    .as_str()
+                    .is_some_and(|message| message.contains("dispatching a bounded repair"))),
+            "the repair should be visible in the run receipt: {run_payload}"
+        );
+
+        // The durable receipt (kind, attempt, bounded raw preview) survives a
+        // journal reload — a restarted session still sees what was repaired.
+        let state = WorkflowWorkspaceState::open(tmp.path());
+        let record = state
+            .runs
+            .lock()
+            .expect("runs")
+            .get(run_payload["run_id"].as_str().expect("run id"))
+            .cloned()
+            .expect("record survives reload");
+        assert_eq!(record.schema_repairs.len(), 1);
+        let repair = &record.schema_repairs[0];
+        assert_eq!(repair.kind, "json_parse");
+        assert_eq!(repair.attempt, 1);
+        assert!(repair.raw_preview.contains("Sure — here it is"));
+        assert!(!repair.raw_truncated);
+        assert!(repair.artifact.is_none(), "a short reply needs no artifact");
+        assert!(
+            record.schema_errors.is_empty(),
+            "a successful repair leaves no terminal schema error"
+        );
+    }
+
+    #[test]
+    fn bounded_raw_preview_truncates_on_a_char_boundary() {
+        let short = "plain reply";
+        assert_eq!(bounded_raw_preview(short), short);
+        let long = "é".repeat(SCHEMA_RAW_PREVIEW_CHARS + 5);
+        let preview = bounded_raw_preview(&long);
+        assert!(preview.contains("preview truncated"));
+        let kept = preview.lines().next().expect("kept line");
+        assert_eq!(kept.chars().count(), SCHEMA_RAW_PREVIEW_CHARS);
+    }
+
+    #[test]
+    fn schema_raw_artifacts_land_beside_the_report_and_refuse_bad_ids() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = write_schema_raw_artifact(
+            tmp.path(),
+            "run-2049",
+            "agent_0007",
+            2,
+            "the full raw reply",
+        )
+        .expect("artifact path");
+        let written = std::fs::read_to_string(&path).expect("artifact written");
+        assert_eq!(written, "the full raw reply");
+        assert!(
+            path.ends_with("run-2049.schema.agent_0007.attempt2.txt"),
+            "{path}"
+        );
+        // The slug filter sanitizes hostile ids into safe file names rather
+        // than refusing: path traversal cannot survive it.
+        let sanitized = write_schema_raw_artifact(tmp.path(), "../../etc", "agent_0007", 1, "x")
+            .expect("sanitized path");
+        assert!(
+            sanitized.contains("etc.schema.agent_0007.attempt1.txt"),
+            "{sanitized}"
+        );
+        assert!(
+            !sanitized.contains(".."),
+            "no parent traversal may survive: {sanitized}"
+        );
+        assert!(
+            write_schema_raw_artifact(tmp.path(), "///", "agent_0007", 1, "x").is_none(),
+            "an id with no slug characters must refuse rather than write"
         );
     }
 
@@ -11311,6 +11670,7 @@ FINAL RECEIPT
             Some(1_000),
             WorkflowFleetBinding::None,
             Vec::new(),
+            tmp.path().to_path_buf(),
         );
         let snapshot = BudgetSnapshot {
             total: Some(1_000),
