@@ -282,7 +282,6 @@
     "config",
     "core",
     "debug",
-    "memory",
     "plugins",
     "project",
     "session",
