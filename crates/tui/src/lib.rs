@@ -47,6 +47,7 @@ mod credentials;
 mod deepseek_theme;
 mod dependencies;
 mod doctor;
+mod doctor_fix;
 mod dsh_credentials;
 mod elapsed;
 mod error_taxonomy;
@@ -1044,6 +1045,16 @@ struct DoctorArgs {
         conflicts_with_all = ["json", "context_json"]
     )]
     probe_search: bool,
+    /// Plan and apply automatic repairs with consent (#5552)
+    #[arg(
+        long,
+        default_value_t = false,
+        conflicts_with_all = ["json", "context_json"]
+    )]
+    fix: bool,
+    /// Apply the planned repairs without prompting (requires --fix)
+    #[arg(long, default_value_t = false, requires = "fix")]
+    yes: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -2028,6 +2039,18 @@ async fn run_async_main_dispatch(
                         plugin_registry.as_ref(),
                     )
                     .await;
+                    if args.fix {
+                        let plan = crate::doctor_fix::plan_fixes(
+                            &config,
+                            &workspace,
+                            plugin_registry.as_ref(),
+                        );
+                        crate::doctor_fix::print_fix_plan(&plan);
+                        if !plan.is_empty() && (args.yes || crate::doctor_fix::confirm_fix(&plan)) {
+                            let results = crate::doctor_fix::apply_fixes(&plan);
+                            crate::doctor_fix::print_apply_results(&results);
+                        }
+                    }
                     Ok(())
                 }
             }
