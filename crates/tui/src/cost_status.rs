@@ -32,7 +32,7 @@
 //! below is a separate route/usage copy (never another money counter), and the
 //! shared test reset clears both stores.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
@@ -80,6 +80,10 @@ pub struct PendingBackgroundCost {
     /// provider identity, endpoint *fingerprint*, billing surface, wire model,
     /// and currency — never a URL, key, token, or filesystem path.
     pub route_receipts: BTreeSet<String>,
+    /// Durable, redacted identities of provider responses folded into this
+    /// batch. These travel with the money so a session snapshot can make a
+    /// replay idempotent after reload.
+    pub usage_source_fingerprints: BTreeSet<String>,
 }
 
 /// Immutable, non-secret route evidence captured before a provider request.
@@ -455,6 +459,9 @@ impl PendingBackgroundCost {
 struct ScopedPendingBackgroundCost {
     generation: u64,
     pending: PendingBackgroundCost,
+    /// All provider responses accepted in this session generation, including
+    /// batches already drained into the live session projection.
+    seen_usage_source_fingerprints: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -678,6 +685,28 @@ pub(crate) fn register_runtime_usage_sink(owner: &str, sink: RuntimeUsageSink) {
     });
 }
 
+/// Redacted durable identity shared by runtime-turn, worker, and interactive
+/// session accounting. Raw response ids never need to be persisted merely to
+/// make replay idempotent.
+#[must_use]
+pub(crate) fn usage_source_fingerprint(source_id: &str) -> String {
+    codewhale_config::catalog::base_url_fingerprint(source_id.trim())
+}
+
+/// Install the interactive session's synchronous runtime sink. A detached
+/// child may report after the parent mailbox has sealed; its owner lease keeps
+/// this sink alive, while the captured scope prevents a later session from
+/// inheriting the spend.
+pub(crate) fn register_interactive_runtime_usage_sink(owner: &str, scope: CostScopeToken) {
+    register_runtime_usage_sink(
+        owner,
+        Arc::new(move |record| {
+            record_interactive_runtime_usage(scope, record);
+            true
+        }),
+    );
+}
+
 /// Acquire an owner lease for a root sub-agent runtime. Runtime clones inherit
 /// the lease, so top-level detached children can outlive the parent mailbox
 /// without losing their accounting path.
@@ -785,8 +814,27 @@ pub fn close_current_scope() -> PendingBackgroundCost {
     with_pending_state_mut(|state| {
         let pending = std::mem::take(&mut state.pending);
         state.generation = state.generation.wrapping_add(1);
+        state.seen_usage_source_fingerprints.clear();
         pending
     })
+}
+
+/// Restore the durable response identities belonging to the newly loaded
+/// session. Callers close the previous scope before loading, so replacing the
+/// set cannot make another session's usage visible here.
+pub(crate) fn restore_usage_source_fingerprints(fingerprints: impl IntoIterator<Item = String>) {
+    with_pending_state_mut(|state| {
+        state.seen_usage_source_fingerprints = fingerprints.into_iter().collect();
+    });
+}
+
+/// Whether this session generation already accepted a provider response.
+/// Used by mailbox delivery to avoid pricing a response that the synchronous
+/// runtime sink already owns.
+#[must_use]
+pub(crate) fn usage_source_seen(source_id: &str) -> bool {
+    let fingerprint = usage_source_fingerprint(source_id);
+    with_pending_state_mut(|state| state.seen_usage_source_fingerprints.contains(&fingerprint))
 }
 
 /// The non-secret identity of a background LLM call's route.
@@ -1168,58 +1216,85 @@ fn record(scope: CostScopeToken, route_receipt: String, audit: &TurnCostAudit, u
         if state.generation != scope.0 {
             return;
         }
-        let pending = &mut state.pending;
-        if let Some(provenance) = audit.provenance.as_ref() {
-            pending.pricing_provenances.insert(provenance.label());
-        }
-        if let Some(defect) = audit.live_pricing_defect.as_ref() {
-            if audit.estimate.is_some() {
-                pending.live_pricing_defects.insert(defect.label());
-            } else {
-                pending.live_pricing_unusable_defects.insert(defect.label());
-            }
-        }
-        if let Some(cost) = audit.estimate {
-            pending.estimate = pending.estimate.saturating_add(cost);
-        }
-
-        // Only money-metered/unknown-basis turns belong in missing-money coverage
-        // or its reason list. A subscription/local receipt is still audited below,
-        // but `not_money_metered` must never be presented as a gap in a subtotal.
-        if audit.counts_toward_money_coverage() {
-            if audit.usd_priced {
-                pending.priced_turns = pending.priced_turns.saturating_add(1);
-            } else {
-                pending.unpriced_turns = pending.unpriced_turns.saturating_add(1);
-            }
-            if audit.cny_priced {
-                pending.cny_priced_turns = pending.cny_priced_turns.saturating_add(1);
-            } else {
-                pending.cny_unpriced_turns = pending.cny_unpriced_turns.saturating_add(1);
-            }
-            for class in &audit.unpriced_classes {
-                pending.unpriced_classes.insert(class.label());
-            }
-            if !audit.usd_priced
-                && let Some(reason) = audit.unpriced_reason
-            {
-                pending.unpriced_reasons.insert(reason.label());
-            }
-            if !audit.cny_priced {
-                pending.cny_unpriced_reasons.insert(
-                    audit
-                        .unpriced_reason
-                        .map_or("currency_not_published", |reason| reason.label()),
-                );
-            }
-        }
-
-        // Record which token classes this route actually billed on, so a receipt
-        // shows whether cache-write/reasoning telemetry was even present.
-        pending
-            .route_receipts
-            .insert(receipt_with_usage_classes(route_receipt, usage));
+        fold_audit_into_pending(&mut state.pending, route_receipt, audit, usage);
     });
+}
+
+fn record_interactive_runtime_usage(scope: CostScopeToken, record: RuntimeUsageRecord) {
+    with_pending_state_mut(|state| {
+        if state.generation != scope.0 {
+            return;
+        }
+        let fingerprint = usage_source_fingerprint(&record.source_id);
+        if !state
+            .seen_usage_source_fingerprints
+            .insert(fingerprint.clone())
+        {
+            return;
+        }
+        let audit = record.usage.route.audit(&record.usage.usage);
+        let receipt = record.usage.route.receipt(&audit);
+        state.pending.usage_source_fingerprints.insert(fingerprint);
+        fold_audit_into_pending(&mut state.pending, receipt, &audit, &record.usage.usage);
+    });
+}
+
+fn fold_audit_into_pending(
+    pending: &mut PendingBackgroundCost,
+    route_receipt: String,
+    audit: &TurnCostAudit,
+    usage: &Usage,
+) {
+    if let Some(provenance) = audit.provenance.as_ref() {
+        pending.pricing_provenances.insert(provenance.label());
+    }
+    if let Some(defect) = audit.live_pricing_defect.as_ref() {
+        if audit.estimate.is_some() {
+            pending.live_pricing_defects.insert(defect.label());
+        } else {
+            pending.live_pricing_unusable_defects.insert(defect.label());
+        }
+    }
+    if let Some(cost) = audit.estimate {
+        pending.estimate = pending.estimate.saturating_add(cost);
+    }
+
+    // Only money-metered/unknown-basis turns belong in missing-money coverage
+    // or its reason list. A subscription/local receipt is still audited below,
+    // but `not_money_metered` must never be presented as a gap in a subtotal.
+    if audit.counts_toward_money_coverage() {
+        if audit.usd_priced {
+            pending.priced_turns = pending.priced_turns.saturating_add(1);
+        } else {
+            pending.unpriced_turns = pending.unpriced_turns.saturating_add(1);
+        }
+        if audit.cny_priced {
+            pending.cny_priced_turns = pending.cny_priced_turns.saturating_add(1);
+        } else {
+            pending.cny_unpriced_turns = pending.cny_unpriced_turns.saturating_add(1);
+        }
+        for class in &audit.unpriced_classes {
+            pending.unpriced_classes.insert(class.label());
+        }
+        if !audit.usd_priced
+            && let Some(reason) = audit.unpriced_reason
+        {
+            pending.unpriced_reasons.insert(reason.label());
+        }
+        if !audit.cny_priced {
+            pending.cny_unpriced_reasons.insert(
+                audit
+                    .unpriced_reason
+                    .map_or("currency_not_published", |reason| reason.label()),
+            );
+        }
+    }
+
+    // Record which token classes this route actually billed on, so a receipt
+    // shows whether cache-write/reasoning telemetry was even present.
+    pending
+        .route_receipts
+        .insert(receipt_with_usage_classes(route_receipt, usage));
 }
 
 /// Drain the pending pool, returning it and resetting to zero.
@@ -1236,7 +1311,10 @@ pub fn drain() -> PendingBackgroundCost {
 /// state. Production code should always use [`drain`].
 #[cfg(test)]
 pub fn reset_for_tests() {
-    with_pending_state_mut(|state| state.pending = PendingBackgroundCost::default());
+    with_pending_state_mut(|state| {
+        state.pending = PendingBackgroundCost::default();
+        state.seen_usage_source_fingerprints.clear();
+    });
     with_runtime_usage_journal_mut(HashMap::clear);
 }
 

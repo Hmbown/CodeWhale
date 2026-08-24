@@ -2263,6 +2263,7 @@ async fn agent_runs_runtime_api_exposes_persisted_worker_receipts() -> Result<()
             budget_scope: None,
             note: "not reported".to_string(),
         },
+        usage_source_fingerprints: Default::default(),
         verification: AgentRunVerificationSummary {
             status: "self_report_only".to_string(),
             summary: "no verified receipt attached".to_string(),

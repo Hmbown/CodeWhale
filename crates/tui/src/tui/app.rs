@@ -785,9 +785,9 @@ pub struct SessionState {
     pub pending_turn_cost_cny: f64,
     pub subagent_cost: f64,
     pub subagent_cost_cny: f64,
-    /// Child usage envelopes already accrued, keyed by child and the stable
-    /// provider-response identity carried by `TokenUsage`.
-    pub subagent_usage_sources: HashSet<(String, String)>,
+    /// Redacted provider-response identities already accrued. The same
+    /// fingerprints are persisted by the session and worker projections.
+    pub subagent_usage_sources: HashSet<String>,
     pub displayed_cost_high_water: f64,
     pub displayed_cost_high_water_cny: f64,
     pub last_prompt_tokens: Option<u32>,
@@ -3403,6 +3403,25 @@ impl App {
         }
     }
 
+    /// Fold one atomic background batch into the live session projection.
+    /// Returns whether the batch carried runtime-owned response identities and
+    /// therefore needs a fresh durable snapshot (it may have landed after the
+    /// ordinary TurnComplete save).
+    pub fn absorb_pending_background_cost(
+        &mut self,
+        pool: &crate::cost_status::PendingBackgroundCost,
+    ) -> bool {
+        let runtime_usage_arrived = !pool.usage_source_fingerprints.is_empty();
+        self.session
+            .subagent_usage_sources
+            .extend(pool.usage_source_fingerprints.iter().cloned());
+        if pool.estimate.is_positive() {
+            self.accrue_subagent_cost_estimate(pool.estimate);
+        }
+        self.absorb_background_cost_coverage(pool);
+        runtime_usage_arrived
+    }
+
     /// Clear every live cost-coverage counter.
     ///
     /// Used by `/new` and by the session-load path: loading a session must not
@@ -3504,6 +3523,12 @@ impl App {
         metadata.cost.live_pricing_unusable_defects =
             self.session.cost_live_pricing_unusable_defects.clone();
         metadata.cost.route_receipts = self.session.cost_route_receipts.clone();
+        metadata.cost.usage_source_fingerprints = self
+            .session
+            .subagent_usage_sources
+            .iter()
+            .cloned()
+            .collect();
         // A session restored as legacy-unknown stays unknown when re-saved:
         // re-writing it as "recorded" would launder the missing evidence into an
         // apparently complete zero.

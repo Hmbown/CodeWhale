@@ -939,6 +939,11 @@ pub struct AgentWorkerRecord {
     pub artifacts: Vec<AgentRunArtifactRef>,
     #[serde(default = "default_agent_run_usage")]
     pub usage: AgentRunUsage,
+    /// Redacted provider-response identities already folded into `usage`.
+    /// Persisting the same fingerprint as the session cost snapshot makes a
+    /// retried delivery idempotent in both projections after reload.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub usage_source_fingerprints: BTreeSet<String>,
     #[serde(default = "default_agent_run_verification")]
     pub verification: AgentRunVerificationSummary,
     #[serde(default = "default_agent_run_recommended_action")]
@@ -993,6 +998,7 @@ impl AgentWorkerRecord {
             takeover,
             artifacts,
             usage: default_agent_run_usage(),
+            usage_source_fingerprints: BTreeSet::new(),
             verification: default_agent_run_verification(),
             recommended_action,
             status: AgentWorkerStatus::Starting,
@@ -1078,6 +1084,42 @@ fn priced_usd_microusd(audit: &crate::pricing::TurnCostAudit) -> Option<u64> {
         return None;
     }
     Some(microusd.round() as u64)
+}
+
+/// Publish one child provider response into every projection that owns it.
+/// The stable source id is the shared exactly-once key: runtime/session cost
+/// and the durable worker record hash it with the same canonical function.
+async fn record_provider_response_usage(
+    runtime: &SubAgentRuntime,
+    agent_id: &str,
+    source_id: &str,
+    route: crate::cost_status::EffectiveRouteEnvelope,
+    usage: &Usage,
+) {
+    let priced_cost_microusd = priced_usd_microusd(&route.audit(usage));
+    if let Some(lease) = runtime.runtime_usage_lease.as_ref() {
+        crate::cost_status::report_effective_route_for_runtime(
+            crate::cost_status::scope_token(),
+            Some(lease.owner()),
+            source_id,
+            &route,
+            usage,
+        );
+    }
+    if let Some(mailbox) = runtime.mailbox.as_ref() {
+        let _ = mailbox.send(MailboxMessage::token_usage(
+            agent_id,
+            source_id,
+            route,
+            usage.clone(),
+        ));
+    }
+    runtime.manager.write().await.record_worker_usage(
+        agent_id,
+        source_id,
+        usage,
+        priced_cost_microusd,
+    );
 }
 
 fn refresh_usage_note(usage: &mut AgentRunUsage) {
@@ -5248,6 +5290,7 @@ impl SubAgentManager {
     fn record_worker_usage(
         &mut self,
         worker_id: &str,
+        source_id: &str,
         usage: &Usage,
         priced_cost_microusd: Option<u64>,
     ) {
@@ -5256,6 +5299,10 @@ impl SubAgentManager {
         let Some(record) = self.worker_records.get_mut(worker_id) else {
             return;
         };
+        let source_fingerprint = crate::cost_status::usage_source_fingerprint(source_id);
+        if !record.usage_source_fingerprints.insert(source_fingerprint) {
+            return;
+        }
         record.updated_at_ms = now_ms;
         record.usage.input_tokens = Some(
             record
@@ -11853,41 +11900,18 @@ async fn run_subagent(
         // Runtime-owned children persist directly before best-effort UI
         // delivery. The owner lease outlives the parent mailbox when a top-
         // level child remains active after the parent turn terminates.
-        let priced_cost_microusd = priced_usd_microusd(&usage_route.audit(&response.usage));
-        if let Some(lease) = runtime.runtime_usage_lease.as_ref() {
-            crate::cost_status::report_effective_route_for_runtime(
-                crate::cost_status::scope_token(),
-                Some(lease.owner()),
-                &usage_source_id,
-                &usage_route,
-                &response.usage,
-            );
-        }
-        // Interactive turns have no runtime owner; their mailbox is the sole
-        // delivery path into the TUI cost projection.
-        if let Some(mb) = runtime.mailbox.as_ref() {
-            // The child's own route billing travels on `usage_route`: the
-            // client this worker actually ran on froze its provider,
-            // identity, endpoint fingerprint, billing surface and billing
-            // mode at construction (`DeepSeekClient::from_parts`), so the
-            // envelope *is* the child's dispatch receipt. It is deliberately
-            // NOT a later ambient `Config` re-read — provider endpoint
-            // variables (`MOONSHOT_BASE_URL`, `KIMI_BASE_URL`, …) are merged
-            // into the *active* provider's table only, so a cross-provider
-            // child's config entry does not describe the endpoint it
-            // dispatched to. An endpoint/credential that names no known
-            // product froze as Unknown and stays Unknown here.
-            let _ = mb.send(MailboxMessage::token_usage(
-                &agent_id,
-                &usage_source_id,
-                usage_route,
-                response.usage.clone(),
-            ));
-        }
-        {
-            let mut manager = runtime.manager.write().await;
-            manager.record_worker_usage(&agent_id, &response.usage, priced_cost_microusd);
-        }
+        // The child's own route billing travels on `usage_route`: the client
+        // that actually ran froze its provider, identity, endpoint fingerprint,
+        // billing surface and billing mode at construction. It is deliberately
+        // not re-derived from ambient parent config at completion time.
+        record_provider_response_usage(
+            runtime,
+            &agent_id,
+            &usage_source_id,
+            usage_route,
+            &response.usage,
+        )
+        .await;
 
         // Per-worker token-budget enforcement (#3321): stop a single runaway
         // worker once its accumulated model tokens exceed its own cap. This

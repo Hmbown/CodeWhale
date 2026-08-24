@@ -6308,7 +6308,9 @@ fn apply_loaded_session_resets_unpersisted_telemetry() {
     app.session.subagent_cost_cny = 5.48;
     app.session
         .subagent_usage_sources
-        .insert(("agent-test".to_string(), "response-test".to_string()));
+        .insert(crate::cost_status::usage_source_fingerprint(
+            "response-test",
+        ));
     app.session.displayed_cost_high_water = 2.0;
     app.session.displayed_cost_high_water_cny = 14.61;
     app.session.last_prompt_tokens = Some(120);
@@ -6373,6 +6375,7 @@ fn apply_loaded_session_resets_unpersisted_telemetry() {
 /// to recognize that shape rather than trust it (#4318).
 #[test]
 fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
+    let _cost_scope = crate::cost_status::test_scope();
     let mut app = create_test_app();
     // Live state from the session being replaced.
     app.session.cost_priced_turns = 9;
@@ -6393,6 +6396,7 @@ fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
     let mut session = saved_session_with_messages(vec![text_message("assistant", "ready")]);
     session.metadata.cost = crate::session_manager::SessionCostSnapshot {
         session_cost_usd: 2.5,
+        subagent_cost_usd: 1.25,
         priced_turns: 2,
         unpriced_turns: 1,
         cny_priced_turns: 0,
@@ -6403,6 +6407,10 @@ fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
         pricing_provenances: ["models_dev_bundled".to_string()].into(),
         route_receipts: ["provider=deepseek identity=deepseek model=deepseek-v4-flash".to_string()]
             .into(),
+        usage_source_fingerprints: [crate::cost_status::usage_source_fingerprint(
+            "subagent:agent-reload:step:1:response:late",
+        )]
+        .into(),
         coverage_recorded: true,
         ..crate::session_manager::SessionCostSnapshot::default()
     };
@@ -6410,6 +6418,7 @@ fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
     apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
 
     assert_eq!(app.session.cost_priced_turns, 2);
+    assert_eq!(app.session.subagent_cost, 1.25);
     assert_eq!(app.session.cost_unpriced_turns, 1);
     assert_eq!(app.session.cost_cny_priced_turns, 0);
     assert_eq!(app.session.cost_cny_unpriced_turns, 3);
@@ -6420,6 +6429,47 @@ fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
     assert_eq!(
         app.session.cost_unpriced_classes,
         ["cache_write".to_string()].into()
+    );
+    assert_eq!(
+        app.session.subagent_usage_sources,
+        session
+            .metadata
+            .cost
+            .usage_source_fingerprints
+            .iter()
+            .cloned()
+            .collect()
+    );
+    assert!(crate::cost_status::usage_source_seen(
+        "subagent:agent-reload:step:1:response:late"
+    ));
+    let replay_owner = "interactive:reloaded-session:turn-replay";
+    crate::cost_status::register_interactive_runtime_usage_sink(
+        replay_owner,
+        crate::cost_status::scope_token(),
+    );
+    crate::cost_status::report_effective_route_for_runtime(
+        crate::cost_status::scope_token(),
+        Some(replay_owner),
+        "subagent:agent-reload:step:1:response:late",
+        &crate::cost_status::EffectiveRouteEnvelope::capture(
+            None,
+            ApiProvider::Anthropic,
+            "anthropic-direct",
+            "claude-sonnet-4-5",
+            Some(ApiProvider::Anthropic.default_base_url()),
+            chrono::Utc::now(),
+        ),
+        &Usage {
+            input_tokens: 200,
+            output_tokens: 20,
+            ..Usage::default()
+        },
+    );
+    crate::cost_status::finish_runtime_usage_owner(replay_owner);
+    assert!(
+        crate::cost_status::drain().is_empty(),
+        "a re-delivered provider response must remain deduped after reload"
     );
     assert_eq!(app.session.cost_route_receipts.len(), 1);
     assert!(

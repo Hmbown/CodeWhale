@@ -845,10 +845,6 @@ impl TurnRecord {
     }
 }
 
-fn routed_usage_source_fingerprint(source_id: &str) -> String {
-    codewhale_config::catalog::base_url_fingerprint(source_id.trim())
-}
-
 /// The only mutation path for routed provider usage. Every source is recorded
 /// once, route labels are sanitized at the boundary, and retained records are
 /// bounded regardless of whether they arrived synchronously, by mailbox, or
@@ -858,7 +854,7 @@ fn append_routed_usage_record(
     source_id: &str,
     usage: EffectiveRouteUsage,
 ) -> bool {
-    let source_fingerprint = routed_usage_source_fingerprint(source_id);
+    let source_fingerprint = crate::cost_status::usage_source_fingerprint(source_id);
     if turn
         .routed_usage_source_ids
         .iter()

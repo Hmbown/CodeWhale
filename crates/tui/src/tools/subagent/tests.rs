@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::ApiProvider;
 use crate::fleet::roster::FleetRoster;
 use crate::tools::{AgentToolSurfaceOptions, ToolRegistryBuilder};
 use crate::worker_profile::ShellPolicy;
@@ -377,6 +378,7 @@ fn worker_record_usage_accumulates_provider_tokens() {
 
     manager.record_worker_usage(
         "agent_usage",
+        "agent_usage:response:1",
         &Usage {
             input_tokens: 100,
             output_tokens: 25,
@@ -388,6 +390,17 @@ fn worker_record_usage_accumulates_provider_tokens() {
     );
     manager.record_worker_usage(
         "agent_usage",
+        "agent_usage:response:1",
+        &Usage {
+            input_tokens: 9_999,
+            output_tokens: 9_999,
+            ..Usage::default()
+        },
+        Some(9_999),
+    );
+    manager.record_worker_usage(
+        "agent_usage",
+        "agent_usage:response:2",
         &Usage {
             input_tokens: 40,
             output_tokens: 10,
@@ -404,6 +417,14 @@ fn worker_record_usage_accumulates_provider_tokens() {
     assert_eq!(record.usage.output_tokens, Some(35));
     assert_eq!(record.usage.total_tokens, Some(175));
     assert_eq!(record.usage.cost_microusd, Some(175));
+    assert_eq!(record.usage_source_fingerprints.len(), 2);
+    let persisted = serde_json::to_vec(&record).expect("serialize worker record");
+    let reloaded: AgentWorkerRecord =
+        serde_json::from_slice(&persisted).expect("reload worker record");
+    assert_eq!(
+        reloaded.usage_source_fingerprints,
+        record.usage_source_fingerprints
+    );
     assert_eq!(record.usage.token_budget, None);
     assert!(
         record.usage.note.contains("175 tokens"),
@@ -427,6 +448,7 @@ fn token_budget_scope_is_shared_across_nested_workers_and_blocks_when_spent() {
     manager.attach_budget_scope("agent_root", root_scope);
     manager.record_worker_usage(
         "agent_root",
+        "agent_root:response:1",
         &Usage {
             input_tokens: 40,
             output_tokens: 10,
@@ -448,6 +470,7 @@ fn token_budget_scope_is_shared_across_nested_workers_and_blocks_when_spent() {
     manager.attach_budget_scope("agent_child", child_scope);
     manager.record_worker_usage(
         "agent_child",
+        "agent_child:response:1",
         &Usage {
             input_tokens: 30,
             output_tokens: 20,
@@ -2022,6 +2045,158 @@ async fn delayed_chat_client(
     };
     let client = DeepSeekClient::new(&config).expect("fake chat client");
     (client, calls, bodies)
+}
+
+#[tokio::test]
+async fn detached_interactive_usage_after_mailbox_seal_reaches_session_accounting() {
+    let _cost_scope = crate::cost_status::test_scope();
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        2,
+    )));
+    let (mailbox, mut mailbox_rx) = Mailbox::new(CancellationToken::new());
+    let mut root = stub_runtime();
+    root.manager = Arc::clone(&manager);
+    root.context = ToolContext::new(tmp.path()).with_state_namespace("session-detached-usage");
+    root.mailbox = Some(mailbox.clone());
+    let runtime_owner = "interactive:session-detached-usage:turn-parent";
+    crate::cost_status::register_interactive_runtime_usage_sink(
+        runtime_owner,
+        crate::cost_status::scope_token(),
+    );
+    root.runtime_usage_lease = crate::cost_status::acquire_runtime_usage_lease(runtime_owner);
+    let detached = root.background_runtime();
+
+    let cases = [
+        (
+            "agent_deepseek",
+            "subagent:agent_deepseek:step:1:response:late",
+            crate::cost_status::EffectiveRouteEnvelope::capture(
+                None,
+                ApiProvider::Deepseek,
+                "deepseek-direct",
+                "deepseek-v4-flash",
+                Some(ApiProvider::Deepseek.default_base_url()),
+                chrono::Utc::now(),
+            ),
+            Usage {
+                input_tokens: 11,
+                output_tokens: 5,
+                ..Usage::default()
+            },
+        ),
+        (
+            "agent_anthropic",
+            "subagent:agent_anthropic:step:1:response:late",
+            crate::cost_status::EffectiveRouteEnvelope::capture(
+                None,
+                ApiProvider::Anthropic,
+                "anthropic-direct",
+                "claude-sonnet-4-5",
+                Some(ApiProvider::Anthropic.default_base_url()),
+                chrono::Utc::now(),
+            ),
+            Usage {
+                input_tokens: 13,
+                output_tokens: 7,
+                ..Usage::default()
+            },
+        ),
+        (
+            "agent_custom",
+            "subagent:agent_custom:step:1:response:late",
+            crate::cost_status::EffectiveRouteEnvelope::capture(
+                None,
+                ApiProvider::Custom,
+                "lab-compatible-route",
+                "lab-model-v1",
+                Some("https://models.example.test/v1"),
+                chrono::Utc::now(),
+            ),
+            Usage {
+                input_tokens: 17,
+                output_tokens: 9,
+                ..Usage::default()
+            },
+        ),
+    ];
+    for (worker_id, ..) in &cases {
+        manager.write().await.register_worker_for_session(
+            make_worker_spec(worker_id, tmp.path().to_path_buf()),
+            "session-detached-usage",
+        );
+    }
+    let (release_usage_tx, release_usage_rx) = tokio::sync::oneshot::channel();
+    let child = tokio::spawn(async move {
+        release_usage_rx
+            .await
+            .expect("parent releases the detached provider response");
+        for (worker_id, source_id, route, usage) in &cases {
+            record_provider_response_usage(&detached, worker_id, source_id, route.clone(), usage)
+                .await;
+            // Simulate a monitor retrying the same durable receipt. Worker and
+            // session projections must reject it under the same identity.
+            record_provider_response_usage(&detached, worker_id, source_id, route.clone(), usage)
+                .await;
+        }
+        cases
+    });
+
+    mailbox.seal();
+    crate::cost_status::finish_runtime_usage_owner(runtime_owner);
+    release_usage_tx
+        .send(())
+        .expect("detached child remains live after mailbox seal");
+    let cases = tokio::time::timeout(Duration::from_secs(2), child)
+        .await
+        .expect("detached usage settles after the sealed parent turn")
+        .expect("detached usage task exits cleanly");
+    assert!(mailbox.is_closed());
+    assert!(
+        !mailbox_rx.has_pending(),
+        "post-seal usage must not weaken the mailbox ordering boundary"
+    );
+
+    let session_usage = crate::cost_status::drain();
+    assert_eq!(session_usage.usage_source_fingerprints.len(), cases.len());
+    assert!(
+        session_usage.estimate.is_positive(),
+        "direct provider routes must reach the live money total"
+    );
+    assert_eq!(
+        session_usage
+            .priced_turns
+            .saturating_add(session_usage.unpriced_turns),
+        cases.len() as u32,
+        "every metered or unknown-basis route contributes exactly one coverage receipt"
+    );
+    for (worker_id, source_id, _route, usage) in cases {
+        let worker = manager
+            .read()
+            .await
+            .get_worker_record(worker_id)
+            .expect("worker usage is durable")
+            .clone();
+        assert_eq!(
+            worker.usage.input_tokens,
+            Some(u64::from(usage.input_tokens))
+        );
+        assert_eq!(
+            worker.usage.output_tokens,
+            Some(u64::from(usage.output_tokens))
+        );
+        let fingerprint = crate::cost_status::usage_source_fingerprint(source_id);
+        assert_eq!(
+            worker.usage_source_fingerprints,
+            [fingerprint.clone()].into()
+        );
+        assert!(
+            session_usage
+                .usage_source_fingerprints
+                .contains(&fingerprint)
+        );
+    }
 }
 
 /// Like [`delayed_chat_client`] but delays *every* attempt, so the per-step

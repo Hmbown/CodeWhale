@@ -4541,6 +4541,24 @@ impl Engine {
         // no provider request can observe a partially updated route.
         self.active_route_limits = route_limits;
         self.config.compaction = compaction;
+        // Headless/runtime hosts supply their durable turn owner. Interactive
+        // turns historically supplied none, leaving a detached child with
+        // only the soon-to-be-sealed mailbox. Give this turn an owner whose
+        // sink folds into the existing session cost pool; cloned child leases
+        // keep it live beyond TurnComplete without reopening the mailbox.
+        let interactive_runtime_cost_owner = if self.config.terminal_chrome_enabled
+            && self.config.compaction.runtime_cost_owner.is_none()
+        {
+            let owner = format!("interactive:{}:{}", self.session.id, turn.id);
+            crate::cost_status::register_interactive_runtime_usage_sink(
+                &owner,
+                crate::cost_status::scope_token(),
+            );
+            self.config.compaction.runtime_cost_owner = Some(owner.clone());
+            Some(owner)
+        } else {
+            None
+        };
 
         // Snapshot the workspace BEFORE we touch a single tool. Run the git
         // work on the blocking pool so the async runtime stays responsive;
@@ -4803,6 +4821,9 @@ impl Engine {
             } else {
                 barrier.cancel_and_flush().await;
             }
+        }
+        if let Some(owner) = interactive_runtime_cost_owner.as_deref() {
+            crate::cost_status::finish_runtime_usage_owner(owner);
         }
 
         // Emit turn complete event — after all post-turn bookkeeping so
@@ -6735,8 +6756,8 @@ struct TurnToolBuild {
     subagent_runtime_model: Option<String>,
     /// Turn-scoped sub-agent mailbox and its flush barrier, when sub-agent
     /// wiring was live. The engine must seal, flush, and await this before it
-    /// emits `TurnComplete`: that is what makes detached-child usage accounting
-    /// exactly-once rather than "whatever arrived in time".
+    /// emits `TurnComplete`. Detached children never reopen this ordering
+    /// boundary; their owner-scoped usage lease is the separate durable path.
     mailbox: Option<TurnMailboxBarrier>,
     /// Tools this build loaded from the plugin surface rather than the built-in
     /// registry builder. Carried out so the read-only request projection can

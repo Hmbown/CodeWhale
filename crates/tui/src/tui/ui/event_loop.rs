@@ -3327,11 +3327,21 @@ pub(crate) async fn run_event_loop(
         // observations of the pool (#4318).
         let pending_bg = crate::cost_status::drain();
         if !pending_bg.is_empty() {
+            let runtime_usage_arrived = app.absorb_pending_background_cost(&pending_bg);
             if pending_bg.estimate.is_positive() {
-                app.accrue_subagent_cost_estimate(pending_bg.estimate);
                 app.needs_redraw = true;
             }
-            app.absorb_background_cost_coverage(&pending_bg);
+            // Runtime-owned child usage can land after the parent's
+            // TurnComplete snapshot. Queue a fresh snapshot from the same
+            // drained money+identity batch so an immediate reload agrees with
+            // the live footer and worker record.
+            if runtime_usage_arrived
+                && let Ok(manager) = SessionManager::default_location()
+                && let Ok(session) = build_session_snapshot(app, &manager)
+            {
+                app.current_session_id = Some(session.metadata.id.clone());
+                persistence_actor::persist(PersistRequest::SessionSnapshot(session));
+            }
         }
         // Drain completed file-tree walks (initial build / expands) so the
         // spliced children repaint without waiting for an input event (#3900).
