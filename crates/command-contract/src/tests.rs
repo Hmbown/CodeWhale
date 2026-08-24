@@ -361,8 +361,6 @@ fn envelope_rejects_duplicate_new_slots_deterministically() {
 /// the workspace path.
 struct FakeMemory {
     hits: Vec<MemoryHit>,
-    remembered: Vec<MemoryRememberTarget>,
-    deleted: Vec<String>,
     remembered_result: Option<MemoryRemembered>,
     workspace_id_result: Result<String, String>,
 }
@@ -376,8 +374,6 @@ impl FakeMemory {
                 line_end: 5,
                 text: "reviewed note".to_string(),
             }],
-            remembered: Vec::new(),
-            deleted: Vec::new(),
             remembered_result: Some(MemoryRemembered {
                 source: PathBuf::from("/mem/global.md"),
                 line_start: 7,
@@ -432,7 +428,6 @@ impl CommandMemoryContext for FakeMemory {
         if note.is_empty() {
             return Err("empty note".to_string());
         }
-        let _ = &self.remembered; // record-only fake; see remember_records_targets
         Ok(self.remembered_result.clone().unwrap_or(MemoryRemembered {
             source: PathBuf::from("/mem/global.md"),
             line_start: 1,
@@ -462,7 +457,6 @@ impl CommandMemoryContext for FakeMemory {
     }
 
     fn delete(&self, scope: MemoryDeleteScope) -> Result<MemoryDelete, String> {
-        let _ = &self.deleted;
         match scope {
             MemoryDeleteScope::All => Ok(MemoryDelete),
             MemoryDeleteScope::Global => Ok(MemoryDelete),
