@@ -130,7 +130,12 @@ impl codewhale_command_contract::metadata::RegisterCommand<CommandResult> for Fe
     }
 
     fn handler() -> codewhale_command_contract::handler::CommandHandler<CommandResult> {
-        codewhale_command_contract::handler::CommandHandler::Contextual(feat015_contextual)
+        codewhale_command_contract::handler::CommandHandler::Contextual {
+            capabilities: codewhale_command_contract::handler::CommandCapabilities::WORKSPACE
+                .union(codewhale_command_contract::handler::CommandCapabilities::MODE_POLICY)
+                .union(codewhale_command_contract::handler::CommandCapabilities::COST),
+            handler: feat015_contextual,
+        }
     }
 }
 
@@ -266,13 +271,16 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         // production entry is migrated in FEAT-015, so the contextual branch
         // is only reachable by the test-only fixture (D6).
         if let Some(handler) = command_object.contextual_handler() {
-            let mut bundle = app.command_contexts();
             return match handler {
                 codewhale_command_contract::handler::CommandHandler::Pure(pure_fn) => {
                     pure_fn(command_arg)
                 }
-                codewhale_command_contract::handler::CommandHandler::Contextual(contextual) => {
-                    contextual(bundle.contexts(), command_arg)
+                codewhale_command_contract::handler::CommandHandler::Contextual {
+                    capabilities,
+                    handler: contextual,
+                } => {
+                    let mut bundle = app.command_contexts();
+                    contextual(bundle.contexts(capabilities), command_arg)
                 }
             };
         }

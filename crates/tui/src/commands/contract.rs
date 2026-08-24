@@ -32,13 +32,15 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use codewhale_command_contract::facets::{
-    CommandCostContext, CommandMediaContext, CommandModePolicyContext, CommandModelContext,
-    CommandPresentationContext, CommandSessionContext, CommandSkillsContext,
-    CommandSystemPromptContext, CommandWorkspaceContext, MediaAttachmentReceipt,
+    CommandCostContext, CommandMediaContext, CommandMemoryContext, CommandModePolicyContext,
+    CommandModelContext, CommandPresentationContext, CommandSessionContext, CommandSkillsContext,
+    CommandSystemPromptContext, CommandWorkspaceContext, MediaAttachmentReceipt, MemoryDelete,
+    MemoryDeleteScope, MemoryExport, MemoryGetOutcome, MemoryHit, MemoryImportOutcome,
+    MemoryReindex, MemoryRememberTarget, MemoryRemembered, MemoryStatus,
 };
-use codewhale_command_contract::handler::CommandContexts;
 #[cfg(test)]
 use codewhale_command_contract::handler::ContextParts;
+use codewhale_command_contract::handler::{CommandCapabilities, CommandContexts};
 use codewhale_command_contract::types::{
     CommandApprovalMode, CommandCurrency, CommandMode, CommandProviderId, CommandReasoningEffort,
 };
@@ -623,6 +625,191 @@ fn media_kind(path: &Path) -> Option<&'static str> {
     }
 }
 
+/// Memory host-data adapter (FEAT-019 D1).
+///
+/// Derives the authoritative native store exactly like the legacy `/memory`
+/// handler (`from_global_path` on the app memory path, falling back to a
+/// `memory` root beside it) and converts every host value/error to a portable
+/// contract value before it crosses the boundary. All methods are `&self` and
+/// borrow `App` only for the duration of one call; workspace state is passed
+/// per call and never retained by the facet (D8).
+pub(crate) struct MemoryAdapter<'a> {
+    host: SharedCommandHost<'a>,
+}
+
+/// Derive the authoritative native-memory store from the resolved user-memory
+/// file path, mirroring the pre-migration `/memory` handler exactly.
+fn native_store_from_memory_path(memory_path: &Path) -> crate::native_memory::NativeMemoryStore {
+    if let Some(store) = crate::native_memory::NativeMemoryStore::from_global_path(memory_path) {
+        return store;
+    }
+    let root = memory_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("memory");
+    crate::native_memory::NativeMemoryStore::new(root)
+}
+
+/// Convert a TUI-owned native hit into the portable contract hit. Only the
+/// semantic fields the handler consumes for rendering cross the boundary (D2).
+fn portable_hit(hit: crate::native_memory::MemoryHit) -> MemoryHit {
+    MemoryHit {
+        source: hit.source,
+        line_start: hit.line_start,
+        line_end: hit.line_end,
+        text: hit.text,
+    }
+}
+
+impl CommandMemoryContext for MemoryAdapter<'_> {
+    fn memory_path(&self) -> PathBuf {
+        self.host.app.borrow().memory_path.clone()
+    }
+
+    fn memory_enabled(&self) -> bool {
+        self.host.app.borrow().use_memory
+    }
+
+    fn status(&self) -> Result<MemoryStatus, String> {
+        let app = self.host.app.borrow();
+        let store = native_store_from_memory_path(&app.memory_path);
+        Ok(MemoryStatus {
+            root: store.root().to_path_buf(),
+            source: store.global_path(),
+            index: store.index_path(),
+        })
+    }
+
+    fn path(&self) -> Result<PathBuf, String> {
+        let app = self.host.app.borrow();
+        Ok(native_store_from_memory_path(&app.memory_path)
+            .root()
+            .to_path_buf())
+    }
+
+    fn workspace_id(&self, workspace: &Path) -> Result<String, String> {
+        match crate::native_memory::NativeMemoryStore::workspace_id(workspace) {
+            Ok(Some(id)) => Ok(id),
+            Ok(None) => {
+                Err("workspace memory requires a git repository with an origin".to_string())
+            }
+            Err(err) => Err(format!("failed to resolve workspace identity: {err}")),
+        }
+    }
+
+    fn search(
+        &self,
+        workspace: &Path,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryHit>, String> {
+        let app = self.host.app.borrow();
+        let store = native_store_from_memory_path(&app.memory_path);
+        match store.search_for_workspace(workspace, query, limit) {
+            Ok(hits) => Ok(hits.into_iter().map(portable_hit).collect()),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    fn remember(
+        &self,
+        target: MemoryRememberTarget,
+        note: &str,
+    ) -> Result<MemoryRemembered, String> {
+        let app = self.host.app.borrow();
+        let store = native_store_from_memory_path(&app.memory_path);
+        let (scope, workspace_id) = match target {
+            MemoryRememberTarget::Global => (crate::native_memory::MemoryScope::Global, None),
+            MemoryRememberTarget::Workspace { workspace_id } => (
+                crate::native_memory::MemoryScope::Workspace,
+                Some(workspace_id),
+            ),
+        };
+        match store.remember(scope, workspace_id.as_deref(), note) {
+            Ok(hit) => Ok(MemoryRemembered {
+                source: hit.source,
+                line_start: hit.line_start,
+            }),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    fn import(&self) -> Result<MemoryImportOutcome, String> {
+        let app = self.host.app.borrow();
+        let store = native_store_from_memory_path(&app.memory_path);
+        let legacy_path = store
+            .root()
+            .parent()
+            .map(|parent| parent.join("memory.md"))
+            .unwrap_or_else(|| app.memory_path.clone());
+        match store.import_legacy(&legacy_path) {
+            Ok(true) => Ok(MemoryImportOutcome::Imported {
+                destination: store.global_path(),
+            }),
+            Ok(false) => Ok(MemoryImportOutcome::Skipped),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    fn get(&self, workspace: &Path, id: i64) -> Result<MemoryGetOutcome, String> {
+        let app = self.host.app.borrow();
+        let store = native_store_from_memory_path(&app.memory_path);
+        match store.get_for_workspace(workspace, id) {
+            Ok(Some(hit)) => Ok(MemoryGetOutcome::Found(portable_hit(hit))),
+            Ok(None) => Ok(MemoryGetOutcome::NotFound),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    fn export(&self) -> Result<MemoryExport, String> {
+        let app = self.host.app.borrow();
+        let store = native_store_from_memory_path(&app.memory_path);
+        match store.export() {
+            Ok(content) => Ok(MemoryExport { content }),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    fn reindex(&self) -> Result<MemoryReindex, String> {
+        let app = self.host.app.borrow();
+        let store = native_store_from_memory_path(&app.memory_path);
+        match store.reindex() {
+            Ok(entry_count) => Ok(MemoryReindex { entry_count }),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    fn delete(&self, scope: MemoryDeleteScope) -> Result<MemoryDelete, String> {
+        let app = self.host.app.borrow();
+        let store = native_store_from_memory_path(&app.memory_path);
+        let result = match scope {
+            MemoryDeleteScope::All => store.delete_all(None, None),
+            MemoryDeleteScope::Global => {
+                store.delete_all(Some(crate::native_memory::MemoryScope::Global), None)
+            }
+        };
+        result.map(|()| MemoryDelete).map_err(|err| err.to_string())
+    }
+
+    fn delete_workspace(&self, workspace: &Path) -> Result<MemoryDelete, String> {
+        let app = self.host.app.borrow();
+        let store = native_store_from_memory_path(&app.memory_path);
+        match crate::native_memory::NativeMemoryStore::workspace_id(workspace) {
+            Ok(Some(id)) => store
+                .delete_all(
+                    Some(crate::native_memory::MemoryScope::Workspace),
+                    Some(&id),
+                )
+                .map(|()| MemoryDelete)
+                .map_err(|err| err.to_string()),
+            Ok(None) => {
+                Err("workspace memory requires a git repository with an origin".to_string())
+            }
+            Err(err) => Err(format!("failed to resolve workspace identity: {err}")),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Envelope construction (D1)
 // ---------------------------------------------------------------------------
@@ -642,26 +829,60 @@ pub(crate) struct CommandContextBundle<'a> {
     workspace: WorkspaceAdapter<'a>,
     presentation: PresentationAdapter<'a>,
     media: MediaAdapter<'a>,
+    memory: MemoryAdapter<'a>,
 }
 
 impl<'a> CommandContextBundle<'a> {
-    pub(crate) fn contexts(&mut self) -> CommandContexts<'_> {
-        CommandContexts::empty()
-            .with_session(&mut self.session)
-            .with_model(&mut self.model)
-            .with_cost(&mut self.cost)
-            .with_mode_policy(&mut self.mode_policy)
-            .with_system_prompt(&mut self.system_prompt)
-            .with_skills(&mut self.skills)
-            .with_workspace(&mut self.workspace)
-            .with_presentation(&mut self.presentation)
-            .with_media(&mut self.media)
+    /// Expose exactly the capabilities declared by the command registration.
+    pub(crate) fn contexts(&mut self, capabilities: CommandCapabilities) -> CommandContexts<'_> {
+        let mut contexts = CommandContexts::empty();
+        if capabilities.contains(CommandCapabilities::SESSION) {
+            contexts = contexts.with_session(&mut self.session);
+        }
+        if capabilities.contains(CommandCapabilities::MODEL) {
+            contexts = contexts.with_model(&mut self.model);
+        }
+        if capabilities.contains(CommandCapabilities::COST) {
+            contexts = contexts.with_cost(&mut self.cost);
+        }
+        if capabilities.contains(CommandCapabilities::MODE_POLICY) {
+            contexts = contexts.with_mode_policy(&mut self.mode_policy);
+        }
+        if capabilities.contains(CommandCapabilities::SYSTEM_PROMPT) {
+            contexts = contexts.with_system_prompt(&mut self.system_prompt);
+        }
+        if capabilities.contains(CommandCapabilities::SKILLS) {
+            contexts = contexts.with_skills(&mut self.skills);
+        }
+        if capabilities.contains(CommandCapabilities::WORKSPACE) {
+            contexts = contexts.with_workspace(&mut self.workspace);
+        }
+        if capabilities.contains(CommandCapabilities::PRESENTATION) {
+            contexts = contexts.with_presentation(&mut self.presentation);
+        }
+        if capabilities.contains(CommandCapabilities::MEDIA) {
+            contexts = contexts.with_media(&mut self.media);
+        }
+        if capabilities.contains(CommandCapabilities::MEMORY) {
+            contexts = contexts.with_memory(&mut self.memory);
+        }
+        contexts
     }
 
     /// Test-only: consume the bundle into independent facet parts.
     #[cfg(test)]
     pub(crate) fn parts(&mut self) -> ContextParts<'_> {
-        self.contexts().into_parts()
+        let all_test_capabilities = CommandCapabilities::SESSION
+            .union(CommandCapabilities::MODEL)
+            .union(CommandCapabilities::COST)
+            .union(CommandCapabilities::MODE_POLICY)
+            .union(CommandCapabilities::SYSTEM_PROMPT)
+            .union(CommandCapabilities::SKILLS)
+            .union(CommandCapabilities::WORKSPACE)
+            .union(CommandCapabilities::PRESENTATION)
+            .union(CommandCapabilities::MEDIA)
+            .union(CommandCapabilities::MEMORY);
+        self.contexts(all_test_capabilities).into_parts()
     }
 }
 
@@ -681,7 +902,8 @@ impl App {
             skills: SkillsAdapter { host: host.clone() },
             workspace: WorkspaceAdapter { host: host.clone() },
             presentation: PresentationAdapter { host: host.clone() },
-            media: MediaAdapter { host },
+            media: MediaAdapter { host: host.clone() },
+            memory: MemoryAdapter { host },
         }
     }
 }
@@ -691,6 +913,7 @@ mod tests {
     use super::*;
     use crate::localization::Locale;
     use crate::models::Role;
+    use tempfile::TempDir;
 
     fn test_app() -> App {
         crate::test_support::test_app_with_options(crate::test_support::test_tui_options(
@@ -1149,7 +1372,303 @@ mod tests {
             // perform capability work; the adapters only run on method calls.
             let _ = parts.media.is_some();
             let _ = parts.presentation.is_some();
+            let _ = parts.memory.is_some();
         }
         assert_eq!(app.input, input_before, "no eager composer mutation");
+    }
+
+    // -----------------------------------------------------------------------
+    // FEAT-019: memory adapter mappings (D6/D9)
+    // -----------------------------------------------------------------------
+
+    /// App with an isolated temp memory file; memory feature enabled or not.
+    fn memory_test_app(tmpdir: &TempDir, use_memory: bool) -> App {
+        let options = crate::test_support::test_tui_options(tmpdir.path());
+        let options = crate::tui::app::TuiOptions {
+            memory_path: tmpdir.path().join("memory.md"),
+            use_memory,
+            ..options
+        };
+        crate::test_support::test_app_with_options(options)
+    }
+
+    /// Give a temp workspace a git origin so workspace identity resolves.
+    fn git_origin(workspace: &Path) {
+        let init = std::process::Command::new("git")
+            .arg("-C")
+            .arg(workspace)
+            .args(["init", "-q"])
+            .status()
+            .unwrap();
+        assert!(init.success(), "git init must succeed");
+        let remote = std::process::Command::new("git")
+            .arg("-C")
+            .arg(workspace)
+            .args(["remote", "add", "origin", "https://example.test/repo.git"])
+            .status()
+            .unwrap();
+        assert!(remote.success(), "git remote add must succeed");
+    }
+
+    #[test]
+    fn memory_adapter_maps_path_and_enablement() {
+        let tmp = TempDir::new().unwrap();
+        let mut enabled = memory_test_app(&tmp, true);
+        let mut bundle = enabled.command_contexts();
+        let memory = bundle.parts().memory.expect("memory facet must be present");
+        assert_eq!(memory.memory_path(), tmp.path().join("memory.md"));
+        assert!(memory.memory_enabled());
+
+        let mut disabled = memory_test_app(&tmp, false);
+        let mut bundle = disabled.command_contexts();
+        let memory = bundle.parts().memory.expect("memory facet must be present");
+        assert!(!memory.memory_enabled());
+    }
+
+    #[test]
+    fn memory_adapter_status_and_path_map_native_store() {
+        let tmp = TempDir::new().unwrap();
+        let mut app = memory_test_app(&tmp, true);
+        let mut bundle = app.command_contexts();
+        let memory = bundle.parts().memory.expect("memory facet");
+
+        // Fallback root derivation mirrors the legacy handler: a plain
+        // `memory.md` file is not a native global source, so the root is the
+        // sibling `memory` directory.
+        let status = memory.status().expect("status");
+        assert_eq!(status.root, tmp.path().join("memory"));
+        assert_eq!(
+            status.source,
+            tmp.path().join("memory").join("global").join("MEMORY.md")
+        );
+        assert_eq!(
+            status.index,
+            tmp.path().join("memory").join("index.sqlite3")
+        );
+        assert_eq!(memory.path().expect("path"), tmp.path().join("memory"));
+    }
+
+    #[test]
+    fn memory_adapter_workspace_identity_resolves_and_preserves_errors() {
+        let tmp = TempDir::new().unwrap();
+        git_origin(tmp.path());
+        let mut app = memory_test_app(&tmp, true);
+        let mut bundle = app.command_contexts();
+        let memory = bundle.parts().memory.expect("memory facet");
+        // A git origin resolves to a stable workspace identity (sha256 digest).
+        let id = memory.workspace_id(tmp.path()).expect("workspace id");
+        assert!(!id.is_empty());
+        assert_eq!(id, memory.workspace_id(tmp.path()).expect("stable id"));
+
+        // A plain directory without git origin preserves the established error.
+        let plain = TempDir::new().unwrap();
+        let err = memory
+            .workspace_id(plain.path())
+            .expect_err("missing origin");
+        assert_eq!(
+            err,
+            "workspace memory requires a git repository with an origin"
+        );
+    }
+
+    #[test]
+    fn memory_adapter_search_remember_get_export_reindex_work() {
+        let tmp = TempDir::new().unwrap();
+        let mut app = memory_test_app(&tmp, true);
+        let mut bundle = app.command_contexts();
+        let memory = bundle.parts().memory.expect("memory facet");
+
+        // Global remember produces a portable remembered location.
+        let remembered = memory
+            .remember(MemoryRememberTarget::Global, "alpha note")
+            .expect("remember global");
+        assert!(remembered.source.ends_with("global/MEMORY.md"));
+        assert_eq!(remembered.line_start, 2);
+
+        // Workspace remember targets the workspace scope with the typed id.
+        git_origin(tmp.path());
+        let workspace_id = memory.workspace_id(tmp.path()).expect("id");
+        let workspace_note = memory
+            .remember(
+                MemoryRememberTarget::Workspace { workspace_id },
+                "workspace-only note",
+            )
+            .expect("remember workspace");
+        assert!(
+            workspace_note
+                .source
+                .to_string_lossy()
+                .contains("workspace")
+        );
+
+        // Search finds workspace-scoped content only for the given workspace.
+        let hits = memory
+            .search(tmp.path(), "workspace-only", 10)
+            .expect("search");
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].text.contains("workspace-only note"));
+        assert_eq!(hits[0].line_start, 2);
+        // Empty results stay a typed empty vec, never an error.
+        assert!(
+            memory
+                .search(tmp.path(), "zzz-no-match", 10)
+                .expect("empty search")
+                .is_empty()
+        );
+
+        // Get distinguishes found from not-found (first rowid is 1).
+        match memory.get(tmp.path(), 1) {
+            Ok(MemoryGetOutcome::Found(hit)) => assert!(!hit.text.is_empty()),
+            other => panic!("expected found entry, got {other:?}"),
+        }
+        assert_eq!(
+            memory.get(tmp.path(), 999_999).expect("get"),
+            MemoryGetOutcome::NotFound
+        );
+
+        // Export carries the document; reindex reports the typed count.
+        let exported = memory.export().expect("export");
+        assert!(exported.content.contains("alpha note"));
+        assert!(exported.content.contains("workspace-only note"));
+        assert!(memory.reindex().expect("reindex").entry_count >= 1);
+    }
+
+    #[test]
+    fn memory_adapter_import_distinguishes_imported_from_skipped() {
+        let tmp = TempDir::new().unwrap();
+        let legacy = tmp.path().join("memory.md");
+        std::fs::write(&legacy, "# legacy\n\n- imported line").unwrap();
+        let mut app = memory_test_app(&tmp, true);
+        let mut bundle = app.command_contexts();
+        let memory = bundle.parts().memory.expect("memory facet");
+
+        let imported = memory.import().expect("import");
+        let MemoryImportOutcome::Imported { destination } = imported else {
+            panic!("first import must be imported");
+        };
+        assert!(destination.ends_with("global/MEMORY.md"));
+
+        // Idempotent: an existing global source reports skipped.
+        assert_eq!(
+            memory.import().expect("second"),
+            MemoryImportOutcome::Skipped
+        );
+    }
+
+    #[test]
+    fn memory_adapter_deletes_are_scoped_and_preserve_other_memory() {
+        let tmp = TempDir::new().unwrap();
+        git_origin(tmp.path());
+        let mut app = memory_test_app(&tmp, true);
+        let mut bundle = app.command_contexts();
+        let memory = bundle.parts().memory.expect("memory facet");
+
+        memory
+            .remember(MemoryRememberTarget::Global, "keep global")
+            .expect("global");
+        let workspace_id = memory.workspace_id(tmp.path()).expect("id");
+        memory
+            .remember(
+                MemoryRememberTarget::Workspace { workspace_id },
+                "remove workspace",
+            )
+            .expect("workspace");
+
+        // Workspace deletion removes only the workspace scope.
+        memory
+            .delete_workspace(tmp.path())
+            .expect("workspace delete");
+        assert!(
+            memory
+                .search(tmp.path(), "remove workspace", 10)
+                .expect("search")
+                .is_empty()
+        );
+        assert_eq!(
+            memory.search(tmp.path(), "keep global", 10).unwrap().len(),
+            1
+        );
+
+        // Global deletion removes the global scope but keeps the workspace one.
+        memory
+            .remember(
+                MemoryRememberTarget::Workspace {
+                    workspace_id: memory.workspace_id(tmp.path()).expect("id"),
+                },
+                "workspace survivor",
+            )
+            .expect("workspace again");
+        memory
+            .delete(MemoryDeleteScope::Global)
+            .expect("global delete");
+        assert!(
+            memory
+                .search(tmp.path(), "keep global", 10)
+                .expect("search")
+                .is_empty()
+        );
+        assert_eq!(
+            memory
+                .search(tmp.path(), "workspace survivor", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // All deletion removes every scope.
+        memory.delete(MemoryDeleteScope::All).expect("all delete");
+        assert!(
+            memory
+                .search(tmp.path(), "workspace survivor", 10)
+                .expect("search")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn memory_adapter_preserves_workspace_delete_error_text() {
+        let tmp = TempDir::new().unwrap();
+        let mut app = memory_test_app(&tmp, true);
+        let mut bundle = app.command_contexts();
+        let memory = bundle.parts().memory.expect("memory facet");
+        let err = memory
+            .delete_workspace(tmp.path())
+            .expect_err("missing origin");
+        assert_eq!(
+            err,
+            "workspace memory requires a git repository with an origin"
+        );
+    }
+
+    #[test]
+    fn envelope_exposes_only_declared_capabilities() {
+        let tmp = TempDir::new().unwrap();
+        let mut app = memory_test_app(&tmp, true);
+        let mut bundle = app.command_contexts();
+
+        // Memory-only: memory present, workspace/session absent.
+        let parts = bundle.contexts(CommandCapabilities::MEMORY).into_parts();
+        assert!(parts.memory.is_some());
+        assert!(parts.workspace.is_none());
+        assert!(parts.session.is_none());
+
+        // Workspace-only: memory absent.
+        let parts = bundle.contexts(CommandCapabilities::WORKSPACE).into_parts();
+        assert!(parts.workspace.is_some());
+        assert!(parts.memory.is_none());
+
+        // Workspace | MEMORY: both present, presentation/media absent.
+        let parts = bundle
+            .contexts(CommandCapabilities::WORKSPACE.union(CommandCapabilities::MEMORY))
+            .into_parts();
+        assert!(parts.workspace.is_some());
+        assert!(parts.memory.is_some());
+        assert!(parts.presentation.is_none());
+        assert!(parts.media.is_none());
+
+        // Unrelated capability: memory absent.
+        let parts = bundle.contexts(CommandCapabilities::SESSION).into_parts();
+        assert!(parts.session.is_some());
+        assert!(parts.memory.is_none());
     }
 }
