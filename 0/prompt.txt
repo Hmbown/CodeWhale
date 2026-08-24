@@ -1,0 +1,69 @@
+hi your job is to make a codewhale computer use plugin that works on mac, windows, linux, harmony os, and android - use primarily the deepseek v4 vision model as our target model for this
+
+---
+
+<task-notification>
+<task-id>a589373b950fe8414</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/94a99196-13a1-4b18-b94a-887ca18b892e/tasks/a589373b950fe8414.output</output-file>
+<status>completed</status>
+<summary>Agent "Review computer-use crate drivers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Review scope
+
+Reviewed all `.rs` files under `/Volumes/VIXinSSD/CW/codewhale/crates/computer-use/src/` (driver trait, session/coordinate-mapping, frame pipeline, MCP JSON-RPC layer, and the macOS/Windows/Linux/Android/HarmonyOS drivers), plus `/Volumes/VIXinSSD/CW/codewhale/plugins/computer-use/**` (plugin.json, mcp.json, agent profile, command) against the design doc at `/Volumes/VIXinSSD/CW/codewhale/docs/design/COMPUTER_USE_PLUGIN.md`. I cross-checked CLI/FFI semantics I wasn't certain of (ydotool click/mousemove flags, HarmonyOS `uitest` swipe velocity/inputText argument order, macOS `screencapture` multi-display behavior, CGEvent constants) against public documentation.
+
+I found two high-confidence, real bugs. Everything else I inspected (MCP response shapes, JSON-RPC error handling, coordinate/zoom math in `frame.rs`/`session.rs`, macOS CGEvent constants and keycode tables, Windows SendInput/GDI capture, Linux xdotool/ydotool argument syntax, adb/hdc shell-quoting) checked out or I could not find a defect I was confident about (≥80).
+
+## Critical
+
+**1. macOS screenshot driver assumes a single display; breaks (or silently mis-targets) on any multi-monitor Mac**
+`crates/computer-use/src/drivers/macos.rs:469-499` (`MacDriver::screenshot`)
+
+```rust
+let out = process::run(&amp;screencapture, &amp;["-x", "-C", "-t", "png", &amp;path_str], ...);
+```
+No `-m` (main-monitor-only) or `-D &lt;display&gt;` flag is passed. Per Apple's own `screencapture` man page, when more than one display is attached and a single output path is given, the tool writes **one file per screen** (only the first display maps to the literal filename you passed; the rest get suffixed names that this driver never reads). `MacDriver`'s whole coordinate model (`to_points`, `scale()`) is anchored to the **main** display's logical size/backing scale, fetched once in `MacDriver::new()` via `CGMainDisplayID()`. If the file written to `path` happens to correspond to a non-main display (which display ends up first is not something this code controls), every subsequent click/move/drag will be computed against the wrong display's geometry, sending clicks to the wrong screen or to nonsensical device pixels.
+
+Confidence: 82 — confirmed via Apple's documented `screencapture` behavior ("1 file per screen" without `-m`), and the code path is unconditional (any dual/multi-monitor Mac hits it, not an edge case). This wasn't caught by the design's live smoke test because it only ran on a single-display host.
+
+Fix: pass `-D &lt;n&gt;` for the specific display index, or (simplest, matches the rest of the coordinate model) add `-m` to force main-monitor-only capture:
+```rust
+&amp;["-x", "-C", "-m", "-t", "png", &amp;path_str]
+```
+
+**2. `parse_bounds` silently drops the sign of negative coordinates (Android + HarmonyOS UI-tree)**
+`crates/computer-use/src/drivers/android.rs:561-572` (`parse_bounds`, also reused by `harmony.rs:508` via `crate::drivers::android::parse_bounds`)
+
+```rust
+pub fn parse_bounds(value: &amp;str) -&gt; Option&lt;(u32, u32, u32, u32)&gt; {
+    let nums: Vec&lt;u32&gt; = value
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    ...
+}
+```
+`uiautomator dump` (and HarmonyOS `dumpLayout`) commonly report negative bounds for elements that are partially scrolled off-screen, e.g. `bounds="[-10,-50][1080,200]"`. Splitting on "not an ASCII digit" treats `-` purely as a delimiter, so `-10` is parsed as `10` — the magnitude survives but the sign is lost, not merely rejected. This silently produces a wrong `(left, top, right, bottom)` tuple (and therefore a wrong `center()`) for any node with a negative bound, rather than erroring or filtering the node out. Since `is_interesting()` doesn't check visibility, such a node can still be surfaced to the model in `computer_ui_tree` output with a plausible-looking but incorrect frame-space center, leading the model to tap the wrong location.
+
+Confidence: 82 — verified by hand-tracing the split/parse logic (not dependent on an external doc), and negative bounds for off-screen/partially-scrolled list items are a known, common occurrence in real `uiautomator`/`dumpLayout` output, not a contrived edge case.
+
+Fix: parse each `[l,t]`/`[r,b]` pair with a proper signed-integer scanner (e.g. regex `-?\d+` or manual sign handling before the digit run) and switch the tuple to `i32` (or clamp negatives to 0 if the rest of the pipeline truly requires `u32`, but do so explicitly rather than by accident).
+
+## Lower-confidence items worth a human double-check (below the ≥80 bar, flagged per your request)
+
+- `crates/computer-use/src/drivers/macos.rs:583-606` (`scroll`): direction sign passed to `CGEventCreateScrollWheelEvent2`'s `wheel1`/`wheel2`. I found genuinely conflicting secondary sources on whether positive `wheel1` means "scroll up" or "scroll down," and the design's live-smoke evidence doesn't mention testing `computer_scroll`. I could not verify this with enough confidence to list it as a finding, but it's the one area of the macOS driver that wasn't exercised live and where I'd want a manual check (scroll up/down and see which way content moves).
+- `crates/computer-use/src/drivers/macos.rs:238-251` (`type_unicode`): text is UTF-16-encoded then chunked with `.chunks(16)` with no awareness of surrogate-pair boundaries. If a non-BMP character (e.g. an emoji) happens to land exactly on a 16-code-unit chunk boundary, its surrogate pair would be split across two `CGEventKeyboardSetUnicodeString` calls, corrupting that character. This is real but low-probability (needs a surrogate pair to straddle exactly index 16, 32, 48…), so I'm not confident enough to rate it ≥80, but it's cheap to fix by chunking on `char` boundaries instead of raw `u16` counts.
+
+## Areas checked and found correct (no findings)
+- MCP JSON-RPC shapes in `crates/computer-use/src/mcp.rs`: `initialize`, `tools/list`, `tools/call` result/error envelopes, `image` content block (`type/data/mimeType`), notification handling (no `id` → no response) all match MCP `2024-11-05`.
+- Coordinate math in `crates/computer-use/src/frame.rs` and `session.rs` (`Frame::to_device`, `Zoom::to_frame`, zoom crop/scale, clamping, zoom invalidation on new screenshots/actions) — verified by hand and matches the unit tests.
+- macOS CGEvent type/flag/click-state constants (`K_CG_EVENT_*`, `FLAG_*`, `K_CG_MOUSE_EVENT_CLICK_STATE`) and the US-layout keycode table — all match documented Carbon/CoreGraphics values.
+- Windows `SendInput`/GDI capture setup (top-down `BITMAPINFOHEADER`, `BitBlt`/`GetDIBits` sequence, DPI-awareness call) — structurally sound; handle-null checks are implicit via the `ok == 0` failure path rather than explicit, but that doesn't cause a crash.
+- adb (`input tap/swipe/text/keyevent/keycombination`, `exec-out screencap -p`, `uiautomator dump /dev/tty`, `monkey`) and hdc/uitest (`screenCap -p`, `uiInput click/doubleClick/longClick/swipe/keyEvent/inputText`, `dumpLayout -p`, `file recv`, `aa start -b/-a`) command syntax, including the HarmonyOS swipe velocity range (200–40000 px/s) — cross-checked against current documentation and matches.
+- xdotool/ydotool flag usage (`click --repeat/--delay`, `mousemove --sync` vs `--absolute`, `mousemove --wheel`, button hex codes `0xC0/0xC1/0xC2`) — cross-checked and matches.
+- Shell quoting: `process::sh_quote` is used consistently everywhere a model-supplied string (`computer_type` text, app/package names) is interpolated into an adb/hdc shell command string; `AppAction::Launch` on macOS/Windows goes through argv (`process::run`), not a shell, so no injection risk there either.
+- No unwrap-on-untrusted-data or char-boundary slicing panics found elsewhere in the reviewed code.</result>
+<usage><subagent_tokens>166789</subagent_tokens><tool_uses>34</tool_uses><duration_ms>509712</duration_ms></usage>
+</task-notification>
