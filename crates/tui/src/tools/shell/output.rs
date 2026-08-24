@@ -117,6 +117,9 @@ fn system_legacy_encoding() -> Option<&'static Encoding> {
     None
 }
 
+// Only the Windows `system_legacy_encoding` calls this in production; the
+// mapping table itself is exercised cross-platform by the unit tests.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn legacy_encoding_for_code_page(code_page: u32) -> Option<&'static Encoding> {
     match code_page {
         874 => Some(encoding_rs::WINDOWS_874),
