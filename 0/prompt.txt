@@ -1,0 +1,1 @@
+hi your job is to make a codewhale computer use plugin that works on mac, windows, linux, harmony os, and android - use primarily the deepseek v4 vision model as our target model for this
