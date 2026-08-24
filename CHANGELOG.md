@@ -7,6 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added a verified Omarchy/AUR packaging path: `packaging/aur` now carries a
+  `PKGBUILD` template, `.SRCINFO` renderer and tests, release-candidate
+  render step, and docs; the live AUR compatibility alias `codewhale-tui ->
+  codewhale` is preserved, AUR dependencies match the live package, and the
+  self-updater refuses to fight an Omarchy/package-manager installation.
+- Added a Fleet run-wide cost/token usage ceiling (R6, #5567): an accumulator
+  plus admission gate and alert bound a whole run's spend across workers.
+- Added per-step cost movement: `TurnUsage` receipts are priced as they land
+  so the live cost surface moves during long agentic turns instead of only at
+  `TurnComplete` (#5578), and the footer now honestly shows `cost: unknown`
+  when nothing can be priced instead of hiding the line.
+- Added the underwater session surface: the ambient water reads session state
+  from across the room, its animation shape follows live agent activity, and
+  attention tints are steady (no breathing) with a distinct reading treatment
+  and no mid-water seam on tall windows.
+- Added `@path:START-END` ranged line mentions (#5550, picker half to follow),
+  a predictable last-copy backup file for clipboard exports with the path
+  named when the clipboard fails (#5555), `wait` on multiple background shell
+  tasks with `until=any|all` (#5549, named-kill half to follow), and composer
+  double-click word / triple-click line selection.
+- Added workflow parallel-`schema` slot partial success (#5583): a slot that
+  produces a schema-valid partial result no longer fails the whole parallel
+  branch.
+- Added plugin load-failure startup hints (#5579) and OpenRouter app
+  attribution headers on outbound requests.
+- Added `codewhale doctor --fix` (with `--yes` for non-interactive consent):
+  the doctor now computes a concrete repair plan — delete stale `.tmp*`
+  leftovers from interrupted atomic writes, tighten secret-store file
+  permissions to `0600`, disable structurally broken (Error-status) MCP
+  entries through the atomic MCP save path, and scaffold missing user-global
+  `skills`/`tools`/`plugins` directories — shows it, and applies it only after
+  explicit consent. Every action is narrowly scoped and idempotent; JSON and
+  context-JSON modes stay read-only and conflict with `--fix` (#5552, v1).
+- Added `/context` reporting of the real provider prompt-cache hit rate (C3)
+  alongside token pressure.
+
+### Changed
+
+- Provider neutrality (#5588): model resolution of omitted/aliased models is
+  now provider-relative, OpenAI-native defaults no longer route through
+  another provider's table, CLI credentials stay provider-scoped, and NVIDIA
+  credentials no longer leak into the DeepSeek keychain. Neutrality test
+  matrices exercise several providers instead of standing in with one.
+- The workflow engine module was decomposed out of its 3k-line mega-file into
+  `journal`, `usage`, and `report` modules plus a module directory (#5586
+  slices 1a/B/C/D), a semantic-free move verified by normalized-content hash.
+- Compaction refusals are now always named (#5577): silent holds under context
+  pressure are gone, the context meter honors the same provider-billed prompt
+  the trigger uses (T1), and prune outcomes are projected without cloning the
+  transcript.
+- Step budgets now end honestly: an ~80% soft landing nudges the model to
+  write its final report, and exhaustion grants exactly one bounded
+  report-on-exhaustion turn instead of dying silently (A1/A2).
+- Contributor credit: recognized agent contributors (e.g. `Codewhale Agent`)
+  may now carry `Co-authored-by` trailers; unknown bot/tool trailers are
+  still rejected by the credit gate.
+
+### Fixed
+
+- Fixed detached interactive agents reporting worker usage after the parent
+  turn ends with the usage missing from the session/live `/cost` total
+  (#5597): interactive turns acquire an owner-scoped runtime usage lease,
+  late usage enters the session cost pool without reopening the sealed
+  mailbox, and worker/session/reload accounting share one hashed response
+  identity so retried deliveries stay exactly-once.
+- Fixed the sub-agent fiasco class: in-workspace absolute `git -C` no longer
+  trips the read-only child shell gate with a coherent bounded gate (#5595),
+  turn end parks turn-owned children resumably instead of silently cancelling
+  them (#5596), stale write-claims are released by liveness with coordinate
+  release (#5562), and the verifier role description matches its real
+  surface (#5562).
+- Fixed workflow responseSchema failure handling (#5583): bounded repair with
+  typed receipts (kind + attempt), raw-output receipts persisted as artifacts
+  that survive reload, and failures surfaced instead of null success (#5528).
+  Degraded owner snapshots no longer project as ordinary Completed runs
+  (#5582), typed task error kinds enable fail-fast parallel/pipeline (R9), and
+  `/workflow confirm` finds the draft despite interleaved messages.
+- Fixed the DeepSeek session that never auto-compacted at 842k/1M (#5577): the
+  exact `billed_842k_on_a_1m_window_compacts_despite_a_small_estimate`
+  regression pins the trigger.
+- Fixed sandbox escapes and authority gaps: workspace-write tools resolve
+  hard-linked files before writing (S2, #5569), an opt-in read deny-list
+  bounds full-disk reads in any posture (S1, #5568), and session grants match
+  the command family instead of widening the whole tool (R2).
+- Fixed provider-transport robustness: non-streaming HTTP requests are bounded
+  by a read timeout (R4), and Chat-Completions mid-stream error frames surface
+  instead of hanging (R3). MCP OAuth expiry now reacts to 401/403 with a named
+  recovery path and login hint instead of looking like a broken server (T4,
+  #5572).
+- Fixed Fleet lifecycle gaps: detached workers are reaped when their manager
+  dies (R7) and the per-task wall-clock timeout is enforced (R5); the local
+  Fleet host compiles on non-Unix targets; detached schema repair stays within
+  the runtime budget.
+- Fixed prompt-cache correctness: the tool catalog is fingerprinted in
+  provider wire order (C1), prefix changes between requests are always
+  declared (C5) — including the newly named mid-turn `change:tool_surface`
+  reasons for deferred-tool admission, tool-search activation, and runtime MCP
+  tool arrival — and a reasoning-only response stopped at the output limit now
+  fails the turn honestly instead of re-issuing a request that can only
+  reproduce the stop.
+- Fixed docs/public-surface drift: REBRAND.md no longer presents
+  `api.deepseeki.com` as a China fallback (#5564), and the web facts/tool
+  counts match the repository.
+
 - Heavy pull requests now run the real Linux workspace nextest, doctest, and
   lockfile lanes directly on GitHub Actions instead of reporting a green
   placeholder while waiting for a branch-specific CNB mirror (#5547).
