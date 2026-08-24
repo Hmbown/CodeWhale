@@ -5325,13 +5325,13 @@ mod tests {
             assert_eq!(
                 std::env::var("DEEPSEEK_API_KEY").as_deref(),
                 Ok("existing-deepseek-key"),
-                "{provider_arg} --api-key handoff replaced DeepSeek's credential"
+                "{provider_arg} explicit CLI credential handoff replaced DeepSeek's credential"
             );
             for var in provider_env_vars(provider) {
                 assert_eq!(
                     std::env::var(var).as_deref(),
                     Ok(explicit_key.as_str()),
-                    "{provider_arg} --api-key handoff missed {var}"
+                    "{provider_arg} explicit CLI credential handoff missed {var}"
                 );
             }
             assert_eq!(
