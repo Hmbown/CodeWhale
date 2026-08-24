@@ -1,16 +1,18 @@
 //! Note command: manage persistent workspace notes.
 
-use crate::tui::app::App;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+use codewhale_command_contract::handler::{CommandCapabilities, CommandContexts, CommandHandler};
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::commands::CommandResult;
 
 const USAGE: &str = "/note <text> | /note add <text> | /note list | /note show <n> | /note edit <n> <text> | /note remove <n> | /note clear | /note path";
 
 /// Manage the persistent workspace notes file.
-fn note(app: &mut App, content: Option<&str>) -> CommandResult {
+fn note(workspace: &Path, content: Option<&str>) -> CommandResult {
     let input = match content {
         Some(c) => c.trim(),
         None => {
@@ -22,7 +24,7 @@ fn note(app: &mut App, content: Option<&str>) -> CommandResult {
         return CommandResult::error("Note content cannot be empty");
     }
 
-    let notes_path = notes_path(app);
+    let notes_path = notes_path(workspace);
     let (command, rest) = split_command(input);
 
     match command.to_ascii_lowercase().as_str() {
@@ -38,12 +40,15 @@ fn note(app: &mut App, content: Option<&str>) -> CommandResult {
     }
 }
 
-fn notes_path(app: &App) -> PathBuf {
-    let primary = app.workspace.join(".codewhale").join("notes.md");
+/// Resolve the notes file. An existing `.codewhale` notes file is preferred;
+/// otherwise the `.deepseek` notes path is used (D3 — the fallback stays
+/// handler-owned through standard filesystem operations).
+fn notes_path(workspace: &Path) -> PathBuf {
+    let primary = workspace.join(".codewhale").join("notes.md");
     if primary.exists() {
         return primary;
     }
-    app.workspace.join(".deepseek").join("notes.md")
+    workspace.join(".deepseek").join("notes.md")
 }
 
 fn split_command(input: &str) -> (&str, Option<&str>) {
@@ -266,46 +271,66 @@ fn parse_note_index(rest: Option<&str>, note_count: usize, usage: &str) -> Resul
     Ok(index - 1)
 }
 
-pub(in crate::commands) const COMMAND_INFO: crate::commands::traits::CommandInfo =
-    crate::commands::traits::CommandInfo {
-        name: "note",
-        aliases: &[],
-        usage: "/note [add|list|show|edit|remove|clear|path]",
-        description_id: crate::localization::MessageId::CmdNoteDescription,
-    };
+pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
+    name: "note",
+    aliases: &[],
+    usage: "/note [add|list|show|edit|remove|clear|path]",
+    description_key: "cmd_note_description",
+};
 
 pub(in crate::commands) struct NoteCmd;
 
-impl crate::commands::traits::RegisterCommand for NoteCmd {
-    fn info() -> &'static crate::commands::traits::CommandInfo {
+impl RegisterCommand<CommandResult> for NoteCmd {
+    fn info() -> &'static CommandInfo {
         &COMMAND_INFO
     }
 
-    fn execute(
-        app: &mut crate::tui::app::App,
-        arg: Option<&str>,
-    ) -> crate::commands::CommandResult {
-        note(app, arg)
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Contextual {
+            capabilities: CommandCapabilities::WORKSPACE,
+            handler: note_contextual,
+        }
     }
+}
+
+fn note_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
+    let parts = contexts.into_parts();
+    let Some(workspace) = parts.workspace.as_deref() else {
+        return CommandResult::error("Command capability unavailable: workspace");
+    };
+    note(&workspace.workspace(), arg)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::tui::app::{App, TuiOptions};
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn create_test_app_with_tmpdir(tmpdir: &TempDir) -> App {
-        let options = TuiOptions {
-            skills_dir: tmpdir.path().join("skills"),
-            memory_path: tmpdir.path().join("memory.md"),
-            notes_path: tmpdir.path().join("notes.txt"),
-            mcp_config_path: tmpdir.path().join("mcp.json"),
-            ..crate::test_support::test_tui_options(tmpdir.path())
-        };
-        App::new(options, &Config::default())
+    use codewhale_command_contract::facets::CommandWorkspaceContext;
+
+    struct FakeWorkspace {
+        path: PathBuf,
+    }
+
+    impl CommandWorkspaceContext for FakeWorkspace {
+        fn workspace(&self) -> PathBuf {
+            self.path.clone()
+        }
+
+        fn work_state_snapshot(&self) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+
+        fn operation_digest(&mut self) -> Result<String, String> {
+            Ok("No active operations or to-do items.".to_string())
+        }
+    }
+
+    fn fake_workspace(tmpdir: &TempDir) -> FakeWorkspace {
+        FakeWorkspace {
+            path: tmpdir.path().to_path_buf(),
+        }
     }
 
     fn notes_path(tmpdir: &TempDir) -> PathBuf {
@@ -319,8 +344,8 @@ mod tests {
     #[test]
     fn test_note_without_content_returns_error() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = note(&mut app, None);
+        let workspace = fake_workspace(&tmpdir);
+        let result = note(&workspace.path, None);
         assert!(result.message.is_some());
         assert!(result.message.unwrap().contains("Usage: /note"));
     }
@@ -328,8 +353,8 @@ mod tests {
     #[test]
     fn test_note_with_empty_content_returns_error() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = note(&mut app, Some("   "));
+        let workspace = fake_workspace(&tmpdir);
+        let result = note(&workspace.path, Some("   "));
         assert!(result.message.is_some());
         assert!(result.message.unwrap().contains("cannot be empty"));
     }
@@ -337,8 +362,8 @@ mod tests {
     #[test]
     fn test_note_appends_to_file() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = note(&mut app, Some("Test note content"));
+        let workspace = fake_workspace(&tmpdir);
+        let result = note(&workspace.path, Some("Test note content"));
         assert!(result.message.is_some());
         let msg = message(result);
         assert!(msg.contains("Note appended to"));
@@ -352,9 +377,9 @@ mod tests {
     #[test]
     fn test_note_multiple_appends() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        note(&mut app, Some("First note"));
-        note(&mut app, Some("Second note"));
+        let workspace = fake_workspace(&tmpdir);
+        note(&workspace.path, Some("First note"));
+        note(&workspace.path, Some("Second note"));
 
         let notes_path = notes_path(&tmpdir);
         let content = std::fs::read_to_string(&notes_path).unwrap();
@@ -367,11 +392,11 @@ mod tests {
     #[test]
     fn test_note_list_numbers_entries_without_storing_numbers() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        note(&mut app, Some("Alpha note"));
-        note(&mut app, Some("Beta note"));
+        let workspace = fake_workspace(&tmpdir);
+        note(&workspace.path, Some("Alpha note"));
+        note(&workspace.path, Some("Beta note"));
 
-        let listed = message(note(&mut app, Some("list")));
+        let listed = message(note(&workspace.path, Some("list")));
         assert!(listed.contains("1. Alpha note"));
         assert!(listed.contains("2. Beta note"));
 
@@ -383,10 +408,10 @@ mod tests {
     #[test]
     fn test_note_show_displays_full_multiline_note() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        note(&mut app, Some("add first line\nsecond line"));
+        let workspace = fake_workspace(&tmpdir);
+        note(&workspace.path, Some("add first line\nsecond line"));
 
-        let shown = message(note(&mut app, Some("show 1")));
+        let shown = message(note(&workspace.path, Some("show 1")));
         assert!(shown.contains("Note 1:"));
         assert!(shown.contains("first line\nsecond line"));
     }
@@ -394,11 +419,11 @@ mod tests {
     #[test]
     fn test_note_edit_updates_numbered_entry() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        note(&mut app, Some("First note"));
-        note(&mut app, Some("Second note"));
+        let workspace = fake_workspace(&tmpdir);
+        note(&workspace.path, Some("First note"));
+        note(&workspace.path, Some("Second note"));
 
-        let edited = message(note(&mut app, Some("edit 2 Updated second note")));
+        let edited = message(note(&workspace.path, Some("edit 2 Updated second note")));
         assert!(edited.contains("Note 2 updated"));
 
         let content = std::fs::read_to_string(notes_path(&tmpdir)).unwrap();
@@ -410,15 +435,15 @@ mod tests {
     #[test]
     fn test_note_remove_renumbers_remaining_entries() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        note(&mut app, Some("First note"));
-        note(&mut app, Some("Second note"));
-        note(&mut app, Some("Third note"));
+        let workspace = fake_workspace(&tmpdir);
+        note(&workspace.path, Some("First note"));
+        note(&workspace.path, Some("Second note"));
+        note(&workspace.path, Some("Third note"));
 
-        let removed = message(note(&mut app, Some("remove 2")));
+        let removed = message(note(&workspace.path, Some("remove 2")));
         assert!(removed.contains("Note 2 removed"));
 
-        let listed = message(note(&mut app, Some("list")));
+        let listed = message(note(&workspace.path, Some("list")));
         assert!(listed.contains("1. First note"));
         assert!(listed.contains("2. Third note"));
         assert!(!listed.contains("Second note"));
@@ -427,10 +452,10 @@ mod tests {
     #[test]
     fn test_note_clear_empties_file() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        note(&mut app, Some("First note"));
+        let workspace = fake_workspace(&tmpdir);
+        note(&workspace.path, Some("First note"));
 
-        let cleared = message(note(&mut app, Some("clear")));
+        let cleared = message(note(&workspace.path, Some("clear")));
         assert!(cleared.contains("Notes cleared"));
         assert_eq!(std::fs::read_to_string(notes_path(&tmpdir)).unwrap(), "");
     }
@@ -438,20 +463,35 @@ mod tests {
     #[test]
     fn test_note_path_prints_workspace_notes_file() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
+        let workspace = fake_workspace(&tmpdir);
 
-        let path = message(note(&mut app, Some("path")));
+        let path = message(note(&workspace.path, Some("path")));
         assert!(path.contains(".deepseek"));
         assert!(path.contains("notes.md"));
     }
 
     #[test]
+    fn test_note_prefers_existing_codewhale_notes_file() {
+        let tmpdir = TempDir::new().unwrap();
+        let codewhale_dir = tmpdir.path().join(".codewhale");
+        std::fs::create_dir_all(&codewhale_dir).unwrap();
+        let codewhale_notes = codewhale_dir.join("notes.md");
+        std::fs::write(&codewhale_notes, "---\nexisting codewhale note").unwrap();
+
+        let workspace = fake_workspace(&tmpdir);
+        let path = message(note(&workspace.path, Some("path")));
+        assert!(path.contains(".codewhale"));
+        assert!(path.contains("notes.md"));
+        assert!(!path.contains(".deepseek"));
+    }
+
+    #[test]
     fn test_note_rejects_out_of_range_index() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        note(&mut app, Some("Only note"));
+        let workspace = fake_workspace(&tmpdir);
+        note(&workspace.path, Some("Only note"));
 
-        let result = note(&mut app, Some("show 2"));
+        let result = note(&workspace.path, Some("show 2"));
         assert!(result.message.unwrap().contains("out of range"));
     }
 
@@ -459,5 +499,31 @@ mod tests {
     fn test_parse_notes_handles_plain_text_before_separator() {
         let parsed = parse_notes("plain note\n---\nseparated note");
         assert_eq!(parsed, vec!["plain note", "separated note"]);
+    }
+
+    #[test]
+    fn note_registration_declares_exactly_workspace() {
+        let CommandHandler::Contextual {
+            capabilities,
+            handler,
+        } = NoteCmd::handler()
+        else {
+            panic!("note must be contextual");
+        };
+        assert_eq!(capabilities, CommandCapabilities::WORKSPACE);
+        assert!(!capabilities.contains(CommandCapabilities::MEMORY));
+        assert!(!capabilities.contains(CommandCapabilities::PRESENTATION));
+        assert!(!capabilities.contains(CommandCapabilities::MEDIA));
+
+        // Missing WORKSPACE fails safely instead of panicking.
+        let missing = handler(CommandContexts::empty(), Some("list"));
+        assert!(missing.is_error);
+        assert_eq!(
+            missing.message.as_deref(),
+            Some("Error: Command capability unavailable: workspace")
+        );
+        assert_eq!(NoteCmd::info().description_key, "cmd_note_description");
+        assert_eq!(NoteCmd::info().name, "note");
+        assert_eq!(NoteCmd::info().aliases, &[] as &[&str]);
     }
 }

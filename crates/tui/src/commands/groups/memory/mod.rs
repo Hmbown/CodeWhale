@@ -7,21 +7,20 @@
 mod memory;
 mod note;
 
-use crate::commands::traits::{Command, CommandGroup, FunctionCommand, RegisterCommand};
+use crate::commands::traits::{CommandGroup, ContextualCommand};
 
 pub struct MemoryCommands;
 
 impl CommandGroup for MemoryCommands {
-    fn commands(&self) -> &'static [Box<dyn Command>] {
+    fn commands(&self) -> &'static [Box<dyn crate::commands::traits::Command>] {
         cached_command_list!(vec![
-            Box::new(FunctionCommand::new(
-                note::NoteCmd::info(),
-                note::NoteCmd::execute,
-            )),
-            Box::new(FunctionCommand::new(
-                memory::MemoryCmd::info(),
-                memory::MemoryCmd::execute,
-            )),
+            Box::new(
+                ContextualCommand::from_contract::<note::NoteCmd>().expect("note registration"),
+            ),
+            Box::new(
+                ContextualCommand::from_contract::<memory::MemoryCmd>()
+                    .expect("memory registration"),
+            ),
         ])
     }
 }
