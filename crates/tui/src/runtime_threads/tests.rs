@@ -1,6 +1,7 @@
 use super::*;
 use crate::core::engine::{MockApprovalEvent, mock_engine_handle};
 use crate::core::events::{Event as EngineEvent, TurnOutcomeStatus};
+use codewhale_protocol::agent_mail::AGENT_MAIL_EVENT_QUEUED;
 use codewhale_protocol::agent_mail::{AgentMailDeliveryMode, AgentMailSender, AgentMailStatus};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
