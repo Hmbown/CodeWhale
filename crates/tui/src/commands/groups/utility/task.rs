@@ -1,6 +1,6 @@
 //! Task commands: add/list/show/cancel
 
-use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::handler::{CommandCapabilities, CommandContexts, CommandHandler};
 use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::commands::CommandResult;
@@ -21,13 +21,18 @@ impl RegisterCommand<CommandResult> for TaskCmd {
     }
 
     fn handler() -> CommandHandler<CommandResult> {
-        CommandHandler::Contextual(task_contextual)
+        CommandHandler::Contextual {
+            capabilities: CommandCapabilities::WORKSPACE,
+            handler: task_contextual,
+        }
     }
 }
 
 fn task_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
     let mut parts = contexts.into_parts();
-    let workspace = parts.workspace.as_deref_mut().expect("workspace facet");
+    let Some(workspace) = parts.workspace.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: workspace");
+    };
     task(workspace, arg)
 }
 
@@ -149,7 +154,20 @@ mod tests {
 
     #[test]
     fn handler_is_contextual() {
-        assert!(matches!(TaskCmd::handler(), CommandHandler::Contextual(_)));
+        let CommandHandler::Contextual {
+            capabilities,
+            handler,
+        } = TaskCmd::handler()
+        else {
+            panic!("task must be contextual");
+        };
+        assert_eq!(capabilities, CommandCapabilities::WORKSPACE);
+        let missing = handler(CommandContexts::empty(), Some("list"));
+        assert!(missing.is_error);
+        assert_eq!(
+            missing.message.as_deref(),
+            Some("Error: Command capability unavailable: workspace")
+        );
         assert_eq!(TaskCmd::info().description_key, "cmd_task_description");
         assert_eq!(TaskCmd::info().aliases, &["tasks"]);
     }
