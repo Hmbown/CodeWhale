@@ -3796,7 +3796,7 @@ pub fn load_project_config_outcome(workspace: &Path) -> ProjectConfigOutcome {
                 };
             }
         };
-        match toml::from_str::<ConfigToml>(&raw) {
+        match parse_config_toml_str(&raw) {
             Ok(config) => {
                 let raw_provider = toml::from_str::<toml::Value>(&raw)
                     .ok()
@@ -5123,12 +5123,39 @@ pub struct ConfigStore {
     original_raw: Option<String>,
 }
 
+/// Parse a [`ConfigToml`] on a dedicated thread with an explicit stack size.
+///
+/// `ConfigToml` nests the per-provider tables, fleet trust policy, and every
+/// typed sub-table in one struct, and the monomorphized toml/serde
+/// deserializer frames for a struct this large overflow the 2 MiB default
+/// stack of libtest and tokio worker threads in debug builds (the same
+/// hazard the TUI fixed for its `ConfigFile`; reproduced as the #5585 stack
+/// overflow through the guided-setup save path). Every production
+/// `ConfigToml` parse goes through here so config-store loads stay safe
+/// regardless of the calling thread's stack budget.
+fn parse_config_toml_str(contents: &str) -> Result<ConfigToml, toml::de::Error> {
+    std::thread::scope(|scope| {
+        match std::thread::Builder::new()
+            .name("config-toml-parse".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn_scoped(scope, || toml::from_str::<ConfigToml>(contents))
+        {
+            Ok(handle) => handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            // Spawning can only fail under resource exhaustion; parsing on
+            // the caller's stack is still the best remaining option.
+            Err(_) => toml::from_str::<ConfigToml>(contents),
+        }
+    })
+}
+
 impl ConfigStore {
     pub fn load(path: Option<PathBuf>) -> Result<Self> {
         let path = resolve_config_path(path)?;
         let (config, original_raw) = if checked_path_exists(&path)? {
             let raw = read_checked_config_file(&path)?;
-            let mut parsed: ConfigToml = toml::from_str(&raw).map_err(|_| {
+            let mut parsed: ConfigToml = parse_config_toml_str(&raw).map_err(|_| {
                 anyhow::anyhow!(
                     "failed to parse config at {}; file contents were omitted",
                     quote_os_path(&path)

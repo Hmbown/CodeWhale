@@ -7781,50 +7781,72 @@ async fn xai_api_key_confirmation_saves_only_the_selected_xai_slot() {
 /// #5195: the save confirmation must name where the key actually landed —
 /// the durable secret store, not the config path — and the scope it is
 /// visible from (user-global credential, available in all folders).
-#[tokio::test]
-async fn setup_confirm_toast_names_secret_store_and_global_scope() {
-    // ConfigPathEnvGuard holds the shared env lock for the whole test, so the
-    // home/backend overrides must be set after it (and never take the lock
-    // again — it is not reentrant).
-    let _config = ConfigPathEnvGuard::new();
-    let home = TempDir::new().expect("isolated toast home");
-    let _home = crate::test_support::EnvVarGuard::set(
-        "CODEWHALE_HOME",
-        home.path().to_string_lossy().as_ref(),
-    );
-    let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
-    let mut app = create_test_app();
-    let mut engine = mock_engine_handle();
-    let mut config = Config::default();
-    let identity = picker_provider_identity(&config, ApiProvider::Openrouter, None)
-        .expect("OpenRouter identity");
+/// #5585: this test drives the full guided-setup save path (provider
+/// identity minting, key persistence, model/base-url pinning, and the
+/// settings/TOML round-trips they trigger). Those serde round-trips are deep
+/// enough that the default 2 MiB libtest thread stack overflows; the product
+/// paths run on the 8 MiB main thread or the sheltered 16 MiB parse threads
+/// (see `parse_config_file_str` in `config.rs` and `parse_config_toml_str`
+/// in `codewhale-config`), so this test runs its runtime on an equivalently
+/// sized stack instead of crashing.
+#[test]
+fn setup_confirm_toast_names_secret_store_and_global_scope() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime")
+                .block_on(async {
+                    // ConfigPathEnvGuard holds the shared env lock for the whole test, so the
+                    // home/backend overrides must be set after it (and never take the lock
+                    // again — it is not reentrant).
+                    let _config = ConfigPathEnvGuard::new();
+                    let home = TempDir::new().expect("isolated toast home");
+                    let _home = crate::test_support::EnvVarGuard::set(
+                        "CODEWHALE_HOME",
+                        home.path().to_string_lossy().as_ref(),
+                    );
+                    let _backend =
+                        crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+                    let mut app = create_test_app();
+                    let mut engine = mock_engine_handle();
+                    let mut config = Config::default();
+                    let identity = picker_provider_identity(&config, ApiProvider::Openrouter, None)
+                        .expect("OpenRouter identity");
 
-    let switched = apply_provider_picker_setup_confirmed(
-        &mut app,
-        &mut engine.handle,
-        &mut config,
-        identity,
-        "toast-destination-key".to_string(),
-        "deepseek/deepseek-v4-pro".to_string(),
-        None,
-        None,
-    )
-    .await;
+                    let switched = apply_provider_picker_setup_confirmed(
+                        &mut app,
+                        &mut engine.handle,
+                        &mut config,
+                        identity,
+                        "toast-destination-key".to_string(),
+                        "deepseek/deepseek-v4-pro".to_string(),
+                        None,
+                        None,
+                    )
+                    .await;
 
-    assert!(switched, "setup confirm failed: {:?}", app.status_message);
-    let toast = app.status_message.as_deref().expect("save toast");
-    assert!(
-        toast.contains("secret store"),
-        "toast must name the secret store, got: {toast}"
-    );
-    assert!(
-        toast.contains("available in all folders"),
-        "toast must state the user-global scope, got: {toast}"
-    );
-    assert!(
-        !toast.contains("toast-destination-key"),
-        "toast must never include the key, got: {toast}"
-    );
+                    assert!(switched, "setup confirm failed: {:?}", app.status_message);
+                    let toast = app.status_message.as_deref().expect("save toast");
+                    assert!(
+                        toast.contains("secret store"),
+                        "toast must name the secret store, got: {toast}"
+                    );
+                    assert!(
+                        toast.contains("available in all folders"),
+                        "toast must state the user-global scope, got: {toast}"
+                    );
+                    assert!(
+                        !toast.contains("toast-destination-key"),
+                        "toast must never include the key, got: {toast}"
+                    );
+                })
+        })
+        .expect("spawn test thread")
+        .join()
+        .expect("test thread panicked");
 }
 
 #[tokio::test]
