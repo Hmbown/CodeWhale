@@ -57,6 +57,23 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def read_module_tree(parent: Path) -> str:
+    """Read a `foo.rs` + `foo/` module pair as one source text.
+
+    Pure mechanical extractions (#5586) move helpers into `foo/*.rs` leaf
+    files without changing behavior; checks that pin invariants to a module
+    must follow the code across the module tree. Submodule files are
+    concatenated in sorted order after the parent, which preserves each
+    file's internal ordering.
+    """
+    parts = [read(parent)]
+    directory = parent.with_suffix("")
+    if directory.is_dir():
+        for child in sorted(directory.glob("*.rs")):
+            parts.append(read(child))
+    return "\n".join(parts)
+
+
 def display_public_value(value: str) -> str:
     if SENSITIVE_IDENTIFIER_RE.search(value):
         return "<redacted sensitive identifier>"
@@ -323,7 +340,7 @@ def report_huggingface_coverage(
             label, config_rs, env_order, "crates/config/src/lib.rs"
         )
         errors += report_env_lookup_order(
-            label, tui_config_rs, env_order, "crates/tui/src/config.rs"
+            label, tui_config_rs, env_order, "crates/tui/src/config.rs (+ config/ tree)"
         )
         errors += report_string_order(label, providers_md, env_order, "docs/PROVIDERS.md")
 
@@ -368,7 +385,7 @@ def provider_table_name(provider_id: str) -> str:
 def main() -> int:
     try:
         config_rs = read(CONFIG_RS)
-        tui_config_rs = read(TUI_CONFIG_RS)
+        tui_config_rs = read_module_tree(TUI_CONFIG_RS)
         agent_rs = read(AGENT_RS)
         providers_md = read(PROVIDERS_MD)
 
