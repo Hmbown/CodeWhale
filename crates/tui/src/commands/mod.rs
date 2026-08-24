@@ -1998,4 +1998,129 @@ mod tests {
         let network = execute("/network list", &mut app);
         assert!(network.message.is_some() || network.is_error, "{network:?}");
     }
+
+    // ---------------------------------------------------------------------
+    // FEAT-019: public memory registration/dispatch and exact capability
+    // declarations (Task 6.2). Tests enter through the registry and the
+    // public `execute` seam and prove the memory group's portable entries.
+    // ---------------------------------------------------------------------
+
+    /// App with an isolated temp workspace and memory enabled.
+    fn memory_test_app(tmpdir: &tempfile::TempDir) -> App {
+        let options = TuiOptions {
+            memory_path: tmpdir.path().join("memory.md"),
+            use_memory: true,
+            ..crate::test_support::test_tui_options(tmpdir.path())
+        };
+        App::new(options, &Config::default())
+    }
+
+    #[test]
+    fn feat019_memory_entries_are_registered_with_exact_capabilities() {
+        for (name, expected) in [
+            (
+                "note",
+                codewhale_command_contract::handler::CommandCapabilities::WORKSPACE,
+            ),
+            (
+                "memory",
+                codewhale_command_contract::handler::CommandCapabilities::WORKSPACE
+                    .union(codewhale_command_contract::handler::CommandCapabilities::MEMORY),
+            ),
+        ] {
+            assert!(
+                registry().has_contextual_handler(name),
+                "/{name} must register through the portable bridge"
+            );
+            let handler = registry()
+                .get(name)
+                .expect("entry")
+                .contextual_handler()
+                .expect("contextual handler");
+            let codewhale_command_contract::handler::CommandHandler::Contextual {
+                capabilities,
+                ..
+            } = handler
+            else {
+                panic!("/{name} must be contextual");
+            };
+            assert_eq!(capabilities, expected, "/{name} exact capability set");
+            assert!(
+                !capabilities.contains(
+                    codewhale_command_contract::handler::CommandCapabilities::PRESENTATION
+                ) && !capabilities
+                    .contains(codewhale_command_contract::handler::CommandCapabilities::MEDIA),
+                "/{name} must not declare presentation or media"
+            );
+        }
+    }
+
+    #[test]
+    fn feat019_note_dispatches_through_public_seam() {
+        let tmpdir = tempfile::TempDir::new().unwrap();
+        let mut app = memory_test_app(&tmpdir);
+
+        let appended = execute("/note hello from dispatch", &mut app);
+        assert!(!appended.is_error, "{appended:?}");
+        assert!(
+            appended
+                .message
+                .as_deref()
+                .is_some_and(|msg| msg.contains("Note appended to")),
+            "{appended:?}"
+        );
+        let notes = tmpdir.path().join(".deepseek").join("notes.md");
+        assert!(notes.exists(), "notes file written under the workspace");
+        let content = std::fs::read_to_string(&notes).unwrap();
+        assert!(content.contains("hello from dispatch"));
+
+        // Metadata bridges to the TUI localization id.
+        let info = registry().get_info("note").expect("note info");
+        assert_eq!(
+            info.description_id,
+            crate::localization::MessageId::CmdNoteDescription
+        );
+    }
+
+    #[test]
+    fn feat019_memory_dispatches_through_public_seam() {
+        let tmpdir = tempfile::TempDir::new().unwrap();
+        let mut app = memory_test_app(&tmpdir);
+
+        let path = execute("/memory path", &mut app);
+        assert!(!path.is_error, "{path:?}");
+        assert_eq!(
+            path.message.as_deref(),
+            Some(tmpdir.path().join("memory.md").to_str().unwrap())
+        );
+
+        // Native status reaches the real adapter through the public seam.
+        let status = execute("/memory native status", &mut app);
+        assert!(!status.is_error, "{status:?}");
+        let msg = status.message.expect("status message");
+        assert!(msg.contains("native memory:"), "{msg}");
+
+        let info = registry().get_info("memory").expect("memory info");
+        assert_eq!(
+            info.description_id,
+            crate::localization::MessageId::CmdMemoryDescription
+        );
+    }
+
+    #[test]
+    fn feat019_public_dispatch_never_panics_on_memory_commands() {
+        let tmpdir = tempfile::TempDir::new().unwrap();
+        let mut app = memory_test_app(&tmpdir);
+        for command in [
+            "/note",
+            "/note ",
+            "/memory",
+            "/memory native bogus",
+            "/memory wat",
+        ] {
+            let result = execute(command, &mut app);
+            // Every path returns a result; none may panic.
+            assert!(result.message.is_some(), "{command}: {result:?}");
+        }
+    }
 }

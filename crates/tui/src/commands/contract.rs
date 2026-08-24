@@ -66,7 +66,7 @@ use crate::tui::app::{App, ReasoningEffort};
 /// declaration by source regex and the Rust frontier tests assert it.
 #[allow(dead_code)]
 pub(crate) const PENDING_GROUPS: &[&str] = &[
-    "config", "core", "debug", "memory", "plugins", "project", "session", "skills",
+    "config", "core", "debug", "plugins", "project", "session", "skills",
 ];
 
 // ---------------------------------------------------------------------------
