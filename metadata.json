@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0T30VBY8044Z56N6RKRMBRY",
+  "strategy": "manual-commit",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/tui/CHANGELOG.md",
+    "crates/tui/src/tools/subagent/tests.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 354,
+    "cache_creation_tokens": 254728,
+    "cache_read_tokens": 33550499,
+    "output_tokens": 95568,
+    "api_call_count": 177,
+    "subagent_tokens": {
+      "input_tokens": 10,
+      "cache_creation_tokens": 62470,
+      "cache_read_tokens": 208403,
+      "output_tokens": 6571,
+      "api_call_count": 5
+    }
+  }
+}
