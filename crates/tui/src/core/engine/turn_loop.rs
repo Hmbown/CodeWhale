@@ -307,7 +307,8 @@ pub(super) fn merge_new_runtime_mcp_tools(
     tool_catalog: &mut Vec<Tool>,
     active_tool_names: &mut std::collections::HashSet<String>,
     refreshed: Vec<Tool>,
-) {
+) -> usize {
+    let mut merged = 0;
     for tool in refreshed {
         if !tool_catalog
             .iter()
@@ -315,8 +316,10 @@ pub(super) fn merge_new_runtime_mcp_tools(
         {
             active_tool_names.insert(tool.name.clone());
             tool_catalog.push(tool);
+            merged += 1;
         }
     }
+    merged
 }
 
 impl Engine {
@@ -1117,15 +1120,13 @@ impl Engine {
                 #[cfg(debug_assertions)]
                 if pm.check_count() > 1
                     && declared_change.is_none()
-                    && matches!(
-                        outcome,
-                        crate::prefix_cache::PrefixCheck::Drift { .. }
-                            | crate::prefix_cache::PrefixCheck::Repinned { .. }
-                    )
+                    && let crate::prefix_cache::PrefixCheck::Drift { change }
+                    | crate::prefix_cache::PrefixCheck::Repinned { change, .. } = &outcome
                 {
                     debug_assert!(
                         false,
-                        "prefix drift without a declared change (C5): the system prompt or tool catalog changed but no context update was stamped"
+                        "prefix drift without a declared change (C5): the {} changed but no context update was stamped",
+                        change.label()
                     );
                 }
                 let pinned_hash = pm
@@ -3036,9 +3037,16 @@ impl Engine {
         super::tool_catalog::remove_evicted_cache_activations(
             tool_catalog,
             active_tool_names,
-            activation.evicted,
+            activation.evicted.iter().cloned(),
         );
-        active_tool_names.extend(activation.admitted);
+        // Admitting or evicting deferred tools changes the request-visible
+        // tool catalog for the rest of this turn. That is a legitimate,
+        // nameable header change — declare it so the prefix pin re-pins under
+        // `change:tool_surface` instead of tripping the C5 drift guard.
+        if !activation.admitted.is_empty() || !activation.evicted.is_empty() {
+            active_tool_names.extend(activation.admitted.iter().cloned());
+            self.session.pending_prefix_change_reason = Some("tool_surface".to_string());
+        }
         PlannedToolCalls {
             plans,
             hook_contexts,
@@ -3482,6 +3490,11 @@ impl Engine {
 
                     if is_tool_search_tool(&tool_name) {
                         let started_at = Instant::now();
+                        // Tool-search activation changes the request-visible
+                        // catalog for the rest of the turn; declare it so the
+                        // next request re-pins under `change:tool_surface`
+                        // instead of tripping the C5 drift guard.
+                        let active_before_search = active_tool_names.clone();
                         let result = super::tool_catalog::execute_tool_search_with_cache(
                             &tool_name,
                             &tool_input,
@@ -3489,6 +3502,10 @@ impl Engine {
                             active_tool_names,
                             &mut self.session.tool_activation_cache,
                         );
+                        if *active_tool_names != active_before_search {
+                            self.session.pending_prefix_change_reason =
+                                Some("tool_surface".to_string());
+                        }
 
                         let _ = self
                             .tx_event
@@ -3854,19 +3871,21 @@ impl Engine {
             }
             match result {
                 Ok(output) => {
-                    super::tool_catalog::activate_result_dependencies(
-                        tool_catalog,
-                        active_tool_names,
-                        &mut self.session.tool_activation_cache,
-                        &output,
-                    );
-                    if output.success {
-                        super::tool_catalog::touch_cached_tool_after_execution(
+                    let mut tool_surface_changed =
+                        super::tool_catalog::activate_result_dependencies(
                             tool_catalog,
                             active_tool_names,
                             &mut self.session.tool_activation_cache,
-                            &outcome.name,
+                            &output,
                         );
+                    if output.success {
+                        tool_surface_changed |=
+                            super::tool_catalog::touch_cached_tool_after_execution(
+                                tool_catalog,
+                                active_tool_names,
+                                &mut self.session.tool_activation_cache,
+                                &outcome.name,
+                            );
                     }
                     // A runtime MCP connection changes the callable tool
                     // surface. Merge the complete schemas into this turn's
@@ -3884,7 +3903,17 @@ impl Engine {
                         && let Some(pool) = self.mcp_pool.as_ref().cloned()
                     {
                         let refreshed = pool.lock().await.to_api_tools();
-                        merge_new_runtime_mcp_tools(tool_catalog, active_tool_names, refreshed);
+                        tool_surface_changed |=
+                            merge_new_runtime_mcp_tools(tool_catalog, active_tool_names, refreshed)
+                                > 0;
+                    }
+                    // Any of the legitimate mid-turn tool-surface changes above
+                    // re-pin the header under a declared `change:tool_surface`
+                    // reason so the next request's prefix check sees a named
+                    // change instead of drift (C5).
+                    if tool_surface_changed {
+                        self.session.pending_prefix_change_reason =
+                            Some("tool_surface".to_string());
                     }
                     emit_tool_audit(json!({
                         "event": "tool.result",
