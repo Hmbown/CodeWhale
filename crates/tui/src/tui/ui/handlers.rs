@@ -1270,6 +1270,9 @@ pub(crate) async fn handle_view_events(
                 // Fleet is selected.
                 open_fleet_setup_target(app, config, Some(&member_id));
             }
+            ViewEvent::FleetRosterOpenModelRequested { member_id } => {
+                open_fleet_model_target(app, config, &member_id);
+            }
             ViewEvent::FleetListOpenDetailRequested { name, scope } => {
                 if app.view_stack.top_kind() != Some(ModalKind::FleetDetail) {
                     if let Some(view) = crate::tui::views::fleet_detail::FleetDetailView::open(

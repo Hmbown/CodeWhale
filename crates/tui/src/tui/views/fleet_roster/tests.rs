@@ -52,6 +52,15 @@ fn view_with_overrides() -> FleetRosterView {
     }
 }
 
+fn selected_fleet_view() -> FleetRosterView {
+    let mut view = view_with_overrides();
+    view.selected_fleet = Some(SelectedFleetSummary {
+        name: "Default".to_string(),
+        scope: crate::fleet::store::FleetScope::Personal,
+    });
+    view
+}
+
 fn render_through_stack(make: impl Fn() -> FleetRosterView, w: u16, h: u16) -> Vec<String> {
     let area = Rect::new(0, 0, w, h);
     let mut buf = Buffer::empty(area);
@@ -174,6 +183,50 @@ fn enter_and_s_open_the_setup_wizard_for_members_only() {
         };
         assert_eq!(member_id, "manager");
     }
+}
+
+#[test]
+fn m_opens_the_selected_member_model_picker_only_for_a_named_fleet() {
+    let mut view = built_in_view();
+    view.handle_key(key(KeyCode::Down));
+    assert!(matches!(
+        view.handle_key(key(KeyCode::Char('m'))),
+        ViewAction::None
+    ));
+
+    let mut view = selected_fleet_view();
+    assert!(matches!(
+        view.handle_key(key(KeyCode::Char('m'))),
+        ViewAction::None
+    ));
+    view.handle_key(key(KeyCode::Down));
+    assert!(matches!(
+        view.handle_key(key(KeyCode::Char('m'))),
+        ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenModelRequested { ref member_id })
+            if member_id == "manager"
+    ));
+}
+
+#[test]
+fn selected_named_fleet_member_shows_edit_affordance() {
+    let rows = render_through_stack(
+        || {
+            let mut view = selected_fleet_view();
+            view.selected = 1;
+            view
+        },
+        100,
+        30,
+    );
+    let text = rows.join("\n");
+    assert!(
+        text.contains("[edit]"),
+        "focused member should advertise editing: {text}"
+    );
+    assert!(
+        text.contains("m model"),
+        "footer should advertise the model shortcut: {text}"
+    );
 }
 
 #[test]
