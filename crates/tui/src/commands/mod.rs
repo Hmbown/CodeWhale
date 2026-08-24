@@ -267,9 +267,10 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         };
         // FEAT-015 dual-path seam (D2): a migrated entry with a
         // capability-scoped handler receives the envelope built from `app`;
-        // everything else keeps the legacy `execute(app, args)` path. No
-        // production entry is migrated in FEAT-015, so the contextual branch
-        // is only reachable by the test-only fixture (D6).
+        // everything else keeps the legacy `execute(app, args)` path. The
+        // envelope is populated only with the capabilities the registration
+        // declared (FEAT-019 D1/D3); production groups such as utility and
+        // memory dispatch through this contextual branch.
         if let Some(handler) = command_object.contextual_handler() {
             return match handler {
                 codewhale_command_contract::handler::CommandHandler::Pure(pure_fn) => {
