@@ -3937,6 +3937,31 @@ struct ConfigFile {
     profiles: Option<HashMap<String, Config>>,
 }
 
+/// Parse a [`ConfigFile`] on a dedicated thread with an explicit stack size.
+///
+/// `[profiles.*]` nests the full `Config` struct inside `ConfigFile`, and the
+/// monomorphized toml/serde deserializer frames for a struct this large
+/// overflow the 2 MiB default stack of libtest and tokio worker threads in
+/// debug builds. Every `ConfigFile` parse goes through here so config loads
+/// and `/v1/config/reload` stay safe regardless of the calling thread's
+/// stack budget.
+fn parse_config_file_str(contents: &str) -> Result<ConfigFile, toml::de::Error> {
+    std::thread::scope(|scope| {
+        match std::thread::Builder::new()
+            .name("config-toml-parse".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn_scoped(scope, || toml::from_str::<ConfigFile>(contents))
+        {
+            Ok(handle) => handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            // Spawning can only fail under resource exhaustion; parsing on
+            // the caller's stack is still the best remaining option.
+            Err(_) => toml::from_str::<ConfigFile>(contents),
+        }
+    })
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 struct RequirementsFile {
     #[serde(default)]
@@ -4242,7 +4267,7 @@ impl Config {
             };
             let Some(parsed) = std::fs::read_to_string(path)
                 .ok()
-                .and_then(|raw| toml::from_str::<ConfigFile>(&raw).ok())
+                .and_then(|raw| parse_config_file_str(&raw).ok())
             else {
                 return Some("an unreadable active config profile");
             };
@@ -4336,7 +4361,7 @@ impl Config {
         };
         let parsed = std::fs::read_to_string(path)
             .ok()
-            .and_then(|raw| toml::from_str::<ConfigFile>(&raw).ok());
+            .and_then(|raw| parse_config_file_str(&raw).ok());
         let Some(parsed) = parsed else {
             return if self.approval_policy.is_some() {
                 ApprovalPolicyControl::Ambiguous
@@ -4416,7 +4441,7 @@ impl Config {
         };
         let parsed = std::fs::read_to_string(path)
             .ok()
-            .and_then(|raw| toml::from_str::<ConfigFile>(&raw).ok());
+            .and_then(|raw| parse_config_file_str(&raw).ok());
         let Some(parsed) = parsed else {
             return if self.allow_shell.is_some() {
                 ShellAccessControl::Ambiguous
@@ -4617,7 +4642,7 @@ impl Config {
             if path.exists() {
                 let contents = fs::read_to_string(path)
                     .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-                let parsed: ConfigFile = toml::from_str(&contents).map_err(|_| {
+                let parsed: ConfigFile = parse_config_file_str(&contents).map_err(|_| {
                     anyhow::anyhow!(
                         "Failed to parse config file {}; file contents were omitted",
                         codewhale_config::quote_os_path(path)
@@ -10402,7 +10427,7 @@ fn merge_providers(
 fn load_single_config_file(path: &Path) -> Result<Config> {
     let contents = fs::read_to_string(path)
         .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-    let parsed: ConfigFile = toml::from_str(&contents).map_err(|_| {
+    let parsed: ConfigFile = parse_config_file_str(&contents).map_err(|_| {
         anyhow::anyhow!(
             "Failed to parse config file {}; file contents were omitted",
             codewhale_config::quote_os_path(path)
