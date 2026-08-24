@@ -3571,7 +3571,7 @@ mod tests {
 
         for (provider, model) in [
             (ApiProvider::Zai, "GLM-5.3"),
-            (ApiProvider::Arcee, "trinity-mini"),
+            (ApiProvider::XiaomiMimo, "mimo-v2.5-pro"),
             (ApiProvider::ModelstudioTokenPlan, "qwen3.8-max"),
         ] {
             let offering =
