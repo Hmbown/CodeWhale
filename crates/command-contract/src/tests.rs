@@ -156,13 +156,20 @@ fn contextual(_contexts: CommandContexts<'_>, value: Option<&str>) -> String {
 #[test]
 fn handlers_are_plain_function_pointers() {
     let pure_handler = CommandHandler::Pure(pure);
-    let contextual_handler = CommandHandler::Contextual(contextual);
+    let contextual_handler = CommandHandler::Contextual {
+        capabilities: CommandCapabilities::NONE,
+        handler: contextual,
+    };
     match pure_handler {
         CommandHandler::Pure(handler) => assert_eq!(handler(Some("x")), "x"),
         _ => unreachable!(),
     }
     match contextual_handler {
-        CommandHandler::Contextual(handler) => {
+        CommandHandler::Contextual {
+            capabilities,
+            handler,
+        } => {
+            assert!(capabilities.is_empty());
             assert_eq!(handler(CommandContexts::empty(), Some("y")), "y")
         }
         _ => unreachable!(),
@@ -343,4 +350,397 @@ fn envelope_rejects_duplicate_new_slots_deterministically() {
             .with_media(&mut b);
     }));
     assert!(result.is_err(), "duplicate media slot must assert");
+}
+
+// ---------------------------------------------------------------------------
+// FEAT-019: memory capability, typed outcomes, and workspace scoping (D1-D9)
+// ---------------------------------------------------------------------------
+
+/// Deterministic fake memory facet over portable values only. Tracks the
+/// workspace argument discipline (D8): only workspace-scoped methods receive
+/// the workspace path.
+struct FakeMemory {
+    hits: Vec<MemoryHit>,
+    remembered: Vec<MemoryRememberTarget>,
+    deleted: Vec<String>,
+    remembered_result: Option<MemoryRemembered>,
+    workspace_id_result: Result<String, String>,
+}
+
+impl FakeMemory {
+    fn new() -> Self {
+        Self {
+            hits: vec![MemoryHit {
+                source: PathBuf::from("/mem/source.md"),
+                line_start: 3,
+                line_end: 5,
+                text: "reviewed note".to_string(),
+            }],
+            remembered: Vec::new(),
+            deleted: Vec::new(),
+            remembered_result: Some(MemoryRemembered {
+                source: PathBuf::from("/mem/global.md"),
+                line_start: 7,
+            }),
+            workspace_id_result: Ok("owner/repo".to_string()),
+        }
+    }
+}
+
+impl CommandMemoryContext for FakeMemory {
+    fn memory_path(&self) -> PathBuf {
+        PathBuf::from("/mem/user-memory.md")
+    }
+
+    fn memory_enabled(&self) -> bool {
+        true
+    }
+
+    fn status(&self) -> Result<MemoryStatus, String> {
+        Ok(MemoryStatus {
+            root: PathBuf::from("/mem/memory"),
+            source: PathBuf::from("/mem/memory/global/global.md"),
+            index: PathBuf::from("/mem/memory/index.db"),
+        })
+    }
+
+    fn path(&self) -> Result<PathBuf, String> {
+        Ok(PathBuf::from("/mem/memory"))
+    }
+
+    fn workspace_id(&self, _workspace: &Path) -> Result<String, String> {
+        self.workspace_id_result.clone()
+    }
+
+    fn search(
+        &self,
+        _workspace: &Path,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryHit>, String> {
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self.hits.iter().take(limit).cloned().collect())
+    }
+
+    fn remember(
+        &self,
+        _target: MemoryRememberTarget,
+        note: &str,
+    ) -> Result<MemoryRemembered, String> {
+        if note.is_empty() {
+            return Err("empty note".to_string());
+        }
+        let _ = &self.remembered; // record-only fake; see remember_records_targets
+        Ok(self.remembered_result.clone().unwrap_or(MemoryRemembered {
+            source: PathBuf::from("/mem/global.md"),
+            line_start: 1,
+        }))
+    }
+
+    fn import(&self) -> Result<MemoryImportOutcome, String> {
+        Ok(MemoryImportOutcome::Skipped)
+    }
+
+    fn get(&self, _workspace: &Path, id: i64) -> Result<MemoryGetOutcome, String> {
+        if id == 42 {
+            Ok(MemoryGetOutcome::Found(self.hits[0].clone()))
+        } else {
+            Ok(MemoryGetOutcome::NotFound)
+        }
+    }
+
+    fn export(&self) -> Result<MemoryExport, String> {
+        Ok(MemoryExport {
+            content: "# memory\n\n- bullet".to_string(),
+        })
+    }
+
+    fn reindex(&self) -> Result<MemoryReindex, String> {
+        Ok(MemoryReindex { entry_count: 3 })
+    }
+
+    fn delete(&self, scope: MemoryDeleteScope) -> Result<MemoryDelete, String> {
+        let _ = &self.deleted;
+        match scope {
+            MemoryDeleteScope::All => Ok(MemoryDelete),
+            MemoryDeleteScope::Global => Ok(MemoryDelete),
+        }
+    }
+
+    fn delete_workspace(&self, _workspace: &Path) -> Result<MemoryDelete, String> {
+        Ok(MemoryDelete)
+    }
+}
+
+/// Recording fake that captures remember targets and delete scopes to prove
+/// the typed target/scope discipline (D2/D8/D9). Interior mutability lets the
+/// contract-level test assert exactly which operations the handler drives.
+#[derive(Default)]
+struct RecordingMemory {
+    remembered_targets: std::cell::RefCell<Vec<MemoryRememberTarget>>,
+    delete_scopes: std::cell::RefCell<Vec<String>>,
+    workspace_deletes: std::cell::Cell<usize>,
+}
+
+impl RecordingMemory {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn recorded_targets(&self) -> Vec<MemoryRememberTarget> {
+        self.remembered_targets.borrow().clone()
+    }
+
+    fn recorded_delete_scopes(&self) -> Vec<String> {
+        self.delete_scopes.borrow().clone()
+    }
+
+    fn recorded_workspace_deletes(&self) -> usize {
+        self.workspace_deletes.get()
+    }
+}
+
+impl CommandMemoryContext for RecordingMemory {
+    fn memory_path(&self) -> PathBuf {
+        PathBuf::from("/mem/user-memory.md")
+    }
+
+    fn memory_enabled(&self) -> bool {
+        true
+    }
+
+    fn status(&self) -> Result<MemoryStatus, String> {
+        unreachable!("recording fake")
+    }
+
+    fn path(&self) -> Result<PathBuf, String> {
+        unreachable!("recording fake")
+    }
+
+    fn workspace_id(&self, _workspace: &Path) -> Result<String, String> {
+        Ok("owner/repo".to_string())
+    }
+
+    fn search(
+        &self,
+        _workspace: &Path,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Vec<MemoryHit>, String> {
+        unreachable!("recording fake")
+    }
+
+    fn remember(
+        &self,
+        target: MemoryRememberTarget,
+        _note: &str,
+    ) -> Result<MemoryRemembered, String> {
+        self.remembered_targets.borrow_mut().push(target);
+        Ok(MemoryRemembered {
+            source: PathBuf::from("/mem/global.md"),
+            line_start: 1,
+        })
+    }
+
+    fn import(&self) -> Result<MemoryImportOutcome, String> {
+        unreachable!("recording fake")
+    }
+
+    fn get(&self, _workspace: &Path, _id: i64) -> Result<MemoryGetOutcome, String> {
+        unreachable!("recording fake")
+    }
+
+    fn export(&self) -> Result<MemoryExport, String> {
+        unreachable!("recording fake")
+    }
+
+    fn reindex(&self) -> Result<MemoryReindex, String> {
+        unreachable!("recording fake")
+    }
+
+    fn delete(&self, scope: MemoryDeleteScope) -> Result<MemoryDelete, String> {
+        self.delete_scopes.borrow_mut().push(match scope {
+            MemoryDeleteScope::All => "all".to_string(),
+            MemoryDeleteScope::Global => "global".to_string(),
+        });
+        Ok(MemoryDelete)
+    }
+
+    fn delete_workspace(&self, _workspace: &Path) -> Result<MemoryDelete, String> {
+        self.workspace_deletes.set(self.workspace_deletes.get() + 1);
+        Ok(MemoryDelete)
+    }
+}
+
+#[test]
+fn memory_facet_is_object_safe_and_typed() {
+    fn memory(_: &dyn CommandMemoryContext) {}
+    let fake = FakeMemory::new();
+    memory(&fake);
+
+    assert_eq!(fake.memory_path(), PathBuf::from("/mem/user-memory.md"));
+    assert!(fake.memory_enabled());
+    let status = fake.status().expect("status");
+    assert_eq!(status.root, PathBuf::from("/mem/memory"));
+    assert_eq!(status.source, PathBuf::from("/mem/memory/global/global.md"));
+    assert_eq!(status.index, PathBuf::from("/mem/memory/index.db"));
+}
+
+#[test]
+fn memory_typed_results_preserve_semantic_distinctions() {
+    let fake = FakeMemory::new();
+
+    // Search returns semantic hits, never preformatted messages.
+    let hits = fake.search(Path::new("/ws"), "note", 10).expect("search");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].source, PathBuf::from("/mem/source.md"));
+    assert_eq!(hits[0].line_start, 3);
+    assert_eq!(hits[0].line_end, 5);
+    assert_eq!(hits[0].text, "reviewed note");
+    assert!(
+        fake.search(Path::new("/ws"), "", 10)
+            .expect("empty")
+            .is_empty()
+    );
+
+    // Get distinguishes found from not-found without an error string.
+    assert!(matches!(
+        fake.get(Path::new("/ws"), 42),
+        Ok(MemoryGetOutcome::Found(_))
+    ));
+    assert_eq!(
+        fake.get(Path::new("/ws"), 1).expect("get"),
+        MemoryGetOutcome::NotFound
+    );
+
+    // Export carries the raw document, not a command response.
+    let exported = fake.export().expect("export");
+    assert_eq!(exported.content, "# memory\n\n- bullet");
+
+    // Reindex carries the typed count.
+    assert_eq!(fake.reindex().expect("reindex").entry_count, 3);
+
+    // Remember distinguishes global from workspace via the typed target.
+    let global = fake
+        .remember(MemoryRememberTarget::Global, "note")
+        .expect("global remember");
+    assert_eq!(global.source, PathBuf::from("/mem/global.md"));
+    assert_eq!(global.line_start, 7);
+    let workspace = fake
+        .remember(
+            MemoryRememberTarget::Workspace {
+                workspace_id: "owner/repo".to_string(),
+            },
+            "note",
+        )
+        .expect("workspace remember");
+    assert_eq!(workspace.source, PathBuf::from("/mem/global.md"));
+
+    // Import distinguishes imported from skipped.
+    assert_eq!(fake.import().expect("import"), MemoryImportOutcome::Skipped);
+    assert_eq!(
+        MemoryImportOutcome::Imported {
+            destination: PathBuf::from("/mem/global.md")
+        },
+        MemoryImportOutcome::Imported {
+            destination: PathBuf::from("/mem/global.md")
+        }
+    );
+
+    // Remember rejects empty notes with a safe error, never a panic.
+    assert!(fake.remember(MemoryRememberTarget::Global, "").is_err());
+
+    // Zero-field delete outcome stays distinguishable.
+    assert_eq!(fake.delete(MemoryDeleteScope::All), Ok(MemoryDelete));
+}
+
+#[test]
+fn memory_delete_and_remember_targets_are_typed_and_scoped() {
+    let memory = RecordingMemory::new();
+    let _ = memory.delete(MemoryDeleteScope::All);
+    let _ = memory.delete(MemoryDeleteScope::Global);
+    let _ = memory.delete_workspace(Path::new("/ws"));
+    let _ = memory.remember(MemoryRememberTarget::Global, "a");
+    let _ = memory.remember(
+        MemoryRememberTarget::Workspace {
+            workspace_id: "owner/repo".to_string(),
+        },
+        "b",
+    );
+
+    // The non-workspace delete method receives exactly the all/global scopes;
+    // workspace deletion goes through the distinct typed method (D8/D9).
+    assert_eq!(memory.recorded_delete_scopes(), vec!["all", "global"]);
+    assert_eq!(memory.recorded_workspace_deletes(), 1);
+
+    // Remember targets preserve the typed global/workspace distinction.
+    assert_eq!(
+        memory.recorded_targets(),
+        vec![
+            MemoryRememberTarget::Global,
+            MemoryRememberTarget::Workspace {
+                workspace_id: "owner/repo".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn capabilities_declare_exact_memory_authority() {
+    let workspace = CommandCapabilities::WORKSPACE;
+    let memory = CommandCapabilities::MEMORY;
+    let workspace_memory = workspace.union(memory);
+
+    assert_eq!(
+        workspace_memory,
+        CommandCapabilities::WORKSPACE | CommandCapabilities::MEMORY
+    );
+    assert_ne!(workspace_memory, workspace);
+    assert_ne!(workspace_memory, memory);
+    assert!(workspace_memory.contains(CommandCapabilities::WORKSPACE));
+    assert!(workspace_memory.contains(CommandCapabilities::MEMORY));
+    assert!(!workspace.contains(CommandCapabilities::MEMORY));
+    assert!(!memory.contains(CommandCapabilities::WORKSPACE));
+    assert!(CommandCapabilities::NONE.is_empty());
+    // No presentation or media authority is declared for the memory group.
+    assert!(!workspace_memory.contains(CommandCapabilities::PRESENTATION));
+    assert!(!workspace_memory.contains(CommandCapabilities::MEDIA));
+    // Existing capability identities stay stable.
+    assert_ne!(CommandCapabilities::SESSION, CommandCapabilities::MODEL);
+}
+
+#[test]
+fn memory_facet_transports_through_envelope_when_declared() {
+    let mut memory = FakeMemory::new();
+    let parts = CommandContexts::empty()
+        .with_memory(&mut memory)
+        .into_parts();
+    assert!(parts.memory.is_some());
+    assert!(parts.session.is_none());
+    assert!(parts.workspace.is_none());
+
+    // Undeclared slots stay absent when the memory facet is carried alone.
+    let mut workspace = Workspace;
+    let parts = CommandContexts::empty()
+        .with_memory(&mut memory)
+        .with_workspace(&mut workspace)
+        .into_parts();
+    assert!(parts.memory.is_some());
+    assert!(parts.workspace.is_some());
+    assert!(parts.presentation.is_none());
+    assert!(parts.media.is_none());
+}
+
+#[test]
+fn envelope_rejects_duplicate_memory_slot_deterministically() {
+    let mut a = FakeMemory::new();
+    let mut b = FakeMemory::new();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CommandContexts::empty()
+            .with_memory(&mut a)
+            .with_memory(&mut b);
+    }));
+    assert!(result.is_err(), "duplicate memory slot must assert");
 }

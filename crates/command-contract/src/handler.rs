@@ -5,16 +5,62 @@
 //! `CommandHandler<crate::commands::CommandResult>`.
 
 use crate::facets::{
-    CommandCostContext, CommandMediaContext, CommandModePolicyContext, CommandModelContext,
-    CommandPresentationContext, CommandSessionContext, CommandSkillsContext,
+    CommandCostContext, CommandMediaContext, CommandMemoryContext, CommandModePolicyContext,
+    CommandModelContext, CommandPresentationContext, CommandSessionContext, CommandSkillsContext,
     CommandSystemPromptContext, CommandWorkspaceContext,
 };
+
+/// Exact host capabilities exposed to one contextual command handler.
+///
+/// The set lives in the external contract crate so command registrations can
+/// declare least authority without naming the TUI host. The dispatcher uses
+/// the declaration to populate only those slots in [`CommandContexts`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CommandCapabilities(u16);
+
+impl CommandCapabilities {
+    pub const NONE: Self = Self(0);
+    pub const SESSION: Self = Self(1 << 0);
+    pub const MODEL: Self = Self(1 << 1);
+    pub const COST: Self = Self(1 << 2);
+    pub const MODE_POLICY: Self = Self(1 << 3);
+    pub const SYSTEM_PROMPT: Self = Self(1 << 4);
+    pub const SKILLS: Self = Self(1 << 5);
+    pub const WORKSPACE: Self = Self(1 << 6);
+    pub const PRESENTATION: Self = Self(1 << 7);
+    pub const MEDIA: Self = Self(1 << 8);
+    /// Memory-group host data (FEAT-019 D1).
+    pub const MEMORY: Self = Self(1 << 9);
+
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    pub const fn contains(self, capability: Self) -> bool {
+        self.0 & capability.0 == capability.0
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl std::ops::BitOr for CommandCapabilities {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        self.union(rhs)
+    }
+}
 
 /// A command handler that is either argument-only or capability-scoped.
 #[derive(Clone, Copy)]
 pub enum CommandHandler<R> {
     Pure(fn(Option<&str>) -> R),
-    Contextual(fn(CommandContexts<'_>, Option<&str>) -> R),
+    Contextual {
+        capabilities: CommandCapabilities,
+        handler: fn(CommandContexts<'_>, Option<&str>) -> R,
+    },
 }
 
 /// Transport envelope with one independently optional facet slot.
@@ -28,6 +74,7 @@ pub struct CommandContexts<'a> {
     workspace: Option<&'a mut dyn CommandWorkspaceContext>,
     presentation: Option<&'a mut dyn CommandPresentationContext>,
     media: Option<&'a mut dyn CommandMediaContext>,
+    memory: Option<&'a mut dyn CommandMemoryContext>,
 }
 
 /// Consumed envelope used when one handler needs several independent facets.
@@ -41,6 +88,7 @@ pub struct ContextParts<'a> {
     pub workspace: Option<&'a mut dyn CommandWorkspaceContext>,
     pub presentation: Option<&'a mut dyn CommandPresentationContext>,
     pub media: Option<&'a mut dyn CommandMediaContext>,
+    pub memory: Option<&'a mut dyn CommandMemoryContext>,
 }
 
 impl<'a> CommandContexts<'a> {
@@ -55,6 +103,7 @@ impl<'a> CommandContexts<'a> {
             workspace: None,
             presentation: None,
             media: None,
+            memory: None,
         }
     }
 
@@ -69,6 +118,7 @@ impl<'a> CommandContexts<'a> {
             workspace: self.workspace,
             presentation: self.presentation,
             media: self.media,
+            memory: self.memory,
         }
     }
 
@@ -137,6 +187,14 @@ impl<'a> CommandContexts<'a> {
         assert!(
             self.media.replace(value).is_none(),
             "media facet already set"
+        );
+        self
+    }
+
+    pub fn with_memory(mut self, value: &'a mut dyn CommandMemoryContext) -> Self {
+        assert!(
+            self.memory.replace(value).is_none(),
+            "memory facet already set"
         );
         self
     }
