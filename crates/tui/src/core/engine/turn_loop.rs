@@ -4632,28 +4632,12 @@ impl Engine {
         Some(snapshot)
     }
 
-    async fn goal_continuation_message_if_needed(
-        &self,
-        tool_registry: Option<&crate::tools::ToolRegistry>,
-        continuations_this_turn: &mut u32,
-        current_turn_usage: &Usage,
-    ) -> Option<String> {
-        let registry = tool_registry?;
-        if !registry.contains("update_goal") {
-            return None;
-        }
-
-        let mut snapshot = self.goal_snapshot_with_current_turn_usage(current_turn_usage)?;
-        let current_turn_tokens = u64::from(current_turn_usage.input_tokens)
-            .saturating_add(u64::from(current_turn_usage.output_tokens));
-
-        // Route the continuation decision through the goal-loop decision core.
-        // A goal runs until complete/blocked or the user pauses it; token/time
-        // accounting is telemetry (#5052). The configurable run-level backstop
-        // ([goal] max_continuations) only halts a pathological
-        // loop. The per-turn guard (`per_turn_max`) only bounds how many
-        // continuation passes happen *within* a single turn before yielding
-        // back to the engine.
+    /// Run the goal-loop decision core against the live goal state merged with
+    /// this turn's usage. `Some(snapshot)` means the goal is still active and
+    /// should continue; `None` means no continuation (inactive goal, terminal
+    /// status, or continuation backstop), after emitting the terminal status.
+    async fn goal_continuation_allowed(&self, current_turn_usage: &Usage) -> Option<GoalSnapshot> {
+        let snapshot = self.goal_snapshot_with_current_turn_usage(current_turn_usage)?;
         let decision = crate::goal_loop::decide_continuation(
             crate::goal_loop::GoalRunStatus::Active,
             crate::goal_loop::GoalProgress {
@@ -4672,6 +4656,66 @@ impl Engine {
             let _ = self.tx_event.send(Event::status(message)).await;
             return None;
         }
+        Some(snapshot)
+    }
+
+    async fn goal_continuation_message_if_needed(
+        &self,
+        tool_registry: Option<&crate::tools::ToolRegistry>,
+        continuations_this_turn: &mut u32,
+        current_turn_usage: &Usage,
+    ) -> Option<String> {
+        let registry = tool_registry?;
+        if !registry.contains("update_goal") {
+            return None;
+        }
+
+        // Decide first so a terminal goal never spends the quiet period —
+        // failures never continue (host-managed cadence).
+        self.goal_continuation_allowed(current_turn_usage)
+            .await
+            .as_ref()?;
+
+        // This within-turn hook is the only goal-continuation dispatch site
+        // for every session, so the configured between-continuation quiet
+        // period is awaited right here unconditionally — non-host-managed
+        // sessions (e.g. `codewhale resume --last`) must honor the delay too.
+        // The wait is cancellable: the cancel token (Esc) wins biased over the
+        // timer, and a pause/clear or terminal update_goal observed after the
+        // wait cancels the pending pass before anything is recorded or
+        // dispatched.
+        let wait = crate::goal_loop::continuation_wait(self.config.goal_continuation_delay_seconds);
+        let was_delayed = wait.is_some();
+        if let Some(wait) = wait {
+            let _ = self
+                .tx_event
+                .send(Event::GoalContinuationWaiting {
+                    delay_seconds: wait.as_secs(),
+                })
+                .await;
+        }
+        if crate::goal_loop::await_continuation_wait(wait, &self.cancel_token).await
+            == crate::goal_loop::ContinuationWaitOutcome::Cancelled
+        {
+            let _ = self
+                .tx_event
+                .send(Event::GoalContinuationWaitEnded { interrupted: true })
+                .await;
+            return None;
+        }
+        if was_delayed {
+            let _ = self
+                .tx_event
+                .send(Event::GoalContinuationWaitEnded { interrupted: false })
+                .await;
+        }
+
+        // Re-decide on the live state after the quiet period: /goal pause,
+        // /goal clear, or a terminal update_goal during the wait cancels the
+        // pending pass instead of dispatching a provider request.
+        let mut snapshot = self.goal_continuation_allowed(current_turn_usage).await?;
+        let current_turn_tokens = u64::from(current_turn_usage.input_tokens)
+            .saturating_add(u64::from(current_turn_usage.output_tokens));
 
         *continuations_this_turn = (*continuations_this_turn).saturating_add(1);
         match self.config.goal_state.lock() {
@@ -6892,5 +6936,158 @@ mod tests {
         let fold = fold_tool_call_before_results(&results);
         assert!(fold.deny_reason.is_none());
         assert!(fold.requires_approval);
+    }
+
+    // ── Goal continuation quiet period ───────────────────────────────
+
+    /// Engine fixture for the continuation-hook cadence tests. A non-empty
+    /// `goal_objective` with the default `Active` status leaves an active goal
+    /// in the shared state after `Engine::new`, so the within-turn hook has a
+    /// live goal to continue. `host_managed` sets `active_thread_id`, the flag
+    /// the hook previously used to decide whether to wait at all.
+    fn goal_continuation_cadence_engine(
+        tmp: &tempfile::TempDir,
+        delay_seconds: u64,
+        host_managed: bool,
+    ) -> (Engine, EngineHandle) {
+        let config = EngineConfig {
+            workspace: tmp.path().to_path_buf(),
+            goal_objective: Some("keep going".to_string()),
+            goal_continuation_delay_seconds: delay_seconds,
+            runtime_services: crate::tools::spec::RuntimeToolServices {
+                active_thread_id: host_managed.then(|| "host-managed-thread".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        Engine::new(config, &Config::default())
+    }
+
+    fn goal_continuation_registry(engine: &Engine) -> crate::tools::ToolRegistry {
+        crate::tools::ToolRegistryBuilder::new()
+            .with_goal_tools(engine.config.goal_state.clone())
+            .build(crate::tools::spec::ToolContext::new(
+                engine.config.workspace.clone(),
+            ))
+    }
+
+    /// Drive the within-turn hook on an engine whose configured quiet period
+    /// is positive, asserting the full dispatch contract: the hook emits its
+    /// wait receipt before dispatching, does not dispatch before the quiet
+    /// period elapses, and does dispatch (recording one continuation) after.
+    async fn assert_positive_delay_continuation_waits(
+        engine: Engine,
+        handle: EngineHandle,
+        delay_seconds: u64,
+    ) {
+        let registry = goal_continuation_registry(&engine);
+        let mut task = tokio::spawn(async move {
+            let mut continuations = 0u32;
+            let usage = Usage::default();
+            let message = engine
+                .goal_continuation_message_if_needed(Some(&registry), &mut continuations, &usage)
+                .await;
+            (message, continuations)
+        });
+
+        // The wait receipt must arrive before anything is dispatched. If the
+        // hook skips the wait, it returns without one and the task finishes.
+        let mut events = handle.rx_event.write().await;
+        loop {
+            let event = tokio::select! {
+                event = events.recv() => event,
+                finished = &mut task => {
+                    panic!(
+                        "goal continuation dispatched before the quiet period: {finished:?}"
+                    );
+                }
+            };
+            match event {
+                Some(Event::GoalContinuationWaiting {
+                    delay_seconds: emitted,
+                }) => {
+                    assert_eq!(
+                        emitted, delay_seconds,
+                        "wait receipt must carry the configured delay"
+                    );
+                    break;
+                }
+                Some(_) => continue,
+                None => panic!("event channel closed before the continuation wait receipt"),
+            }
+        }
+        assert!(
+            !task.is_finished(),
+            "continuation must still be inside the quiet period after the wait receipt"
+        );
+
+        let started = std::time::Instant::now();
+        let (message, continuations) = task.await.expect("continuation task panicked");
+        let waited = started.elapsed();
+        assert!(
+            waited >= Duration::from_millis(delay_seconds.saturating_mul(1000).saturating_sub(100)),
+            "continuation dispatched after only {waited:?}; the {delay_seconds}s quiet period was not honored"
+        );
+        assert!(
+            message.is_some(),
+            "active goal must dispatch a continuation prompt after the quiet period"
+        );
+        assert_eq!(continuations, 1);
+    }
+
+    /// Regression: a CLI-resumed (non-host-managed) session has
+    /// `runtime_services.active_thread_id` unset and must still honor the
+    /// between-continuation quiet period before dispatching.
+    #[tokio::test]
+    async fn non_host_managed_goal_continuation_waits_for_quiet_period() {
+        let tmp = tempdir().expect("tempdir");
+        let (engine, handle) = goal_continuation_cadence_engine(&tmp, 1, false);
+        assert_eq!(
+            engine.config.runtime_services.active_thread_id, None,
+            "fixture must be non-host-managed"
+        );
+        assert_positive_delay_continuation_waits(engine, handle, 1).await;
+    }
+
+    /// Host-managed sessions keep their existing cadence: the quiet period
+    /// still elapses before the continuation prompt dispatches.
+    #[tokio::test]
+    async fn host_managed_goal_continuation_still_waits_for_quiet_period() {
+        let tmp = tempdir().expect("tempdir");
+        let (engine, handle) = goal_continuation_cadence_engine(&tmp, 1, true);
+        assert!(
+            engine.config.runtime_services.active_thread_id.is_some(),
+            "fixture must be host-managed"
+        );
+        assert_positive_delay_continuation_waits(engine, handle, 1).await;
+    }
+
+    /// A zero delay must continue immediately: no wait receipt is emitted and
+    /// the continuation prompt dispatches without any quiet period.
+    #[tokio::test]
+    async fn zero_goal_continuation_delay_dispatches_immediately() {
+        let tmp = tempdir().expect("tempdir");
+        let (engine, handle) = goal_continuation_cadence_engine(&tmp, 0, false);
+        let registry = goal_continuation_registry(&engine);
+        let task = tokio::spawn(async move {
+            let mut continuations = 0u32;
+            let usage = Usage::default();
+            let message = engine
+                .goal_continuation_message_if_needed(Some(&registry), &mut continuations, &usage)
+                .await;
+            (message, continuations)
+        });
+
+        let (message, continuations) = task.await.expect("continuation task panicked");
+        assert!(message.is_some(), "zero delay must still continue the goal");
+        assert_eq!(continuations, 1);
+
+        let mut events = handle.rx_event.write().await;
+        while let Ok(event) = events.try_recv() {
+            assert!(
+                !matches!(event, Event::GoalContinuationWaiting { .. }),
+                "zero delay must not enter the quiet-period wait, got {event:?}"
+            );
+        }
     }
 }

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Heavy pull requests now run the real Linux workspace nextest, doctest, and
+  lockfile lanes directly on GitHub Actions instead of reporting a green
+  placeholder while waiting for a branch-specific CNB mirror (#5547).
+- The goal-continuation quiet period (`[goal] continuation_delay_seconds`,
+  added in #5508) now applies on every dispatch path. Previously the
+  within-turn dispatch hook fired the next continuation prompt immediately
+  whenever a model step ended with the goal still active, so CLI-resumed and
+  host-managed sessions never observed the configured delay (measured
+  end-to-start gaps of ~9 s with a 300 s delay configured). The wait now
+  runs unconditionally inside `goal_continuation_message_if_needed`,
+  remains cancellable, and pause/clear/terminal `update_goal` calls still
+  cancel a pending pass (#5534).
+- Two unit tests no longer depend on process-global environment state that
+  sibling tests mutate concurrently.
+  `route_budget::tests::v4_trigger_uses_window_percent_when_it_fits_spendable_input`
+  asserted no-override output-budget values while reading
+  `CODEWHALE_MAX_OUTPUT_TOKENS` / `DEEPSEEK_MAX_OUTPUT_TOKENS` without
+  holding `lock_test_env()`, so a concurrent writer could flip the value
+  mid-assertion (the order-dependent full-suite flake).
+  `prompts::tests::system_prompt_prefix_never_leaks_private_content` read the
+  real home via `HOME`/`USERPROFILE`, so a machine with
+  `~/.codewhale/instructions.md` leaked its absolute path into the prompt and
+  failed the no-private-paths assertion unless a sibling's temporary `HOME`
+  guard happened to be live. Both tests now hold the env barrier and pin the
+  variables (the route-budget test removes the overrides; the prompts test
+  points `HOME`/`USERPROFILE` at a scratch dir). Assertions unchanged.
+
 ## [0.9.11] - 2026-08-22
 
 Codewhale v0.9.11 tightens the long-running agent loop, makes workflow

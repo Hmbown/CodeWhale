@@ -3696,6 +3696,11 @@ mod tests {
         ));
         fs::create_dir_all(&temp_root).unwrap();
         let _guard = EnvGuard::new(&temp_root);
+        // Neutralize the SSH markers: production intentionally caps motion
+        // over SSH, and the suite routinely runs inside one.
+        let _ssh_client = EnvVarGuard::remove("SSH_CLIENT");
+        let _ssh_connection = EnvVarGuard::remove("SSH_CONNECTION");
+        let _ssh_tty = EnvVarGuard::remove("SSH_TTY");
         let prev_term_program = env::var_os("TERM_PROGRAM");
         // Safety: test-only environment mutation guarded by EnvGuard's lock.
         unsafe {

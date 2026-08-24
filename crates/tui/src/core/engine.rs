@@ -2417,9 +2417,35 @@ impl Engine {
                         else {
                             continue;
                         };
+                        // Host-injected tokens carry their own quiet period:
+                        // host-managed sessions never run the engine-owned
+                        // scheduler, so this arm is their only continuation
+                        // dispatch site and must honor
+                        // [goal] continuation_delay_seconds itself before
+                        // dispatching. The wait is biased-cancellable (Esc,
+                        // steer, or host cancel always wins over a racing
+                        // expiry), and the live goal is re-read below only
+                        // after it, so a pause/clear/complete/blocked landing
+                        // during the quiet period cancels the pass and
+                        // failures never continue. Engine-owned tokens (Some)
+                        // already waited out ready_at in the scheduler and
+                        // keep those semantics untouched.
+                        if engine_schedule_id.is_none()
+                            && crate::goal_loop::await_continuation_wait(
+                                crate::goal_loop::continuation_wait(
+                                    self.config.goal_continuation_delay_seconds,
+                                ),
+                                &self.cancel_token,
+                            )
+                            .await
+                                == crate::goal_loop::ContinuationWaitOutcome::Cancelled
+                        {
+                            continue;
+                        }
                         // Status controls queued while the previous turn was
-                        // running are processed before this operation. Re-read
-                        // the live goal now so pause/clear/complete/blocked can
+                        // running are processed before this operation, and a
+                        // host-injected quiet period has now elapsed. Re-read
+                        // the live goal so pause/clear/complete/blocked can
                         // cancel a stale continuation without starting a turn.
                         let (content, goal_snapshot) = match self.goal_continuation_if_active() {
                             GoalContinuationAction::Inactive => continue,
