@@ -16,7 +16,7 @@ use ratatui::{
 
 use crate::compaction::estimate_input_tokens_for_pressure;
 use crate::localization::{Locale, MessageId, tr};
-use crate::models::SystemPrompt;
+use crate::models::{SystemPrompt, Tool};
 use crate::palette;
 use crate::session_manager::SessionContextReference;
 use crate::tui::app::{App, ToolDetailRecord};
@@ -36,6 +36,8 @@ pub(crate) const CONTEXT_WARNING_THRESHOLD_PERCENT: f64 = 85.0;
 pub(crate) const CONTEXT_CRITICAL_THRESHOLD_PERCENT: f64 = 95.0;
 const MAX_REFERENCE_ROWS: usize = 12;
 const MAX_TOOL_ROWS: usize = 8;
+const MAX_SCHEMA_COST_ROWS: usize = 24;
+const SCHEMA_TOKEN_DIVISOR: usize = 4;
 
 const SYSTEM_LAYER_MARKERS: &[(&str, &str, PromptLayerKind)] = &[
     (
@@ -226,6 +228,7 @@ pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
     push_references(&mut out, &app.session_context_references, locale);
     let _ = writeln!(out);
     push_tools(&mut out, app, locale);
+    push_tool_schema_costs(&mut out, app, locale);
 
     out
 }
@@ -557,6 +560,69 @@ fn push_tool_row(out: &mut String, locale: Locale, location: &str, detail: &Tool
     );
 }
 
+fn tool_schema_tokens(tool: &Tool) -> usize {
+    serde_json::to_string(tool)
+        .map(|schema| schema.chars().count().div_ceil(SCHEMA_TOKEN_DIVISOR))
+        .unwrap_or_default()
+}
+
+fn push_tool_schema_costs(out: &mut String, app: &App, locale: Locale) {
+    let Some(catalog) = app.session.last_tool_catalog.as_ref() else {
+        return;
+    };
+
+    let tokens = tr(locale, MessageId::CtxInspTokens);
+    let tools_label = tr(locale, MessageId::CtxInspRecentTools);
+    let _ = writeln!(out, "{} ({})", tools_label, tokens);
+    let _ = writeln!(out, "------------");
+
+    let mut built_in: Vec<(String, usize)> = catalog
+        .iter()
+        .filter(|tool| !crate::mcp::McpPool::is_mcp_tool(&tool.name))
+        .map(|tool| (tool.name.clone(), tool_schema_tokens(tool)))
+        .collect();
+    built_in.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    let built_in_total: usize = built_in.iter().map(|(_, cost)| cost).sum();
+    let _ = writeln!(
+        out,
+        "- [catalog] ~{built_in_total} {tokens} ({} tools)",
+        built_in.len()
+    );
+    for (name, cost) in built_in.iter().take(MAX_SCHEMA_COST_ROWS) {
+        let _ = writeln!(out, "  - {name}: ~{cost} {tokens}");
+    }
+    if built_in.len() > MAX_SCHEMA_COST_ROWS {
+        let _ = writeln!(
+            out,
+            "  - ... {} more catalog tools",
+            built_in.len() - MAX_SCHEMA_COST_ROWS
+        );
+    }
+
+    let Some(snapshot) = app.mcp_snapshot.as_ref() else {
+        return;
+    };
+    for server in &snapshot.servers {
+        let mut server_tokens = 0usize;
+        let mut catalog_tools = 0usize;
+        for announced in &server.tools {
+            if let Some(tool) = catalog
+                .iter()
+                .find(|tool| tool.name == announced.model_name)
+            {
+                server_tokens += tool_schema_tokens(tool);
+                catalog_tools += 1;
+            }
+        }
+        let _ = writeln!(
+            out,
+            "- [mcp:{}] ~{server_tokens} {tokens} ({catalog_tools}/{} announced tools)",
+            server.name,
+            server.tools.len()
+        );
+    }
+}
+
 fn short_tool_id(id: &str) -> String {
     // Slice by characters, not bytes: a tool id from a gateway can contain
     // multibyte characters, and `&id[..8]` panics on a byte index that lands
@@ -839,7 +905,8 @@ mod tests {
         assert_eq!(short_tool_id("café"), "café");
     }
 
-    use crate::models::{ContentBlock, Message};
+    use crate::mcp::{McpDiscoveredItem, McpManagerSnapshot, McpServerSnapshot};
+    use crate::models::{ContentBlock, Message, Tool};
     use crate::session_manager::SessionContextReference;
     use crate::tui::app::TuiOptions;
     use crate::tui::file_mention::{
@@ -910,6 +977,104 @@ mod tests {
         assert!(text.contains("Session Context"));
         assert!(text.contains("No file, directory, or media references recorded yet."));
         assert!(text.contains("No tool activity recorded yet."));
+    }
+
+    fn schema_tool(name: &str, property_count: usize) -> Tool {
+        let properties = (0..property_count)
+            .map(|index| {
+                (
+                    format!("field_{index}"),
+                    serde_json::json!({"type": "string"}),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        Tool {
+            tool_type: Some("function".to_string()),
+            name: name.to_string(),
+            description: format!("schema for {name}"),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": properties,
+            }),
+            allowed_callers: None,
+            defer_loading: None,
+            input_examples: None,
+            strict: None,
+            cache_control: None,
+        }
+    }
+
+    #[test]
+    fn inspector_reports_catalog_and_mcp_schema_costs_with_bounded_rows() {
+        let mut app = test_app();
+        let mut catalog = (0..(MAX_SCHEMA_COST_ROWS + 2))
+            .map(|index| schema_tool(&format!("tool_{index}"), index + 1))
+            .collect::<Vec<_>>();
+        catalog.push(schema_tool("mcp_local_echo", 3));
+        app.session.last_tool_catalog = Some(catalog);
+        app.mcp_snapshot = Some(McpManagerSnapshot {
+            config_path: PathBuf::from("/tmp/mcp.json"),
+            config_exists: true,
+            reload_required: false,
+            servers: vec![
+                McpServerSnapshot {
+                    name: "local".to_string(),
+                    enabled: true,
+                    required: false,
+                    transport: "stdio".to_string(),
+                    command_or_url: "echo".to_string(),
+                    connect_timeout: 1,
+                    execute_timeout: 1,
+                    read_timeout: 1,
+                    connected: true,
+                    error: None,
+                    capability_metadata: Default::default(),
+                    tools: vec![McpDiscoveredItem {
+                        name: "echo".to_string(),
+                        model_name: "mcp_local_echo".to_string(),
+                        description: Some("echoes input".to_string()),
+                    }],
+                    resources: Vec::new(),
+                    prompts: Vec::new(),
+                },
+                McpServerSnapshot {
+                    name: "empty".to_string(),
+                    enabled: true,
+                    required: false,
+                    transport: "stdio".to_string(),
+                    command_or_url: "empty".to_string(),
+                    connect_timeout: 1,
+                    execute_timeout: 1,
+                    read_timeout: 1,
+                    connected: true,
+                    error: None,
+                    capability_metadata: Default::default(),
+                    tools: Vec::new(),
+                    resources: Vec::new(),
+                    prompts: Vec::new(),
+                },
+            ],
+        });
+
+        let text = build_context_inspector_text(&app, Locale::En);
+        assert!(text.contains("[catalog]"), "catalog total missing: {text}");
+        assert!(text.contains("tool_25"), "catalog row missing: {text}");
+        assert!(
+            text.contains("more catalog tools"),
+            "catalog bound missing: {text}"
+        );
+        assert!(
+            text.contains("[mcp:local]"),
+            "MCP server row missing: {text}"
+        );
+        assert!(
+            text.contains("1/1 announced tools"),
+            "MCP tool cost missing: {text}"
+        );
+        assert!(
+            text.contains("[mcp:empty] ~0"),
+            "empty MCP row missing: {text}"
+        );
     }
 
     #[test]
