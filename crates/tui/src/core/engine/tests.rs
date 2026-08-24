@@ -66,15 +66,34 @@ const REPRESENTATIVE_SKILL_DESCRIPTION: &str = "REPRESENTATIVE_SKILL_DESCRIPTION
 const REPRESENTATIVE_MEMORY_CHECKPOINT: &str = "REPRESENTATIVE_MEMORY_CHECKPOINT";
 const REPRESENTATIVE_GOAL_OBJECTIVE: &str = "REPRESENTATIVE_GOAL_OBJECTIVE";
 
+#[test]
+fn cancellation_wins_at_the_terminal_child_settlement_seam() {
+    assert_eq!(
+        terminal_turn_status_at_settlement(TurnOutcomeStatus::Completed, true),
+        TurnOutcomeStatus::Interrupted
+    );
+    assert_eq!(
+        terminal_turn_status_at_settlement(TurnOutcomeStatus::Completed, false),
+        TurnOutcomeStatus::Completed
+    );
+    assert_eq!(
+        terminal_turn_status_at_settlement(TurnOutcomeStatus::Failed, true),
+        TurnOutcomeStatus::Failed
+    );
+}
+
 #[tokio::test]
-async fn terminal_barrier_joins_foreground_child_before_flushing_mailbox() {
+async fn terminal_barrier_parks_foreground_child_before_flushing_mailbox() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     let turn_token = CancellationToken::new();
     let (mailbox, _receiver) = Mailbox::new(turn_token.clone());
     let foreground_children = Arc::new(ForegroundChildRegistry::new());
     let child_token = turn_token.child_token();
-    let registration = foreground_children.register(child_token.clone());
+    let registration = foreground_children
+        .register("agent_terminal_barrier", child_token.clone())
+        .expect("foreground child registers before settlement");
+    let parking_signal = registration.parking_signal();
     let child_settled = Arc::new(AtomicBool::new(false));
     let child_settled_for_task = Arc::clone(&child_settled);
     let child = tokio::spawn(async move {
@@ -104,14 +123,18 @@ async fn terminal_barrier_joins_foreground_child_before_flushing_mailbox() {
         flush_tx,
         drain_handle,
     };
-    tokio::time::timeout(Duration::from_secs(1), barrier.cancel_and_flush())
+    tokio::time::timeout(Duration::from_secs(1), barrier.park_and_flush())
         .await
-        .expect("the terminal barrier cancels and joins its direct child");
+        .expect("the terminal barrier parks and joins its owned child");
     child
         .await
         .expect("foreground child task exits after cancellation");
 
     assert!(child_settled.load(Ordering::SeqCst));
+    assert!(
+        parking_signal.load(Ordering::Acquire),
+        "normal turn completion must request a resumable park before cancellation"
+    );
     assert!(
         flush_after_child_settled.load(Ordering::SeqCst),
         "mailbox flushing, and therefore TurnComplete, waits for the owned child"
@@ -4113,7 +4136,7 @@ async fn denied_synthetic_tool_is_blocked_by_the_same_turn_policy_at_execution()
     assert!(!policy.allows_tool(TOOL_SEARCH_NAME));
     let mut turn = crate::core::turn::TurnContext::new(4);
 
-    let (status, error) = engine.run_turn(&mut turn, policy, None).await;
+    let (status, error) = engine.run_turn(&mut turn, policy, None, None).await;
     assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
 
     let mut events = handle.rx_event.write().await;
@@ -4128,6 +4151,350 @@ async fn denied_synthetic_tool_is_blocked_by_the_same_turn_policy_at_execution()
         error.to_string().contains("disallowed-tools list"),
         "{error:?}"
     );
+}
+
+#[tokio::test]
+async fn turn_owned_children_receive_exactly_one_coordination_pass_even_at_step_ceiling() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    for max_steps in [1, 4] {
+        let workspace = tempdir().expect("tempdir");
+        let mock = std::sync::Arc::new(MockLlmClient::new(vec![
+            canned::simple_text_turn("The requested work is complete."),
+            canned::simple_text_turn("I have settled the remaining child work."),
+        ]));
+        let client: crate::core::model_client::SharedModelClient = mock.clone();
+        let engine_config = EngineConfig {
+            max_steps,
+            ..deterministic_engine_config(workspace.path())
+        };
+        let (mut engine, _handle) =
+            Engine::new_with_model_client(engine_config, &Config::default(), client);
+        let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+        let registry = crate::tools::ToolRegistry::new(context);
+        let surface = test_tool_surface(&engine, registry, None, AppMode::Agent);
+        let foreground_children = Arc::new(ForegroundChildRegistry::new());
+        let registration = foreground_children
+            .register("agent_turn_owned_test", CancellationToken::new())
+            .expect("foreground child registers before settlement");
+        let mut turn = crate::core::turn::TurnContext::new(max_steps);
+
+        let (status, error) = engine
+            .run_turn(
+                &mut turn,
+                surface,
+                Some(Arc::clone(&foreground_children)),
+                None,
+            )
+            .await;
+
+        assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
+        assert_eq!(
+            mock.call_count(),
+            2,
+            "max_steps={max_steps} must dispatch exactly one coordination pass"
+        );
+        let requests = mock.captured_requests();
+        let coordination_text = requests[1]
+            .messages
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .filter_map(|block| match block {
+                ContentBlock::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            coordination_text.contains(
+                "agent(action=\"wait\", agent_id=\"agent_turn_owned_test\", until=\"all\")"
+            ),
+            "{coordination_text}"
+        );
+        assert!(coordination_text.contains("detached=true"));
+        assert!(coordination_text.contains("resume_from=\"<agent_id>\""));
+        assert_eq!(
+            turn.step, 1,
+            "the ceiling grace must reuse the already-advanced provider slot"
+        );
+
+        drop(registration);
+    }
+}
+
+#[tokio::test]
+async fn turn_owned_coordination_tool_result_gets_one_finalization_response_at_step_ceiling() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    fs::write(workspace.path().join("state.txt"), "settlement-proof\n").expect("write fixture");
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![
+        canned::simple_text_turn("The primary task is complete."),
+        canned::tool_call_turn(
+            "call-coordination-read",
+            "read_file",
+            r#"{"path":"state.txt"}"#,
+        ),
+        canned::simple_text_turn("The coordination result is incorporated."),
+    ]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let engine_config = EngineConfig {
+        max_steps: 1,
+        ..deterministic_engine_config(workspace.path())
+    };
+    let (mut engine, _handle) =
+        Engine::new_with_model_client(engine_config, &Config::default(), client);
+    let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+    let mut tool_registry = crate::tools::ToolRegistry::new(context);
+    tool_registry.register(std::sync::Arc::new(crate::tools::file::ReadFileTool));
+    let tools = Some(tool_registry.to_api_tools_with_cache(true));
+    let surface = test_tool_surface(&engine, tool_registry, tools, AppMode::Agent);
+    let foreground_children = Arc::new(ForegroundChildRegistry::new());
+    let registration = foreground_children
+        .register("agent_tool_roundtrip", CancellationToken::new())
+        .expect("foreground child registers before settlement");
+    let mut turn = crate::core::turn::TurnContext::new(1);
+
+    let (status, error) = engine
+        .run_turn(
+            &mut turn,
+            surface,
+            Some(Arc::clone(&foreground_children)),
+            None,
+        )
+        .await;
+
+    assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
+    assert_eq!(mock.call_count(), 3);
+    let requests = mock.captured_requests();
+    assert!(
+        requests[2]
+            .messages
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .any(|block| matches!(
+                block,
+                ContentBlock::ToolResult { tool_use_id, .. }
+                    if tool_use_id == "call-coordination-read"
+            ))
+    );
+    assert_eq!(mock.remaining_turns(), 0);
+
+    drop(registration);
+}
+
+#[tokio::test]
+async fn turn_owned_coordination_output_limit_grace_is_bounded() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let truncated = |id: &str| {
+        vec![
+            canned::message_start(id),
+            canned::text_block_start(0),
+            canned::text_delta(0, "partial coordination response"),
+            canned::block_stop(0),
+            canned::message_delta("max_output_tokens", None),
+            canned::message_stop(),
+        ]
+    };
+    let workspace = tempdir().expect("tempdir");
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![
+        canned::simple_text_turn("The primary task is complete."),
+        truncated("coordination-truncated-1"),
+        truncated("coordination-truncated-2"),
+        canned::simple_text_turn("must remain unused"),
+    ]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let engine_config = EngineConfig {
+        max_steps: 1,
+        ..deterministic_engine_config(workspace.path())
+    };
+    let (mut engine, _handle) =
+        Engine::new_with_model_client(engine_config, &Config::default(), client);
+    let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+    let tool_registry = crate::tools::ToolRegistry::new(context);
+    let surface = test_tool_surface(&engine, tool_registry, None, AppMode::Agent);
+    let foreground_children = Arc::new(ForegroundChildRegistry::new());
+    let registration = foreground_children
+        .register("agent_bounded_truncation", CancellationToken::new())
+        .expect("foreground child registers before settlement");
+    let mut turn = crate::core::turn::TurnContext::new(1);
+
+    let (status, error) = engine
+        .run_turn(
+            &mut turn,
+            surface,
+            Some(Arc::clone(&foreground_children)),
+            None,
+        )
+        .await;
+
+    assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
+    assert_eq!(mock.call_count(), 3, "coordination grace must be finite");
+    assert_eq!(
+        mock.remaining_turns(),
+        1,
+        "a third grace reply is forbidden"
+    );
+
+    drop(registration);
+}
+
+#[tokio::test]
+async fn turn_owned_coordination_tool_grace_is_bounded_below_step_ceiling() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    fs::write(workspace.path().join("state.txt"), "settlement-proof\n").expect("write fixture");
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![
+        canned::simple_text_turn("The primary task is complete."),
+        canned::tool_call_turn(
+            "call-coordination-read-1",
+            "read_file",
+            r#"{"path":"state.txt"}"#,
+        ),
+        canned::tool_call_turn(
+            "call-coordination-read-2",
+            "read_file",
+            r#"{"path":"state.txt"}"#,
+        ),
+        canned::simple_text_turn("must remain unused"),
+    ]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let engine_config = EngineConfig {
+        max_steps: 8,
+        ..deterministic_engine_config(workspace.path())
+    };
+    let (mut engine, _handle) =
+        Engine::new_with_model_client(engine_config, &Config::default(), client);
+    let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+    let mut tool_registry = crate::tools::ToolRegistry::new(context);
+    tool_registry.register(std::sync::Arc::new(crate::tools::file::ReadFileTool));
+    let tools = Some(tool_registry.to_api_tools_with_cache(true));
+    let surface = test_tool_surface(&engine, tool_registry, tools, AppMode::Agent);
+    let foreground_children = Arc::new(ForegroundChildRegistry::new());
+    let registration = foreground_children
+        .register("agent_bounded_tools", CancellationToken::new())
+        .expect("foreground child registers before settlement");
+    let mut turn = crate::core::turn::TurnContext::new(8);
+
+    let (status, error) = engine
+        .run_turn(
+            &mut turn,
+            surface,
+            Some(Arc::clone(&foreground_children)),
+            None,
+        )
+        .await;
+
+    assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
+    assert_eq!(
+        mock.call_count(),
+        3,
+        "two accepted coordination responses must exhaust the grace even below max_steps"
+    );
+    assert_eq!(
+        mock.remaining_turns(),
+        1,
+        "a third coordination response is forbidden"
+    );
+
+    drop(registration);
+}
+
+#[tokio::test]
+async fn steer_during_final_coordination_response_gets_its_own_provider_reply() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    fs::write(workspace.path().join("state.txt"), "settlement-proof\n").expect("write fixture");
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![
+        canned::simple_text_turn("The primary task is complete."),
+        canned::tool_call_turn(
+            "call-coordination-read-1",
+            "read_file",
+            r#"{"path":"state.txt"}"#,
+        ),
+    ]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let engine_config = EngineConfig {
+        max_steps: 8,
+        ..deterministic_engine_config(workspace.path())
+    };
+    let (mut engine, handle) =
+        Engine::new_with_model_client(engine_config, &Config::default(), client);
+    let tx_steer = handle.tx_steer.clone();
+    mock.push_factory(move |_request| {
+        tx_steer
+            .try_send("Include this user steer in the final answer.".to_string())
+            .expect("test steer channel remains open");
+        canned::tool_call_turn(
+            "call-coordination-read-2",
+            "read_file",
+            r#"{"path":"state.txt"}"#,
+        )
+    });
+    mock.push_turn(canned::tool_call_turn(
+        "call-steer-read",
+        "read_file",
+        r#"{"path":"state.txt"}"#,
+    ));
+    mock.push_turn(canned::simple_text_turn(
+        "The queued user steer is now handled.",
+    ));
+
+    let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+    let mut tool_registry = crate::tools::ToolRegistry::new(context);
+    tool_registry.register(std::sync::Arc::new(crate::tools::file::ReadFileTool));
+    let tools = Some(tool_registry.to_api_tools_with_cache(true));
+    let surface = test_tool_surface(&engine, tool_registry, tools, AppMode::Agent);
+    let foreground_children = Arc::new(ForegroundChildRegistry::new());
+    let registration = foreground_children
+        .register("agent_steer_handoff", CancellationToken::new())
+        .expect("foreground child registers before settlement");
+    let mut turn = crate::core::turn::TurnContext::new(8);
+
+    let (status, error) = engine
+        .run_turn(
+            &mut turn,
+            surface,
+            Some(Arc::clone(&foreground_children)),
+            None,
+        )
+        .await;
+
+    assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
+    assert_eq!(mock.call_count(), 5);
+    let requests = mock.captured_requests();
+    let steer_request_text = requests[3]
+        .messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        steer_request_text.contains("Include this user steer in the final answer."),
+        "{steer_request_text}"
+    );
+    assert!(
+        requests[4]
+            .messages
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .any(|block| matches!(
+                block,
+                ContentBlock::ToolResult { tool_use_id, .. }
+                    if tool_use_id == "call-steer-read"
+            )),
+        "the steer-authorized tool result must reach a finalization response"
+    );
+    assert_eq!(mock.remaining_turns(), 0);
+
+    drop(registration);
 }
 
 /// Compose one assistant turn that proposes `calls` as a single parallel
@@ -4171,7 +4538,7 @@ async fn run_budgeted_read_turn(
     let surface = test_tool_surface(&engine, registry, tools, AppMode::Agent);
     let mut turn = crate::core::turn::TurnContext::new(4);
 
-    let (status, error) = engine.run_turn(&mut turn, surface, None).await;
+    let (status, error) = engine.run_turn(&mut turn, surface, None, None).await;
     let mut events = handle.rx_event.write().await;
     let completions = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|event| match event {
@@ -4931,7 +5298,7 @@ async fn tool_request_snapshot_matches_the_exact_mock_request_payload() {
     let surface = test_tool_surface(&engine, registry, tools, AppMode::Agent);
     let mut turn = crate::core::turn::TurnContext::new(4);
 
-    let (status, error) = engine.run_turn(&mut turn, surface, None).await;
+    let (status, error) = engine.run_turn(&mut turn, surface, None, None).await;
     assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
 
     let request = mock.last_request().expect("mock request");
@@ -5012,7 +5379,9 @@ async fn normal_repl_kernel_persists_across_user_turns() {
     ));
     let first_policy = test_tool_surface(&engine, first_registry, None, AppMode::Agent);
     let mut first_turn = crate::core::turn::TurnContext::new(4);
-    let (status, error) = engine.run_turn(&mut first_turn, first_policy, None).await;
+    let (status, error) = engine
+        .run_turn(&mut first_turn, first_policy, None, None)
+        .await;
     assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
     assert_eq!(first_turn.usage.input_tokens, 7);
     assert_eq!(first_turn.usage.output_tokens, 11);
@@ -5043,7 +5412,9 @@ async fn normal_repl_kernel_persists_across_user_turns() {
     ));
     let second_policy = test_tool_surface(&engine, second_registry, None, AppMode::Agent);
     let mut second_turn = crate::core::turn::TurnContext::new(4);
-    let (status, error) = engine.run_turn(&mut second_turn, second_policy, None).await;
+    let (status, error) = engine
+        .run_turn(&mut second_turn, second_policy, None, None)
+        .await;
     assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
 
     let kernel = engine.repl_kernel.as_ref().expect("persistent kernel");
@@ -5096,7 +5467,7 @@ async fn snapshot_for_catalog(
         crate::tools::ToolRegistry::new(crate::tools::ToolContext::new(workspace.to_path_buf()));
     let surface = test_tool_surface(&engine, registry, catalog, AppMode::Agent);
     let mut turn = crate::core::turn::TurnContext::new(2);
-    let (status, error) = engine.run_turn(&mut turn, surface, None).await;
+    let (status, error) = engine.run_turn(&mut turn, surface, None, None).await;
     assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
     let mut events = handle.rx_event.write().await;
     std::iter::from_fn(|| events.try_recv().ok())
@@ -5159,7 +5530,7 @@ async fn request_snapshots_advance_to_the_latest_tool_step() {
     let surface = test_tool_surface(&engine, registry, tools, AppMode::Agent);
     let mut turn = crate::core::turn::TurnContext::new(4);
 
-    let (status, error) = engine.run_turn(&mut turn, surface, None).await;
+    let (status, error) = engine.run_turn(&mut turn, surface, None, None).await;
     assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
     let mut events = handle.rx_event.write().await;
     let snapshots = std::iter::from_fn(|| events.try_recv().ok())
@@ -5203,7 +5574,7 @@ async fn tool_result_followed_by_terminal_empty_assistant_fails_turn() {
     let surface = test_tool_surface(&engine, registry, tools, AppMode::Agent);
     let mut turn = crate::core::turn::TurnContext::new(4);
 
-    let (status, error) = engine.run_turn(&mut turn, surface, None).await;
+    let (status, error) = engine.run_turn(&mut turn, surface, None, None).await;
     assert_eq!(status, TurnOutcomeStatus::Failed);
     assert_eq!(mock.call_count(), 2, "tool step then empty provider step");
     assert!(
@@ -5284,7 +5655,9 @@ async fn request_snapshot_reports_registry_provenance_for_the_transmitted_catalo
     let policy = test_tool_surface(&engine, registry, tools, AppMode::Agent);
 
     let mut turn = crate::core::turn::TurnContext::new(4);
-    let (status, error) = engine.run_turn(&mut turn, policy, Some(surface)).await;
+    let (status, error) = engine
+        .run_turn(&mut turn, policy, None, Some(surface))
+        .await;
     assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
 
     let mut events = handle.rx_event.write().await;
@@ -6038,7 +6411,7 @@ async fn duplicate_raw_read_errors_each_touch_the_working_set() {
         let surface = test_tool_surface(&engine, registry, tools, AppMode::Agent);
         let mut turn = crate::core::turn::TurnContext::new(8);
 
-        let (status, error) = engine.run_turn(&mut turn, surface, None).await;
+        let (status, error) = engine.run_turn(&mut turn, surface, None, None).await;
 
         assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
         engine

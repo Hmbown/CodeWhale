@@ -4718,11 +4718,18 @@ impl Engine {
         // killing the whole engine-event-loop task — which left the UI stuck
         // on "working" forever with the engine silently dead (#2583, #1269).
         use futures_util::FutureExt as _;
-        let turn_result =
-            std::panic::AssertUnwindSafe(self.run_turn(&mut turn, surface, Some(tool_surface)))
-                .catch_unwind()
-                .await;
-        let (status, error) = match turn_result {
+        let foreground_children_for_turn = mailbox_for_runtime
+            .as_ref()
+            .map(|barrier| Arc::clone(&barrier.foreground_children));
+        let turn_result = std::panic::AssertUnwindSafe(self.run_turn(
+            &mut turn,
+            surface,
+            foreground_children_for_turn,
+            Some(tool_surface),
+        ))
+        .catch_unwind()
+        .await;
+        let (mut status, error) = match turn_result {
             Ok(outcome) => outcome,
             Err(panic) => {
                 let detail = crate::utils::panic_message(&*panic);
@@ -4742,13 +4749,34 @@ impl Engine {
         self.session.total_usage.add(&turn.usage);
         self.record_goal_usage_for_turn(&turn.usage, turn.elapsed());
 
+        // Cancellation wins until the terminal settlement decision. `run_turn`
+        // performs its own final check, but an Esc/interrupt can arrive while
+        // its clean-exit receipts are being appended. Recheck at this seam so
+        // that pre-settlement cancellation remains terminal Cancelled child
+        // work rather than being relabelled as a normal resumable park.
+        let status_at_settlement =
+            terminal_turn_status_at_settlement(status, self.cancel_token.is_cancelled());
+        if status_at_settlement != status {
+            status = status_at_settlement;
+            let _ = self
+                .tx_event
+                .send(Event::status(
+                    "Request cancelled while settling turn-owned sub-agents",
+                ))
+                .await;
+        }
+
         // Seal and fully forward every accepted mailbox envelope before the
         // terminal event. This is the durability barrier for child usage: an
         // event can no longer arrive after `TurnComplete` and be mistaken for
         // the following turn (or lost by a runtime monitor that already
         // settled the record).
         if let Some(barrier) = mailbox_for_runtime.take() {
-            barrier.cancel_and_flush().await;
+            if status == TurnOutcomeStatus::Completed {
+                barrier.park_and_flush().await;
+            } else {
+                barrier.cancel_and_flush().await;
+            }
         }
 
         // Emit turn complete event — after all post-turn bookkeeping so
@@ -6633,12 +6661,35 @@ pub(crate) struct TurnMailboxBarrier {
     pub(crate) drain_handle: tokio::task::JoinHandle<()>,
 }
 
+fn terminal_turn_status_at_settlement(
+    status: TurnOutcomeStatus,
+    cancellation_requested: bool,
+) -> TurnOutcomeStatus {
+    if status == TurnOutcomeStatus::Completed && cancellation_requested {
+        TurnOutcomeStatus::Interrupted
+    } else {
+        status
+    }
+}
+
 impl TurnMailboxBarrier {
-    /// Settle direct foreground work before closing the turn's mailbox.  The
+    /// Settle the foreground subtree before closing the turn's mailbox. The
     /// ordering is intentional: a terminal turn event must never be emitted
     /// while an owned child can still publish into this turn's shared state.
     pub(crate) async fn cancel_and_flush(self) {
         self.foreground_children.cancel_and_wait().await;
+        self.flush().await;
+    }
+
+    /// A normally completed parent turn parks any still-running owned work as
+    /// resumable before closing the mailbox. Failed or interrupted turns use
+    /// [`Self::cancel_and_flush`] and retain explicit cancellation semantics.
+    pub(crate) async fn park_and_flush(self) {
+        self.foreground_children.park_and_wait().await;
+        self.flush().await;
+    }
+
+    async fn flush(self) {
         self.mailbox.seal();
         let _ = self.flush_tx.send(());
         let _ = self.drain_handle.await;
