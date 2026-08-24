@@ -39,6 +39,16 @@ BOT_EMAILS = {
 }
 BOT_NAMES = ("claude", "codex", "cursor")
 
+# Recognized agent contributors may receive `Co-authored-by` credit for work
+# they materially authored (see AGENTS.md). Matching is exact on the normalized
+# name+email pair: lookalike or unknown agent identities still fail the gate.
+# These identities intentionally stay out of AUTHOR_MAP because they are not
+# GitHub contributor-graph humans.
+AGENT_CONTRIBUTOR_IDENTITIES = {
+    ("codewhale agent", "codewhale-agent@hmbown.local"),
+    ("claude fable 5", "noreply@anthropic.com"),
+}
+
 # This commit is already immutable history on origin/main. Its trailer names a
 # local Codewhale automation actor, not a human contributor. It escaped the
 # existing gate and is now immutable on origin/main. Rewriting main would
@@ -284,6 +294,8 @@ def validate(commits: list[Commit], aliases: dict[str, Identity], check_authors:
                 norm_key(coauthor.name),
                 norm_key(coauthor.email),
             ) in LEGACY_AUTOMATION_TRAILER_EXCEPTIONS:
+                continue
+            if (norm_key(coauthor.name), norm_key(coauthor.email)) in AGENT_CONTRIBUTOR_IDENTITIES:
                 continue
             if is_bot_identity(coauthor.name, coauthor.email):
                 if not commit.is_merge_commit():

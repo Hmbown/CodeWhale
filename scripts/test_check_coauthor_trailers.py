@@ -55,6 +55,16 @@ class CheckCoauthorTrailersTests(unittest.TestCase):
         errors = mod.validate([commit("human credit", body)], self.aliases, False)
         self.assertEqual(errors, [])
 
+    def test_allows_recognized_agent_contributor_trailers(self) -> None:
+        body = (FIXTURES / "agent-contributors.txt").read_text(encoding="utf-8")
+        errors = mod.validate([commit("agent-assisted change", body)], self.aliases, False)
+        self.assertEqual(errors, [])
+
+    def test_agent_contributor_allowance_is_exact_not_a_wildcard(self) -> None:
+        body = (FIXTURES / "agent-lookalikes.txt").read_text(encoding="utf-8")
+        errors = mod.validate([commit("lookalike agent trailers", body)], self.aliases, False)
+        self.assertEqual(len(errors), 2)
+
     def test_merge_of_contributor_pr_carries_harvest_credit_by_authorship(self) -> None:
         merge = mod.Commit(
             sha="feedface" * 5,
@@ -89,29 +99,28 @@ class CheckCoauthorTrailersTests(unittest.TestCase):
         errors = mod.validate([merge], self.aliases, False)
         self.assertEqual(errors, [])
 
-    def test_allows_only_the_exact_immutable_automation_trailer(self) -> None:
-        legacy = mod.Commit(
-            sha="9a74825cd182a62465943bcbbcbcf591d1ce99ee",
-            parents="parent",
-            author_name="Maintainer",
-            author_email="1+maintainer@users.noreply.github.com",
-            subject="legacy automation commit",
-            body="Co-authored-by: CodeWhale Agent <codewhale-agent@hmbown.local>",
-        )
-        errors = mod.validate([legacy], self.aliases, False)
-        self.assertEqual(errors, [])
-
-        other_commit = mod.Commit(
-            sha="deadbeef" * 5,
-            parents=legacy.parents,
-            author_name=legacy.author_name,
-            author_email=legacy.author_email,
-            subject=legacy.subject,
-            body=legacy.body,
-        )
-        errors = mod.validate([other_commit], self.aliases, False)
-        self.assertTrue(errors)
-        self.assertIn("codewhale-agent@hmbown.local", errors[0])
+    def test_codewhale_agent_trailer_is_a_recognized_contributor(self) -> None:
+        # The immutable-history exception predates the general agent-contributor
+        # rule; the identity is now allowed on every commit, not only the legacy
+        # SHA. Lookalike identities remain rejected (see
+        # test_agent_contributor_allowance_is_exact_not_a_wildcard).
+        for sha in ("9a74825cd182a62465943bcbbcbcf591d1ce99ee", "deadbeef" * 5):
+            body = "Co-authored-by: CodeWhale Agent <codewhale-agent@hmbown.local>"
+            errors = mod.validate(
+                [
+                    mod.Commit(
+                        sha=sha,
+                        parents="parent",
+                        author_name="Maintainer",
+                        author_email="1+maintainer@users.noreply.github.com",
+                        subject="agent-assisted commit",
+                        body=body,
+                    )
+                ],
+                self.aliases,
+                False,
+            )
+            self.assertEqual(errors, [])
 
     def test_legacy_exception_does_not_hide_another_bad_trailer(self) -> None:
         legacy_with_extra = mod.Commit(
