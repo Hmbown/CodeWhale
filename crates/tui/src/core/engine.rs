@@ -124,6 +124,20 @@ fn agent_list_event(manager: &SubAgentManager, active_session_id: &str) -> Event
 
 const MCP_REGISTRY_FIRST_INSTRUCTION_SOURCE: &str = "runtime:mcp-registry-first";
 const MCP_REGISTRY_FIRST_INSTRUCTION: &str = "## MCP Registry-first policy\n\nFor any task centered on a specialized capability, including media or document conversion, data transformation, browser automation, database or service access, or a developer utility, you must call `registry_sync` with a `query` describing that capability before `exec_shell`, `fetch_url`, code execution, local programs, custom code, or a manual implementation. It scores the local Registry snapshot host-side and returns at most eight matches; the full catalog never enters the conversation. Treat a returned server as a match when it plausibly covers the core capability; wording need not be exact. If any plausible match exists, you must call `start_registry_mcp_server` with its exact name and inspect its tools before considering a local alternative. If nothing matches, refine the query once; a still-empty refined result means every Registry entry is clearly irrelevant. An installed or familiar shell command is not a reason to skip Registry discovery. Use local tools directly only for ordinary repo-native work and simple file operations, or after the matching server fails to start.";
+const ISOLATED_CHAT_ENGINE_PROMPT: &str = "You are Codewhale Chat. Answer the user's request directly and conversationally. This isolated chat-only session has no local workspace, project, memory, skill, account, credential, path, runtime context, or tools.";
+
+fn sanitize_isolated_chat_attachments(mut text: String) -> String {
+    let references = crate::tui::file_mention::media_attachment_references(&text);
+    for reference in references.into_iter().rev() {
+        let replacement = if text[reference.start_byte..reference.end_byte].ends_with('\n') {
+            "[Attachment omitted: Runtime Chat is text-only.]\n"
+        } else {
+            "[Attachment omitted: Runtime Chat is text-only.]"
+        };
+        text.replace_range(reference.start_byte..reference.end_byte, replacement);
+    }
+    text
+}
 
 /// Snapshot of parent state that can be passed to forked sub-agents without
 /// rewriting the parent transcript.
@@ -1274,7 +1288,7 @@ impl Engine {
 
         // Compaction re-states the user's `/anchor` file after its summary;
         // hand it the workspace root once so every prepared pass can read it.
-        if config.compaction.workspace.is_none() {
+        if config.compaction.workspace.is_none() && !api_config.runtime_chat_isolated {
             config.compaction.workspace = Some(config.workspace.clone());
         }
 
@@ -1283,7 +1297,7 @@ impl Engine {
         // ranking and the model compares the full user context with the full
         // Registry catalog. Append it after configured instruction sources so
         // the Registry-first decision sits close to the current user turn.
-        if config.features.enabled(Feature::Mcp) {
+        if config.features.enabled(Feature::Mcp) && !api_config.runtime_chat_isolated {
             config
                 .instructions
                 .push(crate::prompts::InstructionSource::Inline {
@@ -1375,7 +1389,9 @@ impl Engine {
         } else {
             prompts::PromptHost::Headless
         };
-        let system_prompt =
+        let system_prompt = if api_config.runtime_chat_isolated {
+            SystemPrompt::Text(ISOLATED_CHAT_ENGINE_PROMPT.to_string())
+        } else {
             prompts::system_prompt_for_mode_with_context_skills_session_and_approval_for_host(
                 &config.workspace,
                 None,
@@ -1403,7 +1419,8 @@ impl Engine {
                     mode: AppMode::Agent,
                 },
                 prompt_host,
-            );
+            )
+        };
         let stable_prompt = Some(system_prompt);
         session.last_system_prompt_hash = Some(system_prompt_hash(stable_prompt.as_ref()));
         session.system_prompt = stable_prompt;
@@ -3368,6 +3385,15 @@ impl Engine {
     /// Whether the model can *see* the result is decided per request, not
     /// here — see `image_attach::strip_images_when_unsupported`.
     fn user_content_blocks(&self, text: String) -> Vec<ContentBlock> {
+        // Managed Chat currently accepts text only. Treat attachment-marker
+        // syntax as an omitted attachment so an account prompt can never make
+        // this host read a local path or echo that host path to a provider.
+        if self.api_config.runtime_chat_isolated {
+            return vec![ContentBlock::Text {
+                text: sanitize_isolated_chat_attachments(text),
+                cache_control: None,
+            }];
+        }
         let expanded = crate::image_attach::expand_attachment_blocks(&text);
         let mut content = Vec::with_capacity(2 + expanded.blocks.len());
         content.push(ContentBlock::Text {
@@ -3398,17 +3424,21 @@ impl Engine {
         provenance: UserInputProvenance,
         snapshot: TurnMetadataSnapshot<'_>,
     ) -> Message {
-        let turn_metadata = self.turn_metadata_block_from_snapshot(
-            routed_model,
-            auto_model,
-            reasoning_effort,
-            reasoning_effort_auto,
-            provenance,
-            &text,
-            snapshot,
-        );
+        let turn_metadata = (!self.api_config.runtime_chat_isolated).then(|| {
+            self.turn_metadata_block_from_snapshot(
+                routed_model,
+                auto_model,
+                reasoning_effort,
+                reasoning_effort_auto,
+                provenance,
+                &text,
+                snapshot,
+            )
+        });
         let mut content = self.user_content_blocks(text);
-        content.push(turn_metadata);
+        if let Some(turn_metadata) = turn_metadata {
+            content.push(turn_metadata);
+        }
         Message {
             role: Role::User,
             content,
@@ -3475,17 +3505,21 @@ impl Engine {
         // message prefix is invalidated at every date boundary. Moving it
         // to the tail preserves the user-input prefix and limits cache
         // invalidation to the trailing metadata block.
-        let turn_metadata = self.turn_metadata_block(
-            routed_model,
-            auto_model,
-            reasoning_effort,
-            reasoning_effort_auto,
-            provenance,
-            &text,
-            self.last_policy_narrowing.as_ref(),
-        );
+        let turn_metadata = (!self.api_config.runtime_chat_isolated).then(|| {
+            self.turn_metadata_block(
+                routed_model,
+                auto_model,
+                reasoning_effort,
+                reasoning_effort_auto,
+                provenance,
+                &text,
+                self.last_policy_narrowing.as_ref(),
+            )
+        });
         let mut content = self.user_content_blocks(text);
-        content.push(turn_metadata);
+        if let Some(turn_metadata) = turn_metadata {
+            content.push(turn_metadata);
+        }
         Message {
             role: Role::User,
             content,
@@ -3984,6 +4018,32 @@ impl Engine {
         route: TurnRouteContext,
         turn_id: &str,
     ) -> TurnToolBuild {
+        // Account-owned Chat is a text-only inference boundary. Do not build
+        // native/plugin/dynamic registries, connect or snapshot MCP, capture a
+        // sub-agent fork context, or create a sub-agent mailbox before an
+        // empty allow-list later filters the wire catalog.
+        if self.api_config.runtime_chat_isolated {
+            let registry = ToolRegistryBuilder::new().build(ToolContext::for_empty_registry());
+            return TurnToolBuild {
+                surface: ToolSurfacePolicy::new(
+                    registry,
+                    Some(Vec::new()),
+                    input_policy.mode,
+                    &HashSet::new(),
+                    &[],
+                    false,
+                    Some(Vec::new()),
+                    None,
+                    Some(0),
+                    input_policy.approval_mode_for_session(),
+                ),
+                mcp_tool_names: Vec::new(),
+                mcp: McpToolState::Disabled,
+                subagent_runtime_model: None,
+                mailbox: None,
+                plugin_tool_names: HashSet::new(),
+            };
+        }
         // Build tool registry and tool list for the current mode
         let todo_list = self.config.todos.clone();
         let plan_state = self.config.plan_state.clone();
@@ -4765,12 +4825,15 @@ impl Engine {
         let foreground_children_for_turn = mailbox_for_runtime
             .as_ref()
             .map(|barrier| Arc::clone(&barrier.foreground_children));
-        let turn_result = std::panic::AssertUnwindSafe(self.run_turn(
-            &mut turn,
-            surface,
-            foreground_children_for_turn,
-            Some(tool_surface),
-        ))
+        let turn_result = std::panic::AssertUnwindSafe(async {
+            self.run_turn(
+                &mut turn,
+                surface,
+                foreground_children_for_turn,
+                Some(tool_surface),
+            )
+            .await
+        })
         .catch_unwind()
         .await;
         let (mut status, error) = match turn_result {
@@ -5979,6 +6042,9 @@ impl Engine {
         &self,
         context: &NextTurnPromptContext,
     ) -> Option<SystemPrompt> {
+        if self.api_config.runtime_chat_isolated {
+            return Some(SystemPrompt::Text(ISOLATED_CHAT_ENGINE_PROMPT.to_string()));
+        }
         let user_memory_block = crate::native_memory::native_prompt_block(
             self.config.memory_enabled,
             &self.config.memory_path,

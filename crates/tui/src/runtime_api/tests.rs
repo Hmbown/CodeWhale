@@ -58,6 +58,11 @@ fn thread_route_credential_error_is_bad_request_not_not_found() {
 
     let missing = map_thread_err(anyhow::anyhow!("thread 'thr_missing' not found"));
     assert_eq!(missing.status, StatusCode::NOT_FOUND);
+
+    let operation_mismatch = map_thread_err(anyhow::anyhow!(
+        "operation_key is already bound to a different turn request"
+    ));
+    assert_eq!(operation_mismatch.status, StatusCode::CONFLICT);
 }
 
 #[test]
@@ -409,6 +414,8 @@ fn messages_from_thread_detail_batches_tool_results() {
         model: DEFAULT_TEXT_MODEL.to_string(),
         model_provider: None,
         model_provider_id: None,
+        reasoning_effort: None,
+        allowed_tools: None,
         workspace: PathBuf::from("."),
         mode: "agent".to_string(),
         permission_posture: Some("ask".to_string()),
@@ -597,6 +604,8 @@ fn legacy_exact_thread_export_normalizes_provider_kind_and_id() {
             // Pre-additive records overloaded this legacy field with the exact id.
             model_provider: Some("lm-studio".to_string()),
             model_provider_id: None,
+            reasoning_effort: None,
+            allowed_tools: None,
             workspace: PathBuf::from("."),
             mode: "agent".to_string(),
             permission_posture: None,
@@ -3196,6 +3205,96 @@ async fn thread_endpoints_expose_lifecycle_contract() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_endpoint_operation_key_returns_original_and_conflicts_on_mismatch() -> Result<()> {
+    let Some((addr, runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+    let created: serde_json::Value = client
+        .post(format!("http://{addr}/v1/threads"))
+        .json(&json!({}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let thread_id = created["id"].as_str().context("thread id")?.to_string();
+
+    let mut harness = crate::core::engine::mock_engine_handle();
+    runtime_threads
+        .install_test_engine(&thread_id, harness.handle.clone())
+        .await?;
+    let send_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = send_count.clone();
+    let tx_event = harness.tx_event.clone();
+    tokio::spawn(async move {
+        while let Some(op) = harness.rx_op.recv().await {
+            if !matches!(op, Op::SendMessage { .. }) {
+                continue;
+            }
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            sleep(Duration::from_millis(20)).await;
+            let _ = tx_event
+                .send(EngineEvent::TurnComplete {
+                    usage: Usage::default(),
+                    status: TurnOutcomeStatus::Completed,
+                    error: None,
+                    tool_catalog: None,
+                    base_url: None,
+                })
+                .await;
+        }
+    });
+
+    let url = format!("http://{addr}/v1/threads/{thread_id}/turns");
+    let request = json!({
+        "prompt": "one HTTP operation",
+        "operation_key": "cwc-http-operation-1",
+        "reasoning_effort": "high",
+        "allowed_tools": []
+    });
+    let first_response = client.post(&url).json(&request).send().await?;
+    assert_eq!(first_response.status(), StatusCode::CREATED);
+    let first: serde_json::Value = first_response.json().await?;
+    let first_turn_id = first["turn"]["id"].as_str().context("turn id")?;
+    assert!(!serde_json::to_string(&first)?.contains("cwc-http-operation-1"));
+
+    let replay_response = client.post(&url).json(&request).send().await?;
+    assert_eq!(replay_response.status(), StatusCode::CREATED);
+    let replay: serde_json::Value = replay_response.json().await?;
+    assert_eq!(replay["turn"]["id"], first_turn_id);
+
+    let mismatch = client
+        .post(&url)
+        .json(&json!({
+            "prompt": "changed HTTP operation",
+            "operation_key": "cwc-http-operation-1",
+            "reasoning_effort": "high",
+            "allowed_tools": []
+        }))
+        .send()
+        .await?;
+    assert_eq!(mismatch.status(), StatusCode::CONFLICT);
+
+    sleep(Duration::from_millis(40)).await;
+    assert_eq!(
+        send_count.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "exact replay and mismatch must not emit another SendMessage"
+    );
+    assert_eq!(
+        runtime_threads
+            .test_store()
+            .list_turns_for_thread(&thread_id)?
+            .len(),
+        1
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn events_endpoint_respects_since_seq_cursor() -> Result<()> {
     let Some((addr, runtime_threads, handle)) = spawn_test_server().await? else {
         return Ok(());
@@ -5258,6 +5357,10 @@ async fn runtime_info_reports_bind_state() -> Result<()> {
     assert!(info["version"].is_string());
     assert_eq!(info["transports"], json!(["http", "sse"]));
     assert_eq!(info["capabilities"]["threads"], true);
+    assert_eq!(
+        info["capabilities"]["turn_operation_idempotency"], true,
+        "clients must have an explicit fail-closed gate before sending operation_key"
+    );
     assert_eq!(info["capabilities"]["account_session"], true);
     assert_eq!(info["capabilities"]["external_tools"], true);
     assert_eq!(info["capabilities"]["worker_runtime"], true);
@@ -5493,7 +5596,7 @@ async fn mobile_page_is_available_only_when_enabled() -> Result<()> {
     let tmp = tempfile::tempdir()?;
     let root = tmp.path().to_path_buf();
     let sessions_dir = root.join("sessions");
-    let Some((addr, _runtime_threads, handle)) = spawn_test_server_with_root_token_and_mobile(
+    let Some((addr, runtime_threads, handle)) = spawn_test_server_with_root_token_and_mobile(
         root.clone(),
         sessions_dir.clone(),
         None,
@@ -5507,6 +5610,8 @@ async fn mobile_page_is_available_only_when_enabled() -> Result<()> {
     let disabled = client.get(format!("http://{addr}/mobile")).send().await?;
     assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
     handle.abort();
+    let _ = handle.await;
+    drop(runtime_threads);
 
     let Some((addr, _runtime_threads, handle)) =
         spawn_test_server_with_root_token_and_mobile(root, sessions_dir, None, true).await?
@@ -7040,6 +7145,148 @@ fn provider_catalog_keeps_official_deepseek_facts_but_not_custom_proxy_claims() 
         codewhale_config::route::CapabilityState::Unknown,
         "same-name custom proxy must not surface first-party vision capability as verified"
     );
+}
+
+#[test]
+fn provider_credential_state_wire_values_are_stable_and_sanitized() {
+    use crate::provider_readiness::CredentialState;
+
+    for (internal, expected) in [
+        (CredentialState::Saved, "configured"),
+        (CredentialState::ImportedToken, "configured"),
+        (CredentialState::MissingLogin, "login_required"),
+        (CredentialState::ExternalConsent, "login_required"),
+        (CredentialState::MissingKey, "missing"),
+        (CredentialState::NoAuth, "no_auth"),
+        (CredentialState::Local, "local"),
+        (CredentialState::Legacy, "legacy"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(ProviderCredentialState::from(internal))
+                .expect("provider credential state should serialize"),
+            expected,
+        );
+    }
+}
+
+#[tokio::test]
+async fn provider_catalog_reports_exact_named_custom_credential_state_without_secrets() -> Result<()>
+{
+    let _env_lock = lock_test_env();
+    let _key_source = EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
+    let _cli_key = EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
+    let root = std::env::temp_dir().join(format!(
+        "codewhale-provider-credential-state-{}",
+        Uuid::new_v4()
+    ));
+    fs::create_dir_all(&root)?;
+
+    let cases = [
+        (
+            "private-gateway",
+            "configured",
+            r#"provider = "private-gateway"
+
+[providers.private-gateway]
+kind = "openai-compatible"
+base_url = "https://secret-route.example.test/tenant/private/v1"
+model = "private-model"
+api_key = "sk-provider-fixture-do-not-leak"
+api_key_env = "CODEWHALE_PROVIDER_FIXTURE_ENV"
+"#,
+        ),
+        (
+            "missing-gateway",
+            "missing",
+            r#"provider = "missing-gateway"
+
+[providers.missing-gateway]
+kind = "openai-compatible"
+base_url = "https://missing-route.example.test/private/v1"
+model = "missing-model"
+"#,
+        ),
+        (
+            "local-runtime",
+            "local",
+            r#"provider = "local-runtime"
+
+[providers.local-runtime]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:18190/private/v1"
+model = "local-model"
+"#,
+        ),
+    ];
+
+    for (route_id, expected_state, config) in cases {
+        let config_file = root.join(format!("{route_id}.toml"));
+        fs::write(&config_file, config)?;
+        let Some((addr, _runtime_threads, handle)) =
+            spawn_test_server_with_config_path(config_file).await?
+        else {
+            return Ok(());
+        };
+        let providers = get_providers(&crate::tls::reqwest_client(), &addr).await;
+        assert_eq!(providers["current"], "custom");
+        let custom = providers["providers"]
+            .as_array()
+            .and_then(|entries| entries.iter().find(|entry| entry["id"] == "custom"))
+            .context("custom provider entry")?;
+        assert_eq!(
+            custom["model_provider_id"], route_id,
+            "credential state must describe the exact active named custom route"
+        );
+        assert_eq!(custom["credentialState"], expected_state);
+
+        let allowed_fields: std::collections::BTreeSet<_> = [
+            "credentialState",
+            "default_model",
+            "display_name",
+            "has_model_catalog",
+            "id",
+            "model_provider_id",
+        ]
+        .into_iter()
+        .collect();
+        for entry in providers["providers"]
+            .as_array()
+            .context("providers array")?
+        {
+            let actual_fields: std::collections::BTreeSet<_> = entry
+                .as_object()
+                .context("provider entry object")?
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(
+                actual_fields, allowed_fields,
+                "provider catalog must remain a non-secret projection"
+            );
+        }
+
+        let serialized = serde_json::to_string(&providers)?;
+        for forbidden in [
+            "sk-provider-fixture-do-not-leak",
+            "CODEWHALE_PROVIDER_FIXTURE_ENV",
+            "secret-route.example.test",
+            "missing-route.example.test",
+            "127.0.0.1:18190",
+            "default_base_url",
+            "env_vars",
+            "api_key",
+            "api_key_env",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "provider catalog leaked forbidden detail: {forbidden}"
+            );
+        }
+
+        handle.abort();
+    }
+
+    Ok(())
 }
 
 #[tokio::test]

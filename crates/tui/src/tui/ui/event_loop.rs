@@ -541,7 +541,7 @@ pub async fn run_tui(
     app.dispatch_completion_tx = Some(dispatch_completion_tx);
 
     if std::mem::take(&mut app.start_remote_control_on_launch) {
-        start_remote_control_session(&mut app);
+        start_remote_control_session(&mut app, config);
     }
     submit_initial_input_if_ready(&mut app, config, &engine_handle).await?;
 

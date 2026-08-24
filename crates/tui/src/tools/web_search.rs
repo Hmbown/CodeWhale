@@ -698,6 +698,13 @@ impl WebSearchTool {
 
         let payload = baidu_search_payload(query, max_results);
 
+        // Baidu's AI Search endpoint accepts conversational messages rather
+        // than an index-only query. Treat the entire request/response decode
+        // as model-backed for attached-run ownership; a false negative here
+        // could overlap Runtime Chat, while the conservative read lease only
+        // serializes work that already belongs to the same interactive run.
+        let _inference = acquire_model_backed_search_inference_participant().await;
+
         let resp = client
             .post(BAIDU_ENDPOINT)
             .header("Authorization", format!("Bearer {api_key}"))
@@ -775,6 +782,13 @@ impl WebSearchTool {
             })?;
 
         let payload = volcengine_search_payload(query, max_results);
+
+        // Unlike the ordinary index-search backends, Volcengine's Responses
+        // endpoint runs a named model and returns model-generated text. Keep
+        // that provider lifecycle inside the attached CWC run's shared read
+        // ownership through retries and response decoding, so an isolated
+        // Runtime Chat turn cannot be projected alongside it.
+        let _inference = acquire_model_backed_search_inference_participant().await;
 
         let mut last_err: Option<ToolError> = None;
         for attempt in 0..3 {
@@ -1662,6 +1676,11 @@ fn baidu_error_message(parsed: &Value) -> Option<String> {
     Some(format!("Baidu search API error (code {code}: {message})"))
 }
 
+async fn acquire_model_backed_search_inference_participant()
+-> crate::client::RemoteControlInferencePermit {
+    crate::client::acquire_remote_control_inference_participant().await
+}
+
 fn parse_sofya_results(parsed: &Value, max_results: usize) -> Vec<WebSearchEntry> {
     parsed
         .get("results")
@@ -2054,12 +2073,13 @@ fn duckduckgo_allows_bing_fallback(base_url: Option<&str>) -> bool {
 mod tests {
     use super::{
         ERROR_BODY_PREVIEW_BYTES, ScrapeEndpoints, SearchProbeTargetError, WebSearchTool,
-        baidu_search_payload, bocha_error_message, domain_matches, duckduckgo_search_url,
-        extract_search_query, finalize_search_response, optional_search_max_results,
-        parse_baidu_results, parse_bocha_results, parse_metaso_results, parse_searxng_results,
-        parse_sofya_results, parse_tavily_results, parse_volcengine_results,
-        register_search_citations, rerank, run_scrape_search_with_endpoints, sanitize_error_body,
-        search_probe_target, searxng_search_url, truncate_error_body, volcengine_extract_text,
+        acquire_model_backed_search_inference_participant, baidu_search_payload,
+        bocha_error_message, domain_matches, duckduckgo_search_url, extract_search_query,
+        finalize_search_response, optional_search_max_results, parse_baidu_results,
+        parse_bocha_results, parse_metaso_results, parse_searxng_results, parse_sofya_results,
+        parse_tavily_results, parse_volcengine_results, register_search_citations, rerank,
+        run_scrape_search_with_endpoints, sanitize_error_body, search_probe_target,
+        searxng_search_url, truncate_error_body, volcengine_extract_text,
     };
     use crate::config::SearchProvider;
     use crate::tools::web::contract::{
@@ -2620,6 +2640,25 @@ mod tests {
             volcengine_extract_text(&body).as_deref(),
             Some("{\"results\":[]}")
         );
+    }
+
+    #[tokio::test]
+    async fn volcengine_model_search_waits_for_runtime_chat_ownership() {
+        let ownership = crate::client::acquire_runtime_chat_inference_ownership().await;
+        let mut participant =
+            tokio::spawn(async { acquire_model_backed_search_inference_participant().await });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(40), &mut participant)
+                .await
+                .is_err(),
+            "model-backed web search must wait behind Runtime Chat ownership"
+        );
+        drop(ownership);
+        let permit = tokio::time::timeout(std::time::Duration::from_secs(1), participant)
+            .await
+            .expect("model-backed search resumes after relay settlement")
+            .expect("model-backed search participant task");
+        drop(permit);
     }
 
     #[tokio::test]

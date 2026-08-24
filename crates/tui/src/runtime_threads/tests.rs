@@ -16,6 +16,7 @@ const EVENT_PROCESS_ROOT_ENV: &str = "CODEWHALE_TEST_EVENT_PROCESS_ROOT";
 const EVENT_PROCESS_THREAD_ENV: &str = "CODEWHALE_TEST_EVENT_PROCESS_THREAD";
 const EVENT_PROCESS_SIGNAL_ENV: &str = "CODEWHALE_TEST_EVENT_PROCESS_SIGNAL";
 const EVENT_PROCESS_START_ENV: &str = "CODEWHALE_TEST_EVENT_PROCESS_START";
+const EVENT_PROCESS_RELEASE_ENV: &str = "CODEWHALE_TEST_EVENT_PROCESS_RELEASE";
 const EVENT_PROCESS_WORKER_ENV: &str = "CODEWHALE_TEST_EVENT_PROCESS_WORKER";
 const EVENT_PROCESS_COUNT_ENV: &str = "CODEWHALE_TEST_EVENT_PROCESS_COUNT";
 const EVENT_PROCESS_HELPER: &str = "runtime_threads::tests::runtime_event_process_child_helper";
@@ -36,9 +37,41 @@ fn runtime_event_process_child_helper() {
     let signal = PathBuf::from(
         std::env::var_os(EVENT_PROCESS_SIGNAL_ENV).expect("event child needs a signal path"),
     );
-    let store = RuntimeThreadStore::open(root).expect("event child opens Runtime store");
+    if role == "manager-racer" {
+        let start = PathBuf::from(
+            std::env::var_os(EVENT_PROCESS_START_ENV).expect("manager racer needs a start barrier"),
+        );
+        let release = PathBuf::from(
+            std::env::var_os(EVENT_PROCESS_RELEASE_ENV)
+                .expect("manager racer needs a release barrier"),
+        );
+        std::fs::write(&signal, b"ready").expect("announce manager racer readiness");
+        wait_for_runtime_event_test_file(&start, "manager racer start barrier");
+        match test_manager(root) {
+            Ok(_manager) => {
+                std::fs::write(&signal, b"won").expect("announce manager race winner");
+                wait_for_runtime_event_test_file(&release, "manager racer release barrier");
+            }
+            Err(error) if format!("{error:#}").contains("already active in another process") => {
+                std::fs::write(&signal, b"lost").expect("announce manager race loser");
+            }
+            Err(error) => panic!("unexpected manager race failure: {error:#}"),
+        }
+        return;
+    }
+    let store = RuntimeThreadStore::open(root.clone()).expect("event child opens Runtime store");
 
     match role.as_str() {
+        "manager-holder" => {
+            let start = PathBuf::from(
+                std::env::var_os(EVENT_PROCESS_START_ENV)
+                    .expect("manager holder needs a release barrier"),
+            );
+            drop(store);
+            let _manager = test_manager(root).expect("manager child acquires process owner lock");
+            std::fs::write(&signal, b"locked").expect("announce held manager owner lock");
+            wait_for_runtime_event_test_file(&start, "manager owner release barrier");
+        }
         "writer" => {
             let start = PathBuf::from(
                 std::env::var_os(EVENT_PROCESS_START_ENV)
@@ -193,6 +226,48 @@ fn spawn_runtime_event_child(
     RuntimeEventChildGuard::new(command.spawn().expect("spawn Runtime event child"))
 }
 
+fn spawn_runtime_manager_racer(
+    root: &Path,
+    signal: &Path,
+    start: &Path,
+    release: &Path,
+) -> RuntimeEventChildGuard {
+    let mut command = std::process::Command::new(
+        std::env::current_exe().expect("current test executable for Runtime manager racer"),
+    );
+    command
+        .arg(EVENT_PROCESS_HELPER)
+        .args(["--exact", "--ignored", "--test-threads", "1"])
+        .env(EVENT_PROCESS_ROLE_ENV, "manager-racer")
+        .env(EVENT_PROCESS_ROOT_ENV, root)
+        .env(EVENT_PROCESS_THREAD_ENV, "thr_unused")
+        .env(EVENT_PROCESS_SIGNAL_ENV, signal)
+        .env(EVENT_PROCESS_START_ENV, start)
+        .env(EVENT_PROCESS_RELEASE_ENV, release)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    RuntimeEventChildGuard::new(command.spawn().expect("spawn Runtime manager racer"))
+}
+
+fn wait_for_runtime_event_test_value(path: &Path, expected: &[&str], label: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Ok(value) = std::fs::read_to_string(path) {
+            let value = value.trim().to_string();
+            if expected.contains(&value.as_str()) {
+                return value;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {label} at {}",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 struct RuntimeEventChildGuard(Option<std::process::Child>);
 
 impl RuntimeEventChildGuard {
@@ -320,6 +395,8 @@ fn sample_thread(thread_id: &str) -> ThreadRecord {
         model: DEFAULT_TEXT_MODEL.to_string(),
         model_provider: None,
         model_provider_id: None,
+        reasoning_effort: None,
+        allowed_tools: None,
         workspace: PathBuf::from("."),
         mode: AppMode::Agent.as_setting().to_string(),
         permission_posture: Some("ask".to_string()),
@@ -789,6 +866,328 @@ async fn root_custom_thread_and_turn_writers_omit_exact_id() -> Result<()> {
 }
 
 #[tokio::test]
+async fn runtime_turn_reasoning_and_tool_defaults_follow_explicit_precedence() -> Result<()> {
+    let manager = RuntimeThreadManager::open(
+        Config {
+            reasoning_effort: Some("high".to_string()),
+            ..Config::default()
+        },
+        PathBuf::from("."),
+        test_manager_config(test_runtime_dir()),
+    )?;
+
+    let override_thread = manager
+        .create_thread(CreateThreadRequest {
+            reasoning_effort: Some("mid".to_string()),
+            allowed_tools: Some(vec!["read_file".to_string()]),
+            ..CreateThreadRequest::default()
+        })
+        .await?;
+    assert_eq!(
+        override_thread.reasoning_effort.as_deref(),
+        Some("medium"),
+        "new API input is persisted in its canonical spelling"
+    );
+    assert_eq!(
+        override_thread.allowed_tools,
+        Some(vec!["read_file".to_string()])
+    );
+    let mut override_harness = install_mock_engine(&manager, &override_thread.id).await;
+    manager
+        .start_turn(
+            &override_thread.id,
+            StartTurnRequest {
+                prompt: "turn settings win".to_string(),
+                reasoning_effort: Some("off".to_string()),
+                allowed_tools: Some(Vec::new()),
+                ..StartTurnRequest::default()
+            },
+        )
+        .await?;
+    match override_harness.rx_op.recv().await {
+        Some(Op::SendMessage {
+            reasoning_effort,
+            reasoning_effort_auto,
+            allowed_tools,
+            ..
+        }) => {
+            assert_eq!(reasoning_effort.as_deref(), Some("off"));
+            assert!(!reasoning_effort_auto);
+            assert_eq!(
+                allowed_tools,
+                Some(Vec::new()),
+                "Some([]) must reach the engine as an empty model-visible catalog gate"
+            );
+        }
+        other => panic!("expected turn override SendMessage op, got {other:?}"),
+    }
+
+    let thread_default = manager
+        .create_thread(CreateThreadRequest {
+            reasoning_effort: Some("medium".to_string()),
+            allowed_tools: Some(vec!["read_file".to_string()]),
+            ..CreateThreadRequest::default()
+        })
+        .await?;
+    let mut thread_harness = install_mock_engine(&manager, &thread_default.id).await;
+    manager
+        .start_turn(
+            &thread_default.id,
+            StartTurnRequest {
+                prompt: "thread settings win over config".to_string(),
+                ..StartTurnRequest::default()
+            },
+        )
+        .await?;
+    match thread_harness.rx_op.recv().await {
+        Some(Op::SendMessage {
+            reasoning_effort,
+            allowed_tools,
+            ..
+        }) => {
+            assert_eq!(
+                reasoning_effort.as_deref(),
+                Some("high"),
+                "the thread's medium preference is normalized for the exact DeepSeek route"
+            );
+            assert_eq!(allowed_tools, Some(vec!["read_file".to_string()]));
+        }
+        other => panic!("expected thread-default SendMessage op, got {other:?}"),
+    }
+
+    let configured_default = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    let mut config_harness = install_mock_engine(&manager, &configured_default.id).await;
+    manager
+        .start_turn(
+            &configured_default.id,
+            StartTurnRequest {
+                prompt: "fall back to config".to_string(),
+                ..StartTurnRequest::default()
+            },
+        )
+        .await?;
+    match config_harness.rx_op.recv().await {
+        Some(Op::SendMessage {
+            reasoning_effort,
+            allowed_tools,
+            ..
+        }) => {
+            assert_eq!(reasoning_effort.as_deref(), Some("high"));
+            assert_eq!(
+                allowed_tools, None,
+                "no API allowlist keeps the normal configured tool catalog"
+            );
+        }
+        other => panic!("expected config-default SendMessage op, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_thread_rejects_unknown_reasoning_effort() -> Result<()> {
+    let manager = test_manager(test_runtime_dir())?;
+    let error = manager
+        .create_thread(CreateThreadRequest {
+            reasoning_effort: Some("surprise-me".to_string()),
+            ..CreateThreadRequest::default()
+        })
+        .await
+        .expect_err("new Runtime API inputs must not silently become max")
+        .to_string();
+    assert!(error.contains("Unrecognized reasoning effort"), "{error}");
+    assert!(manager.store.list_threads()?.is_empty());
+
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    let error = manager
+        .start_turn(
+            &thread.id,
+            StartTurnRequest {
+                prompt: "reject invalid turn setting".to_string(),
+                reasoning_effort: Some("surprise-me".to_string()),
+                ..StartTurnRequest::default()
+            },
+        )
+        .await
+        .expect_err("per-turn Runtime API inputs use the same strict parser")
+        .to_string();
+    assert!(error.contains("Unrecognized reasoning effort"), "{error}");
+    assert!(manager.store.list_turns_for_thread(&thread.id)?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn runtime_request_wire_distinguishes_missing_and_empty_tool_allowlists() -> Result<()> {
+    let inherited: StartTurnRequest = serde_json::from_value(json!({ "prompt": "inherit" }))?;
+    assert_eq!(inherited.operation_key, None);
+    assert_eq!(inherited.reasoning_effort, None);
+    assert_eq!(inherited.allowed_tools, None);
+
+    let disabled: StartTurnRequest = serde_json::from_value(json!({
+        "prompt": "no tools",
+        "operation_key": "cwc-turn-42",
+        "reasoning_effort": "high",
+        "allowed_tools": []
+    }))?;
+    assert_eq!(disabled.operation_key.as_deref(), Some("cwc-turn-42"));
+    assert_eq!(disabled.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(disabled.allowed_tools, Some(Vec::new()));
+
+    let camel: StartTurnRequest = serde_json::from_value(json!({
+        "prompt": "compat alias",
+        "operationKey": "cwc-turn-camel"
+    }))?;
+    assert_eq!(camel.operation_key.as_deref(), Some("cwc-turn-camel"));
+    Ok(())
+}
+
+#[test]
+fn runtime_turn_operation_keys_are_bounded_scoped_and_fingerprint_execution_policy() -> Result<()> {
+    assert!(validate_runtime_turn_operation_key("valid-key_42").is_ok());
+    assert!(
+        validate_runtime_turn_operation_key(&"k".repeat(MAX_RUNTIME_TURN_OPERATION_KEY_BYTES))
+            .is_ok()
+    );
+    for invalid in [
+        "".to_string(),
+        " leading".to_string(),
+        "trailing ".to_string(),
+        "control\nkey".to_string(),
+        "k".repeat(MAX_RUNTIME_TURN_OPERATION_KEY_BYTES + 1),
+    ] {
+        assert!(
+            validate_runtime_turn_operation_key(&invalid).is_err(),
+            "invalid operation key was accepted"
+        );
+    }
+
+    let key = "same-caller-key";
+    let owner_a = runtime_turn_operation_key_fingerprint("owner_a", "thr_a", key)?;
+    assert_ne!(
+        owner_a,
+        runtime_turn_operation_key_fingerprint("owner_b", "thr_a", key)?,
+        "operation keys must be Runtime-store scoped"
+    );
+    assert_ne!(
+        owner_a,
+        runtime_turn_operation_key_fingerprint("owner_a", "thr_b", key)?,
+        "operation keys must be thread scoped"
+    );
+
+    let mut thread = sample_thread("thr_fingerprint");
+    thread.model_provider = Some("deepseek".to_string());
+    thread.model_provider_id = Some("deepseek".to_string());
+    let policy = RuntimePolicyProjection::from_persisted("agent", Some("ask"), false);
+    let tools = vec!["read_file".to_string()];
+    let base = runtime_turn_request_fingerprint(
+        &thread,
+        "same prompt",
+        None,
+        "deepseek-v4-pro",
+        Some(crate::tui::app::ReasoningEffort::High),
+        Some(&tools),
+        policy,
+        false,
+        false,
+        &[],
+        None,
+    )?;
+
+    let mut different_provider = thread.clone();
+    different_provider.model_provider = Some("openai-codex".to_string());
+    different_provider.model_provider_id = Some("openai-codex".to_string());
+    let changed = [
+        runtime_turn_request_fingerprint(
+            &different_provider,
+            "same prompt",
+            None,
+            "deepseek-v4-pro",
+            Some(crate::tui::app::ReasoningEffort::High),
+            Some(&tools),
+            policy,
+            false,
+            false,
+            &[],
+            None,
+        )?,
+        runtime_turn_request_fingerprint(
+            &thread,
+            "different prompt",
+            None,
+            "deepseek-v4-pro",
+            Some(crate::tui::app::ReasoningEffort::High),
+            Some(&tools),
+            policy,
+            false,
+            false,
+            &[],
+            None,
+        )?,
+        runtime_turn_request_fingerprint(
+            &thread,
+            "same prompt",
+            None,
+            "different-model",
+            Some(crate::tui::app::ReasoningEffort::High),
+            Some(&tools),
+            policy,
+            false,
+            false,
+            &[],
+            None,
+        )?,
+        runtime_turn_request_fingerprint(
+            &thread,
+            "same prompt",
+            None,
+            "deepseek-v4-pro",
+            Some(crate::tui::app::ReasoningEffort::Medium),
+            Some(&tools),
+            policy,
+            false,
+            false,
+            &[],
+            None,
+        )?,
+        runtime_turn_request_fingerprint(
+            &thread,
+            "same prompt",
+            None,
+            "deepseek-v4-pro",
+            Some(crate::tui::app::ReasoningEffort::High),
+            Some(&[]),
+            policy,
+            false,
+            false,
+            &[],
+            None,
+        )?,
+        runtime_turn_request_fingerprint(
+            &thread,
+            "same prompt",
+            None,
+            "deepseek-v4-pro",
+            Some(crate::tui::app::ReasoningEffort::High),
+            Some(&tools),
+            RuntimePolicyProjection::from_persisted("operate", Some("full_access"), true),
+            true,
+            true,
+            &[],
+            None,
+        )?,
+    ];
+    assert!(
+        changed.iter().all(|fingerprint| fingerprint != &base),
+        "provider/model/prompt/reasoning/tool or permission changes must alter the fingerprint"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn real_turn_client_preflight_failure_writes_no_in_progress_record() -> Result<()> {
     let mut custom = std::collections::HashMap::new();
     custom.insert(
@@ -1064,6 +1463,231 @@ async fn caller_cancellation_after_engine_acceptance_keeps_owned_turn_lifecycle(
         &["turn.started", "item.started", "item.completed"]
     );
     assert_eq!(lifecycle.last().map(String::as_str), Some("turn.completed"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn operation_key_replays_torn_response_survives_restart_and_rejects_mismatch() -> Result<()> {
+    let runtime_dir = test_runtime_dir();
+    let manager = test_manager(runtime_dir.clone())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    let mut harness = install_mock_engine(&manager, &thread.id).await;
+    let operation_key = "cwc-op-sk-fixture-must-not-persist".to_string();
+    let request = StartTurnRequest {
+        prompt: "idempotent turn payload".to_string(),
+        operation_key: Some(operation_key.clone()),
+        reasoning_effort: Some("high".to_string()),
+        allowed_tools: Some(Vec::new()),
+        ..StartTurnRequest::default()
+    };
+
+    // Hold the start receipt so the engine has accepted and persisted the
+    // turn while the HTTP-equivalent caller still has no response.
+    let mut event_lock = fd_lock::RwLock::new(manager.store.open_event_lock()?);
+    let event_state_guard = event_lock.try_write()?;
+    let start_manager = manager.clone();
+    let start_thread_id = thread.id.clone();
+    let first_request = request.clone();
+    let start_task = tokio::spawn(async move {
+        start_manager
+            .start_turn(&start_thread_id, first_request)
+            .await
+    });
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), harness.rx_op.recv()).await?,
+        Some(Op::SendMessage { .. })
+    ));
+    let turns = manager.store.list_turns_for_thread(&thread.id)?;
+    assert_eq!(turns.len(), 1);
+    let original = turns[0].clone();
+
+    // Simulate a torn HTTP response. Retrying immediately returns the same
+    // in-progress turn and never places a second operation in the engine.
+    start_task.abort();
+    let _ = start_task.await;
+    let replay = tokio::time::timeout(
+        Duration::from_secs(2),
+        manager.start_turn(&thread.id, request.clone()),
+    )
+    .await??;
+    assert_eq!(replay.id, original.id);
+    assert!(harness.rx_op.try_recv().is_err());
+
+    let key_fingerprint = runtime_turn_operation_key_fingerprint(
+        &manager.store.owner_id,
+        &thread.id,
+        &operation_key,
+    )?;
+    let binding = manager
+        .store
+        .load_turn_operation_binding(&key_fingerprint)?
+        .context("persisted turn operation binding")?;
+    assert_eq!(binding.turn_id, original.id);
+    assert_eq!(binding.thread_id, thread.id);
+    assert_eq!(binding.operation_key_fingerprint, key_fingerprint);
+    assert_eq!(binding.request_fingerprint.len(), 64);
+    assert!(
+        !serde_json::to_string(&binding)?.contains(&operation_key),
+        "raw operation key entered its durable binding"
+    );
+
+    drop(event_state_guard);
+    harness
+        .tx_event
+        .send(EngineEvent::MessageStarted { index: 0 })
+        .await?;
+    harness
+        .tx_event
+        .send(EngineEvent::MessageDelta {
+            index: 0,
+            content: "one execution".to_string(),
+        })
+        .await?;
+    harness
+        .tx_event
+        .send(EngineEvent::MessageComplete { index: 0 })
+        .await?;
+    harness
+        .tx_event
+        .send(EngineEvent::TurnComplete {
+            usage: Usage::default(),
+            status: TurnOutcomeStatus::Completed,
+            error: None,
+            tool_catalog: None,
+            base_url: None,
+        })
+        .await?;
+    let terminal =
+        wait_for_terminal_turn(&manager, &original.id, TURN_SETTLEMENT_DEADLOCK_TIMEOUT).await?;
+    assert_eq!(terminal.status, RuntimeTurnStatus::Completed);
+    assert_eq!(manager.store.list_turns_for_thread(&thread.id)?.len(), 1);
+
+    let leaked_key_file = ignore::WalkBuilder::new(&runtime_dir)
+        .hidden(false)
+        .build()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+        .find_map(|entry| {
+            fs::read_to_string(entry.path())
+                .ok()
+                .filter(|contents| contents.contains(&operation_key))
+                .map(|_| entry.path().to_path_buf())
+        });
+    assert!(
+        leaked_key_file.is_none(),
+        "raw operation key leaked into {}",
+        leaked_key_file
+            .as_deref()
+            .map(std::path::Path::display)
+            .map(|path| path.to_string())
+            .unwrap_or_default()
+    );
+
+    drop(harness);
+    drop(manager);
+    let reopened = test_manager(runtime_dir)?;
+    let replay_after_restart = reopened.start_turn(&thread.id, request.clone()).await?;
+    assert_eq!(replay_after_restart.id, original.id);
+    assert_eq!(replay_after_restart.status, RuntimeTurnStatus::Completed);
+
+    let mut mismatches = Vec::new();
+    let mut changed_prompt = request.clone();
+    changed_prompt.prompt = "different prompt".to_string();
+    mismatches.push(changed_prompt);
+    let mut changed_model = request.clone();
+    changed_model.model = Some("different-model".to_string());
+    mismatches.push(changed_model);
+    let mut changed_reasoning = request.clone();
+    changed_reasoning.reasoning_effort = Some("medium".to_string());
+    mismatches.push(changed_reasoning);
+    let mut changed_tools = request.clone();
+    changed_tools.allowed_tools = Some(vec!["read_file".to_string()]);
+    mismatches.push(changed_tools);
+    let mut changed_permission = request.clone();
+    changed_permission.permission_posture = Some("full_access".to_string());
+    mismatches.push(changed_permission);
+
+    for mismatch in mismatches {
+        let error = reopened
+            .start_turn(&thread.id, mismatch)
+            .await
+            .expect_err("operation-key reuse with changed execution must fail closed")
+            .to_string();
+        assert!(error.contains("different turn request"), "{error}");
+    }
+    assert_eq!(reopened.store.list_turns_for_thread(&thread.id)?.len(), 1);
+
+    let mut oversized = request;
+    oversized.operation_key = Some("k".repeat(MAX_RUNTIME_TURN_OPERATION_KEY_BYTES + 1));
+    let error = reopened
+        .start_turn(&thread.id, oversized)
+        .await
+        .expect_err("oversized operation keys must be rejected")
+        .to_string();
+    assert!(error.contains("cannot exceed"), "{error}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn restart_removes_torn_operation_item_before_reserved_turn_retry() -> Result<()> {
+    let runtime_dir = test_runtime_dir();
+    let store = RuntimeThreadStore::open(runtime_dir.clone())?;
+    let thread = sample_thread("thr_torn_operation_item");
+    store.save_thread(&thread)?;
+    let operation_key = "relay-torn-item-operation";
+    let key_fingerprint =
+        runtime_turn_operation_key_fingerprint(&store.owner_id, &thread.id, operation_key)?;
+    let turn_id = "turn_relay_reserved_retry";
+    store.save_turn_operation_binding(&RuntimeTurnOperationBinding {
+        schema_version: TURN_OPERATION_BINDING_SCHEMA_VERSION,
+        thread_id: thread.id.clone(),
+        turn_id: turn_id.to_string(),
+        operation_key_fingerprint: key_fingerprint.clone(),
+        request_fingerprint: crate::hashing::sha256_hex("torn-request"),
+        created_at: Utc::now(),
+    })?;
+    let mut orphan = sample_item(
+        turn_id,
+        "item_torn_before_turn_commit",
+        TurnItemLifecycleStatus::Completed,
+    );
+    orphan.kind = TurnItemKind::UserMessage;
+    store.save_item(&orphan)?;
+    drop(store);
+
+    let manager = test_manager(runtime_dir)?;
+    assert!(
+        manager
+            .store
+            .load_turn_operation_binding(&key_fingerprint)?
+            .is_none()
+    );
+    assert!(manager.store.list_items_for_turn(turn_id)?.is_empty());
+
+    let mut harness = install_mock_engine(&manager, &thread.id).await;
+    let turn = manager
+        .start_turn_with_reserved_id(
+            &thread.id,
+            StartTurnRequest {
+                prompt: "retry after the pre-submit crash".to_string(),
+                operation_key: Some(operation_key.to_string()),
+                ..StartTurnRequest::default()
+            },
+            turn_id,
+        )
+        .await?;
+    assert_eq!(turn.id, turn_id);
+    assert!(matches!(
+        harness.rx_op.recv().await,
+        Some(Op::SendMessage { .. })
+    ));
+    assert_eq!(
+        manager.store.list_items_for_turn(turn_id)?.len(),
+        1,
+        "the retry must own exactly one user item"
+    );
     Ok(())
 }
 
@@ -1696,6 +2320,195 @@ async fn config_reload_updates_next_turn_route_without_mutating_engine_route() -
         other => panic!("expected typed compact route, got {other:?}"),
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn queued_reload_is_a_hard_boundary_for_a_concurrent_turn_start() -> Result<()> {
+    let provider = |base_url: &str, key: &str| crate::config::ProviderConfig {
+        kind: Some("openai-compatible".to_string()),
+        base_url: Some(base_url.to_string()),
+        model: Some("local-model".to_string()),
+        api_key: Some(key.to_string()),
+        ..crate::config::ProviderConfig::default()
+    };
+    let config = Config {
+        provider: Some("lm-studio".to_string()),
+        providers: Some(crate::config::ProvidersConfig {
+            custom: std::collections::HashMap::from([(
+                "lm-studio".to_string(),
+                provider("http://127.0.0.1:18181/v1", "old-local-test-key"),
+            )]),
+            ..crate::config::ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+    let manager = RuntimeThreadManager::open(
+        config.clone(),
+        PathBuf::from("."),
+        test_manager_config(test_runtime_dir()),
+    )?;
+    let thread = manager
+        .create_thread(CreateThreadRequest {
+            model: Some("local-model".to_string()),
+            model_provider: Some("lm-studio".to_string()),
+            ..CreateThreadRequest::default()
+        })
+        .await?;
+    let mut harness = install_mock_engine(&manager, &thread.id).await;
+
+    // Hold one existing admission reader while the reload writer queues. Tokio
+    // RwLock is write-preferring, so the later turn reader cannot overtake it.
+    let prior_admission = manager.config_admission.read().await;
+    let mut reloaded = config;
+    reloaded
+        .providers
+        .as_mut()
+        .and_then(|providers| providers.custom.get_mut("lm-studio"))
+        .expect("named custom provider")
+        .clone_from(&provider("http://127.0.0.1:18182/v1", "new-local-test-key"));
+    let reload_manager = manager.clone();
+    let mut reload = tokio::spawn(async move { reload_manager.reload_config(reloaded).await });
+    tokio::task::yield_now().await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), &mut reload)
+            .await
+            .is_err(),
+        "reload must be waiting for the prior admission reader"
+    );
+
+    let start_manager = manager.clone();
+    let start_thread_id = thread.id.clone();
+    let mut start = tokio::spawn(async move {
+        start_manager
+            .start_turn(
+                &start_thread_id,
+                StartTurnRequest {
+                    prompt: "use the post-reload route".to_string(),
+                    ..StartTurnRequest::default()
+                },
+            )
+            .await
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), &mut start)
+            .await
+            .is_err(),
+        "a turn queued after the reload writer may not snapshot old config"
+    );
+    drop(prior_admission);
+    reload.await.expect("reload task")?;
+    start.await.expect("start task")?;
+
+    loop {
+        match harness.rx_op.recv().await {
+            Some(Op::SendMessage { route, .. }) => {
+                assert_eq!(
+                    route.config.deepseek_base_url(),
+                    "http://127.0.0.1:18182/v1"
+                );
+                break;
+            }
+            Some(
+                Op::SetCompaction { .. }
+                | Op::SetStreamChunkTimeout { .. }
+                | Op::SetSubagentRuntimeConfig { .. },
+            ) => {}
+            other => panic!("expected post-reload SendMessage, got {other:?}"),
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn queued_reload_is_a_hard_boundary_for_concurrent_compaction() -> Result<()> {
+    let provider = |base_url: &str, key: &str| crate::config::ProviderConfig {
+        kind: Some("openai-compatible".to_string()),
+        base_url: Some(base_url.to_string()),
+        model: Some("local-model".to_string()),
+        api_key: Some(key.to_string()),
+        ..crate::config::ProviderConfig::default()
+    };
+    let config = Config {
+        provider: Some("lm-studio".to_string()),
+        providers: Some(crate::config::ProvidersConfig {
+            custom: std::collections::HashMap::from([(
+                "lm-studio".to_string(),
+                provider("http://127.0.0.1:18181/v1", "old-local-test-key"),
+            )]),
+            ..crate::config::ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+    let manager = RuntimeThreadManager::open(
+        config.clone(),
+        PathBuf::from("."),
+        test_manager_config(test_runtime_dir()),
+    )?;
+    let thread = manager
+        .create_thread(CreateThreadRequest {
+            model: Some("local-model".to_string()),
+            model_provider: Some("lm-studio".to_string()),
+            ..CreateThreadRequest::default()
+        })
+        .await?;
+    let mut harness = install_mock_engine(&manager, &thread.id).await;
+
+    let prior_admission = manager.config_admission.read().await;
+    let mut reloaded = config;
+    *reloaded
+        .providers
+        .as_mut()
+        .and_then(|providers| providers.custom.get_mut("lm-studio"))
+        .expect("named custom provider") =
+        provider("http://127.0.0.1:18182/v1", "new-local-test-key");
+    let reload_manager = manager.clone();
+    let mut reload = tokio::spawn(async move { reload_manager.reload_config(reloaded).await });
+    tokio::task::yield_now().await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), &mut reload)
+            .await
+            .is_err()
+    );
+    let compact_manager = manager.clone();
+    let compact_thread_id = thread.id.clone();
+    let mut compact = tokio::spawn(async move {
+        compact_manager
+            .compact_thread(
+                &compact_thread_id,
+                CompactThreadRequest {
+                    reason: Some("post-reload compaction".to_string()),
+                },
+            )
+            .await
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), &mut compact)
+            .await
+            .is_err(),
+        "compaction queued after the reload writer may not carry old config"
+    );
+    drop(prior_admission);
+    reload.await.expect("reload task")?;
+    compact.await.expect("compact task")?;
+
+    loop {
+        match harness.rx_op.recv().await {
+            Some(Op::CompactContext { route, .. }) => {
+                assert_eq!(
+                    route.config.deepseek_base_url(),
+                    "http://127.0.0.1:18182/v1"
+                );
+                break;
+            }
+            Some(
+                Op::SetCompaction { .. }
+                | Op::SetStreamChunkTimeout { .. }
+                | Op::SetSubagentRuntimeConfig { .. },
+            ) => {}
+            other => panic!("expected post-reload CompactContext, got {other:?}"),
+        }
+    }
     Ok(())
 }
 
@@ -2513,6 +3326,7 @@ fn runtime_usage_sink_survives_parent_terminal_and_restart_exactly_once() -> Res
         },
     );
     drop(lease);
+    drop(manager);
 
     let reopened = test_manager(data_dir.clone())?;
     reopened.register_runtime_usage_sink(&turn.id);
@@ -2528,6 +3342,7 @@ fn runtime_usage_sink_survives_parent_terminal_and_restart_exactly_once() -> Res
         },
     );
     crate::cost_status::finish_runtime_usage_owner(&turn.id);
+    drop(reopened);
     let reopened = test_manager(data_dir)?;
     let persisted = reopened.store.load_turn(&turn.id)?;
     assert_eq!(persisted.routed_usage.len(), 1);
@@ -2783,6 +3598,37 @@ fn store_load_thread_rejects_newer_schema_version() {
 }
 
 #[test]
+fn store_restart_discards_only_operation_bindings_that_never_acquired_a_turn() -> Result<()> {
+    let dir = test_runtime_dir();
+    let store = RuntimeThreadStore::open(dir.clone())?;
+    let key_fingerprint = crate::hashing::sha256_hex("scoped-key");
+    let binding = RuntimeTurnOperationBinding {
+        schema_version: TURN_OPERATION_BINDING_SCHEMA_VERSION,
+        thread_id: "thr_torn_binding".to_string(),
+        turn_id: "turn_never_persisted".to_string(),
+        operation_key_fingerprint: key_fingerprint.clone(),
+        request_fingerprint: crate::hashing::sha256_hex("request"),
+        created_at: Utc::now(),
+    };
+    store.save_turn_operation_binding(&binding)?;
+    assert!(
+        store
+            .load_turn_operation_binding(&key_fingerprint)?
+            .is_some()
+    );
+
+    drop(store);
+    let reopened = RuntimeThreadStore::open(dir)?;
+    assert!(
+        reopened
+            .load_turn_operation_binding(&key_fingerprint)?
+            .is_none(),
+        "a binding written before its turn is safe to discard because engine submission is later"
+    );
+    Ok(())
+}
+
+#[test]
 fn runtime_event_sequences_serialize_across_real_processes() -> Result<()> {
     let dir = test_runtime_dir();
     let store = RuntimeThreadStore::open(dir.clone())?;
@@ -2836,6 +3682,78 @@ fn runtime_event_sequences_serialize_across_real_processes() -> Result<()> {
     );
 
     std::fs::remove_dir_all(dir)?;
+    Ok(())
+}
+
+#[test]
+fn runtime_manager_store_has_one_lifetime_process_owner() -> Result<()> {
+    let dir = test_runtime_dir();
+    let signal = dir.join("manager-owner.ready");
+    let release = dir.join("process-writers.start");
+    let child = spawn_runtime_event_child("manager-holder", &dir, "thr_unused", &signal);
+    wait_for_runtime_event_test_file(&signal, "manager process owner readiness");
+
+    let error = match test_manager(dir.clone()) {
+        Ok(_) => panic!("a second process must not open the same Runtime manager store"),
+        Err(error) => error,
+    };
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("already active in another process"),
+        "unexpected owner-lock error: {error:#}"
+    );
+
+    let distinct_dir = test_runtime_dir();
+    let distinct = test_manager(distinct_dir)?;
+    drop(distinct);
+
+    std::fs::write(release, b"release")?;
+    child.wait_success("Runtime manager owner holder");
+    let reopened = test_manager(dir)?;
+    drop(reopened);
+    Ok(())
+}
+
+#[test]
+fn fresh_runtime_manager_store_race_has_exactly_one_process_owner() -> Result<()> {
+    let control = test_runtime_dir();
+    std::fs::create_dir_all(&control)?;
+    let store_root = control.join("fresh-runtime-store");
+    let start = control.join("manager-race.start");
+    let release = control.join("manager-race.release");
+    let signal_a = control.join("manager-race-a.signal");
+    let signal_b = control.join("manager-race-b.signal");
+    assert!(!store_root.exists(), "race must begin from an absent store");
+
+    let child_a = spawn_runtime_manager_racer(&store_root, &signal_a, &start, &release);
+    let child_b = spawn_runtime_manager_racer(&store_root, &signal_b, &start, &release);
+    wait_for_runtime_event_test_value(&signal_a, &["ready"], "manager racer A readiness");
+    wait_for_runtime_event_test_value(&signal_b, &["ready"], "manager racer B readiness");
+    assert!(
+        !store_root.exists(),
+        "neither child may initialize owner-derived state before the common barrier"
+    );
+
+    std::fs::write(&start, b"go")?;
+    let mut outcomes = vec![
+        wait_for_runtime_event_test_value(&signal_a, &["won", "lost"], "manager racer A outcome"),
+        wait_for_runtime_event_test_value(&signal_b, &["won", "lost"], "manager racer B outcome"),
+    ];
+    outcomes.sort();
+    assert_eq!(outcomes, vec!["lost", "won"]);
+
+    let owner_path = store_root.join(AGENT_MAIL_OWNER_FILE);
+    let owner: RuntimeStoreOwner = serde_json::from_str(&read_store_file(&owner_path)?)?;
+    validated_record_id(&owner.owner_id, "Runtime owner id")?;
+    assert!(owner.owner_id.starts_with("owner_"));
+
+    std::fs::write(&release, b"release")?;
+    child_a.wait_success("fresh Runtime manager racer A");
+    child_b.wait_success("fresh Runtime manager racer B");
+    let reopened = test_manager(store_root)?;
+    assert_eq!(reopened.test_store().owner_id, owner.owner_id);
+    drop(reopened);
+    std::fs::remove_dir_all(control)?;
     Ok(())
 }
 
@@ -3409,7 +4327,7 @@ fn store_list_items_rejects_swapped_symlinked_store_directory() {
 }
 
 #[test]
-fn store_load_thread_defaults_missing_session_id() {
+fn store_load_thread_defaults_missing_additive_runtime_defaults() {
     let dir = test_runtime_dir();
     let store = RuntimeThreadStore::open(dir.clone()).expect("open store");
     let thread = sample_thread("thr_legacy_session");
@@ -3420,6 +4338,14 @@ fn store_load_thread_defaults_missing_session_id() {
         .as_object_mut()
         .expect("thread object")
         .remove("session_id");
+    payload
+        .as_object_mut()
+        .expect("thread object")
+        .remove("reasoning_effort");
+    payload
+        .as_object_mut()
+        .expect("thread object")
+        .remove("allowed_tools");
     std::fs::write(
         &path,
         serde_json::to_string(&payload).expect("encode thread"),
@@ -3430,6 +4356,8 @@ fn store_load_thread_defaults_missing_session_id() {
         .load_thread(&thread.id)
         .expect("legacy thread should load");
     assert_eq!(loaded.session_id, None);
+    assert_eq!(loaded.reasoning_effort, None);
+    assert_eq!(loaded.allowed_tools, None);
 
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -3894,6 +4822,115 @@ fn open_recovers_queued_and_in_progress_turns() -> Result<()> {
     let completed_item = manager.store.load_item("item_done")?;
     assert_eq!(completed_item.status, TurnItemLifecycleStatus::Completed);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_chat_event_read_flushes_restart_terminal_receipt_once() -> Result<()> {
+    let runtime_dir = test_runtime_dir();
+    let store = RuntimeThreadStore::open(runtime_dir.clone())?;
+    let thread = sample_thread("thr_relay_restart_receipt");
+    let turn = sample_turn(
+        &thread.id,
+        "turn_relay_restart_receipt",
+        RuntimeTurnStatus::InProgress,
+    );
+    store.save_thread(&thread)?;
+    store.save_turn(&turn)?;
+    drop(store);
+
+    let manager = test_manager(runtime_dir)?;
+    let events = manager.events_since_async(&thread.id, None).await?;
+    let completed = events
+        .iter()
+        .filter(|event| {
+            event.event == "turn.completed" && event.turn_id.as_deref() == Some(turn.id.as_str())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].payload["recovered"], true);
+    assert_eq!(completed[0].payload["turn"]["status"], "interrupted");
+
+    let replay = manager.events_since_async(&thread.id, None).await?;
+    assert_eq!(
+        replay
+            .iter()
+            .filter(|event| {
+                event.event == "turn.completed"
+                    && event.turn_id.as_deref() == Some(turn.id.as_str())
+            })
+            .count(),
+        1,
+        "restart recovery must append one stable terminal receipt"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn restart_resumes_item_normalization_after_parent_was_already_interrupted() -> Result<()> {
+    let runtime_dir = test_runtime_dir();
+    let store = RuntimeThreadStore::open(runtime_dir.clone())?;
+    let mut thread = sample_thread("thr_second_crash_recovery");
+    thread.latest_turn_id = Some("turn_stale_pointer".to_string());
+    let mut turn = sample_turn(
+        &thread.id,
+        "turn_second_crash_recovery",
+        RuntimeTurnStatus::Interrupted,
+    );
+    turn.error = Some(RUNTIME_RESTART_REASON.to_string());
+    turn.ended_at = Some(Utc::now());
+    let item = sample_item(
+        &turn.id,
+        "item_second_crash_recovery",
+        TurnItemLifecycleStatus::InProgress,
+    );
+    turn.item_ids = vec![item.id.clone()];
+    store.save_thread(&thread)?;
+    store.save_item(&item)?;
+    store.save_turn(&turn)?;
+    drop(store);
+
+    let manager = test_manager(runtime_dir.clone())?;
+    assert_eq!(
+        manager.store.load_thread(&thread.id)?.latest_turn_id,
+        Some(turn.id.clone()),
+        "recovery must repair a turn committed before its thread pointer"
+    );
+    assert_eq!(
+        manager.store.load_item(&item.id)?.status,
+        TurnItemLifecycleStatus::Interrupted,
+        "a second startup must finish item normalization even when the parent was committed first"
+    );
+    let first = manager.events_since_async(&thread.id, None).await?;
+    assert_eq!(
+        first
+            .iter()
+            .filter(|event| {
+                event.event == "turn.completed"
+                    && event.turn_id.as_deref() == Some(turn.id.as_str())
+            })
+            .count(),
+        1
+    );
+    drop(manager);
+
+    let reopened = test_manager(runtime_dir)?;
+    assert_eq!(
+        reopened.store.load_item(&item.id)?.status,
+        TurnItemLifecycleStatus::Interrupted
+    );
+    let replay = reopened.events_since_async(&thread.id, None).await?;
+    assert_eq!(
+        replay
+            .iter()
+            .filter(|event| {
+                event.event == "turn.completed"
+                    && event.turn_id.as_deref() == Some(turn.id.as_str())
+            })
+            .count(),
+        1,
+        "another reopen must not duplicate the recovered terminal receipt"
+    );
     Ok(())
 }
 
@@ -9128,6 +10165,8 @@ fn opening_manager_recovers_stale_queued_and_in_progress_work() -> Result<()> {
         model: DEFAULT_TEXT_MODEL.to_string(),
         model_provider: None,
         model_provider_id: None,
+        reasoning_effort: None,
+        allowed_tools: None,
         workspace: PathBuf::from("."),
         mode: "agent".to_string(),
         permission_posture: None,

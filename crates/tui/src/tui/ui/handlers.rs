@@ -1604,7 +1604,7 @@ pub(crate) async fn handle_view_events(
                 }
             }
             ViewEvent::SetupOpenRemoteControlRequested => {
-                start_remote_control_session(app);
+                start_remote_control_session(app, config);
             }
             ViewEvent::HotbarDisableRequested => {
                 disable_hotbar(app, config);

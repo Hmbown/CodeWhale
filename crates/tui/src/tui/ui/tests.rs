@@ -405,6 +405,64 @@ async fn connected_web_mirror_never_refuses_local_composer_input() {
     );
 }
 
+#[tokio::test]
+async fn runtime_chat_queues_local_composer_input_without_starting_a_second_turn() {
+    let mut app = create_test_app();
+    app.remote_control.block_runtime_chat_dispatch_for_tests();
+    let config = Config::default();
+    let mut mock = mock_engine_handle();
+
+    crate::tui::ui::dispatch::dispatch_composer_message(
+        &mut app,
+        &config,
+        &mock.handle,
+        crate::tui::app::QueuedMessage::new("local prompt during Runtime Chat".to_string(), None),
+        crate::tui::ui::DispatchRecovery::Immediate,
+        crate::tui::app::ComposerSubmitAction::Submit(
+            crate::tui::app::SubmitDisposition::Immediate,
+        ),
+    )
+    .await
+    .expect("Runtime Chat dispatch gate");
+
+    assert_eq!(app.queued_message_count(), 1);
+    assert!(!app.is_loading, "the interactive engine must remain idle");
+    assert!(
+        mock.rx_op.try_recv().is_err(),
+        "the interactive engine must not receive a second provider turn"
+    );
+    assert!(app.status_message.is_none());
+    let toast = app.status_toasts.back().expect("Runtime Chat queue toast");
+    assert_eq!(toast.level, StatusToastLevel::Info);
+    assert!(toast.text.contains("Runtime Chat"));
+    assert_eq!(toast.ttl_ms, Some(4_000));
+}
+
+#[tokio::test]
+async fn stale_remote_control_turn_never_cancels_the_current_engine_turn() {
+    let mut app = create_test_app();
+    app.remote_control
+        .force_mirror_connected_for_tests("run_fixture", "turn_current");
+    app.remote_control
+        .queue_remote_event_for_tests(crate::remote_control::RemoteEvent::Command {
+            run_id: "run_fixture".to_string(),
+            seq: 1,
+            command: crate::remote_control::RemoteCommand::Control {
+                action: crate::remote_control::RemoteControlRequest::Interrupt,
+                turn_id: Some("turn_stale".to_string()),
+                runtime_chat: None,
+            },
+        });
+    let mock = mock_engine_handle();
+    drain_remote_control_events(&mut app, &Config::default(), &mock.handle)
+        .await
+        .unwrap();
+    assert!(
+        !mock.cancel_token.is_cancelled(),
+        "a delayed command for an older turn must not cancel the current provider lifecycle"
+    );
+}
+
 fn test_mailbox_route(
     provider: ApiProvider,
     model: &str,
@@ -3516,6 +3574,41 @@ fn create_test_app() -> App {
         skip_onboarding: false,
         ..crate::test_support::test_tui_options(PathBuf::from("."))
     })
+}
+
+#[test]
+fn runtime_chat_short_circuits_inline_voice_and_cache_actions_before_ui_mutation() {
+    let mut app = create_test_app();
+    app.remote_control.block_runtime_chat_dispatch_for_tests();
+    app.voice_enabled = true;
+    let history_len = app.history.len();
+
+    let voice = crate::commands::CommandResult::with_message_and_action(
+        "optimistic voice message",
+        AppAction::VoiceCapture,
+    );
+    assert!(super::apply::reject_inline_inference_while_runtime_chat_owns_run(&mut app, &voice,));
+    assert!(!app.voice_enabled, "blocked /voice must restore its toggle");
+    assert_eq!(
+        app.history.len(),
+        history_len,
+        "the optimistic command message must not be appended"
+    );
+    assert!(app.status_message.is_none());
+    let toast = app.status_toasts.back().expect("blocked action toast");
+    assert_eq!(toast.level, crate::tui::app::StatusToastLevel::Info);
+    assert!(toast.text.contains("Codewhale Runtime"));
+    assert_eq!(toast.ttl_ms, Some(6_000));
+
+    let cache = crate::commands::CommandResult::with_message_and_action(
+        "optimistic cache message",
+        AppAction::CacheWarmup,
+    );
+    assert!(super::apply::reject_inline_inference_while_runtime_chat_owns_run(&mut app, &cache,));
+    assert_eq!(app.history.len(), history_len);
+
+    let mut idle = create_test_app();
+    assert!(!super::apply::reject_inline_inference_while_runtime_chat_owns_run(&mut idle, &cache,));
 }
 
 #[derive(Clone, Default)]
@@ -8587,8 +8680,17 @@ async fn remote_preflight_failure_releases_the_account_owned_run() {
     let mut app = create_test_app();
     app.set_provider_identity(ApiProvider::Custom, "lm-studio");
     app.set_model_selection("local-model".to_string());
+    let journal_root = tempfile::tempdir().expect("remote dispatch journal root");
     app.remote_control
-        .activate_prompt("run_remote_fixture", "turn_remote_fixture");
+        .prepare_remote_control_session_journal(
+            journal_root.path(),
+            "target_remote_fixture",
+            "session_remote_fixture",
+        )
+        .expect("durable remote dispatch journal");
+    app.remote_control
+        .activate_prompt("run_remote_fixture", "turn_remote_fixture")
+        .unwrap();
     let (_engine, handle) = crate::core::engine::Engine::new(EngineConfig::default(), &config);
 
     dispatch_user_message(

@@ -3869,6 +3869,8 @@ impl Engine {
         active_tool_names: &mut std::collections::HashSet<String>,
         hook_contexts: &std::collections::HashMap<String, String>,
     ) {
+        let active_tool_names_before = active_tool_names.clone();
+        let tool_catalog_len_before = tool_catalog.len();
         // #dogfood 0.8.67: if the model mutates the goal mid-turn via
         // create_goal/update_goal, push the change to the sidebar right after
         // this tool batch instead of waiting for turn end — otherwise the
@@ -4039,6 +4041,14 @@ impl Engine {
         // applies it behind a `changed` guard).
         if goal_tool_ran {
             self.emit_goal_updated().await;
+        }
+        // Backstop for the per-outcome `tool_surface_changed` declarations
+        // above: any surviving catalog/name-set mutation still re-pins under
+        // `change:tool_surface` instead of tripping the C5 drift guard.
+        if *active_tool_names != active_tool_names_before
+            || tool_catalog.len() != tool_catalog_len_before
+        {
+            self.session.pending_prefix_change_reason = Some("tool_surface".to_string());
         }
     }
 

@@ -2849,6 +2849,22 @@ pub struct Config {
     /// selection.
     #[serde(skip)]
     pub(crate) migrated_legacy_ollama_cloud_route: bool,
+    /// Runtime-only isolation boundary for account-owned managed Chat.
+    ///
+    /// This is never user-configurable or serialized. The Runtime Chat relay
+    /// sets it on its private config clone so the Engine suppresses all host
+    /// workspace metadata and constructs no model-visible MCP, sub-agent, or
+    /// native tool surface for those turns.
+    #[serde(skip)]
+    pub(crate) runtime_chat_isolated: bool,
+    /// Runtime-only marker for an independent RuntimeThreadManager store.
+    ///
+    /// Those threads are not projected into the interactive TUI's attached
+    /// CWC run, so their provider requests do not participate in that run's
+    /// exclusive Chat ownership gate. RuntimeThreadManager sets this marker on
+    /// its private config clone; it is never user-configurable or serialized.
+    #[serde(skip)]
+    pub(crate) runtime_thread_inference_unrelated: bool,
     /// Native tool catalog controls. This table controls built-in
     /// tool loading policy.
     #[serde(default)]
@@ -10201,6 +10217,9 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
                 recorded => recorded,
             }
         },
+        runtime_chat_isolated: override_cfg.runtime_chat_isolated || base.runtime_chat_isolated,
+        runtime_thread_inference_unrelated: override_cfg.runtime_thread_inference_unrelated
+            || base.runtime_thread_inference_unrelated,
         mini_window: override_cfg.mini_window.or(base.mini_window),
         title: override_cfg.title.or(base.title),
     }

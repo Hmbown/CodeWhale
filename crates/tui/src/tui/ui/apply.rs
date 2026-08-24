@@ -1016,6 +1016,30 @@ pub(crate) async fn apply_provider_fallback_switch(
     ));
 }
 
+pub(super) fn reject_inline_inference_while_runtime_chat_owns_run(
+    app: &mut App,
+    result: &commands::CommandResult,
+) -> bool {
+    let blocked_inline_inference = matches!(
+        result.action.as_ref(),
+        Some(AppAction::VoiceCapture | AppAction::CacheWarmup)
+    ) && app.remote_control.runtime_chat_blocks_local_dispatch();
+    if !blocked_inline_inference {
+        return false;
+    }
+    if matches!(result.action.as_ref(), Some(AppAction::VoiceCapture)) {
+        // `/voice` toggles this before returning the action. Restore the state
+        // so a retry after relay settlement starts capture rather than merely
+        // toggling the stale flag off.
+        app.voice_enabled = false;
+    }
+    let notice = app
+        .tr(MessageId::SettingLockedDuringTurn)
+        .replace("{setting}", "Codewhale Runtime");
+    app.push_status_toast(notice, crate::tui::app::StatusToastLevel::Info, Some(6_000));
+    true
+}
+
 pub(crate) async fn apply_command_result(
     terminal: &mut AppTerminal,
     app: &mut App,
@@ -1027,6 +1051,14 @@ pub(crate) async fn apply_command_result(
     >,
     result: commands::CommandResult,
 ) -> Result<bool> {
+    // These two actions await participant inference inline on the UI event
+    // loop. Waiting behind Runtime Chat's exclusive writer here would
+    // deadlock: this same loop must drain the terminal projection/server
+    // cursor that releases the writer. Fail closed before displaying the
+    // command's optimistic message or invoking recorder/provider code.
+    if reject_inline_inference_while_runtime_chat_owns_run(app, &result) {
+        return Ok(false);
+    }
     if let Some(msg) = result.message {
         app.add_message(HistoryCell::System { content: msg });
     }
@@ -1985,7 +2017,7 @@ pub(crate) async fn apply_command_result(
             }
             AppAction::RemoteControl(action) => match action {
                 crate::remote_control::RemoteControlAction::Start => {
-                    start_remote_control_session(app);
+                    start_remote_control_session(app, config);
                 }
                 crate::remote_control::RemoteControlAction::Stop => {
                     app.remote_control.stop();

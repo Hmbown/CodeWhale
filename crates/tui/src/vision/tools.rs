@@ -242,6 +242,10 @@ impl ToolSpec for ImageAnalyzeTool {
             enabled: true,
             ..Default::default()
         };
+        let _inference = match self.route_client.as_ref() {
+            Some(client) => client.acquire_remote_control_inference_permit().await,
+            None => Some(crate::client::acquire_remote_control_inference_participant().await),
+        };
 
         let response = with_retry(
             &retry_config,

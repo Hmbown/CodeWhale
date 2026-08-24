@@ -316,6 +316,7 @@ async fn post_chat_completions(
     base_url: &str,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    let _inference = crate::client::acquire_remote_control_inference_participant().await;
     let client = crate::tls::reqwest_client();
     let resp = client
         .post(chat_completions_url(base_url))

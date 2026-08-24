@@ -3813,6 +3813,7 @@ async fn host_managed_engine_does_not_self_dispatch_goal_continuation() {
 
 #[tokio::test]
 async fn host_managed_engine_defers_idle_subagent_completion_to_explicit_turn() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
     use crate::tools::subagent::SubAgentCompletion;
 
     let mut custom = HashMap::new();
@@ -3850,9 +3851,9 @@ async fn host_managed_engine_defers_idle_subagent_completion_to_explicit_turn() 
     // which asserts that single dispatch). Script the response the same way
     // so the turn completes deterministically instead of dialing the loopback
     // route fixture that nothing serves in this test.
-    let mock = Arc::new(crate::llm_client::mock::MockLlmClient::new(vec![
-        crate::llm_client::mock::canned::simple_text_turn("drained host turn"),
-    ]));
+    let mock = Arc::new(MockLlmClient::new(vec![canned::simple_text_turn(
+        "drained host turn",
+    )]));
     let client: crate::core::model_client::SharedModelClient = mock.clone();
     let (engine, handle) = Engine::new_with_model_client(engine_config, &config, client);
     let owner_session_id = engine.session.id.clone();
@@ -5993,6 +5994,105 @@ fn deterministic_engine_config(workspace: &Path) -> EngineConfig {
         subagents_enabled: false,
         ..EngineConfig::default()
     }
+}
+
+#[tokio::test]
+async fn isolated_runtime_chat_provider_request_contains_no_host_context_or_tools() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    const PROJECT_CANARY: &str = "PRIVATE_PROJECT_AGENTS_CANARY";
+    const MEMORY_CANARY: &str = "PRIVATE_USER_MEMORY_CANARY";
+    const SKILL_CANARY: &str = "PRIVATE_SKILL_CANARY";
+    const MCP_CANARY: &str = "PRIVATE_MCP_CANARY";
+    const INSTRUCTION_CANARY: &str = "PRIVATE_INSTRUCTION_CANARY";
+    const ATTACHMENT_CANARY: &str = "PRIVATE_ATTACHMENT_BYTES_CANARY";
+
+    let root = tempdir().expect("private Runtime Chat root");
+    let workspace = root.path().join("private-host-workspace-canary");
+    let skills = root.path().join("private-skills-canary");
+    fs::create_dir_all(&workspace).expect("create private workspace");
+    fs::create_dir_all(&skills).expect("create private skills");
+    fs::write(workspace.join("AGENTS.md"), PROJECT_CANARY).expect("write AGENTS canary");
+    let memory = root.path().join("private-memory.md");
+    fs::write(&memory, MEMORY_CANARY).expect("write memory canary");
+    fs::write(skills.join("SKILL.md"), SKILL_CANARY).expect("write skill canary");
+    let mcp = root.path().join("private-mcp.json");
+    fs::write(&mcp, format!(r#"{{"server":"{MCP_CANARY}"}}"#)).expect("write MCP canary");
+    let instructions = root.path().join("private-instructions.md");
+    fs::write(&instructions, INSTRUCTION_CANARY).expect("write instruction canary");
+    let attachment = root.path().join("private-attachment.png");
+    fs::write(&attachment, ATTACHMENT_CANARY).expect("write attachment canary");
+
+    let api_config = Config {
+        runtime_chat_isolated: true,
+        ..Config::default()
+    };
+    let mut engine_config = deterministic_engine_config(&workspace);
+    engine_config.instructions = vec![instructions.into()];
+    engine_config.project_context_pack_enabled = true;
+    engine_config.memory_enabled = true;
+    engine_config.memory_path = memory;
+    engine_config.skills_dir = skills;
+    engine_config.mcp_config_path = mcp;
+    engine_config.subagents_enabled = true;
+    engine_config.allowed_tools = None;
+
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![canned::simple_text_turn(
+        "Hello from isolated Chat.",
+    )]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let (engine, handle) = Engine::new_with_model_client(engine_config, &api_config, client);
+    let task = tokio::spawn(engine.run());
+    handle
+        .send(external_user_message_op(
+            &format!("Say hello.\n[Attached image: {}]", attachment.display()),
+            AppMode::Agent,
+            &api_config,
+        ))
+        .await
+        .expect("send isolated Chat turn");
+
+    let mut rx = handle.rx_event.write().await;
+    loop {
+        let event = tokio::time::timeout(model_turn_event_timeout(), rx.recv())
+            .await
+            .expect("isolated Chat turn timed out")
+            .expect("isolated Chat event stream closed");
+        if let Event::TurnComplete { status, error, .. } = event {
+            assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
+            break;
+        }
+    }
+
+    let request = mock.last_request().expect("captured provider request");
+    assert!(
+        request.tools.as_ref().is_none_or(Vec::is_empty),
+        "isolated Chat must expose no provider tools"
+    );
+    let serialized = serde_json::to_string(&request).expect("serialize captured request");
+    assert!(serialized.contains("Say hello."), "{serialized}");
+    assert!(serialized.contains("Attachment omitted"), "{serialized}");
+    for forbidden in [
+        workspace.to_string_lossy().as_ref(),
+        root.path().to_string_lossy().as_ref(),
+        PROJECT_CANARY,
+        MEMORY_CANARY,
+        SKILL_CANARY,
+        MCP_CANARY,
+        INSTRUCTION_CANARY,
+        ATTACHMENT_CANARY,
+        "<turn_meta>",
+        "<user_memory>",
+        "<available_skills>",
+        "Git workspace:",
+    ] {
+        assert!(
+            !serialized.contains(forbidden),
+            "leaked {forbidden}: {serialized}"
+        );
+    }
+
+    task.abort();
 }
 
 #[tokio::test]

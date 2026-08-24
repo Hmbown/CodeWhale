@@ -532,6 +532,7 @@ fn default_runtime_capabilities() -> RuntimeCapabilities {
         account_session: true,
         threads: true,
         turns: true,
+        turn_operation_idempotency: true,
         turn_steer: true,
         turn_interrupt: true,
         event_replay: true,
@@ -4022,8 +4023,11 @@ async fn retry_thread_turn(
             &forked_thread.id,
             StartTurnRequest {
                 prompt: retry_prompt,
+                operation_key: None,
                 input_summary: None,
                 model: None,
+                reasoning_effort: None,
+                allowed_tools: None,
                 mode: None,
                 permission_posture: None,
                 allow_shell: None,
@@ -5336,9 +5340,6 @@ struct ProviderEntry {
     model_provider_id: Option<String>,
     /// Human-friendly name for picker UIs (e.g. "DeepSeek", "OpenAI").
     display_name: String,
-    /// Default base URL for this provider ( informational; the live base URL
-    /// may be overridden in config.toml).
-    default_base_url: String,
     /// Default model id for this provider, if any. Empty for pass-through
     /// providers (Ollama / Custom) that expose no built-in catalog.
     default_model: String,
@@ -5346,9 +5347,42 @@ struct ProviderEntry {
     /// GUI should render a free-text input instead of calling
     /// `/v1/providers/{id}/models`.
     has_model_catalog: bool,
-    /// API key environment variable candidates, e.g. `["DEEPSEEK_API_KEY"]`.
-    /// The GUI may surface these in a tooltip when auth is missing.
-    env_vars: Vec<String>,
+    /// Sanitized structural credential classification for the exact route.
+    /// This deliberately contains no credential, endpoint, path, environment
+    /// variable, consent-source, or token metadata.
+    #[serde(rename = "credentialState")]
+    credential_state: ProviderCredentialState,
+}
+
+/// Stable, non-secret wire projection of provider readiness.
+///
+/// The richer internal classification remains private to the Runtime. In
+/// particular, saved API keys and imported tokens collapse to `configured`,
+/// while login and external-consent states collapse to `login_required`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ProviderCredentialState {
+    Configured,
+    LoginRequired,
+    Missing,
+    NoAuth,
+    Local,
+    Legacy,
+}
+
+impl From<crate::provider_readiness::CredentialState> for ProviderCredentialState {
+    fn from(value: crate::provider_readiness::CredentialState) -> Self {
+        use crate::provider_readiness::CredentialState;
+
+        match value {
+            CredentialState::Saved | CredentialState::ImportedToken => Self::Configured,
+            CredentialState::MissingLogin | CredentialState::ExternalConsent => Self::LoginRequired,
+            CredentialState::MissingKey => Self::Missing,
+            CredentialState::NoAuth => Self::NoAuth,
+            CredentialState::Local => Self::Local,
+            CredentialState::Legacy => Self::Legacy,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5444,6 +5478,150 @@ fn provider_default_model_for_api(
         .unwrap_or_default()
 }
 
+pub(crate) fn runtime_chat_model_id_is_safe(value: &str) -> bool {
+    let sanitized = crate::cost_status::sanitize_persisted_route_label(value);
+    value == value.trim()
+        && !value.is_empty()
+        && value.len() <= 256
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && !value.contains("..")
+        && !value.contains("://")
+        // Runtime Chat publishes a non-secret selector, never an endpoint or
+        // userinfo-bearing authority. Model families that need revisions can
+        // use their ordinary slash/dash ids; `@` is intentionally excluded at
+        // this trust boundary because `user:password@host:port/path` otherwise
+        // passes the generic route-label sanitizer.
+        && !value.contains('@')
+        && !runtime_chat_model_id_looks_like_host_port(value)
+        && !value.starts_with("redacted-")
+        && sanitized == value
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b'.' | b'_' | b':' | b'/' | b'@' | b'+' | b'-')
+        })
+}
+
+fn runtime_chat_model_id_looks_like_host_port(value: &str) -> bool {
+    let authority = value.split('/').next().unwrap_or(value);
+    let Some((host, port)) = authority.rsplit_once(':') else {
+        return false;
+    };
+    !host.is_empty() && !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+pub(crate) fn runtime_chat_route_id_is_safe(value: &str) -> bool {
+    let sanitized = crate::cost_status::sanitize_persisted_route_label(value);
+    value == value.trim()
+        && !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && !value.contains("..")
+        && !value.starts_with("redacted-")
+        && sanitized == value
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// Build the deliberately narrow provider projection used by the account-owned
+/// Runtime Chat relay. This is the same active-route truth exposed by the
+/// authenticated native `/v1/runtime/info`, `/v1/providers`, and
+/// `/v1/providers/{id}/models` endpoints, collapsed to the one exact route the
+/// current Runtime can use without moving credentials across the relay.
+pub(crate) fn runtime_chat_relay_catalog(
+    config: &Config,
+    challenge: &str,
+) -> Result<Value, String> {
+    use crate::provider_readiness::CredentialState;
+
+    const PROTOCOL: &str = "codewhale.runtime-chat-relay.v1";
+    if !(32..=128).contains(&challenge.len())
+        || !challenge
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err("Codewhale returned an invalid Runtime Chat relay challenge.".to_string());
+    }
+
+    let provider = config.api_provider();
+    let identity = config
+        .active_provider_identity(provider)
+        .map_err(|_| "The active Runtime provider identity is invalid.".to_string())?;
+    let credential_state =
+        match crate::provider_readiness::credential_state_for_provider(config, provider) {
+            CredentialState::Saved | CredentialState::ImportedToken => "configured",
+            CredentialState::Local => "local",
+            CredentialState::NoAuth => "no_auth",
+            CredentialState::MissingKey
+            | CredentialState::MissingLogin
+            | CredentialState::ExternalConsent
+            | CredentialState::Legacy => {
+                return Err("The active Runtime provider is not ready for Chat.".to_string());
+            }
+        };
+
+    let mut models = provider_models_for_api(config, provider, provider);
+    models.retain(|model| runtime_chat_model_id_is_safe(model));
+    models.sort();
+    models.dedup();
+    models.truncate(256);
+    if models.is_empty() {
+        return Err("The active Runtime provider has no safe model catalog.".to_string());
+    }
+    let requested_default = provider_default_model_for_api(config, provider, provider);
+    let default_model = models
+        .iter()
+        .find(|model| model.as_str() == requested_default)
+        .cloned()
+        .unwrap_or_else(|| models[0].clone());
+    let model_provider_id = identity
+        .persisted_id()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| provider.as_str())
+        .to_string();
+    if !runtime_chat_route_id_is_safe(&model_provider_id) {
+        return Err("The active Runtime model-provider identity is invalid.".to_string());
+    }
+
+    Ok(json!({
+        "protocol": PROTOCOL,
+        "challenge": challenge,
+        "runtime": {
+            "service": "codewhale-runtime-api",
+            "apiVersion": RUNTIME_API_VERSION,
+            "codewhaleVersion": env!("CARGO_PKG_VERSION"),
+            "authRequired": true,
+            "capabilities": {
+                "relay_chat_v1": true,
+                "isolated_chat_threads": true,
+                "turn_operation_idempotency": true,
+                "tool_execution": false,
+                "stable_event_ids": true,
+            },
+        },
+        "providers": [{
+            "id": provider.as_str(),
+            "modelProviderId": model_provider_id,
+            "displayName": provider.display_name(),
+            "defaultModel": default_model,
+            "credentialState": credential_state,
+            "models": models.into_iter().map(|model| json!({
+                // Runtime Chat commands currently carry text only. Provider
+                // vision support is not relay capability truth until bounded
+                // image bytes are part of this protocol.
+                "imageInput": "unsupported",
+                "id": model,
+            })).collect::<Vec<_>>(),
+        }],
+    }))
+}
+
 async fn list_providers(
     State(state): State<RuntimeApiState>,
 ) -> Result<Json<ProvidersResponse>, ApiError> {
@@ -5464,14 +5642,13 @@ async fn list_providers(
                 .then(|| active_identity.persisted_id().map(str::to_string))
                 .flatten(),
             display_name: api_provider.display_name().to_string(),
-            default_base_url: api_provider.default_base_url().to_string(),
             default_model,
             has_model_catalog,
-            env_vars: api_provider
-                .env_vars()
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect(),
+            credential_state: crate::provider_readiness::credential_state_for_provider(
+                &config,
+                api_provider,
+            )
+            .into(),
         });
     }
     Ok(Json(ProvidersResponse { current, providers }))
@@ -6445,11 +6622,11 @@ fn map_thread_err(err: anyhow::Error) -> ApiError {
     } else if message.contains("already has an active turn")
         || message.contains("No active turn")
         || message.contains("is not active")
+        || lower.contains("operation_key is already bound")
+        || lower.contains("operation_key binding is incomplete")
+        || lower.contains("operation_key binding does not match")
     {
-        ApiError {
-            status: StatusCode::CONFLICT,
-            message,
-        }
+        ApiError::conflict(message)
     } else {
         ApiError::bad_request(message)
     }

@@ -108,6 +108,7 @@ mod route_budget;
 mod route_receipt;
 mod route_runtime;
 mod runtime_api;
+mod runtime_chat_relay;
 mod runtime_handoff;
 mod runtime_log;
 mod runtime_policy;

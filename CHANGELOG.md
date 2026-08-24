@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added the managed Chat relay: account-owned Chat commands now execute on the
+  native runtime thread engine through a new `runtime_chat_relay` module
+  instead of a second execution path. Each Chat thread is a dedicated,
+  isolated runtime thread with an empty model-visible tool allowlist, a
+  chat-only system prompt, and no workspace, memory, skill, credential, or
+  local-path context; the active interactive TUI thread is never reused. The
+  relay keeps one durable state file per scope behind a session-wide owner
+  lock, binds a saved session permanently to its first remote target, replays
+  exact duplicate commands from retained results instead of starting a second
+  inference turn, terminalizes orphaned reservations on restart, and rejects
+  (never queues into) a busy local Work turn with an immediate retryable
+  result. Stop commands require the exact run and turn identity, and a worker
+  aborts on any account or target mismatch during token refresh.
+
 - Added a verified Omarchy/AUR packaging path: `packaging/aur` now carries a
   `PKGBUILD` template, `.SRCINFO` renderer and tests, release-candidate
   render step, and docs; the live AUR compatibility alias `codewhale-tui ->
