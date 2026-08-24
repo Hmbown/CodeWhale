@@ -1,0 +1,89 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0SVYB2JS2FTC5TCM9WQM8HE",
+  "session_id": "55c680d8-f681-4ec7-a19b-ba4c13d7f913",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-24T12:29:22.90632Z",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "crates/tui/locales/ca.json",
+    "crates/tui/locales/de.json",
+    "crates/tui/locales/en.json",
+    "crates/tui/locales/es-419.json",
+    "crates/tui/locales/fr.json",
+    "crates/tui/locales/hi.json",
+    "crates/tui/locales/id.json",
+    "crates/tui/locales/ja.json",
+    "crates/tui/locales/ko.json",
+    "crates/tui/locales/pt-BR.json",
+    "crates/tui/locales/ru.json",
+    "crates/tui/locales/uk.json",
+    "crates/tui/locales/vi.json",
+    "crates/tui/locales/zh-Hans.json",
+    "crates/tui/locales/zh-Hant.json",
+    "crates/tui/src/commands/groups/config/mod.rs",
+    "crates/tui/src/localization.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "5fb7a2c40fff",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 780,
+    "cache_creation_tokens": 616589,
+    "cache_read_tokens": 125331756,
+    "output_tokens": 225985,
+    "api_call_count": 390
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01AZiqG3Pb1AVpbX6Wd93CQF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:systematic-debugging"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "5fb7a2c40fff",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 27,
+        "end": 28,
+        "entry_ids": [
+          "3d526a1d-38a0-410e-a077-7be088cc2a4b"
+        ],
+        "tool_use_id": "toolu_01AZiqG3Pb1AVpbX6Wd93CQF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01AZiqG3Pb1AVpbX6Wd93CQF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:systematic-debugging",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-24T12:29:22.784735Z",
+    "agent_lines": 12,
+    "agent_removed": 0,
+    "human_added": 629,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 641,
+    "total_lines_changed": 641,
+    "agent_percentage": 1.87207488299532,
+    "metric_version": 2
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0SVYB2JS2FTC5TCM9WQM8HE",
+  "strategy": "manual-commit",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/tui/locales/ca.json",
+    "crates/tui/locales/de.json",
+    "crates/tui/locales/en.json",
+    "crates/tui/locales/es-419.json",
+    "crates/tui/locales/fr.json",
+    "crates/tui/locales/hi.json",
+    "crates/tui/locales/id.json",
+    "crates/tui/locales/ja.json",
+    "crates/tui/locales/ko.json",
+    "crates/tui/locales/pt-BR.json",
+    "crates/tui/locales/ru.json",
+    "crates/tui/locales/uk.json",
+    "crates/tui/locales/vi.json",
+    "crates/tui/locales/zh-Hans.json",
+    "crates/tui/locales/zh-Hant.json",
+    "crates/tui/src/commands/groups/config/mod.rs",
+    "crates/tui/src/localization.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 780,
+    "cache_creation_tokens": 616589,
+    "cache_read_tokens": 125331756,
+    "output_tokens": 225985,
+    "api_call_count": 390
+  }
+}
