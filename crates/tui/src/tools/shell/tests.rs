@@ -1029,15 +1029,12 @@ fn windows_verbatim_and_drive_operands_survive_posix_split() {
     // the splitter round-trips the real path (the `\\?\` cases that the
     // verbatim strip alone could never reach).
     for (raw, expected) in [
-        (
-            r"\\?\C:\Users\foo\inside.txt",
-            r"\\?\C:\Users\foo\inside.txt",
-        ),
+        (r"\\?\C:\Users\foo\inside.txt", r"C:\Users\foo\inside.txt"),
         (r"C:\Users\foo\inside.txt", r"C:\Users\foo\inside.txt"),
         (r"\\server\share\secret", r"\\server\share\secret"),
         (r"\\.\device\path", r"\\.\device\path"),
     ] {
-        let protected = protect_windows_path_backslashes(&format!("cat {raw}"));
+        let protected = normalize_windows_command_paths(&format!("cat {raw}"));
         let argv = shell_words::split(&protected).expect("split must succeed");
         assert_eq!(
             argv,
@@ -1052,15 +1049,15 @@ fn windows_path_protection_leaves_other_words_untouched() {
     // POSIX escapes, drive-relative spellings, and plain relative operands
     // are not Windows absolute paths and must round-trip unchanged.
     assert_eq!(
-        protect_windows_path_backslashes("echo a\\ b && cat inside.txt"),
+        normalize_windows_command_paths("echo a\\ b && cat inside.txt"),
         "echo a\\ b && cat inside.txt"
     );
     assert_eq!(
-        protect_windows_path_backslashes("cat C:secret"),
+        normalize_windows_command_paths("cat C:secret"),
         "cat C:secret"
     );
     assert_eq!(
-        protect_windows_path_backslashes("cat inside.txt"),
+        normalize_windows_command_paths("cat inside.txt"),
         "cat inside.txt"
     );
 }
