@@ -213,13 +213,11 @@ pub(crate) fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         project_context_pack_enabled: config.project_context_pack_enabled(),
         translation_enabled: app.translation_enabled,
         verbosity: app.verbosity.clone(),
-        // Effectively unlimited: the previous cap of 100 hit the ceiling on
-        // long multi-step plans (wide refactors, sub-agent orchestration) and
-        // presented as the agent "giving up mid-task". `u32::MAX` is the type
-        // ceiling; users can still interrupt with Ctrl+C / Esc, and a turn
-        // naturally ends when the model stops emitting tool calls. A real
-        // runaway is rare and human-noticeable; we trust the operator.
-        max_steps: u32::MAX,
+        // Finite safety ceiling (R1 / #5566). A1/A2 soft-land at 80% and
+        // grant one report turn instead of dying mid-task. Embedders that
+        // need the old unbounded contract pass `UNBOUNDED_MODEL_STEPS`.
+        max_steps: DEFAULT_MAX_STEPS,
+        max_wall_time: DEFAULT_MAX_WALL_TIME,
         max_subagents,
         max_admitted_subagents: config
             .max_admitted_subagents_for_provider(provider)

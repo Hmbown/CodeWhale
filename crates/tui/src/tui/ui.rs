@@ -58,7 +58,9 @@ use crate::config::{
     revoke_external_credential_consent_for_at,
 };
 use crate::config_ui::{self, ConfigUiMode, WebConfigSession, WebConfigSessionEvent};
-use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
+use crate::core::engine::{
+    DEFAULT_MAX_STEPS, DEFAULT_MAX_WALL_TIME, EngineConfig, EngineHandle, spawn_engine,
+};
 use crate::core::events::Event as EngineEvent;
 use crate::core::ops::{Op, ProviderRuntimeStatus, USER_SHELL_TOOL_ID_PREFIX, UserInputProvenance};
 use crate::hooks::{HookEvent, HookExecutor, TurnEndPayloadInput, TurnEndTotals};

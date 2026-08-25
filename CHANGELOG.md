@@ -140,6 +140,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Step budgets now end honestly: an ~80% soft landing nudges the model to
   write its final report, and exhaustion grants exactly one bounded
   report-on-exhaustion turn instead of dying silently (A1/A2).
+- Interactive and headless runs now default to a finite 100-step model
+  budget and a 30-minute cumulative per-turn wall-clock. `exec --max-turns`
+  defaults to 100. The per-step stream duration cap is bounded by remaining
+  turn wall-clock so it cannot re-arm across steps (R1, #5566). Pass
+  `--max-turns` for a different ceiling; `UNBOUNDED_MODEL_STEPS` remains
+  the explicit opt-out for embedders.
 - Contributor credit: recognized agent contributors (e.g. `Codewhale Agent`)
   may now carry `Co-authored-by` trailers; unknown bot/tool trailers are
   still rejected by the credit gate.

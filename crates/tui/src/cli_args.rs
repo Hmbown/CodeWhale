@@ -270,7 +270,7 @@ pub(crate) struct ExecArgs {
     /// Comma-separated list of tools to deny (deny wins over allow).
     #[arg(long, value_delimiter = ',')]
     pub(crate) disallowed_tools: Option<Vec<String>>,
-    /// Maximum number of model steps before the run ends. Omitted means unlimited.
+    /// Maximum number of model steps before the run ends. Defaults to 100.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     pub(crate) max_turns: Option<u32>,
     /// Maximum number of tool calls admitted in one model turn. Omitted means unlimited.

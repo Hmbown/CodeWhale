@@ -10,7 +10,7 @@
 use super::*;
 
 pub(crate) fn exec_max_steps(max_turns: Option<u32>) -> u32 {
-    max_turns.unwrap_or(u32::MAX)
+    max_turns.unwrap_or(crate::core::engine::DEFAULT_MAX_STEPS)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -213,6 +213,7 @@ pub(crate) async fn run_exec_agent(
         project_context_pack_enabled: execution_config.project_context_pack_enabled(),
         translation_enabled: false,
         max_steps: max_turns,
+        max_wall_time: crate::core::engine::DEFAULT_MAX_WALL_TIME,
         max_subagents,
         max_admitted_subagents: execution_config
             .max_admitted_subagents_for_provider(effective_provider)

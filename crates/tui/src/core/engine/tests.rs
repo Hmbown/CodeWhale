@@ -385,9 +385,13 @@ async fn emergency_compaction_cancellation_drops_provider_and_never_mutates_cont
 const REPRESENTATIVE_HANDOFF_RELAY: &str = "REPRESENTATIVE_HANDOFF_RELAY";
 
 #[test]
-fn ordinary_engine_default_has_no_hidden_step_budget() {
+fn ordinary_engine_default_has_a_finite_step_and_wall_clock_budget() {
     assert_eq!(UNBOUNDED_MODEL_STEPS, u32::MAX);
-    assert_eq!(EngineConfig::default().max_steps, UNBOUNDED_MODEL_STEPS);
+    assert_eq!(DEFAULT_MAX_STEPS, 100);
+    assert_eq!(DEFAULT_MAX_WALL_TIME, Duration::from_secs(30 * 60));
+    assert_eq!(EngineConfig::default().max_steps, DEFAULT_MAX_STEPS);
+    assert_eq!(EngineConfig::default().max_wall_time, DEFAULT_MAX_WALL_TIME);
+    assert_ne!(EngineConfig::default().max_steps, UNBOUNDED_MODEL_STEPS);
 }
 
 #[test]

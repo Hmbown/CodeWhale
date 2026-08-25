@@ -674,6 +674,15 @@ impl Engine {
                 return (TurnOutcomeStatus::Interrupted, None);
             }
 
+            if turn_wall_clock_exhausted(turn.elapsed(), self.config.max_wall_time) {
+                let error = format!(
+                    "Turn exceeded its wall-clock budget (limit: {}s)",
+                    self.config.max_wall_time.as_secs()
+                );
+                let _ = self.tx_event.send(Event::status(error.clone())).await;
+                return (TurnOutcomeStatus::Failed, Some(error));
+            }
+
             if self.apply_pending_runtime_authority().await {
                 mode = self.current_mode;
                 questions_allowed = crate::core::authority::permission_posture_allows_questions(
@@ -740,6 +749,7 @@ impl Engine {
             // A1): a step-faithful harness ends mid-report far too often.
             if !soft_landing_sent
                 && self.config.max_steps > 0
+                && self.config.max_steps < UNBOUNDED_MODEL_STEPS
                 && turn.steps_used() >= ((self.config.max_steps as f32 * 0.8).floor() as u32).max(1)
             {
                 soft_landing_sent = true;
@@ -1380,6 +1390,7 @@ impl Engine {
                     &stream_request,
                     request_dispatched_at,
                     stream_retry_budget.spent(),
+                    turn.started_at,
                 )
                 .await;
             turn_error = turn_error.or(stream_error);
@@ -4060,6 +4071,7 @@ impl Engine {
         stream_request: &crate::models::MessageRequest,
         mut request_dispatched_at: Instant,
         drop_resumes_spent: u32,
+        turn_started_at: Instant,
     ) -> StreamOutcome {
         // The stream value is itself `Pin<Box<dyn Stream + Send>>`, which
         // is `Unpin`, so we can rebind it on a transparent retry without
@@ -4129,7 +4141,7 @@ impl Engine {
         let mut pending_resume: Option<StreamResume> = None;
         let mut stream_content_bytes: usize = 0;
         let (chunk_timeout_secs, chunk_timeout) = stream_chunk_timeout_budget(&self.config);
-        let max_duration = Duration::from_secs(STREAM_MAX_DURATION_SECS);
+        let per_step_stream_cap = Duration::from_secs(STREAM_MAX_DURATION_SECS);
 
         // Process stream events
         loop {
@@ -4181,8 +4193,28 @@ impl Engine {
                 break;
             }
 
-            // Guard: max wall-clock duration
-            if stream_start.elapsed() > max_duration {
+            // Guard: cumulative turn wall-clock, then the remaining per-step
+            // stream cap. The per-step timer still re-arms on a transparent
+            // retry of this stream, but it cannot re-arm past the turn budget.
+            if turn_wall_clock_exhausted(turn_started_at.elapsed(), self.config.max_wall_time) {
+                let envelope = ErrorEnvelope::classify(
+                    format!(
+                        "Turn exceeded its wall-clock budget (limit: {}s)",
+                        self.config.max_wall_time.as_secs()
+                    ),
+                    true,
+                );
+                crate::logging::warn(&envelope.message);
+                stream_error.get_or_insert(envelope.message.clone());
+                let _ = self.tx_event.send(Event::error(envelope)).await;
+                break;
+            }
+            let max_duration = stream_duration_limit(
+                turn_started_at.elapsed(),
+                self.config.max_wall_time,
+                per_step_stream_cap,
+            );
+            if max_duration.is_zero() || stream_start.elapsed() > max_duration {
                 let envelope = StreamError::DurationLimit {
                     limit_secs: STREAM_MAX_DURATION_SECS,
                 }

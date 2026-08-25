@@ -314,7 +314,10 @@ impl From<LlmError> for ErrorEnvelope {
 pub fn classify_error_message(message: &str) -> ErrorCategory {
     let lower = message.to_lowercase();
 
-    if lower.contains("maximum model steps") || lower.contains("step budget exhausted") {
+    if lower.contains("maximum model steps")
+        || lower.contains("step budget exhausted")
+        || lower.contains("wall-clock budget")
+    {
         return ErrorCategory::Budget;
     }
     if lower.contains("model output truncated")
@@ -562,6 +565,18 @@ mod tests {
         assert_eq!(
             classify("request timed out after 30s"),
             ErrorCategory::Timeout
+        );
+    }
+
+    #[test]
+    fn budget_catches_step_and_wall_clock_exhaustion() {
+        assert_eq!(
+            classify("Maximum model steps reached before completion (limit: 100)"),
+            ErrorCategory::Budget
+        );
+        assert_eq!(
+            classify("Turn exceeded its wall-clock budget (limit: 1800s)"),
+            ErrorCategory::Budget
         );
     }
 

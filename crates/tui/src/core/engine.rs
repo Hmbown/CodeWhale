@@ -300,10 +300,14 @@ pub struct EngineConfig {
     /// and a post-hoc translation layer replaces remaining English output.
     pub translation_enabled: bool,
     pub verbosity: Option<String>,
-    /// Maximum number of assistant steps before stopping. Ordinary interactive
-    /// hosts use [`UNBOUNDED_MODEL_STEPS`]; explicit test/embed callers may
-    /// still install a finite boundary.
+    /// Maximum number of assistant steps before stopping. Ordinary hosts
+    /// default to [`DEFAULT_MAX_STEPS`]. Pass [`UNBOUNDED_MODEL_STEPS`] to
+    /// opt out of the safety ceiling.
     pub max_steps: u32,
+    /// Cumulative per-turn wall-clock bound. `Duration::ZERO` leaves the
+    /// turn unbounded in time (the per-step stream cap still applies).
+    /// Ordinary hosts default to [`DEFAULT_MAX_WALL_TIME`].
+    pub max_wall_time: Duration,
     /// Maximum number of concurrently active subagents.
     pub max_subagents: usize,
     /// Maximum queued + running sub-agents admitted for this engine session.
@@ -480,10 +484,8 @@ impl Default for EngineConfig {
             instructions: Vec::new(),
             project_context_pack_enabled: false,
             translation_enabled: false,
-            // Ordinary interactive turns have no hidden model-step budget.
-            // Callers that need a finite safety boundary set one explicitly;
-            // progress-based stationarity belongs at the tool-loop layer.
-            max_steps: UNBOUNDED_MODEL_STEPS,
+            max_steps: DEFAULT_MAX_STEPS,
+            max_wall_time: DEFAULT_MAX_WALL_TIME,
             max_subagents: DEFAULT_MAX_SUBAGENTS,
             max_admitted_subagents: DEFAULT_MAX_SUBAGENTS,
             launch_concurrency: DEFAULT_MAX_SUBAGENTS,
@@ -7055,3 +7057,8 @@ use crate::tools::js_execution::execute_js_execution_tool;
 
 #[cfg(test)]
 mod tests;
+
+mod runaway_budget;
+pub(crate) use runaway_budget::{
+    DEFAULT_MAX_STEPS, DEFAULT_MAX_WALL_TIME, stream_duration_limit, turn_wall_clock_exhausted,
+};

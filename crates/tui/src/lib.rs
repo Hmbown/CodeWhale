@@ -10239,15 +10239,19 @@ reasoning = "high"
     }
 
     #[test]
-    fn exec_omits_the_headless_turn_cap_by_default() {
+    fn exec_defaults_to_a_finite_max_turns() {
         let cli = parse_cli(&["codewhale", "exec", "--auto", "benchmark this"]);
         let Some(Commands::Exec(args)) = cli.command else {
             panic!("expected exec command");
         };
 
         assert_eq!(args.max_turns, None);
-        assert_eq!(exec_max_steps(args.max_turns), u32::MAX);
+        assert_eq!(
+            exec_max_steps(args.max_turns),
+            crate::core::engine::DEFAULT_MAX_STEPS
+        );
         assert_eq!(exec_max_steps(Some(7)), 7);
+        assert_eq!(crate::core::engine::DEFAULT_MAX_STEPS, 100);
     }
 
     #[test]
