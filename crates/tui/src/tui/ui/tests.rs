@@ -4531,6 +4531,40 @@ fn active_raw_paste_keeps_space_as_payload_over_reasoning_action() {
 }
 
 #[test]
+fn typed_command_burst_keeps_r_and_y_out_of_transcript_actions() {
+    let mut app = create_test_app();
+    app.use_paste_burst_detection = true;
+    app.bracketed_paste_seen = false;
+    app.history = vec![HistoryCell::Assistant {
+        content: "previous command output".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+
+    let now = Instant::now();
+    let command = "/plugin trust demo";
+    for (offset, ch) in command.chars().enumerate() {
+        let at = now + Duration::from_millis(offset as u64);
+        let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
+        let _ = flush_paste_burst_before_composer(&mut app, at);
+        assert!(
+            handle_plain_key_before_composer(&mut app, &key, at),
+            "paste-burst input should retain {ch:?}"
+        );
+    }
+    assert!(flush_paste_burst_before_composer(
+        &mut app,
+        now + Duration::from_millis(500),
+    ));
+
+    assert_eq!(app.input, command);
+    assert!(
+        app.view_stack.is_empty(),
+        "typed command must not open a pager"
+    );
+}
+
+#[test]
 fn active_streaming_reasoning_keeps_its_visible_owner_across_a_delta() {
     let mut app = create_test_app();
     app.push_history_cell(running_exec_cell());
