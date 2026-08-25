@@ -9361,6 +9361,22 @@ reviewer = "reviewer"
         assert_eq!(run_payload["status"], "completed", "{run_payload}");
         assert_eq!(run_payload["result"]["refuted"], json!(true));
         assert_eq!(calls.load(Ordering::SeqCst), 2, "one repair re-ask");
+        let usage = run_payload["usage"]
+            .as_object()
+            .expect("repair usage charged against the run");
+        assert_eq!(
+            usage.get("tasks_reported").and_then(Value::as_u64),
+            Some(2),
+            "original + repair must both land in the totals: {run_payload}"
+        );
+        let total = usage
+            .get("total_tokens")
+            .and_then(Value::as_u64)
+            .expect("total tokens");
+        assert!(
+            total >= 4,
+            "both attempts contribute provider tokens: {run_payload}"
+        );
         assert_eq!(
             run.metadata
                 .as_ref()
@@ -9401,6 +9417,107 @@ reviewer = "reviewer"
             record.schema_errors.is_empty(),
             "a successful repair leaves no terminal schema error"
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn oversized_schema_raw_artifact_survives_journal_reload() {
+        let _retry_guard = workflow_test_retry_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+        let oversized = format!(
+            "Sure — here is a long preamble. {}",
+            "x".repeat(SCHEMA_RAW_PREVIEW_CHARS)
+        );
+        let (client, calls) = fake_chat_client(&oversized).await;
+        let runtime = SubAgentRuntime::new(
+            client,
+            "deepseek-v4-flash".to_string(),
+            ctx.clone(),
+            true,
+            None,
+            manager.clone(),
+        );
+        let tool = WorkflowTool::new(manager, runtime);
+
+        let run = tool
+            .execute(
+                json!({
+                    "action": "run",
+                    "script": r#"
+                    return await task({
+                        description: "Return the schema fixture.",
+                        responseSchema: {
+                            type: "object",
+                            properties: { refuted: { type: "boolean" } },
+                            required: ["refuted"],
+                        },
+                    });
+                    "#
+                }),
+                &ctx,
+            )
+            .await
+            .expect("workflow run returns a record");
+        let run_payload: Value = serde_json::from_str(&run.content).expect("run json");
+
+        assert_eq!(run_payload["status"], "failed", "{run_payload}");
+        assert_ne!(run_payload["status"], "degraded", "{run_payload}");
+        assert_ne!(run_payload["status"], "completed", "{run_payload}");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "default repair re-asks once"
+        );
+
+        let state = WorkflowWorkspaceState::open(tmp.path());
+        let record = state
+            .runs
+            .lock()
+            .expect("runs")
+            .get(run_payload["run_id"].as_str().expect("run id"))
+            .cloned()
+            .expect("record survives reload");
+        assert_eq!(record.status, WorkflowRunStatus::Failed);
+        assert_eq!(record.schema_repairs.len(), 1);
+        assert_eq!(record.schema_errors.len(), 1);
+        let repair = &record.schema_repairs[0];
+        assert_eq!(repair.kind, "json_parse");
+        assert_eq!(repair.attempt, 1);
+        assert!(
+            repair.raw_preview.contains("preview truncated"),
+            "{}",
+            repair.raw_preview
+        );
+        let repair_artifact = repair.artifact.as_deref().expect("repair artifact");
+        assert!(
+            std::path::Path::new(repair_artifact).exists(),
+            "{repair_artifact}"
+        );
+        let error = &record.schema_errors[0];
+        assert_eq!(error.kind, "json_parse");
+        assert_eq!(error.attempt, 2);
+        assert!(
+            error.raw_preview.contains("preview truncated"),
+            "{}",
+            error.raw_preview
+        );
+        let error_artifact = error.artifact.as_deref().expect("terminal artifact");
+        assert!(
+            std::path::Path::new(error_artifact).exists(),
+            "{error_artifact}"
+        );
+        let report = tmp
+            .path()
+            .join(".codewhale")
+            .join("reports")
+            .join(format!("{}.md", record.run_id));
+        let body = std::fs::read_to_string(&report).expect("report written");
+        assert!(body.contains("Schema errors"), "{body}");
+        assert!(body.contains("Schema repairs"), "{body}");
+        assert!(body.contains(repair_artifact), "{body}");
+        assert!(body.contains(error_artifact), "{body}");
     }
 
     #[test]
