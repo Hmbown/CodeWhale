@@ -1,0 +1,152 @@
+CodeWhale 0.9.12 — COMPLETE THE RELEASE LANE. Work every remaining open issue on GitHub until done.
+
+Repo /Volumes/VIXinSSD/CW/codewhale (GitHub Hmbown/CodeWhale), branch codex/v0912-integration-20260823, pushed head d070d510c. Read AGENTS.md first and obey it over this prompt. Hard gate: NO release actions — no version bump, tag, publish, deploy, or merge to main. Hunter gates all of that. Pushing the integration branch to run CI is always fine. Keep the branch green; verify everything yourself, never trust prior claims (a false "suite green" hid a stack overflow this cycle).
+
+Mission
+
+Close out ALL 128 open issues (gh issue list --state open) and process all 13 open PRs. Tracker: #5573. Priority order: P0 safety/money (#5567 fleet cost ceiling, #5568 sandbox read deny-list, #5569 hard-link write escape, #5543→PR#5584 child approval receipts, #5552 doctor --fix) → bugs (#5597, #5595, #5583, #5582, #5578, #5577, #5572, #5562, #5529, #5528, #5522, #5290, #5601, #5605, #5564) → UX (#5589, #5556, #5555, #5551, #5550, #5549, #5479, #5271, #5268) → neutrality/structure epics (#5588, #5586, #5580, #5587, #5575, #5316, #5443, #5103, #5092-5094, #5249, #5362, #5226) → plugin UX #5579, #5548, #5519, #5482. Issues already DONE on the branch that just need merge-and-close when 0.9.12 ships: #5585, #5589 (slice), #5553 (slice), #5557, #5564-check, #5600 (closed), #5577 (verified fixed), #5595 (fixed pre-takeover — verify then close with evidence), #5601 (fixed). Each issue you finish gets a comment with commands+output as evidence; close on branch-merge or when Hunter says.
+
+PRs: exact dispositions
+
+- Take now (merge --no-ff, preserve authorship, verify full suite, changelog receipts): #5592 (lifecycle outbox, +4.4k, Hunter-approved, expects conflicts in engine dispatch vs #5606 — take #5606's code placed into the new module layout) and #5593 (/relaunch, Hunter-approved).
+- #5606 (Hunter's relay, 19.4k): take once he adds a Closes #N line to the PR body (link gate). Diagnosis already posted on the PR.
+- #5584 (child approval receipts, P0, CI-green): review posted; ask author to mark ready, then take.
+- #5574, #5540, #5539, #5537: review & take if green; #5387 (tower-http 0.6→0.7) needs real migration review.
+- #5594: DIRTY — wait for author rebase; do not force.
+- Dependabot PRs land only with green full CI.
+
+In flight RIGHT NOW (uncommitted in working tree — finish first)
+
+The agy/Antigravity sign-in fix. Root cause verified against the real state.vscdb: the token is a base64 protobuf envelope under antigravityUnifiedStateSync.oauthToken (field1 ya29. access, field2 "Bearer", field3 1// refresh, field4 expiry epoch) plus a LIVE credential in antigravityAuthStatus JSON apiKey. Implementation exists: crates/tui/src/agy_credentials/envelope.rs (new; parses both shapes, auth-status wins, expired envelope → absent, refresh token parsed-past-and-dropped per read-only contract) + reworked agy_credentials.rs (queries both rows, resolve_external_credential precedence). Status: lib check + clippy clean in isolation; remaining: shape-only tests (never log token material — mirror existing fixture_db tests; build a fixture envelope), full suite, changelog receipt, commit fix(credentials): parse the agy state.vscdb token envelope for sign-in, push. Verify in a worktree at HEAD — the main checkout has OTHER AGENTS' uncommitted work you must not touch: computer-use crate (phase 2 in progress, currently mid-edit/broken), plugins/, cli/, web/, docs-refresh worktree (merging later into this branch when they finish — they'll also index the already-pushed docs/AUTOMATION.md; expect a trivial README conflict, their rewrite wins but keep the automations link).
+
+Rules (violations have broken this repo before)
+
+Commit only files you changed; file-scoped rustfmt --check; clippy --tests; full cargo test -p codewhale-tui --lib --locked (~11.2k tests, ~2min) green between commits. Trailer: Co-Authored-By: Claude Fable 5 <noreply@anthropic.com> (or another allowed identity from scripts/check-coauthor-trailers.py). Any feat: referencing #N needs a #N CHANGELOG receipt (gate: scripts/release/check-feature-release-notes.sh); after ANY root CHANGELOG edit run scripts/sync-changelog.sh or Version-drift fails. Invariants (AGENTS.md): one turn loop (Engine::run_turn, guard test in crates/core/tests/single_turn_loop.rs); BASE_PROMPT sole in crates/tui/src/prompts/text.rs; KV-cache prefix contract docs/CACHE.md; modules repeatedly misidentified as dead are listed in AGENTS.md — verify consumers before deleting. Windows CI legs have a 1h30m cap — a "cancelled" windows leg = timeout, just re-push. Known flake #5605 (passes isolated). Small coherent fixes commit directly; one PR per logical workstream.
+
+Done this cycle (do NOT redo)
+
+9 mechanical #5586 extractions (lib.rs 18.7k→13.1k, config.rs→10.2k, client.rs→10.6k, runtime_threads.rs→8.3k: client/{wire,redaction,wire_dialect}.rs, config/{merge,credentials}.rs, cli_args.rs, doctor_cli.rs, exec_agent.rs, runtime_threads/{agent_mail,store}.rs), #5585 fix (parse_config_toml_str 16MiB thread in codewhale-config + test restructure), PRs #5602/#5603/#5604 taken, docs/AUTOMATION.md + README/GUIDE links (d070d510c), provider-registry lint follows module trees (079ebc512), wire_config_prefers_anthropic dedup, #5600/#5605 filed, #5573 reconciled. Also landed earlier: /import-claude, MiniMax/Xiaomi 404 probe (#5601), managed-Chat relay runtime, ConfigFile 16MiB parse thread, #5595 Windows fixes (do NOT carve \\?\ from the classifier's ?-blocklist — verbatim spellings fail closed by design), #5577 billed-token fix, origin/main merged.
+
+Standing product goal: Codewhale must be fast, slim, easy to run — weigh every change for footprint and speed. use ultracode as appropriate
+
+---
+
+and just fyi we also have a model working on a computer use plugin that we're adding to this version + we have another model working on making sure the codewhale app is up and working properly on the web ok? build error. Edition 2024 requires explicit unsafe { } blocks with // SAFETY: comments inside unsafe fn.
+
+  Context / scope decision (already made, do not re-litigate):
+  Computer use has three future environments: workspace (agent's own machine, the Devin-shaped product), host (the user's real desktop), device (Android/HarmonyOS). The user decided to build host-only first, and the workspace lane comes later built on the same primitives. The north-star doc is already written at docs/design/COMPUTER_USE_WORKSPACE.md — don't rewrite it, just keep new work compatible. The phase-2 design is docs/design/COMPUTER_USE_BACKGROUND.md (element-level AX control, background input via AXPress/CGEventPostToPid, per-app consent). The phase-1 crate (crates/computer-use) is pixel-based foreground control and is complete; your job is phase 2 on top of it.
+
+  Architecture already in place (all compiles or nearly so):
+
+  1. src/consent.rs (NEW, done): per-app consent. Policy { allow, deny, host_terminal, host_terminal_pid }, Verdict { Allowed, NeedsApproval, Denied, Excluded }, hard exclusions (SecurityAgent, loginwindow, System Settings, Codewhale itself, host terminal). needs_approval_error() returns a structured needs_app_approval: message naming the app and the exact [apps] allow = [...] line to add. Has tests.
+
+  2. src/elements.rs (NEW, done): ElementDriver trait (apps, app_state, act, raise, caps), types AppInfo, WindowInfo, AppState, ElementNode, ElementAction enum (Press/Click/SetValue/Type/Key/Menu/Scroll/SelectText/Drag), ActionReceipt { text, verified, moved }, StateMode { Full, Image, Ax }, render_nodes(). Has tests.
+
+  3. src/driver.rs (MODIFIED, done): added fn element(&mut self) -> Option<&mut dyn ElementDriver> with default None to the Driver trait.
+
+  4. src/config.rs (MODIFIED, done): added [apps] allow/deny TOML section parsing into Config.apps: Policy, plus config_hint/path_hint() for approval messages. Has tests.
+
+  5. src/session.rs (MODIFIED, done): new tools computer_apps, computer_app_state, computer_element, computer_raise in the catalog; app argument added to computer_click/scroll/type/key/drag routed via routed_app_action(); consent gate gate_app(); app resolution resolve_app(); AppSnapshot cache keyed by app label. All wired into call() dispatch.
+
+  6. src/drivers/mock.rs (MODIFIED, done): MockDriver implements ElementDriver when element_enabled.
+
+  7. src/drivers/macos.rs (MODIFIED, done): MacDriver gained element_snapshot: Option<MacElementSnapshot> field, element() returns Some(self), pub(crate) helpers backing_scale(), accessibility_granted(), need_accessibility(), and keycode()/modifier_flags() made pub(crate). Added cf_boolean_true() helper.
+
+  8. src/drivers/mod.rs (MODIFIED): registers #[cfg(target_os = "macos")] pub mod macos_ax;.
+
+  9. src/lib.rs (MODIFIED): registers consent + elements modules; calls macos_ax::detect_host_terminal() at startup to populate cfg.apps.host_terminal_pid.
+
+  THE BLOCKER / what to finish first:
+
+  src/drivers/macos_ax.rs — I DELETED it after a bad first draft. You must rewrite it from scratch. It is the macOS AX element backend. Requirements:
+
+  - FFI bindings to CoreFoundation (CFString/CFArray/CFDicationServices (AXUIElement,CGWindowListCopyWindowInfo, CGWindowListCreateImage, CGEventPostToPid), CoreGraphics (CGEventCreate, CGImage*, CGRectMakeWithDictionaryRepresentation), and libproc (proc_pidpath).
+  - Implement ElementDriver for MacDriver (methods: appsaps).
+  - apps(): use CGWindowListCopyWindowInfo to build the running-app list; group windows by owner pid; only layer==0 windows; get bundle ids by reading the .app's Info.plist CFBundleIdentifier (parse from the plist XML, handle $(PRODUCT_BUNDLE_IDENTIFIER) as None).
+  - app_state(): match the AX window by title (fallback: position), walk the AX tree with AXUIElementCopyAttributeValue(kAXChildrenAttribute) capped at depth ~24 / ~1500 nodes, capture the window image with CGWindowListCreateImage(kCGWindowListOptionIncludingWindow, window_id), convert BGRA→RGBA, downscale to opts.max_edge, convert node
+  frames from window-local points to image pixels using uded by checking if any layer-0 window in front of it
+  fully covers it. Store a MacElementSnapshot (retained geometry) so index-based actions work later.
+  - act(): take the snapshot, dispatch on ElementAction. Press → AXPress, fallback background click at node center via CGEventPostToPid (window-local points, NOT global). SetValue → AXUIElementSetAttributeValue(kAXValueAttribute) + read-back for verified, fallback
+  focus+select-all+type for Electron. Type/Key → CGEvent Menu → AXShowMenu. Scroll →CGEventCreateScrollWheelEvent2 posted to pid, read scroll bar AXValue before/after for moved. SelectText → AXValueCreate with CFRange → kAXSelectedTextRangeAttribute. Drag → mouse down/dragged/up posted to pid.
+  - raise() → osascript set frontmost of (first process whose unix id is PID) to true.
+  - detect_host_terminal() -> Option<(u32, String)>: walk the parent-pid chain with /bin/ps -o ppid=,comm= -p PID skipping shells/codewhale itself.
+  - Tests: parse_bundle_identifier (plist XML), bgra_to_ith stride), bundle_id_from_executable_path.
+
+  Key correctness notes:
+  - CGEventPostToPid coordinates are window-local points (origin at the window's top-left), not global screen points. Do not add the window origin.
+  - All AXUIElement refs retained in the snapshot must be CFReleased in Drop for MacElementSnapshot.
+  - encode_png takes &RgbImage not &RgbaImage — convert before encoding, or add an RGBA encode path.
+  - warnings = "deny" means no unused imports, no unused variables.
+
+  After macos_ax.rs compiles and tests pass:
+
+  1. Add ElementDriver to the Windows driver (src/drivers/windows.rs) — reads only for now: apps() via EnumWindows, app_state() with window_image only (no AX tree on Windows yet, return empty nodes with a note), act() returns DriverError::Unsupported for everything. caps() = { tree: false, window_image: true, background_actions: false, note: "Windows: window capture only; use foreground pixel tools for actions" }.
+
+  2. Add ElementDriver to Android (src/drivers/android.rs) and HarmonyOS (src/drivers/harmony.rs): map Press → tap at node center via existing input tap, SetValue → input text, apps() → running packages, app_state() → existing ui_tree() nodes converted to ElementNode with a synthetic full-screen image. caps() = { tree: true, window_image: false, background_actions: false }.
+
+  3. Update the bundle files in crates/computer-use/bundle/:
+  - skills/computer-use/SKILL.md: add the background/element workflow (computer_apps → computer_app_state → computer_element by index, app arg on click/type/key/scroll/drag, consent gate, needs_app_approval handling).
+  - plugin.json: bump version to 0.2.0.
+  - README.md: note the new tools.
+
+  4. Update docs/COMPUTER_USE.md: add a "Background / element control" section covering the new tools, the consent model, and the macOS permission requirements.
+
+  5. Update src/setup.rs: write an initial [apps] section to computer-use.toml during setup (with a comment explaining the allow/deny lists), and detect the host terminal to add it to the exclusion list in the printed next-steps.
+
+  Verification gates (must all pass before you're done):
+  - cargo test -p codewhale-computer-use — all tests gre
+  - cargo fmt --all -- --check
+  - cargo clippy -p codewhale-computer-use --all-targets -- -D warnings
+  - cargo build --release -p codewhale-computer-use
+  - The TUI bundle validation test: cargo test -p codewhale-tui shipped_computer_use_bundle — the bundle files you update must match what the TUI expects (it validates plugin.json structure, skill count, MCP server command, etc.)
+  - OHOS dependency guard: bash scripts/ohos/*.sh or whatever the OHOS guard script is (check scripts/ohos/)
+
+  What NOT to do:
+  - Do not commit to main. Work on the existing branch o
+  - Do not touch crates/tui/src/ except if the bundle validation test fails and requires a TUI-side fix.
+  - Do not implement the workspace/container lane — that's phase 3, documented in COMPUTER_USE_WORKSPACE.md.
+  - Do not add nightly features.
+  - Do not weaken any existing safety or data-integrity behavior to make a gate pass.
+
+  Current test count: 58 passing in the crate (up from 46 at phase-1 baseline). Your job is to get that number higher with the new element/consent tests, then finish the platform drivers and bundle updates.
+
+  /remote-control is active · Continue here, on your phone, or at https://claude.ai/code/session_013bKvSt1mvoaFDmjNss3hvK
+
+I'll start by orienting myself in the repo and reading the existing phase-2 architecture before writing macos_ax.rs.
+
+  Read 3 files, ran 4 shell commands
+
+Now the macOS driver — the crucial one, since macos_ax.rs must build on its helpers.
+
+  Read 2 files, ran 1 shell command
+
+❯ note that another agent is working on 0.9.12 work unrelated to this as you're working atm
+
+Noted — I'll keep everything scoped to crates/computer-use + the computer-use docs, and avoid workspace-wide writes (including cargo fmt --all, which would touch the other agent's in-flight files).
+
+  Searched for 3 patterns, ran 8 shell commands
+
+Now I'll write the macOS AX backend.
+
+  Ran 10 shell commands
+
+macOS lane is green (65 tests, clippy + fmt clean). Now the other platform drivers.
+
+  Ran 7 shell commands
+
+Now the Windows element driver (reads only).
+
+  Searched for 1 pattern, read 1 file, ran 2 shell commands
+
+Windows target compiles. Now the shared device element layer for Android/HarmonyOS.
+
+  Searched for 1 pattern, ran 2 shell commands
+
+Now the shared device element module:
+
+  Read 1 file
+
+Now wire the two device drivers to it:
+
+⏺ Building Phase 2 macOS AX backend; lanes compiling
+  ⎿  $ cat ../../scripts/release/check-ohos-deps.sh 2>/dev/null | head -60 just want to give you the full scoop
