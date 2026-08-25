@@ -1778,6 +1778,139 @@ mod provider_key_validation_tests {
         assert!(!saved.contains("step-plan-key"), "no secret yet: {saved}");
     }
 
+    /// #5601: first-run MiniMax must probe the official OpenAI `/v1` host,
+    /// never `/v1/v1`. Live 2026-08-25: GET /v1/models 401s without a key;
+    /// GET /v1/v1/models 404s.
+    #[tokio::test]
+    async fn first_run_minimax_key_is_probed_against_the_official_openai_url() {
+        let config_env = ConfigPathEnvGuard::new();
+        let mut app = create_test_app();
+        let mut engine = mock_engine_handle();
+        let mut config = Config::default();
+        let verifier = MockProviderKeyVerifier::new(Ok(crate::client::KeyProbeOutcome::Verified));
+        let identity = picker_provider_identity(&config, ApiProvider::Minimax, None)
+            .expect("MiniMax identity");
+
+        apply_provider_picker_api_key_with_verifier(
+            &mut app,
+            &mut engine.handle,
+            &mut config,
+            identity,
+            "sk-minimax".to_string(),
+            None,
+            &verifier,
+        )
+        .await;
+
+        assert_eq!(
+            verifier.calls(),
+            vec![(
+                ApiProvider::Minimax,
+                "sk-minimax".to_string(),
+                crate::config::DEFAULT_MINIMAX_BASE_URL.to_string()
+            )]
+        );
+        assert_eq!(
+            crate::client::api_url(crate::config::DEFAULT_MINIMAX_BASE_URL, "models"),
+            "https://api.minimax.io/v1/models"
+        );
+        assert_eq!(config.provider.as_deref(), None);
+        assert_eq!(
+            config
+                .providers
+                .as_ref()
+                .and_then(|providers| providers.minimax.api_key.as_deref()),
+            None
+        );
+        let saved = std::fs::read_to_string(config_env.config_path()).unwrap_or_default();
+        assert!(!saved.contains("sk-minimax"));
+    }
+
+    /// #5601: a pasted Xiaomi `sk-` key must be probed against pay-as-you-go,
+    /// not Token Plan SGP. First-run has no saved key, so the probe clone has
+    /// to carry the pasted secret before URL resolution.
+    #[tokio::test]
+    async fn first_run_xiaomi_sk_key_is_probed_against_payg_not_token_plan() {
+        let config_env = ConfigPathEnvGuard::new();
+        let mut app = create_test_app();
+        let mut engine = mock_engine_handle();
+        let mut config = Config::default();
+        let verifier = MockProviderKeyVerifier::new(Ok(crate::client::KeyProbeOutcome::Verified));
+        let identity = picker_provider_identity(&config, ApiProvider::XiaomiMimo, None)
+            .expect("Xiaomi identity");
+
+        apply_provider_picker_api_key_with_verifier(
+            &mut app,
+            &mut engine.handle,
+            &mut config,
+            identity,
+            "sk-xiaomi".to_string(),
+            None,
+            &verifier,
+        )
+        .await;
+
+        assert_eq!(
+            verifier.calls(),
+            vec![(
+                ApiProvider::XiaomiMimo,
+                "sk-xiaomi".to_string(),
+                crate::config::XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL.to_string()
+            )]
+        );
+        assert_eq!(
+            crate::client::api_url(crate::config::XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL, "models"),
+            "https://api.xiaomimimo.com/v1/models"
+        );
+        assert_eq!(config.provider.as_deref(), None);
+        assert_eq!(
+            config
+                .providers
+                .as_ref()
+                .and_then(|providers| providers.xiaomi_mimo.api_key.as_deref()),
+            None
+        );
+        let saved = std::fs::read_to_string(config_env.config_path()).unwrap_or_default();
+        assert!(!saved.contains("sk-xiaomi"));
+    }
+
+    /// Token Plan `tp-` keys stay on the SGP Token Plan host.
+    #[tokio::test]
+    async fn first_run_xiaomi_tp_key_is_probed_against_token_plan() {
+        let config_env = ConfigPathEnvGuard::new();
+        let mut app = create_test_app();
+        let mut engine = mock_engine_handle();
+        let mut config = Config::default();
+        let verifier = MockProviderKeyVerifier::new(Ok(crate::client::KeyProbeOutcome::Verified));
+        let identity = picker_provider_identity(&config, ApiProvider::XiaomiMimo, None)
+            .expect("Xiaomi identity");
+
+        apply_provider_picker_api_key_with_verifier(
+            &mut app,
+            &mut engine.handle,
+            &mut config,
+            identity,
+            "tp-xiaomi".to_string(),
+            None,
+            &verifier,
+        )
+        .await;
+
+        assert_eq!(
+            verifier.calls(),
+            vec![(
+                ApiProvider::XiaomiMimo,
+                "tp-xiaomi".to_string(),
+                crate::config::DEFAULT_XIAOMI_MIMO_BASE_URL.to_string()
+            )]
+        );
+        assert_eq!(
+            crate::client::api_url(crate::config::DEFAULT_XIAOMI_MIMO_BASE_URL, "models"),
+            "https://token-plan-sgp.xiaomimimo.com/v1/models"
+        );
+        let _ = config_env;
+    }
+
     /// The confirm stage writes the endpoint into `[providers.stepfun]` and
     /// leaves every other provider table alone.
     #[tokio::test]

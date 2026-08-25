@@ -5146,6 +5146,26 @@ model = "mimo-v2.5-pro"
 }
 
 #[test]
+fn xiaomi_mimo_sk_key_without_base_url_uses_pay_as_you_go() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    let config: ConfigToml = toml::from_str(
+        r#"
+provider = "xiaomi-mimo"
+
+[providers.xiaomi_mimo]
+api_key = "sk-payg-key"
+"#,
+    )
+    .expect("xiaomi payg first-run config");
+
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+    assert_eq!(resolved.provider, ProviderKind::XiaomiMimo);
+    assert_eq!(resolved.base_url, XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL);
+}
+
+#[test]
 fn xiaomi_token_plan_key_rewrites_saved_pay_as_you_go_base_url() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();

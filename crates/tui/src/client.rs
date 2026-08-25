@@ -9492,6 +9492,82 @@ mod tests {
     }
 
     #[test]
+    fn minimax_and_xiaomi_official_bases_do_not_grow_a_second_v1() {
+        // Live 2026-08-25: GET /v1/models on MiniMax and Xiaomi OpenAI hosts
+        // 401s without a key (the route exists). GET /v1/v1/models 404s.
+        // #5601 first-run 404s are this double-append, not a missing /models
+        // surface. Pin every shipped official base so a later builder change
+        // cannot recreate it.
+        use crate::config::{
+            DEFAULT_MINIMAX_ANTHROPIC_BASE_URL, DEFAULT_MINIMAX_BASE_URL,
+            DEFAULT_XIAOMI_MIMO_BASE_URL, XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL,
+            XIAOMI_MIMO_TOKEN_PLAN_AMS_BASE_URL, XIAOMI_MIMO_TOKEN_PLAN_CN_BASE_URL,
+        };
+
+        for (base, models, chat) in [
+            (
+                DEFAULT_MINIMAX_BASE_URL,
+                "https://api.minimax.io/v1/models",
+                "https://api.minimax.io/v1/chat/completions",
+            ),
+            (
+                "https://api.minimaxi.com/v1",
+                "https://api.minimaxi.com/v1/models",
+                "https://api.minimaxi.com/v1/chat/completions",
+            ),
+            (
+                DEFAULT_XIAOMI_MIMO_BASE_URL,
+                "https://token-plan-sgp.xiaomimimo.com/v1/models",
+                "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
+            ),
+            (
+                XIAOMI_MIMO_TOKEN_PLAN_CN_BASE_URL,
+                "https://token-plan-cn.xiaomimimo.com/v1/models",
+                "https://token-plan-cn.xiaomimimo.com/v1/chat/completions",
+            ),
+            (
+                XIAOMI_MIMO_TOKEN_PLAN_AMS_BASE_URL,
+                "https://token-plan-ams.xiaomimimo.com/v1/models",
+                "https://token-plan-ams.xiaomimimo.com/v1/chat/completions",
+            ),
+            (
+                XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL,
+                "https://api.xiaomimimo.com/v1/models",
+                "https://api.xiaomimimo.com/v1/chat/completions",
+            ),
+        ] {
+            assert_eq!(versioned_base_url(base), base.trim_end_matches('/'));
+            assert_eq!(api_url(base, "models"), models);
+            assert_eq!(api_url(base, "chat/completions"), chat);
+            assert_eq!(api_url(&format!("{base}/"), "models"), models);
+            assert!(
+                !api_url(base, "models").contains("/v1/v1"),
+                "double /v1 on {base}"
+            );
+        }
+
+        // Host-only inputs must gain exactly one /v1.
+        assert_eq!(
+            api_url("https://api.minimax.io", "models"),
+            "https://api.minimax.io/v1/models"
+        );
+        assert_eq!(
+            api_url("https://api.xiaomimimo.com", "models"),
+            "https://api.xiaomimimo.com/v1/models"
+        );
+        assert_eq!(
+            api_url("https://token-plan-sgp.xiaomimimo.com", "models"),
+            "https://token-plan-sgp.xiaomimimo.com/v1/models"
+        );
+
+        // MiniMax Anthropic keeps /anthropic and appends /v1 once.
+        assert_eq!(
+            api_url(DEFAULT_MINIMAX_ANTHROPIC_BASE_URL, "models"),
+            "https://api.minimax.io/anthropic/v1/models"
+        );
+    }
+
+    #[test]
     fn opencode_go_refreshes_its_own_catalog_so_new_models_appear() {
         // #5607: OpenCode Go is a gateway whose roster is whatever the key
         // unlocks today, so a shipped catalog goes stale (GLM 5.3 and

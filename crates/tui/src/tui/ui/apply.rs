@@ -2726,6 +2726,10 @@ pub(crate) async fn apply_provider_picker_api_key_with_verifier(
     if let Some(base_url) = base_url_override.clone() {
         scoped_config.set_provider_base_url_override(provider, Some(base_url));
     }
+    // Xiaomi picks Token Plan vs pay-as-you-go from the key prefix. The live
+    // config still has no key at this stage, so the probe clone has to carry
+    // the pasted secret or `sk-` keys are sent to the Token Plan host (#5601).
+    scoped_config.set_provider_api_key_override(provider, Some(api_key.clone()));
     // #3875: verify the key against the provider before opening the rest of
     // the guided flow. Nothing is persisted until the confirm stage.
     // Resolve the effective route, including compatibility routes whose

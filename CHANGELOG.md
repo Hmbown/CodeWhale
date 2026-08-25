@@ -176,12 +176,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default — while `crates/agent` reported the opposite for the same ids. The
   Codex route budgeted every model at the 128,000-token offline floor, so
   `gpt-5.6` compacted at 128,000 against a 1,050,000 window.
-- Fixed first-run provider setup rejecting valid MiniMax and Xiaomi MiMo API
-  keys (#5601): those first-party routes answer 404 on the `GET /models`
-  probe because they only implement chat completions, and the wizard treated
-  any probe failure as a bad key. A 404/405 probe now counts as
-  "unverifiable" — setup continues to the model pick without recording a
-  false readiness verdict — while real auth failures (401/403) still block.
+- Fixed first-run MiniMax and Xiaomi MiMo setup 404ing after the API key is
+  entered (#5601). Xiaomi first-run probed Token Plan SGP even for `sk-` keys
+  because the pasted secret was not applied before URL resolution; `sk-` now
+  probes `api.xiaomimimo.com/v1` and `tp-` stays on Token Plan SGP. Official
+  MiniMax (`api.minimax.io/v1`, China `api.minimaxi.com/v1`) and Xiaomi
+  (`token-plan-*.xiaomimimo.com/v1`, `api.xiaomimimo.com/v1`) bases are pinned
+  in the URL builder so they cannot grow a second `/v1` — live 2026-08-25,
+  GET `/v1/models` exists (401 without a key) while `/v1/v1/models` 404s.
+  A 404/405 `/models` probe still counts as unverifiable rather than a bad
+  key, so routes that genuinely lack `/models` do not dead-end setup.
 - Fixed a debug-build stack overflow parsing config files whose
   `[profiles.*]` tables nest the full config schema: every `ConfigFile` TOML
   parse now runs on a dedicated thread with an explicit 16 MiB stack, so
@@ -222,9 +226,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of widening the whole tool (R2).
 - Fixed provider-transport robustness: non-streaming HTTP requests are bounded
   by a read timeout (R4), and Chat-Completions mid-stream error frames surface
-  instead of hanging (R3). MCP OAuth expiry now reacts to 401/403 with a named
-  recovery path and login hint instead of looking like a broken server (T4,
-  #5572).
+  instead of hanging (R3). MCP OAuth expiry now reacts to 401/403 with a forced
+  refresh+retry once, then a `codewhale mcp login` hint instead of looking like
+  a broken server (T4, #5572); refresh-error details are not echoed.
 - Fixed Fleet lifecycle gaps: detached workers are reaped when their manager
   dies (R7) and the per-task wall-clock timeout is enforced (R5); the local
   Fleet host compiles on non-Unix targets; detached schema repair stays within
