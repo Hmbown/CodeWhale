@@ -223,6 +223,21 @@ mod tests {
     }
 
     #[test]
+    fn setup_provider_lm_studio_opens_template() {
+        let mut app = test_app();
+
+        let result = SetupCmd::execute(&mut app, Some("provider lm-studio"));
+
+        assert_eq!(
+            result.action,
+            Some(AppAction::OpenTemplateSetup {
+                template_id: "lm-studio".to_string(),
+            })
+        );
+        assert!(result.message.is_none());
+    }
+
+    #[test]
     fn setup_provider_agnes_opens_unpublished_template() {
         let mut app = test_app();
 

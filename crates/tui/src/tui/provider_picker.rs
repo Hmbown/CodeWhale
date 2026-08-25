@@ -58,19 +58,15 @@ use codewhale_config::catalog::{CatalogOffering, CatalogSnapshot};
 use codewhale_config::provider::{CredentialAcquisition, WireFormat};
 use codewhale_config::route::{PricingSku, RequestProtocol};
 use codewhale_config::{
-    AGNES_TEMPLATE_ID, ProviderSetupApply, ProviderSetupTemplate, SENSENOVA_TEMPLATE_ID,
-    provider_setup_template, provider_setup_templates,
+    AGNES_TEMPLATE_ID, DS4_BASE_URL, DS4_DEFAULT_MODEL, DS4_PROVIDER_ID, DS4_TEMPLATE_ID,
+    LM_STUDIO_BASE_URL, LM_STUDIO_PROVIDER_ID, LM_STUDIO_TEMPLATE_ID, ProviderSetupApply,
+    ProviderSetupTemplate, SENSENOVA_TEMPLATE_ID, provider_setup_template,
+    provider_setup_templates,
 };
 use serde_json::Value;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::OnceLock;
-
-const DS4_PROVIDER_ID: &str = "ds4";
-const DS4_BASE_URL: &str = "http://127.0.0.1:8000/v1";
-const DS4_DEFAULT_MODEL: &str = "deepseek-v4-flash";
-const LM_STUDIO_PROVIDER_ID: &str = "lm_studio";
-const LM_STUDIO_BASE_URL: &str = "http://127.0.0.1:1234/v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
@@ -2358,6 +2354,12 @@ impl ProviderPickerView {
                         self.begin_setup();
                     }
                 }
+            }
+            ProviderSetupApply::Compatible if template.id == LM_STUDIO_TEMPLATE_ID => {
+                self.enter_lm_studio_form();
+            }
+            ProviderSetupApply::Compatible if template.id == DS4_TEMPLATE_ID => {
+                self.enter_ds4_form();
             }
             ProviderSetupApply::Compatible => self.enter_compatible_form(template),
             ProviderSetupApply::Unpublished => {

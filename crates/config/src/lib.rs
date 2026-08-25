@@ -30,8 +30,10 @@ pub use model_reference::{Modality, ModelReferenceCard, ModelReferenceDatabase};
 pub(crate) use provider_defaults::*;
 pub use provider_kind::ProviderKind;
 pub use provider_templates::{
-    AGNES_TEMPLATE_ID, ProviderSetupApply, ProviderSetupTemplate, SENSENOVA_API_KEY_ENV,
-    SENSENOVA_BASE_URL, SENSENOVA_DEFAULT_MODEL, SENSENOVA_MODELS, SENSENOVA_TEMPLATE_ID,
+    AGNES_TEMPLATE_ID, DS4_BASE_URL, DS4_DEFAULT_MODEL, DS4_MODELS, DS4_PROVIDER_ID,
+    DS4_TEMPLATE_ID, LM_STUDIO_BASE_URL, LM_STUDIO_PROVIDER_ID, LM_STUDIO_TEMPLATE_ID,
+    ProviderSetupApply, ProviderSetupTemplate, SENSENOVA_API_KEY_ENV, SENSENOVA_BASE_URL,
+    SENSENOVA_DEFAULT_MODEL, SENSENOVA_MODELS, SENSENOVA_TEMPLATE_ID,
     compatible_provider_setup_templates, provider_setup_template, provider_setup_templates,
 };
 pub use setup_state::{

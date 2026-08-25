@@ -139,8 +139,13 @@ pub(in crate::commands) fn provider_setup_action_for_name(raw: &str) -> Result<A
             provider: Some(provider),
         }),
         None => Err(format!(
-            "Unknown provider '{raw}'. Expected: {}, or a template (agnes, sensenova, opencode-zen, opencode-go).",
-            ApiProvider::names_hint()
+            "Unknown provider '{raw}'. Expected: {}, or a template ({}).",
+            ApiProvider::names_hint(),
+            codewhale_config::provider_setup_templates()
+                .iter()
+                .map(|template| template.id)
+                .collect::<Vec<_>>()
+                .join(", "),
         )),
     }
 }
@@ -302,6 +307,19 @@ mod tests {
             result.action,
             Some(AppAction::OpenTemplateSetup {
                 template_id: "agnes".to_string(),
+            })
+        );
+        assert!(result.message.is_none());
+    }
+
+    #[test]
+    fn setup_subcommand_opens_lm_studio_template() {
+        let mut app = create_test_app();
+        let result = provider(&mut app, Some("setup lm-studio"));
+        assert_eq!(
+            result.action,
+            Some(AppAction::OpenTemplateSetup {
+                template_id: "lm-studio".to_string(),
             })
         );
         assert!(result.message.is_none());

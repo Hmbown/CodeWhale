@@ -6,11 +6,13 @@
 //! - first-class gateways users still treat as "paste a Base URL"
 //!   (OpenCode Zen / Go), and
 //! - named OpenAI-compatible custom routes that are not `ProviderKind`
-//!   variants (SenseNova).
+//!   variants (SenseNova, LM Studio, DS4).
 //!
 //! Values here are limited to hosts, models, and env names already
 //! documented in this repository. Agnes is catalogued as unpublished so
-//! the UI can say so without inventing a URL.
+//! the UI can say so without inventing a URL. Keyless loopback rows
+//! (LM Studio, DS4) are reached from the `P` template list, not from
+//! list-stage letter keys — those letters belong to a-z type-ahead.
 //!
 //! A `/models` 2xx from Test Connection is reachability only. It is not
 //! model readiness.
@@ -30,6 +32,21 @@ pub const SENSENOVA_MODELS: &[&str] = &[SENSENOVA_DEFAULT_MODEL];
 /// Agnes is requested by #5350 but has no published OpenAI-compatible
 /// host in this repository.
 pub const AGNES_TEMPLATE_ID: &str = "agnes";
+
+/// Local LM Studio OpenAI-compatible loopback. Persisted custom-table
+/// id stays `lm_studio` so existing `[providers.lm_studio]` rows keep
+/// matching; the template catalog id is kebab-case like the others.
+pub const LM_STUDIO_TEMPLATE_ID: &str = "lm-studio";
+pub const LM_STUDIO_PROVIDER_ID: &str = "lm_studio";
+pub const LM_STUDIO_BASE_URL: &str = "http://127.0.0.1:1234/v1";
+
+/// Local DS4 (DwarfStar) OpenAI-compatible loopback. Same transport as
+/// any custom OpenAI-compatible row; no API key.
+pub const DS4_TEMPLATE_ID: &str = "ds4";
+pub const DS4_PROVIDER_ID: &str = "ds4";
+pub const DS4_BASE_URL: &str = "http://127.0.0.1:8000/v1";
+pub const DS4_DEFAULT_MODEL: &str = "deepseek-v4-flash";
+pub const DS4_MODELS: &[&str] = &[DS4_DEFAULT_MODEL];
 
 /// How a beginner template is applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +178,17 @@ impl ProviderSetupTemplate {
         matches!(self.apply, ProviderSetupApply::Unpublished)
     }
 
+    /// Keyless `http://127.0.0.1` OpenAI-compatible loopback. Not a
+    /// catalog filter and not an API-key template.
+    #[must_use]
+    pub fn is_keyless_local(self) -> bool {
+        self.is_compatible()
+            && self.api_key_env().is_none()
+            && self
+                .base_url()
+                .is_some_and(|url| url.starts_with("http://127.0.0.1:"))
+    }
+
     /// Compact Settings-row value: fillable ids, then unpublished ids.
     #[must_use]
     pub fn settings_value() -> String {
@@ -224,6 +252,30 @@ const TEMPLATES: &[ProviderSetupTemplate] = &[
         guidance: "OpenAI-compatible SenseTime SenseNova host. Store an env var name, not a raw key.",
     },
     ProviderSetupTemplate {
+        id: LM_STUDIO_TEMPLATE_ID,
+        display_name: "LM Studio",
+        apply: ProviderSetupApply::Compatible,
+        base_url: Some(LM_STUDIO_BASE_URL),
+        default_model: None,
+        models: &[],
+        api_key_env: None,
+        docs_url: None,
+        credential_url: None,
+        guidance: "Keyless local LM Studio loopback. Enter the model currently loaded in LM Studio. No API key.",
+    },
+    ProviderSetupTemplate {
+        id: DS4_TEMPLATE_ID,
+        display_name: "DS4",
+        apply: ProviderSetupApply::Compatible,
+        base_url: Some(DS4_BASE_URL),
+        default_model: Some(DS4_DEFAULT_MODEL),
+        models: DS4_MODELS,
+        api_key_env: None,
+        docs_url: None,
+        credential_url: None,
+        guidance: "Keyless local DS4 (DwarfStar) loopback. Start ds4-server first. No API key.",
+    },
+    ProviderSetupTemplate {
         id: AGNES_TEMPLATE_ID,
         display_name: "Agnes",
         apply: ProviderSetupApply::Unpublished,
@@ -266,6 +318,8 @@ pub fn provider_setup_template(id: &str) -> Option<&'static ProviderSetupTemplat
                 "sense-nova" | "meituan-sensenova" | "meituan-sensenova-cn" => {
                     template.id == SENSENOVA_TEMPLATE_ID
                 }
+                "lmstudio" => template.id == LM_STUDIO_TEMPLATE_ID,
+                "dwarfstar" => template.id == DS4_TEMPLATE_ID,
                 _ => false,
             })
         })
@@ -289,6 +343,32 @@ mod tests {
                 assert!(template.base_url().is_none(), "{}", template.id);
                 assert!(template.picker_models().is_empty(), "{}", template.id);
                 assert!(template.api_key_env().is_none(), "{}", template.id);
+                continue;
+            }
+            if template.is_keyless_local() {
+                let base_url = template
+                    .base_url()
+                    .unwrap_or_else(|| panic!("{} host", template.id));
+                assert!(
+                    base_url.starts_with("http://127.0.0.1:"),
+                    "{} keyless local URL must be loopback: {base_url}",
+                    template.id
+                );
+                assert!(
+                    template.api_key_env().is_none(),
+                    "{} must not invent an API key env",
+                    template.id
+                );
+                if let Some(default_model) = template.default_model() {
+                    assert!(
+                        template
+                            .picker_models()
+                            .iter()
+                            .any(|model| model.eq_ignore_ascii_case(default_model)),
+                        "{} default {default_model} missing from picker models",
+                        template.id
+                    );
+                }
                 continue;
             }
             let base_url = template
@@ -387,7 +467,7 @@ mod tests {
     fn settings_value_names_fillable_then_unpublished() {
         assert_eq!(
             ProviderSetupTemplate::settings_value(),
-            "opencode-zen, opencode-go, sensenova; agnes unpublished"
+            "opencode-zen, opencode-go, sensenova, lm-studio, ds4; agnes unpublished"
         );
     }
 
@@ -401,5 +481,24 @@ mod tests {
             provider_setup_template("OPENCODE_ZEN").map(|template| template.id),
             Some("opencode-zen")
         );
+    }
+
+    #[test]
+    fn keyless_local_templates_use_loopback_and_skip_api_key_env() {
+        let lm = provider_setup_template("lm_studio").expect("lm studio alias");
+        assert_eq!(lm.id, LM_STUDIO_TEMPLATE_ID);
+        assert!(lm.is_keyless_local());
+        assert_eq!(lm.base_url(), Some(LM_STUDIO_BASE_URL));
+        assert!(lm.api_key_env().is_none());
+        assert!(lm.default_model().is_none());
+        assert!(lm.picker_models().is_empty());
+
+        let ds4 = provider_setup_template("dwarfstar").expect("ds4 alias");
+        assert_eq!(ds4.id, DS4_TEMPLATE_ID);
+        assert!(ds4.is_keyless_local());
+        assert_eq!(ds4.base_url(), Some(DS4_BASE_URL));
+        assert_eq!(ds4.default_model(), Some(DS4_DEFAULT_MODEL));
+        assert_eq!(ds4.picker_models(), DS4_MODELS);
+        assert!(ds4.api_key_env().is_none());
     }
 }
