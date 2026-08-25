@@ -111,6 +111,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed child tool approvals granting from an in-memory decision with no
+  durable evidence (#5543, by @cyq1017): sub-agent runtimes now inherit the
+  parent session's approval receipt store, commit `Asked` before the prompt is
+  exposed, and commit the terminal outcome before the gate closes. A failed
+  receipt write returns `Deny`, never `Proceed`, and a dropped decision
+  channel is recorded as unavailable instead of being mislabelled as user
+  cancellation.
 - Fixed first-run provider setup rejecting valid MiniMax and Xiaomi MiMo API
   keys (#5601): those first-party routes answer 404 on the `GET /models`
   probe because they only implement chat completions, and the wizard treated
