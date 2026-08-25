@@ -9,14 +9,17 @@
 //! `ANTIGRAVITY_API_KEY` and the process's own `AGY_ADC_AUTH` always win
 //! over the external file.
 
+mod envelope;
+
 use std::io::{Read as _, Seek, SeekFrom};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use codewhale_config::{ExternalCredentialReadGrant, ExternalCredentialSource};
 
-/// ItemTable key holding the `agy` OAuth token.
-pub const AGY_OAUTH_TOKEN_KEY: &str = "antigravityUnifiedStateSync.oauthToken";
+pub use envelope::AGY_AUTH_STATUS_KEY;
+
+use envelope::{AGY_OAUTH_TOKEN_KEY, access_token_from_auth_status_json, parse_token_envelope};
 
 /// Upper bound on the credential store size we are willing to open.
 const AGY_STATE_DB_LIMIT: u64 = 64 * 1024 * 1024;
@@ -115,7 +118,7 @@ pub(crate) fn antigravity_oauth_token_from_grant(
     // secure handle open across the query and prove the inode did not move.
     let pinned = file_identity(&file);
     drop(file);
-    let value = query_oauth_token(path)?;
+    let (envelope_value, auth_status_value) = query_oauth_token(path)?;
     let reopened = std::fs::File::open(path)
         .ok()
         .and_then(|recheck| file_identity_of(&recheck));
@@ -125,7 +128,51 @@ pub(crate) fn antigravity_oauth_token_from_grant(
             codewhale_config::quote_os_path(path)
         );
     }
-    parse_agy_oauth_token_value(value)
+    resolve_external_credential(envelope_value.as_deref(), auth_status_value.as_deref())
+}
+
+/// Resolve the sendable credential from the two store rows.
+///
+/// Precedence mirrors how the official app maintains its own state: the
+/// `antigravityAuthStatus` JSON `apiKey` is the live credential the app
+/// keeps current, so it wins when present; the protobuf envelope under
+/// `antigravityUnifiedStateSync.oauthToken` is the fallback and is honored
+/// only when its recorded expiry (if any) is still in the future. An
+/// expired envelope is absent, not an error — the honest outcome is "sign
+/// in to Antigravity again", the same read-only-never-refresh contract the
+/// module has always stated.
+fn resolve_external_credential(
+    envelope_value: Option<&str>,
+    auth_status_value: Option<&str>,
+) -> Result<Option<String>> {
+    if let Some(status) = auth_status_value
+        && let Some(token) = access_token_from_auth_status_json(status)
+    {
+        return Ok(Some(token));
+    }
+    let Some(raw) = envelope_value else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if let Some(credential) = parse_token_envelope(trimmed) {
+        if let Some(expires_at) = credential.expires_at
+            && expires_at <= chrono::Utc::now().timestamp()
+        {
+            tracing::debug!(
+                target: "config",
+                "external agy token envelope is expired; treat as absent \
+                 (sign in to Antigravity to refresh its store)"
+            );
+            return Ok(None);
+        }
+        return Ok(Some(credential.access_token));
+    }
+    // Legacy shapes (bare token string or JSON with a token member) from
+    // older agy builds still import through the original parser.
+    parse_agy_oauth_token_value(Some(raw.to_string()))
 }
 
 #[cfg(unix)]
@@ -168,7 +215,7 @@ fn file_identity_of(_file: &std::fs::File) -> Option<(u64, u64)> {
 }
 
 /// Open the granted path read-only through the shared secure boundary.
-fn query_oauth_token(path: &Path) -> Result<Option<String>> {
+fn query_oauth_token(path: &Path) -> Result<(Option<String>, Option<String>)> {
     let connection = rusqlite::Connection::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -179,29 +226,32 @@ fn query_oauth_token(path: &Path) -> Result<Option<String>> {
             codewhale_config::quote_os_path(path)
         )
     })?;
-    let value: Option<String> = connection
-        .query_row(
-            "SELECT value FROM ItemTable WHERE key = ?1",
-            [AGY_OAUTH_TOKEN_KEY],
-            |row| row.get(0),
-        )
-        .map(Some)
-        .or_else(|error| match error {
-            rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            other => Err(other),
-        })
-        .with_context(|| {
-            format!(
-                "querying {} for {AGY_OAUTH_TOKEN_KEY}",
-                codewhale_config::quote_os_path(path)
-            )
-        })?;
-    Ok(value)
+    let lookup = |key: &str| -> Result<Option<String>> {
+        let row = connection
+            .query_row("SELECT value FROM ItemTable WHERE key = ?1", [key], |row| {
+                row.get::<_, Option<String>>(0)
+            })
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })
+            .with_context(|| {
+                format!(
+                    "querying {} for {key}",
+                    codewhale_config::quote_os_path(path)
+                )
+            })?;
+        Ok(row)
+    };
+    let envelope = lookup(AGY_OAUTH_TOKEN_KEY)?;
+    let auth_status = lookup(AGY_AUTH_STATUS_KEY)?;
+    Ok((envelope, auth_status))
 }
 
-/// The stored value is opaque to Codewhale. Accept only shapes observed in
-/// the official store — a bare token string or a JSON object with a token
-/// member — and never synthesize or trim secrets beyond whitespace.
+/// Legacy value shapes (older agy builds): a bare token string or a JSON
+/// object with a token member. The current build's protobuf envelope is
+/// parsed by [`envelope::parse_token_envelope`]. Never synthesize or trim
+/// secrets beyond whitespace.
 pub(crate) fn parse_agy_oauth_token_value(value: Option<String>) -> Result<Option<String>> {
     let Some(raw) = value else {
         return Ok(None);
@@ -337,6 +387,36 @@ mod tests {
         )
         .expect("test grant");
         assert!(antigravity_oauth_token_from_grant(&grant).is_err());
+    }
+
+    #[test]
+    fn auth_status_api_key_wins_over_the_envelope() {
+        // The app keeps antigravityAuthStatus current, so it is the live
+        // credential even when a stale envelope row is still present.
+        let resolved = resolve_external_credential(
+            Some("ignored-envelope-value"),
+            Some(r#"{"apiKey":"ya29.live-status-key"}"#),
+        )
+        .unwrap();
+        assert_eq!(resolved, Some("ya29.live-status-key".to_string()));
+    }
+
+    #[test]
+    fn unusable_auth_status_falls_through_to_the_legacy_value() {
+        // Older builds stored a bare state string under the status key; it
+        // must not shadow the token row.
+        let resolved =
+            resolve_external_credential(Some("ya29.legacy-bare"), Some("signedIn")).unwrap();
+        assert_eq!(resolved, Some("ya29.legacy-bare".to_string()));
+    }
+
+    #[test]
+    fn absent_rows_resolve_to_absent() {
+        assert_eq!(resolve_external_credential(None, None).unwrap(), None);
+        assert_eq!(
+            resolve_external_credential(Some("   "), None).unwrap(),
+            None
+        );
     }
 
     #[test]
