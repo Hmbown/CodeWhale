@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0VQR4BS0M9K8VN91E4NYV80",
+  "session_id": "3be71f1b-6956-4dc9-a7a0-18279396a514",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-25T05:54:34.270706Z",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [
+    "crates/tui/src/agy_credentials.rs",
+    "crates/tui/src/agy_credentials/envelope.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "3eec2304651a",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 690,
+    "cache_creation_tokens": 623321,
+    "cache_read_tokens": 125457375,
+    "output_tokens": 289951,
+    "api_call_count": 345
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-25T05:54:33.846647Z",
+    "agent_lines": 144,
+    "agent_removed": 58,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 144,
+    "total_lines_changed": 202,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
