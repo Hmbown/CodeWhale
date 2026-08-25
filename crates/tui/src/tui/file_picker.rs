@@ -2,11 +2,13 @@
 //!
 //! Opens an overlay populated with workspace-relative paths discovered by a
 //! single-pass `WalkBuilder` walk (depth from `mention_walk_depth`, default
-//! 10, `0` = unlimited; hidden=true, follow_links=false,
-//! `.gitignore` honored). The walk keeps at most [`MAX_CANDIDATES`] paths in
-//! walk order so opening the picker stays bounded on huge repos. Subsequent
-//! keystrokes filter that cached list in memory using a small subsequence +
-//! first-letter-bonus scorer — no per-keystroke disk traversal.
+//! 10, `0` = unlimited; hidden files skipped unless the query starts with
+//! `!`, follow_links=false, `.gitignore` honored). The walk keeps at most
+//! [`MAX_CANDIDATES`] paths in walk order so opening the picker stays bounded
+//! on huge repos. Subsequent keystrokes filter that cached list in memory
+//! using a small subsequence + first-letter-bonus scorer — no per-keystroke
+//! disk traversal. A leading `!` includes hidden files via a second bounded
+//! walk (#5550).
 //!
 //! When the typed query matches nothing in that truncated index, a targeted
 //! rescan walks from the query's existing path prefix (or the workspace root)
@@ -38,7 +40,10 @@ use crate::tui::views::{
     ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,
     render_panel_scroll_rail, render_underwater_surface,
 };
-use crate::workspace_discovery::{DISCOVERY_ALWAYS_DIRS, path_is_excluded_from_discovery};
+use crate::workspace_discovery::{
+    DISCOVERY_ALWAYS_DIRS, parse_hidden_file_prefix, path_has_hidden_component,
+    path_is_excluded_from_discovery, should_skip_unignored_discovery_entry,
+};
 
 /// Maximum number of candidates collected from the initial walk. Keeps memory
 /// bounded for very large monorepos; matches the limits codex-rs uses for the
@@ -163,6 +168,10 @@ pub struct FilePickerView {
     /// Lowercased query a rescan was last completed for. Prevents repeating
     /// a walk that already produced no extra hits.
     rescan_query: Option<String>,
+    /// Index at which appended hidden-file candidates begin. `None` until a
+    /// `!` prefix has triggered a hidden walk. Visible files stay in
+    /// `candidates[..hidden_start]`.
+    hidden_start: Option<usize>,
 }
 
 /// What the off-thread workspace scan produces: the candidate paths and the
@@ -237,6 +246,7 @@ impl FilePickerView {
                 max_depth,
                 index_truncated: walk.truncated,
                 rescan_query: None,
+                hidden_start: None,
             };
             view.refilter();
             return view;
@@ -278,6 +288,7 @@ impl FilePickerView {
             max_depth,
             index_truncated: false,
             rescan_query: None,
+            hidden_start: None,
         };
         view.refilter();
         view
@@ -309,6 +320,7 @@ impl FilePickerView {
             max_depth,
             index_truncated: truncated,
             rescan_query: None,
+            hidden_start: None,
         };
         view.refilter();
         view
@@ -331,6 +343,7 @@ impl FilePickerView {
             Some(PickerScan::Initial(scan)) => {
                 self.candidates = scan.candidates;
                 self.index_truncated = scan.truncated;
+                self.hidden_start = None;
                 for path in scan.modified {
                     self.relevance.mark_modified(path);
                 }
@@ -340,7 +353,8 @@ impl FilePickerView {
                 self.refilter();
             }
             Some(PickerScan::Targeted { query, hits }) => {
-                let current = self.query.trim().to_lowercase();
+                let (_, needle) = parse_hidden_file_prefix(&self.query);
+                let current = needle.to_lowercase();
                 self.is_rescanning = false;
                 if current == query {
                     self.merge_rescan_hits(&query, hits);
@@ -355,15 +369,40 @@ impl FilePickerView {
     }
 
     fn refilter(&mut self) {
+        let (include_hidden, _) = parse_hidden_file_prefix(&self.query);
+        if include_hidden {
+            self.ensure_hidden_candidates();
+        }
         self.refilter_from_index();
         self.maybe_rescan();
     }
 
+    fn ensure_hidden_candidates(&mut self) {
+        if self.hidden_start.is_some() || self.is_loading {
+            return;
+        }
+        self.hidden_start = Some(self.candidates.len());
+        let extra = collect_hidden_candidates(&self.workspace_root, self.max_depth, MAX_CANDIDATES);
+        let existing: HashSet<String> = self.candidates.iter().cloned().collect();
+        for path in extra {
+            if existing.contains(&path) {
+                continue;
+            }
+            self.candidates.push(path);
+        }
+    }
+
     fn refilter_from_index(&mut self) {
-        let query = self.query.trim().to_lowercase();
+        let (include_hidden, needle) = parse_hidden_file_prefix(&self.query);
+        let query = needle.to_lowercase();
+        let end = if include_hidden {
+            self.candidates.len()
+        } else {
+            self.hidden_start.unwrap_or(self.candidates.len())
+        };
+        let pool = &self.candidates[..end];
         let mut scored: Vec<(usize, i32, i32, i32)> = if query.is_empty() {
-            self.candidates
-                .iter()
+            pool.iter()
                 .enumerate()
                 .map(|(idx, path)| {
                     let boost = self.relevance.boost_for(path);
@@ -371,8 +410,7 @@ impl FilePickerView {
                 })
                 .collect()
         } else {
-            self.candidates
-                .iter()
+            pool.iter()
                 .enumerate()
                 .filter_map(|(idx, path)| {
                     score(&query, path).map(|fuzzy| {
@@ -413,7 +451,8 @@ impl FilePickerView {
         if !self.filtered.is_empty() {
             return;
         }
-        let query = self.query.trim().to_lowercase();
+        let (include_hidden, needle) = parse_hidden_file_prefix(&self.query);
+        let query = needle.to_lowercase();
         if query.is_empty() {
             return;
         }
@@ -433,6 +472,7 @@ impl FilePickerView {
                 &self.workspace_root,
                 self.max_depth,
                 &query,
+                include_hidden,
                 MAX_RESCAN_HITS,
             );
             self.merge_rescan_hits(&query, hits);
@@ -447,7 +487,13 @@ impl FilePickerView {
         let max_depth = self.max_depth;
         let query_for_scan = query.clone();
         crate::utils::spawn_blocking_supervised("file-picker-rescan", move || {
-            let hits = collect_query_matches(&root, max_depth, &query_for_scan, MAX_RESCAN_HITS);
+            let hits = collect_query_matches(
+                &root,
+                max_depth,
+                &query_for_scan,
+                include_hidden,
+                MAX_RESCAN_HITS,
+            );
             if let Ok(mut guard) = cell.lock() {
                 *guard = Some(PickerScan::Targeted {
                     query: query_for_scan,
@@ -461,9 +507,19 @@ impl FilePickerView {
         self.rescan_query = Some(query.to_string());
         self.is_rescanning = false;
         if !hits.is_empty() {
+            let mut insert_at = self.hidden_start.unwrap_or(self.candidates.len());
             for hit in hits {
-                if !self.candidates.iter().any(|existing| existing == &hit) {
+                if self.candidates.iter().any(|existing| existing == &hit) {
+                    continue;
+                }
+                if path_has_hidden_component(&hit) {
                     self.candidates.push(hit);
+                } else {
+                    self.candidates.insert(insert_at, hit);
+                    insert_at += 1;
+                    if let Some(start) = self.hidden_start.as_mut() {
+                        *start += 1;
+                    }
                 }
             }
         }
@@ -514,6 +570,14 @@ impl FilePickerView {
     #[cfg(test)]
     pub fn markers_for_test(&self, path: &str) -> String {
         self.relevance.markers_for(path)
+    }
+
+    #[cfg(test)]
+    fn visible_paths_for_test(&self) -> Vec<String> {
+        self.filtered
+            .iter()
+            .filter_map(|&idx| self.candidates.get(idx).cloned())
+            .collect()
     }
 }
 
@@ -637,6 +701,7 @@ impl ModalView for FilePickerView {
             &[
                 ActionHint::new("↑/↓", "move"),
                 ActionHint::new("Enter", "insert @path"),
+                ActionHint::new("!", "dotfiles"),
                 ActionHint::new("Esc", "cancel"),
             ],
         );
@@ -750,6 +815,7 @@ fn collect_candidates_limited(
             display_root: root,
             max_depth,
             honor_gitignore: true,
+            include_hidden: false,
             limit,
             matches: &|_| true,
         },
@@ -770,6 +836,7 @@ fn collect_candidates_limited(
                     display_root: root,
                     max_depth: max_depth.map(|d| d.saturating_sub(1)),
                     honor_gitignore: false,
+                    include_hidden: false,
                     limit,
                     matches: &|_| true,
                 },
@@ -798,6 +865,7 @@ fn collect_query_matches(
     root: &Path,
     max_depth: Option<usize>,
     query: &str,
+    include_hidden: bool,
     limit: usize,
 ) -> Vec<String> {
     let query = query.trim();
@@ -810,12 +878,14 @@ fn collect_query_matches(
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     let under_always = always_dir_prefix(root, &start).is_some();
+    let honor_gitignore = !include_hidden && !under_always;
     let hit_cap = push_matching_files(
         MatchingFileWalk {
             walk_root: &start,
             display_root: root,
             max_depth: depth,
-            honor_gitignore: !under_always,
+            honor_gitignore,
+            include_hidden,
             limit,
             matches: &matches,
         },
@@ -834,6 +904,7 @@ fn collect_query_matches(
                     display_root: root,
                     max_depth: max_depth.map(|d| d.saturating_sub(1)),
                     honor_gitignore: false,
+                    include_hidden,
                     limit,
                     matches: &matches,
                 },
@@ -844,6 +915,29 @@ fn collect_query_matches(
             }
         }
     }
+    out.sort();
+    out
+}
+
+fn collect_hidden_candidates(root: &Path, max_depth: Option<usize>, limit: usize) -> Vec<String> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let _ = push_matching_files(
+        MatchingFileWalk {
+            walk_root: root,
+            display_root: root,
+            max_depth,
+            honor_gitignore: false,
+            include_hidden: true,
+            limit,
+            matches: &path_has_hidden_component,
+        },
+        &mut out,
+        Some(&mut seen),
+    );
     out.sort();
     out
 }
@@ -889,6 +983,7 @@ struct MatchingFileWalk<'a> {
     display_root: &'a Path,
     max_depth: Option<usize>,
     honor_gitignore: bool,
+    include_hidden: bool,
     limit: usize,
     matches: &'a dyn Fn(&str) -> bool,
 }
@@ -903,6 +998,7 @@ fn push_matching_files(
         display_root,
         max_depth,
         honor_gitignore,
+        include_hidden,
         limit,
         matches,
     } = walk;
@@ -911,13 +1007,16 @@ fn push_matching_files(
     }
     let mut builder = WalkBuilder::new(walk_root);
     builder
-        .hidden(true)
+        .hidden(!include_hidden)
         .follow_links(false)
         .max_depth(max_depth);
     if honor_gitignore {
         builder.git_ignore(true).git_exclude(true).git_global(true);
     } else {
         builder.git_ignore(false).ignore(false);
+        builder.filter_entry(|entry| {
+            !should_skip_unignored_discovery_entry(display_root, entry.path())
+        });
     }
 
     for entry in builder.build().flatten() {
@@ -1121,6 +1220,47 @@ mod tests {
 
         assert_eq!(view.selected_for_test(), Some("src/lib.rs"));
         assert_eq!(view.markers_for_test("src/lib.rs"), "M  ");
+    }
+
+    #[test]
+    fn picker_bang_prefix_includes_hidden_files() {
+        let dir = TempDir::new().expect("tempdir");
+        let root = dir.path();
+        fs::write(root.join("README.md"), "").unwrap();
+        fs::write(root.join(".env"), "secret-ish fixture").unwrap();
+        fs::create_dir_all(root.join(".agents")).unwrap();
+        fs::write(root.join(".agents/skill.md"), "").unwrap();
+
+        let mut view = FilePickerView::new_with_relevance(root, FilePickerRelevance::default());
+        let default_paths = view.visible_paths_for_test();
+        assert!(
+            default_paths.iter().any(|path| path == "README.md"),
+            "{default_paths:?}"
+        );
+        assert!(
+            default_paths.iter().all(|path| path != ".env"),
+            "hidden files stay out of the default index: {default_paths:?}"
+        );
+
+        view.handle_key(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE));
+        let bang_paths = view.visible_paths_for_test();
+        assert!(
+            bang_paths.iter().any(|path| path == ".env"),
+            "leading ! must surface hidden files: {bang_paths:?}"
+        );
+        assert!(
+            bang_paths.iter().any(|path| path == "README.md"),
+            "leading ! includes hidden files without dropping visible ones: {bang_paths:?}"
+        );
+
+        view.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        view.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        view.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        let env_paths = view.visible_paths_for_test();
+        assert!(
+            env_paths.iter().any(|path| path == ".env"),
+            "!env should match .env: {env_paths:?}"
+        );
     }
 
     #[test]
@@ -1336,7 +1476,7 @@ mod tests {
 
         let walk = collect_candidates_limited(root, Some(WALK_DEPTH), 15);
         assert!(walk.truncated);
-        let hits = collect_query_matches(root, Some(WALK_DEPTH), "room_chat_shell", 64);
+        let hits = collect_query_matches(root, Some(WALK_DEPTH), "room_chat_shell", false, 64);
         assert!(
             hits.iter().any(|path| path == "zzz/room_chat_shell.dart"),
             "targeted rescan must recover the file past the cap: {hits:?}"
