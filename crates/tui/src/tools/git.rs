@@ -80,7 +80,7 @@ impl ToolSpec for GitStatusTool {
         }
 
         let command_str = format_command(&git_ctx.working_dir, &args);
-        let output = run_git_command(&git_ctx.working_dir, &args)?;
+        let output = run_git_command_async(git_ctx.working_dir.clone(), args).await?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -182,7 +182,7 @@ impl ToolSpec for GitDiffTool {
         }
 
         let command_str = format_command(&git_ctx.working_dir, &args);
-        let output = run_git_command(&git_ctx.working_dir, &args)?;
+        let output = run_git_command_async(git_ctx.working_dir.clone(), args).await?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -283,6 +283,34 @@ fn run_git_command(working_dir: &Path, args: &[String]) -> Result<std::process::
             ToolError::execution_failed(format!("Failed to run git: {e}"))
         }
     })
+}
+
+/// Offloads the blocking `git` invocation onto the blocking pool so the
+/// async worker is never stalled.
+///
+/// This is not cosmetic. Both tools here declare `supports_parallel() ==
+/// true`, and the engine drains an advertised-parallel batch from a single
+/// task (`crates/tui/src/core/engine/tool_execution.rs`), so an inline
+/// blocking spawn inside `execute` parks the worker and serializes the
+/// *entire* batch, not just this tool (#5616, reported by
+/// @rafaelcavalheri). `Git::command()` resolution — including its one-time
+/// synchronous `git --version` probe (`OnceLock`-cached after the first
+/// call) — happens inside [`run_git_command`], so the offload keeps that
+/// first-call probe off the worker too.
+///
+/// The wrapper must keep routing through [`run_git_command`]: that is what
+/// attaches `GIT_OPTIONAL_LOCKS=0` from `Git::command()` (#5617, b9fd28367)
+/// and the `not_available` error mapping. Do not rewrite it to spawn git
+/// directly; `readonly_tools_do_not_rewrite_the_users_index` below pins
+/// this end to end. Character-identical twin in `git_history.rs`
+/// (346bfe3b6).
+async fn run_git_command_async(
+    working_dir: PathBuf,
+    args: Vec<String>,
+) -> Result<std::process::Output, ToolError> {
+    tokio::task::spawn_blocking(move || run_git_command(&working_dir, &args))
+        .await
+        .map_err(|e| ToolError::execution_failed(format!("git task panicked: {e}")))?
 }
 
 fn format_command(working_dir: &Path, args: &[String]) -> String {
@@ -482,6 +510,120 @@ mod tests {
         assert!(result.content.contains(unicode_name));
         assert!(!result.content.contains("\\344"));
         assert!(!result.content.contains("\\320"));
+    }
+
+    #[tokio::test]
+    async fn async_offload_matches_the_sync_path_byte_for_byte() {
+        if !git_available() {
+            return;
+        }
+        let tmp = tempdir().expect("tempdir");
+        init_git_repo(tmp.path());
+
+        let file = tmp.path().join("file.txt");
+        fs::write(&file, "hello\n").expect("write");
+        commit_all(tmp.path(), "init");
+        fs::write(&file, "hello\nworld\n").expect("modify");
+
+        let args = vec![
+            "-c".to_string(),
+            "core.quotepath=false".to_string(),
+            "status".to_string(),
+            "--porcelain=v1".to_string(),
+            "-b".to_string(),
+        ];
+        let offloaded = run_git_command_async(tmp.path().to_path_buf(), args.clone())
+            .await
+            .expect("async git");
+        let sync = run_git_command(tmp.path(), &args).expect("sync git");
+        assert_eq!(offloaded.status.code(), sync.status.code());
+        assert_eq!(offloaded.stdout, sync.stdout);
+        assert_eq!(offloaded.stderr, sync.stderr);
+    }
+
+    #[tokio::test]
+    async fn readonly_tools_do_not_rewrite_the_users_index() {
+        if !git_available() {
+            return;
+        }
+        let tmp = tempdir().expect("tempdir");
+        init_git_repo(tmp.path());
+
+        // ~200 stat-dirty files: the measured threshold at which an
+        // opportunistic `git status` refresh actually rewrites .git/index
+        // (b9fd28367). Fewer can leave the refresh too cheap to bother.
+        for i in 0..200 {
+            fs::write(
+                tmp.path().join(format!("f{i}.rs")),
+                "pub fn one() -> i32 { 1 }\n",
+            )
+            .expect("write");
+        }
+        commit_all(tmp.path(), "init");
+        // Rewrite identical bytes: content stays clean, mtimes move, the
+        // index goes stat-dirty — the state whose opportunistic refresh is
+        // what takes `.git/index.lock` in the user's repo.
+        let retouch_all = || {
+            for i in 0..200 {
+                fs::write(
+                    tmp.path().join(format!("f{i}.rs")),
+                    "pub fn one() -> i32 { 1 }\n",
+                )
+                .expect("retouch");
+            }
+        };
+        retouch_all();
+
+        // Teeth check: a raw unlocked `git status` — exactly what a refactor
+        // that bypasses `Git::command()` would produce — must rewrite the
+        // index on this fixture, or the lock below is vacuous. If this git
+        // no longer writes opportunistically, say so and skip.
+        let index = tmp.path().join(".git").join("index");
+        let index_mtime = || {
+            fs::metadata(&index)
+                .expect("index exists")
+                .modified()
+                .expect("index mtime")
+        };
+        let before_raw = index_mtime();
+        let unlocked = std::process::Command::new("git")
+            .args([
+                "-c",
+                "core.quotepath=false",
+                "status",
+                "--porcelain=v1",
+                "-b",
+            ])
+            .current_dir(tmp.path())
+            .output()
+            .expect("raw git status");
+        assert!(unlocked.status.success());
+        if index_mtime() == before_raw {
+            // This git no longer rewrites the index opportunistically; the
+            // no-rewrite assertion below would be vacuous, so skip rather
+            // than pin platform-specific behavior the fix does not rely on.
+            return;
+        }
+
+        // Re-dirty (the raw run refreshed the index) and prove both tools
+        // leave it byte-identical through the async offload.
+        retouch_all();
+        let before_tools = index_mtime();
+        let ctx = ToolContext::new(tmp.path());
+        let status = GitStatusTool
+            .execute(json!({}), &ctx)
+            .await
+            .expect("status");
+        assert!(status.success);
+        let diff = GitDiffTool.execute(json!({}), &ctx).await.expect("diff");
+        assert!(diff.success);
+        assert_eq!(
+            index_mtime(),
+            before_tools,
+            "git_status/git_diff must not rewrite .git/index: the async offload \
+             has to keep routing through run_git_command -> Git::command() so \
+             GIT_OPTIONAL_LOCKS=0 stays attached (#5617, b9fd28367)"
+        );
     }
 
     #[test]
