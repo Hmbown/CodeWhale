@@ -118,6 +118,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receipt write returns `Deny`, never `Proceed`, and a dropped decision
   channel is recorded as unavailable instead of being mislabelled as user
   cancellation.
+- Fixed GPT-5.6 Sol pricing, which overstated cost on the tier the bare
+  `gpt-5.6` alias resolves to. The 2026-08-17 sweep recorded 5.00/30.00 per
+  million; the model page now publishes 4.00/20.00 (cache read 0.40, write
+  5.00), so every Sol turn was billed 25% high on input and 50% high on
+  output in the cost surface. Terra and Luna were re-checked the same day and
+  are unchanged.
 - Fixed four model-fact errors found by auditing the categorization tables
   against each other. `claude-opus-5` was missing from the server-side
   web-search table, so the current Anthropic flagship silently lost the

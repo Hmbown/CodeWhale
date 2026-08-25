@@ -583,8 +583,13 @@ fn pricing_for_model_at(model: &str, now: DateTime<Utc>) -> Option<ModelPricing>
 
 fn known_pricing_for_model(model_lower: &str) -> Option<ModelPricing> {
     let explicit = match model_lower {
+        // GPT-5.6 Sol, re-verified 2026-08-25 against the model page
+        // (Input / Cached / Output). The previous 5.00/30.00 predated
+        // OpenAI's cut and overstated output cost by 50% on the tier the
+        // bare `gpt-5.6` alias resolves to.
+        // https://developers.openai.com/api/docs/models/gpt-5.6-sol
         "openai/gpt-5.6" | "openai/gpt-5.6-sol" | "gpt-5.6" | "gpt-5.6-sol" => {
-            Some(usd_only_pricing(0.50, 5.00, 30.00))
+            Some(usd_only_pricing(0.40, 4.00, 20.00))
         }
         // GPT-5.6 Terra / Luna short-context (<=272K) rates, re-verified
         // 2026-08-17 against the model pages (Input / Cached / Output):
@@ -3311,7 +3316,7 @@ mod tests {
             ("gpt-5.5", 0.50, 5.00, 30.00),
             // GPT-5.5 Pro has no cached-input discount: cache-hit == input.
             ("gpt-5.5-pro", 30.00, 30.00, 180.00),
-            ("gpt-5.6-sol", 0.50, 5.00, 30.00),
+            ("gpt-5.6-sol", 0.40, 4.00, 20.00),
             ("gpt-5.6-terra", 0.20, 2.00, 12.00),
             ("gpt-5.6-luna", 0.02, 0.20, 1.20),
             ("gpt-5-codex", 0.125, 1.25, 10.00),
