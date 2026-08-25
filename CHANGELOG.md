@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Compaction now keeps a bounded verbatim last round (the latest user
+  message plus its assistant/tool results) instead of discarding every
+  assistant/tool/thinking turn behind a summary. A coverage floor refuses
+  to replace history if that last round would vanish. `/context` and the
+  inspector gained compaction and `/anchor` rows so a pass is visible
+  (#4394, IMPROVEMENT-PLAN-0912 T2).
+
+- Selected transcript blocks support `y` copy content, `Y` copy metadata,
+  Enter fullscreen, and `r` raw markdown, only when an explicit selection
+  exists so empty-composer typing is not stolen (#5551).
 - Optional per-session control socket (`[control_socket]` config table,
   Unix, off by default): when enabled, the interactive TUI binds a
   newline-framed JSON-RPC socket at `<sessions-dir>/<session-id>/control.sock`
@@ -112,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `@path:START-END` ranged line mentions (#5550, picker half to follow),
   a predictable last-copy backup file for clipboard exports with the path
   named when the clipboard fails (#5555), `wait` on multiple background shell
-  tasks with `until=any|all` (#5549, named-kill half to follow), and composer
+  tasks with `until=any|all` plus named `kill` (#5549), and composer
   double-click word / triple-click line selection.
 - Added workflow parallel-`schema` slot partial success (#5583): a slot that
   produces a schema-valid partial result no longer fails the whole parallel
@@ -255,8 +265,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#5582), typed task error kinds enable fail-fast parallel/pipeline (R9), and
   `/workflow confirm` finds the draft despite interleaved messages.
 - Fixed the DeepSeek session that never auto-compacted at 842k/1M (#5577): the
-  exact `billed_842k_on_a_1m_window_compacts_despite_a_small_estimate`
-  regression pins the trigger.
+  footer meter now uses the same uninflated pressure signal as the trigger
+  (the 1.5× overflow estimator had painted ~561k as 842k), provider-billed
+  prompt tokens survive across turn boundaries so the next send still sees
+  them, and tests pin the DeepSeek 1M 80% threshold at 800k — 799,999 stays
+  idle, 800,000 and 842,000 compact.
 - Fixed sandbox escapes and authority gaps: workspace-write tools refuse to
   rewrite a hard-linked file instead of silently splitting the pair (S2,
   #5569; Unix only — Windows std has no link-count introspection), an opt-in

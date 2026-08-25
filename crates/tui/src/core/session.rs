@@ -252,6 +252,12 @@ pub struct Session {
     /// [`Session::replace_messages`], and at other mutation sites in
     /// `core/engine.rs`.
     pub messages_revision: u64,
+
+    /// Provider-billed prompt tokens from the most recent parent-route
+    /// request that still describes the live message list. Survives turn
+    /// boundaries so the next send can compact on last-turn pressure
+    /// (#5577). Cleared when history is rewritten (compaction, restore).
+    pub(crate) latest_parent_input_tokens: Option<u32>,
 }
 
 /// Cumulative usage statistics for a session.
@@ -330,6 +336,7 @@ impl Session {
             frozen_prefix: None,
             tool_activation_cache: ToolActivationCache::default(),
             messages_revision: 0,
+            latest_parent_input_tokens: None,
         }
     }
 
@@ -347,6 +354,7 @@ impl Session {
     pub fn replace_messages(&mut self, messages: Vec<Message>) {
         self.messages = messages.into();
         self.messages_revision = self.messages_revision.saturating_add(1);
+        self.latest_parent_input_tokens = None;
     }
 
     /// Bump `messages_revision` without otherwise mutating the message list.

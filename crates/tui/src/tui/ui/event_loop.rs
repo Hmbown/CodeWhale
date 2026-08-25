@@ -2297,9 +2297,22 @@ pub(crate) async fn run_event_loop(
                         apply_compaction_started(app, id, auto);
                     }
                     EngineEvent::CompactionCompleted {
-                        id, auto, message, ..
+                        id,
+                        auto,
+                        message,
+                        messages_before,
+                        messages_after,
+                        summary_prompt,
                     } => {
-                        apply_compaction_completed(app, &id, auto, message);
+                        apply_compaction_completed(
+                            app,
+                            &id,
+                            auto,
+                            message,
+                            messages_before,
+                            messages_after,
+                            summary_prompt,
+                        );
                     }
                     EngineEvent::CompactionCancelled { id, auto, message } => {
                         apply_compaction_cancelled(app, &id, auto, message);

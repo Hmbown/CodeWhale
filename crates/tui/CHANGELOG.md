@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Compaction keeps a bounded verbatim last round (latest user message plus
+  assistant/tool results) and refuses to replace history if that round would
+  vanish. The context inspector names the compaction path and `/anchor`
+  survival (#4394, T2).
 - Selected transcript blocks support `y` copy content, `Y` copy metadata,
   Enter fullscreen, and `r` raw markdown, only when an explicit selection
   exists so empty-composer typing is not stolen (#5551).

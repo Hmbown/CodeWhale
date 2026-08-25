@@ -564,15 +564,24 @@ mod tests {
         assert_eq!(budget.output_cap_tokens, u64::from(API_MAX_OUTPUT_TOKENS));
         assert_eq!(budget.input_budget_ceiling, 933_440);
         // 80% of the 1M window fits below the spendable input ceiling.
+        let trigger = compaction_threshold_for_route_at_percent(
+            ApiProvider::Deepseek,
+            "deepseek-v4-pro",
+            None,
+            80.0,
+        );
+        assert_eq!(trigger, 800_000);
         assert_eq!(
             compaction_threshold_for_route_at_percent(
                 ApiProvider::Deepseek,
-                "deepseek-v4-pro",
+                "deepseek-v4-flash",
                 None,
                 80.0,
             ),
             800_000
         );
+        // #5577: 842k billed on this 1M window is past the 80% trigger.
+        assert!(842_000 > trigger);
     }
 
     #[test]
