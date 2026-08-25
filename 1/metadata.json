@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0VVK4BQV6T921N1JM82BDPZ",
+  "session_id": "d03b7366-8d29-42d7-a7bf-a2d7afbc864a",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-25T07:01:45.462167Z",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "web/components/mobile-menu.tsx",
+    "web/components/nav.tsx",
+    "web/lib/i18n/links.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "7fbe4d407205",
+  "checkpoint_transcript_start": 2695,
+  "transcript_lines_at_start": 2695,
+  "compact_transcript_start": 444,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014ofvjtti6CiKpJYCmH5Lw8",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "artifact-design"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "7fbe4d407205",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2210,
+        "end": 2211,
+        "entry_ids": [
+          "6d3d60a8-ebfd-4d5f-a3e7-1825f3798fea"
+        ],
+        "tool_use_id": "toolu_014ofvjtti6CiKpJYCmH5Lw8"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014ofvjtti6CiKpJYCmH5Lw8"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: artifact-design",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-25T07:01:45.26955Z",
+    "agent_lines": 34,
+    "agent_removed": 17,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 34,
+    "total_lines_changed": 51,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
