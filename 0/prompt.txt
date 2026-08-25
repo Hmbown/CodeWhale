@@ -1,0 +1,69 @@
+What’s the results on the terminal bench
+
+---
+
+There should be a 0.9.11 one
+
+---
+
+Can you look at when we switched tk concurrency 4 and go hack and awitch tk 2 amd re run those?
+
+---
+
+is it even running
+
+---
+
+how about now
+
+---
+
+so whats the current average or whatever
+
+---
+
+how about now
+
+---
+
+nah its fine how its going
+
+---
+
+results?
+
+---
+
+how about now
+
+---
+
+how about now
+
+---
+
+ok i need us to do the 7 that failed out then or whatever :/ tere's still too big of infra issues
+
+---
+
+ok got it yeah we should def try it  and figure out what never gogt a fair shot and do it with concurrency of 1 instead of making this have unique issues ok?
+
+---
+
+no 0.9.7 lol
+
+---
+
+whath appened
+
+---
+
+ok got it i think we need to honestly do an entire one that is just n = 1 and c=1 and also can you give me more info again about the openrouter stuff for codewhale like i want to e able to speak to my experience with developing around it and any issues / hepls / things i want to make notes of it
+
+---
+
+can you open that file for me so i can see it lol
+
+---
+
+ok but tell me more about this this looks like slop to me so bsaically saying we love them becasue they're theo nly thing close to nomralized reasoning effort and  ohhhh ok so just like some outdated docs for their auth / models thing or who am i or whatever?
