@@ -130,6 +130,24 @@ impl WriteScopeClaim {
     }
 }
 
+fn describe_write_claim_scope(claim: &WriteScopeClaim) -> String {
+    if claim.roots.iter().any(|root| root == ".") {
+        return format!("{} (whole workspace `.`)", claim.owner);
+    }
+    format!(
+        "{} (roots: {:?}, files: {:?}, contracts: {:?})",
+        claim.owner, claim.roots, claim.exact_files, claim.contracts
+    )
+}
+
+fn write_scope_contention_error(claimant: &WriteScopeClaim, existing: &WriteScopeClaim) -> String {
+    format!(
+        "write-scope contention between {} and {}. Serialize the work, narrow write_roots, or use worktree isolation",
+        describe_write_claim_scope(claimant),
+        describe_write_claim_scope(existing),
+    )
+}
+
 fn path_contains(root: &str, candidate: &str) -> bool {
     let root = root.trim_end_matches('/');
     let candidate = candidate.trim_end_matches('/');
@@ -539,13 +557,7 @@ impl CoordinationLedger {
             };
             self.contentions.push(receipt);
             trim_front(&mut self.contentions, COORDINATION_RECORD_LIMIT);
-            return Err(format!(
-                "write-scope contention with {} (roots: {:?}, files: {:?}, contracts: {:?}); serialize the work, narrow the claim, or use worktree isolation",
-                existing.claim.owner,
-                existing.claim.roots,
-                existing.claim.exact_files,
-                existing.claim.contracts
-            ));
+            return Err(write_scope_contention_error(&claim, &existing.claim));
         }
         self.write_claims
             .retain(|existing| existing.claim.owner != claim.owner);
@@ -1304,6 +1316,43 @@ fn trim_front<T>(records: &mut Vec<T>, limit: usize) {
 mod records_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn whole_workspace_contention_names_both_owners_and_the_root_claim() {
+        let mut ledger = CoordinationLedger::default();
+        ledger
+            .register_claim(
+                WriteScopeClaim {
+                    owner: "child-a".into(),
+                    roots: vec![".".into()],
+                    exact_files: vec![],
+                    contracts: vec![],
+                },
+                false,
+                |_| true,
+            )
+            .expect("first whole-workspace claim registers");
+        let error = ledger
+            .register_claim(
+                WriteScopeClaim {
+                    owner: "child-b".into(),
+                    roots: vec![".".into()],
+                    exact_files: vec![],
+                    contracts: vec![],
+                },
+                false,
+                |_| true,
+            )
+            .expect_err("second whole-workspace claim contends");
+        assert!(error.contains("contention"), "{error}");
+        assert!(error.contains("child-a"), "{error}");
+        assert!(error.contains("child-b"), "{error}");
+        assert!(
+            error.contains("whole workspace"),
+            "root claims must be named as the whole workspace, not dumped as ['.']: {error}"
+        );
+        assert!(error.contains("write_roots"), "{error}");
+    }
 
     #[test]
     fn overlapping_roots_detected() {

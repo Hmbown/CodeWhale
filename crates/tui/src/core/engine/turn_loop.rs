@@ -670,8 +670,19 @@ impl Engine {
 
         loop {
             if self.cancel_token.is_cancelled() {
-                let _ = self.tx_event.send(Event::status("Request cancelled")).await;
-                return (TurnOutcomeStatus::Interrupted, None);
+                let mut pending = Vec::new();
+                if !self
+                    .recover_steers_from_cancelled_parent_stream(
+                        &mut pending,
+                        None,
+                        turn_end_child_guard_sent,
+                        &mut turn_end_child_coordination_responses_remaining,
+                    )
+                    .await
+                {
+                    let _ = self.tx_event.send(Event::status("Request cancelled")).await;
+                    return (TurnOutcomeStatus::Interrupted, None);
+                }
             }
 
             if turn_wall_clock_exhausted(turn.elapsed(), self.config.max_wall_time) {
@@ -1330,6 +1341,18 @@ impl Engine {
             let stream_result = tokio::select! {
                 biased;
                 () = self.cancel_token.cancelled() => {
+                    let mut pending = Vec::new();
+                    if self
+                        .recover_steers_from_cancelled_parent_stream(
+                            &mut pending,
+                            None,
+                            turn_end_child_guard_sent,
+                            &mut turn_end_child_coordination_responses_remaining,
+                        )
+                        .await
+                    {
+                        continue;
+                    }
                     let _ = self.tx_event.send(Event::status("Request cancelled")).await;
                     return (TurnOutcomeStatus::Interrupted, None);
                 }
@@ -1428,6 +1451,18 @@ impl Engine {
             }
 
             if self.cancel_token.is_cancelled() {
+                if self
+                    .recover_steers_from_cancelled_parent_stream(
+                        &mut pending_steers,
+                        Some(&current_text_visible),
+                        turn_end_child_guard_sent,
+                        &mut turn_end_child_coordination_responses_remaining,
+                    )
+                    .await
+                {
+                    turn.next_step();
+                    continue;
+                }
                 let _ = self.tx_event.send(Event::status("Request cancelled")).await;
                 self.add_interrupted_assistant_text(&current_text_visible)
                     .await;
@@ -2422,6 +2457,13 @@ impl Engine {
         }
 
         if self.cancel_token.is_cancelled() {
+            // The loop has already ended, so a leftover steer cannot resume
+            // this turn. Commit it anyway so the next user turn still sees it
+            // instead of handle_send_message draining it as stale.
+            let leftover = self.drain_rx_steers();
+            if !leftover.is_empty() {
+                let _ = self.commit_pending_steers(leftover).await;
+            }
             return (TurnOutcomeStatus::Interrupted, None);
         }
         if let Some(err) = turn_error {
@@ -4063,6 +4105,69 @@ impl Engine {
         }
     }
 
+    fn drain_rx_steers(&mut self) -> Vec<String> {
+        let mut steers = Vec::new();
+        while let Ok(steer) = self.rx_steer.try_recv() {
+            let steer = steer.trim().to_string();
+            if !steer.is_empty() {
+                steers.push(steer);
+            }
+        }
+        steers
+    }
+
+    async fn commit_pending_steers(&mut self, steers: impl IntoIterator<Item = String>) -> bool {
+        let mut accepted = false;
+        for steer in steers {
+            if steer.trim().is_empty() {
+                continue;
+            }
+            accepted = true;
+            self.session
+                .working_set
+                .observe_user_message(&steer, &self.session.workspace);
+            self.add_session_message(self.user_text_message_with_turn_metadata(steer))
+                .await;
+        }
+        accepted
+    }
+
+    /// Honour steers that arrived on a cancelled parent stream.
+    ///
+    /// `process_stream` polls cancel with `biased` before the next chunk, so a
+    /// steer queued during that stream can sit in `pending_steers` or still on
+    /// `rx_steer` when the turn would otherwise return Interrupted and drop
+    /// them. Applying them and resetting the token lets the next loop
+    /// iteration rebuild the request with the user's input.
+    async fn recover_steers_from_cancelled_parent_stream(
+        &mut self,
+        pending_steers: &mut Vec<String>,
+        interrupted_assistant_text: Option<&str>,
+        turn_end_child_guard_sent: bool,
+        turn_end_child_coordination_responses_remaining: &mut u8,
+    ) -> bool {
+        pending_steers.extend(self.drain_rx_steers());
+        if pending_steers.is_empty() {
+            return false;
+        }
+        if let Some(text) = interrupted_assistant_text {
+            self.add_interrupted_assistant_text(text).await;
+        }
+        let _ = self
+            .commit_pending_steers(std::mem::take(pending_steers))
+            .await;
+        grant_turn_end_steer_response_allowance(
+            turn_end_child_guard_sent,
+            turn_end_child_coordination_responses_remaining,
+        );
+        self.reset_cancel_token();
+        let _ = self
+            .tx_event
+            .send(Event::status("Continuing — queued steer input".to_string()))
+            .await;
+        true
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn process_stream(
         &mut self,
@@ -4671,6 +4776,9 @@ impl Engine {
                 }
             }
         }
+        // Cancel is biased-first in the select above, so a steer that races
+        // the cancel (or arrives after the last chunk) is still on rx_steer.
+        pending_steers.extend(self.drain_rx_steers());
         StreamOutcome {
             current_text_raw,
             current_text_visible,
@@ -7175,5 +7283,205 @@ mod tests {
                 "zero delay must not enter the quiet-period wait, got {event:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod cancelled_parent_steer_tests {
+    use super::super::*;
+    use crate::config::Config;
+    use crate::llm_client::mock::canned;
+    use crate::models::{ContentBlock, MessageRequest, StreamEvent, Usage};
+    use crate::tools::ToolContext;
+    use crate::tui::app::AppMode;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tempfile::tempdir;
+    use tokio::sync::mpsc;
+
+    struct CancelAfterQueuedSteerModelClient {
+        calls: AtomicUsize,
+        token: StdMutex<Option<Arc<StdMutex<CancellationToken>>>>,
+        tx_steer: StdMutex<Option<mpsc::Sender<String>>>,
+        captured: StdMutex<Vec<MessageRequest>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::core::model_client::ModelClient for CancelAfterQueuedSteerModelClient {
+        fn provider_name(&self) -> &str {
+            "mock"
+        }
+
+        fn model(&self) -> &str {
+            "mock-model"
+        }
+
+        async fn create_message(
+            &self,
+            _request: MessageRequest,
+        ) -> anyhow::Result<crate::models::MessageResponse> {
+            anyhow::bail!("unused")
+        }
+
+        async fn create_message_stream(
+            &self,
+            request: MessageRequest,
+        ) -> anyhow::Result<crate::llm_client::StreamEventBox> {
+            self.captured
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(request);
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n > 0 {
+                let turn = canned::simple_text_turn(
+                    "The queued steer was applied after the cancelled stream.",
+                );
+                return Ok(Box::pin(futures_util::stream::iter(
+                    turn.into_iter().map(Ok),
+                )));
+            }
+
+            let shared = self
+                .token
+                .lock()
+                .expect("token cell")
+                .clone()
+                .expect("token installed before turn");
+            let token = shared
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let tx_steer = self
+                .tx_steer
+                .lock()
+                .expect("steer cell")
+                .clone()
+                .expect("steer channel installed before turn");
+            let mut message_start = canned::message_start("cancel_after_steer");
+            if let StreamEvent::MessageStart { message } = &mut message_start {
+                message.usage = Usage {
+                    input_tokens: 11,
+                    ..Default::default()
+                };
+            }
+            let events = vec![
+                message_start,
+                canned::text_block_start(0),
+                canned::text_delta(0, "partial answer before cancel"),
+                canned::block_stop(0),
+                canned::message_delta(
+                    "end_turn",
+                    Some(Usage {
+                        output_tokens: 5,
+                        ..Default::default()
+                    }),
+                ),
+                canned::message_stop(),
+            ];
+            let last = events.len() - 1;
+            let stream = futures_util::stream::iter(events.into_iter().enumerate().map(
+                move |(index, event)| {
+                    if index == last {
+                        tx_steer
+                            .try_send("keep this steer after cancel".to_string())
+                            .expect("test steer channel remains open");
+                        token.cancel();
+                    }
+                    Ok(event)
+                },
+            ));
+            Ok(Box::pin(stream))
+        }
+
+        async fn health_check(&self) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    fn request_text(request: &MessageRequest) -> String {
+        request
+            .messages
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .filter_map(|block| match block {
+                ContentBlock::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    async fn queued_steer_survives_cancelled_parent_stream() {
+        let workspace = tempdir().expect("tempdir");
+        let model = Arc::new(CancelAfterQueuedSteerModelClient {
+            calls: AtomicUsize::new(0),
+            token: StdMutex::new(None),
+            tx_steer: StdMutex::new(None),
+            captured: StdMutex::new(Vec::new()),
+        });
+        let client: crate::core::model_client::SharedModelClient = model.clone();
+        let (mut engine, handle) = Engine::new_with_model_client(
+            EngineConfig {
+                workspace: workspace.path().to_path_buf(),
+                snapshots_enabled: false,
+                subagents_enabled: false,
+                terminal_chrome_enabled: false,
+                max_steps: 8,
+                ..EngineConfig::default()
+            },
+            &Config::default(),
+            client,
+        );
+        *model.token.lock().expect("token cell") = Some(engine.shared_cancel_token.clone());
+        *model.tx_steer.lock().expect("steer cell") = Some(handle.tx_steer.clone());
+
+        let context = ToolContext::new(workspace.path().to_path_buf());
+        let registry = crate::tools::ToolRegistry::new(context);
+        let surface = ToolSurfacePolicy::new(
+            registry,
+            None,
+            AppMode::Agent,
+            &engine.config.tools_always_load,
+            &[],
+            engine.config.strict_tool_mode,
+            engine.config.allowed_tools.clone(),
+            engine.config.disallowed_tools.clone(),
+            engine.config.max_tool_calls,
+            engine.session.approval_mode,
+        );
+        let mut turn = crate::core::turn::TurnContext::new(8);
+
+        let (status, error) = engine.run_turn(&mut turn, surface, None, None).await;
+
+        assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
+        assert_eq!(
+            model.calls.load(Ordering::SeqCst),
+            2,
+            "cancelled parent stream with a queued steer must resume for one follow-up response"
+        );
+        let captured = model
+            .captured
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(captured.len(), 2);
+        let follow_up = request_text(&captured[1]);
+        assert!(
+            follow_up.contains("keep this steer after cancel"),
+            "follow-up request must include the steer that raced the cancelled stream: {follow_up}"
+        );
+        assert!(
+            engine.session.messages.iter().any(|message| {
+                message.content.iter().any(|block| {
+                    matches!(
+                        block,
+                        ContentBlock::Text { text, .. }
+                            if text.contains("keep this steer after cancel")
+                    )
+                })
+            }),
+            "the steer must be committed to the session instead of dropped"
+        );
     }
 }
