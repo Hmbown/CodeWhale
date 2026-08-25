@@ -1671,7 +1671,7 @@
   "ProviderTemplateGuidanceAgnes": "Agnes não tem uma URL OpenAI-compatível publicada neste repositório, então não há preset preenchível.",
   "ProviderCustomFormBaseUrl": "URL base",
   "ProviderCustomFormModel": "Modelo padrão",
-  "ProviderCustomFormHint": "Endpoint compatível com OpenAI. Guarde o nome da variável de ambiente, não a chave crua. OpenCode Zen/Go são linhas de primeira classe. SenseNova: S. Agnes não tem URL publicada.",
+  "ProviderCustomFormHint": "Endpoint compatível com OpenAI. Guarde o nome da variável de ambiente, não a chave crua. OpenCode Zen/Go são linhas de primeira classe. SenseNova fica em P (modelos). Agnes não tem URL publicada.",
   "ConfigLabelProviderTemplates": "Modelos de provedor para iniciantes",
   "ConfigActionOpenProviderTemplates": "Enter abre a lista de modelos",
   "ConfigHintProviderTemplates": "P em /provider; C-t testa /models sem tratar 2xx como modelo pronto",

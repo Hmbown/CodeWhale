@@ -1671,7 +1671,7 @@
   "ProviderTemplateGuidanceAgnes": "이 저장소에 Agnes의 게시된 OpenAI 호환 URL이 없어 입력 가능한 프리셋이 없습니다.",
   "ProviderCustomFormBaseUrl": "기본 URL",
   "ProviderCustomFormModel": "기본 모델",
-  "ProviderCustomFormHint": "OpenAI 호환 엔드포인트. 원시 키가 아니라 환경 변수 이름을 저장하세요. OpenCode Zen/Go는 일급 행입니다. SenseNova: S. Agnes에는 게시된 URL이 없습니다.",
+  "ProviderCustomFormHint": "OpenAI 호환 엔드포인트. 원시 키가 아니라 환경 변수 이름을 저장하세요. OpenCode Zen/Go는 일급 행입니다. SenseNova는 P(템플릿)에 있습니다. Agnes에는 게시된 URL이 없습니다.",
   "ConfigLabelProviderTemplates": "초보자 프로바이더 템플릿",
   "ConfigActionOpenProviderTemplates": "Enter로 템플릿 목록 열기",
   "ConfigHintProviderTemplates": "/provider에서 P; C-t는 /models를 시험하며 2xx를 모델 준비 완료로 보지 않습니다",

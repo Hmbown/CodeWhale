@@ -1671,7 +1671,7 @@
   "ProviderTemplateGuidanceAgnes": "Agnes no té cap URL OpenAI-compatible publicada en aquest repositori, així que no té un predefinit omplible.",
   "ProviderCustomFormBaseUrl": "URL base",
   "ProviderCustomFormModel": "Model per defecte",
-  "ProviderCustomFormHint": "Punt final compatible amb OpenAI. Deseu el nom de la variable d'entorn, no la clau crua. OpenCode Zen/Go són files de primera classe. SenseNova: S. Agnes no té URL publicada.",
+  "ProviderCustomFormHint": "Punt final compatible amb OpenAI. Deseu el nom de la variable d'entorn, no la clau crua. OpenCode Zen/Go són files de primera classe. SenseNova és a P (plantilles). Agnes no té URL publicada.",
   "ConfigLabelProviderTemplates": "Plantilles de proveïdor per a principiants",
   "ConfigActionOpenProviderTemplates": "Enter obre la llista de plantilles",
   "ConfigHintProviderTemplates": "P a /provider; C-t prova /models sense tractar 2xx com a model a punt",

@@ -1671,7 +1671,7 @@
   "ProviderTemplateGuidanceAgnes": "इस रिपॉजिटरी में Agnes का कोई प्रकाशित OpenAI-संगत URL नहीं है, इसलिए कोई भरने योग्य प्रीसेट नहीं है।",
   "ProviderCustomFormBaseUrl": "बेस URL",
   "ProviderCustomFormModel": "डिफ़ॉल्ट मॉडल",
-  "ProviderCustomFormHint": "OpenAI-संगत एंडपॉइंट। कच्ची कुंजी नहीं, पर्यावरण चर का नाम सहेजें। OpenCode Zen/Go प्रथम-श्रेणी पंक्तियाँ हैं। SenseNova: S. Agnes का कोई प्रकाशित URL नहीं है।",
+  "ProviderCustomFormHint": "OpenAI-संगत एंडपॉइंट। कच्ची कुंजी नहीं, पर्यावरण चर का नाम सहेजें। OpenCode Zen/Go प्रथम-श्रेणी पंक्तियाँ हैं। SenseNova अब P (टेम्पलेट) में है। Agnes का कोई प्रकाशित URL नहीं है।",
   "ConfigLabelProviderTemplates": "शुरुआती प्रोवाइडर टेम्पलेट",
   "ConfigActionOpenProviderTemplates": "Enter टेम्पलेट सूची खोलता है",
   "ConfigHintProviderTemplates": "/provider में P; C-t /models जाँचता है और 2xx को मॉडल-तैयार नहीं मानता",

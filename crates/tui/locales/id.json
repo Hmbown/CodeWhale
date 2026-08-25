@@ -1671,7 +1671,7 @@
   "ProviderTemplateGuidanceAgnes": "Agnes tidak memiliki URL kompatibel OpenAI yang diterbitkan di repositori ini, jadi tidak ada prasetel yang bisa diisi.",
   "ProviderCustomFormBaseUrl": "URL dasar",
   "ProviderCustomFormModel": "Model bawaan",
-  "ProviderCustomFormHint": "Endpoint kompatibel OpenAI. Simpan nama variabel lingkungan, bukan kunci mentah. OpenCode Zen/Go adalah baris kelas satu. SenseNova: S. Agnes tidak punya URL terbit.",
+  "ProviderCustomFormHint": "Endpoint kompatibel OpenAI. Simpan nama variabel lingkungan, bukan kunci mentah. OpenCode Zen/Go adalah baris kelas satu. SenseNova ada di P (templat). Agnes tidak punya URL terbit.",
   "ConfigLabelProviderTemplates": "Templat penyedia untuk pemula",
   "ConfigActionOpenProviderTemplates": "Enter membuka daftar templat",
   "ConfigHintProviderTemplates": "P di /provider; C-t menguji /models tanpa menganggap 2xx sebagai model siap",

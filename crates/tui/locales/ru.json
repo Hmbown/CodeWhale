@@ -1671,7 +1671,7 @@
   "ProviderTemplateGuidanceAgnes": "У Agnes нет опубликованного OpenAI-совместимого URL в этом репозитории, поэтому заполняемого пресета нет.",
   "ProviderCustomFormBaseUrl": "Базовый URL",
   "ProviderCustomFormModel": "Модель по умолчанию",
-  "ProviderCustomFormHint": "OpenAI-совместимая конечная точка. Сохраняйте имя переменной окружения, не сырой ключ. OpenCode Zen/Go — строки первого класса. SenseNova: S. У Agnes нет опубликованного URL.",
+  "ProviderCustomFormHint": "OpenAI-совместимая конечная точка. Сохраняйте имя переменной окружения, не сырой ключ. OpenCode Zen/Go — строки первого класса. SenseNova находится в P (шаблоны). У Agnes нет опубликованного URL.",
   "ConfigLabelProviderTemplates": "Шаблоны провайдера для новичков",
   "ConfigActionOpenProviderTemplates": "Enter открывает список шаблонов",
   "ConfigHintProviderTemplates": "P в /provider; C-t проверяет /models и не считает 2xx готовностью модели",

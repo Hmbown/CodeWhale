@@ -1671,7 +1671,7 @@
   "ProviderTemplateGuidanceAgnes": "このリポジトリに Agnes の公開 OpenAI 互換 URL がないため、入力可能なプリセットはありません。",
   "ProviderCustomFormBaseUrl": "ベースURL",
   "ProviderCustomFormModel": "既定モデル",
-  "ProviderCustomFormHint": "OpenAI 互換エンドポイント。生のキーではなく環境変数名を保存します。OpenCode Zen/Go は第一級行です。SenseNova: S。Agnes に公開 URL はありません。",
+  "ProviderCustomFormHint": "OpenAI 互換エンドポイント。生のキーではなく環境変数名を保存します。OpenCode Zen/Go は第一級行です。SenseNova は P（テンプレート）にあります。Agnes に公開 URL はありません。",
   "ConfigLabelProviderTemplates": "初心者向けプロバイダテンプレート",
   "ConfigActionOpenProviderTemplates": "Enter でテンプレート一覧を開く",
   "ConfigHintProviderTemplates": "/provider で P。C-t は /models を試し、2xx をモデル準備完了とは見なしません",

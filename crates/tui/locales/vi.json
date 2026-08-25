@@ -1671,7 +1671,7 @@
   "ProviderTemplateGuidanceAgnes": "Agnes không có URL tương thích OpenAI đã công bố trong kho này, nên không có preset điền sẵn.",
   "ProviderCustomFormBaseUrl": "URL cơ sở",
   "ProviderCustomFormModel": "Mô hình mặc định",
-  "ProviderCustomFormHint": "Điểm cuối tương thích OpenAI. Lưu tên biến môi trường, không lưu khóa thô. OpenCode Zen/Go là hàng hạng nhất. SenseNova: S. Agnes không có URL đã công bố.",
+  "ProviderCustomFormHint": "Điểm cuối tương thích OpenAI. Lưu tên biến môi trường, không lưu khóa thô. OpenCode Zen/Go là hàng hạng nhất. SenseNova nằm ở P (mẫu). Agnes không có URL đã công bố.",
   "ConfigLabelProviderTemplates": "Mẫu nhà cung cấp cho người mới",
   "ConfigActionOpenProviderTemplates": "Enter mở danh sách mẫu",
   "ConfigHintProviderTemplates": "P trong /provider; C-t thử /models và không coi 2xx là mô hình sẵn sàng",

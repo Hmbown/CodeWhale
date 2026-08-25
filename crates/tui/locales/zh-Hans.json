@@ -1671,7 +1671,7 @@
   "ProviderTemplateGuidanceAgnes": "本仓库没有 Agnes 已发布的 OpenAI 兼容 URL，因此没有可填写的预设。",
   "ProviderCustomFormBaseUrl": "基础 URL",
   "ProviderCustomFormModel": "默认模型",
-  "ProviderCustomFormHint": "OpenAI 兼容端点。请保存环境变量名，不要保存原始密钥。OpenCode Zen/Go 是一等路由。SenseNova：S。Agnes 没有已发布 URL。",
+  "ProviderCustomFormHint": "OpenAI 兼容端点。请保存环境变量名，不要保存原始密钥。OpenCode Zen/Go 是一等路由。SenseNova 在 P（模板）中。Agnes 没有已发布 URL。",
   "ConfigLabelProviderTemplates": "新手提供商模板",
   "ConfigActionOpenProviderTemplates": "按 Enter 打开模板列表",
   "ConfigHintProviderTemplates": "在 /provider 按 P；C-t 测试 /models，2xx 只表示可达，不表示模型可用",

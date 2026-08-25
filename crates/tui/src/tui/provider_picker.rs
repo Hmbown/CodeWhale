@@ -2239,12 +2239,6 @@ impl ProviderPickerView {
         self.custom_provider_api_key_env.clear();
     }
 
-    fn enter_sensenova_form(&mut self) {
-        if let Some(template) = provider_setup_template(SENSENOVA_TEMPLATE_ID) {
-            self.apply_template(template);
-        }
-    }
-
     fn enter_template_list(&mut self) {
         self.stage = Stage::TemplateList;
         self.template_selected_idx = self
@@ -2551,7 +2545,6 @@ impl ProviderPickerView {
                     ActionHint::new("I", "LM Studio"),
                     ActionHint::new("C", self.tr(MessageId::PickerActionCustom)),
                     ActionHint::new("D", "DS4"),
-                    ActionHint::new("S", "SenseNova"),
                 ],
             )
         } else {
@@ -2567,7 +2560,6 @@ impl ProviderPickerView {
                     ActionHint::new("I", "LM Studio"),
                     ActionHint::new("C", self.tr(MessageId::PickerActionCustom)),
                     ActionHint::new("D", "DS4"),
-                    ActionHint::new("S", "SenseNova"),
                     ActionHint::new("P", self.tr(MessageId::PickerActionTemplates)),
                     ActionHint::new("C-t", self.tr(MessageId::PickerActionTestConnection)),
                     ActionHint::new("R", self.tr(MessageId::PickerActionEditKey)),
@@ -3919,14 +3911,6 @@ impl ModalView for ProviderPickerView {
                         && c.eq_ignore_ascii_case(&'d') =>
                 {
                     self.enter_ds4_form();
-                    ViewAction::None
-                }
-                KeyCode::Char(c)
-                    if key.modifiers.is_empty()
-                        && self.query.is_empty()
-                        && c.eq_ignore_ascii_case(&'s') =>
-                {
-                    self.enter_sensenova_form();
                     ViewAction::None
                 }
                 KeyCode::Char(c)
@@ -6001,10 +5985,29 @@ mod tests {
 
     #[test]
     fn sensenova_preset_fills_published_openai_host() {
+        // Reached through the template list like every other compatible
+        // template, not a dedicated key: SenseNova has no standing the
+        // others lack, and a per-provider hotkey stole a letter from the
+        // a-z jump the footer advertises.
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
         assert!(matches!(
-            picker.handle_key(key(KeyCode::Char('s'))),
+            picker.handle_key(key(KeyCode::Char('p'))),
+            ViewAction::None
+        ));
+        assert_eq!(picker.stage, Stage::TemplateList);
+        let index = provider_setup_templates()
+            .iter()
+            .position(|template| template.id == codewhale_config::SENSENOVA_TEMPLATE_ID)
+            .expect("SenseNova template");
+        while picker.template_selected_idx < index {
+            picker.handle_key(key(KeyCode::Down));
+        }
+        while picker.template_selected_idx > index {
+            picker.handle_key(key(KeyCode::Up));
+        }
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Enter)),
             ViewAction::None
         ));
         assert_eq!(picker.stage, Stage::CustomForm);
