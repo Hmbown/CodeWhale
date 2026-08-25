@@ -44,9 +44,18 @@ BOT_NAMES = ("claude", "codex", "cursor")
 # name+email pair: lookalike or unknown agent identities still fail the gate.
 # These identities intentionally stay out of AUTHOR_MAP because they are not
 # GitHub contributor-graph humans.
+#
+# Entries are per model, not a `claude`-prefix wildcard, and that is the point:
+# the trailer is the only durable record of which model produced a given
+# change, so it is what lets us compare their output later and find where a
+# particular one needs help. A wildcard would accept any string and destroy
+# exactly the signal this list exists to preserve. Add a model here when it
+# actually starts contributing, and do not reuse another model's identity to
+# get past the gate — that files the work under the wrong author.
 AGENT_CONTRIBUTOR_IDENTITIES = {
     ("codewhale agent", "codewhale-agent@hmbown.local"),
     ("claude fable 5", "noreply@anthropic.com"),
+    ("claude opus 5", "noreply@anthropic.com"),
 }
 
 # This commit is already immutable history on origin/main. Its trailer names a
