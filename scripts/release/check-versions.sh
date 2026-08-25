@@ -215,6 +215,18 @@ if [[ -n "${previous_tag}" ]]; then
       git diff "${previous_tag}..HEAD" -- README.md \
         | grep -E '^\+[-*] \*\*\[[^]]+\]\(https://github.com/[^)]+\)\*\*' || true
     )
+  else
+    # A gate that silently no-ops is worse than no gate: it reports success and
+    # is read as evidence. If the tag cannot be resolved -- the fetch above is
+    # `|| true` and a network blip is enough -- then the feature release-note
+    # receipt check and the contributor-credit check did not run at all, and
+    # this script must not imply that they passed.
+    echo "::error::Cannot resolve refs/tags/${previous_tag}, so the feature release-note receipt and contributor-credit checks did not run. Fetch the tag and re-run; do not treat this as a pass." >&2
+    if [[ "${CWC_ALLOW_MISSING_PREVIOUS_TAG:-}" == "1" ]]; then
+      echo "::warning::CWC_ALLOW_MISSING_PREVIOUS_TAG=1 set, continuing with those two checks UNRUN." >&2
+    else
+      fail=1
+    fi
   fi
 fi
 
