@@ -6,18 +6,28 @@
 //! material is ever logged):
 //!
 //! ```text
-//! base64(                                        // outer, urlsafe, unpadded
-//!   field1: b"oauthTokenInfoSentinelKey"        // marker message
-//!   field2: base64(                             // inner, urlsafe, unpadded
-//!     field1: access token  ("ya29....", 260B)
-//!     field2: b"Bearer"
-//!     field3: refresh token ("1//....", 103B)
-//!     field4: varint message { field1: expiry epoch seconds }
-//!   )
-//!   field1: b"authStateWithContextSentinel"     // marker message
-//!   field2: {"state":"signedIn", ...} JSON
+//! base64(                                    // outer, urlsafe, unpadded
+//!   field1: entry {                          // one entry per sentinel
+//!     field1: b"oauthTokenInfoSentinelKey"   // which entry this is
+//!     field2: holder {
+//!       field1: base64(                      // inner, urlsafe, unpadded
+//!         field1: access token  ("ya29....", 260B)
+//!         field2: b"Bearer"
+//!         field3: refresh token ("1//....", 103B)
+//!         field4: message { field1: varint expiry, epoch seconds }
+//!       )
+//!     }
+//!   }
+//!   field1: entry {
+//!     field1: b"authStateWithContextSentinelKey"
+//!     field2: holder { field1: base64({"state":"signedIn", ...}) }
+//!   }
 //! )
 //! ```
+//!
+//! Each entry is a nested message, not a pair of sibling fields on the outer
+//! message — verified by decoding a real store on 2026-08-25, where the
+//! entries were 545 and 249 bytes and the token-info blob was 384 bytes.
 //!
 //! The same DB also carries `antigravityAuthStatus` (plain JSON with
 //! `apiKey`/`email`/`name`), which is the credential the current app
@@ -25,7 +35,8 @@
 //! never refreshes, and never logs token values.
 
 use base64::{
-    Engine as _, engine::general_purpose::URL_SAFE, engine::general_purpose::URL_SAFE_NO_PAD,
+    Engine as _, engine::general_purpose::STANDARD, engine::general_purpose::STANDARD_NO_PAD,
+    engine::general_purpose::URL_SAFE, engine::general_purpose::URL_SAFE_NO_PAD,
 };
 
 /// ItemTable key holding the `agy` OAuth token envelope.
@@ -58,50 +69,77 @@ pub(crate) fn access_token_from_auth_status_json(raw: &str) -> Option<String> {
     (!token.is_empty()).then(|| token.to_string())
 }
 
+/// Marker naming the entry that carries the OAuth token.
+const OAUTH_TOKEN_SENTINEL: &[u8] = b"oauthTokenInfoSentinelKey";
+
+/// Whether a stored value is recognisably this envelope.
+///
+/// Used to fail closed: a value that is an envelope but does not parse must
+/// never fall through to the legacy bare-token reader, which would hand the
+/// whole base64 blob back as if it were a credential.
+pub(crate) fn looks_like_envelope(raw: &str) -> bool {
+    base64_decode_any(raw.trim().as_bytes())
+        .is_some_and(|bytes| contains_window(&bytes, OAUTH_TOKEN_SENTINEL))
+}
+
+fn contains_window(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
 /// Parse the `antigravityUnifiedStateSync.oauthToken` protobuf envelope.
 pub(crate) fn parse_token_envelope(raw: &str) -> Option<AgyExternalCredential> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let outer = base64_urlsafe_decode(trimmed.as_bytes())?;
-    // The outer value is one or more concatenated protobuf messages. Find
-    // the `oauthTokenInfoSentinelKey` marker message and take the field that
-    // follows it (field 2 of the same message).
-    let fields = protobuf_fields(&outer)?;
-    let mut access_token = None;
-    let mut expires_at = None;
-    let mut in_token_info = false;
-    for (field_number, payload) in fields {
-        if payload == b"oauthTokenInfoSentinelKey" && field_number == 1 {
-            in_token_info = true;
+    let outer = base64_decode_any(trimmed.as_bytes())?;
+    // The outer message holds one nested entry per sentinel. Each entry names
+    // itself in field 1 and carries its payload in field 2.
+    for (_, entry) in protobuf_fields(&outer)? {
+        let Some(entry_fields) = protobuf_fields(&entry) else {
+            continue;
+        };
+        let names_token_info = entry_fields
+            .iter()
+            .any(|(number, value)| *number == 1 && value.as_slice() == OAUTH_TOKEN_SENTINEL);
+        if !names_token_info {
             continue;
         }
-        if in_token_info && field_number == 2 {
-            // Inner base64 blob of the token-info message.
-            let inner_blob = base64_urlsafe_decode(&payload)?;
-            let inner_fields = protobuf_fields(&inner_blob)?;
-            let nested = protobuf_fields(&inner_fields.first()?.1)?;
-            for (num, value) in nested {
-                match num {
-                    1 if access_token.is_none() => {
-                        access_token = Some(String::from_utf8_lossy(&value).to_string());
+        let holder = entry_fields
+            .iter()
+            .find(|(number, _)| *number == 2)
+            .map(|(_, value)| value)?;
+        // The holder wraps a single base64 string which decodes directly to
+        // the token-info message.
+        let blob = protobuf_fields(holder)?
+            .into_iter()
+            .find(|(number, _)| *number == 1)
+            .map(|(_, value)| value)?;
+        let info = base64_decode_any(&blob)?;
+        return credential_from_token_info(&info);
+    }
+    None
+}
+
+/// Read the token-info message: field 1 is the access token, field 3 is the
+/// refresh token (parsed past, never kept), field 4 wraps the expiry varint.
+fn credential_from_token_info(info: &[u8]) -> Option<AgyExternalCredential> {
+    let mut access_token = None;
+    let mut expires_at = None;
+    for (number, value) in protobuf_fields(info)? {
+        match number {
+            1 if access_token.is_none() => {
+                access_token = Some(String::from_utf8_lossy(&value).into_owned());
+            }
+            // Field 2 is the literal "Bearer"; field 3 is the refresh token.
+            4 => {
+                for (inner, raw) in protobuf_fields(&value)? {
+                    if inner == 1 {
+                        expires_at = Some(varint_u64(&raw)? as i64);
                     }
-                    // Field 3 is the refresh token: parsed past, never kept.
-                    4 => {
-                        // field4 = nested message { field1: varint expiry }
-                        if let Some(expiry_fields) = protobuf_fields(&value) {
-                            for (n, v) in expiry_fields {
-                                if n == 1 {
-                                    expires_at = Some(varint_u64(&v)? as i64);
-                                }
-                            }
-                        }
-                    }
-                    _ => {}
                 }
             }
-            in_token_info = false;
+            _ => {}
         }
     }
     let access_token = access_token?;
@@ -116,13 +154,22 @@ pub(crate) fn parse_token_envelope(raw: &str) -> Option<AgyExternalCredential> {
 
 // ── Minimal protobuf wire reader (length-delimited subset) ─────────────────
 
-/// Decode unpadded urlsafe base64, tolerating standard-alphabet padding.
-fn base64_urlsafe_decode(input: &[u8]) -> Option<Vec<u8>> {
+/// Decode base64 in whichever alphabet the store happens to use.
+///
+/// The real store writes STANDARD base64 — padded, and using `+` — while the
+/// inner token blob is unpadded. An earlier version of this function only
+/// tried the URL-safe alphabets, which reject `+`, so the outer envelope
+/// never decoded at all and every sign-in fell through to the legacy
+/// bare-token reader. Try all four rather than betting on one.
+fn base64_decode_any(input: &[u8]) -> Option<Vec<u8>> {
     let text = std::str::from_utf8(input).ok()?;
     let cleaned: String = text.chars().filter(|c| c != &'\n' && c != &'\r').collect();
-    URL_SAFE_NO_PAD
-        .decode(cleaned.trim_end_matches('='))
-        .or_else(|_| URL_SAFE.decode(cleaned.as_str()))
+    let unpadded = cleaned.trim_end_matches('=');
+    STANDARD
+        .decode(&cleaned)
+        .or_else(|_| STANDARD_NO_PAD.decode(unpadded))
+        .or_else(|_| URL_SAFE.decode(&cleaned))
+        .or_else(|_| URL_SAFE_NO_PAD.decode(unpadded))
         .ok()
 }
 
@@ -213,7 +260,9 @@ mod tests {
         out
     }
 
-    /// Build an envelope with the shape observed in the official store.
+    /// Build an envelope with the nesting decoded from a real store on
+    /// 2026-08-25: the outer message holds one nested entry per sentinel,
+    /// each naming itself in field 1 and holding its payload in field 2.
     fn fixture_envelope(access: &str, refresh: &str, expires_at: Option<u64>) -> String {
         let mut token_info = Vec::new();
         token_info.extend(delimited(1, access.as_bytes()));
@@ -222,15 +271,23 @@ mod tests {
         if let Some(expiry) = expires_at {
             token_info.extend(delimited(4, &varint_field(1, expiry)));
         }
-        // The inner blob wraps the token-info message in one outer field.
-        let inner_blob = delimited(1, &token_info);
-        let inner_b64 = URL_SAFE_NO_PAD.encode(&inner_blob);
+        // The holder carries one base64 string that decodes straight to the
+        // token-info message.
+        let blob = URL_SAFE_NO_PAD.encode(&token_info);
+        let holder = delimited(1, blob.as_bytes());
+
+        let mut token_entry = Vec::new();
+        token_entry.extend(delimited(1, b"oauthTokenInfoSentinelKey"));
+        token_entry.extend(delimited(2, &holder));
+
+        let state_blob = URL_SAFE_NO_PAD.encode(br#"{"state":"signedIn"}"#);
+        let mut state_entry = Vec::new();
+        state_entry.extend(delimited(1, b"authStateWithContextSentinelKey"));
+        state_entry.extend(delimited(2, &delimited(1, state_blob.as_bytes())));
 
         let mut outer = Vec::new();
-        outer.extend(delimited(1, b"oauthTokenInfoSentinelKey"));
-        outer.extend(delimited(2, inner_b64.as_bytes()));
-        outer.extend(delimited(1, b"authStateWithContextSentinel"));
-        outer.extend(delimited(2, br#"{"state":"signedIn"}"#));
+        outer.extend(delimited(1, &token_entry));
+        outer.extend(delimited(1, &state_entry));
         URL_SAFE_NO_PAD.encode(&outer)
     }
 
@@ -273,6 +330,20 @@ mod tests {
         assert!(
             parse_token_envelope(&URL_SAFE_NO_PAD.encode(b"not a protobuf envelope")).is_none()
         );
+    }
+
+    #[test]
+    fn an_envelope_is_recognised_even_when_it_does_not_parse() {
+        // The fail-closed hook: a value carrying the sentinel is an envelope,
+        // so a parse failure must never be handed to the legacy bare-token
+        // reader, which would return the whole blob as a "credential".
+        let raw = fixture_envelope("ya29.fixture-access", "1//fixture-refresh", None);
+        assert!(looks_like_envelope(&raw));
+        assert!(!looks_like_envelope("ya29.bare-token"));
+        assert!(!looks_like_envelope(""));
+        assert!(!looks_like_envelope(
+            &URL_SAFE_NO_PAD.encode(b"some other base64 payload")
+        ));
     }
 
     #[test]

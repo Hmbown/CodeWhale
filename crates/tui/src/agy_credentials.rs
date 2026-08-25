@@ -19,7 +19,10 @@ use codewhale_config::{ExternalCredentialReadGrant, ExternalCredentialSource};
 
 pub use envelope::AGY_AUTH_STATUS_KEY;
 
-use envelope::{AGY_OAUTH_TOKEN_KEY, access_token_from_auth_status_json, parse_token_envelope};
+use envelope::{
+    AGY_OAUTH_TOKEN_KEY, access_token_from_auth_status_json, looks_like_envelope,
+    parse_token_envelope,
+};
 
 /// Upper bound on the credential store size we are willing to open.
 const AGY_STATE_DB_LIMIT: u64 = 64 * 1024 * 1024;
@@ -169,6 +172,18 @@ fn resolve_external_credential(
             return Ok(None);
         }
         return Ok(Some(credential.access_token));
+    }
+    if looks_like_envelope(trimmed) {
+        // Recognisably an envelope that this build cannot read — a newer agy
+        // layout, most likely. Fail closed. Falling through to the legacy
+        // reader would hand the whole base64 blob back as a "credential",
+        // which is the original sign-in bug, not a fallback.
+        tracing::debug!(
+            target: "config",
+            "external agy token envelope did not parse; treat as absent \
+             (sign in to Antigravity again, or report the store layout)"
+        );
+        return Ok(None);
     }
     // Legacy shapes (bare token string or JSON with a token member) from
     // older agy builds still import through the original parser.
