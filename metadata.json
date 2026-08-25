@@ -3,7 +3,7 @@
   "checkpoint_id": "01M0VHN8YP9HH98E3097SJ3MKC",
   "strategy": "manual-commit",
   "branch": "codex/v0912-integration-20260823",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "CHANGELOG.md",
     "crates/tui/src/tui/composer_display.rs",
@@ -16,13 +16,20 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 358,
-    "cache_creation_tokens": 412402,
-    "cache_read_tokens": 46175871,
-    "output_tokens": 182045,
-    "api_call_count": 179
+    "input_tokens": 366,
+    "cache_creation_tokens": 416787,
+    "cache_read_tokens": 47665639,
+    "output_tokens": 185167,
+    "api_call_count": 183
   }
 }
