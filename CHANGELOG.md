@@ -131,10 +131,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the DeepSeek session that never auto-compacted at 842k/1M (#5577): the
   exact `billed_842k_on_a_1m_window_compacts_despite_a_small_estimate`
   regression pins the trigger.
-- Fixed sandbox escapes and authority gaps: workspace-write tools resolve
-  hard-linked files before writing (S2, #5569), an opt-in read deny-list
-  bounds full-disk reads in any posture (S1, #5568), and session grants match
-  the command family instead of widening the whole tool (R2).
+- Fixed sandbox escapes and authority gaps: workspace-write tools refuse to
+  rewrite a hard-linked file instead of silently splitting the pair (S2,
+  #5569; Unix only — Windows std has no link-count introspection), an opt-in
+  read deny-list carves named paths out of the sandbox's full-disk read in
+  every posture (S1, #5568), and session grants match the command family
+  instead of widening the whole tool (R2).
 - Fixed provider-transport robustness: non-streaming HTTP requests are bounded
   by a read timeout (R4), and Chat-Completions mid-stream error frames surface
   instead of hanging (R3). MCP OAuth expiry now reacts to 401/403 with a named
