@@ -30,6 +30,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::localization::{MessageId, tr};
 use crate::palette::{ChromeInk, UiTheme};
+use crate::tui::ambient_life::{ActivityMotion, AmbientActivity};
 use crate::tui::{
     app::App,
     underwater::{LiveActivity, ShellPhase, ShellTier, phase_marker_with_activity},
@@ -258,6 +259,46 @@ fn status_toast_ink(level: crate::tui::app::StatusToastLevel) -> ChromeInk {
 ///
 /// Route identity never appears here: the identity band below the composer
 /// owns it in every phase, without duplication.
+/// Marker-ink pulse for the phase strip's left rail. Pure function of the
+/// shared clocks and the activity row — the glyph itself never changes
+/// width, so adjacent layout is untouched (see MOTION_CONTRACT.md).
+/// Reduced/Still hold the base ink.
+fn marker_pulse_style(
+    app: &App,
+    phase: ShellPhase,
+    activity: LiveActivity,
+    rail_color: ratatui::style::Color,
+    base: Style,
+) -> Style {
+    if app.motion_policy().as_low_motion() {
+        return base;
+    }
+    let (elapsed_ms, period_ms, waiting) = match phase {
+        ShellPhase::Waiting | ShellPhase::Approval => (
+            app.ambient_clock_ms,
+            ActivityMotion::of(AmbientActivity::Baseline).pulse_period_ms,
+            true,
+        ),
+        ShellPhase::Working | ShellPhase::Verifying => {
+            let motion = AmbientActivity::from_kind(activity.kind()).motion();
+            (
+                app.turn_started_at
+                    .map(|started| started.elapsed().as_millis())
+                    .unwrap_or(app.ambient_clock_ms),
+                motion.caret_period_ms,
+                false,
+            )
+        }
+        _ => return base,
+    };
+    let brightness = if waiting {
+        crate::tui::motion::attention_brightness(elapsed_ms, period_ms)
+    } else {
+        crate::tui::motion::caret_brightness(elapsed_ms, period_ms)
+    };
+    base.fg(crate::tui::ocean::scale_color(rail_color, brightness))
+}
+
 pub fn render_activity(area: Rect, buf: &mut Buffer, app: &mut App) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -281,9 +322,13 @@ pub fn render_activity(area: Rect, buf: &mut Buffer, app: &mut App) {
             Modifier::empty()
         },
     );
+    // Waiting-on-you breathes the diamond ink; live work pulses the marker
+    // ink on the activity row's caret cadence. The glyph never changes
+    // width here, so adjacent layout is untouched. Reduced/Still hold base.
+    let marker_style = marker_pulse_style(app, phase, activity, rail_color, phase_style);
     let mut left = vec![
         Span::styled("▌", phase_style),
-        Span::styled(marker, phase_style),
+        Span::styled(marker, marker_style),
         Span::raw(" "),
         Span::styled(phase_label.clone(), phase_style),
     ];
@@ -1341,6 +1386,86 @@ mod tests {
         assert_eq!(
             crate::config::StatusItem::from_key("session_metrics"),
             Some(crate::config::StatusItem::SessionMetrics)
+        );
+    }
+
+    /// The waiting diamond's ink breathes on the shared attention wave and
+    /// freezes under low motion. Only the foreground ink moves — the glyph
+    /// and its width never change, so adjacent layout is untouched.
+    #[test]
+    fn waiting_marker_ink_breathes_but_freezes_on_low_motion() {
+        let mut app = test_app();
+        let rail = ratatui::style::Color::Rgb(64, 224, 208);
+        let base = Style::new().fg(rail);
+        let activity = LiveActivity::from_app(&app);
+        let period = ActivityMotion::of(AmbientActivity::Baseline).pulse_period_ms;
+
+        app.ambient_clock_ms = 0;
+        let trough = marker_pulse_style(&app, ShellPhase::Waiting, activity, rail, base);
+        app.ambient_clock_ms = period / 2;
+        let crest = marker_pulse_style(&app, ShellPhase::Waiting, activity, rail, base);
+        assert_ne!(trough.fg, crest.fg, "waiting marker ink must breathe");
+        assert_eq!(
+            crest.fg,
+            Some(crate::tui::ocean::scale_color(
+                rail,
+                crate::tui::motion::attention_brightness(period / 2, period)
+            )),
+            "crest must ride the shared attention wave, not a private one"
+        );
+
+        // Low motion freezes the marker on the base ink at every clock tick.
+        app.low_motion = true;
+        for clock in [0u128, period / 3, period / 2] {
+            app.ambient_clock_ms = clock;
+            assert_eq!(
+                marker_pulse_style(&app, ShellPhase::Waiting, activity, rail, base),
+                base,
+                "low motion must hold base ink at clock {clock}"
+            );
+        }
+    }
+
+    /// Working markers pulse on the activity row's caret cadence: with no
+    /// turn start recorded the shared ambient clock drives the wave, so the
+    /// crest lands half a caret period in — the same table the streaming
+    /// caret uses, never a private cadence.
+    #[test]
+    fn working_marker_ink_uses_the_activity_row_caret_cadence() {
+        let mut app = test_app();
+        app.is_loading = true;
+        app.turn_started_at = None;
+        let activity = LiveActivity::from_app(&app);
+        assert_eq!(
+            activity.kind(),
+            crate::tui::underwater::LiveActivityKind::Working
+        );
+
+        let rail = ratatui::style::Color::Rgb(64, 224, 208);
+        let base = Style::new().fg(rail);
+        let period = AmbientActivity::from_kind(activity.kind())
+            .motion()
+            .caret_period_ms;
+
+        app.ambient_clock_ms = 0;
+        let trough = marker_pulse_style(&app, ShellPhase::Working, activity, rail, base);
+        app.ambient_clock_ms = period / 2;
+        let crest = marker_pulse_style(&app, ShellPhase::Working, activity, rail, base);
+        assert_ne!(trough.fg, crest.fg, "working marker ink must breathe");
+        assert_eq!(
+            crest.fg,
+            Some(crate::tui::ocean::scale_color(
+                rail,
+                crate::tui::motion::caret_brightness(period / 2, period)
+            )),
+            "working marker must ride the activity row's caret wave"
+        );
+
+        // Reduced environments hold the base ink instead of pulsing.
+        app.low_motion = true;
+        assert_eq!(
+            marker_pulse_style(&app, ShellPhase::Working, activity, rail, base),
+            base
         );
     }
 }

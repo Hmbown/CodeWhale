@@ -15,9 +15,11 @@
 //! Provider SSE deltas are **input**, never animation timing. The display
 //! clock ([`crate::tui::streaming::StreamDisplayClock`]) coalesces them.
 
+pub mod activity;
 pub mod frame_requester;
 pub mod mode;
 
+pub use activity::{attention_brightness, caret_brightness};
 pub use frame_requester::FrameRequester;
 #[allow(unused_imports)] // public API surface for host pickers / widgets
 pub use mode::{MotionMode, MotionPolicy, SpinnerPresentation};

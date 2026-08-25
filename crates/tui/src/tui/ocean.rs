@@ -67,15 +67,19 @@ pub fn ambient_inks_for_activity(
 ) -> (Color, Color) {
     use crate::tui::ambient_life::AmbientActivity;
     let sky = match activity {
-        AmbientActivity::Subagents => rgb(theme.accent_secondary).unwrap_or((79, 209, 197)),
+        AmbientActivity::Subagents | AmbientActivity::Watching => {
+            rgb(theme.accent_secondary).unwrap_or((79, 209, 197))
+        }
+        AmbientActivity::ComputerUse => rgb(theme.accent_primary).unwrap_or((56, 189, 248)),
         _ => rgb(theme.info).unwrap_or((106, 174, 242)),
     };
-    // `mix(sky, base, t)`: larger `t` sits closer to the background — dimmer.
     let (toward_base_a, toward_base_b) = match activity {
         AmbientActivity::Reasoning => (0.58, 0.44),
         AmbientActivity::Reading => (0.50, 0.36),
         AmbientActivity::Tools => (0.30, 0.18),
+        AmbientActivity::ComputerUse => (0.22, 0.12),
         AmbientActivity::Subagents => (0.34, 0.22),
+        AmbientActivity::Watching => (0.62, 0.50),
         AmbientActivity::Verifying | AmbientActivity::Baseline => (0.42, 0.28),
     };
     match rgb(theme.surface_bg) {

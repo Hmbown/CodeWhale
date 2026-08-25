@@ -29,10 +29,22 @@ pub(crate) const BRAILLE_SPINNER_STILL_FRAME: &str = "⣤";
 /// (125 ms) for v0.9.4 — at 5 Hz the fill still reads as continuous motion
 /// without the restless flicker the faster table produced.
 pub(crate) const BRAILLE_SPINNER_FRAME_MS: u64 = 200;
+pub(crate) const WATCH_PULSE_FRAMES: [&str; 4] = ["·", "˚", "°", "˚"];
+pub(crate) const WATCH_PULSE_STILL_FRAME: &str = "˚";
+pub(crate) const WATCH_PULSE_FRAME_MS: u64 = 480;
 
 #[must_use]
 pub(crate) fn braille_spinner_frame_for_elapsed_ms(
     elapsed_ms: u128,
+    low_motion: bool,
+) -> &'static str {
+    braille_spinner_frame_for_elapsed_ms_at(elapsed_ms, BRAILLE_SPINNER_FRAME_MS, low_motion)
+}
+
+#[must_use]
+pub(crate) fn braille_spinner_frame_for_elapsed_ms_at(
+    elapsed_ms: u128,
+    frame_ms: u64,
     low_motion: bool,
 ) -> &'static str {
     if low_motion {
@@ -41,11 +53,23 @@ pub(crate) fn braille_spinner_frame_for_elapsed_ms(
     if elapsed_ms < u128::from(LIVE_MARKER_DELAY_MS) {
         return LIVE_STATIC_MARKER;
     }
+    let frame_ms = u128::from(frame_ms.max(1));
     let idx = elapsed_ms
         .saturating_sub(u128::from(LIVE_MARKER_DELAY_MS))
-        .checked_div(u128::from(BRAILLE_SPINNER_FRAME_MS))
+        .checked_div(frame_ms)
         .map_or(0, |frame| frame % BRAILLE_SPINNER_FRAMES.len() as u128);
     BRAILLE_SPINNER_FRAMES[usize::try_from(idx).unwrap_or_default()]
+}
+
+#[must_use]
+pub(crate) fn watch_pulse_frame_for_elapsed_ms(elapsed_ms: u128, low_motion: bool) -> &'static str {
+    if low_motion {
+        return WATCH_PULSE_STILL_FRAME;
+    }
+    let idx = elapsed_ms
+        .checked_div(u128::from(WATCH_PULSE_FRAME_MS))
+        .map_or(0, |frame| frame % WATCH_PULSE_FRAMES.len() as u128);
+    WATCH_PULSE_FRAMES[usize::try_from(idx).unwrap_or_default()]
 }
 
 #[must_use]

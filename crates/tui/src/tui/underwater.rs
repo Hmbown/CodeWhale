@@ -209,8 +209,10 @@ pub(crate) enum LiveActivityKind {
     Reasoning,
     Reading,
     UsingTool,
+    ComputerUse,
     UsingSubagents,
     Verifying,
+    Watching,
 }
 
 /// Bounded projection of live turn activity. Completed entries are ignored,
@@ -238,12 +240,16 @@ impl LiveActivity {
             LiveActivityKind::Verifying
         } else if app_has_unfinished_subagents(app) {
             LiveActivityKind::UsingSubagents
+        } else if tools.computer_use {
+            LiveActivityKind::ComputerUse
         } else if tools.count > 0 && tools.all_reading {
             LiveActivityKind::Reading
         } else if tools.count > 0 {
             LiveActivityKind::UsingTool
         } else if app.streaming_thinking_active_entry.is_some() {
             LiveActivityKind::Reasoning
+        } else if app_has_active_watchers(app) {
+            LiveActivityKind::Watching
         } else {
             LiveActivityKind::Working
         };
@@ -265,7 +271,10 @@ impl LiveActivity {
 
     #[must_use]
     fn is_explicit(self) -> bool {
-        !matches!(self.kind, LiveActivityKind::Working)
+        !matches!(
+            self.kind,
+            LiveActivityKind::Working | LiveActivityKind::Watching
+        )
     }
 
     #[must_use]
@@ -277,8 +286,10 @@ impl LiveActivity {
             LiveActivityKind::Reasoning => tr(locale, MessageId::PhaseReasoning),
             LiveActivityKind::Reading => tr(locale, MessageId::PhaseReading),
             LiveActivityKind::UsingTool => tr(locale, MessageId::PhaseUsingTool),
+            LiveActivityKind::ComputerUse => tr(locale, MessageId::PhaseComputerUse),
             LiveActivityKind::UsingSubagents => tr(locale, MessageId::PhaseSubagents),
             LiveActivityKind::Verifying => tr(locale, MessageId::PhaseVerifying),
+            LiveActivityKind::Watching => tr(locale, MessageId::PhaseWatching),
         }
     }
 }
@@ -288,6 +299,7 @@ struct RunningToolFacts {
     count: usize,
     all_reading: bool,
     verifying: bool,
+    computer_use: bool,
 }
 
 /// True when any sub-agent spawned by this session is still running: live
@@ -309,16 +321,39 @@ impl Default for RunningToolFacts {
             count: 0,
             all_reading: true,
             verifying: false,
+            computer_use: false,
         }
     }
 }
 
 impl RunningToolFacts {
-    fn observe(&mut self, reading: bool, verifying: bool) {
+    fn observe(&mut self, reading: bool, verifying: bool, computer_use: bool) {
         self.count = self.count.saturating_add(1);
         self.all_reading &= reading;
         self.verifying |= verifying;
+        self.computer_use |= computer_use;
     }
+}
+
+fn app_has_active_watchers(app: &App) -> bool {
+    app.runtime_services
+        .automations
+        .as_ref()
+        .and_then(|manager| manager.try_lock().ok())
+        .and_then(|guard| guard.list_automations().ok())
+        .is_some_and(|records| {
+            records.iter().any(|record| {
+                record.status == crate::automation_manager::AutomationStatus::Active
+                    && record.delivery_mode()
+                        == crate::automation_manager::AutomationDeliveryMode::Watcher
+            })
+        })
+}
+
+#[must_use]
+pub(crate) fn is_computer_use_tool_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.contains("computer_") || name.contains("computer-use") || name.contains("computeruse")
 }
 
 const WORKING_BUBBLE_FRAMES: [&str; 8] = ["⠀", "⢀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣿"];
@@ -487,27 +522,31 @@ fn running_tool_facts(app: &App) -> RunningToolFacts {
         };
         match tool {
             ToolCell::Exec(exec) if exec.status == ToolStatus::Running => {
-                facts.observe(false, exec_is_verification(&exec.command));
+                facts.observe(false, exec_is_verification(&exec.command), false);
             }
             ToolCell::Generic(generic) if generic.status == ToolStatus::Running => {
                 let family = tool_family_for_name(&generic.name);
                 facts.observe(
                     matches!(family, ToolFamily::Read | ToolFamily::Find),
                     family == ToolFamily::Verify || generic.name == "read_lints",
+                    is_computer_use_tool_name(&generic.name),
                 );
             }
             ToolCell::Exploring(exploring) => {
                 for entry in &exploring.entries {
                     if entry.status == ToolStatus::Running {
-                        facts.observe(true, false);
+                        facts.observe(true, false, false);
                     }
                 }
             }
             ToolCell::WebSearch(search) if search.status == ToolStatus::Running => {
-                facts.observe(true, false);
+                facts.observe(true, false, false);
+            }
+            ToolCell::Mcp(mcp) if mcp.status == ToolStatus::Running => {
+                facts.observe(false, false, is_computer_use_tool_name(&mcp.tool));
             }
             other if other.status() == Some(ToolStatus::Running) => {
-                facts.observe(false, false);
+                facts.observe(false, false, false);
             }
             _ => {}
         }
@@ -555,6 +594,7 @@ pub(crate) fn title_activity_verb(app: &App) -> &'static str {
         ShellPhase::Done => "done",
         ShellPhase::Failed => "failed",
         ShellPhase::Typing => "drafting…",
+        ShellPhase::Idle if activity.kind() == LiveActivityKind::Watching => "watching…",
         ShellPhase::Idle => "idle",
         ShellPhase::Working => match activity.kind() {
             LiveActivityKind::Compacting | LiveActivityKind::AutoCompacting => {
@@ -563,8 +603,10 @@ pub(crate) fn title_activity_verb(app: &App) -> &'static str {
             LiveActivityKind::Reasoning => "reasoning…",
             LiveActivityKind::Reading => "reading…",
             LiveActivityKind::UsingTool => "using tool…",
+            LiveActivityKind::ComputerUse => "computer use…",
             LiveActivityKind::UsingSubagents => "subagents…",
             LiveActivityKind::Verifying => "verifying…",
+            LiveActivityKind::Watching => "watching…",
             LiveActivityKind::Working => "working…",
         },
     }
@@ -588,6 +630,7 @@ pub(crate) fn sync_title_activity(app: &App) {
                 | ShellPhase::Approval
                 | ShellPhase::Typing
         )
+        || LiveActivity::from_app(app).kind() == LiveActivityKind::Watching
     {
         crate::tui::notifications::set_title_activity_verb(title_activity_verb(app));
     }
@@ -600,19 +643,30 @@ pub(crate) fn phase_marker_with_activity(
 ) -> (&'static str, Cow<'static, str>) {
     let locale = app.ui_locale;
     match phase {
+        ShellPhase::Idle if activity.kind() == LiveActivityKind::Watching => {
+            let policy = app.motion_policy();
+            let frame = crate::tui::spinner::watch_pulse_frame_for_elapsed_ms(
+                app.ambient_clock_ms,
+                policy.as_low_motion(),
+            );
+            (frame, activity.label(locale))
+        }
         ShellPhase::Idle => ("·", phase.label(locale)),
         ShellPhase::Typing => ("›", phase.label(locale)),
         ShellPhase::Working => {
-            // The footer and the live tool card share one wall-clock cadence,
-            // so the two primary liveness marks never look like unrelated
-            // spinners. The shared helper also preserves the 400ms
-            // "motion is earned" delay and reduced/still fallback.
             let policy = app.motion_policy();
-            let animated = crate::tui::spinner::braille_spinner_frame(app.turn_started_at, false);
-            let earned = app.turn_started_at.is_none_or(|started| {
-                started.elapsed().as_millis()
-                    >= u128::from(crate::tui::spinner::LIVE_MARKER_DELAY_MS)
-            });
+            let motion =
+                crate::tui::ambient_life::AmbientActivity::from_kind(activity.kind()).motion();
+            let elapsed = app
+                .turn_started_at
+                .map(|started| started.elapsed().as_millis())
+                .unwrap_or(app.ambient_clock_ms);
+            let animated = crate::tui::spinner::braille_spinner_frame_for_elapsed_ms_at(
+                elapsed,
+                motion.spinner_frame_ms,
+                false,
+            );
+            let earned = elapsed >= u128::from(crate::tui::spinner::LIVE_MARKER_DELAY_MS);
             let frame = policy.spinner_glyph(animated, earned);
             (frame, activity.label(locale))
         }

@@ -25,6 +25,16 @@ coalesces decorative frame wakes. The main `ui` poll loop remains the only
 - Working/phase chrome above the composer (TUI-DOG-008) must stay truthful under
   Reduced/Still — calm redraws, not decorative spin.
 
+## Activity-shaped motion
+
+Live work selects one row from `ActivityMotion` (`tui/ambient_life.rs`).
+Chrome, the ocean clock, the streaming caret, and the completion cameo all
+read that row.
+
+Waiting-on-you pulses the diamond ink. Reduced/Still freeze decorative pulses.
+Thinking turns no longer part the fish school; tool, computer-use, and
+sub-agent work dart. `/loop` watchers keep a slow sonar pulse.
+
 ## One-shot phase transitions
 
 - A successful turn records the first history index owned by that turn. Tool

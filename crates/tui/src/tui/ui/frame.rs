@@ -1377,13 +1377,10 @@ pub(crate) fn estimated_context_tokens(app: &App) -> Option<i64> {
         let last = message_count - 1;
         cache.message_tokens[last] = estimate_tokens(&app.api_messages[last..=last]);
     }
-    let message_tokens = cache
-        .message_tokens
-        .iter()
-        .copied()
-        .sum::<usize>()
-        .saturating_mul(3)
-        .div_ceil(2);
+    // Uninflated: the same arithmetic as `estimate_input_tokens_for_pressure`.
+    // The 1.5× overflow estimator was the #5577 display gap — ~561k of real
+    // pressure rendered as 842k/1M while the trigger still saw 561k.
+    let message_tokens = cache.message_tokens.iter().copied().sum::<usize>();
     let system_tokens =
         estimate_input_tokens_conservative(&[], app.system_prompt.as_ref()).saturating_sub(48);
     let estimated = message_tokens
@@ -1404,6 +1401,7 @@ pub(crate) fn context_usage_snapshot(app: &App) -> Option<(i64, u32, f64)> {
 
 pub(crate) fn context_usage_snapshot_for_window(app: &App, max: u32) -> Option<(i64, u32, f64)> {
     let max_i64 = i64::from(max);
+    let billed = app.last_billed_input_tokens.map(i64::from);
     let reported = app
         .session
         .last_prompt_tokens
@@ -1411,22 +1409,18 @@ pub(crate) fn context_usage_snapshot_for_window(app: &App, max: u32) -> Option<(
         .map(|tokens| tokens.max(0));
     let estimated = estimated_context_tokens(app).map(|tokens| tokens.max(0));
 
-    // Always prefer the estimated current-context size (computed from
-    // `app.api_messages`) when we have it. Reported `last_prompt_tokens`
-    // comes from `Event::TurnComplete.usage`, which the engine builds with
-    // `turn.add_usage` — that SUMS input_tokens across every round in the
-    // turn, so a multi-round tool-call turn reports a value much larger
-    // than the actual context window state, then the next single-round
-    // turn drops back to a single round's input_tokens. User-visible %
-    // was bouncing 31% → 9% (#115) because of this. The estimate is
-    // monotonic wrt conversation growth, which is what a "context filling
-    // up" indicator should show. We still consult `reported` only as a
-    // fallback when no estimate is available (e.g., immediately after a
-    // session restore before the api_messages are populated).
-    let used = match (estimated, reported) {
-        (Some(estimated), _) => estimated.min(max_i64),
-        (None, Some(reported)) => reported.min(max_i64),
-        (None, None) => return None,
+    // Same pressure signal as the auto-compaction trigger (#5577): the
+    // uninflated local estimate, then max with the live parent-route billed
+    // prompt. `last_prompt_tokens` still cannot win — `turn.add_usage` SUMS
+    // input_tokens across every round of a turn, so a multi-round tool-call
+    // turn reports a value much larger than the live window, then the next
+    // single-round turn drops back (#115). It remains a restore fallback
+    // only when no estimate and no billed receipt exist.
+    let used = match (estimated, billed, reported) {
+        (Some(estimated), billed, _) => estimated.max(billed.unwrap_or(0)).min(max_i64),
+        (None, Some(billed), _) => billed.min(max_i64),
+        (None, None, Some(reported)) => reported.min(max_i64),
+        (None, None, None) => return None,
     };
 
     let max_f64 = f64::from(max);

@@ -166,9 +166,11 @@ impl ChatWidget {
         let underwater_motion_enabled =
             crate::tui::underwater::decorative_shell_motion_enabled(app);
         let browsing_history = !app.viewport.transcript_scroll.is_at_tail();
+        let watching = ocean_activity == crate::tui::ambient_life::AmbientActivity::Watching;
         let ocean_animated = underwater_motion_enabled
             && (render_empty_state
                 || browsing_history
+                || watching
                 || matches!(phase, ShellPhase::Working | ShellPhase::Verifying));
         // Life presence eases the animated/static boundary as a pure function
         // of the monotonic clocks (see ocean::life_presence): bursty fast
@@ -204,7 +206,7 @@ impl ChatWidget {
             .and(app.turn_started_at)
             .map(|started| started.elapsed().as_millis())
             .filter(|elapsed| *elapsed < 800)
-            .filter(|_| matches!(phase, ShellPhase::Working | ShellPhase::Verifying));
+            .filter(|_| ocean_activity.motion().darts());
         let scroll_track = app.ui_theme.border;
         let scroll_thumb = app.ui_theme.status_working;
         let jump_border = app.ui_theme.border;
@@ -1045,7 +1047,7 @@ fn occupied_text_bounds(line: &Line<'_>) -> Option<(usize, usize)> {
 
 #[cfg(test)]
 fn fish_flee_offset(elapsed_ms: u128) -> u16 {
-    crate::tui::ambient_life::fish_flee_offset(elapsed_ms)
+    crate::tui::ambient_life::fish_flee_offset_scaled(elapsed_ms, 1.0)
 }
 
 #[cfg(test)]

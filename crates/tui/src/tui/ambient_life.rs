@@ -225,8 +225,130 @@ pub enum AmbientActivity {
     /// than hidden reasoning — skimming, not digging.
     Reading,
     Tools,
+    /// Screen-steering work (clicks, screenshots, typed input). Faster and
+    /// fizzier than a generic tool current — the surface is being stirred.
+    ComputerUse,
     Subagents,
     Verifying,
+    /// Idle `/loop` watchers: the session is quiet but something is still
+    /// listening. Slow sonar, not a working current.
+    Watching,
+}
+
+/// Bounded motion parameters for one [`AmbientActivity`]. Chrome, the ocean
+/// clock, the streaming caret, and the completion cameo all read this row.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ActivityMotion {
+    pub clock_speed: f32,
+    pub extra_bubble_streams: usize,
+    pub bubble_rise_scale: f32,
+    pub jelly_period_scale: f32,
+    pub dart_scale: f32,
+    pub spinner_frame_ms: u64,
+    pub caret_period_ms: u128,
+    pub pulse_period_ms: u128,
+    pub completion_burst: bool,
+}
+
+impl ActivityMotion {
+    #[must_use]
+    pub fn of(activity: AmbientActivity) -> Self {
+        match activity {
+            AmbientActivity::Baseline => Self {
+                clock_speed: 1.0,
+                extra_bubble_streams: 0,
+                bubble_rise_scale: 1.0,
+                jelly_period_scale: 1.0,
+                dart_scale: 0.0,
+                spinner_frame_ms: 200,
+                caret_period_ms: 700,
+                pulse_period_ms: 2_000,
+                completion_burst: false,
+            },
+            AmbientActivity::Reasoning => Self {
+                clock_speed: 0.6,
+                extra_bubble_streams: 0,
+                bubble_rise_scale: 1.0,
+                jelly_period_scale: 1.2,
+                dart_scale: 0.0,
+                spinner_frame_ms: 280,
+                caret_period_ms: 900,
+                pulse_period_ms: 2_800,
+                completion_burst: false,
+            },
+            AmbientActivity::Reading => Self {
+                clock_speed: 0.8,
+                extra_bubble_streams: 0,
+                bubble_rise_scale: 1.0,
+                jelly_period_scale: 1.1,
+                dart_scale: 0.0,
+                spinner_frame_ms: 240,
+                caret_period_ms: 800,
+                pulse_period_ms: 2_200,
+                completion_burst: false,
+            },
+            AmbientActivity::Tools => Self {
+                clock_speed: 1.25,
+                extra_bubble_streams: 0,
+                bubble_rise_scale: 0.9,
+                jelly_period_scale: 1.0,
+                dart_scale: 1.0,
+                spinner_frame_ms: 200,
+                caret_period_ms: 500,
+                pulse_period_ms: 1_600,
+                completion_burst: true,
+            },
+            AmbientActivity::ComputerUse => Self {
+                clock_speed: 1.4,
+                extra_bubble_streams: 1,
+                bubble_rise_scale: 0.72,
+                jelly_period_scale: 0.85,
+                dart_scale: 1.55,
+                spinner_frame_ms: 150,
+                caret_period_ms: 400,
+                pulse_period_ms: 1_200,
+                completion_burst: true,
+            },
+            AmbientActivity::Subagents => Self {
+                clock_speed: 1.25,
+                extra_bubble_streams: 0,
+                bubble_rise_scale: 0.9,
+                jelly_period_scale: 1.0,
+                dart_scale: 1.0,
+                spinner_frame_ms: 200,
+                caret_period_ms: 500,
+                pulse_period_ms: 1_600,
+                completion_burst: true,
+            },
+            AmbientActivity::Verifying => Self {
+                clock_speed: 1.0,
+                extra_bubble_streams: 0,
+                bubble_rise_scale: 1.0,
+                jelly_period_scale: 1.0,
+                dart_scale: 0.0,
+                spinner_frame_ms: 200,
+                caret_period_ms: 700,
+                pulse_period_ms: 2_000,
+                completion_burst: false,
+            },
+            AmbientActivity::Watching => Self {
+                clock_speed: 0.45,
+                extra_bubble_streams: 0,
+                bubble_rise_scale: 1.35,
+                jelly_period_scale: 1.6,
+                dart_scale: 0.0,
+                spinner_frame_ms: 480,
+                caret_period_ms: 1_400,
+                pulse_period_ms: 2_400,
+                completion_burst: false,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn darts(self) -> bool {
+        self.dart_scale > f32::EPSILON
+    }
 }
 
 impl AmbientActivity {
@@ -236,22 +358,23 @@ impl AmbientActivity {
             crate::tui::underwater::LiveActivityKind::Reasoning => Self::Reasoning,
             crate::tui::underwater::LiveActivityKind::Reading => Self::Reading,
             crate::tui::underwater::LiveActivityKind::UsingTool => Self::Tools,
+            crate::tui::underwater::LiveActivityKind::ComputerUse => Self::ComputerUse,
             crate::tui::underwater::LiveActivityKind::UsingSubagents => Self::Subagents,
             crate::tui::underwater::LiveActivityKind::Verifying => Self::Verifying,
+            crate::tui::underwater::LiveActivityKind::Watching => Self::Watching,
             _ => Self::Baseline,
         }
     }
 
+    #[must_use]
+    pub fn motion(self) -> ActivityMotion {
+        ActivityMotion::of(self)
+    }
+
     /// Ocean-clock speed factor: thinking reads as the slow deep, tool work
-    /// as the fast current.
+    /// as the fast current, watchers as a long swell.
     fn speed(self) -> f32 {
-        match self {
-            Self::Reasoning => 0.6,
-            Self::Reading => 0.8,
-            Self::Tools | Self::Subagents => 1.25,
-            Self::Verifying => 1.0,
-            Self::Baseline => 1.0,
-        }
+        self.motion().clock_speed
     }
 
     fn scaled_time_ms(self, elapsed_ms: u128) -> u128 {
@@ -383,7 +506,10 @@ fn build_frame_marks(
         let y_i32 = i32::from(anchor_y) + i32::from(*dy) + i32::from(bob);
         // Fish dart sideways away from the scatter anchor (nearby only).
         if let Some(flee_ms) = cursor.flee_elapsed_ms {
-            let flee = i32::from(fish_flee_offset(flee_ms));
+            let flee = i32::from(fish_flee_offset_scaled(
+                flee_ms,
+                activity.motion().dart_scale,
+            ));
             if x_i32.abs_diff(i32::from(ptr)) < 16 && y_i32.abs_diff(i32::from(ptr_y)) < 6 {
                 // Horizontal only. The old ±1 row kick pushed the outer
                 // fish off the school's band and straight into the row the
@@ -485,15 +611,16 @@ fn build_frame_marks(
         if y == 0 || !water(x, y, dome_w) {
             continue;
         }
-        let dome_brightness = jelly_glow(wave01(t, JELLY_PULSE_MS, phase));
+        let jelly_pulse_ms = scale_period_ms(JELLY_PULSE_MS, activity.motion().jelly_period_scale);
+        let dome_brightness = jelly_glow(wave01(t, jelly_pulse_ms, phase));
         let tentacle_brightness = jelly_glow(wave01(
             t.saturating_sub(JELLY_TENTACLE_LAG_MS),
-            JELLY_PULSE_MS,
+            jelly_pulse_ms,
             phase,
         ));
         // The dome opens/closes on the same clock as its glow; the parked
         // pose holds the half-pulsed (contracted) frame.
-        let pulse_frame = usize::from(wave01(t, JELLY_PULSE_MS, phase) > 0.5);
+        let pulse_frame = usize::from(wave01(t, jelly_pulse_ms, phase) > 0.5);
         let skirt_row = y.saturating_add(1);
         let tentacle_row = y.saturating_add(2);
         // Treat the silhouette as one visual unit. The former per-row quiet
@@ -552,15 +679,18 @@ fn build_frame_marks(
     // frame. It now rises [`BUBBLE_MAX_RISE_ROWS`] rows from the floor,
     // grows, and fades out, which is both what a bubble does and a reason for
     // it to be exactly where it is.
-    for b in 0..density.bubble_streams() {
+    let bubble_streams = density
+        .bubble_streams()
+        .saturating_add(activity.motion().extra_bubble_streams);
+    for b in 0..bubble_streams {
         let phase = (b as u128).saturating_mul(1_900);
-        // Edge columns — avoid center brand.
-        let column = if b % 2 == 0 {
-            area.width / 8
-        } else {
-            area.width.saturating_mul(7) / 8
+        let column = match b % 3 {
+            0 => area.width / 8,
+            1 => area.width.saturating_mul(7) / 8,
+            _ => area.width.saturating_mul(3) / 4,
         };
-        let rise_period = BUBBLE_RISE_MS.saturating_add(phase % 900);
+        let rise_period = scale_period_ms(BUBBLE_RISE_MS, activity.motion().bubble_rise_scale)
+            .saturating_add(phase % 900);
         let cycle = (t.saturating_add(phase) % rise_period) as f64 / rise_period as f64;
         let boost = if cursor.flee_elapsed_ms.is_some() && column.abs_diff(ptr) < 10 {
             2
@@ -646,6 +776,33 @@ fn build_frame_marks(
                         brightness: None,
                     });
                 }
+            }
+        }
+        if activity.motion().completion_burst && !activity.pod_cameo() {
+            for burst in 0u16..2 {
+                let column = whale
+                    .anchor_x
+                    .saturating_sub(area.x)
+                    .saturating_add(burst.saturating_mul(3))
+                    .min(area.width.saturating_sub(1));
+                let rise = (cameo_ms / 420).min(u128::from(BUBBLE_MAX_RISE_ROWS)) as u16;
+                let y = whale
+                    .anchor_y
+                    .saturating_sub(area.y)
+                    .saturating_sub(rise)
+                    .min(area.height.saturating_sub(1));
+                if !water(column, y, 1) {
+                    continue;
+                }
+                marks.push(AmbientMark {
+                    x: column,
+                    y,
+                    glyph: bubble_glyph(rise),
+                    jellyfish: None,
+                    depth: Depth::Foreground,
+                    style_mod: None,
+                    brightness: Some(bubble_dissolve(rise)),
+                });
             }
         }
     }
@@ -1131,10 +1288,21 @@ fn sine_bob(elapsed_ms: u128, period_ms: u128, amplitude: u16) -> u16 {
 
 /// One-shot flee arc keyed to Working transition / pointer motion.
 #[must_use]
-pub fn fish_flee_offset(elapsed_ms: u128) -> u16 {
+pub fn fish_flee_offset_scaled(elapsed_ms: u128, scale: f32) -> u16 {
+    if scale <= f32::EPSILON {
+        return 0;
+    }
     let progress = elapsed_ms.min(800) as f32 / 800.0;
-    let excursion = (progress * std::f32::consts::PI).sin() * 9.0;
-    excursion.round().clamp(0.0, 9.0) as u16
+    let excursion = (progress * std::f32::consts::PI).sin() * 9.0 * scale;
+    excursion.round().clamp(0.0, 14.0) as u16
+}
+
+#[must_use]
+fn scale_period_ms(period_ms: u128, scale: f32) -> u128 {
+    if (scale - 1.0).abs() < f32::EPSILON {
+        return period_ms;
+    }
+    ((period_ms as f64) * f64::from(scale.max(0.2))) as u128
 }
 
 /// One fish silhouette family for the whole school: the lead carries an eye
