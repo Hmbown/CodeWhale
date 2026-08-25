@@ -531,7 +531,7 @@ pub(super) fn handle_focused_block_key(app: &mut App, key: &KeyEvent) -> bool {
     }
 }
 
-fn selected_block_cell<'a>(app: &'a App) -> Option<(usize, &'a HistoryCell)> {
+fn selected_block_cell(app: &App) -> Option<(usize, &HistoryCell)> {
     let index = selected_transcript_cell_index(app)?;
     let cell = app.cell_at_virtual_index(index)?;
     Some((index, cell))

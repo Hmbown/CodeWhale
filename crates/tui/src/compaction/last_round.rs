@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 
-use crate::models::{ContentBlock, Message, Role, SystemPrompt};
+use crate::models::{ContentBlock, Message, SystemPrompt};
 
 use super::{
     COMPACT_RETAINED_USER_MESSAGE_MAX_TOKENS, compaction_checkpoint_message,
@@ -294,7 +294,7 @@ pub(super) fn build_replacement_history(
 mod tests {
     use super::*;
     use crate::compaction::{COMPACTION_SUMMARY_MARKER, compaction_checkpoint_message};
-    use crate::models::ContentBlock;
+    use crate::models::{ContentBlock, Role};
     use serde_json::json;
 
     fn msg(role: &str, text: &str) -> Message {

@@ -15,11 +15,13 @@ use crate::models::{
 
 #[path = "compaction/last_round.rs"]
 mod last_round;
+pub(crate) use last_round::last_round_start;
+#[cfg(test)]
+pub(crate) use last_round::validate_last_round_coverage;
 pub use last_round::{
     CompactionCoverage, CompactionKeep, CompactionPath, LastCompactionSnapshot,
     inspect_compaction_keep, last_round_kept_count, pinned_anchors_text,
 };
-pub(crate) use last_round::{last_round_start, validate_last_round_coverage};
 
 /// Configuration for conversation compaction behavior.
 ///

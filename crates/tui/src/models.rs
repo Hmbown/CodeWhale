@@ -1480,10 +1480,12 @@ mod tests {
         codewhale_config::catalog::bundled_output_exceeds_context(value)
     }
 
-    fn stated_limits(
-        value: &serde_json::Value,
-    ) -> BTreeMap<String, BTreeSet<(Option<u64>, Option<u64>)>> {
-        let mut map: BTreeMap<String, BTreeSet<(Option<u64>, Option<u64>)>> = BTreeMap::new();
+    /// model_id → set of (context, output) limit pairs as stated in the
+    /// bundled catalog.
+    type StatedLimits = BTreeMap<String, BTreeSet<(Option<u64>, Option<u64>)>>;
+
+    fn stated_limits(value: &serde_json::Value) -> StatedLimits {
+        let mut map: StatedLimits = BTreeMap::new();
         for fact in codewhale_config::catalog::bundled_limit_facts(value) {
             if fact.model_id.is_empty() {
                 continue;

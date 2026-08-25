@@ -1738,6 +1738,7 @@ impl ProviderPickerView {
     /// defaults filled in. Same transport as any custom OpenAI-compatible
     /// row; the model field stays empty because it depends on what the user
     /// has loaded.
+    #[allow(dead_code)] // LM Studio onboarding entry point; command wiring lands separately
     #[must_use]
     pub fn new_for_lm_studio_setup(
         active: ApiProvider,

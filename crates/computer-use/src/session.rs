@@ -448,10 +448,9 @@ fn parse_type_text(args: &Value) -> Result<&str, String> {
 
 /// `index` wins over `x`/`y` when both are present. `x` and `y` must
 /// arrive together.
-fn type_focus_point(
-    args: &Value,
-    snapshot: Option<&AppSnapshot>,
-) -> Result<(Option<usize>, Option<(f64, f64)>), String> {
+type TypeFocus = (Option<usize>, Option<(f64, f64)>);
+
+fn type_focus_point(args: &Value, snapshot: Option<&AppSnapshot>) -> Result<TypeFocus, String> {
     if let Some(index) = get_usize_opt(args, "index")? {
         if let Some(snapshot) = snapshot
             && index >= snapshot.node_count

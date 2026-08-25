@@ -1610,13 +1610,7 @@ impl ElementDriver for MacDriver {
         MacDriver::need_accessibility()?;
         if matches!(
             &action,
-            ElementAction::Type {
-                activate: true,
-                ..
-            } | ElementAction::Key {
-                activate: true,
-                ..
-            }
+            ElementAction::Type { activate: true, .. } | ElementAction::Key { activate: true, .. }
         ) {
             self.raise(app)?;
             std::thread::sleep(Duration::from_millis(80));
@@ -2042,11 +2036,13 @@ fn verify_value(snapshot: &MacElementSnapshot, index: usize, expected: &str) -> 
 
 /// Global click target used to focus before typing. `index` wins over
 /// `point`. `None` means type into whatever already has focus.
+type GlobalFocusTarget = ((f64, f64), String);
+
 fn type_focus_target(
     snapshot: &MacElementSnapshot,
     index: Option<usize>,
     point: Option<(f64, f64)>,
-) -> Result<Option<((f64, f64), String)>, DriverError> {
+) -> Result<Option<GlobalFocusTarget>, DriverError> {
     match (index, point) {
         (Some(index), _) => {
             let label = describe(snapshot.node(index)?, index);

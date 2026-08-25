@@ -665,11 +665,11 @@ pub fn parse_loop_interval(token: &str) -> Result<std::time::Duration> {
 /// hour-aligned durations stay HOURLY so existing hourly math keeps applying.
 pub fn rrule_for_loop_interval(interval: std::time::Duration) -> Result<String> {
     let secs = interval.as_secs();
-    if secs == 0 || secs % 60 != 0 {
+    if secs == 0 || !secs.is_multiple_of(60) {
         bail!("loop interval must be a whole number of minutes");
     }
     let minutes = secs / 60;
-    if minutes % 60 == 0 {
+    if minutes.is_multiple_of(60) {
         Ok(format!("FREQ=HOURLY;INTERVAL={}", minutes / 60))
     } else {
         Ok(format!("FREQ=MINUTELY;INTERVAL={minutes}"))
