@@ -1194,6 +1194,9 @@ fn claimed_diff_taint(
         .arg("-C")
         .arg(workspace)
         .args(["status", "--porcelain"])
+        // Read-only probe: never take the index lock in the user's repo
+        // (#5617).
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .ok()?;
     if !status_output.status.success() {

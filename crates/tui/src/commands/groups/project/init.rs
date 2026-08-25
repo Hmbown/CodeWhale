@@ -462,6 +462,9 @@ fn gather_git_info(workspace: &Path) -> Option<String> {
     // Status summary.
     let status_output = Command::new("git")
         .args(["status", "--porcelain=v1", "--untracked-files=no"])
+        // Read-only probe: never take the index lock in the user's repo
+        // (#5617).
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .current_dir(&git_root)
         .output()
         .ok();

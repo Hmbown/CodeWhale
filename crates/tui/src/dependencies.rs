@@ -376,6 +376,41 @@ impl ExternalTool for Git {
         &["git"]
     }
 
+    /// Every `Git` invocation in the product is issued against a repository
+    /// the user also works in by hand. `git status` and `git diff`
+    /// opportunistically refresh the index, and that refresh takes
+    /// `.git/index.lock` — which is why a user's own `git commit` could fail
+    /// with "Unable to create '.../.git/index.lock': File exists" while
+    /// codewhale was merely idling in the same repo (#5617, reported by
+    /// @LmeSzinc).
+    ///
+    /// `GIT_OPTIONAL_LOCKS=0` suppresses only *optional* lock-taking, so
+    /// reads stop touching the index while genuine writes (`add`, `commit`,
+    /// `stash`, `update-ref`) are unaffected — including the snapshot
+    /// side-repo runner, which writes to its own git dir. `git diff --quiet`
+    /// exit-code semantics are preserved, which `snapshot::repo` relies on
+    /// for `/undo` cursoring.
+    ///
+    /// Set here rather than on the `ExternalTool::command` default so it does
+    /// not leak onto `Gh`, `Cargo`, `Node`, `Python`, or `RustC`. Prefer the
+    /// environment variable over the `--no-optional-locks` flag: the flag is
+    /// top-level (it must precede the subcommand, awkward for the several
+    /// call sites that build argument vectors), it would change the
+    /// agent-visible command string rendered by `tools::git::format_command`,
+    /// and an unknown flag hard-fails on old git while an unknown environment
+    /// variable is silently ignored.
+    fn command() -> Option<Command> {
+        let spec = Self::resolve()?;
+        let (program, fixed_args) = split_interpreter_spec(&spec);
+        let mut cmd = Command::new(&program);
+        crate::utils::suppress_console_window(&mut cmd);
+        for arg in &fixed_args {
+            cmd.arg(arg);
+        }
+        cmd.env("GIT_OPTIONAL_LOCKS", "0");
+        Some(cmd)
+    }
+
     fn resolve() -> Option<String> {
         static CACHE: OnceLock<Option<String>> = OnceLock::new();
         CACHE
@@ -751,6 +786,39 @@ mod tests {
     fn git_command_returns_some_when_available() {
         if Git::available() {
             assert!(Git::command().is_some());
+        }
+    }
+
+    /// Every git command we build must be lock-free (#5617). Without this,
+    /// a read-only probe can take `.git/index.lock` in the user's own
+    /// repository and break a `git commit` they run by hand.
+    #[test]
+    fn git_command_never_takes_optional_locks() {
+        if !Git::available() {
+            return;
+        }
+        let cmd = Git::command().expect("git resolves when available");
+        let value = cmd
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("GIT_OPTIONAL_LOCKS"))
+            .and_then(|(_, value)| value)
+            .expect("GIT_OPTIONAL_LOCKS must be set on every git command");
+        assert_eq!(value, std::ffi::OsStr::new("0"));
+    }
+
+    /// The suppression is deliberately scoped to git. Other external tools
+    /// have no index to protect and must not inherit a git-specific variable.
+    #[test]
+    fn optional_lock_suppression_does_not_leak_to_other_tools() {
+        for cmd in [Gh::command(), Cargo::command(), Node::command()]
+            .into_iter()
+            .flatten()
+        {
+            assert!(
+                !cmd.get_envs()
+                    .any(|(key, _)| key == std::ffi::OsStr::new("GIT_OPTIONAL_LOCKS")),
+                "only Git may set GIT_OPTIONAL_LOCKS"
+            );
         }
     }
 

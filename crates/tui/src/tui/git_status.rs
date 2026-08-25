@@ -158,6 +158,12 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
 fn git_output(cwd: &Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .args(args)
+        // This probe runs against the user's own repository every two
+        // seconds. `git status` opportunistically refreshes the index, and
+        // that refresh takes `.git/index.lock` — colliding with a `git
+        // commit` the user runs in their own shell (#5617). Optional locks
+        // are exactly what we do not want here: we only ever read.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .current_dir(cwd)
         .output()
         .map_err(|e| e.to_string())?;

@@ -80,6 +80,9 @@ fn git_stdout(workspace: &Path, args: &[&str]) -> Option<String> {
         .arg("-C")
         .arg(workspace)
         .args(args)
+        // Read-only probe: never take the index lock in the user's repo
+        // (#5617).
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .ok()?;
     if !output.status.success() {
