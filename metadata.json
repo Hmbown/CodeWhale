@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0W2K2CQ7K52XF0EW4V63B1Y",
+  "strategy": "manual-commit",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/tui/src/tui/keybindings.rs",
+    "crates/tui/src/tui/ui/activity_detail.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 204,
+    "cache_creation_tokens": 556581,
+    "cache_read_tokens": 22876482,
+    "output_tokens": 110521,
+    "api_call_count": 102
+  }
+}
