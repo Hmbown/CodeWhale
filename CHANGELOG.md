@@ -104,6 +104,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - Provider neutrality (#5588): model resolution of omitted/aliased models is
   now provider-relative, OpenAI-native defaults no longer route through
   another provider's table, CLI credentials stay provider-scoped, NVIDIA
@@ -294,6 +301,13 @@ item-level change record is retained below the categorized release highlights.
   ([@aboimpinto](https://github.com/aboimpinto))** for PR #5525.
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - Sub-agent, Fleet-worker, workflow-task, and thread-runtime model turns no
   longer inherit a hidden role-based step ceiling. An omitted or zero
@@ -1542,6 +1556,13 @@ locales grow to 18 and 8.
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 
 - The model-facing `agent` tool advertises exactly 12 fields — `action`,
   `prompt`, `type`, `profile`, `name`, `agent_id`, `message`, `until`,
@@ -1671,6 +1692,13 @@ a published OpenAI-compatible host ship here (#5350).
   (OOM killer) remains uninterceptable by design.
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - Prompt-cache prefix is pinned for the session. The tool loop no longer
   recomposes the system prompt from disk on every model step, so an agent
@@ -2040,6 +2068,13 @@ pin that caused it rather than living around it.
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - Reasoning-effort normalization and the model picker read a model's published
   `reasoning_options` list from the catalog instead of collapsing every route to
   the historic Low/Medium ladder. Any catalog row that publishes an effort list
@@ -2142,6 +2177,13 @@ runs against Pi 0.8.41 and by dogfooding repeated manual compaction.
   transcript, export, compaction, or relay text.
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - Anonymous usage counting is on by default for fresh installs and disclosed in
   a native first-run Codewhale modal with an immediate opt-out. Prior declines
@@ -2340,6 +2382,13 @@ could end productive work without a final assistant response.
   notes in their own To-do while the durable transcript retains their evidence.
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - `codewhale-cli` now contains the terminal runtime directly. Release installers
   expose byte-identical `codewhale` and `codew` commands without a separate TUI
@@ -2556,6 +2605,13 @@ File edits, terminal width, and Windows installation.
   wired into the turn pipeline and ships dormant by design.
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - `/fleet` is the familiar roster/setup face again. The operator row is the
   Fleet leader (session model); the header names the selected saved Fleet and
@@ -2915,6 +2971,13 @@ stale runtime and dependency surface.
   (#3921, #4785).
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - Model-visible built-ins now use the canonical `Bash`, `File`, and `Run`
   action schemas. `apply_patch` remains available as the one direct custom
@@ -3417,6 +3480,13 @@ says otherwise.
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - Prefix-cache tool catalog entries store only the SHA-256 digest, not the
   joined catalog string. Unused plan-transition validation helpers are removed.
 
@@ -3569,6 +3639,13 @@ Thank you to the contributors whose code, reports, and reviews shaped v0.9.2:
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - Rework the ambient idle ocean: the water now holds exactly one loose
   wedge school of fish, jellyfish, bubbles, and the rare whale cameo —
   seaweed and bio-dust are removed. Fish swim on a wrap-around path and
@@ -3657,6 +3734,13 @@ surface.
   missing credentials fall back to the local heuristic.
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - Keep the top activity bar literal and actionable: active To-dos appear first,
   followed by Sub-agents, while generic operations and coordination stay in
@@ -4441,6 +4525,13 @@ largest curated model-and-pricing expansion in the project so far.
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - Tool-hang watchdog trimmed from 15 minutes to 10 (#1862); approval modal
   footer hints use a higher-contrast tier (#3380); status/mode copy is
   disclosed once across header, footer, cards, and sidebar instead of
@@ -4517,6 +4608,13 @@ reproductions shaped v0.9.0:
 ## [0.8.68] - 2026-07-10
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - Make the advertised Android/Termux release target buildable by generating
   QuickJS bindings against the Android NDK instead of expecting an upstream
@@ -4660,6 +4758,13 @@ reproductions shaped v0.9.0:
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - Tool-hang watchdog trimmed from 15 minutes to 10 (#1862); approval modal
   footer hints use a higher-contrast tier (#3380); status/mode copy is
   disclosed once across header, footer, cards, and sidebar instead of
@@ -4764,6 +4869,13 @@ reproductions shaped v0.9.0:
   v0.8.68 (#2974, #4038).
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - Clarified the Fleet coordination hierarchy and made roles carry real
   doctrine: the **operator** (the session's `/model` selection) runs the
@@ -5032,6 +5144,13 @@ reproductions shaped v0.9.0:
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - Deferred Auto mode from the user-facing mode picker, cycle, hotbar, `/mode`
   command, and runtime-thread mode overrides until it has a distinct prompt and
   auto-review behavior; existing `auto` mode text now folds back to Agent
@@ -5163,6 +5282,13 @@ reproductions shaped v0.9.0:
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - **Config modularization (#3311).** `ProviderKind` (#3505), harness posture
   (#3507), and provider default seeds (#3503) moved into dedicated modules, and
   the `config.rs` monolith split into clean leaf modules (paths, search,
@@ -5289,6 +5415,13 @@ reproductions shaped v0.9.0:
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - **Community and dependency harvests.** The release train carries focused
   community-credit slices from #3379 by @greyfreedom, #3348 by @nightt5879,
   #3346 by @hongqitai, #3345/#3333 by @cyq1017, and Dependabot updates for
@@ -5390,6 +5523,13 @@ reproductions shaped v0.9.0:
 ## [0.8.62] - 2026-06-17
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - **GLM-5.2 is now the default direct Z.AI model.** `DEFAULT_ZAI_MODEL` resolves
   to `GLM-5.2` in both `codewhale-tui` and `codewhale-config`; the `glm-5.1`
@@ -5548,6 +5688,13 @@ folds in several community contributions.
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - **Sub-agents converge toward fleet-style durable workers** — real worker lifecycle states are
   projected to the sidebar instead of a hardcoded "running", and a sub-agent returns a structured
   needs-input checkpoint instead of parking. (#3226, #3096, #3154)
@@ -5642,6 +5789,13 @@ folds in several community contributions.
   `MiniMax-M3` with the M2.7/M2.5/M2.1 family selectable (#3187/#3191).
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - **README and contributor credits.** The README now has a shorter public
   overview and moves the full contributor ledger to `docs/CONTRIBUTORS.md`,
@@ -5904,6 +6058,13 @@ folds in several community contributions.
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - **Sub-agent routing is provider-aware.** DeepSeek ids are no longer
   hardcoded into model validation; routing works from per-provider
   big/cheap candidates, the network router is skipped when a provider has
@@ -5965,6 +6126,13 @@ folds in several community contributions.
   github-actions updates, monthly npm for `web/`).
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - **The changelog went on a diet.** Root `CHANGELOG.md` now carries recent
   releases (v0.8.40+); older entries moved to `docs/CHANGELOG_ARCHIVE.md`.
@@ -6062,6 +6230,13 @@ folds in several community contributions.
   correctness/stability issues (#2880, @HUQIANTAO).
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - **CNB shim cleanup.** Removed deprecated `deepseek` shim references from the
   CNB mirror path.
@@ -6317,6 +6492,13 @@ folds in several community contributions.
   and @gaord for the runtime metadata direction.
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - Removed the deprecated `deepseek` and `deepseek-tui` binary shims from the
   v0.9.0 Cargo crates and GitHub release artifact matrix. The canonical
@@ -6641,6 +6823,13 @@ patches, retesting, and release-stabilization signals that shaped this pass.
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - **Auto-compaction is now percentage- and model-aware.** The per-model
   threshold helper is `compaction_threshold_for_model_at_percent(model,
   percent)` (replacing the effort-based variant), and the default
@@ -6750,6 +6939,13 @@ that shaped this release cycle.
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - Hardened theme repainting and sidebar color use so theme switches do not
   leave stale Whale-dark panel colors behind.
 - Made legacy config migration visible when CodeWhale copies old DeepSeek-era
@@ -6797,6 +6993,13 @@ UX reports relayed during the final triage pass.
   OCR, and other registered tools.
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - Hardened prefix-cache fingerprints to hash API-visible tool schema details,
   not just tool names, so schema and description drift invalidates cached
@@ -6873,6 +7076,13 @@ release: **@A-Corner** (#2438), **@taiwan988** (#2483), **@AiurArtanis**
   will return when an open-weight Qwen 3.7 release ships.
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - **Release hardening.** CI now runs clippy/docs checks, web frontend lint and
   type checks, provider-registry drift checks, broader crate docs, and a large
@@ -6969,6 +7179,13 @@ screenshots, logs, or retest requests shaped this release: **@buko** (#2359,
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - **DeepSeek-first release framing, project-context logging, state-root
   migration, CodeWhale README paths, and reasoning-locale behavior** were
   finalized for the v0.8.47 release.
@@ -7024,6 +7241,13 @@ Thanks to contributors credited in the v0.8.47 GitHub Release, including
   (#2203).
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - **DeepSeek-first focus.** v0.8.46 refocuses on delivering the
   highest-quality experience on DeepSeek first. Additional first-class
@@ -7092,6 +7316,13 @@ and continuing contributors **@reidliu41**, **@cyq1017**, **@idling11**,
   their full text on hover. Thanks @idling11 (#2110).
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - **AGENTS.md is now maintainer-local.** The project instructions file no
   longer ships as a tracked repo file; it lives in maintainer-local ignored
@@ -7171,6 +7402,13 @@ and continuing contributors **@reidliu41**, **@cyq1017**, **@idling11**,
   recent interactive session for the current workspace.
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - **App state migrates to `~/.codewhale/`.** New installs write product-owned
   state (config, sessions, tasks, skills, logs, etc.) under `~/.codewhale/`.
@@ -7264,6 +7502,13 @@ and continuing contributors **@reidliu41**, **@cyq1017**, **@idling11**,
 
 ### Changed
 
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
+
 - **Contributor count and acknowledgement surfaces refreshed.** The website
   fallback contributor count now reflects 98 live GitHub contributors (up from
   the stale 91). All three README translations (English, 中文, 日本語) now
@@ -7299,6 +7544,13 @@ and continuing contributors **@reidliu41**, **@cyq1017**, **@idling11**,
 ## [0.8.42] - 2026-05-24
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - **CodeWhale now ships with the Brother Whale agent identity prompt.** The
   built-in system prompt frames the agent as trusted, calm, careful, and
@@ -7365,6 +7617,13 @@ and selection fix in #1964.
 ## [0.8.41] - 2026-05-23
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - **Project renamed to codewhale.** The canonical CLI dispatcher is now
   `codewhale` (was `deepseek`) and the TUI runtime is `codewhale-tui`
@@ -7552,6 +7811,13 @@ documentation lineage now preserved through the rename.
   reasoning is not reintroduced as if it were visible user or assistant text.
 
 ### Changed
+
+- The marketing site hides the Sign in / Register links behind
+  `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
+  `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so
+  visitors who clicked got an error *after* an account had already been
+  created for them. app.codewhale.net stays reachable for existing users
+  and the CLI device flow; flip the flag back to restore the links.
 
 - **Slash-command autocomplete ranks exact alias matches first.** Typing
   `/q` now surfaces `/exit` (whose alias `q` is an exact match) above

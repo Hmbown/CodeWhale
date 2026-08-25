@@ -19,6 +19,15 @@ export const DISCORD_URL = "https://discord.gg/37gfS3ksug";
 
 /** The hosted Codewhale app (account sign-in / sign-up). */
 export const APP_URL = "https://app.codewhale.net";
+/**
+ * Sign-in / registration entry points are hidden on the marketing site while
+ * web auth is being repaired: `POST /api/auth/session-exchange` was failing 15
+ * of 16 attempts, so visitors who clicked these got an error *after* an account
+ * had already been created for them. app.codewhale.net stays reachable for
+ * existing users and the CLI device flow. Flip this back to `true` to restore.
+ */
+export const SHOW_APP_AUTH_LINKS = false;
+
 export const APP_LOGIN_URL = `${APP_URL}/login`;
 export const APP_SIGNUP_URL = `${APP_URL}/signup`;
 

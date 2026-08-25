@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Locale } from "@/lib/i18n/config";
 import { FACTS } from "@/lib/facts.generated";
 import { fill, getChrome } from "@/lib/i18n/dictionaries";
-import { navLinks, REPO_URL, DISCORD_URL, APP_LOGIN_URL, APP_SIGNUP_URL } from "@/lib/i18n/links";
+import { navLinks, REPO_URL, DISCORD_URL, APP_LOGIN_URL, APP_SIGNUP_URL, SHOW_APP_AUTH_LINKS } from "@/lib/i18n/links";
 import { fetchRepoStats, formatStars } from "@/lib/github";
 import { getEnv } from "@/lib/kv";
 import { LocaleSwitcher } from "./locale-switcher";
@@ -101,14 +101,16 @@ export async function Nav({ locale = "en" }: { locale?: Locale }) {
           >
             <svg viewBox="0 0 71 55" aria-hidden fill="currentColor" className="brand-mark"><path d="M60.1 4.9C55.6 2.8 50.7 1.3 45.6.4c-.6 1.1-1.3 2.6-1.8 3.8-5.4-.8-10.8-.8-16.1 0-.5-1.2-1.2-2.7-1.8-3.8-5.1.9-10 2.4-14.5 4.5C2.6 18.2-.4 31.2 1 44c6.1 4.6 12.1 7.4 17.9 9.3 1.4-1.9 2.7-4 3.8-6.2-2.1-.8-4.1-1.8-6-3 .5-.4 1-.8 1.5-1.2 11.5 5.4 24 5.4 35.4 0 .5.4 1 .8 1.5 1.2-1.9 1.2-3.9 2.2-6 3 1.1 2.2 2.4 4.3 3.8 6.2 5.8-1.9 11.8-4.7 17.9-9.3 1.7-15-2.9-27.9-10.7-39.1zM23.7 36.3c-3.5 0-6.4-3.2-6.4-7.2s2.8-7.2 6.4-7.2 6.5 3.2 6.4 7.2c0 4-2.9 7.2-6.4 7.2zm23.4 0c-3.5 0-6.4-3.2-6.4-7.2s2.8-7.2 6.4-7.2c3.5 0 6.5 3.2 6.4 7.2 0 4-2.9 7.2-6.4 7.2z"/></svg>
           </Link>
-          <span className="paper-auth" role="group" aria-label={chrome.authGroupAria}>
-            <Link href={APP_LOGIN_URL} className="paper-auth-signin hidden lg:inline-flex">
-              {chrome.authSignIn}
-            </Link>
-            <Link href={APP_SIGNUP_URL} className="paper-auth-register hidden lg:inline-flex">
-              {chrome.authRegister}
-            </Link>
-          </span>
+          {SHOW_APP_AUTH_LINKS && (
+            <span className="paper-auth" role="group" aria-label={chrome.authGroupAria}>
+              <Link href={APP_LOGIN_URL} className="paper-auth-signin hidden lg:inline-flex">
+                {chrome.authSignIn}
+              </Link>
+              <Link href={APP_SIGNUP_URL} className="paper-auth-register hidden lg:inline-flex">
+                {chrome.authRegister}
+              </Link>
+            </span>
+          )}
           <Link
             href={`/${locale}/install`}
             className="paper-install-cta hidden xl:inline-flex"
@@ -118,10 +120,14 @@ export async function Nav({ locale = "en" }: { locale?: Locale }) {
           <MobileMenu
             installHref={`/${locale}/install`}
             installLabel={chrome.installCta}
-            signInHref={APP_LOGIN_URL}
-            signInLabel={chrome.authSignIn}
-            registerHref={APP_SIGNUP_URL}
-            registerLabel={chrome.authRegister}
+            {...(SHOW_APP_AUTH_LINKS
+              ? {
+                  signInHref: APP_LOGIN_URL,
+                  signInLabel: chrome.authSignIn,
+                  registerHref: APP_SIGNUP_URL,
+                  registerLabel: chrome.authRegister,
+                }
+              : {})}
             links={links}
             openLabel={chrome.menuOpen}
             closeLabel={chrome.menuClose}
