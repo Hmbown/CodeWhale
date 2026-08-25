@@ -712,8 +712,26 @@ fn unversioned_base_url(base_url: &str) -> String {
         .to_string()
 }
 
+/// Whether a base URL already carries an API version, anywhere in its path.
+///
+/// This deliberately looks at every path segment rather than only the last.
+/// DeepInfra publishes its OpenAI-compatible surface at
+/// `https://api.deepinfra.com/v1/openai`, where the version is the *first*
+/// segment; a last-segment-only test saw `openai`, decided the URL was
+/// unversioned, and appended a second `/v1`. Every request then went to
+/// `/v1/openai/v1/chat/completions`, which is a 404 — the provider was
+/// entirely non-functional (verified live: `/v1/openai/models` -> 200,
+/// `/v1/openai/v1/models` -> 404).
+///
+/// The host is excluded so a hostname that happens to look like a version
+/// cannot suppress the suffix for a genuinely unversioned path.
 fn base_url_has_version_suffix(trimmed: &str) -> bool {
-    trimmed.rsplit('/').next().is_some_and(is_version_segment)
+    let path = trimmed
+        .split_once("://")
+        .map_or(trimmed, |(_, rest)| rest)
+        .split_once('/')
+        .map_or("", |(_, path)| path);
+    path.split('/').any(is_version_segment)
 }
 
 fn is_version_segment(segment: &str) -> bool {
@@ -9441,6 +9459,36 @@ mod tests {
             .find(|offering| offering.wire_model_id == DEFAULT_EDENAI_MODEL)
             .expect("Eden AI default row");
         assert!(default.default_for_provider);
+    }
+
+    #[test]
+    fn a_base_url_versioned_mid_path_does_not_get_a_second_version() {
+        // DeepInfra's OpenAI-compatible surface is /v1/openai — the version
+        // is the FIRST segment. Appending another /v1 produced a 404 on
+        // every request and made the provider entirely non-functional.
+        assert_eq!(
+            versioned_base_url("https://api.deepinfra.com/v1/openai"),
+            "https://api.deepinfra.com/v1/openai"
+        );
+        // The ordinary case is unchanged: a version-terminated base is kept,
+        // and a genuinely unversioned base still gains /v1.
+        assert_eq!(
+            versioned_base_url("https://api.openai.com/v1"),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            versioned_base_url("https://api.example.com"),
+            "https://api.example.com/v1"
+        );
+        assert_eq!(
+            versioned_base_url("https://api.example.com/openai"),
+            "https://api.example.com/openai/v1"
+        );
+        // A host that looks like a version must not suppress the suffix.
+        assert_eq!(
+            versioned_base_url("https://v1.example.com/openai"),
+            "https://v1.example.com/openai/v1"
+        );
     }
 
     #[test]

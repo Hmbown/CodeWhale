@@ -118,6 +118,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receipt write returns `Deny`, never `Proceed`, and a dropped decision
   channel is recorded as unavailable instead of being mislabelled as user
   cancellation.
+- Fixed DeepInfra being entirely non-functional. Its OpenAI-compatible surface
+  is `https://api.deepinfra.com/v1/openai`, where the API version is the first
+  path segment, but the shared URL builder only checked the last segment, saw
+  `openai`, and appended a second `/v1`. Every request went to
+  `/v1/openai/v1/chat/completions`, which 404s. Version detection now scans the
+  whole path; DeepInfra was the only configured base URL affected.
+- Fixed the hard-link write guard being Unix-only (#5569). Windows now counts
+  links through `GetFileInformationByHandle` — the same call this repo already
+  used for the workspace `.env` guard — so a hard-linked file pointing outside
+  the workspace is refused on both platforms instead of only the one with the
+  stronger default posture.
 - Fixed GPT-5.6 Sol pricing, which overstated cost on the tier the bare
   `gpt-5.6` alias resolves to. The 2026-08-17 sweep recorded 5.00/30.00 per
   million; the model page now publishes 4.00/20.00 (cache read 0.40, write
