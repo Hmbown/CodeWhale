@@ -188,7 +188,7 @@ impl McpServer {
                                 },
                                 "model": {
                                     "type": "string",
-                                    "description": "Optional model identifier (default: deepseek-v4-pro)"
+                                    "description": "Optional model identifier (default: the configured model)"
                                 },
                                 "cwd": {
                                     "type": "string",
@@ -345,10 +345,17 @@ impl McpServer {
                 message: "Missing required argument: prompt".to_string(),
             })?;
 
-        let model = arguments
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or("deepseek-v4-pro");
+        // Load config first: it supplies both the model client and the
+        // default model when the caller omits `model`.
+        let config = Config::load(None, None).map_err(|e| RpcError {
+            code: -32000,
+            message: format!("Failed to load config: {e}"),
+        })?;
+        let client = DeepSeekClient::new(&config).map_err(model_client_init_error)?;
+
+        // An explicit `model` argument always wins; otherwise the runtime's
+        // configured default model is used.
+        let model = resolve_tool_model(arguments, &config);
 
         // Resolve thread_id
         let thread_id = if internal_name == "deepseek" {
@@ -364,13 +371,6 @@ impl McpServer {
                 })?
                 .to_string()
         };
-
-        // Load config and create client
-        let config = Config::load(None, None).map_err(|e| RpcError {
-            code: -32000,
-            message: format!("Failed to load config: {e}"),
-        })?;
-        let client = DeepSeekClient::new(&config).map_err(model_client_init_error)?;
 
         // Build message list
         let user_message = Message {
@@ -395,9 +395,9 @@ impl McpServer {
 
         // Send the API request (non-streaming for the basic version). Internal
         // chat uses the same resolved output policy as an ordinary turn.
-        let request_route = client.effective_route_envelope(model, chrono::Utc::now());
+        let request_route = client.effective_route_envelope(&model, chrono::Utc::now());
         let request = MessageRequest {
-            model: model.to_string(),
+            model,
             messages: messages.clone(),
             max_tokens: client.effective_max_output_tokens(&request_route.model),
             system: None,
@@ -615,6 +615,18 @@ struct RpcError {
     message: String,
 }
 
+/// Resolve the model for a native `deepseek`/`deepseek-reply` tool call.
+///
+/// An explicit `model` argument always wins; otherwise the runtime's
+/// configured default model is used (provider-neutral).
+fn resolve_tool_model(arguments: &Value, config: &Config) -> String {
+    arguments
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| config.default_model())
+}
+
 fn model_client_init_error(error: impl std::fmt::Display) -> RpcError {
     RpcError {
         code: -32000,
@@ -720,5 +732,55 @@ mod tests {
 
         assert!(!init.message.contains("DeepSeek"));
         assert!(!request.message.contains("DeepSeek"));
+    }
+
+    #[test]
+    fn deepseek_tool_model_defaults_to_configured_model() {
+        let configured = Config {
+            provider: Some("openai".to_string()),
+            default_text_model: Some("gpt-probe-model".to_string()),
+            ..Config::default()
+        };
+
+        // Omitted `model` resolves to the runtime's configured model.
+        assert_eq!(
+            resolve_tool_model(&json!({ "prompt": "hi" }), &configured),
+            "gpt-probe-model"
+        );
+
+        // An explicit `model` argument still wins over the configured default.
+        assert_eq!(
+            resolve_tool_model(
+                &json!({ "prompt": "hi", "model": "explicit-model" }),
+                &configured
+            ),
+            "explicit-model"
+        );
+
+        // A default config (Deepseek family) still resolves to the seed
+        // default, so unchanged configurations keep the prior behavior.
+        assert_eq!(
+            resolve_tool_model(&json!({}), &Config::default()),
+            crate::config::DEFAULT_TEXT_MODEL
+        );
+    }
+
+    #[test]
+    fn deepseek_tool_schema_names_configured_model_as_default() {
+        let settings = McpServerSettings {
+            expose_tools: vec!["deepseek".to_string()],
+            require_approval: false,
+        };
+        let server = McpServer::new(PathBuf::from("."), settings).expect("build server");
+
+        let response = server.list_tools_response();
+        let description = response["tools"][0]["inputSchema"]["properties"]["model"]["description"]
+            .as_str()
+            .expect("model description is a string");
+        assert!(
+            description.contains("the configured model"),
+            "unexpected description: {description}"
+        );
+        assert!(!description.contains("deepseek-v4-pro"));
     }
 }
