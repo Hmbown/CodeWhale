@@ -6,11 +6,11 @@
 
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT, TRUE};
+use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleBitmap,
     CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC,
-    SRCCOPY, SelectObject,
+    SRCCOPY, ScreenToClient, SelectObject,
 };
 use windows_sys::Win32::Storage::Xps::PrintWindow;
 use windows_sys::Win32::System::Threading::{
@@ -31,8 +31,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetSystemMetrics, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-    IsWindowVisible, PW_RENDERFULLCONTENT, SM_CXSCREEN, SM_CYSCREEN, SW_RESTORE,
-    SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
+    IsWindowVisible, MK_LBUTTON, MK_MBUTTON, MK_RBUTTON, PW_RENDERFULLCONTENT, PostMessageW,
+    SM_CXSCREEN, SM_CYSCREEN, SW_RESTORE, SetForegroundWindow, ShowWindow, WM_CHAR, WM_KEYDOWN,
+    WM_KEYUP, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WS_EX_TOOLWINDOW,
 };
 
 use crate::consent::AppIdentity;
@@ -455,13 +457,14 @@ impl Driver for WindowsDriver {
 }
 
 // ---------------------------------------------------------------------------
-// Element surface (phase 2): reads only.
+// Element surface (phase 2): window directory, PrintWindow capture, and
+// posted (cursor-free) input.
 //
-// UI Automation would give Windows the same tree and background writes macOS
-// has, but it is a COM surface and — as Codex documents for its own Windows
-// build — cursor-free action is not generally reliable there. Until that
-// lands, Windows contributes the app/window directory and window-scoped
-// capture, and points the model at the phase-1 foreground tools for actions.
+// There is no accessibility tree here yet, so index-based actions
+// (press / set_value / menu / select_text) refuse. Pixel click/type/key/scroll
+// /drag go to the target HWND via PostMessageW and do not move the real
+// cursor. Apps that ignore posted input still need computer_raise plus the
+// foreground SendInput tools.
 // ---------------------------------------------------------------------------
 
 /// One top-level window as `EnumWindows` reports it.
@@ -675,7 +678,124 @@ fn capture_window(record: &WinRecord, max_edge: u32) -> Result<(Vec<u8>, u32, u3
     Ok((png, out_w, out_h))
 }
 
-const NO_ACTIONS: &str = "Windows element actions are not implemented: UI Automation gives the tree but not reliable cursor-free input. Use computer_raise to bring the window forward, then the foreground tools (computer_screenshot + computer_click/type/key) without the `app` argument.";
+const NO_TREE: &str = "Windows has no element tree yet; pass x/y from computer_app_state (computer_click / computer_type / computer_key / computer_scroll) or computer_raise and use the foreground tools";
+
+fn packed_lparam(x: i32, y: i32) -> LPARAM {
+    let lo = (x as u16) as u32;
+    let hi = (y as u16) as u32;
+    ((hi << 16) | lo) as LPARAM
+}
+
+fn packed_wheel(keys: u16, delta: i16) -> WPARAM {
+    let lo = keys as u32;
+    let hi = (delta as u16) as u32;
+    ((hi << 16) | lo) as WPARAM
+}
+
+fn post(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Result<(), DriverError> {
+    // SAFETY: `hwnd` came from this process's EnumWindows listing and is
+    // still a window; posted messages do not require the caller to own it.
+    let ok = unsafe { PostMessageW(hwnd, msg, wparam, lparam) };
+    if ok == 0 {
+        return Err(DriverError::Failed(
+            "PostMessageW failed (the window may have closed or be elevated)".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn client_lparam(record: &WinRecord, x: f64, y: f64) -> Result<LPARAM, DriverError> {
+    let mut point = POINT {
+        x: record.x + x.round() as i32,
+        y: record.y + y.round() as i32,
+    };
+    // SAFETY: `record.hwnd` is a live top-level window from enumerate_windows.
+    let ok = unsafe { ScreenToClient(record.hwnd, &mut point as *mut POINT) };
+    if ok == 0 {
+        return Err(DriverError::Failed(
+            "ScreenToClient failed for this window".to_string(),
+        ));
+    }
+    Ok(packed_lparam(point.x, point.y))
+}
+
+fn mouse_msgs(button: Button, clicks: u32) -> (u32, u32, u32, WPARAM) {
+    match button {
+        Button::Left if clicks >= 2 => (
+            WM_LBUTTONDOWN,
+            WM_LBUTTONUP,
+            WM_LBUTTONDBLCLK,
+            MK_LBUTTON as WPARAM,
+        ),
+        Button::Left => (WM_LBUTTONDOWN, WM_LBUTTONUP, 0, MK_LBUTTON as WPARAM),
+        Button::Right => (WM_RBUTTONDOWN, WM_RBUTTONUP, 0, MK_RBUTTON as WPARAM),
+        Button::Middle => (WM_MBUTTONDOWN, WM_MBUTTONUP, 0, MK_MBUTTON as WPARAM),
+    }
+}
+
+fn post_key(hwnd: HWND, vk: u16, down: bool) -> Result<(), DriverError> {
+    post(
+        hwnd,
+        if down { WM_KEYDOWN } else { WM_KEYUP },
+        vk as WPARAM,
+        0,
+    )
+}
+
+fn post_combo(hwnd: HWND, combo: &KeyCombo) -> Result<(), DriverError> {
+    let (vk, shift) = vk_for(&combo.key)?;
+    if combo.modifiers.ctrl {
+        post_key(hwnd, VK_CONTROL, true)?;
+    }
+    if combo.modifiers.alt {
+        post_key(hwnd, VK_MENU, true)?;
+    }
+    if combo.modifiers.shift || shift {
+        post_key(hwnd, VK_SHIFT, true)?;
+    }
+    if combo.modifiers.meta {
+        post_key(hwnd, VK_LWIN, true)?;
+    }
+    post_key(hwnd, vk, true)?;
+    post_key(hwnd, vk, false)?;
+    if combo.modifiers.meta {
+        post_key(hwnd, VK_LWIN, false)?;
+    }
+    if combo.modifiers.shift || shift {
+        post_key(hwnd, VK_SHIFT, false)?;
+    }
+    if combo.modifiers.alt {
+        post_key(hwnd, VK_MENU, false)?;
+    }
+    if combo.modifiers.ctrl {
+        post_key(hwnd, VK_CONTROL, false)?;
+    }
+    Ok(())
+}
+
+fn post_text(hwnd: HWND, text: &str) -> Result<(), DriverError> {
+    for ch in text.chars() {
+        if ch == '\n' {
+            post_key(hwnd, VK_RETURN, true)?;
+            post_key(hwnd, VK_RETURN, false)?;
+            continue;
+        }
+        post(hwnd, WM_CHAR, ch as u32 as WPARAM, 0)?;
+    }
+    Ok(())
+}
+
+fn window_for(app: &AppIdentity) -> Result<WinRecord, DriverError> {
+    enumerate_windows()
+        .into_iter()
+        .find(|record| record.pid == app.pid)
+        .ok_or_else(|| {
+            DriverError::Failed(format!(
+                "`{}` has no visible window (it may be minimized)",
+                app.label()
+            ))
+        })
+}
 
 impl ElementDriver for WindowsDriver {
     fn apps(&mut self) -> Result<Vec<AppInfo>, DriverError> {
@@ -766,10 +886,161 @@ impl ElementDriver for WindowsDriver {
 
     fn act(
         &mut self,
-        _app: &AppIdentity,
-        _action: ElementAction,
+        app: &AppIdentity,
+        action: ElementAction,
     ) -> Result<ActionReceipt, DriverError> {
-        Err(DriverError::Unsupported(NO_ACTIONS.to_string()))
+        match action {
+            ElementAction::Press { .. }
+            | ElementAction::SetValue { .. }
+            | ElementAction::Menu { .. }
+            | ElementAction::SelectText { .. } => {
+                Err(DriverError::Unsupported(NO_TREE.to_string()))
+            }
+            ElementAction::Click {
+                x,
+                y,
+                button,
+                clicks,
+                hold_ms,
+            } => {
+                let record = window_for(app)?;
+                let lparam = client_lparam(&record, x, y)?;
+                let (down, up, dbl, wparam) = mouse_msgs(button, clicks);
+                if clicks >= 2 && dbl != 0 {
+                    post(record.hwnd, down, wparam, lparam)?;
+                    post(record.hwnd, up, 0, lparam)?;
+                    post(record.hwnd, dbl, wparam, lparam)?;
+                    post(record.hwnd, up, 0, lparam)?;
+                } else {
+                    for _ in 0..clicks.max(1) {
+                        post(record.hwnd, down, wparam, lparam)?;
+                        if hold_ms > 0 {
+                            std::thread::sleep(Duration::from_millis(hold_ms.min(5_000)));
+                        }
+                        post(record.hwnd, up, 0, lparam)?;
+                    }
+                }
+                Ok(ActionReceipt {
+                    text: format!(
+                        "posted a {button:?} click at ({x:.0}, {y:.0}) to `{}` without moving the cursor",
+                        app.label()
+                    ),
+                    ..Default::default()
+                })
+            }
+            ElementAction::Type {
+                text,
+                index,
+                point,
+                clear,
+                submit,
+                activate,
+            } => {
+                if index.is_some() {
+                    return Err(DriverError::Unsupported(NO_TREE.to_string()));
+                }
+                if activate {
+                    self.raise(app)?;
+                    std::thread::sleep(Duration::from_millis(80));
+                }
+                let record = window_for(app)?;
+                if let Some((x, y)) = point {
+                    let lparam = client_lparam(&record, x, y)?;
+                    post(record.hwnd, WM_LBUTTONDOWN, MK_LBUTTON as WPARAM, lparam)?;
+                    post(record.hwnd, WM_LBUTTONUP, 0, lparam)?;
+                    std::thread::sleep(Duration::from_millis(40));
+                }
+                if clear {
+                    post_combo(record.hwnd, &crate::keys::select_all())?;
+                    post_key(record.hwnd, VK_BACK, true)?;
+                    post_key(record.hwnd, VK_BACK, false)?;
+                }
+                if !text.is_empty() {
+                    post_text(record.hwnd, &text)?;
+                }
+                if submit {
+                    post_key(record.hwnd, VK_RETURN, true)?;
+                    post_key(record.hwnd, VK_RETURN, false)?;
+                }
+                Ok(ActionReceipt {
+                    text: format!(
+                        "posted typing into `{}` without moving the cursor",
+                        app.label()
+                    ),
+                    ..Default::default()
+                })
+            }
+            ElementAction::Key { combo, activate } => {
+                if activate {
+                    self.raise(app)?;
+                    std::thread::sleep(Duration::from_millis(80));
+                }
+                let record = window_for(app)?;
+                post_combo(record.hwnd, &combo)?;
+                Ok(ActionReceipt {
+                    text: format!(
+                        "posted {combo} to `{}` without moving the cursor",
+                        app.label()
+                    ),
+                    ..Default::default()
+                })
+            }
+            ElementAction::Scroll {
+                index,
+                point,
+                dir,
+                pages,
+            } => {
+                if index.is_some() {
+                    return Err(DriverError::Unsupported(NO_TREE.to_string()));
+                }
+                let record = window_for(app)?;
+                let (x, y) = point.unwrap_or((record.w as f64 / 2.0, record.h as f64 / 2.0));
+                let lparam = client_lparam(&record, x, y)?;
+                let (msg, delta) = match dir {
+                    ScrollDir::Up => (WM_MOUSEWHEEL, 120i16),
+                    ScrollDir::Down => (WM_MOUSEWHEEL, -120i16),
+                    ScrollDir::Left => (WM_MOUSEHWHEEL, -120i16),
+                    ScrollDir::Right => (WM_MOUSEHWHEEL, 120i16),
+                };
+                for _ in 0..pages.max(1) {
+                    post(record.hwnd, msg, packed_wheel(0, delta), lparam)?;
+                }
+                Ok(ActionReceipt {
+                    text: format!(
+                        "posted {pages} page(s) of scroll {dir:?} to `{}` without moving the cursor",
+                        app.label()
+                    ),
+                    ..Default::default()
+                })
+            }
+            ElementAction::Drag {
+                from,
+                to,
+                duration_ms,
+            } => {
+                let record = window_for(app)?;
+                let start = client_lparam(&record, from.0, from.1)?;
+                let end = client_lparam(&record, to.0, to.1)?;
+                post(record.hwnd, WM_LBUTTONDOWN, MK_LBUTTON as WPARAM, start)?;
+                post(record.hwnd, WM_MOUSEMOVE, MK_LBUTTON as WPARAM, end)?;
+                if duration_ms > 0 {
+                    std::thread::sleep(Duration::from_millis(duration_ms.min(5_000)));
+                }
+                post(record.hwnd, WM_LBUTTONUP, 0, end)?;
+                Ok(ActionReceipt {
+                    text: format!(
+                        "posted a drag ({:.0}, {:.0}) → ({:.0}, {:.0}) to `{}` without moving the cursor",
+                        from.0,
+                        from.1,
+                        to.0,
+                        to.1,
+                        app.label()
+                    ),
+                    ..Default::default()
+                })
+            }
+        }
     }
 
     fn raise(&mut self, app: &AppIdentity) -> Result<(), DriverError> {
@@ -795,8 +1066,22 @@ impl ElementDriver for WindowsDriver {
         ElementCaps {
             tree: false,
             window_image: true,
-            background_actions: false,
-            note: "Windows: window capture only; use foreground pixel tools for actions",
+            background_actions: true,
+            note: "Windows: window capture plus posted click/type/key/scroll/drag (cursor stays put). No accessibility tree, so index-based element actions still need the foreground tools.",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{packed_lparam, packed_wheel};
+
+    #[test]
+    fn packed_lparam_puts_x_in_low_word() {
+        let packed = packed_lparam(10, 20);
+        assert_eq!(packed as u32 & 0xffff, 10);
+        assert_eq!((packed as u32 >> 16) & 0xffff, 20);
+        let wheel = packed_wheel(0, -120);
+        assert_eq!((wheel as u32 >> 16) as u16 as i16, -120);
     }
 }
