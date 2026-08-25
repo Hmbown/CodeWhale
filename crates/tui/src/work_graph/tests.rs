@@ -620,6 +620,85 @@ fn scripted_run() -> WorkGraph {
 }
 
 #[test]
+fn degraded_owner_observation_is_not_a_success_gate() {
+    let mut graph = seeded();
+    must(
+        &mut graph,
+        WorkGraphChange::BindOperation {
+            node: nid("op"),
+            binding: OperationBinding {
+                external: "workflow:workflow_abc".to_string(),
+                durable: true,
+                last_observation: None,
+            },
+        },
+        6,
+    );
+    graph
+        .apply(
+            WorkGraphChange::ReconcileOperation {
+                node: nid("op"),
+                obs: OperationObservation::OwnerReported {
+                    state: OwnerState::Degraded,
+                    seq: 1,
+                    at: 7,
+                    output: None,
+                },
+            },
+            ctx_keyed(7, 1),
+        )
+        .expect("degraded reconcile applies");
+
+    let node = graph.snapshot().node(&nid("op")).expect("op node");
+    assert_eq!(node.state, NodeState::Completed);
+    assert_eq!(
+        node.binding
+            .as_ref()
+            .and_then(|binding| binding.last_observation.as_ref())
+            .map(|obs| obs.owner_state),
+        Some(OwnerState::Degraded)
+    );
+    assert!(
+        !WorkGraphSnapshot::node_is_done(node),
+        "degraded must not satisfy a success-only wait"
+    );
+
+    let mut completed = seeded();
+    must(
+        &mut completed,
+        WorkGraphChange::BindOperation {
+            node: nid("op"),
+            binding: OperationBinding {
+                external: "workflow:workflow_ok".to_string(),
+                durable: true,
+                last_observation: None,
+            },
+        },
+        6,
+    );
+    completed
+        .apply(
+            WorkGraphChange::ReconcileOperation {
+                node: nid("op"),
+                obs: OperationObservation::OwnerReported {
+                    state: OwnerState::Completed,
+                    seq: 1,
+                    at: 7,
+                    output: None,
+                },
+            },
+            ctx_keyed(7, 1),
+        )
+        .expect("completed reconcile applies");
+    let node = completed.snapshot().node(&nid("op")).expect("op node");
+    assert_eq!(node.state, NodeState::Completed);
+    assert!(
+        WorkGraphSnapshot::node_is_done(node),
+        "ordinary completed with empty acceptance remains done"
+    );
+}
+
+#[test]
 fn reducer_is_deterministic_including_ids() {
     let first = scripted_run();
     let second = scripted_run();

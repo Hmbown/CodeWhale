@@ -7968,6 +7968,97 @@ reviewer = "reviewer"
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
+    async fn degraded_run_owner_snapshot_is_not_ordinary_success() {
+        // #5582: a mixed parallel run with a dropped slot must project
+        // Degraded through the owner snapshot, the work-graph done-gate,
+        // the host stage, and a journal reload. verify=true is the
+        // success-only completion gate and must not promote it.
+        let _retry_guard = workflow_test_retry_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut ctx = ToolContext::new(tmp.path().to_path_buf());
+        let work = crate::work_graph::new_shared_work_runtime(
+            crate::tools::todo::new_shared_todo_list(),
+            crate::tools::plan::new_shared_plan_state(),
+        );
+        ctx.runtime.work = Some(work.clone());
+        let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+        let (client, calls) = fake_chat_client("child done").await;
+        let runtime = SubAgentRuntime::new(
+            client,
+            "deepseek-v4-flash".to_string(),
+            ctx.clone(),
+            true,
+            None,
+            manager,
+        );
+        let tool = WorkflowTool::new(runtime.manager.clone(), runtime);
+
+        let result = tool
+            .execute(
+                json!({
+                    "action": "run",
+                    "verify": true,
+                    "script": "return await parallel([() => task({ description: 'say done', type: 'explore', allowedTools: [] }), () => task({ description: 'bad slot', type: 'explore', allowedTools: [], cwd: '/absolute/path' })]);"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("partially dropped fan-out still returns the run record");
+        let payload: Value = serde_json::from_str(&result.content).expect("json result");
+
+        assert_eq!(payload["status"], "degraded", "{payload}");
+        assert!(
+            payload.get("verification").is_none_or(Value::is_null),
+            "success-only verify must not run on a degraded terminal: {payload}"
+        );
+
+        let graph = work
+            .capture(Some(&ctx.state_namespace))
+            .expect("capture work graph")
+            .expect("workflow registered an operation")
+            .graph;
+        let op = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                node.binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.external.starts_with("workflow:"))
+            })
+            .expect("workflow operation node");
+        let owner_state = op
+            .binding
+            .as_ref()
+            .and_then(|binding| binding.last_observation.as_ref())
+            .map(|obs| obs.owner_state);
+        assert_eq!(owner_state, Some(OwnerState::Degraded), "{payload}");
+        assert!(
+            !crate::work_graph::WorkGraphSnapshot::node_is_done(op),
+            "degraded must not satisfy a success-only wait"
+        );
+
+        let reloaded = WorkflowWorkspaceState::open(tmp.path());
+        let restored = reloaded
+            .runs
+            .lock()
+            .expect("runs")
+            .get(payload["run_id"].as_str().expect("run id"))
+            .cloned()
+            .expect("journal reload");
+        assert_eq!(restored.status, WorkflowRunStatus::Degraded);
+        assert_eq!(host_workflow_stage(&restored), "degraded");
+        assert_eq!(
+            owner_state_for_run_status(restored.status),
+            OwnerState::Degraded
+        );
+        assert!(
+            calls.load(Ordering::SeqCst) >= 1,
+            "the healthy slot still ran"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn parallel_fan_out_with_every_dispatch_rejected_fails_the_run() {
         // #5035: when every parallel slot is rejected before dispatch, the run
         // must not report overall success that ran nothing — the collected

@@ -344,6 +344,36 @@ mod tests {
             crate::tools::workflow::owner_state_for_run_status(WorkflowRunStatus::Completed),
             OwnerState::Completed
         );
+        assert_ne!(
+            crate::tools::workflow::owner_state_for_run_status(WorkflowRunStatus::Degraded),
+            crate::tools::workflow::owner_state_for_run_status(WorkflowRunStatus::Completed),
+        );
+    }
+
+    #[test]
+    fn degraded_status_survives_journal_reload() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = WorkflowWorkspaceState::open(tmp.path());
+        let mut record = sample_record("workflow_degraded", WorkflowRunStatus::Degraded);
+        record.completed_at_ms = Some(99);
+        record.error = Some("completed with dropped slots: 1 dispatch(es) were rejected; the recorded result may be partial".to_string());
+        state.record_snapshot(&record);
+        drop(state);
+
+        let reloaded = WorkflowWorkspaceState::open(tmp.path());
+        let restored = reloaded
+            .runs
+            .lock()
+            .expect("runs lock")
+            .get("workflow_degraded")
+            .cloned()
+            .expect("hydrated degraded run");
+        assert_eq!(restored.status, WorkflowRunStatus::Degraded);
+        assert_eq!(super::super::host_workflow_stage(&restored), "degraded");
+        assert_eq!(
+            crate::tools::workflow::owner_state_for_run_status(restored.status),
+            crate::work_graph::OwnerState::Degraded
+        );
     }
 
     fn sample_record(run_id: &str, status: WorkflowRunStatus) -> WorkflowRunRecord {
@@ -720,6 +750,8 @@ mod tests {
 
         record.status = WorkflowRunStatus::Completed;
         assert_eq!(super::super::host_workflow_stage(&record), "completed");
+        record.status = WorkflowRunStatus::Degraded;
+        assert_eq!(super::super::host_workflow_stage(&record), "degraded");
         record.status = WorkflowRunStatus::Failed;
         assert_eq!(super::super::host_workflow_stage(&record), "failed");
         record.status = WorkflowRunStatus::Cancelled;

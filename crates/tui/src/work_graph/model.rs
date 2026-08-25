@@ -20,7 +20,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::config::ApiProvider;
 
-use super::events::{ChangeReceipt, ObservationSummary, WorkGraphProposal};
+use super::events::{ChangeReceipt, ObservationSummary, OwnerState, WorkGraphProposal};
 use super::ids::{BindingId, WorkEdgeId, WorkNodeId};
 
 /// Milliseconds since the Unix epoch (UTC). Supplied by callers via
@@ -911,9 +911,19 @@ impl WorkGraphSnapshot {
     }
 
     /// "Done" for dependency/approval purposes: verified, or completed with
-    /// no acceptance requirements (nothing left to verify).
+    /// no acceptance requirements (nothing left to verify). A degraded owner
+    /// observation is never done — the run ended with dropped slots and must
+    /// not satisfy a success-only wait (#5582).
     #[must_use]
     pub fn node_is_done(node: &WorkNode) -> bool {
+        if node
+            .binding
+            .as_ref()
+            .and_then(|binding| binding.last_observation.as_ref())
+            .is_some_and(|obs| matches!(obs.owner_state, OwnerState::Degraded))
+        {
+            return false;
+        }
         matches!(node.state, NodeState::Verified)
             || (matches!(node.state, NodeState::Completed) && node.acceptance.is_empty())
     }

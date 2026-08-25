@@ -2,7 +2,7 @@
 
 use crate::tools::todo::{TodoItem, TodoListSnapshot, TodoStatus};
 
-use super::{NodeKind, NodeState, WorkGraphSnapshot, WorkRuntimeSnapshot};
+use super::{NodeKind, NodeState, OwnerState, WorkGraphSnapshot, WorkNode, WorkRuntimeSnapshot};
 
 #[must_use]
 pub fn format_operation_digest(snapshot: Option<&WorkRuntimeSnapshot>) -> String {
@@ -41,7 +41,7 @@ pub fn format_operation_digest_parts(
                 .map_or("unbound", |binding| binding.external.as_str());
             out.push_str(&format!(
                 "  {:<10} {} · {}\n",
-                state_label(node.state),
+                operation_digest_label(node),
                 owner,
                 one_line(&node.title)
             ));
@@ -72,6 +72,21 @@ const fn state_rank(state: NodeState) -> u8 {
         NodeState::Verified => 6,
         NodeState::Cancelled | NodeState::Superseded => 7,
     }
+}
+
+fn operation_digest_label(node: &WorkNode) -> &'static str {
+    // Owner-snapshot truth wins for degraded runs: the graph node still
+    // lands on Completed ("ended, not done"), but dashboards reading this
+    // digest must not collapse that into ordinary success (#5582).
+    if node
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.last_observation.as_ref())
+        .is_some_and(|obs| matches!(obs.owner_state, OwnerState::Degraded))
+    {
+        return "degraded";
+    }
+    state_label(node.state)
 }
 
 const fn state_label(state: NodeState) -> &'static str {
@@ -144,5 +159,44 @@ mod tests {
         assert!(text.find("#2 · now").unwrap() < text.find("#1 · later").unwrap());
         assert!(text.contains("cancelled  #3 · dropped"));
         assert!(!text.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn digest_names_degraded_owner_state_instead_of_ended() {
+        use crate::work_graph::{
+            ObservationSummary, OperationBinding, OwnerState, Provenance, WorkNode, WorkNodeId,
+        };
+
+        let mut graph = WorkGraphSnapshot::new();
+        graph.nodes.push(WorkNode {
+            id: WorkNodeId::derive("sess-digest", "op"),
+            kind: NodeKind::Operation,
+            title: "partial review".to_string(),
+            state: NodeState::Completed,
+            acceptance: Vec::new(),
+            binding: Some(OperationBinding {
+                external: "workflow:workflow_abc".to_string(),
+                durable: true,
+                last_observation: Some(ObservationSummary {
+                    owner_state: OwnerState::Degraded,
+                    seq: 1,
+                    observed_at: 1,
+                    output: None,
+                }),
+            }),
+            evidence: None,
+            provenance: Provenance::RuntimeReconcile {
+                source: "test".to_string(),
+                observed_at: 1,
+            },
+            created_at: 1,
+            updated_at: 1,
+        });
+        let text = format_operation_digest_parts(&graph, &TodoListSnapshot::default());
+        assert!(text.contains("degraded"), "{text}");
+        assert!(
+            !text.contains("ended     workflow:workflow_abc"),
+            "degraded must not render as ordinary ended/completed: {text}"
+        );
     }
 }
