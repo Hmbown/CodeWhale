@@ -2723,8 +2723,31 @@ impl McpPool {
             .ok_or_else(|| anyhow::anyhow!("Failed to store MCP connection for {server_name}"))
     }
 
-    /// Connect to all enabled servers, returning errors for failed connections
+    /// Connect to all enabled servers, returning errors for failed connections.
+    ///
+    /// Servers connect **concurrently** (bounded by [`CONNECT_CONCURRENCY`]).
+    /// This used to be a sequential loop over `get_or_connect`, so every
+    /// server paid the slowest server's spawn+handshake from its own budget:
+    /// with the default 10s connect timeout, N servers meant a worst case of
+    /// N×10s before the pool was usable — and until 93c2c101d, before `/mcp`
+    /// could even open. Each connection still gets its own configured connect
+    /// timeout; one wedged server can no longer serialize the rest.
+    ///
+    /// Semantics preserved from the sequential loop: the config is reloaded
+    /// before the name snapshot (so a server added mid-session connects on
+    /// this call, not the next), plugin-authority revocation drops the
+    /// connection instead of silently reconnecting, and the required-server
+    /// sweep reports at most one error per name. Config edits that land while
+    /// the batch is in flight are reconciled by one retry pass: a content
+    /// change drops every connection the previous pass inserted.
     pub async fn connect_all(&mut self) -> Vec<(String, anyhow::Error)> {
+        /// Peak concurrent spawn+handshake attempts. Uncapped, a config full
+        /// of `npx` servers would start one node runtime per server at the
+        /// same instant — a memory spike on low-end machines the sequential
+        /// loop never produced. Eight keeps wall-clock wins (the 10s timeout
+        /// dominates) while bounding peak memory.
+        const CONNECT_CONCURRENCY: usize = 8;
+
         let mut errors = Vec::new();
         // Reload before taking the configured-name snapshot. Previously the
         // first call after adding a server captured the old names, then only
@@ -2734,17 +2757,111 @@ impl McpPool {
             errors.push(("configuration".to_string(), err));
             return errors;
         }
-        let names: Vec<String> = self
-            .config
-            .servers
-            .keys()
-            .filter(|n| self.config.servers[*n].is_enabled())
-            .cloned()
-            .collect();
 
-        for name in names {
-            if let Err(e) = self.get_or_connect(&name).await {
-                errors.push((name, e));
+        for _pass in 0..2 {
+            // Phase 1 — cheap, sequential: decide which servers need a fresh
+            // connection. Reads live pool state (ready checks, plugin
+            // authority), so it must not run inside the spawned tasks.
+            let names: Vec<String> = self
+                .config
+                .servers
+                .iter()
+                .filter(|(_, server)| server.is_enabled())
+                .map(|(name, _)| name.clone())
+                .collect();
+            let mut pending: Vec<(String, McpServerConfig)> = Vec::new();
+            for name in names {
+                let Some(server_config) = self.config.servers.get(&name).cloned() else {
+                    continue;
+                };
+
+                // Same plugin-authority gate as `get_or_connect`: a revoked
+                // or re-keyed plugin source drops any live connection and
+                // reports, rather than reconnecting through it.
+                let plugin_source = self
+                    .connections
+                    .get(&name)
+                    .and_then(|connection| connection.config().reviewed_plugin.clone())
+                    .or_else(|| server_config.reviewed_plugin.clone());
+                if let Some(source) = plugin_source
+                    && let Err(error) = source.validate_before_use(&name, "use")
+                {
+                    self.drop_connection(&name, "plugin authority revoked or changed");
+                    errors.push((name.clone(), error));
+                    continue;
+                }
+
+                if self
+                    .connections
+                    .get(&name)
+                    .is_some_and(McpConnection::is_ready)
+                {
+                    continue;
+                }
+                self.drop_connection(&name, "reconnect");
+                pending.push((name.clone(), server_config));
+            }
+
+            if pending.is_empty() {
+                break;
+            }
+
+            // Phase 2 — slow, concurrent: identical inputs to the sequential
+            // path's `McpConnection::connect_with_policy` call, each with its
+            // own configured connect timeout enforced inside the handshake.
+            let timeouts = self.config.timeouts;
+            let network_policy = self.network_policy.clone();
+            let catalog_generation = self.catalog_generation.load(Ordering::SeqCst);
+            let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(CONNECT_CONCURRENCY));
+            let mut joins: tokio::task::JoinSet<(String, Result<McpConnection, anyhow::Error>)> =
+                tokio::task::JoinSet::new();
+            for (name, config) in pending {
+                let permit = semaphore.clone();
+                let network_policy = network_policy.clone();
+                joins.spawn(async move {
+                    let _permit = permit.acquire_owned().await;
+                    let connection = McpConnection::connect_with_policy(
+                        name.clone(),
+                        config,
+                        &timeouts,
+                        network_policy.as_ref(),
+                    )
+                    .await;
+                    (name, connection)
+                });
+            }
+
+            while let Some(joined) = joins.join_next().await {
+                match joined {
+                    Ok((name, Ok(mut connection))) => {
+                        connection.catalog_generation = catalog_generation;
+                        self.connections.insert(name, connection);
+                    }
+                    Ok((name, Err(e))) => errors.push((name, e)),
+                    // A panicked connect task loses its server name in the
+                    // JoinError; attribute generically. The sequential loop
+                    // would have propagated the panic and taken the whole
+                    // pool down with it, so this is strictly better.
+                    Err(join_error) => {
+                        errors.push(("connection task".to_string(), join_error.into()));
+                    }
+                }
+            }
+
+            // Reconcile a config edit that landed mid-batch: a content
+            // change dropped every connection this pass inserted, so run one
+            // more pass against the new config and drop the stale pass's
+            // errors with it.
+            match self.reload_if_config_changed().await {
+                Ok(true) => {
+                    errors.clear();
+                    continue;
+                }
+                Ok(false) => break,
+                Err(error) => {
+                    errors.push(("configuration".to_string(), error));
+                    break;
+                }
             }
         }
 
