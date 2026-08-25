@@ -1014,8 +1014,9 @@ fn push_matching_files(
         builder.git_ignore(true).git_exclude(true).git_global(true);
     } else {
         builder.git_ignore(false).ignore(false);
-        builder.filter_entry(|entry| {
-            !should_skip_unignored_discovery_entry(display_root, entry.path())
+        let skip_root = display_root.to_path_buf();
+        builder.filter_entry(move |entry| {
+            !should_skip_unignored_discovery_entry(&skip_root, entry.path())
         });
     }
 
