@@ -39,12 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   render step, and docs; the live AUR compatibility alias `codewhale-tui ->
   codewhale` is preserved, AUR dependencies match the live package, and the
   self-updater refuses to fight an Omarchy/package-manager installation.
-- Added a Fleet run-wide cost/token usage ceiling (R6, #5567): an accumulator
-  plus admission gate and alert bound a whole run's spend across workers.
+- Added a Fleet run-wide token ceiling (R6, #5567): an accumulator plus
+  admission gate and a once-per-run alert stop new task leases across workers;
+  in-flight tasks still finish. `FleetUsageCeiling` is denominated in tokens
+  (`max_total_tokens`), not currency — a cost ceiling is not shipped.
 - Added per-step cost movement: `TurnUsage` receipts are priced as they land
   so the live cost surface moves during long agentic turns instead of only at
-  `TurnComplete` (#5578), and the footer now honestly shows `cost: unknown`
-  when nothing can be priced instead of hiding the line.
+  `TurnComplete` (#5578).
 - Added the underwater session surface: the ambient water reads session state
   from across the room, its animation shape follows live agent activity, and
   attention tints are steady (no breathing) with a distinct reading treatment
@@ -74,9 +75,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Provider neutrality (#5588): model resolution of omitted/aliased models is
   now provider-relative, OpenAI-native defaults no longer route through
-  another provider's table, CLI credentials stay provider-scoped, and NVIDIA
-  credentials no longer leak into the DeepSeek keychain. Neutrality test
-  matrices exercise several providers instead of standing in with one.
+  another provider's table, CLI credentials stay provider-scoped, NVIDIA
+  credentials no longer leak into the DeepSeek keychain, and NVIDIA NIM no
+  longer lists `DEEPSEEK_API_KEY` as a credential fallback — that one sent a
+  DeepSeek key to NVIDIA's endpoint on provider switch, so rotate the DeepSeek
+  key, not the NVIDIA one. Neutrality test matrices exercise several providers
+  instead of standing in with one.
 - The workflow engine module was decomposed out of its 3k-line mega-file into
   `journal`, `usage`, and `report` modules plus a module directory (#5586
   slices 1a/B/C/D), a semantic-free move verified by normalized-content hash.
