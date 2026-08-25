@@ -19,7 +19,7 @@ use super::CommandResult;
 
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "advisor",
-    aliases: &["watchers", "watch"],
+    aliases: &[],
     usage: "/advisor [on|off|status]",
     description_id: MessageId::CmdAdvisorDescription,
 };

@@ -1868,6 +1868,7 @@ mod tests {
         const FEAT_018_UTILITY: &[&str] = &[
             "attach",
             "automation",
+            "loop",
             "jobs",
             "mcp",
             "network",
@@ -1897,6 +1898,7 @@ mod tests {
         for name in [
             "attach",
             "automation",
+            "loop",
             "jobs",
             "mcp",
             "network",

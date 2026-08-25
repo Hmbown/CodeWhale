@@ -1141,6 +1141,12 @@ pub enum AutomationAction {
         confirmation: Option<String>,
     },
     Run(String),
+    Create {
+        name: String,
+        prompt: String,
+        rrule: String,
+        interval_label: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

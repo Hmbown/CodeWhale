@@ -90,6 +90,9 @@ pub(crate) fn panel_content_row_count(
 }
 
 fn agents_have_useful_content(app: &App) -> bool {
+    if active_watchers(app).next().is_some() {
+        return true;
+    }
     if !app.subagent_cache.is_empty() {
         return true;
     }
@@ -105,6 +108,62 @@ fn agents_have_useful_content(app: &App) -> bool {
 /// Agents panel: cached sub-agents plus progress-only and fanout signals.
 /// The summary projection is lifted from the legacy `render_sidebar_subagents`
 /// so the panel keeps its exact content in the rail.
+fn active_watchers(app: &App) -> impl Iterator<Item = crate::automation_manager::AutomationRecord> {
+    let listed = app
+        .runtime_services
+        .automations
+        .as_ref()
+        .and_then(|manager| manager.try_lock().ok())
+        .and_then(|guard| guard.list_automations().ok())
+        .unwrap_or_default();
+    listed.into_iter().filter(|record| {
+        record.status == crate::automation_manager::AutomationStatus::Active
+            && record.delivery_mode() == crate::automation_manager::AutomationDeliveryMode::Watcher
+    })
+}
+
+fn watcher_lines(app: &App, content_width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let watchers: Vec<_> = active_watchers(app).collect();
+    if watchers.is_empty() {
+        return lines;
+    }
+    lines.push(Line::from(
+        crate::localization::tr(
+            app.ui_locale,
+            crate::localization::MessageId::AutomationWatchersHeading,
+        )
+        .into_owned(),
+    ));
+    for record in watchers {
+        let next = record
+            .next_run_at
+            .map(|when| {
+                let remaining = when.signed_duration_since(chrono::Utc::now());
+                if remaining.num_seconds() <= 0 {
+                    "due".to_string()
+                } else if remaining.num_hours() >= 1 {
+                    format!("next in {}h", remaining.num_hours())
+                } else {
+                    format!("next in {}m", remaining.num_minutes().max(1))
+                }
+            })
+            .unwrap_or_else(|| "scheduled".to_string());
+        let name = if record.name.chars().count() > content_width.saturating_sub(16) {
+            record
+                .name
+                .chars()
+                .take(content_width.saturating_sub(19))
+                .collect::<String>()
+                + "..."
+        } else {
+            record.name.clone()
+        };
+        lines.push(Line::from(format!("Loop {next} · {name}")));
+    }
+    lines
+}
+
 fn agents_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Line<'static>> {
     let cached_ids: std::collections::HashSet<&str> = app
         .subagent_cache
@@ -142,14 +201,17 @@ fn agents_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<L
         role_counts,
     };
     let rows = sidebar::sidebar_agent_rows(app);
-    sidebar::subagent_panel_lines(
+    let mut lines = watcher_lines(app, content_width);
+    let remaining = max_rows.saturating_sub(lines.len()).max(1);
+    lines.extend(sidebar::subagent_panel_lines(
         &summary,
         &rows,
         app.ui_locale,
         content_width,
-        max_rows,
+        remaining,
         &app.ui_theme,
-    )
+    ));
+    lines
 }
 
 /// Pinned panel: the durable work summary (goal + checklist) the legacy

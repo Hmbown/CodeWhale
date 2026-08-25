@@ -1,8 +1,8 @@
 //! Durable automation formatting and operator actions.
 
 use crate::automation_manager::{
-    AutomationRecord, AutomationRunRecord, AutomationRunStatus, AutomationStatus,
-    SharedAutomationManager, run_now_shared,
+    AutomationDeliveryMode, AutomationRecord, AutomationRunRecord, AutomationRunStatus,
+    AutomationStatus, CreateAutomationRequest, SharedAutomationManager, run_now_shared,
 };
 use crate::localization::{Locale, MessageId, tr};
 use crate::task_manager::SharedTaskManager;
@@ -35,8 +35,55 @@ pub(super) async fn handle_action(
             Ok(run) => format_run_enqueued(locale, &id, &run),
             Err(error) => action_failed(locale, MessageId::AutomationActionRun, &id, &error),
         },
+        AutomationAction::Create {
+            name,
+            prompt,
+            rrule,
+            interval_label,
+        } => create_loop(locale, &automations, name, prompt, rrule, interval_label).await,
     };
     add_message(app, content);
+}
+
+async fn create_loop(
+    locale: Locale,
+    automations: &SharedAutomationManager,
+    name: String,
+    prompt: String,
+    rrule: String,
+    interval_label: String,
+) -> String {
+    let manager = automations.lock().await;
+    match manager.create_automation(CreateAutomationRequest {
+        name,
+        prompt,
+        rrule,
+        cwds: Vec::new(),
+        mode: Some("agent".to_string()),
+        allow_shell: Some(false),
+        trust_mode: Some(false),
+        auto_approve: Some(false),
+        delivery_mode: Some(AutomationDeliveryMode::Watcher),
+        status: Some(AutomationStatus::Active),
+    }) {
+        Ok(record) => {
+            let next = record
+                .next_run_at
+                .map(|when| {
+                    when.with_timezone(&chrono::Local)
+                        .format("%H:%M")
+                        .to_string()
+                })
+                .unwrap_or_else(|| "soon".to_string());
+            tr(locale, MessageId::LoopCreated)
+                .replace("{id}", &record.id)
+                .replace("{interval}", &interval_label)
+                .replace("{next}", &next)
+        }
+        Err(error) => {
+            tr(locale, MessageId::AutomationListFailed).replace("{error}", &error.to_string())
+        }
+    }
 }
 
 async fn list(locale: Locale, automations: &SharedAutomationManager) -> String {

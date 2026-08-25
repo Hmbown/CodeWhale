@@ -4,6 +4,7 @@
 mod attachment;
 mod automation;
 mod jobs;
+mod loop_cmd;
 mod mcp;
 mod network;
 mod task;
@@ -23,6 +24,9 @@ impl CommandGroup for UtilityCommands {
             Box::new(
                 ContextualCommand::from_contract::<automation::AutomationCmd>()
                     .expect("automation registration"),
+            ),
+            Box::new(
+                ContextualCommand::from_contract::<loop_cmd::LoopCmd>().expect("loop registration"),
             ),
             Box::new(
                 ContextualCommand::from_contract::<task::TaskCmd>().expect("task registration"),

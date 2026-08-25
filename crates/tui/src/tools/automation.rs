@@ -108,7 +108,7 @@ impl ToolSpec for AutomationTool {
     fn description(&self) -> &'static str {
         match self.forced_action {
             Some("create") => {
-                "Create a durable scheduled automation. Creation requires approval. Supported schedules: FREQ=ONCE;AT=YYYY-MM-DDTHH:MM[:SS] (local time) or RFC3339, FREQ=HOURLY..., FREQ=WEEKLY..., and FREQ=CRON;EXPR=<standard 5-field local cron>. delivery_mode=watcher is for condition checks: return EXACTLY NOTHING_TO_REPORT when there is no change."
+                "Create a durable scheduled automation. Creation requires approval. Supported schedules: FREQ=ONCE;AT=YYYY-MM-DDTHH:MM[:SS] (local time) or RFC3339, FREQ=MINUTELY;INTERVAL=N, FREQ=HOURLY..., FREQ=WEEKLY..., and FREQ=CRON;EXPR=<standard 5-field local cron>. delivery_mode=watcher is for condition checks: return EXACTLY NOTHING_TO_REPORT when there is no change. Operators can also create a watcher with /loop 45m <prompt>."
             }
             Some("list") => {
                 "List durable automations with status, next run, and last run timestamps."
@@ -159,7 +159,7 @@ impl ToolSpec for AutomationTool {
                 "rrule".to_string(),
                 json!({
                     "type": "string",
-                    "description": "Supported: FREQ=ONCE;AT=2026-08-03T14:30 (local time or RFC3339), FREQ=HOURLY;INTERVAL=N[;BYDAY=MO,TU][;BYHOUR=9][;BYMINUTE=30], FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=30, or FREQ=CRON;EXPR=*/17 * * * *. Cron uses standard 5-field local time. For HOURLY, BYHOUR/BYMINUTE choose the initial local wall-clock anchor and INTERVAL advances from that anchor; BYHOUR is not a daily-only filter. Anchored wall times skip nonexistent clock times and use the first occurrence of ambiguous clock times. (action=create/update)"
+                    "description": "Supported: FREQ=ONCE;AT=2026-08-03T14:30 (local time or RFC3339), FREQ=MINUTELY;INTERVAL=N, FREQ=HOURLY;INTERVAL=N[;BYDAY=MO,TU][;BYHOUR=9][;BYMINUTE=30], FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=30, or FREQ=CRON;EXPR=*/17 * * * *. Cron uses standard 5-field local time. For HOURLY, BYHOUR/BYMINUTE choose the initial local wall-clock anchor and INTERVAL advances from that anchor; BYHOUR is not a daily-only filter. Anchored wall times skip nonexistent clock times and use the first occurrence of ambiguous clock times. (action=create/update)"
                 }),
             );
             properties.insert(

@@ -155,6 +155,8 @@ pub(crate) fn key_to_message_id(key: &'static str) -> Option<MessageId> {
         "cmd_auto_description" => MessageId::CmdAutoDescription,
         "cmd_auth_description" => MessageId::CmdAuthDescription,
         "cmd_automation_description" => MessageId::CmdAutomationDescription,
+        "cmd_loop_description" => MessageId::CmdLoopDescription,
+        "loop_usage" => MessageId::LoopUsage,
         "cmd_balance_description" => MessageId::CmdBalanceDescription,
         "cmd_branch_description" => MessageId::CmdBranchDescription,
         "cmd_cache_description" => MessageId::CmdCacheDescription,

@@ -190,7 +190,7 @@ impl AutomationRecord {
         self.auto_approve.unwrap_or(DEFAULT_AUTOMATION_AUTO_APPROVE)
     }
 
-    fn delivery_mode(&self) -> AutomationDeliveryMode {
+    pub fn delivery_mode(&self) -> AutomationDeliveryMode {
         self.delivery_mode
             .unwrap_or(DEFAULT_AUTOMATION_DELIVERY_MODE)
     }
@@ -256,6 +256,7 @@ pub struct UpdateAutomationRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AutomationFrequency {
+    Minutely,
     Hourly,
     Weekly,
 }
@@ -264,6 +265,9 @@ enum AutomationFrequency {
 pub enum AutomationSchedule {
     Once {
         at: DateTime<Utc>,
+    },
+    Minutely {
+        interval_minutes: u32,
     },
     Hourly {
         interval_hours: u32,
@@ -301,16 +305,41 @@ impl AutomationSchedule {
             .as_deref()
         {
             Some("ONCE") => return parse_once_schedule(&parts),
+            Some("MINUTELY") => AutomationFrequency::Minutely,
             Some("HOURLY") => AutomationFrequency::Hourly,
             Some("WEEKLY") => AutomationFrequency::Weekly,
             Some("CRON") => return parse_cron_schedule(&parts),
             Some(other) => {
-                bail!("Unsupported RRULE FREQ '{other}'. Supported: ONCE, HOURLY, WEEKLY, and CRON")
+                bail!(
+                    "Unsupported RRULE FREQ '{other}'. Supported: ONCE, MINUTELY, HOURLY, WEEKLY, and CRON"
+                )
             }
             None => bail!("RRULE must include FREQ"),
         };
 
         match freq {
+            AutomationFrequency::Minutely => {
+                for key in parts.keys() {
+                    if key != "FREQ" && key != "INTERVAL" {
+                        bail!(
+                            "Unsupported RRULE field '{key}' for MINUTELY. Allowed: FREQ,INTERVAL"
+                        );
+                    }
+                }
+                let interval_minutes = parts
+                    .get("INTERVAL")
+                    .map(|v| v.parse::<u32>())
+                    .transpose()
+                    .context("Failed to parse INTERVAL")?
+                    .unwrap_or(1);
+                if interval_minutes == 0 {
+                    bail!("INTERVAL must be >= 1 for MINUTELY schedules");
+                }
+                if interval_minutes > 60 * 24 * 7 {
+                    bail!("MINUTELY INTERVAL must be at most 7 days");
+                }
+                Ok(Self::Minutely { interval_minutes })
+            }
             AutomationFrequency::Hourly => {
                 for key in parts.keys() {
                     if key != "FREQ"
@@ -427,6 +456,10 @@ impl AutomationSchedule {
                         after.to_rfc3339()
                     )
                 }
+            }
+            Self::Minutely { interval_minutes } => {
+                let minutes = i64::from(*interval_minutes);
+                Ok(after + Duration::minutes(minutes))
             }
             Self::Hourly {
                 interval_hours,
@@ -594,6 +627,53 @@ fn parse_byday(value: &str) -> Result<Vec<Weekday>> {
         }
     }
     Ok(days)
+}
+
+/// Smallest `/loop` interval. Sub-minute busy-loops would burn the scheduler
+/// tick (default 15s) without gaining anything.
+pub const MIN_LOOP_INTERVAL_SECS: u64 = 60;
+
+/// Parse `/loop` interval tokens such as `45m`, `2h`, `1d`, `90s`.
+pub fn parse_loop_interval(token: &str) -> Result<std::time::Duration> {
+    let token = token.trim().to_ascii_lowercase();
+    let split = token
+        .char_indices()
+        .find(|(_, ch)| ch.is_ascii_alphabetic())
+        .map(|(i, _)| i)
+        .unwrap_or(token.len());
+    let (number, unit) = token.split_at(split);
+    let amount: u64 = number
+        .parse()
+        .map_err(|_| anyhow::anyhow!("interval must start with a number, e.g. 45m"))?;
+    if amount == 0 {
+        bail!("interval must be greater than zero");
+    }
+    let secs = match unit {
+        "s" | "sec" | "secs" | "second" | "seconds" => amount,
+        "m" | "min" | "mins" | "minute" | "minutes" | "" => amount.saturating_mul(60),
+        "h" | "hr" | "hrs" | "hour" | "hours" => amount.saturating_mul(60 * 60),
+        "d" | "day" | "days" => amount.saturating_mul(60 * 60 * 24),
+        other => bail!("unknown interval unit '{other}' (use s, m, h, or d)"),
+    };
+    if secs < MIN_LOOP_INTERVAL_SECS {
+        bail!("interval must be at least {MIN_LOOP_INTERVAL_SECS}s");
+    }
+    Ok(std::time::Duration::from_secs(secs))
+}
+
+/// RRULE for a `/loop` interval. Minute-aligned durations become MINUTELY;
+/// hour-aligned durations stay HOURLY so existing hourly math keeps applying.
+pub fn rrule_for_loop_interval(interval: std::time::Duration) -> Result<String> {
+    let secs = interval.as_secs();
+    if secs == 0 || secs % 60 != 0 {
+        bail!("loop interval must be a whole number of minutes");
+    }
+    let minutes = secs / 60;
+    if minutes % 60 == 0 {
+        Ok(format!("FREQ=HOURLY;INTERVAL={}", minutes / 60))
+    } else {
+        Ok(format!("FREQ=MINUTELY;INTERVAL={minutes}"))
+    }
 }
 
 fn parse_once_schedule(parts: &BTreeMap<String, String>) -> Result<AutomationSchedule> {
@@ -2162,6 +2242,26 @@ mod tests {
             .earliest()
             .expect("valid unambiguous local time")
             .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn minutely_loop_interval_advances_from_now() {
+        let schedule = AutomationSchedule::parse_rrule("FREQ=MINUTELY;INTERVAL=45").expect("parse");
+        let after = Utc
+            .with_ymd_and_hms(2026, 8, 25, 12, 0, 0)
+            .single()
+            .unwrap();
+        let next = schedule.next_after_with_anchor(after, after).expect("next");
+        assert_eq!(next, after + Duration::minutes(45));
+        assert_eq!(
+            rrule_for_loop_interval(parse_loop_interval("45m").expect("45m")).expect("rrule"),
+            "FREQ=MINUTELY;INTERVAL=45"
+        );
+        assert_eq!(
+            rrule_for_loop_interval(parse_loop_interval("2h").expect("2h")).expect("rrule"),
+            "FREQ=HOURLY;INTERVAL=2"
+        );
+        assert!(parse_loop_interval("30s").is_err());
     }
 
     #[test]
