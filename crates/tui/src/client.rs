@@ -2237,9 +2237,7 @@ impl DeepSeekClient {
     /// on failure, existing/bundled rows remain available.
     pub fn spawn_active_provider_catalog_refresh(config: &Config) {
         let provider = config.api_provider();
-        // Only refresh for providers that serve their own model list and are
-        // not already covered by the Models.dev catalog.
-        if !matches!(provider, ApiProvider::Telecomjs | ApiProvider::Edenai) {
+        if !provider_serves_its_own_catalog(provider) {
             return;
         }
 
@@ -2885,6 +2883,24 @@ pub(super) fn parse_models_response(payload: &str) -> Result<Vec<AvailableModel>
 /// OpenCode Go mixes OpenAI Chat Completions and Anthropic Messages models in
 /// one roster. Codewhale's `OpencodeGo` route is intentionally Chat-only, so
 /// both `/models` consumers must share this filter before publishing choices.
+/// Whether a provider's own `/v1/models` endpoint is worth refreshing from.
+///
+/// Two conditions, both required: the provider serves a key-scoped model
+/// roster of its own, and the Models.dev catalog does not already cover it.
+/// A provider that fails either one gains nothing from the extra request —
+/// the bundled catalog and the Models.dev snapshot already describe it.
+///
+/// Gateways and aggregators are the usual members: their roster is whatever
+/// the operator's key unlocks today, so a shipped catalog is stale the moment
+/// the upstream adds a model. That is exactly the OpenCode Go report in
+/// \#5607 — new models did not appear until the binary was rebuilt.
+fn provider_serves_its_own_catalog(provider: ApiProvider) -> bool {
+    matches!(
+        provider,
+        ApiProvider::Telecomjs | ApiProvider::Edenai | ApiProvider::OpencodeGo
+    )
+}
+
 fn apply_provider_model_cutline(
     provider: ApiProvider,
     models: Vec<AvailableModel>,
@@ -9425,6 +9441,21 @@ mod tests {
             .find(|offering| offering.wire_model_id == DEFAULT_EDENAI_MODEL)
             .expect("Eden AI default row");
         assert!(default.default_for_provider);
+    }
+
+    #[test]
+    fn opencode_go_refreshes_its_own_catalog_so_new_models_appear() {
+        // #5607: OpenCode Go is a gateway whose roster is whatever the key
+        // unlocks today, so a shipped catalog goes stale (GLM 5.3 and
+        // ox-Alpha were missing until a rebuild). It must be refreshed from
+        // its own /v1/models like the other gateways.
+        assert!(provider_serves_its_own_catalog(ApiProvider::OpencodeGo));
+        assert!(provider_serves_its_own_catalog(ApiProvider::Telecomjs));
+        assert!(provider_serves_its_own_catalog(ApiProvider::Edenai));
+        // A first-party provider that Models.dev already covers gains
+        // nothing from the extra request.
+        assert!(!provider_serves_its_own_catalog(ApiProvider::Deepseek));
+        assert!(!provider_serves_its_own_catalog(ApiProvider::Openai));
     }
 
     #[tokio::test]

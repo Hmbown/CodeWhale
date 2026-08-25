@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added OpenCode Go to the live provider catalog refresh (#5607, reported by
+  @diegovskytl): its roster is whatever the operator's key unlocks, so models
+  added upstream (GLM 5.3, ox-Alpha) stayed invisible until the binary was
+  rebuilt. Codewhale now merges the provider's own `/v1/models` rows at
+  startup and on provider switch, the same treatment TelecomJS and Eden AI
+  already had. The Chat-Completions cutline still applies, so Messages-only
+  rows are not offered on a Chat-only route.
 - Added `/import-claude` (#5557): reads `~/.claude.json` and
   `~/.claude/settings.json` read-only and renders an explicit, reviewable
   migration plan plus a written report. MCP servers route through the
