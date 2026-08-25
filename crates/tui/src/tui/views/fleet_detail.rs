@@ -474,8 +474,7 @@ impl FleetDetailView {
             DetailStep::Overview => {
                 let mut hints = vec![
                     ActionHint::new("↑/↓", "move"),
-                    ActionHint::new("o", "Coordinator model"),
-                    ActionHint::new("e", "member model"),
+                    ActionHint::new("Enter/m", "model"),
                     ActionHint::new("t", "reasoning"),
                     ActionHint::new("r", "rename"),
                     ActionHint::new("s", "save"),
@@ -566,6 +565,13 @@ impl ModalView for FleetDetailView {
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
                         self.move_row(1);
+                        ViewAction::None
+                    }
+                    KeyCode::Enter | KeyCode::Char('m') => {
+                        // Roster Enter/`m` land here. Enter must open the
+                        // selected row's model picker; otherwise the editor
+                        // looks like the roster and the key does nothing (#5589).
+                        self.open_model_picker();
                         ViewAction::None
                     }
                     KeyCode::Char('o') => {
@@ -680,17 +686,21 @@ impl FleetDetailView {
         let scroll = self.selected.saturating_sub(rows_visible.saturating_sub(1));
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        // Operator row.
-        if self.selected == 0 {
+        // Operator row stays visible while a member is focused so the list
+        // does not collapse into a roster-shaped member-only screen (#5589).
+        if scroll == 0 {
             let selected = self.selected == 0;
             let base = if selected {
                 Style::default().fg(palette::WHALE_ACTION).bold()
             } else {
                 Style::default().fg(palette::TEXT_SECONDARY)
             };
-            let operator_text = match &self.fleet.operator {
-                Some(op) => format!("{}/{}", op.provider, op.model),
-                None => "inherits session route".to_string(),
+            let (operator_text, operator_tone) = match &self.fleet.operator {
+                Some(op) => (
+                    format!("pinned {}/{}", op.provider, op.model),
+                    palette::TEXT_PRIMARY,
+                ),
+                None => ("inherits session route".to_string(), palette::TEXT_MUTED),
             };
             let reasoning = self
                 .fleet
@@ -698,11 +708,12 @@ impl FleetDetailView {
                 .as_ref()
                 .and_then(|op| op.reasoning.as_deref())
                 .unwrap_or("inherit");
+            let edit = if selected { "[edit] " } else { "" };
             lines.push(Line::from(vec![
                 Span::styled(if selected { "» " } else { "  " }, base),
-                Span::styled("operator", base),
+                Span::styled(format!("{edit}Coordinator"), base),
                 Span::styled("  ", Style::default()),
-                Span::styled(operator_text, Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(operator_text, Style::default().fg(operator_tone)),
                 Span::styled(
                     format!(" · reasoning: {reasoning}"),
                     Style::default().fg(palette::TEXT_DIM),
@@ -721,9 +732,12 @@ impl FleetDetailView {
             } else {
                 Style::default().fg(palette::TEXT_SECONDARY)
             };
-            let route = match (&member.provider, &member.model) {
-                (Some(p), Some(m)) => format!("model {p}/{m}"),
-                _ => "same model as this session".to_string(),
+            let (route, route_tone) = match (&member.provider, &member.model) {
+                (Some(p), Some(m)) => (format!("pinned {p}/{m}"), palette::TEXT_PRIMARY),
+                _ => (
+                    "same model as this session".to_string(),
+                    palette::TEXT_MUTED,
+                ),
             };
             let reasoning = member.reasoning.as_deref().unwrap_or("inherit");
             let vision = if member.requires.iter().any(|r| r == "vision") {
@@ -752,15 +766,16 @@ impl FleetDetailView {
                         || member.id.clone(),
                         |name| format!("{name} ({})", member.id),
                     );
+                let edit = if selected { "[edit] " } else { "" };
                 lines.push(Line::from(vec![
                     Span::styled(if selected { "» " } else { "  " }, base),
-                    Span::styled(member_label, base),
+                    Span::styled(format!("{edit}{member_label}"), base),
                     Span::styled(
                         format!(" · role {role}"),
                         Style::default().fg(palette::TEXT_SECONDARY),
                     ),
                     Span::styled("  ", Style::default()),
-                    Span::styled(route, Style::default().fg(palette::TEXT_MUTED)),
+                    Span::styled(route, Style::default().fg(route_tone)),
                     Span::styled(
                         format!(" · reasoning: {reasoning}{vision}"),
                         Style::default().fg(palette::TEXT_DIM),
@@ -1031,6 +1046,41 @@ mod tests {
         view.handle_key(key(KeyCode::Enter));
         let op = view.fleet.operator.as_ref().expect("pinned operator");
         assert!(!op.provider.is_empty() && !op.model.is_empty());
+    }
+
+    #[test]
+    fn enter_and_m_open_the_selected_row_model_picker() {
+        let ws = tempfile::TempDir::new().unwrap();
+        let fleet = sample_fleet("Fleet Enter");
+        save_fleet(&fleet, FleetScope::Workspace, ws.path()).unwrap();
+
+        let mut view = FleetDetailView::open(
+            &app_in(ws.path().to_path_buf()),
+            &Config::default(),
+            "Fleet Enter",
+            FleetScope::Workspace,
+        )
+        .expect("open");
+        assert_eq!(view.selected, 0);
+        assert_eq!(view.step, DetailStep::Overview);
+
+        assert!(matches!(
+            view.handle_key(key(KeyCode::Enter)),
+            ViewAction::None
+        ));
+        assert_eq!(view.step, DetailStep::PickRoute);
+        assert_eq!(view.pick_target, PickTarget::Operator);
+
+        view.handle_key(key(KeyCode::Esc));
+        assert_eq!(view.step, DetailStep::Overview);
+
+        view.selected = 1;
+        assert!(matches!(
+            view.handle_key(key(KeyCode::Char('m'))),
+            ViewAction::None
+        ));
+        assert_eq!(view.step, DetailStep::PickRoute);
+        assert_eq!(view.pick_target, PickTarget::Member(0));
     }
 
     #[test]
