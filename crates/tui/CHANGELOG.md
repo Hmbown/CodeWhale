@@ -136,7 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   placeholder while waiting for a branch-specific CNB mirror (#5547).
 - Fleet roster members in a selected Fleet now expose a visible edit affordance
   and a direct `m` model-picker shortcut, while the coordinator row remains
-  read-only (#5589).
+  read-only (#5604, covers #5589).
 - The goal-continuation quiet period (`[goal] continuation_delay_seconds`,
   added in #5508) now applies on every dispatch path. Previously the
   within-turn dispatch hook fired the next continuation prompt immediately
