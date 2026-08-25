@@ -186,6 +186,7 @@ fn parse_codewhale_entry(
                     _,
                 )) => "Tarball URL".to_string(),
                 PluginInstallSource::LocalPath { .. } => "Local directory".to_string(),
+                PluginInstallSource::Builtin(_) => "Built into this Codewhale".to_string(),
                 PluginInstallSource::Remote(crate::skills::install::InstallSource::Registry(_)) => {
                     "Registry".to_string()
                 }
@@ -259,6 +260,7 @@ fn normalize_native_source(spec: &str) -> MarketplaceSourceSpec {
         Ok(PluginInstallSource::Remote(crate::skills::install::InstallSource::DirectUrl(url))) => {
             MarketplaceSourceSpec::ArchiveUrl { url, sha256: None }
         }
+        Ok(PluginInstallSource::Builtin(name)) => MarketplaceSourceSpec::Builtin { name },
         Ok(other) => MarketplaceSourceSpec::Invalid {
             reason: format!("registry source {other:?} is not a marketplace install"),
         },

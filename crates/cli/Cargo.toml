@@ -21,6 +21,7 @@ clap_complete.workspace = true
 codewhale-tui = { path = "../tui", version = "0.9.11" }
 codewhale-agent = { path = "../agent", version = "0.9.11" }
 codewhale-app-server = { path = "../app-server", version = "0.9.11" }
+codewhale-computer-use = { path = "../computer-use", version = "0.9.11" }
 codewhale-config = { path = "../config", version = "0.9.11" }
 codewhale-lane = { path = "../lane", version = "0.9.11" }
 codewhale-workflow = { path = "../workflow", version = "0.9.11" }

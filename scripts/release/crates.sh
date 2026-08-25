@@ -23,6 +23,9 @@ release_crates=(
   # Prototype command boundary depends on core; future TUI/commands adapters
   # consume it without changing current production dispatch in FEAT-014.
   codewhale-command-contract
+  # Computer-use MCP server; no internal deps, consumed by tui (builtin
+  # plugin install source) and cli (`codewhale computer-use`).
+  codewhale-computer-use
   codewhale-tui
   codewhale-app-server
   codewhale-cli

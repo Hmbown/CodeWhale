@@ -65,7 +65,7 @@ mod tarball;
 mod tests;
 
 use place::{ensure_target_within_plugins_dir, finalize_install, plugin_target_path};
-use stage::stage_local_copy;
+use stage::{stage_builtin_copy, stage_local_copy};
 use tarball::stage_tarball;
 
 /// Marker file shared with the skill installer. Its presence means "this
@@ -90,7 +90,27 @@ pub enum PluginInstallSource {
     /// through the shared skill-install machinery. There is no registry
     /// index in v1.
     Remote(InstallSource),
+    /// A bundle compiled into this Codewhale build (`builtin:<name>`).
+    /// Staged from embedded bytes — never fetched, never executed — and
+    /// reviewed exactly like any other install.
+    Builtin(String),
 }
+
+/// Built-in bundles this build can install. Each maps to embedded files
+/// (`(relative path, contents)`) plus a content digest used as the
+/// `.installed-from` source checksum so `/plugin update` can detect a newer
+/// build's bundle.
+pub fn builtin_bundle(name: &str) -> Option<(&'static [(&'static str, &'static str)], String)> {
+    match name {
+        codewhale_computer_use::bundle::BUNDLE_NAME => Some((
+            codewhale_computer_use::bundle::FILES,
+            codewhale_computer_use::setup::content_digest(),
+        )),
+        _ => None,
+    }
+}
+
+pub const BUILTIN_BUNDLE_NAMES: &[&str] = &[codewhale_computer_use::bundle::BUNDLE_NAME];
 
 impl PluginInstallSource {
     /// Parse a user-supplied spec.
@@ -105,6 +125,16 @@ impl PluginInstallSource {
         }
         if let Some(path) = trimmed.strip_prefix("path:") {
             return Self::local(path);
+        }
+        if let Some(name) = trimmed.strip_prefix("builtin:") {
+            let name = name.trim();
+            if builtin_bundle(name).is_none() {
+                bail!(
+                    "unknown built-in plugin `{name}`; available: {}",
+                    BUILTIN_BUNDLE_NAMES.join(", ")
+                );
+            }
+            return Ok(Self::Builtin(name.to_string()));
         }
         if trimmed.starts_with("github:")
             || trimmed.starts_with("https://")
@@ -141,6 +171,7 @@ fn plugin_spec_string(source: &PluginInstallSource, canonical_source: Option<&Pa
             format!("path:{}", path.display())
         }
         PluginInstallSource::Remote(remote) => source_spec_string(remote),
+        PluginInstallSource::Builtin(name) => format!("builtin:{name}"),
     }
 }
 
@@ -304,6 +335,24 @@ async fn install_inner(
                 update,
             )
         }
+        PluginInstallSource::Builtin(name) => {
+            let (files, digest) = builtin_bundle(name)
+                .ok_or_else(|| anyhow::anyhow!("unknown built-in plugin `{name}`"))?;
+            let staged = stage_builtin_copy(files, user_plugins_dir)?;
+            verify_expected_content_hash(&staged, expected_content_hash)?;
+            if let Some(conflict) = name_conflict(&staged.name) {
+                let _ = fs::remove_dir_all(&staged.staged_path);
+                bail!(conflict);
+            }
+            finalize_install(
+                staged,
+                &plugin_spec_string(&source, None),
+                None,
+                &digest,
+                user_plugins_dir,
+                update,
+            )
+        }
         PluginInstallSource::Remote(remote) => {
             let (bytes, url) = match fetch_tarball(remote, network, max_size).await? {
                 FetchOutcome::Bytes { bytes, url } => (bytes, url),
@@ -402,6 +451,33 @@ pub async fn update(
     let marker: InstalledFromMarker = serde_json::from_str(&marker_body)
         .with_context(|| format!("malformed {INSTALLED_FROM_MARKER} for {name}"))?;
     let source = PluginInstallSource::parse(&marker.spec)?;
+    if let PluginInstallSource::Builtin(builtin_name) = &source {
+        let (files, digest) = builtin_bundle(builtin_name)
+            .ok_or_else(|| anyhow::anyhow!("unknown built-in plugin `{builtin_name}`"))?;
+        if digest == marker.source_checksum() {
+            return Ok(PluginUpdateResult::NoChange);
+        }
+        let staged = stage_builtin_copy(files, user_plugins_dir)?;
+        let outcome = finalize_install(
+            staged,
+            &plugin_spec_string(&source, None),
+            None,
+            &digest,
+            user_plugins_dir,
+            true,
+        )?;
+        return match outcome {
+            PluginInstallOutcome::Installed(installed) => {
+                Ok(PluginUpdateResult::Updated(installed))
+            }
+            PluginInstallOutcome::NeedsApproval(host) => {
+                Ok(PluginUpdateResult::NeedsApproval(host))
+            }
+            PluginInstallOutcome::NetworkDenied(host) => {
+                Ok(PluginUpdateResult::NetworkDenied(host))
+            }
+        };
+    }
     let PluginInstallSource::Remote(remote) = source else {
         bail!(
             "plugin '{name}' was installed from a local path ({}) and cannot be updated from the network; \

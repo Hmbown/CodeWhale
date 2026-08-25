@@ -211,6 +211,9 @@ pub enum MarketplaceSourceSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sha256: Option<String>,
     },
+    /// Bundle compiled into this Codewhale build (`builtin:<name>`); staged
+    /// from embedded files, never fetched.
+    Builtin { name: String },
     /// Non-GitHub git URL. The installer cannot fetch these yet; the plan
     /// stays [`MarketplaceInstallPlan::Unsupported`].
     GitUrl { url: String },

@@ -806,6 +806,7 @@ dependencies = [
  "codewhale-agent",
  "codewhale-app-server",
  "codewhale-build-support",
+ "codewhale-computer-use",
  "codewhale-config",
  "codewhale-execpolicy",
  "codewhale-lane",
@@ -841,6 +842,21 @@ name = "codewhale-command-contract"
 version = "0.9.11"
 dependencies = [
  "codewhale-core",
+]
+
+[[package]]
+name = "codewhale-computer-use"
+version = "0.9.11"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "image",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "toml 1.1.4+spec-1.1.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1049,6 +1065,7 @@ dependencies = [
  "clap_complete",
  "codewhale-build-support",
  "codewhale-command-contract",
+ "codewhale-computer-use",
  "codewhale-config",
  "codewhale-core",
  "codewhale-execpolicy",

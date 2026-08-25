@@ -448,7 +448,7 @@ fn install_bundle(app: &mut App, spec: &str) -> CommandResult {
         Err(error) => {
             return CommandResult::error(format!(
                 "Invalid plugin install source `{spec}`: {error:#}\n\
-                 Expected a local path, github:owner/repo, or an HTTPS tarball URL."
+                 Expected a local path, github:owner/repo, an HTTPS tarball URL, or builtin:<name>."
             ));
         }
     };

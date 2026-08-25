@@ -27,6 +27,12 @@ const NPM_INSTALL = `npm install -g codewhale`;
 const CARGO_INSTALL = `cargo install codewhale-cli --locked`;
 const FIRST_RUN = `codewhale`;
 const UPDATE = `codewhale update`;
+const COMPUTER_USE_SETUP = `codewhale computer-use setup`;
+const COMPUTER_USE_ENABLE = `/plugin enable computer-use
+/plugin trust computer-use <token printed above>
+/plugin enable computer-use`;
+const COMPUTER_USE_RUN = `/model flash-vision
+/computer open the calculator and add 2 and 2`;
 
 const RELEASE_DOWNLOAD = `# Download your platform archive:
 https://github.com/Hmbown/CodeWhale/releases/latest`;
@@ -287,12 +293,123 @@ codewhale doctor`;
         </ol>
       </section>
 
-      {/* ⑤ OTHER WAYS TO INSTALL */}
+      {/* ⑤ COMPUTER USE */}
+      <section id="computer-use" className="site-container py-10 hairline-t">
+        <div className="flex items-baseline gap-4 mb-5">
+          <Seal char="控" />
+          <div className="eyebrow">{isZh ? "05 · 电脑操作" : "05 · Computer use"}</div>
+        </div>
+        <h2 className="font-display text-3xl mb-2">
+          {isZh ? "让模型看见并操作屏幕" : "Let the model see and operate your screen"}
+        </h2>
+        <p className="text-sm text-ink-soft leading-relaxed max-w-2xl mb-4">
+          {isZh ? (
+            <>
+              可选插件 <code className="inline">computer-use</code> 给视觉模型（默认{" "}
+              <code className="inline">deepseek-v4-flash-vision-exp</code>）截图、点击、输入、滚动、拖拽和启动应用的能力。
+              支持 macOS、Windows、Linux / HarmonyOS PC，以及通过 <code className="inline">adb</code> /{" "}
+              <code className="inline">hdc</code> 连接的 Android 与 HarmonyOS 设备。服务端就是{" "}
+              <code className="inline">codewhale</code> 本体，无需额外下载。
+            </>
+          ) : (
+            <>
+              The optional <code className="inline">computer-use</code> plugin gives a vision model
+              (default <code className="inline">deepseek-v4-flash-vision-exp</code>) screenshots, clicks,
+              typing, scrolling, drags, and app launching on macOS, Windows, Linux / HarmonyOS PC, and on
+              Android or HarmonyOS devices attached over <code className="inline">adb</code> /{" "}
+              <code className="inline">hdc</code>. The server is the <code className="inline">codewhale</code>{" "}
+              binary itself — nothing else to download.
+            </>
+          )}
+        </p>
+
+        <ol className="space-y-6 max-w-2xl">
+          <li>
+            <div className="font-display text-lg mb-2">
+              {isZh ? "① 安装插件并申请权限" : "① Install the plugin and request permissions"}
+            </div>
+            <InstallCodeBlock cmd={COMPUTER_USE_SETUP} copyLabel={copyLabel} copiedLabel={copiedLabel} />
+            <p className="mt-3 text-sm text-ink-soft leading-relaxed">
+              {isZh ? (
+                <>
+                  把内置插件写入 <code className="inline">~/.codewhale/plugins/computer-use</code>，在 macOS 上弹出
+                  「辅助功能」和「屏幕录制」授权提示（请在 系统设置 → 隐私与安全性 中为你的终端应用打开这两项），
+                  然后做一次测试截图并打印诊断。Linux 需要 <code className="inline">xdotool</code> +{" "}
+                  <code className="inline">scrot</code>（X11）或 <code className="inline">grim</code> +{" "}
+                  <code className="inline">ydotool</code>（Wayland）；手机需要 <code className="inline">adb</code> 或{" "}
+                  <code className="inline">hdc</code>。
+                </>
+              ) : (
+                <>
+                  Writes the built-in bundle to <code className="inline">~/.codewhale/plugins/computer-use</code>,
+                  triggers the macOS Accessibility and Screen Recording prompts (enable both for your terminal app
+                  in System Settings → Privacy &amp; Security), then takes a test screenshot and prints diagnostics.
+                  Linux needs <code className="inline">xdotool</code> + <code className="inline">scrot</code> (X11) or{" "}
+                  <code className="inline">grim</code> + <code className="inline">ydotool</code> (Wayland); phones need{" "}
+                  <code className="inline">adb</code> or <code className="inline">hdc</code>.
+                </>
+              )}
+            </p>
+          </li>
+          <li>
+            <div className="font-display text-lg mb-2">
+              {isZh ? "② 在会话中审阅、信任并启用" : "② Review, trust, and enable it in a session"}
+            </div>
+            <InstallCodeBlock cmd={COMPUTER_USE_ENABLE} copyLabel={copyLabel} copiedLabel={copiedLabel} />
+            <p className="mt-3 text-sm text-ink-soft leading-relaxed">
+              {isZh ? (
+                <>
+                  插件永远不会自动启用：第一次 <code className="inline">/plugin enable</code> 会展示它请求的权限和精确的{" "}
+                  <code className="inline">/plugin trust computer-use …</code> 命令；运行该命令后再启用一次。
+                  每一次 <code className="inline">computer_*</code> 调用仍然经过 MCP 工具审批。
+                </>
+              ) : (
+                <>
+                  Nothing activates by itself: the first <code className="inline">/plugin enable</code> shows what the
+                  bundle asks for and prints the exact <code className="inline">/plugin trust computer-use …</code>{" "}
+                  command; run it, then enable again. Every <code className="inline">computer_*</code> call still
+                  goes through MCP tool approval.
+                </>
+              )}
+            </p>
+          </li>
+          <li>
+            <div className="font-display text-lg mb-2">
+              {isZh ? "③ 切到视觉模型并下达任务" : "③ Switch to the vision model and give it a task"}
+            </div>
+            <InstallCodeBlock cmd={COMPUTER_USE_RUN} copyLabel={copyLabel} copiedLabel={copiedLabel} />
+            <p className="mt-3 text-sm text-ink-soft leading-relaxed">
+              {isZh ? (
+                <>
+                  循环是：截图 → 一步操作 → 用操作返回的新截图验证 → 下一步。截图会发送给模型提供商；
+                  技能会让模型在输入密码、付款或确认破坏性操作前先停下来询问。
+                  在 <code className="inline">~/.codewhale/computer-use.toml</code> 中可选择 Android / HarmonyOS 设备或只读模式。
+                </>
+              ) : (
+                <>
+                  The loop is screenshot → one action → verify from the screenshot the action returns → next.
+                  Screenshots are sent to the model provider; the skill makes the model stop and ask before
+                  passwords, payments, or destructive confirmations. Pick an Android / HarmonyOS device or
+                  observe-only mode in <code className="inline">~/.codewhale/computer-use.toml</code>.
+                </>
+              )}
+            </p>
+            <a
+              href="https://github.com/Hmbown/CodeWhale/blob/main/docs/COMPUTER_USE.md"
+              className="body-link mt-2 inline-block text-sm"
+            >
+              {isZh ? "完整指南 · docs/COMPUTER_USE.md" : "Full guide · docs/COMPUTER_USE.md"} →
+            </a>
+          </li>
+        </ol>
+      </section>
+
+      {/* ⑥ OTHER WAYS TO INSTALL */}
       <section id="other-ways" className="bg-paper-deep hairline-t hairline-b">
         <div className="site-container py-12">
           <div className="flex items-baseline gap-4 mb-5">
             <Seal char="备" />
-            <div className="eyebrow">{isZh ? "05 · 其他安装方式" : "05 · Other ways to install"}</div>
+            <div className="eyebrow">{isZh ? "06 · 其他安装方式" : "06 · Other ways to install"}</div>
           </div>
           <h2 className="font-display text-3xl mb-2">
             {isZh ? "其他安装方式" : "Other ways to install"}

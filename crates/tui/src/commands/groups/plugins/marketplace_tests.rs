@@ -160,7 +160,7 @@ fn marketplace_add_list_show_remove_roundtrip() {
     );
     assert!(plugins(&mut app, Some("marketplace show kimi")).is_error);
     let empty = plugins(&mut app, Some("marketplace list")).message.unwrap();
-    assert!(empty.contains("No marketplace catalogs"), "{empty}");
+    assert!(empty.contains("No other catalogs"), "{empty}");
 }
 
 #[test]
@@ -207,7 +207,7 @@ fn marketplace_add_rejects_symlinks_and_bad_documents() {
         plugins(&mut app, Some("marketplace list"))
             .message
             .unwrap()
-            .contains("No marketplace catalogs")
+            .contains("No other catalogs")
     );
 
     // corrupt stored state fails closed and is never rewritten
@@ -311,4 +311,80 @@ fn marketplace_codex_installed_by_default_never_auto_installs() {
     // Foreign auto-install policy never ran anything: no bundle on disk.
     assert!(!codewhale_home.join("plugins/defaulted-thing").exists());
     assert!(app.plugin_registry.get("defaulted-thing").is_none());
+}
+
+/// The built-in `official` catalog is always listed, installs the embedded
+/// computer-use bundle through the reviewed installer (disabled + untrusted,
+/// `builtin:` provenance), updates from the binary, and can neither be
+/// removed nor shadowed by `add`.
+#[test]
+fn official_catalog_installs_the_builtin_computer_use_bundle() {
+    let _lock = crate::test_support::lock_test_env();
+    let root = TempDir::new().unwrap();
+    let codewhale_home = root.path().join("home");
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &codewhale_home);
+    let (mut app, _temp) = create_test_app(root.path());
+
+    let list = plugins(&mut app, Some("marketplace list")).message.unwrap();
+    assert!(list.contains("`official`"), "{list}");
+    assert!(list.contains(r"computer\-use"), "{list}");
+    assert!(list.contains("built into this Codewhale"), "{list}");
+    assert!(list.contains("tier=official"), "{list}");
+    assert!(
+        !marketplace_state_path(&codewhale_home).exists(),
+        "listing never writes state"
+    );
+
+    let show = plugins(&mut app, Some("marketplace show official"))
+        .message
+        .unwrap();
+    assert!(show.contains(r"computer\-use"), "{show}");
+
+    assert!(plugins(&mut app, Some("marketplace remove official")).is_error);
+    let bogus = root.path().join("nope.json");
+    fs::write(&bogus, "{}").unwrap();
+    let shadow = plugins(
+        &mut app,
+        Some(&format!("marketplace add official {}", bogus.display())),
+    );
+    assert!(shadow.is_error);
+    assert!(shadow.message.unwrap().contains("built into Codewhale"));
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let installed = plugins(&mut app, Some("marketplace install official computer-use"));
+        assert!(!installed.is_error, "{:?}", installed.message);
+        let message = installed.message.unwrap();
+        assert!(message.contains("disabled and untrusted"), "{message}");
+        assert!(
+            message
+                .lines()
+                .any(|line| line.starts_with("/plugin trust computer-use ")),
+            "install must route into the trust review: {message}"
+        );
+        let plugin = app.plugin_registry.get("computer-use").unwrap();
+        assert!(!plugin.enabled && !plugin.trusted());
+        assert_eq!(plugin.inventory.stdio_mcp_servers, 1);
+        assert_eq!(plugin.inventory.skills, 1);
+        let marker =
+            fs::read_to_string(codewhale_home.join("plugins/computer-use/.installed-from"))
+                .unwrap();
+        assert!(marker.contains("\"builtin:computer-use\""), "{marker}");
+
+        // Same bytes in the binary → nothing to update; never a network error.
+        let update = plugins(&mut app, Some("update computer-use"));
+        assert!(!update.is_error, "{:?}", update.message);
+
+        // Installing again is refused like any other duplicate.
+        let again = plugins(&mut app, Some("install builtin:computer-use"));
+        assert!(again.is_error, "{:?}", again.message);
+        // Unknown built-ins name the available ones.
+        let unknown = plugins(&mut app, Some("install builtin:nope"));
+        assert!(unknown.is_error);
+        assert!(unknown.message.unwrap().contains("computer-use"));
+    });
 }

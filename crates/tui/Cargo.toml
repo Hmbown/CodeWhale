@@ -32,6 +32,7 @@ ahash = "0.8"
 anyhow.workspace = true
 codewhale-config = { path = "../config", version = "0.9.11" }
 codewhale-command-contract = { path = "../command-contract", version = "0.9.11" }
+codewhale-computer-use = { path = "../computer-use", version = "0.9.11" }
 codewhale-core = { path = "../core", version = "0.9.11" }
 codewhale-execpolicy = { path = "../execpolicy", version = "0.9.11" }
 codewhale-lane = { path = "../lane", version = "0.9.11" }

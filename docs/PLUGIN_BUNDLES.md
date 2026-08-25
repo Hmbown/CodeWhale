@@ -14,6 +14,17 @@ owns how bits get onto and off disk — the `/plugin install`, `update`,
 plugin repositories are a different, unconverted format; that boundary is
 [CLAUDE_PLUGIN_COMPAT.md](CLAUDE_PLUGIN_COMPAT.md).
 
+One bundle is compiled into the binary and listed in the built-in `official`
+marketplace catalog: `computer-use` (`/plugin marketplace install official
+computer-use`, `/plugin install builtin:computer-use`, or `codewhale
+computer-use setup` from the shell). Its source of truth is
+`crates/computer-use/bundle/`; it contributes a stdio MCP server, a Skill, an
+Agent profile, and a command that together give a vision route screen control,
+and it still enters disabled and untrusted like every other install. Operator
+guide: [COMPUTER_USE.md](COMPUTER_USE.md). A `builtin:<name>` install source
+stages embedded files; `/plugin update` re-stages them when a newer build
+carries a different bundle.
+
 ## Discovery and precedence
 
 Codewhale scans only its own roots, looking in each `<name>/` directory for a

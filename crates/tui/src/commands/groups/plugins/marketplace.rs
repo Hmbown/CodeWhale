@@ -18,13 +18,16 @@ use std::path::{Path, PathBuf};
 use super::render::{escape_review_path, escape_review_text};
 use crate::commands::CommandResult;
 use crate::localization::{Locale, MessageId, tr};
-use crate::plugins::marketplace::parsers::MarketplaceDocument;
 use crate::plugins::marketplace::parsers::kimi::{
     KIMI_GZIP_TARBALL_SOURCE_KIND, KIMI_REMOTE_UNSUPPORTED_REASON, KIMI_ZIP_UNSUPPORTED_REASON,
 };
-use crate::plugins::marketplace::store::{MarketplaceStore, StoredMarketplaceCatalog};
+use crate::plugins::marketplace::parsers::{MarketplaceDocument, parse_catalog};
+use crate::plugins::marketplace::store::{
+    MarketplaceState, MarketplaceStore, StoredMarketplaceCatalog,
+};
 use crate::plugins::marketplace::types::{
-    MarketplaceCatalog, MarketplaceFormat, MarketplaceInstallPlan, MarketplaceSourceSpec,
+    CatalogTier, MarketplaceCatalog, MarketplaceCatalogId, MarketplaceFormat,
+    MarketplaceInstallPlan, MarketplaceSourceSpec,
 };
 use crate::plugins::types::PluginDiagnosticLevel;
 use crate::tui::app::App;
@@ -32,6 +35,58 @@ use crate::tui::app::App;
 /// Catalog documents are JSON text; four megabytes is far beyond any real
 /// published catalog and caps the parse cost of a user-supplied file.
 const MAX_CATALOG_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The catalog built into every Codewhale release. It lists bundles that
+/// ship inside the binary (`builtin:<name>` install specs), so there is
+/// nothing to fetch; installing still goes through the reviewed installer
+/// and lands disabled and untrusted like everything else.
+pub(crate) const OFFICIAL_CATALOG_NAME: &str = "official";
+
+fn official_catalog_document() -> serde_json::Value {
+    serde_json::json!({
+        "name": OFFICIAL_CATALOG_NAME,
+        "description": "Plugins built into this Codewhale release",
+        "version": crate::plugins::install::BUILTIN_BUNDLE_NAMES.len().to_string(),
+        "plugins": [
+            {
+                "name": codewhale_computer_use::bundle::BUNDLE_NAME,
+                "source": format!("builtin:{}", codewhale_computer_use::bundle::BUNDLE_NAME),
+                "version": codewhale_computer_use::bundle::version(),
+                "description": "See and operate this desktop or an attached Android / HarmonyOS device with a vision model (deepseek-v4-flash-vision-exp): screenshots, clicks, typing, scrolling, app launch. Also: `codewhale computer-use setup`.",
+                "homepage": "https://github.com/Hmbown/CodeWhale/blob/main/docs/COMPUTER_USE.md"
+            }
+        ]
+    })
+}
+
+pub(crate) fn builtin_official_catalog() -> StoredMarketplaceCatalog {
+    let mut catalog = parse_catalog(MarketplaceDocument {
+        catalog_id: MarketplaceCatalogId::new(OFFICIAL_CATALOG_NAME),
+        format: MarketplaceFormat::Codewhale,
+        root: official_catalog_document(),
+        base: None,
+    });
+    catalog.provenance.tier = CatalogTier::Official;
+    catalog.provenance.publisher = Some("Codewhale".to_string());
+    for candidate in &mut catalog.candidates {
+        candidate.provenance.tier = CatalogTier::Official;
+        candidate.provenance.publisher = Some("Codewhale".to_string());
+    }
+    StoredMarketplaceCatalog {
+        added_at: "built-in".to_string(),
+        source_path: "(built into this Codewhale)".to_string(),
+        catalog,
+    }
+}
+
+/// Stored catalogs plus the built-in `official` one. A stored catalog can
+/// never shadow the built-in name because `add` refuses it.
+fn lookup_catalog(state: &MarketplaceState, name: &str) -> Option<StoredMarketplaceCatalog> {
+    if name == OFFICIAL_CATALOG_NAME {
+        return Some(builtin_official_catalog());
+    }
+    state.get(name).cloned()
+}
 
 const USAGE: &str = "Usage: /plugin marketplace add|list|show|remove|install\n\
      \x20 add <name> <path>    read a local catalog file (kimi/claude/codex/codewhale)\n\
@@ -74,6 +129,11 @@ fn add(app: &mut App, name: &str, raw_path: &str) -> CommandResult {
         return CommandResult::error(
             "Marketplace name must be 1-64 characters of letters, digits, `-`, `_`, or `.`",
         );
+    }
+    if name == OFFICIAL_CATALOG_NAME {
+        return CommandResult::error(format!(
+            "`{OFFICIAL_CATALOG_NAME}` is the catalog built into Codewhale; pick another name."
+        ));
     }
     let store = match open_store(app) {
         Ok(store) => store,
@@ -155,14 +215,21 @@ fn list(app: &mut App) -> CommandResult {
             ));
         }
     };
+    let mut output = String::from("Marketplace catalogs:\n");
+    let official = builtin_official_catalog();
+    output.push('\n');
+    output.push_str(&render_catalog_summary(
+        OFFICIAL_CATALOG_NAME,
+        &official.catalog,
+    ));
+    output.push_str("  built into this Codewhale release; nothing is downloaded\n");
+    output.push_str(&render_candidates(app.ui_locale, &official.catalog, false));
     if state.catalogs().is_empty() {
-        return CommandResult::message(format!(
-            "No marketplace catalogs are registered.\n{}\n\
-             Reads a LOCAL catalog file; nothing is fetched over the network.",
-            USAGE
+        output.push_str(&format!(
+            "\nNo other catalogs are registered.\n{USAGE}\n\
+             `add` reads a LOCAL catalog file; nothing is fetched over the network.\n"
         ));
     }
-    let mut output = String::from("Marketplace catalogs:\n");
     for (name, entry) in state.catalogs() {
         output.push('\n');
         output.push_str(&render_catalog_summary(name, &entry.catalog));
@@ -188,7 +255,7 @@ fn show(app: &mut App, name: &str) -> CommandResult {
             ));
         }
     };
-    let Some(entry) = state.get(name) else {
+    let Some(entry) = lookup_catalog(&state, name) else {
         return CommandResult::error(format!(
             "No marketplace named `{}`. Use /plugin marketplace list.",
             escape_review_text(name)
@@ -206,6 +273,11 @@ fn show(app: &mut App, name: &str) -> CommandResult {
 }
 
 fn remove(app: &mut App, name: &str) -> CommandResult {
+    if name == OFFICIAL_CATALOG_NAME {
+        return CommandResult::error(format!(
+            "`{OFFICIAL_CATALOG_NAME}` is built into Codewhale and cannot be removed."
+        ));
+    }
     let store = match open_store(app) {
         Ok(store) => store,
         Err(result) => return *result,
@@ -236,7 +308,7 @@ fn install(app: &mut App, catalog_name: &str, candidate_name: &str) -> CommandRe
             ));
         }
     };
-    let Some(entry) = state.get(catalog_name) else {
+    let Some(entry) = lookup_catalog(&state, catalog_name) else {
         return CommandResult::error(format!(
             "No marketplace named `{}`. Use /plugin marketplace list.",
             escape_review_text(catalog_name)

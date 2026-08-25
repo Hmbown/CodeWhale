@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/plugin.json",
+  "name": "computer-use",
+  "version": "0.2.0",
+  "description": "See and operate the screen (macOS, Windows, Linux, HarmonyOS PC) or an attached Android / HarmonyOS device with a vision model such as deepseek-v4-flash-vision-exp. On macOS it also drives one app at a time through its accessibility tree, in the background, under a per-app allowlist.",
+  "author": { "name": "Codewhale Team" },
+  "homepage": "https://github.com/Hmbown/CodeWhale/blob/main/docs/COMPUTER_USE.md",
+  "repository": "https://github.com/Hmbown/CodeWhale",
+  "license": "MIT",
+  "keywords": ["computer-use", "gui", "screenshot", "accessibility", "background", "android", "harmonyos", "deepseek"],
+  "extensions": {
+    "net.codewhale": {
+      "display_name": "Computer Use",
+      "agents": { "path": "agents" },
+      "commands": { "path": "commands" },
+      "when": { "os": ["macos", "linux", "windows", "android"], "binaries": ["codewhale"] }
+    }
+  }
+}

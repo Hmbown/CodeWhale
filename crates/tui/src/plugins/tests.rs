@@ -1487,3 +1487,71 @@ fn export_skills_normalization_collision_is_an_error() {
         "a failed export removes the directory it created"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shipped bundles under <repo>/plugins/
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn copy_dir_recursive(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir_recursive(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
+/// The computer-use bundle checked into `crates/computer-use/bundle` must stay a
+/// valid Agent Plugins v1.0.0 bundle with every declared component active:
+/// a stdio MCP server, one Skill, one Agent profile, one command.
+#[test]
+fn shipped_computer_use_bundle_validates_with_all_components_active() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../computer-use/bundle")
+        .canonicalize()
+        .expect("crates/computer-use/bundle exists");
+    let tmp = tempfile::tempdir().unwrap();
+    let config = config(tmp.path());
+    copy_dir_recursive(&source, &config.user_plugins_dir.join("computer-use"));
+
+    let registry = discover_with_config(&config);
+    let errors: Vec<_> = registry
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.level == PluginDiagnosticLevel::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "unexpected error diagnostics: {errors:?}"
+    );
+
+    let plugin = registry
+        .get("computer-use")
+        .expect("computer-use bundle loads");
+    assert_eq!(plugin.inventory.skills, 1);
+    assert_eq!(plugin.inventory.mcp_servers, 1);
+    assert_eq!(plugin.inventory.stdio_mcp_servers, 1);
+    assert_eq!(plugin.inventory.remote_mcp_servers, 0);
+    assert_eq!(plugin.inventory.commands, 1);
+    assert_eq!(plugin.inventory.agents, 1);
+    assert!(plugin.inventory.unsupported_labels().is_empty());
+    assert_eq!(plugin.compatibility(), PluginCompatibility::Full);
+    assert_eq!(plugin.skill_snapshots.len(), 1);
+    assert_eq!(plugin.skill_snapshots[0].name, "computer-use");
+
+    let servers = plugin.manifest.mcp_servers.as_ref().unwrap();
+    let server = servers.get("computer").expect("computer stdio server");
+    assert_eq!(server.command.as_deref(), Some("codewhale"));
+    assert_eq!(
+        server.args,
+        vec!["computer-use".to_string(), "serve".to_string()]
+    );
+    assert!(
+        server.env.is_empty(),
+        "no ${{SOURCE_ENV}} mappings: an unset source is a spawn error"
+    );
+}

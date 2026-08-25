@@ -316,6 +316,11 @@ path used by stream-json wrappers.
     /// Internal detached-runtime output/receipt supervisor.
     #[command(name = "lane-log-proxy", hide = true)]
     LaneLogProxy(LaneLogProxyArgs),
+    /// Computer-use MCP server and diagnostics (screenshots + input for a
+    /// vision model; see docs/COMPUTER_USE.md). `codewhale computer-use serve`
+    /// is what the `computer-use` plugin bundle launches.
+    #[command(name = "computer-use")]
+    ComputerUse(TuiPassthroughArgs),
     /// Run checked-in Workflows through a Lane Runtime backend.
     #[command(after_help = "\
 Examples:
@@ -1881,6 +1886,16 @@ fn run() -> Result<()> {
     if let Some(args) = proxy {
         return run_lane_log_proxy_command(args);
     }
+    // The computer-use server is a plugin child: it must start without user
+    // config, credentials, or telemetry state, and its stdout is the MCP
+    // transport.
+    if let Some(Commands::ComputerUse(args)) = &command {
+        let code = codewhale_computer_use::run(args.args.clone());
+        if code == 0 {
+            return Ok(());
+        }
+        std::process::exit(code);
+    }
 
     let pipe_api_key_handoff = matches!(
         &command,
@@ -1990,6 +2005,7 @@ fn run() -> Result<()> {
             run_tui_in_process(&cli, &resolved_runtime, tui_args("workflow-tool", args))
         }
         Some(Commands::LaneLogProxy(_)) => unreachable!("lane log proxy dispatched above"),
+        Some(Commands::ComputerUse(_)) => unreachable!("computer-use dispatched above"),
         Some(Commands::Workflow(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             let config_path = store.path().to_path_buf();

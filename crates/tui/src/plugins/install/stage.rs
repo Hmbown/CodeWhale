@@ -81,6 +81,49 @@ pub(super) fn validate_staged(staged_path: &Path) -> Result<(String, String)> {
     Ok((name, validated.content_hash))
 }
 
+/// Materialize an embedded (built-in) bundle into staging. The files are
+/// compiled into this binary, so there is nothing to fetch and no symlink or
+/// size question; the staged tree still goes through the same manifest
+/// validation as any other install.
+pub(super) fn stage_builtin_copy(
+    files: &[(&str, &str)],
+    user_plugins_dir: &Path,
+) -> Result<StagedPlugin> {
+    let staged_path = fresh_staging_dir(user_plugins_dir)?;
+    let result = (|| -> Result<StagedPlugin> {
+        for (relative, contents) in files {
+            let relative = Path::new(relative);
+            if relative.is_absolute()
+                || relative
+                    .components()
+                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
+            {
+                bail!(
+                    "built-in bundle path {} is not a plain relative path",
+                    relative.display()
+                );
+            }
+            let target = staged_path.join(relative);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+            fs::write(&target, contents)
+                .with_context(|| format!("failed to write {}", target.display()))?;
+        }
+        let (name, content_hash) = validate_staged(&staged_path)?;
+        Ok(StagedPlugin {
+            name,
+            staged_path: staged_path.clone(),
+            content_hash,
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staged_path);
+    }
+    result
+}
+
 /// Copy a local bundle directory into staging. Symlinks anywhere in the
 /// source are rejected; a stale `.installed-from` marker is never copied so
 /// provenance always reflects *this* install.

@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added the `computer-use` plugin bundle (`crates/computer-use/bundle/`) and the
+  `codewhale computer-use` subcommand backing it: a stdio MCP server
+  (`crates/computer-use`) that captures the screen and injects input on
+  macOS (CoreGraphics), Windows (GDI/SendInput), Linux and HarmonyOS PC
+  (`xdotool`/`grim` family), Android (`adb`), and HarmonyOS/OpenHarmony
+  (`hdc`/`uitest`). Built for `deepseek-v4-flash-vision-exp`: screenshots are
+  downscaled to the model's 384-token image budget, every action returns a
+  fresh screenshot, and `computer_zoom`/grid overlays recover fine detail.
+  The bundle also ships the `computer-use:computer-use` Skill, a
+  vision-pinned `computer-operator` Agent profile, and `/computer <task>`.
+  Install in one step with `codewhale computer-use setup` (writes the
+  embedded bundle, triggers the macOS permission prompts, runs a test
+  capture) or from the new built-in `official` marketplace catalog
+  (`/plugin marketplace install official computer-use`, backed by a new
+  `builtin:<name>` install source); trust and enablement stay in the
+  hash-bound review. The website's install page gained a matching section.
+  Operator guide: `docs/COMPUTER_USE.md`.
 - Composer attachments now render as a compact `[Image #1]` token instead of
   the full `[Attached image: 1920x1440 PNG (2.3MB) at /long/path.png]` line.
   This is display-only: the buffer still stores the path-bearing text, so

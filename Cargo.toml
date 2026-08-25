@@ -5,6 +5,7 @@ members = [
     "crates/build-support",
     "crates/cli",
     "crates/command-contract",
+    "crates/computer-use",
     "crates/config",
     "crates/core",
     "crates/execpolicy",
