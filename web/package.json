@@ -2,7 +2,7 @@
   "name": "codewhale-web",
   "version": "0.1.0",
   "private": true,
-  "description": "Community site for Codewhale — codewhale.net",
+  "description": "Community site for Codewhale \u2014 codewhale.net",
   "scripts": {
     "dev": "node scripts/derive-facts.mjs && next dev",
     "prebuild": "node scripts/derive-facts.mjs",
@@ -10,6 +10,8 @@
     "start": "next start",
     "test": "vitest run",
     "check:facts": "node scripts/check-facts.mjs",
+    "sync:latest-release": "node scripts/sync-latest-release.mjs",
+    "check:latest-release": "node scripts/sync-latest-release.mjs --check",
     "check:docs": "node scripts/check-docs.mjs",
     "check:locales": "node scripts/check-locales.mjs",
     "check:deploy-env": "node scripts/check-cloudflare-deploy-env.mjs",
