@@ -2935,8 +2935,31 @@ async fn compatibility_stream_exposes_and_resolves_user_input_without_answer_ech
     Ok(())
 }
 
-#[tokio::test]
-async fn thread_endpoints_expose_lifecycle_contract() -> Result<()> {
+/// The lifecycle contract exercises the same deep request path production
+/// serves from a `CODEWHALE_MAIN_STACK_BYTES` (16 MiB) runtime thread
+/// (see lib.rs). libtest threads default to ~2 MiB and overflow on it —
+/// CI only survives because RUST_MIN_STACK happens to be set for rustc's
+/// LLVM threads. Mirror the production contract explicitly instead of
+/// depending on the environment.
+#[test]
+fn thread_endpoints_expose_lifecycle_contract() {
+    std::thread::Builder::new()
+        .stack_size(crate::CODEWHALE_MAIN_STACK_BYTES)
+        .name("thread-lifecycle-contract".to_string())
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build test runtime")
+                .block_on(thread_endpoints_expose_lifecycle_contract_inner())
+        })
+        .expect("spawn lifecycle-contract thread")
+        .join()
+        .expect("lifecycle-contract thread panicked")
+        .expect("lifecycle contract failed");
+}
+
+async fn thread_endpoints_expose_lifecycle_contract_inner() -> Result<()> {
     let Some((addr, runtime_threads, handle)) = spawn_test_server().await? else {
         return Ok(());
     };
