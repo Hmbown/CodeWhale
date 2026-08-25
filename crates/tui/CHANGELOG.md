@@ -87,6 +87,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Migrated `/note` and `/memory` onto the portable command-contract handlers
+  (FEAT-019, #5609, by @aboimpinto): the envelope now carries a `MEMORY`
+  facet and registrations declare least capabilities. `/loop` on this branch
+  was adapted to the same `Contextual { capabilities, handler }` shape so
+  the watcher command compiles with the new dispatcher.
 - Provider neutrality (#5588): model resolution of omitted/aliased models is
   now provider-relative, OpenAI-native defaults no longer route through
   another provider's table, CLI credentials stay provider-scoped, NVIDIA
