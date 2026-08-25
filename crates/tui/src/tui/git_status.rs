@@ -1,8 +1,17 @@
 //! Native git status / worktree surface for the TUI chrome.
 //!
-//! Fast, cached, non-blocking: probes run off the render path and results
-//! are read from a small snapshot. Prefer `gix` when available at build time;
-//! fall back to a single short-lived `git` invocation with a hard timeout.
+//! Cached and non-blocking: probes run off the render path on a background
+//! thread and the renderer only ever reads [`cached_status`].
+//!
+//! A probe shells out to the real `git` binary — up to six invocations
+//! (`rev-parse --show-toplevel`, `rev-parse --git-common-dir`,
+//! `symbolic-ref --short HEAD` or its `rev-parse --short HEAD` fallback,
+//! `status --porcelain`, `rev-list --left-right --count`, and
+//! `worktree list --porcelain`). There is no `gix` dependency and no
+//! per-invocation timeout; the earlier claim of both here was wrong, and it
+//! misled a contributor reasoning about probe cost in #5617. All of these
+//! run with `GIT_OPTIONAL_LOCKS=0` so a read never contends for
+//! `.git/index.lock` in the user's repository.
 //!
 //! This module owns capability and state outside the renderer so
 //! `widgets/mod.rs` / `ui.rs` stay projection-only.
