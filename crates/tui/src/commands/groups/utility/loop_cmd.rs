@@ -1,7 +1,7 @@
 //! `/loop [interval] <prompt>` — create an in-session watcher automation.
 
 use codewhale_command_contract::facets::CommandPresentationContext;
-use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::handler::{CommandCapabilities, CommandContexts, CommandHandler};
 use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::automation_manager::{parse_loop_interval, rrule_for_loop_interval};
@@ -23,16 +23,18 @@ impl RegisterCommand<CommandResult> for LoopCmd {
     }
 
     fn handler() -> CommandHandler<CommandResult> {
-        CommandHandler::Contextual(loop_contextual)
+        CommandHandler::Contextual {
+            capabilities: CommandCapabilities::PRESENTATION,
+            handler: loop_contextual,
+        }
     }
 }
 
 fn loop_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
     let mut parts = contexts.into_parts();
-    let presentation = parts
-        .presentation
-        .as_deref_mut()
-        .expect("presentation facet");
+    let Some(presentation) = parts.presentation.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: presentation");
+    };
     loop_command(presentation, arg)
 }
 
