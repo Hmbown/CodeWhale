@@ -2351,7 +2351,7 @@ impl ConfigView {
             "sandbox_mode" => "Filesystem sandbox: none / workspace-write / read-only.",
             "theme" => "Named UI theme. Scope: saved settings.",
             "low_motion" => "Reduce motion: freezes pulses, keeps static highlights.",
-            "calm_mode" => "Quieter chrome and denser transcript.",
+            "calm_mode" => "Quieter chrome and collapsed tool detail. Spacing stays yours.",
             "ocean_treatment" => "Underwater field treatment (ombre / flat / terminal).",
             "locale" => "UI language. Scope: saved settings.",
             "reasoning_effort" => "Default reasoning effort for capable models.",

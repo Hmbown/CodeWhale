@@ -528,6 +528,13 @@ pub struct Settings {
     /// One-time YOLO deprecation toast has been shown. Suppresses the repeat
     /// toast after the first sighting per install (persisted across sessions).
     pub yolo_deprecation_shown: bool,
+    /// The 0.9.12 calm-spacing correction has run. Until 0.9.12 the `calm`
+    /// preset wrote `transcript_spacing = "compact"`, so users who asked for
+    /// a calm transcript silently got the densest one. The migration lifts
+    /// exactly that combination once; this flag makes it one-way, so a user
+    /// who genuinely prefers compact keeps it after re-choosing.
+    #[serde(default)]
+    pub calm_spacing_migrated: bool,
     /// Persisted impression counts for action-triggered, ephemeral product
     /// guidance. Keys are stable tip identifiers; values are bounded by the
     /// behavioral-tip engine and omitted entirely before the first sighting.
@@ -614,6 +621,7 @@ impl Default for Settings {
             workspace_follow_symlinks: false,
             feature_intro_shown: false,
             yolo_deprecation_shown: false,
+            calm_spacing_migrated: false,
             behavioral_tip_impressions: std::collections::BTreeMap::new(),
             legacy_yolo_default: false,
         }
@@ -629,7 +637,11 @@ impl Default for Settings {
 pub const CALM_PRESET_FIELDS: &[(&str, &str)] = &[
     ("calm_mode", "true"),
     ("tool_collapse", "calm"),
-    ("transcript_spacing", "compact"),
+    // Comfortable, not compact: the preset's whole claim is a *readable*
+    // transcript, and compact is the densest setting there is. Pinning it
+    // here gave every calm user a wall of text with no row between a
+    // reasoning block, the tool it ran, and the answer that followed.
+    ("transcript_spacing", "comfortable"),
     ("low_motion", "true"),
     ("fancy_animations", "false"),
     ("show_tool_details", "false"),
@@ -671,6 +683,27 @@ fn normalize_rail_panel(value: &str) -> &'static str {
 /// `sidebar_width_percent` maps onto the absolute side width at a
 /// 120-column reference. Auto-collapse itself is deliberately dropped: the
 /// rail hides via placement off. Explicit new keys win over migrated ones.
+/// Calm-spacing correction (0.9.12), one-way.
+///
+/// Until 0.9.12 the `calm` preset wrote `transcript_spacing = "compact"`, so
+/// every user who asked for a calm transcript silently received the densest
+/// one available — reasoning, the tool it ran, and the answer that followed
+/// all fused into a single wall with no separating row. Lift exactly that
+/// stored combination, exactly once.
+///
+/// The flag is set unconditionally, so this never runs twice: a user who
+/// deliberately re-selects compact afterwards keeps it. A user who chose
+/// compact *without* calm is untouched, because that was a real choice.
+fn migrate_calm_spacing(s: &mut Settings) {
+    if s.calm_spacing_migrated {
+        return;
+    }
+    s.calm_spacing_migrated = true;
+    if s.calm_mode && s.transcript_spacing == "compact" {
+        s.transcript_spacing = "comfortable".to_string();
+    }
+}
+
 fn migrate_sidebar_settings_to_rail(s: &mut Settings) {
     match s.sidebar_focus.trim().to_ascii_lowercase().as_str() {
         "hidden" | "hide" | "closed" | "off" | "none" => {
@@ -897,6 +930,7 @@ impl Settings {
             };
             s.composer_density = normalize_composer_density(&s.composer_density).to_string();
             s.transcript_spacing = normalize_transcript_spacing(&s.transcript_spacing).to_string();
+            migrate_calm_spacing(&mut s);
             s.tool_collapse_mode = normalize_tool_collapse_mode(&s.tool_collapse_mode).to_string();
             s.sidebar_focus = normalize_sidebar_focus(&s.sidebar_focus).to_string();
             // Rail unification (0.9.4) migration: the classic sidebar is
@@ -3285,7 +3319,7 @@ mod tests {
 
         assert!(settings.calm_mode);
         assert_eq!(settings.tool_collapse_mode, "calm");
-        assert_eq!(settings.transcript_spacing, "compact");
+        assert_eq!(settings.transcript_spacing, "comfortable");
         assert!(settings.low_motion);
         assert!(!settings.fancy_animations);
         assert!(!settings.show_tool_details);
@@ -5266,6 +5300,58 @@ mod tests {
         let got = TuiPrefs::path().expect("path should resolve");
 
         assert_eq!(got, tmp.path().join(".codewhale").join("tui.toml"));
+    }
+
+    #[test]
+    fn calm_spacing_migration_lifts_only_the_preset_trap_and_only_once() {
+        // The trap: calm + compact, which the old preset wrote together.
+        let mut trapped = Settings {
+            calm_mode: true,
+            transcript_spacing: "compact".to_string(),
+            ..Settings::default()
+        };
+        migrate_calm_spacing(&mut trapped);
+        assert_eq!(trapped.transcript_spacing, "comfortable");
+        assert!(trapped.calm_spacing_migrated);
+
+        // One-way: re-choosing compact after the migration must stick.
+        trapped.transcript_spacing = "compact".to_string();
+        migrate_calm_spacing(&mut trapped);
+        assert_eq!(
+            trapped.transcript_spacing, "compact",
+            "a deliberate compact choice must survive; the migration is one-way"
+        );
+
+        // Compact WITHOUT calm was a real choice, so it is left alone.
+        let mut deliberate = Settings {
+            calm_mode: false,
+            transcript_spacing: "compact".to_string(),
+            ..Settings::default()
+        };
+        migrate_calm_spacing(&mut deliberate);
+        assert_eq!(deliberate.transcript_spacing, "compact");
+
+        // Calm users already on a roomier rhythm are not narrowed.
+        let mut spacious = Settings {
+            calm_mode: true,
+            transcript_spacing: "spacious".to_string(),
+            ..Settings::default()
+        };
+        migrate_calm_spacing(&mut spacious);
+        assert_eq!(spacious.transcript_spacing, "spacious");
+    }
+
+    #[test]
+    fn calm_preset_no_longer_pins_the_densest_transcript() {
+        let spacing = CALM_PRESET_FIELDS
+            .iter()
+            .find(|(key, _)| *key == "transcript_spacing")
+            .map(|(_, value)| *value);
+        assert_eq!(
+            spacing,
+            Some("comfortable"),
+            "a preset that advertises a readable transcript must not select the densest one"
+        );
     }
 
     #[test]

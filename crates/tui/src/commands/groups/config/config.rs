@@ -3288,7 +3288,9 @@ mod tests {
         );
         assert_eq!(
             app.transcript_spacing,
-            crate::tui::app::TranscriptSpacing::Compact
+            crate::tui::app::TranscriptSpacing::Comfortable,
+            "calm quiets chrome and collapses tool detail; it must not also \
+             pick the densest transcript rhythm"
         );
         // Evidence preserved: thinking is not hidden by the preset.
         assert!(app.show_thinking, "calm preset must not hide thinking");
