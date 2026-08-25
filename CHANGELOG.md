@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Composer attachments now render as a compact `[Image #1]` token instead of
+  the full `[Attached image: 1920x1440 PNG (2.3MB) at /long/path.png]` line.
+  This is display-only: the buffer still stores the path-bearing text, so
+  history recall, queueing, session reload, and the Runtime Chat path
+  redaction all keep parsing exactly what they parsed before. Numbering is
+  positional and recomputed each frame, so deleting one attachment renumbers
+  the rest immediately, and the caret crosses a collapsed line in one step.
 - Added OpenCode Go to the live provider catalog refresh (#5607, reported by
   @diegovskytl): its roster is whatever the operator's key unlocks, so models
   added upstream (GLM 5.3, ox-Alpha) stayed invisible until the binary was

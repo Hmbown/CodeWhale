@@ -170,8 +170,15 @@ fn mouse_pos_to_char_index(app: &App, col: u16, row: u16, text_area: Rect) -> Op
         return Some(0);
     }
 
+    // Hit-test against what was painted, not what is stored: an attachment
+    // line renders as a short `[Image #N]` token, so wrapping the buffer here
+    // would put every click after the first attachment on the wrong row.
+    // The chosen index is converted back to buffer space before returning,
+    // because the caret lives in the buffer.
+    let display = app.composer_display();
+    let display_text = display.text.as_ref();
     let width = text_area.width.max(1) as usize;
-    let wrapped = crate::tui::widgets::wrap_input_lines_for_mouse(&app.input, width);
+    let wrapped = crate::tui::widgets::wrap_input_lines_for_mouse(display_text, width);
 
     // Subtract the vertical top-padding (centering of short inputs).
     let text_row = rel_row.saturating_sub(app.viewport.last_composer_top_padding);
@@ -195,7 +202,7 @@ fn mouse_pos_to_char_index(app: &App, col: u16, row: u16, text_area: Rect) -> Op
         col_used += gw;
         char_offset += g.chars().count();
     }
-    Some(line_start + char_offset)
+    Some(display.to_buffer(line_start + char_offset))
 }
 
 fn composer_wrapped_cursor_row_col(
@@ -235,14 +242,18 @@ fn move_composer_cursor_by_wrapped_rows(app: &mut App, text_area: Rect, rows: is
         return false;
     }
 
+    // Row motion is a visual operation, so it walks the painted rows and
+    // converts back at the end.
+    let display = app.composer_display();
+    let display_text = display.text.as_ref().to_string();
     let width = text_area.width.max(1) as usize;
-    let wrapped = crate::tui::widgets::wrap_input_lines_for_mouse(&app.input, width);
+    let wrapped = crate::tui::widgets::wrap_input_lines_for_mouse(&display_text, width);
     if wrapped.len() <= 1 {
         return false;
     }
 
     let (current_row, current_col) =
-        composer_wrapped_cursor_row_col(&app.input, app.cursor_position, &wrapped);
+        composer_wrapped_cursor_row_col(&display_text, display.cursor, &wrapped);
     let max_row = wrapped.len().saturating_sub(1);
     let target_row = if rows.is_negative() {
         current_row.saturating_sub(rows.unsigned_abs())
@@ -256,11 +267,14 @@ fn move_composer_cursor_by_wrapped_rows(app: &mut App, text_area: Rect, rows: is
 
     let (target_start, target_text) = &wrapped[target_row];
     let target_len = target_text.chars().count();
+    let display_total = display_text.chars().count();
+    let target_display = target_start
+        .saturating_add(current_col.min(target_len))
+        .min(display_total);
+    let buffer_target = display.to_buffer(target_display);
     let total = app.input.chars().count();
     app.clear_selection();
-    app.cursor_position = target_start
-        .saturating_add(current_col.min(target_len))
-        .min(total);
+    app.cursor_position = buffer_target.min(total);
     app.needs_redraw = true;
     true
 }

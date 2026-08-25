@@ -1090,8 +1090,13 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         app.viewport.last_composer_content = Some(inner);
 
         // Compute scroll offset and top padding for mouse coordinate mapping.
-        let input_text = app.composer_display_input();
-        let input_cursor = app.composer_display_cursor();
+        // One display build feeds both the scroll offset and the top padding.
+        // These two numbers are the only channel by which mouse hit-testing
+        // learns the frame geometry, so they must describe exactly the text
+        // the composer painted.
+        let display = app.composer_display();
+        let input_text = display.text.as_ref();
+        let input_cursor = display.cursor;
         let content_geometry =
             crate::tui::widgets::composer_content_geometry(inner, app.is_history_search_active());
         let content_width = content_geometry.text_width();

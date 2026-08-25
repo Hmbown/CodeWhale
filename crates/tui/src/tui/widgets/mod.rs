@@ -1278,8 +1278,9 @@ impl Renderable for ComposerWidget<'_> {
         let background = Style::default().bg(self.app.ui_theme.composer_bg);
         let has_panel = self.has_panel(area);
         let inner_area = self.inner_area(area);
-        let input_text = self.app.composer_display_input();
-        let input_cursor = self.app.composer_display_cursor();
+        let display = self.app.composer_display();
+        let input_text = display.text.as_ref();
+        let input_cursor = display.cursor;
         let history_search_matches = if self.app.is_history_search_active() {
             self.app.history_search_matches()
         } else {
@@ -1503,6 +1504,14 @@ impl Renderable for ComposerWidget<'_> {
                 Span::styled(placeholder, style),
             ]));
         } else if let Some((sel_start, sel_end)) = self.app.selection_range() {
+            // selection_range() is in BUFFER chars while visible_char_indices
+            // is in DISPLAY chars, so the two disagree wherever a line was
+            // collapsed. Map the edges: the start floors to the token's first
+            // column and the end ceils past its last, so a selection that
+            // touches an attachment highlights the whole `[Image #N]` rather
+            // than a fraction of it.
+            let sel_start = display.to_display(sel_start);
+            let sel_end = display.to_display_ceil(sel_end);
             // Use the character indices we already computed during layout
             // to avoid redundant wrapping (issue #3909).
             let line_ranges: Vec<(usize, usize)> = visible_char_indices
@@ -1812,7 +1821,7 @@ impl Renderable for ComposerWidget<'_> {
 
     fn desired_height(&self, width: u16) -> u16 {
         composer_height(
-            self.app.composer_display_input(),
+            self.app.composer_display().text.as_ref(),
             width,
             self.max_height.min(self.max_height_cap()),
             self.active_menu_reserved_rows(),
@@ -1823,8 +1832,9 @@ impl Renderable for ComposerWidget<'_> {
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let inner_area = self.inner_area(area);
-        let input_text = self.app.composer_display_input();
-        let input_cursor = self.app.composer_display_cursor();
+        let display = self.app.composer_display();
+        let input_text = display.text.as_ref();
+        let input_cursor = display.cursor;
         let content_geometry =
             composer_content_geometry(inner_area, self.app.is_history_search_active());
         let input_content_width = content_geometry.text_width();

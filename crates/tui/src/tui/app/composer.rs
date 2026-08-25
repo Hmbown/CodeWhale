@@ -571,14 +571,21 @@ impl ComposerState {
             .map_or(0, |search| search.selected)
     }
 
-    pub fn composer_display_input(&self) -> &str {
-        self.history_search_query().unwrap_or(&self.input)
-    }
-
-    pub fn composer_display_cursor(&self) -> usize {
-        self.composer_history_search
-            .as_ref()
-            .map_or(self.cursor_position, |search| char_count(&search.query))
+    /// The composer text as the user sees it, plus the mapping back to the
+    /// buffer they are editing.
+    ///
+    /// Attachment lines render as a compact `[Image #1]` token instead of the
+    /// path-bearing line the buffer stores, so the durable text keeps every
+    /// guarantee it has (history recall, queueing, session reload, and the
+    /// Runtime-Chat path redaction all parse the stored form) while the
+    /// composer stays readable. A history search takes precedence and is
+    /// never collapsed: it is a query, not a buffer.
+    pub fn composer_display(&self) -> crate::tui::composer_display::ComposerDisplay<'_> {
+        use crate::tui::composer_display::ComposerDisplay;
+        match self.composer_history_search.as_ref() {
+            Some(search) => ComposerDisplay::passthrough(&search.query, char_count(&search.query)),
+            None => ComposerDisplay::collapse(&self.input, self.cursor_position),
+        }
     }
 
     pub fn history_search_matches(&self) -> Vec<String> {
@@ -1124,16 +1131,39 @@ impl App {
         true
     }
 
+    /// A collapsed attachment line renders as one short token, so the caret
+    /// must cross it in one step. Walking it grapheme by grapheme would look
+    /// like a frozen cursor for the ~60 buffer characters the token hides.
+    /// Returns the buffer index just outside the collapsed line, if the given
+    /// index is inside one.
+    fn collapsed_line_edge(&self, cursor: usize, moving_left: bool) -> Option<usize> {
+        let display = self.composer_display();
+        let span = display.span_containing(cursor)?;
+        Some(if moving_left {
+            span.buffer_start
+        } else {
+            span.buffer_start + span.buffer_len
+        })
+    }
+
     pub fn move_cursor_left(&mut self) {
         let cursor = self.cursor_position.min(char_count(&self.input));
-        self.cursor_position = prev_grapheme_boundary(&self.input, cursor);
+        let next = prev_grapheme_boundary(&self.input, cursor);
+        self.cursor_position = self
+            .collapsed_line_edge(next, true)
+            .filter(|_| next != cursor)
+            .unwrap_or(next);
         self.needs_redraw = true;
     }
 
     pub fn move_cursor_right(&mut self) {
         let total = char_count(&self.input);
         if self.cursor_position < total {
-            self.cursor_position = next_grapheme_boundary(&self.input, self.cursor_position);
+            let next = next_grapheme_boundary(&self.input, self.cursor_position);
+            self.cursor_position = self
+                .collapsed_line_edge(next, false)
+                .unwrap_or(next)
+                .min(total);
             self.needs_redraw = true;
         }
     }

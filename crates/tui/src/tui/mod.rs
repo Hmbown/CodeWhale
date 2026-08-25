@@ -28,6 +28,7 @@ pub mod clipboard;
 pub mod color_compat;
 pub mod command_palette;
 pub mod composer_chrome;
+pub mod composer_display;
 pub mod composer_ui;
 pub mod context_inspector;
 pub mod context_menu;
