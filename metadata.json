@@ -3,7 +3,7 @@
   "checkpoint_id": "01M0VFC8DCQBZPC4DPZEZ2MXM0",
   "strategy": "manual-commit",
   "branch": "codex/v0912-integration-20260823",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     "CHANGELOG.md"
   ],
@@ -21,13 +21,20 @@
       "compact_transcript": "/1/transcript.jsonl",
       "content_hash": "/1/content_hash.txt",
       "prompt": "/1/prompt.txt"
+    },
+    {
+      "metadata": "/2/metadata.json",
+      "transcript": "/2/full.jsonl",
+      "compact_transcript": "/2/transcript.jsonl",
+      "content_hash": "/2/content_hash.txt",
+      "prompt": "/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 416,
-    "cache_creation_tokens": 586626,
-    "cache_read_tokens": 38931602,
-    "output_tokens": 213503,
-    "api_call_count": 208
+    "input_tokens": 426,
+    "cache_creation_tokens": 590216,
+    "cache_read_tokens": 40178824,
+    "output_tokens": 216376,
+    "api_call_count": 213
   }
 }
