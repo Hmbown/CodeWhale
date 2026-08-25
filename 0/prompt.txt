@@ -1,0 +1,33 @@
+What’s the results on the terminal bench
+
+---
+
+There should be a 0.9.11 one
+
+---
+
+Can you look at when we switched tk concurrency 4 and go hack and awitch tk 2 amd re run those?
+
+---
+
+is it even running
+
+---
+
+how about now
+
+---
+
+so whats the current average or whatever
+
+---
+
+how about now
+
+---
+
+nah its fine how its going
+
+---
+
+results?
