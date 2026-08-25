@@ -80,7 +80,7 @@ impl ToolSpec for GitStatusTool {
         }
 
         let command_str = format_command(&git_ctx.working_dir, &args);
-        let output = run_git_command(&git_ctx.working_dir, &args)?;
+        let output = run_git_command_async(git_ctx.working_dir.clone(), args).await?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -182,7 +182,7 @@ impl ToolSpec for GitDiffTool {
         }
 
         let command_str = format_command(&git_ctx.working_dir, &args);
-        let output = run_git_command(&git_ctx.working_dir, &args)?;
+        let output = run_git_command_async(git_ctx.working_dir.clone(), args).await?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -283,6 +283,17 @@ fn run_git_command(working_dir: &Path, args: &[String]) -> Result<std::process::
             ToolError::execution_failed(format!("Failed to run git: {e}"))
         }
     })
+}
+
+/// Async wrapper that offloads the blocking `git` invocation onto a
+/// blocking-capable thread so the tokio worker is not stalled.
+async fn run_git_command_async(
+    working_dir: PathBuf,
+    args: Vec<String>,
+) -> Result<std::process::Output, ToolError> {
+    tokio::task::spawn_blocking(move || run_git_command(&working_dir, &args))
+        .await
+        .map_err(|e| ToolError::execution_failed(format!("git task panicked: {e}")))?
 }
 
 fn format_command(working_dir: &Path, args: &[String]) -> String {
