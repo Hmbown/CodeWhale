@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0W7M6JZ0NS635P0Q27S4FCA",
+  "strategy": "manual-commit",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/tui/src/tui/ambient_life.rs",
+    "crates/tui/src/tui/ocean.rs",
+    "crates/tui/src/tui/spinner.rs",
+    "crates/tui/src/tui/ui/frame.rs",
+    "crates/tui/src/tui/underwater.rs",
+    "crates/tui/src/tui/widgets/mod.rs",
+    "docs/MOTION_CONTRACT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 210,
+    "cache_creation_tokens": 894796,
+    "cache_read_tokens": 23548729,
+    "output_tokens": 113121,
+    "api_call_count": 105
+  }
+}
