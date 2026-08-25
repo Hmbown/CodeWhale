@@ -879,6 +879,10 @@ pub fn bundled_output_exceeds_context(value: &Value) -> Vec<String> {
 }
 
 pub mod fact_guard;
+pub use fact_guard::{
+    DefaultModelSpec, TUI_MODEL_CATALOG_JSON, audit_committed_bundled_assets,
+    audit_model_provider_facts,
+};
 
 #[cfg(test)]
 mod tests;

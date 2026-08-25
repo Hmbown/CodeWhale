@@ -386,9 +386,8 @@ fn compare_dimension<T: std::fmt::Display + Ord>(
 ) {
     let unique: Vec<(&str, &T)> = values
         .into_iter()
-        .filter_map(|(name, set)| {
-            (set.len() == 1).then(|| (name, set.iter().next().expect("len 1")))
-        })
+        .filter(|(_, set)| set.len() == 1)
+        .map(|(name, set)| (name, set.iter().next().expect("len 1")))
         .collect();
     if unique.len() < 2 {
         return;
@@ -727,6 +726,86 @@ mod tests {
         assert!(
             hits.iter().any(|row| row.contains("context disagrees")),
             "{hits:?}"
+        );
+    }
+
+    #[test]
+    fn corrupted_row_fails_every_fact_guard_assertion() {
+        let models_dev = json!({
+            "providers": {
+                "fixture": {
+                    "id": "fixture",
+                    "limit": { "context": 128000, "output": 4096 },
+                    "models": {
+                        "corrupt-default": {
+                            "id": "corrupt-default",
+                            "default": true,
+                            "limit": { "context": 1050000, "output": 2000000 },
+                            "aliases": ["shared-alias"]
+                        },
+                        "other": {
+                            "id": "other",
+                            "limit": { "context": 8192, "output": 1024 },
+                            "aliases": ["shared-alias"]
+                        }
+                    }
+                }
+            }
+        });
+        let tui_catalog = json!({
+            "entries": {
+                "corrupt-default": {
+                    "id": "corrupt-default",
+                    "context_window": 128000,
+                    "max_output": 4096
+                },
+                "alias-owner": {
+                    "id": "alias-owner",
+                    "aliases": ["shared-alias"]
+                }
+            }
+        });
+        let hits = audit_model_provider_facts(
+            &[("models_dev", &models_dev), ("tui_catalog", &tui_catalog)],
+            &[
+                DefaultModelSpec {
+                    provider: "fixture".into(),
+                    model: "corrupt-default".into(),
+                },
+                DefaultModelSpec {
+                    provider: "fixture".into(),
+                    model: "missing-default".into(),
+                },
+            ],
+        );
+        assert!(
+            hits.iter()
+                .any(|row| row.contains("output") && row.contains("context")),
+            "max_output <= context_window: {hits:?}"
+        );
+        assert!(
+            hits.iter()
+                .any(|row| row.contains("disagrees across bundled assets")),
+            "split facts: {hits:?}"
+        );
+        assert!(
+            hits.iter()
+                .any(|row| row.contains("alias") && row.contains("multiple canonical")),
+            "alias uniqueness: {hits:?}"
+        );
+        assert!(
+            hits.iter().any(|row| row.contains("shadows")),
+            "provider-wide shadowing: {hits:?}"
+        );
+        assert!(
+            hits.iter()
+                .any(|row| row.contains("DEFAULT model has no price")),
+            "DEFAULT price: {hits:?}"
+        );
+        assert!(
+            hits.iter()
+                .any(|row| row.contains("missing-default") && row.contains("no catalog row")),
+            "DEFAULT catalog row: {hits:?}"
         );
     }
 
