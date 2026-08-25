@@ -441,7 +441,10 @@ mod tests {
 
     #[test]
     fn list_explains_empty_state_and_operator_controls() {
-        assert!(format_list(Locale::En, &[]).contains("`automation` tool to create one"));
+        assert!(
+            format_list(Locale::En, &[])
+                .contains("Create one with /loop 45m <prompt> or the automation tool")
+        );
         let text = format_list(Locale::En, &[record(AutomationStatus::Paused)]);
         assert!(text.contains("auto_1  [paused]  Nightly checks"));
         assert!(text.contains("next: -"));

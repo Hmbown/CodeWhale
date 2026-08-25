@@ -7112,6 +7112,7 @@ fn small_surface_starts_with_only_pi_head_and_search() {
             "bash",
             "edit",
             "read",
+            "read_media",
             "todo_write",
             "tool_search",
             "write",
@@ -7367,10 +7368,18 @@ fn small_surface_depth_cap_removes_only_agent() {
     );
     assert_eq!(
         model_tool_names(model_request_tools(&mut surface)),
-        ["bash", "edit", "read", "todo_write", "tool_search", "write"]
-            .into_iter()
-            .map(str::to_string)
-            .collect()
+        [
+            "bash",
+            "edit",
+            "read",
+            "read_media",
+            "todo_write",
+            "tool_search",
+            "write"
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
     );
 }
 

@@ -9903,6 +9903,7 @@ async fn runtime_contract_tool_metric_uses_canonical_mode_surfaces() {
         "bash",
         "edit",
         "read",
+        "read_media",
         "todo_write",
         "tool_search",
         "write",

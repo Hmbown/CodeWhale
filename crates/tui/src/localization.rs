@@ -4120,7 +4120,7 @@ mod tests {
             .keys()
             .filter(|key| key.starts_with("Automation"))
             .collect::<Vec<_>>();
-        assert_eq!(automation_keys.len(), 42);
+        assert_eq!(automation_keys.len(), 43);
 
         for locale in Locale::shipped_complete() {
             let pack = raw_locale_messages(*locale);
