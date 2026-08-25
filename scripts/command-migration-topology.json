@@ -7,6 +7,7 @@
         "crates/tui/src/commands/groups/utility/attachment.rs",
         "crates/tui/src/commands/groups/utility/automation.rs",
         "crates/tui/src/commands/groups/utility/jobs.rs",
+        "crates/tui/src/commands/groups/utility/loop_cmd.rs",
         "crates/tui/src/commands/groups/utility/mcp.rs",
         "crates/tui/src/commands/groups/utility/network.rs",
         "crates/tui/src/commands/groups/utility/task.rs",

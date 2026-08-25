@@ -1,7 +1,7 @@
 //! `/loop [interval] <prompt>` — create an in-session watcher automation.
 
 use codewhale_command_contract::facets::CommandPresentationContext;
-use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::handler::{CommandCapabilities, CommandContexts, CommandHandler};
 use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::automation_manager::{parse_loop_interval, rrule_for_loop_interval};
@@ -23,16 +23,18 @@ impl RegisterCommand<CommandResult> for LoopCmd {
     }
 
     fn handler() -> CommandHandler<CommandResult> {
-        CommandHandler::Contextual(loop_contextual)
+        CommandHandler::Contextual {
+            capabilities: CommandCapabilities::PRESENTATION,
+            handler: loop_contextual,
+        }
     }
 }
 
 fn loop_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
     let mut parts = contexts.into_parts();
-    let presentation = parts
-        .presentation
-        .as_deref_mut()
-        .expect("presentation facet");
+    let Some(presentation) = parts.presentation.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: presentation");
+    };
     loop_command(presentation, arg)
 }
 
@@ -179,5 +181,25 @@ mod tests {
         let result = loop_command(&mut FakePresentation, Some("45m"));
         assert!(result.is_error);
         assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn handler_is_contextual_and_requests_presentation_facet() {
+        let CommandHandler::Contextual {
+            capabilities,
+            handler,
+        } = LoopCmd::handler()
+        else {
+            panic!("loop must be contextual");
+        };
+        assert_eq!(capabilities, CommandCapabilities::PRESENTATION);
+        let missing = handler(CommandContexts::empty(), Some("list"));
+        assert!(missing.is_error);
+        assert_eq!(
+            missing.message.as_deref(),
+            Some("Error: Command capability unavailable: presentation")
+        );
+        assert_eq!(LoopCmd::info().description_key, "cmd_loop_description");
+        assert_eq!(LoopCmd::info().aliases, &["watch", "watcher"]);
     }
 }
