@@ -97,6 +97,13 @@ pub struct TaskRequest {
     /// JSON schema the reply must satisfy; validated in the VM after the
     /// driver returns the raw text (see [`crate`] docs for decode rules).
     pub response_schema: Option<serde_json::Value>,
+    /// Bounded repair attempts after a failed `responseSchema` decode
+    /// (#5583): re-ask the same route with the schema and the failed reply.
+    /// `None` uses the default of one attempt; `Some(0)` disables repair.
+    /// Clamped at parse time to [`SCHEMA_REPAIR_MAX_ATTEMPTS`]. The driver
+    /// treats a repair spawn like any other task — same admission, budget,
+    /// and usage accounting.
+    pub schema_repair_attempts: Option<u32>,
     /// Short human label for progress surfaces.
     pub label: Option<String>,
     /// Phase name this task belongs to, for progress grouping.
@@ -170,14 +177,49 @@ pub enum ProgressEvent {
         title: String,
     },
     /// A completed child returned text that failed the caller's
-    /// `responseSchema`. The VM emits this before throwing the validation
-    /// error back into the script so host-side receipts can mark the leaf as
-    /// failed instead of reporting a successful child beside a `null` result.
+    /// `responseSchema` and no repair remains (none configured, or every
+    /// repair attempt also failed — #5583). The VM emits this before
+    /// throwing the validation error back into the script so host-side
+    /// receipts can mark the leaf as failed instead of reporting a
+    /// successful child beside a `null` result. This event is terminal:
+    /// it fires exactly once per failed `task()`, for the attempt that
+    /// failed last, carrying every earlier attempt through
+    /// [`ProgressEvent::TaskSchemaRepairAttempted`].
     TaskSchemaValidationFailed {
-        /// Driver-assigned task id (engine `agent_id`).
+        /// Driver-assigned task id (engine `agent_id`) of the failed attempt.
         task_id: String,
+        /// Which decode stage failed: `json_parse` or `schema_validation`.
+        kind: String,
+        /// 1-based attempt number that failed terminally (1 = no repair
+        /// was tried; 2+ = repairs were tried and also failed).
+        attempt: u32,
         /// The validation error already surfaced to JS.
         message: String,
+        /// Raw reply text of the failed attempt, bounded by
+        /// [`SCHEMA_RAW_CARRY_CHARS`]; the host writes the durable artifact.
+        raw: String,
+        /// True when `raw` was capped at the carry limit.
+        raw_truncated: bool,
+    },
+    /// A completed child failed its `responseSchema` and a bounded repair
+    /// will follow (#5583). Emitted before the repair spawn so the failed
+    /// attempt is visible even when the repair succeeds and the `task()`
+    /// call returns normally.
+    TaskSchemaRepairAttempted {
+        /// Driver-assigned task id (engine `agent_id`) of the failed attempt
+        /// that triggered this repair.
+        task_id: String,
+        /// Which decode stage failed: `json_parse` or `schema_validation`.
+        kind: String,
+        /// 1-based number of the attempt that failed.
+        attempt: u32,
+        /// The decode error of that attempt.
+        message: String,
+        /// Raw reply text of that attempt, bounded by
+        /// [`SCHEMA_RAW_CARRY_CHARS`].
+        raw: String,
+        /// True when `raw` was capped at the carry limit.
+        raw_truncated: bool,
     },
     /// A `task()` call was rejected before any child agent existed —
     /// malformed options, a bad `responseSchema`, the lifetime cap, or an

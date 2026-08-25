@@ -1146,6 +1146,7 @@
   "PhaseReasoning": "мышление",
   "PhaseReading": "чтение",
   "PhaseUsingTool": "инструмент",
+  "PhaseSubagents": "работают субагенты",
   "PhaseVerifying": "проверка",
   "PhaseWaitingOnYou": "ждёт вас",
   "PhaseDone": "готово",

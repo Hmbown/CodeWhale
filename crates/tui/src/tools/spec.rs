@@ -713,6 +713,18 @@ impl std::ops::DerefMut for ToolContext {
 }
 
 impl ToolContext {
+    /// Create an inert context for a registry that intentionally has no tools.
+    ///
+    /// Empty paths are deliberate: isolated Runtime Chat must not retain the
+    /// host workspace or derive project notes and MCP paths. Isolation comes
+    /// from callers pairing this context with an empty registry and allow-list
+    /// plus a zero tool-call budget; this constructor is not a security
+    /// boundary by itself.
+    #[must_use]
+    pub(crate) fn for_empty_registry() -> Self {
+        Self::with_options(PathBuf::new(), false, PathBuf::new(), PathBuf::new())
+    }
+
     /// Create a new `ToolContext` with default settings.
     #[must_use]
     pub fn new(workspace: impl Into<PathBuf>) -> Self {

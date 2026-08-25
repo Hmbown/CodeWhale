@@ -8,18 +8,20 @@
 //! `brew upgrade` / `npm install -g` silently reverts the user.
 //!
 //! So before we tell anyone to run anything, we work out who owns the file.
-//! Detection is path-based (plus an escape-hatch env var) because the install
-//! method is a property of *where the binary lives*, which is knowable
-//! offline, in a test, and without asking a package manager anything.
+//! Detection is path-based where managers use distinct prefixes. Omarchy's
+//! AUR packages live in the ordinary `/usr/bin` prefix, so that case also
+//! consults the local pacman ownership database. No network access is needed.
 
 use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::process::{Command, Stdio};
 
 /// Environment variable that overrides install-method detection.
 ///
-/// Accepts `npm`, `homebrew` (or `brew`), `cargo`, and `binary`. Anything else
-/// is ignored and detection falls back to the path heuristics. Packagers who
-/// relocate the binary somewhere the heuristics cannot read — and users
-/// debugging a wrong guess — set this.
+/// Accepts `npm`, `homebrew` (or `brew`), `cargo`, `omarchy`, and `binary`.
+/// Anything else is ignored and detection falls back to automatic detection.
+/// Packagers who relocate the binary somewhere the heuristics cannot read —
+/// and users debugging a wrong guess — set this.
 pub const INSTALL_METHOD_ENV: &str = "CODEWHALE_INSTALL_METHOD";
 
 /// The package manager (if any) that owns the running executable.
@@ -31,6 +33,8 @@ pub enum InstallMethod {
     Homebrew,
     /// `cargo install` — a binary under `~/.cargo/bin`.
     Cargo,
+    /// An AUR/pacman package installed on Omarchy.
+    Omarchy,
     /// A release binary the user placed on disk themselves. The default, and
     /// the only case where in-place self-update is correct.
     Binary,
@@ -51,7 +55,19 @@ impl InstallMethod {
         {
             return forced;
         }
-        Self::from_path(exe)
+        Self::detect_with_omarchy_probe(exe, omarchy_package_owns)
+    }
+
+    fn detect_with_omarchy_probe(exe: &Path, owns_package: impl FnOnce(&Path) -> bool) -> Self {
+        let path_method = Self::from_path(exe);
+        if path_method != Self::Binary {
+            return path_method;
+        }
+        if owns_package(exe) {
+            Self::Omarchy
+        } else {
+            Self::Binary
+        }
     }
 
     /// Path-only detection, with no environment lookup. Split out from
@@ -91,6 +107,7 @@ impl InstallMethod {
             "npm" => Some(Self::Npm),
             "homebrew" | "brew" => Some(Self::Homebrew),
             "cargo" => Some(Self::Cargo),
+            "omarchy" => Some(Self::Omarchy),
             "binary" | "release" => Some(Self::Binary),
             _ => None,
         }
@@ -108,6 +125,7 @@ impl InstallMethod {
             Self::Npm => "npm install -g codewhale@latest",
             Self::Homebrew => "brew upgrade codewhale",
             Self::Cargo => "cargo install codewhale-cli --locked --force",
+            Self::Omarchy => "omarchy update",
             Self::Binary => "codewhale update",
         }
     }
@@ -128,9 +146,31 @@ impl InstallMethod {
             Self::Npm => "npm",
             Self::Homebrew => "Homebrew",
             Self::Cargo => "cargo",
+            Self::Omarchy => "Omarchy",
             Self::Binary => "release binary",
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn omarchy_package_owns(exe: &Path) -> bool {
+    if !Path::new("/usr/share/omarchy/version").is_file() {
+        return false;
+    }
+
+    Command::new("pacman")
+        .args(["-Qo"])
+        .arg(exe)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn omarchy_package_owns(_exe: &Path) -> bool {
+    false
 }
 
 /// Detect the install method for the currently running executable.
@@ -209,6 +249,27 @@ mod tests {
     }
 
     #[test]
+    fn omarchy_probe_only_claims_package_owned_plain_paths() {
+        let managed = PathBuf::from("/usr/bin/codewhale");
+        assert_eq!(
+            InstallMethod::detect_with_omarchy_probe(&managed, |_| true),
+            InstallMethod::Omarchy
+        );
+        assert_eq!(
+            InstallMethod::detect_with_omarchy_probe(&managed, |_| false),
+            InstallMethod::Binary
+        );
+
+        let npm = PathBuf::from("/usr/lib/node_modules/codewhale/bin/codewhale");
+        assert_eq!(
+            InstallMethod::detect_with_omarchy_probe(&npm, |_| {
+                panic!("a path-owned install must not query pacman")
+            }),
+            InstallMethod::Npm
+        );
+    }
+
+    #[test]
     fn termux_and_plain_release_binaries_self_update() {
         for exe in [
             "/data/data/com.termux/files/usr/bin/codewhale",
@@ -238,9 +299,20 @@ mod tests {
             Some(InstallMethod::Cargo)
         );
         assert_eq!(
+            InstallMethod::from_token("omarchy"),
+            Some(InstallMethod::Omarchy)
+        );
+        assert_eq!(
             InstallMethod::from_token("binary"),
             Some(InstallMethod::Binary)
         );
         assert_eq!(InstallMethod::from_token("apt"), None);
+    }
+
+    #[test]
+    fn omarchy_install_is_package_managed() {
+        assert_eq!(InstallMethod::Omarchy.update_command(), "omarchy update");
+        assert_eq!(InstallMethod::Omarchy.label(), "Omarchy");
+        assert!(!InstallMethod::Omarchy.supports_self_update());
     }
 }

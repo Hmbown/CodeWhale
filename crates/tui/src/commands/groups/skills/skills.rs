@@ -888,26 +888,6 @@ where
     tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
 }
 
-#[allow(dead_code)] // retained for sync/remote listing helpers
-fn path_or_default(path: &std::path::Path) -> String {
-    path.file_name()
-        .map(|n| {
-            // Display with parent so the user sees the full skill location.
-            // We intentionally use `display()` here because it's just for
-            // user-facing output, not for path comparisons.
-            let parent = path
-                .parent()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
-            if parent.is_empty() {
-                n.to_string_lossy().to_string()
-            } else {
-                format!("{parent}/{}", n.to_string_lossy())
-            }
-        })
-        .unwrap_or_else(|| path.display().to_string())
-}
-
 fn needs_approval_message(host: &str) -> String {
     format!(
         "Network policy requires approval for {host}.\n\

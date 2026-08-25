@@ -1506,7 +1506,8 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Vllm => vec![DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
         ApiProvider::Volcengine => vec![DEFAULT_VOLCENGINE_MODEL, DEFAULT_VOLCENGINE_FLASH_MODEL],
         ApiProvider::Ollama | ApiProvider::OllamaCloud => Vec::new(),
-        ApiProvider::Openai | ApiProvider::Atlascloud => OFFICIAL_DEEPSEEK_MODELS.to_vec(),
+        ApiProvider::Openai => OFFICIAL_OPENAI_MODELS.to_vec(),
+        ApiProvider::Atlascloud => vec![DEFAULT_ATLASCLOUD_MODEL],
         ApiProvider::Together => vec![DEFAULT_TOGETHER_MODEL, DEFAULT_TOGETHER_FLASH_MODEL],
         ApiProvider::Qianfan => vec![DEFAULT_QIANFAN_MODEL],
         ApiProvider::OpenaiCodex => vec![DEFAULT_OPENAI_CODEX_MODEL],
@@ -2848,6 +2849,22 @@ pub struct Config {
     /// selection.
     #[serde(skip)]
     pub(crate) migrated_legacy_ollama_cloud_route: bool,
+    /// Runtime-only isolation boundary for account-owned managed Chat.
+    ///
+    /// This is never user-configurable or serialized. The Runtime Chat relay
+    /// sets it on its private config clone so the Engine suppresses all host
+    /// workspace metadata and constructs no model-visible MCP, sub-agent, or
+    /// native tool surface for those turns.
+    #[serde(skip)]
+    pub(crate) runtime_chat_isolated: bool,
+    /// Runtime-only marker for an independent RuntimeThreadManager store.
+    ///
+    /// Those threads are not projected into the interactive TUI's attached
+    /// CWC run, so their provider requests do not participate in that run's
+    /// exclusive Chat ownership gate. RuntimeThreadManager sets this marker on
+    /// its private config clone; it is never user-configurable or serialized.
+    #[serde(skip)]
+    pub(crate) runtime_thread_inference_unrelated: bool,
     /// Native tool catalog controls. This table controls built-in
     /// tool loading policy.
     #[serde(default)]
@@ -2934,6 +2951,15 @@ pub struct Config {
     /// provides fresh device nodes, so most users never need this.
     #[serde(default, alias = "bwrapDevRoots")]
     pub bwrap_dev_roots: Vec<std::path::PathBuf>,
+    /// Opt-in sandbox read deny-list (S1, #5568). Listed subpaths are
+    /// unreadable inside sandboxed shell commands even though the sandbox
+    /// otherwise grants full-disk read: Seatbelt appends last-match-wins
+    /// deny rules; bubblewrap masks each existing path with an empty tmpfs
+    /// (directories) or a /dev/null bind (files). A leading `~` expands to
+    /// the user's home. Empty (the default) preserves current behavior.
+    /// Example: `sandbox_denied_read_paths = ["~/.ssh", "~/.aws"]`.
+    #[serde(default, alias = "sandboxDeniedReadPaths")]
+    pub sandbox_denied_read_paths: Vec<std::path::PathBuf>,
     #[serde(alias = "managedConfigPath")]
     pub managed_config_path: Option<String>,
     #[serde(alias = "requirementsPath")]
@@ -6450,13 +6476,13 @@ impl Config {
         // named/custom-table routes so a stale root key is not sent elsewhere.
         //
         // However, when the CLI dispatcher forwards an explicit `--api-key`
-        // through `DEEPSEEK_API_KEY` with the dispatcher source marker, that
+        // through the provider-neutral CLI bridge with its source marker, that
         // intentional override must win over the saved root key. This is
         // essential for DeepSeek-compatible subscription endpoints where the
         // user runs something like:
         //   codewhale --provider deepseek --api-key ark-... --base-url ... --model auto
         if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
-            && std::env::var("DEEPSEEK_API_KEY_SOURCE").as_deref() == Ok("cli")
+            && cli_api_key_source().as_deref() == Some("cli")
             && let Some(env_key) = explicit_cli_key
                 .as_ref()
                 .cloned()
@@ -10114,6 +10140,11 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         } else {
             override_cfg.bwrap_dev_roots
         },
+        sandbox_denied_read_paths: if override_cfg.sandbox_denied_read_paths.is_empty() {
+            base.sandbox_denied_read_paths
+        } else {
+            override_cfg.sandbox_denied_read_paths
+        },
         managed_config_path: override_cfg
             .managed_config_path
             .or(base.managed_config_path),
@@ -10186,6 +10217,9 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
                 recorded => recorded,
             }
         },
+        runtime_chat_isolated: override_cfg.runtime_chat_isolated || base.runtime_chat_isolated,
+        runtime_thread_inference_unrelated: override_cfg.runtime_thread_inference_unrelated
+            || base.runtime_thread_inference_unrelated,
         mini_window: override_cfg.mini_window.or(base.mini_window),
         title: override_cfg.title.or(base.title),
     }
@@ -11950,13 +11984,21 @@ pub(crate) fn explicit_launch_provider_override() -> Option<String> {
 }
 
 pub(crate) fn explicit_cli_api_key_override() -> Option<String> {
-    (std::env::var("DEEPSEEK_API_KEY_SOURCE").as_deref() == Ok("cli"))
+    (cli_api_key_source().as_deref() == Some("cli"))
         .then(|| {
-            std::env::var("CODEWHALE_CLI_API_KEY")
+            std::env::var(codewhale_config::CLI_API_KEY_ENV)
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
         .flatten()
+}
+
+pub(crate) fn cli_api_key_source() -> Option<String> {
+    codewhale_env_var(
+        codewhale_config::CLI_API_KEY_SOURCE_ENV,
+        codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV,
+    )
+    .ok()
 }
 
 fn missing_provider_api_key_message(provider: ApiProvider) -> Result<String> {

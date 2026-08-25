@@ -70,8 +70,11 @@ host; its generated one-time `cwapp_*` token is loopback-only.
 cannot provide an exact commit reports `unknown`, allowing compatibility
 clients to fail closed rather than accepting an ambiguous binary pair.
 
-The same response advertises `capabilities.account_session: true` and a
-token-free account receipt:
+The same response advertises `capabilities.account_session: true` and
+`capabilities.turn_operation_idempotency: true`. A client must require the
+latter before relying on `operation_key`; do not infer support from a 2xx turn
+response because an older tolerant reader may ignore an unknown request field.
+The response also includes a token-free account receipt:
 
 ```json
 {
@@ -520,6 +523,26 @@ and live state comes only from a resumed thread's SSE stream.
 - `POST /v1/threads/{id}/resume`
 - `POST /v1/threads/{id}/fork`
 
+`POST /v1/threads` accepts optional execution defaults in addition to the
+provider, model, workspace, and permission fields:
+
+```json
+{
+  "model_provider": "openai-codex",
+  "model": "gpt-5.6",
+  "reasoning_effort": "high",
+  "allowed_tools": ["read_file", "search"]
+}
+```
+
+`reasoning_effort` uses the canonical Runtime vocabulary (`auto`, `off`,
+`low`, `medium`, `high`, `xhigh`, `ultra`, or `max`; documented compatibility
+aliases are accepted and persisted canonically). `allowed_tools` is a
+model-visible allowlist. Omitting it keeps the normal configured catalog; an
+explicit empty array (`"allowed_tools": []`) exposes no tools to the model.
+Both fields are additive: older thread records and clients that omit them
+retain their previous behavior.
+
 `GET /v1/threads/summary` is the read-only summary surface used by the VS Code
 Agent View. `search` matches thread `id`, `title`, and `model` (and, when the
 title is unset, the latest turn's input summary — the displayed title). It
@@ -589,6 +612,48 @@ accept an empty string to clear a previously-set value. Added in v0.8.10 (#562):
 - `POST /v1/threads/{id}/undo` - fork the thread with the last N turns removed (`{"depth": N}`, default 0 = last turn only); returns the forked thread plus `original_user_text` so a GUI can pre-populate the input box
 - `POST /v1/threads/{id}/patch-undo` - snapshot-based file rollback followed by the same fork (`{"depth": N}`); returns `patch_result` (`files_restored`, `summary`, `snapshot_label`) alongside the forked thread
 - `POST /v1/threads/{id}/retry` - fork with the last N turns removed and immediately start a new turn (`{"depth": N, "prompt": "..."}`; `prompt` overrides the original user text, which is re-used when omitted)
+
+`POST /v1/threads/{id}/turns` accepts the same optional
+`reasoning_effort` and `allowed_tools` fields as per-turn overrides:
+
+```json
+{
+  "prompt": "Review this change without running tools.",
+  "operation_key": "cwc-request-01J7Y6Q9W4",
+  "reasoning_effort": "max",
+  "allowed_tools": []
+}
+```
+
+Resolution is deterministic: a turn override wins over the thread default,
+which wins over the Runtime's normal configuration. For tools, reaching normal
+configuration means the ordinary configured catalog; `[]` is never treated as
+missing. Reasoning is normalized only after the exact provider/model route is
+resolved, and `auto` remains a per-prompt reasoning decision even when the
+thread uses a fixed model. The request still enters the existing
+`Op::SendMessage` path and the single `Engine::run_turn` loop.
+
+`operation_key` is an optional idempotency key for clients that may lose an
+HTTP response after the Runtime accepted a turn. It is scoped to the current
+Runtime store and thread, may contain at most 128 UTF-8 bytes, and may not be
+empty or contain surrounding whitespace or control characters. Omitting it
+preserves the legacy create-a-new-turn behavior.
+
+The first accepted request durably binds a SHA-256 fingerprint of the key to
+the Runtime turn id and a canonical request fingerprint before sending the
+existing `Op::SendMessage`. An exact retry returns that original turn in the
+normal `{ "thread": ..., "turn": ... }` response and emits no second engine
+operation, item, or lifecycle sequence. Reusing the key on the same thread
+with a different provider/model, prompt, reasoning policy, tool allowlist or
+dynamic-tool schema, environment, or permission policy fails closed with
+`409 Conflict`. The same caller key may be used independently on another
+thread.
+
+Only the scoped key fingerprint, request fingerprint, thread id, and turn id
+are stored in the Runtime's private turn-operation index. The raw key is never
+persisted or logged, and request bodies, credentials, and attachments are not
+copied into that index. Existing thread/turn persistence remains the source of
+the returned turn after a process restart.
 
 **Approvals**
 - `POST /v1/approvals/{approval_id}` with body
@@ -750,10 +815,9 @@ client probed `/v1/models`, `/v1/runtime/models`, and `/v1/runtime/providers`
       "id": "modelstudio-token-plan",
       "model_provider_id": "modelstudio-token-plan",
       "display_name": "Alibaba Cloud Model Studio",
-      "default_base_url": "https://…/compatible-mode/v1",
       "default_model": "qwen3.8-max",
       "has_model_catalog": true,
-      "env_vars": ["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"]
+      "credentialState": "configured"
     }
   ]
 }
@@ -767,16 +831,27 @@ entries have a null exact id; a null id on the active `custom` entry identifies
 the released legacy root-level custom route. Preserve both fields from the
 selected entry and send a non-null exact id back as `POST /v1/threads`'s
 `model_provider_id`; dropping a named custom id would collapse the selection to
-the legacy root custom route. Treat
-`default_base_url` and `env_vars` as runtime-local detail: they are an endpoint
-and credential *names*, and a browser layer has no use for either. A UI bridge
-should project `id`, `model_provider_id`, `display_name`, `default_model`, and
-`has_model_catalog`.
+the legacy root custom route. `credentialState` is a stable, non-secret
+projection of the Runtime's existing structural credential classification:
 
-There is deliberately no credential-presence field yet — this route reports what
-the runtime can *represent*, not what it can currently serve. The models route
-below is also a selection catalog, not a credential-readiness probe: a non-empty
-list does not prove that the route can currently serve a request.
+- `configured`: credential material is structurally available;
+- `login_required`: the route needs login or a usable login capability;
+- `missing`: an API-style credential is unavailable;
+- `no_auth`: the route explicitly disables credential use;
+- `local`: the exact route is local and keyless;
+- `legacy`: the compatibility route cannot be classified more precisely.
+
+For an active named custom provider, this state is calculated from the exact
+route named by `model_provider_id`, not from a generic custom-provider default.
+It deliberately collapses saved-key and imported-token details into
+`configured`, and login/consent-source details into `login_required`.
+
+The response never includes endpoint URLs, credential environment-variable
+names, filesystem paths, credential values, consent-source details, or token
+metadata. `credentialState` is not a provider canary: `configured` does not
+prove endpoint reachability, credential validity, model entitlement, or a
+successful request. The models route below is also only a selection catalog; a
+non-empty list does not prove that the route can currently serve a request.
 
 ### `GET /v1/providers/{id}/models`
 
@@ -871,6 +946,12 @@ not persisted in `TurnRecord`.
   not, the first async read reconciles any unresolved dynamic calls as
   `tool_call.canceled` and then emits one `turn.completed`. Existing terminal
   call and turn receipts are detected and never duplicated.
+- Turn-operation bindings survive restart. Retrying the same `operation_key`
+  and request returns the original recovered turn (including an `interrupted`
+  turn recovered from an in-progress process exit); mismatched reuse remains a
+  conflict. A crash-created binding that never acquired a turn is discarded at
+  startup because engine submission happens only after both records are
+  durable.
 - Task execution performs its own recovery on top of the same persisted
   thread/turn store.
 

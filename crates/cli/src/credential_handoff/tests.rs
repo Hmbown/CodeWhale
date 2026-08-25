@@ -14,7 +14,11 @@ fn without_ambient_credentials() -> Vec<crate::tests::ScopedEnvVar> {
         .flat_map(crate::provider_env_vars)
         .copied()
         .collect::<Vec<_>>();
-    names.push("CODEWHALE_CLI_API_KEY");
+    names.extend([
+        codewhale_config::CLI_API_KEY_ENV,
+        codewhale_config::CLI_API_KEY_SOURCE_ENV,
+        codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV,
+    ]);
     names.sort_unstable();
     names.dedup();
     names

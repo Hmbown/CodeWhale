@@ -68,6 +68,15 @@ pub(crate) async fn drain_remote_control_events(
             crate::remote_control::RemoteEvent::RuntimeCursor { .. } => {
                 // The controller has already retired the acknowledged prefix.
             }
+            crate::remote_control::RemoteEvent::RuntimeChatHostReleased => {
+                // Internal provider-config handoff; the controller has already
+                // reopened the isolated host and queued its fresh catalog.
+            }
+            crate::remote_control::RemoteEvent::RuntimeChatProjection(_) => {
+                // The controller journaled this isolated native event before
+                // exposing it to the UI bridge. It is web-Chat output, not a
+                // mutation of the current interactive TUI transcript.
+            }
             crate::remote_control::RemoteEvent::FailedPreLease(error) => {
                 let status = format!("WEB MIRROR · could not start · {error} · /rc to retry");
                 app.status_message = Some(status.clone());
@@ -102,7 +111,30 @@ pub(crate) async fn drain_remote_control_events(
             } => {
                 match app.remote_control.claim_command(&run_id, seq, &command) {
                     Ok(true) => {}
-                    Ok(false) => continue,
+                    Ok(false) => {
+                        // The native Runtime operation key makes Chat replay
+                        // safe. Re-enter it and reissue the terminal command
+                        // acknowledgement: the previous provider submission
+                        // may be durable even though its acknowledgement POST
+                        // was lost with a worker failure.
+                        if let crate::remote_control::RemoteCommand::RuntimeChatPrompt(prompt) =
+                            &command
+                        {
+                            match app.remote_control.apply_runtime_chat_prompt(prompt).await {
+                                Ok(()) => app
+                                    .remote_control
+                                    .acknowledge(&run_id, seq, &command, "applied", None),
+                                Err(error) => app.remote_control.acknowledge(
+                                    &run_id,
+                                    seq,
+                                    &command,
+                                    "failed",
+                                    Some(error),
+                                ),
+                            }
+                        }
+                        continue;
+                    }
                     Err(error) => {
                         app.remote_control.acknowledge(
                             &run_id,
@@ -117,7 +149,38 @@ pub(crate) async fn drain_remote_control_events(
                         continue;
                     }
                 }
+                if matches!(
+                    &command,
+                    crate::remote_control::RemoteCommand::RuntimeChatPrompt(_)
+                ) && local_turn_is_active(app)
+                {
+                    app.remote_control.acknowledge(
+                        &run_id,
+                        seq,
+                        &command,
+                        "failed",
+                        Some(
+                            "Finish or interrupt the active local turn before starting Runtime Chat."
+                                .to_string(),
+                        ),
+                    );
+                    continue;
+                }
                 match command.clone() {
+                    crate::remote_control::RemoteCommand::RuntimeChatPrompt(prompt) => {
+                        match app.remote_control.apply_runtime_chat_prompt(&prompt).await {
+                            Ok(()) => app
+                                .remote_control
+                                .acknowledge(&run_id, seq, &command, "applied", None),
+                            Err(error) => app.remote_control.acknowledge(
+                                &run_id,
+                                seq,
+                                &command,
+                                "failed",
+                                Some(error),
+                            ),
+                        }
+                    }
                     crate::remote_control::RemoteCommand::Prompt { turn_id, prompt } => {
                         if app.is_loading || app.dispatch_in_flight {
                             app.remote_control.acknowledge(
@@ -134,7 +197,16 @@ pub(crate) async fn drain_remote_control_events(
                         }
                         app.remote_control
                             .upload_snapshot(&run_id, &app.api_messages);
-                        app.remote_control.activate_prompt(&run_id, &turn_id);
+                        if let Err(error) = app.remote_control.activate_prompt(&run_id, &turn_id) {
+                            app.remote_control.acknowledge(
+                                &run_id,
+                                seq,
+                                &command,
+                                "failed",
+                                Some(error),
+                            );
+                            continue;
+                        }
                         let message = QueuedMessage::new(prompt, None);
                         app.remote_control.set_applying_remote_command(true);
                         let result = dispatch_user_message_with_recovery(
@@ -220,14 +292,39 @@ pub(crate) async fn drain_remote_control_events(
                             ),
                         }
                     }
-                    crate::remote_control::RemoteCommand::Control { .. } => {
-                        if !app.remote_control.active_run_matches(&run_id) {
+                    crate::remote_control::RemoteCommand::Control {
+                        runtime_chat: Some(scope),
+                        turn_id: Some(turn_id),
+                        ..
+                    } => {
+                        match app
+                            .remote_control
+                            .interrupt_runtime_chat(&run_id, &scope, &turn_id)
+                            .await
+                        {
+                            Ok(()) => app
+                                .remote_control
+                                .acknowledge(&run_id, seq, &command, "applied", None),
+                            Err(error) => app.remote_control.acknowledge(
+                                &run_id,
+                                seq,
+                                &command,
+                                "failed",
+                                Some(error),
+                            ),
+                        }
+                    }
+                    crate::remote_control::RemoteCommand::Control { turn_id, .. } => {
+                        let exact_active_turn = turn_id.as_deref().is_some_and(|turn_id| {
+                            app.remote_control.active_turn_matches(&run_id, turn_id)
+                        });
+                        if !exact_active_turn {
                             app.remote_control.acknowledge(
                                 &run_id,
                                 seq,
                                 &command,
                                 "failed",
-                                Some("This run no longer owns an active turn.".to_string()),
+                                Some("This turn no longer owns active Work.".to_string()),
                             );
                             continue;
                         }
@@ -262,6 +359,9 @@ fn local_turn_is_active(app: &App) -> bool {
 /// There is no await between the state check and the controller mutation, so a
 /// terminal event cannot race this single-threaded ownership transition.
 fn try_attach_active_local_turn_to_remote(app: &mut App) -> bool {
+    if app.remote_control.runtime_chat_blocks_local_dispatch() {
+        return false;
+    }
     if !local_turn_is_active(app) {
         // A dispatch can fail before its typed TurnStarted receipt. In that
         // case there is no turn to hand off and the connected attachment is
@@ -286,7 +386,7 @@ fn try_attach_active_local_turn_to_remote(app: &mut App) -> bool {
     app.remote_control.attach_current_local_turn(turn_id)
 }
 
-pub(crate) fn start_remote_control_session(app: &mut App) {
+pub(crate) fn start_remote_control_session(app: &mut App, config: &Config) {
     let session_id = app
         .current_session_id
         .clone()
@@ -320,6 +420,24 @@ pub(crate) fn start_remote_control_session(app: &mut App) {
             return;
         }
     };
+    if let Err(error) = app.remote_control.prepare_remote_control_session_journal(
+        &journal_dir,
+        &target_ref,
+        &session_id,
+    ) {
+        app.push_status_toast(error, StatusToastLevel::Error, Some(12_000));
+        return;
+    }
+    if let Err(error) = app.remote_control.configure_runtime_chat(
+        config.clone(),
+        std::sync::Arc::clone(&app.plugin_registry),
+        journal_dir.join("runtime-chat"),
+        target_ref.clone(),
+        session_id.clone(),
+    ) {
+        app.push_status_toast(error, StatusToastLevel::Error, Some(12_000));
+        return;
+    }
     match app
         .remote_control
         .start(crate::remote_control::RemoteStart {

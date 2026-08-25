@@ -58,13 +58,6 @@ pub fn hot_tail_style(base_fg: Color, elapsed_ms: u128, reduced_motion: bool) ->
     Style::default().fg(fg).add_modifier(Modifier::BOLD)
 }
 
-/// Style for settled prose (muted relative to hot).
-#[must_use]
-#[allow(dead_code)]
-pub fn settled_style(base_fg: Color) -> Style {
-    Style::default().fg(base_fg)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

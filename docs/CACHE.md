@@ -42,6 +42,7 @@ one-request miss):
 | `/model` (SetModel) | `change:model` |
 | Mode change (agent/plan/operate/yolo) | `change:mode` |
 | Goal set / pause / resume / clear / status | `change:goal` |
+| Mid-turn tool-surface change (deferred-tool admission/eviction, tool-search activation, runtime MCP tool arrival) | `change:tool_surface` |
 | Session sync / restore (SyncSession) | `resume` |
 | Session construction | `initial` |
 

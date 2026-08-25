@@ -69,7 +69,7 @@ stewardship.
 | `planner`     | analyse and produce a strategy         | no      | yes      | read-only probes | "design the migration; don't execute"        |
 | `reviewer`    | read-and-grade with severity scores    | no      | yes      | read-only (net + bounded verify) | "audit this PR for bugs"                     |
 | `builder`     | land a specific change with min edit   | yes     | yes      | yes           | "rewrite `bar.rs::Foo::bar` to do X"         |
-| `verifier`    | run tests / validation, report outcome | no      | yes      | test-focused  | "run cargo test --workspace, report"         |
+| `verifier`    | run tests / validation, report outcome | no      | yes      | bounded verification (no writes) | "verify the diff with the bounded test checks; report PASS/FAIL" |
 | `consultant`  | short-lived, high-reasoning counsel     | no      | yes      | none          | "what are we missing in this design?"        |
 | `custom`      | explicit narrow tool allowlist         | inherits | inherits | inherits     | hand-picked tools on the parent's posture    |
 
@@ -274,7 +274,9 @@ OUTPUT: VERDICT, EVIDENCE, GAPS, NEXT.
 - **`verifier`** — when the parent needs an authoritative pass/fail
   on the test suite or other validation. Verifiers don't fix
   failures; they capture the failing assertion + stack and put fix
-  candidates under RISKS.
+  candidates under RISKS. The verifier posture never writes, and shell
+  is clamped to the bounded built-in verification surface: the write
+  ceiling is read-only and unbounded shell forms are refused (#5186).
 - **`consultant`** — when the operator wants a high-leverage second opinion
   before cheaper execution continues. Consultants read enough to ground a
   recommendation, but cannot write or run shell commands. `oracle` and

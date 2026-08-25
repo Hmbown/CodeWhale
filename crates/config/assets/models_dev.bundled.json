@@ -842,16 +842,6 @@
       "npm": "@ai-sdk/openai",
       "env": ["OPENAI_API_KEY"],
       "models": {
-        "deepseek-v4-pro": {
-          "id": "deepseek-v4-pro",
-          "name": "DeepSeek V4 Pro (OpenAI-compatible default)",
-          "family": "deepseek",
-          "default": true,
-          "reasoning": true,
-          "tool_call": true,
-          "modalities": { "input": ["text"], "output": ["text"] },
-          "limit": { "context": 1000000, "output": 384000 }
-        },
         "gpt-5.5": {
           "id": "gpt-5.5",
           "name": "GPT-5.5",
@@ -876,6 +866,7 @@
           "id": "gpt-5.6",
           "name": "GPT-5.6 Sol",
           "family": "gpt",
+          "default": true,
           "attachment": true,
           "reasoning": true,
           "tool_call": true,

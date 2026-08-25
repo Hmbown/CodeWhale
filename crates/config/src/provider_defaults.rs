@@ -9,7 +9,10 @@ pub(crate) const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-pro";
 pub(crate) const DEFAULT_DEEPSEEK_ANTHROPIC_MODEL: &str = DEFAULT_DEEPSEEK_MODEL;
 pub(crate) const DEFAULT_NVIDIA_NIM_MODEL: &str = "deepseek-ai/deepseek-v4-pro";
 pub(crate) const DEFAULT_NVIDIA_NIM_FLASH_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
-pub(crate) const DEFAULT_OPENAI_MODEL: &str = "deepseek-v4-pro";
+// A DeepSeek id here guaranteed a 404 against the default OpenAI endpoint:
+// unlike the hosted-aggregator rows below, api.openai.com serves no DeepSeek
+// models. Default to OpenAI's own flagship instead (#5588).
+pub(crate) const DEFAULT_OPENAI_MODEL: &str = "gpt-5.6";
 pub(crate) const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/beta";
 pub(crate) const DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL: &str = "https://api.deepseek.com/anthropic";
 pub(crate) const DEFAULT_NVIDIA_NIM_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";

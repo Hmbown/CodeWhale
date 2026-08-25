@@ -405,6 +405,64 @@ async fn connected_web_mirror_never_refuses_local_composer_input() {
     );
 }
 
+#[tokio::test]
+async fn runtime_chat_queues_local_composer_input_without_starting_a_second_turn() {
+    let mut app = create_test_app();
+    app.remote_control.block_runtime_chat_dispatch_for_tests();
+    let config = Config::default();
+    let mut mock = mock_engine_handle();
+
+    crate::tui::ui::dispatch::dispatch_composer_message(
+        &mut app,
+        &config,
+        &mock.handle,
+        crate::tui::app::QueuedMessage::new("local prompt during Runtime Chat".to_string(), None),
+        crate::tui::ui::DispatchRecovery::Immediate,
+        crate::tui::app::ComposerSubmitAction::Submit(
+            crate::tui::app::SubmitDisposition::Immediate,
+        ),
+    )
+    .await
+    .expect("Runtime Chat dispatch gate");
+
+    assert_eq!(app.queued_message_count(), 1);
+    assert!(!app.is_loading, "the interactive engine must remain idle");
+    assert!(
+        mock.rx_op.try_recv().is_err(),
+        "the interactive engine must not receive a second provider turn"
+    );
+    assert!(app.status_message.is_none());
+    let toast = app.status_toasts.back().expect("Runtime Chat queue toast");
+    assert_eq!(toast.level, StatusToastLevel::Info);
+    assert!(toast.text.contains("Runtime Chat"));
+    assert_eq!(toast.ttl_ms, Some(4_000));
+}
+
+#[tokio::test]
+async fn stale_remote_control_turn_never_cancels_the_current_engine_turn() {
+    let mut app = create_test_app();
+    app.remote_control
+        .force_mirror_connected_for_tests("run_fixture", "turn_current");
+    app.remote_control
+        .queue_remote_event_for_tests(crate::remote_control::RemoteEvent::Command {
+            run_id: "run_fixture".to_string(),
+            seq: 1,
+            command: crate::remote_control::RemoteCommand::Control {
+                action: crate::remote_control::RemoteControlRequest::Interrupt,
+                turn_id: Some("turn_stale".to_string()),
+                runtime_chat: None,
+            },
+        });
+    let mock = mock_engine_handle();
+    drain_remote_control_events(&mut app, &Config::default(), &mock.handle)
+        .await
+        .unwrap();
+    assert!(
+        !mock.cancel_token.is_cancelled(),
+        "a delayed command for an older turn must not cancel the current provider lifecycle"
+    );
+}
+
 fn test_mailbox_route(
     provider: ApiProvider,
     model: &str,
@@ -3370,6 +3428,9 @@ fn composer_mouse_first_visible_character_maps_to_zero_after_prompt_gutter() {
         "the first rendered character must not inherit the prompt's two-column inset"
     );
 
+    // Exercise a second independent caret mapping, not the intentional
+    // adjacent-click word-selection gesture.
+    app.viewport.composer_click_trace = None;
     assert!(handle_composer_mouse(
         &mut app,
         MouseEvent {
@@ -3513,6 +3574,41 @@ fn create_test_app() -> App {
         skip_onboarding: false,
         ..crate::test_support::test_tui_options(PathBuf::from("."))
     })
+}
+
+#[test]
+fn runtime_chat_short_circuits_inline_voice_and_cache_actions_before_ui_mutation() {
+    let mut app = create_test_app();
+    app.remote_control.block_runtime_chat_dispatch_for_tests();
+    app.voice_enabled = true;
+    let history_len = app.history.len();
+
+    let voice = crate::commands::CommandResult::with_message_and_action(
+        "optimistic voice message",
+        AppAction::VoiceCapture,
+    );
+    assert!(super::apply::reject_inline_inference_while_runtime_chat_owns_run(&mut app, &voice,));
+    assert!(!app.voice_enabled, "blocked /voice must restore its toggle");
+    assert_eq!(
+        app.history.len(),
+        history_len,
+        "the optimistic command message must not be appended"
+    );
+    assert!(app.status_message.is_none());
+    let toast = app.status_toasts.back().expect("blocked action toast");
+    assert_eq!(toast.level, crate::tui::app::StatusToastLevel::Info);
+    assert!(toast.text.contains("Codewhale Runtime"));
+    assert_eq!(toast.ttl_ms, Some(6_000));
+
+    let cache = crate::commands::CommandResult::with_message_and_action(
+        "optimistic cache message",
+        AppAction::CacheWarmup,
+    );
+    assert!(super::apply::reject_inline_inference_while_runtime_chat_owns_run(&mut app, &cache,));
+    assert_eq!(app.history.len(), history_len);
+
+    let mut idle = create_test_app();
+    assert!(!super::apply::reject_inline_inference_while_runtime_chat_owns_run(&mut idle, &cache,));
 }
 
 #[derive(Clone, Default)]
@@ -5239,14 +5335,20 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
 }
 
 #[test]
-fn session_approved_cache_keeps_tool_name_session_grants() {
+fn session_approved_cache_does_not_promote_tool_name_grants_to_whole_tool() {
     let mut app = create_test_app();
     app.approval_session_approved
         .insert("edit_file".to_string());
 
     assert!(
+        !is_session_approved_for_tool(&app, "edit_file", "file:edit_file:fresh"),
+        "a bare tool-name grant must not cover future calls of the same tool (ops R2)"
+    );
+    app.approval_session_approved
+        .insert("file:edit_file:fresh".to_string());
+    assert!(
         is_session_approved_for_tool(&app, "edit_file", "file:edit_file:fresh"),
-        "approve-for-session should still cover future calls of the same tool"
+        "a grouping-key grant still covers its command family"
     );
 }
 
@@ -6299,7 +6401,9 @@ fn apply_loaded_session_resets_unpersisted_telemetry() {
     app.session.subagent_cost_cny = 5.48;
     app.session
         .subagent_usage_sources
-        .insert(("agent-test".to_string(), "response-test".to_string()));
+        .insert(crate::cost_status::usage_source_fingerprint(
+            "response-test",
+        ));
     app.session.displayed_cost_high_water = 2.0;
     app.session.displayed_cost_high_water_cny = 14.61;
     app.session.last_prompt_tokens = Some(120);
@@ -6364,6 +6468,7 @@ fn apply_loaded_session_resets_unpersisted_telemetry() {
 /// to recognize that shape rather than trust it (#4318).
 #[test]
 fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
+    let _cost_scope = crate::cost_status::test_scope();
     let mut app = create_test_app();
     // Live state from the session being replaced.
     app.session.cost_priced_turns = 9;
@@ -6384,6 +6489,7 @@ fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
     let mut session = saved_session_with_messages(vec![text_message("assistant", "ready")]);
     session.metadata.cost = crate::session_manager::SessionCostSnapshot {
         session_cost_usd: 2.5,
+        subagent_cost_usd: 1.25,
         priced_turns: 2,
         unpriced_turns: 1,
         cny_priced_turns: 0,
@@ -6394,6 +6500,10 @@ fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
         pricing_provenances: ["models_dev_bundled".to_string()].into(),
         route_receipts: ["provider=deepseek identity=deepseek model=deepseek-v4-flash".to_string()]
             .into(),
+        usage_source_fingerprints: [crate::cost_status::usage_source_fingerprint(
+            "subagent:agent-reload:step:1:response:late",
+        )]
+        .into(),
         coverage_recorded: true,
         ..crate::session_manager::SessionCostSnapshot::default()
     };
@@ -6401,6 +6511,7 @@ fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
     apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
 
     assert_eq!(app.session.cost_priced_turns, 2);
+    assert_eq!(app.session.subagent_cost, 1.25);
     assert_eq!(app.session.cost_unpriced_turns, 1);
     assert_eq!(app.session.cost_cny_priced_turns, 0);
     assert_eq!(app.session.cost_cny_unpriced_turns, 3);
@@ -6411,6 +6522,47 @@ fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
     assert_eq!(
         app.session.cost_unpriced_classes,
         ["cache_write".to_string()].into()
+    );
+    assert_eq!(
+        app.session.subagent_usage_sources,
+        session
+            .metadata
+            .cost
+            .usage_source_fingerprints
+            .iter()
+            .cloned()
+            .collect()
+    );
+    assert!(crate::cost_status::usage_source_seen(
+        "subagent:agent-reload:step:1:response:late"
+    ));
+    let replay_owner = "interactive:reloaded-session:turn-replay";
+    crate::cost_status::register_interactive_runtime_usage_sink(
+        replay_owner,
+        crate::cost_status::scope_token(),
+    );
+    crate::cost_status::report_effective_route_for_runtime(
+        crate::cost_status::scope_token(),
+        Some(replay_owner),
+        "subagent:agent-reload:step:1:response:late",
+        &crate::cost_status::EffectiveRouteEnvelope::capture(
+            None,
+            ApiProvider::Anthropic,
+            "anthropic-direct",
+            "claude-sonnet-4-5",
+            Some(ApiProvider::Anthropic.default_base_url()),
+            chrono::Utc::now(),
+        ),
+        &Usage {
+            input_tokens: 200,
+            output_tokens: 20,
+            ..Usage::default()
+        },
+    );
+    crate::cost_status::finish_runtime_usage_owner(replay_owner);
+    assert!(
+        crate::cost_status::drain().is_empty(),
+        "a re-delivered provider response must remain deduped after reload"
     );
     assert_eq!(app.session.cost_route_receipts.len(), 1);
     assert!(
@@ -8528,8 +8680,17 @@ async fn remote_preflight_failure_releases_the_account_owned_run() {
     let mut app = create_test_app();
     app.set_provider_identity(ApiProvider::Custom, "lm-studio");
     app.set_model_selection("local-model".to_string());
+    let journal_root = tempfile::tempdir().expect("remote dispatch journal root");
     app.remote_control
-        .activate_prompt("run_remote_fixture", "turn_remote_fixture");
+        .prepare_remote_control_session_journal(
+            journal_root.path(),
+            "target_remote_fixture",
+            "session_remote_fixture",
+        )
+        .expect("durable remote dispatch journal");
+    app.remote_control
+        .activate_prompt("run_remote_fixture", "turn_remote_fixture")
+        .unwrap();
     let (_engine, handle) = crate::core::engine::Engine::new(EngineConfig::default(), &config);
 
     dispatch_user_message(
@@ -12333,6 +12494,12 @@ fn update_notice_names_the_command_for_the_actual_install_method() {
             .toast_line(codewhale_release::InstallMethod::Homebrew)
             .contains("brew upgrade codewhale"),
         "toast names the Homebrew command"
+    );
+    assert!(
+        notice
+            .toast_line(codewhale_release::InstallMethod::Omarchy)
+            .contains("omarchy update"),
+        "toast names the Omarchy update command"
     );
 
     // A plain release binary keeps the self-updater.

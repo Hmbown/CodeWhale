@@ -47,6 +47,7 @@ mod credentials;
 mod deepseek_theme;
 mod dependencies;
 mod doctor;
+mod doctor_fix;
 mod dsh_credentials;
 mod elapsed;
 mod error_taxonomy;
@@ -107,6 +108,7 @@ mod route_budget;
 mod route_receipt;
 mod route_runtime;
 mod runtime_api;
+mod runtime_chat_relay;
 mod runtime_handoff;
 mod runtime_log;
 mod runtime_policy;
@@ -444,6 +446,11 @@ struct ExecArgs {
     /// Maximum number of tool calls admitted in one model turn. Omitted means unlimited.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     max_tool_calls: Option<u32>,
+    /// Shut down when the parent closes this process's stdin. Fleet workers
+    /// pass this automatically: a dead manager must not leave detached workers
+    /// spending forever (R7).
+    #[arg(long, default_value_t = false)]
+    parent_death_watch: bool,
     /// Extra text appended to the system prompt for this run.
     #[arg(long)]
     append_system_prompt: Option<String>,
@@ -1040,6 +1047,16 @@ struct DoctorArgs {
         conflicts_with_all = ["json", "context_json"]
     )]
     probe_search: bool,
+    /// Plan and apply automatic repairs with consent (#5552)
+    #[arg(
+        long,
+        default_value_t = false,
+        conflicts_with_all = ["json", "context_json"]
+    )]
+    fix: bool,
+    /// Apply the planned repairs without prompting (requires --fix)
+    #[arg(long, default_value_t = false, requires = "fix")]
+    yes: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -2053,6 +2070,18 @@ async fn run_async_main_dispatch(
                         plugin_registry.as_ref(),
                     )
                     .await;
+                    if args.fix {
+                        let plan = crate::doctor_fix::plan_fixes(
+                            &config,
+                            &workspace,
+                            plugin_registry.as_ref(),
+                        );
+                        crate::doctor_fix::print_fix_plan(&plan);
+                        if !plan.is_empty() && (args.yes || crate::doctor_fix::confirm_fix(&plan)) {
+                            let results = crate::doctor_fix::apply_fixes(&plan);
+                            crate::doctor_fix::print_apply_results(&results);
+                        }
+                    }
                     Ok(())
                 }
             }
@@ -2196,6 +2225,9 @@ async fn run_async_main_dispatch(
                     || args.allow_sandbox_elevation
                     || env_tool_surface.is_some();
                 if needs_engine {
+                    if args.parent_death_watch {
+                        spawn_parent_death_watch();
+                    }
                     let provider = config.api_provider();
                     let max_subagents = cli.max_subagents.map_or_else(
                         || config.max_subagents_for_provider(provider),
@@ -11536,6 +11568,41 @@ fn apply_fleet_engine_feature_caps(
 /// Resolve the optional headless safety budget without imposing a hidden
 /// default. Benchmarks and other long-running exec callers continue until the
 /// model finishes unless they opt into a finite `--max-turns` value.
+/// Watch stdin for EOF — the manager closed the pipe because it died — and
+/// terminate our own process group. Fleet workers run in their own session
+/// (setsid, host.rs), so nothing else kills them after a parent crash; the
+/// same guard makes a task-timeout worker stop its own tree deterministically
+/// (R7). Windows workers are reaped by the host's Job Object instead, so the
+/// watcher is a Unix-only concern.
+fn spawn_parent_death_watch() {
+    #[cfg(not(unix))]
+    {
+        return;
+    }
+    #[cfg(unix)]
+    std::thread::Builder::new()
+        .name("parent-death-watch".to_string())
+        .spawn(|| {
+            use std::io::Read as _;
+            let mut stdin = std::io::stdin();
+            let mut buf = [0u8; 512];
+            loop {
+                match stdin.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => continue,
+                }
+            }
+            tracing::info!(
+                target: "fleet",
+                "parent stdin closed; terminating worker process group"
+            );
+            // SAFETY: kill is async-signal-safe; 0 targets this process's own
+            // group, which after setsid is exactly the worker tree.
+            unsafe { libc::kill(0, libc::SIGTERM) };
+        })
+        .expect("spawn parent-death watch thread");
+}
+
 fn exec_max_steps(max_turns: Option<u32>) -> u32 {
     max_turns.unwrap_or(u32::MAX)
 }
@@ -11788,6 +11855,7 @@ async fn run_exec_agent(
             read_only_roots: execution_config.bwrap_ro_roots.clone(),
             device_roots: execution_config.bwrap_dev_roots.clone(),
         },
+        denied_read_subpaths: execution_config.sandbox_denied_read_paths.clone(),
         memory_enabled: execution_config.memory_enabled(),
         memory_path: execution_config.memory_path(),
         speech_output_dir: execution_config.speech_output_dir(),

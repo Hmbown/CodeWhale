@@ -3538,10 +3538,20 @@ fn merge_project_provider_config(target: &mut ProviderConfigToml, source: &Provi
 /// `$CODEWHALE_HOME/telemetry/dryrun.jsonl`, and no HTTP client is constructed.
 pub const DEFAULT_TELEMETRY_ENDPOINT: &str = "https://telemetry.codewhale.net/v1/telemetry";
 
+/// Provider-neutral credential value forwarded from the CLI dispatcher to the
+/// in-process TUI when `--api-key` must survive profile-late route selection.
+pub const CLI_API_KEY_ENV: &str = "CODEWHALE_CLI_API_KEY";
+
+/// Source marker paired with [`CLI_API_KEY_ENV`] on the CLI-to-TUI boundary.
+pub const CLI_API_KEY_SOURCE_ENV: &str = "CODEWHALE_CLI_API_KEY_SOURCE";
+
+/// Read-only compatibility alias used by dispatchers before v0.9.12.
+pub const LEGACY_CLI_API_KEY_SOURCE_ENV: &str = "DEEPSEEK_API_KEY_SOURCE";
+
 /// The dispatcher's statement to the TUI child about *why* telemetry is off.
 ///
 /// Private to the `codewhale` → `codewhale-tui` hop, in the same spirit as
-/// `DEEPSEEK_API_KEY_SOURCE`. Set to `1`/`0` on every delegated run.
+/// [`CLI_API_KEY_SOURCE_ENV`]. Set to `1`/`0` on every delegated run.
 pub const TELEMETRY_FLOOR_ENV: &str = "CODEWHALE_TELEMETRY_FLOOR";
 
 /// Whether an environment-level kill switch forces telemetry off here.

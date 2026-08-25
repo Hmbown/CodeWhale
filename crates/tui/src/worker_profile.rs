@@ -222,8 +222,12 @@ impl WorkerRuntimeProfile {
             // Consultant: counsel only. Reads (workspace and web) to ground
             // its advice; never acts on the workspace, so no shell (#4752).
             FleetRole::Consultant => (PermissionSet::read_only_with_network(), ShellPolicy::None),
-            // Verifier: doesn't modify code, but runs the test suite and may
-            // fetch what a test or a doc check needs.
+            // Verifier: doesn't modify code, but runs the bounded built-in
+            // verification surface (test/check selections) under a full shell
+            // ceiling clamped by ChildAuthority: writes are denied and
+            // unbounded shell forms are refused (#5186). The old wording
+            // promised "runs the test suite" without saying the surface is
+            // bounded. See the roster description and VERIFIER_AGENT_INTRO.
             FleetRole::Verifier => (PermissionSet::read_only_with_network(), ShellPolicy::Full),
             // Doers, and Custom: inherit the parent's effective posture. A
             // custom worker is narrowed by its explicit tool list and by the
@@ -424,7 +428,7 @@ mod tests {
         assert_eq!(
             verifier.shell,
             ShellPolicy::Full,
-            "verifier runs the test suite"
+            "verifier holds shell authority for the bounded verification surface (unbounded forms are refused by the policy seam)"
         );
     }
 

@@ -1792,11 +1792,13 @@ impl ProviderPickerView {
         key_entry_for_missing_auth: bool,
     ) -> Self {
         let mut picker = Self::new_with_runtime_status(active, config, runtime_status);
-        picker.view = if !key_entry_for_missing_auth && target.is_none() {
-            ProviderListView::Local
-        } else {
-            ProviderListView::Catalog
-        };
+        // First-run setup shows the full provider catalog (hosted + local)
+        // so a user can pick DeepSeek or any other API immediately. Local-only
+        // is opt-in via "explore offline" and the L toggle. A local-first
+        // default (introduced 2026-08-15) hid hosted providers behind a
+        // keypress, which read as "only local models are supported."
+        let _ = key_entry_for_missing_auth;
+        picker.view = ProviderListView::Catalog;
         picker.setup_mode = true;
         if let Some(target) = target
             && let Some(idx) = picker.rows.iter().position(|row| row.provider == target)
@@ -1805,16 +1807,6 @@ impl ProviderPickerView {
             if key_entry_for_missing_auth && !picker.selected_has_key() {
                 picker.begin_setup();
             }
-        } else if picker.view == ProviderListView::Local
-            && let Some(idx) = picker
-                .rows
-                .iter()
-                .position(|row| row.provider == ApiProvider::Ollama)
-        {
-            // Ollama is the broadest beginner path and uses the standard local
-            // OpenAI-compatible endpoint. This only changes the first-run
-            // highlight; nothing is persisted until the user presses Enter.
-            picker.selected_idx = idx;
         }
         picker
     }
@@ -4794,7 +4786,7 @@ mod tests {
     fn key_entry_hint_uses_metadata_env_vars() {
         assert_eq!(
             ProviderPickerView::env_var_for(ApiProvider::NvidiaNim),
-            "NVIDIA_API_KEY / NVIDIA_NIM_API_KEY / DEEPSEEK_API_KEY"
+            "NVIDIA_API_KEY / NVIDIA_NIM_API_KEY"
         );
     }
 
@@ -4807,7 +4799,7 @@ mod tests {
 
         let rendered = render_text(&picker, 120, 20);
 
-        assert!(rendered.contains("NVIDIA_API_KEY / NVIDIA_NIM_API_KEY / DEEPSEEK_API_KEY"));
+        assert!(rendered.contains("NVIDIA_API_KEY / NVIDIA_NIM_API_KEY"));
         assert!(rendered.contains("https://build.nvidia.com/settings/api-keys"));
     }
 
@@ -6914,15 +6906,18 @@ mod tests {
     }
 
     #[test]
-    fn first_run_onboarding_starts_with_local_models_and_no_cloud_rows() {
+    fn first_run_onboarding_shows_all_providers_including_hosted() {
         let _lock = crate::test_support::lock_test_env();
         let config = Config::default();
-        let mut picker =
+        let picker =
             ProviderPickerView::new_for_onboarding(ApiProvider::Deepseek, None, &config, None);
 
+        // First-run setup opens on the full catalog with the active provider
+        // (DeepSeek) selected — hosted APIs are visible immediately, not
+        // hidden behind a keypress (#n3onr1ft feedback, 2026-08-23).
         assert_eq!(picker.stage, Stage::List);
-        assert_eq!(picker.view, ProviderListView::Local);
-        assert_eq!(picker.selected_provider(), ApiProvider::Ollama);
+        assert_eq!(picker.view, ProviderListView::Catalog);
+        assert_eq!(picker.selected_provider(), ApiProvider::Deepseek);
 
         let visible = picker
             .filtered_rows()
@@ -6930,15 +6925,15 @@ mod tests {
             .map(|(_, row)| row.provider)
             .collect::<Vec<_>>();
         assert!(!visible.is_empty());
-        assert!(visible.iter().all(|provider| provider.is_self_hosted()));
+        // Hosted providers AND local runtimes are both present up front.
+        assert!(visible.contains(&ApiProvider::Deepseek));
         assert!(visible.contains(&ApiProvider::Ollama));
-        assert!(visible.contains(&ApiProvider::Sglang));
-        assert!(visible.contains(&ApiProvider::Vllm));
-        assert!(!visible.contains(&ApiProvider::OllamaCloud));
-        assert!(!visible.contains(&ApiProvider::Deepseek));
+        assert!(
+            visible.iter().any(|provider| !provider.is_self_hosted()),
+            "hosted providers must be visible on first run: {visible:?}"
+        );
 
         let rendered = render_text(&picker, 40, 12);
-        assert!(rendered.contains("Ollama"), "{rendered}");
         assert!(
             rendered.contains(crate::tui::glyphs::SELECTION),
             "{rendered}"
@@ -6948,17 +6943,6 @@ mod tests {
                 crate::tui::ui_text::text_display_width(line) <= 40,
                 "40x12 line {idx} clips: {line:?}\n{rendered}"
             );
-        }
-
-        match picker.handle_key(key(KeyCode::Enter)) {
-            ViewAction::EmitAndClose(ViewEvent::ProviderPickerApplied {
-                provider,
-                provider_id,
-            }) => {
-                assert_eq!(provider, ApiProvider::Ollama);
-                assert_eq!(provider_id, None);
-            }
-            other => panic!("expected keyless local provider apply, got {other:?}"),
         }
     }
 

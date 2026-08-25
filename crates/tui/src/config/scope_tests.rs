@@ -13,7 +13,6 @@
 //!   a newer selection).
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crate::config::{ApiProvider, Config};
 use crate::provider_readiness::{ResolvedProviderReadiness, resolve_for_model};
@@ -361,16 +360,4 @@ fn personal_fleet_selection_persists_across_restart() {
             None => std::env::remove_var("CODEWHALE_HOME"),
         }
     }
-}
-
-/// Arc-wrapped read path used by concurrent engine threads: resolving the
-/// route from a shared config must be cheap and side-effect-free.
-#[allow(dead_code)]
-fn resolve_shared(config: Arc<Config>) -> ResolvedProviderReadiness {
-    resolve_for_model(
-        &config,
-        ApiProvider::Deepseek,
-        "deepseek-v4-pro",
-        &crate::provider_readiness::ProviderReadinessSnapshot::default(),
-    )
 }

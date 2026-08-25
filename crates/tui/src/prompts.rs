@@ -3480,9 +3480,23 @@ mod tests {
     /// #4632 — The system prompt prefix (the byte-stable part cached by
     /// inference servers) must never contain private content: absolute
     /// filesystem paths, API keys, or home-directory references.
+    ///
+    /// Pin `HOME`/`USERPROFILE` to a scratch dir (and hold the env barrier)
+    /// so global `~/.codewhale/instructions.md` and home-resolved skills
+    /// cannot leak their real absolute paths into the prompt under test.
+    /// Without this a machine that has `~/.codewhale/instructions.md` fails
+    /// the absolute-path assertion, and the test only passes in parallel
+    /// runs when a sibling test happens to hold a temporary `HOME` guard at
+    /// the same moment — process-global env, so the result must never
+    /// depend on scheduling or the developer's machine.
     #[test]
     fn system_prompt_prefix_never_leaks_private_content() {
+        let _env_guard = crate::test_support::lock_test_env();
         let tmp = tempdir().expect("tempdir");
+        let home_tmp = tempdir().expect("home tempdir");
+        let _home = EnvVarGuard::set("HOME", home_tmp.path().as_os_str());
+        let _userprofile = EnvVarGuard::set("USERPROFILE", home_tmp.path().as_os_str());
+        let _skills_dir = EnvVarGuard::remove("DEEPSEEK_SKILLS_DIR");
         let workspace = tmp.path();
         let prompt = match system_prompt_for_mode_with_context(workspace, None) {
             SystemPrompt::Text(text) => text,

@@ -20,8 +20,9 @@ use codewhale_workflow::{
     resolve_workflow_agent,
 };
 use codewhale_workflow_js::{
-    BudgetSnapshot, DriverError, ProgressEvent, SpawnedTask, TaskCompletion, TaskRequest,
-    WORKFLOW_MAX_CONCURRENT, WorkflowDriver, WorkflowRunCancel, WorkflowVm,
+    BudgetSnapshot, DriverError, ProgressEvent, SCHEMA_RAW_PREVIEW_CHARS, SpawnedTask,
+    TaskCompletion, TaskRequest, WORKFLOW_MAX_CONCURRENT, WorkflowDriver, WorkflowRunCancel,
+    WorkflowVm,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -180,14 +181,7 @@ impl WorkflowWorkLifecycle {
                 .ok()
             })
         });
-        let state = match record.status {
-            WorkflowRunStatus::Running => OwnerState::Running,
-            // Degraded still finished and produced output; the run record and
-            // report carry the dropped-slot truth.
-            WorkflowRunStatus::Completed | WorkflowRunStatus::Degraded => OwnerState::Completed,
-            WorkflowRunStatus::Failed => OwnerState::Failed,
-            WorkflowRunStatus::Cancelled => OwnerState::Cancelled,
-        };
+        let state = owner_state_for_run_status(record.status);
         let mut snapshot = OperationOwnerSnapshot::new(
             self.external.clone(),
             state,
@@ -232,6 +226,21 @@ impl WorkflowWorkLifecycle {
                 checked_at: i64::try_from(now_ms()).unwrap_or(i64::MAX),
             },
         );
+    }
+}
+
+/// Owner-snapshot projection of a workflow run status. Total and lossless
+/// for terminal truth: Degraded stays Degraded — collapsing it into
+/// Completed let dashboards and automation read a partial workflow as an
+/// ordinary success (#5582). The run record and report keep the per-slot
+/// detail either way.
+fn owner_state_for_run_status(status: WorkflowRunStatus) -> OwnerState {
+    match status {
+        WorkflowRunStatus::Running => OwnerState::Running,
+        WorkflowRunStatus::Completed => OwnerState::Completed,
+        WorkflowRunStatus::Degraded => OwnerState::Degraded,
+        WorkflowRunStatus::Failed => OwnerState::Failed,
+        WorkflowRunStatus::Cancelled => OwnerState::Cancelled,
     }
 }
 
@@ -281,6 +290,10 @@ struct WorkflowRunSummary {
     token_budget: Option<u64>,
     child_count: usize,
     schema_error_count: usize,
+    /// Failed `responseSchema` decodes a bounded repair followed (#5583),
+    /// including succeeded ones.
+    #[serde(default)]
+    schema_repair_count: u64,
     dispatch_failure_count: u64,
     progress_count: u64,
     last_progress: Option<String>,
@@ -304,6 +317,52 @@ struct WorkflowRunSummary {
 struct WorkflowSchemaError {
     task_id: String,
     message: String,
+    /// Which decode stage failed (#5583): `json_parse` or
+    /// `schema_validation`. Journals written before the split existed
+    /// default to the validation bucket — the common failure shape.
+    #[serde(default = "legacy_schema_failure_kind")]
+    kind: String,
+    /// 1-based attempt that failed terminally (1 = no repair was tried).
+    #[serde(default = "legacy_schema_failure_attempt")]
+    attempt: u32,
+    /// Bounded preview of the raw reply; the full text lives in `artifact`
+    /// when one was written.
+    #[serde(default)]
+    raw_preview: String,
+    /// True when the carried raw text was capped at the carry limit.
+    #[serde(default)]
+    raw_truncated: bool,
+    /// Path of the durable raw-output artifact, when the reply exceeded the
+    /// preview bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    artifact: Option<String>,
+}
+
+/// One failed `responseSchema` decode that a bounded repair followed
+/// (#5583). Recorded even when the repair succeeds, so a repaired run shows
+/// exactly what was repaired and why.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorkflowSchemaRepairAttempt {
+    task_id: String,
+    #[serde(default = "legacy_schema_failure_kind")]
+    kind: String,
+    /// 1-based number of the attempt that failed.
+    attempt: u32,
+    message: String,
+    #[serde(default)]
+    raw_preview: String,
+    #[serde(default)]
+    raw_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    artifact: Option<String>,
+}
+
+fn legacy_schema_failure_kind() -> String {
+    "schema_validation".to_string()
+}
+
+fn legacy_schema_failure_attempt() -> u32 {
+    1
 }
 
 /// One `task()` dispatch the driver rejected before any child agent existed.
@@ -427,93 +486,9 @@ enum WorkflowUiEventKind {
     },
 }
 
-/// Per-worker usage telemetry carried on `task_completed` events (#2974).
-///
-/// Tokens come from the worker ledger (`AgentRunUsage`); `tool_calls` is the
-/// worker's model/tool step count (`SubAgentResult::steps_taken`) and
-/// `result_ref` points at the durable child artifact (transcript handle) so
-/// consumers can fetch full output by reference instead of inline text.
-/// Field names mirror `AgentRunUsage` so #4039 can render Tokens/Tools
-/// columns without a remapping layer.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-struct WorkflowTaskUsage {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    output_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    total_tokens: Option<u64>,
-    /// Priced USD subtotal carried from the worker's immutable route audits,
-    /// in microdollars. Absence is unknown, never a zero-cost claim.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    cost_microusd: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    duration_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    result_ref: Option<String>,
-    /// Provenance of the token counts. This producer currently emits only
-    /// `provider_reported`; absent means unknown and must never render as zero
-    /// (#4039).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    token_source: Option<WorkflowTokenSource>,
-}
+mod usage;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum WorkflowTokenSource {
-    ProviderReported,
-}
-
-/// Run-wide usage totals reconciled from per-task telemetry, carried on
-/// `run_completed` events and the persisted run record (#2974).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-struct WorkflowRunUsage {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    output_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    total_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    cost_microusd: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<u64>,
-    /// Number of completed tasks that contributed telemetry.
-    #[serde(default)]
-    tasks_reported: u64,
-}
-
-impl WorkflowRunUsage {
-    fn from_task(usage: &WorkflowTaskUsage) -> Self {
-        Self {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            total_tokens: usage.total_tokens,
-            cost_microusd: usage.cost_microusd,
-            tool_calls: usage.tool_calls.map(u64::from),
-            tasks_reported: 1,
-        }
-    }
-
-    fn add_task(&mut self, usage: &WorkflowTaskUsage) {
-        self.input_tokens = sum_optional_usage(self.input_tokens, usage.input_tokens);
-        self.output_tokens = sum_optional_usage(self.output_tokens, usage.output_tokens);
-        self.total_tokens = sum_optional_usage(self.total_tokens, usage.total_tokens);
-        self.cost_microusd = sum_optional_usage(self.cost_microusd, usage.cost_microusd);
-        self.tool_calls = sum_optional_usage(self.tool_calls, usage.tool_calls.map(u64::from));
-        self.tasks_reported = self.tasks_reported.saturating_add(1);
-    }
-}
-
-fn sum_optional_usage(left: Option<u64>, right: Option<u64>) -> Option<u64> {
-    match (left, right) {
-        (Some(left), Some(right)) => Some(left.saturating_add(right)),
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        (None, None) => None,
-    }
-}
+use usage::{WorkflowRunUsage, WorkflowTaskUsage, WorkflowTokenSource, sum_optional_usage};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorkflowTaskStartedEvent {
@@ -610,6 +585,13 @@ struct WorkflowRunRecord {
     #[serde(default)]
     events: Vec<WorkflowUiEvent>,
     schema_errors: Vec<WorkflowSchemaError>,
+    /// Failed `responseSchema` decodes that a bounded repair followed
+    /// (#5583), including repairs that succeeded. Structured tail of a
+    /// monotonic `schema_repair_count`.
+    #[serde(default)]
+    schema_repairs: Vec<WorkflowSchemaRepairAttempt>,
+    #[serde(default)]
+    schema_repair_count: u64,
     /// Task dispatches the driver rejected before any child ran (#5035).
     /// This is the exact, saturating total; `dispatch_failures` is only the
     /// newest structured tail.
@@ -669,6 +651,8 @@ impl WorkflowRunRecord {
             progress: Vec::new(),
             events: Vec::new(),
             schema_errors: Vec::new(),
+            schema_repairs: Vec::new(),
+            schema_repair_count: 0,
             dispatch_failure_count: 0,
             dispatch_failures: Vec::new(),
             result: None,
@@ -757,6 +741,7 @@ impl WorkflowRunRecord {
             token_budget: self.token_budget,
             child_count: self.child_ids.len(),
             schema_error_count: self.schema_errors.len(),
+            schema_repair_count: self.schema_repairs.len() as u64,
             dispatch_failure_count: self.dispatch_failure_count,
             progress_count: self.progress_count,
             last_progress: self.progress.last().cloned(),
@@ -1183,6 +1168,7 @@ async fn start_workflow(
         token_budget,
         fleet,
         gate_specs,
+        context.workspace.clone(),
     );
     let vm_cancel = WorkflowRunCancel::new();
     let controller = Arc::new(WorkflowRunController::new(
@@ -1905,121 +1891,9 @@ async fn run_workflow_vm(
     }
 }
 
-/// Persist a durable per-run report under `.codewhale/reports/<run_id>.md`
-/// so a settled background run leaves one synthesized artifact even after
-/// the session ends. Best-effort: report IO never affects the run outcome.
-fn write_run_report_artifact(workspace: &Path, record: &WorkflowRunRecord) {
-    if !matches!(
-        record.status,
-        WorkflowRunStatus::Completed
-            | WorkflowRunStatus::Degraded
-            | WorkflowRunStatus::Failed
-            | WorkflowRunStatus::Cancelled
-    ) {
-        return;
-    }
-    // Run ids are generated slugs, but never trust one as a path segment.
-    let safe_id: String = record
-        .run_id
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
-        .collect();
-    if safe_id.is_empty() {
-        return;
-    }
-    let dir = workspace.join(".codewhale").join("reports");
-    if let Err(err) = std::fs::create_dir_all(&dir) {
-        crate::logging::warn(format!(
-            "workflow report dir {} not created: {err}",
-            dir.display()
-        ));
-        return;
-    }
-    let path = dir.join(format!("{safe_id}.md"));
-    if let Err(err) = std::fs::write(&path, render_run_report(record)) {
-        crate::logging::warn(format!(
-            "workflow report {} not written: {err}",
-            path.display()
-        ));
-    }
-}
+mod report;
 
-fn render_run_report(record: &WorkflowRunRecord) -> String {
-    let mut out = String::new();
-    out.push_str(&format!("# Workflow run {}\n\n", record.run_id));
-    out.push_str(&format!("- status: {:?}\n", record.status));
-    if let Some(goal) = record.workflow_goal.as_deref() {
-        out.push_str(&format!("- goal: {goal}\n"));
-    }
-    if let Some(source) = record.source_path.as_deref() {
-        out.push_str(&format!("- source: {}\n", source.display()));
-    }
-    out.push_str(&format!("- started_at_ms: {}\n", record.started_at_ms));
-    if let Some(completed) = record.completed_at_ms {
-        out.push_str(&format!("- completed_at_ms: {completed}\n"));
-    }
-    if let Some(budget) = record.token_budget {
-        out.push_str(&format!("- token_budget: {budget}\n"));
-    }
-    out.push_str(&format!("- child_agents: {}\n", record.child_ids.len()));
-    if let Some(error) = record.error.as_deref() {
-        out.push_str(&format!("- error: {error}\n"));
-    }
-    if record.dispatch_failure_count > 0 {
-        out.push_str(&format!(
-            "\n## Dispatch failures ({})\n\n",
-            record.dispatch_failure_count
-        ));
-        let omitted = record
-            .dispatch_failure_count
-            .saturating_sub(u64::try_from(record.dispatch_failures.len()).unwrap_or(u64::MAX));
-        if omitted > 0 {
-            out.push_str(&format!(
-                "- {omitted} older failure receipt(s) omitted from this bounded report; see the workflow journal\n"
-            ));
-        }
-        for failure in &record.dispatch_failures {
-            let slot = failure
-                .label
-                .as_deref()
-                .or(failure.phase.as_deref())
-                .unwrap_or("task");
-            out.push_str(&format!("- {slot}: {}\n", failure.message));
-        }
-    }
-    if !record.gate_status.is_empty() {
-        out.push_str("\n## Gates\n\n");
-        for line in &record.gate_status {
-            out.push_str(&format!("- {line:?}\n"));
-        }
-    }
-    if !record.progress.is_empty() {
-        out.push_str("\n## Progress\n\n");
-        for line in &record.progress {
-            out.push_str(&format!("- {line}\n"));
-        }
-    }
-    if !record.schema_errors.is_empty() {
-        out.push_str(&format!(
-            "\n## Schema errors ({})\n\n",
-            record.schema_errors.len()
-        ));
-    }
-    if let Some(result) = record.result.as_ref() {
-        out.push_str("\n## Result\n\n```json\n");
-        out.push_str(&serde_json::to_string_pretty(result).unwrap_or_else(|_| result.to_string()));
-        out.push_str("\n```\n");
-    }
-    if let Some(verification) = record.verification.as_ref() {
-        out.push_str("\n## Verification\n\n```json\n");
-        out.push_str(
-            &serde_json::to_string_pretty(verification)
-                .unwrap_or_else(|_| verification.to_string()),
-        );
-        out.push_str("\n```\n");
-    }
-    out
-}
+use report::{bounded_raw_preview, write_run_report_artifact, write_schema_raw_artifact};
 
 fn session_workflow_config_store()
 -> &'static Mutex<HashMap<PathBuf, codewhale_config::WorkflowConfigToml>> {
@@ -2097,6 +1971,7 @@ fn workflow_result_for(
         "terminal": summary.status != WorkflowRunStatus::Running,
         "child_count": summary.child_count,
         "schema_error_count": summary.schema_error_count,
+        "schema_repair_count": summary.schema_repair_count,
         "dispatch_failure_count": summary.dispatch_failure_count,
         "event_count": summary.event_count,
         "events_returned": bounds.events_returned,
@@ -3414,6 +3289,9 @@ struct SubAgentWorkflowDriver {
     /// fleet this holds the immutable snapshot every task launch reads from,
     /// which is why editing `fleets/<name>.toml` mid-run cannot move a route.
     fleet: WorkflowFleetBinding,
+    /// Workspace root, for durable `responseSchema` raw-output artifacts
+    /// written beside the run report (#5583).
+    workspace: PathBuf,
 }
 
 impl SubAgentWorkflowDriver {
@@ -3427,6 +3305,7 @@ impl SubAgentWorkflowDriver {
         total_budget: Option<u64>,
         fleet: WorkflowFleetBinding,
         gate_specs: Vec<GateSpec>,
+        workspace: PathBuf,
     ) -> Arc<Self> {
         let fleet_name = fleet.name();
         let (completion_tx, completion_rx) = mpsc::unbounded_channel();
@@ -3452,6 +3331,7 @@ impl SubAgentWorkflowDriver {
             spawn_permits: Mutex::new(HashMap::new()),
             fleet_name,
             fleet,
+            workspace,
         });
         spawn_completion_pump(driver.clone(), completion_rx);
         driver
@@ -3970,6 +3850,26 @@ impl SubAgentWorkflowDriver {
         }
     }
 
+    /// Bounded preview + durable artifact for a failed `responseSchema`
+    /// attempt's raw reply (#5583). The record keeps a preview; the full
+    /// text goes to a `.txt` artifact beside the run report when it is
+    /// larger than the preview, so the journal stays small while the
+    /// evidence stays durable.
+    fn schema_raw_receipt(
+        &self,
+        task_id: &str,
+        attempt: u32,
+        raw: &str,
+    ) -> (String, Option<String>) {
+        let preview = bounded_raw_preview(raw);
+        let artifact = if raw.chars().count() > SCHEMA_RAW_PREVIEW_CHARS {
+            write_schema_raw_artifact(&self.workspace, &self.run_id, task_id, attempt, raw)
+        } else {
+            None
+        };
+        (preview, artifact)
+    }
+
     fn task_records_snapshot(&self) -> Vec<RuntimeTaskRecord> {
         self.task_records
             .lock()
@@ -4228,6 +4128,7 @@ impl WorkflowDriver for SubAgentWorkflowDriver {
 
     fn progress(&self, event: ProgressEvent) {
         let mut schema_error = None;
+        let mut schema_repair = None;
         let (message, ui_event) = match event {
             // Pre-spawn rejections share the dispatch-failure ledger so the
             // completion classifier sees every requested slot, whether the VM
@@ -4256,17 +4157,66 @@ impl WorkflowDriver for SubAgentWorkflowDriver {
                     ),
                 )
             }
-            ProgressEvent::TaskSchemaValidationFailed { task_id, message } => {
+            ProgressEvent::TaskSchemaValidationFailed {
+                task_id,
+                kind,
+                attempt,
+                message,
+                raw,
+                raw_truncated,
+            } => {
                 self.record_schema_validation_failure(&task_id, message.clone());
+                let (raw_preview, artifact) = self.schema_raw_receipt(&task_id, attempt, &raw);
                 schema_error = Some(WorkflowSchemaError {
                     task_id: task_id.clone(),
                     message: message.clone(),
+                    kind,
+                    attempt,
+                    raw_preview,
+                    raw_truncated,
+                    artifact,
                 });
                 (
-                    format!("schema validation failed for {task_id}: {message}"),
+                    format!(
+                        "schema validation failed for {task_id} (attempt {attempt}): {message}"
+                    ),
                     WorkflowUiEvent::new(
                         &self.owner_session_id,
                         WorkflowUiEventKind::TaskSchemaValidationFailed { task_id, message },
+                    ),
+                )
+            }
+            // #5583: a failed decode with a repair still to come. Receipted
+            // on the schema-repair ledger (visible even when the repair
+            // succeeds); the live surfaces see it as a progress line so
+            // operators know a bounded re-ask is happening.
+            ProgressEvent::TaskSchemaRepairAttempted {
+                task_id,
+                kind,
+                attempt,
+                message,
+                raw,
+                raw_truncated,
+            } => {
+                let (raw_preview, artifact) = self.schema_raw_receipt(&task_id, attempt, &raw);
+                schema_repair = Some(WorkflowSchemaRepairAttempt {
+                    task_id: task_id.clone(),
+                    kind,
+                    attempt,
+                    message: message.clone(),
+                    raw_preview,
+                    raw_truncated,
+                    artifact,
+                });
+                let note = format!(
+                    "schema decode failed for {task_id} (attempt {attempt}): {message}; \
+                     dispatching a bounded repair"
+                );
+                (
+                    format!("log: {note}"),
+                    WorkflowUiEvent::new(
+                        &self.owner_session_id,
+                        WorkflowUiEventKind::Log { message: note },
                     ),
                 )
             }
@@ -4278,6 +4228,10 @@ impl WorkflowDriver for SubAgentWorkflowDriver {
             record.push_event(ui_event.clone());
             if let Some(schema_error) = schema_error {
                 record.schema_errors.push(schema_error);
+            }
+            if let Some(schema_repair) = schema_repair {
+                record.schema_repair_count = record.schema_repair_count.saturating_add(1);
+                record.schema_repairs.push(schema_repair);
             }
         }
         self.state.record_progress(&self.run_id, &message);
@@ -4790,824 +4744,7 @@ fn now_ms() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-mod journal {
-    use super::{
-        SharedWorkflowControllers, SharedWorkflowLifecycles, SharedWorkflowRuns,
-        WorkflowDispatchFailure, WorkflowRunRecord, WorkflowRunStatus, WorkflowUiEvent,
-        WorkflowUiEventKind, WorkflowWorkLifecycle,
-    };
-    use serde::{Deserialize, Serialize};
-    use std::collections::HashMap;
-    use std::fs::OpenOptions;
-    use std::io::{BufRead, Write};
-    use std::path::{Path, PathBuf};
-    use std::sync::{Arc, Mutex, OnceLock};
-    use tracing::warn;
-
-    pub(super) const CODEWHALE_DIR: &str = ".codewhale";
-    pub(super) const WORKFLOW_RUNS_FILE: &str = "workflow-runs.jsonl";
-
-    /// Per-workspace workflow state shared across tool-registry rebuilds.
-    pub(super) struct WorkflowWorkspaceState {
-        pub runs: SharedWorkflowRuns,
-        pub controllers: SharedWorkflowControllers,
-        lifecycles: SharedWorkflowLifecycles,
-        journal: WorkflowRunJournal,
-    }
-
-    impl WorkflowWorkspaceState {
-        pub fn open(workspace: &Path) -> Arc<Self> {
-            Self::open_inner(workspace, true)
-        }
-
-        /// Hydrate the journal without rewriting leftover `running` rows to
-        /// `failed`. Host cancel uses this after a restart so a controller-less
-        /// run can still be marked cancelled instead of looking like a crash.
-        pub fn open_preserving_running(workspace: &Path) -> Arc<Self> {
-            Self::open_inner(workspace, false)
-        }
-
-        fn open_inner(workspace: &Path, recover_orphans: bool) -> Arc<Self> {
-            let journal = WorkflowRunJournal::open(workspace);
-            let runs = Arc::new(Mutex::new(journal.hydrate_runs(recover_orphans)));
-            Arc::new(Self {
-                runs,
-                controllers: Arc::new(Mutex::new(HashMap::new())),
-                lifecycles: Arc::new(Mutex::new(HashMap::new())),
-                journal,
-            })
-        }
-
-        pub fn attach_lifecycle(&self, run_id: &str, lifecycle: WorkflowWorkLifecycle) {
-            self.lifecycles
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .entry(run_id.to_string())
-                .or_insert(lifecycle);
-        }
-
-        pub fn reconcile_snapshot(&self, record: &WorkflowRunRecord) {
-            let lifecycle = self
-                .lifecycles
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .get(&record.run_id)
-                .cloned();
-            if let Some(lifecycle) = lifecycle
-                && let Err(err) = lifecycle.reconcile_record(record)
-            {
-                warn!(
-                    run_id = record.run_id,
-                    "workflow Work reconciliation failed: {err}"
-                );
-            }
-        }
-
-        pub fn reconcile_cancel(&self, run_id: &str, outcome: super::CancelOutcome) {
-            let lifecycle = self
-                .lifecycles
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .get(run_id)
-                .cloned();
-            if let Some(lifecycle) = lifecycle
-                && let Err(err) = lifecycle.reconcile_cancel(outcome)
-            {
-                warn!(run_id, "workflow cancellation reconciliation failed: {err}");
-            }
-        }
-
-        pub fn mark_owner_missing(&self, run_id: &str) {
-            let lifecycle = self
-                .lifecycles
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .get(run_id)
-                .cloned();
-            if let Some(lifecycle) = lifecycle {
-                lifecycle.reconcile_missing();
-            }
-        }
-
-        pub fn try_record_snapshot(&self, record: &WorkflowRunRecord) -> Result<(), String> {
-            self.journal
-                .append_snapshot(record)
-                .map_err(|err| err.to_string())
-        }
-
-        pub fn record_snapshot(&self, record: &WorkflowRunRecord) {
-            if let Err(err) = self.try_record_snapshot(record) {
-                warn!("workflow journal snapshot failed: {err}");
-            }
-        }
-
-        pub fn record_progress(&self, run_id: &str, message: &str) {
-            if let Err(err) = self.journal.append_progress(run_id, message) {
-                warn!("workflow journal progress failed: {err}");
-            }
-        }
-
-        pub fn record_event(&self, run_id: &str, event: &WorkflowUiEvent) {
-            if let Err(err) = self.journal.append_event(run_id, event) {
-                warn!("workflow journal event failed: {err}");
-            }
-        }
-
-        /// Durable journal location for full-fidelity run detail (#2974).
-        pub fn journal_path(&self) -> &Path {
-            &self.journal.ledger_path
-        }
-    }
-
-    fn workspace_store() -> &'static Mutex<HashMap<PathBuf, Arc<WorkflowWorkspaceState>>> {
-        static STORE: OnceLock<Mutex<HashMap<PathBuf, Arc<WorkflowWorkspaceState>>>> =
-            OnceLock::new();
-        STORE.get_or_init(|| Mutex::new(HashMap::new()))
-    }
-
-    pub(super) fn shared_workflow_state(workspace: &Path) -> Arc<WorkflowWorkspaceState> {
-        let key = workspace
-            .canonicalize()
-            .unwrap_or_else(|_| workspace.to_path_buf());
-        let mut store = workspace_store()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        store
-            .entry(key)
-            .or_insert_with(|| WorkflowWorkspaceState::open(workspace))
-            .clone()
-    }
-
-    /// Read-only lookup that never creates workspace state, a journal
-    /// directory, or a ledger file. Used by the human-only `/structcopy`
-    /// command (#2033), which must stay side-effect free.
-    pub(super) fn peek_shared_workflow_state(
-        workspace: &Path,
-    ) -> Option<Arc<WorkflowWorkspaceState>> {
-        let key = workspace
-            .canonicalize()
-            .unwrap_or_else(|_| workspace.to_path_buf());
-        workspace_store()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .get(&key)
-            .cloned()
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    #[serde(tag = "kind", rename_all = "snake_case")]
-    enum WorkflowJournalRecord {
-        // Boxed: a full run record dwarfs the progress variant
-        // (clippy::large_enum_variant).
-        Snapshot {
-            run: Box<WorkflowRunRecord>,
-        },
-        Progress {
-            run_id: String,
-            message: String,
-        },
-        Event {
-            run_id: String,
-            event: Box<WorkflowUiEvent>,
-        },
-    }
-
-    #[derive(Debug)]
-    struct WorkflowRunJournal {
-        ledger_path: PathBuf,
-    }
-
-    impl WorkflowRunJournal {
-        fn open(workspace: &Path) -> Self {
-            let dir = workspace.join(CODEWHALE_DIR);
-            if let Err(err) = std::fs::create_dir_all(&dir) {
-                warn!(
-                    "workflow journal dir create failed ({}): {err}",
-                    dir.display()
-                );
-            }
-            let ledger_path = dir.join(WORKFLOW_RUNS_FILE);
-            if !ledger_path.exists()
-                && let Err(err) = std::fs::write(&ledger_path, "")
-            {
-                warn!(
-                    "workflow journal create failed ({}): {err}",
-                    ledger_path.display()
-                );
-            }
-            Self { ledger_path }
-        }
-
-        fn hydrate_runs(&self, recover_orphans: bool) -> HashMap<String, WorkflowRunRecord> {
-            let file = match std::fs::File::open(&self.ledger_path) {
-                Ok(file) => file,
-                Err(_) => return HashMap::new(),
-            };
-            let mut runs = HashMap::new();
-            for line in std::io::BufReader::new(file).lines() {
-                let Ok(line) = line else { continue };
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let record = match serde_json::from_str::<WorkflowJournalRecord>(trimmed) {
-                    Ok(record) => record,
-                    Err(err) => {
-                        warn!("workflow journal skipped malformed line: {err}");
-                        continue;
-                    }
-                };
-                match record {
-                    WorkflowJournalRecord::Snapshot { run } => {
-                        let mut run = *run;
-                        run.normalize_bounded_ledgers();
-                        runs.insert(run.run_id.clone(), run);
-                    }
-                    WorkflowJournalRecord::Progress { run_id, message } => {
-                        if let Some(run) = runs.get_mut(&run_id) {
-                            run.push_progress(message);
-                        }
-                    }
-                    WorkflowJournalRecord::Event { run_id, event } => {
-                        if let Some(run) = runs.get_mut(&run_id) {
-                            let event = *event;
-                            if let WorkflowUiEventKind::TaskDispatchFailed {
-                                label,
-                                phase,
-                                message,
-                            } = &event.kind
-                            {
-                                run.push_dispatch_failure(WorkflowDispatchFailure {
-                                    at_ms: event.at_ms,
-                                    label: label.clone(),
-                                    phase: phase.clone(),
-                                    message: message.clone(),
-                                });
-                            }
-                            run.push_event(event);
-                        }
-                    }
-                }
-            }
-            // Journals written before #2974 have no counters; rebuild them
-            // from the retained tail so summaries stay truthful.
-            for run in runs.values_mut() {
-                run.normalize_bounded_ledgers();
-                run.events_total = run.events_total.max(run.events.len() as u64);
-            }
-            // A run journaled as Running belongs to a process that is gone;
-            // without this it would show as live forever after a restart.
-            // Host cancel skips this rewrite so it can still mark the line
-            // cancelled with an honest "nothing live to stop" receipt.
-            if recover_orphans {
-                let mut recovered = Vec::new();
-                for run in runs.values_mut() {
-                    if run.status == WorkflowRunStatus::Running {
-                        run.status = WorkflowRunStatus::Failed;
-                        run.lifecycle_seq = run.lifecycle_seq.saturating_add(1);
-                        run.completed_at_ms.get_or_insert_with(super::now_ms);
-                        run.error = Some(
-                            "process exited before the run completed (recovered on startup)"
-                                .to_string(),
-                        );
-                        recovered.push(run.clone());
-                    }
-                }
-                // The recovery decision is owner truth, not a presentation-only
-                // repair. Append it so another restart replays the same terminal
-                // sequence instead of rediscovering and incrementing it again.
-                for run in recovered {
-                    if let Err(err) = self.append_snapshot(&run) {
-                        warn!(
-                            run_id = run.run_id,
-                            "workflow recovery snapshot append failed: {err}"
-                        );
-                    }
-                }
-            }
-            runs
-        }
-
-        fn append_record(&self, record: &WorkflowJournalRecord) -> std::io::Result<()> {
-            let mut line = serde_json::to_string(record)
-                .map_err(|err| std::io::Error::other(err.to_string()))?;
-            line.push('\n');
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.ledger_path)?;
-            file.write_all(line.as_bytes())?;
-            file.flush()?;
-            Ok(())
-        }
-
-        fn append_snapshot(&self, record: &WorkflowRunRecord) -> std::io::Result<()> {
-            self.append_record(&WorkflowJournalRecord::Snapshot {
-                run: Box::new(record.clone()),
-            })
-        }
-
-        fn append_progress(&self, run_id: &str, message: &str) -> std::io::Result<()> {
-            self.append_record(&WorkflowJournalRecord::Progress {
-                run_id: run_id.to_string(),
-                message: message.to_string(),
-            })
-        }
-
-        fn append_event(&self, run_id: &str, event: &WorkflowUiEvent) -> std::io::Result<()> {
-            self.append_record(&WorkflowJournalRecord::Event {
-                run_id: run_id.to_string(),
-                event: Box::new(event.clone()),
-            })
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::super::{WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED, WorkflowUiEventKind};
-        use super::*;
-
-        fn sample_record(run_id: &str, status: WorkflowRunStatus) -> WorkflowRunRecord {
-            WorkflowRunRecord {
-                run_id: run_id.to_string(),
-                owner_session_id: Some("session-journal".to_string()),
-                status,
-                lifecycle_seq: 1,
-                started_at_ms: 1,
-                completed_at_ms: None,
-                source_path: None,
-                workflow_id: Some("fixture".to_string()),
-                workflow_goal: Some("journal test".to_string()),
-                token_budget: None,
-                child_ids: Vec::new(),
-                progress_count: 0,
-                progress: Vec::new(),
-                events: Vec::new(),
-                schema_errors: Vec::new(),
-                dispatch_failure_count: 0,
-                dispatch_failures: Vec::new(),
-                result: None,
-                execution: None,
-                error: None,
-                verify_on_complete: false,
-                verification: None,
-                plan_approval: None,
-                gate_status: Vec::new(),
-                usage: None,
-                events_total: 0,
-                events_dropped: 0,
-            }
-        }
-
-        #[test]
-        fn workflow_journal_hydrates_snapshots_and_progress() {
-            let tmp = tempfile::tempdir().expect("tempdir");
-            let state = WorkflowWorkspaceState::open(tmp.path());
-            let running = sample_record("workflow_abc", WorkflowRunStatus::Running);
-            state.record_snapshot(&running);
-            state.record_progress("workflow_abc", "phase: scan");
-            state.record_event(
-                "workflow_abc",
-                &WorkflowUiEvent::at(
-                    5,
-                    "session-journal",
-                    WorkflowUiEventKind::PhaseStarted {
-                        title: "scan".to_string(),
-                    },
-                ),
-            );
-
-            let completed = WorkflowRunRecord {
-                status: WorkflowRunStatus::Completed,
-                completed_at_ms: Some(99),
-                progress: vec!["phase: scan".to_string()],
-                events: vec![WorkflowUiEvent::at(
-                    5,
-                    "session-journal",
-                    WorkflowUiEventKind::PhaseStarted {
-                        title: "scan".to_string(),
-                    },
-                )],
-                ..sample_record("workflow_abc", WorkflowRunStatus::Completed)
-            };
-            state.record_snapshot(&completed);
-            state.record_event(
-                "workflow_abc",
-                &WorkflowUiEvent::at(
-                    6,
-                    "session-journal",
-                    WorkflowUiEventKind::HandoffPromoted {
-                        artifact_id: "workflow_abc:scout-1:scout-gate:findings".to_string(),
-                        gate_id: "scout-gate".to_string(),
-                        kind: "findings".to_string(),
-                        from_role: "scout".to_string(),
-                        to_role: "implementer".to_string(),
-                        producer_task_id: "scout-1".to_string(),
-                    },
-                ),
-            );
-            state.record_event(
-                "workflow_abc",
-                &WorkflowUiEvent::at(
-                    7,
-                    "session-journal",
-                    WorkflowUiEventKind::HandoffConsumed {
-                        artifact_id: "workflow_abc:scout-1:scout-gate:findings".to_string(),
-                        kind: "findings".to_string(),
-                        from_role: "scout".to_string(),
-                        to_role: "implementer".to_string(),
-                        consumer_task_id: "implementer-1".to_string(),
-                    },
-                ),
-            );
-
-            let reloaded = WorkflowWorkspaceState::open(tmp.path());
-            let runs = reloaded
-                .runs
-                .lock()
-                .expect("runs lock")
-                .get("workflow_abc")
-                .cloned()
-                .expect("hydrated run");
-            assert_eq!(runs.status, WorkflowRunStatus::Completed);
-            assert_eq!(runs.progress, vec!["phase: scan"]);
-            assert_eq!(runs.events.len(), 3);
-            assert_eq!(runs.events[0].event_type(), "phase_started");
-            let promoted = serde_json::to_value(&runs.events[1]).expect("promoted receipt");
-            assert_eq!(promoted["type"], "handoff_promoted");
-            assert_eq!(
-                promoted["artifact_id"],
-                "workflow_abc:scout-1:scout-gate:findings"
-            );
-            assert_eq!(promoted["gate_id"], "scout-gate");
-            assert_eq!(promoted["producer_task_id"], "scout-1");
-            assert!(promoted.get("payload").is_none(), "{promoted}");
-            let consumed = serde_json::to_value(&runs.events[2]).expect("consumed receipt");
-            assert_eq!(consumed["type"], "handoff_consumed");
-            assert_eq!(consumed["artifact_id"], promoted["artifact_id"]);
-            assert_eq!(consumed["consumer_task_id"], "implementer-1");
-            assert!(consumed.get("payload").is_none(), "{consumed}");
-            assert_eq!(runs.completed_at_ms, Some(99));
-
-            // The event-line replay above must also survive compaction into a
-            // final Snapshot record containing both handoff variants.
-            reloaded.record_snapshot(&runs);
-            let reopened = WorkflowWorkspaceState::open(tmp.path());
-            let compacted = reopened
-                .runs
-                .lock()
-                .expect("runs lock")
-                .get("workflow_abc")
-                .cloned()
-                .expect("snapshot with handoff receipts");
-            assert_eq!(
-                compacted
-                    .events
-                    .iter()
-                    .map(WorkflowUiEvent::event_type)
-                    .collect::<Vec<_>>(),
-                vec!["phase_started", "handoff_promoted", "handoff_consumed"]
-            );
-        }
-
-        #[test]
-        fn workflow_journal_rebuilds_a_bounded_exact_rejection_ledger() {
-            let tmp = tempfile::tempdir().expect("tempdir");
-            let state = WorkflowWorkspaceState::open(tmp.path());
-            state.record_snapshot(&sample_record(
-                "workflow_rejections",
-                WorkflowRunStatus::Running,
-            ));
-            let total = WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED + 5;
-            for index in 0..total {
-                let message = format!("invalid task options {index}");
-                state.record_progress(
-                    "workflow_rejections",
-                    &format!("dispatch failed for rejected-{index}: {message}"),
-                );
-                state.record_event(
-                    "workflow_rejections",
-                    &WorkflowUiEvent::at(
-                        index as u64,
-                        "session-journal",
-                        WorkflowUiEventKind::TaskDispatchFailed {
-                            label: Some(format!("rejected-{index}")),
-                            phase: Some("fan-out".to_string()),
-                            message,
-                        },
-                    ),
-                );
-            }
-            drop(state);
-
-            let reloaded = WorkflowWorkspaceState::open(tmp.path());
-            let run = reloaded
-                .runs
-                .lock()
-                .expect("runs lock")
-                .get("workflow_rejections")
-                .cloned()
-                .expect("hydrated rejection run");
-            assert_eq!(run.progress_count, total as u64);
-            assert_eq!(run.progress.len(), total);
-            assert_eq!(run.dispatch_failure_count, total as u64);
-            assert_eq!(
-                run.dispatch_failures.len(),
-                WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED
-            );
-            assert_eq!(
-                run.dispatch_failures
-                    .first()
-                    .and_then(|failure| failure.label.as_deref()),
-                Some("rejected-5")
-            );
-            drop(reloaded);
-
-            // Restart recovery appends a compact snapshot. Replaying the
-            // journal again must not double-count its earlier event lines.
-            let reopened = WorkflowWorkspaceState::open(tmp.path());
-            let run = reopened
-                .runs
-                .lock()
-                .expect("runs lock")
-                .get("workflow_rejections")
-                .cloned()
-                .expect("rehydrated rejection run");
-            assert_eq!(run.dispatch_failure_count, total as u64);
-            assert_eq!(
-                run.dispatch_failures.len(),
-                WORKFLOW_RUN_DISPATCH_FAILURES_MAX_RETAINED
-            );
-        }
-
-        #[test]
-        fn workflow_journal_marks_orphaned_running_runs_failed() {
-            let tmp = tempfile::tempdir().expect("tempdir");
-            let state = WorkflowWorkspaceState::open(tmp.path());
-            state.record_snapshot(&sample_record(
-                "workflow_orphan",
-                WorkflowRunStatus::Running,
-            ));
-
-            let reloaded = WorkflowWorkspaceState::open(tmp.path());
-            let run = reloaded
-                .runs
-                .lock()
-                .expect("runs lock")
-                .get("workflow_orphan")
-                .cloned()
-                .expect("hydrated run");
-            assert_eq!(run.status, WorkflowRunStatus::Failed);
-            assert_eq!(
-                run.lifecycle_seq, 2,
-                "restart recovery is a durable owner lifecycle transition"
-            );
-            assert!(
-                run.completed_at_ms.is_some(),
-                "restart recovery must terminalize the durable owner record"
-            );
-            assert!(
-                run.error
-                    .as_deref()
-                    .is_some_and(|error| error.contains("process exited")),
-                "expected orphan recovery error, got {:?}",
-                run.error
-            );
-
-            let reopened = WorkflowWorkspaceState::open(tmp.path());
-            let replayed = reopened
-                .runs
-                .lock()
-                .expect("runs lock")
-                .get("workflow_orphan")
-                .cloned()
-                .expect("durably recovered run");
-            assert_eq!(replayed.status, WorkflowRunStatus::Failed);
-            assert_eq!(
-                replayed.lifecycle_seq, 2,
-                "reopening must replay the recovery snapshot without another transition"
-            );
-        }
-
-        #[test]
-        fn host_cancel_hydrates_a_journal_without_live_process_state() {
-            let tmp = tempfile::tempdir().expect("tempdir");
-            let state = WorkflowWorkspaceState::open(tmp.path());
-            let record = sample_record("workflow_prior", WorkflowRunStatus::Running);
-            state.record_snapshot(&record);
-            drop(state);
-
-            assert!(
-                peek_shared_workflow_state(tmp.path()).is_none(),
-                "writing the journal must not insert process-wide live state"
-            );
-
-            let line = super::super::host_cancel_workflow(
-                tmp.path(),
-                "workflow_prior",
-                Some("session-journal"),
-            )
-            .expect("a journaled run must be visible to host cancel after restart");
-            assert_eq!(line.run_id, "workflow_prior");
-            assert_eq!(line.status, "cancelled");
-            assert!(
-                line.error
-                    .as_deref()
-                    .is_some_and(|error| error.contains("no live process")),
-                "controller-less cancel must leave an honest receipt, got {:?}",
-                line.error
-            );
-
-            let reopened = WorkflowWorkspaceState::open(tmp.path());
-            let replayed = reopened
-                .runs
-                .lock()
-                .expect("runs lock")
-                .get("workflow_prior")
-                .cloned()
-                .expect("cancelled journal line");
-            assert_eq!(replayed.status, WorkflowRunStatus::Cancelled);
-        }
-
-        #[test]
-        fn host_stage_is_derived_from_typed_owner_events() {
-            let mut record = sample_record("workflow_stage", WorkflowRunStatus::Running);
-            record.push_event(WorkflowUiEvent::at(
-                1,
-                "session-journal",
-                WorkflowUiEventKind::RunStarted {
-                    workflow_id: Some("fixture".to_string()),
-                    workflow_goal: Some("review release".to_string()),
-                    source_path: None,
-                    token_budget: None,
-                },
-            ));
-            assert_eq!(super::super::host_workflow_stage(&record), "queued");
-
-            record.push_event(WorkflowUiEvent::at(
-                2,
-                "session-journal",
-                WorkflowUiEventKind::PhaseStarted {
-                    title: "review".to_string(),
-                },
-            ));
-            assert_eq!(super::super::host_workflow_stage(&record), "running");
-
-            record.push_event(WorkflowUiEvent::at(
-                3,
-                "session-journal",
-                WorkflowUiEventKind::TaskStarted(Box::new(
-                    super::super::WorkflowTaskStartedEvent {
-                        task_id: "reviewer-1".to_string(),
-                        label: Some("reviewer".to_string()),
-                        role: None,
-                        profile: None,
-                        model: None,
-                        strength: None,
-                        thinking: None,
-                        requested_reasoning: None,
-                        effective_reasoning: None,
-                        resolved_role: Some("reviewer".to_string()),
-                        resolved_profile: None,
-                        resolved_provider: "local".to_string(),
-                        resolved_model: "stub".to_string(),
-                        route_source: "session".to_string(),
-                        child_route: None,
-                        worktree: false,
-                        workspace: None,
-                        git_branch: None,
-                        parent_task_id: None,
-                        depth: 0,
-                        workflow_run_id: Some("workflow_stage".to_string()),
-                        workflow_phase_id: Some("review".to_string()),
-                        workflow_task_label: Some("reviewer".to_string()),
-                        workflow_child_index: Some(0),
-                        fleet_receipt: None,
-                    },
-                )),
-            ));
-            assert_eq!(super::super::host_workflow_stage(&record), "waiting");
-
-            record.push_event(WorkflowUiEvent::at(
-                4,
-                "session-journal",
-                WorkflowUiEventKind::TaskCompleted {
-                    task_id: "reviewer-1".to_string(),
-                    status: super::super::IrWorkflowRunStatus::Succeeded,
-                    usage: None,
-                },
-            ));
-            assert_eq!(super::super::host_workflow_stage(&record), "running");
-
-            record.status = WorkflowRunStatus::Completed;
-            assert_eq!(super::super::host_workflow_stage(&record), "completed");
-            record.status = WorkflowRunStatus::Failed;
-            assert_eq!(super::super::host_workflow_stage(&record), "failed");
-            record.status = WorkflowRunStatus::Cancelled;
-            assert_eq!(super::super::host_workflow_stage(&record), "cancelled");
-        }
-
-        #[test]
-        fn host_run_details_derive_phases_and_child_states_from_the_journal() {
-            let tmp = tempfile::tempdir().expect("tempdir");
-            let state = WorkflowWorkspaceState::open(tmp.path());
-            let mut record = sample_record("workflow_detail", WorkflowRunStatus::Running);
-            record.workflow_goal = Some("audit provider errors".to_string());
-            for message in ["phase: scan", "child slow-1 done", "child slow-2 failed"] {
-                record.push_progress(message.to_string());
-            }
-            state.record_snapshot(&record);
-            drop(state);
-
-            let phase: WorkflowUiEvent = serde_json::from_value(serde_json::json!({
-                "at_ms": 1,
-                "owner_session_id": "session-journal",
-                "type": "phase_started",
-                "title": "scan"
-            }))
-            .expect("phase_started event");
-            let started: WorkflowUiEvent = WorkflowUiEvent::at(
-                2,
-                "session-journal",
-                WorkflowUiEventKind::TaskStarted(Box::new(
-                    super::super::WorkflowTaskStartedEvent {
-                        task_id: "child-1".to_string(),
-                        label: Some("slow-1".to_string()),
-                        role: None,
-                        profile: None,
-                        model: None,
-                        strength: None,
-                        thinking: None,
-                        requested_reasoning: None,
-                        effective_reasoning: None,
-                        resolved_role: Some("explore".to_string()),
-                        resolved_profile: None,
-                        resolved_provider: "deepseek".to_string(),
-                        resolved_model: "deepseek-v4-flash".to_string(),
-                        route_source: "session".to_string(),
-                        child_route: None,
-                        worktree: false,
-                        workspace: None,
-                        git_branch: None,
-                        parent_task_id: None,
-                        depth: 0,
-                        workflow_run_id: Some("workflow_detail".to_string()),
-                        workflow_phase_id: Some("scan".to_string()),
-                        workflow_task_label: None,
-                        workflow_child_index: Some(0),
-                        fleet_receipt: None,
-                    },
-                )),
-            );
-            let completed: WorkflowUiEvent = serde_json::from_value(serde_json::json!({
-                "at_ms": 3,
-                "owner_session_id": "session-journal",
-                "type": "task_completed",
-                "task_id": "child-1",
-                "status": "failed"
-            }))
-            .expect("task_completed event");
-            let replay = WorkflowWorkspaceState::open(tmp.path());
-            replay.record_event("workflow_detail", &phase);
-            replay.record_event("workflow_detail", &started);
-            replay.record_event("workflow_detail", &completed);
-            drop(replay);
-
-            let details =
-                super::super::host_workflow_run_details(tmp.path(), Some("session-journal"));
-            assert_eq!(details.len(), 1, "one journaled run");
-            let detail = &details[0];
-            assert_eq!(detail.line.run_id, "workflow_detail");
-            // Journal-only `running` rows hydrate through restart-orphan
-            // recovery (the same rewrite `WorkflowWorkspaceState::open`
-            // applies), so the host projection reports the run as failed —
-            // live in-process runs keep `running` via the shared state.
-            assert_eq!(detail.line.status, "failed");
-            assert_eq!(detail.line.label, "audit provider errors");
-            assert_eq!(detail.phases, vec!["scan".to_string()]);
-            assert_eq!(detail.children.len(), 1);
-            let child = &detail.children[0];
-            assert_eq!(child.task_id, "child-1");
-            assert_eq!(child.label.as_deref(), Some("slow-1"));
-            assert_eq!(child.role.as_deref(), Some("explore"));
-            assert_eq!(child.model.as_deref(), Some("deepseek-v4-flash"));
-            assert_eq!(child.phase.as_deref(), Some("scan"));
-            assert_eq!(
-                child.state, "failed",
-                "terminal event must win over running"
-            );
-            assert_eq!(detail.progress_tail.len(), 3);
-            assert!(!detail.has_result);
-
-            // Session ownership fences the projection: a foreign session
-            // sees nothing, exactly like every other host control.
-            assert!(
-                super::super::host_workflow_run_details(tmp.path(), Some("session-other"))
-                    .is_empty()
-            );
-        }
-    }
-}
+mod journal;
 
 use journal::{WorkflowWorkspaceState, peek_shared_workflow_state, shared_workflow_state};
 
@@ -6466,6 +5603,7 @@ mod tests {
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: Some("fix".to_string()),
             phase: Some("implement".to_string()),
         };
@@ -6527,6 +5665,7 @@ permissions = "read_only"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: None,
             phase: None,
         }
@@ -6747,6 +5886,7 @@ permissions = "read_only"
             None,
             WorkflowFleetBinding::None,
             gates,
+            tmp.path().to_path_buf(),
         );
 
         // The upstream scout fails, which puts the gate into a blocking state.
@@ -6957,6 +6097,7 @@ permissions = "read_only"
             None,
             WorkflowFleetBinding::None,
             Vec::new(),
+            tmp.path().to_path_buf(),
         );
 
         let operation = exact_workflow(EXACT_GLM_FLEET);
@@ -7414,6 +6555,7 @@ permissions = "read_only"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: None,
             phase: None,
         };
@@ -9032,6 +8174,7 @@ reviewer = "reviewer"
             None,
             WorkflowFleetBinding::None,
             gates,
+            tmp.path().to_path_buf(),
         );
 
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
@@ -9067,6 +8210,7 @@ reviewer = "reviewer"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: Some("fix".to_string()),
             phase: None,
         };
@@ -9209,6 +8353,7 @@ reviewer = "reviewer"
             None,
             WorkflowFleetBinding::None,
             gates,
+            tmp.path().to_path_buf(),
         );
 
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
@@ -9244,6 +8389,7 @@ reviewer = "reviewer"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: Some("fix".to_string()),
             phase: None,
         };
@@ -9332,6 +8478,7 @@ reviewer = "reviewer"
             None,
             WorkflowFleetBinding::None,
             gates,
+            tmp.path().to_path_buf(),
         );
 
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
@@ -9367,6 +8514,7 @@ reviewer = "reviewer"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: Some("blocked".to_string()),
             phase: None,
         };
@@ -9464,6 +8612,7 @@ reviewer = "reviewer"
             None,
             WorkflowFleetBinding::None,
             gates,
+            tmp.path().to_path_buf(),
         );
         driver.gate_board.lock().expect("gate board").lane_id = "wrong-lane".to_string();
 
@@ -9500,6 +8649,7 @@ reviewer = "reviewer"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: Some("blocked".to_string()),
             phase: None,
         };
@@ -9786,6 +8936,7 @@ reviewer = "reviewer"
             None,
             WorkflowFleetBinding::None,
             gates,
+            tmp.path().to_path_buf(),
         );
 
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
@@ -9821,6 +8972,7 @@ reviewer = "reviewer"
             max_steps: None,
             wall_time_secs: None,
             response_schema: None,
+            schema_repair_attempts: None,
             label: Some("verify".to_string()),
             phase: None,
         };
@@ -10071,6 +9223,143 @@ reviewer = "reviewer"
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
+    async fn schema_failure_repairs_and_the_receipt_survives_journal_reload() {
+        let _retry_guard = workflow_test_retry_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+        // The #5583 report shape: attempt 1 wraps valid JSON in prose (a
+        // parse failure), the bounded repair answers with bare corrected
+        // JSON. Two model calls, no more — the fake server panics on extras.
+        let (client, calls) = fake_chat_client_responses(&[
+            "Sure — here it is:\n```json\n{\"refuted\": true}\n```\nDone!",
+            "{\"refuted\": true}",
+        ])
+        .await;
+        let runtime = SubAgentRuntime::new(
+            client,
+            "deepseek-v4-flash".to_string(),
+            ctx.clone(),
+            true,
+            None,
+            manager.clone(),
+        );
+        let tool = WorkflowTool::new(manager, runtime);
+
+        let run = tool
+            .execute(
+                json!({
+                    "action": "run",
+                    "script": r#"
+                    return await task({
+                        description: "Return the schema fixture.",
+                        responseSchema: {
+                            type: "object",
+                            properties: { refuted: { type: "boolean" } },
+                            required: ["refuted"],
+                        },
+                    });
+                    "#
+                }),
+                &ctx,
+            )
+            .await
+            .expect("workflow run returns a record");
+        let run_payload: Value = serde_json::from_str(&run.content).expect("run json");
+
+        assert_eq!(run_payload["status"], "completed", "{run_payload}");
+        assert_eq!(run_payload["result"]["refuted"], json!(true));
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "one repair re-ask");
+        assert_eq!(
+            run.metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("schema_repair_count"))
+                .and_then(Value::as_u64),
+            Some(1),
+            "the repair should be counted in the run metadata"
+        );
+        assert!(
+            run_payload["progress"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|message| message
+                    .as_str()
+                    .is_some_and(|message| message.contains("dispatching a bounded repair"))),
+            "the repair should be visible in the run receipt: {run_payload}"
+        );
+
+        // The durable receipt (kind, attempt, bounded raw preview) survives a
+        // journal reload — a restarted session still sees what was repaired.
+        let state = WorkflowWorkspaceState::open(tmp.path());
+        let record = state
+            .runs
+            .lock()
+            .expect("runs")
+            .get(run_payload["run_id"].as_str().expect("run id"))
+            .cloned()
+            .expect("record survives reload");
+        assert_eq!(record.schema_repairs.len(), 1);
+        let repair = &record.schema_repairs[0];
+        assert_eq!(repair.kind, "json_parse");
+        assert_eq!(repair.attempt, 1);
+        assert!(repair.raw_preview.contains("Sure — here it is"));
+        assert!(!repair.raw_truncated);
+        assert!(repair.artifact.is_none(), "a short reply needs no artifact");
+        assert!(
+            record.schema_errors.is_empty(),
+            "a successful repair leaves no terminal schema error"
+        );
+    }
+
+    #[test]
+    fn bounded_raw_preview_truncates_on_a_char_boundary() {
+        let short = "plain reply";
+        assert_eq!(bounded_raw_preview(short), short);
+        let long = "é".repeat(SCHEMA_RAW_PREVIEW_CHARS + 5);
+        let preview = bounded_raw_preview(&long);
+        assert!(preview.contains("preview truncated"));
+        let kept = preview.lines().next().expect("kept line");
+        assert_eq!(kept.chars().count(), SCHEMA_RAW_PREVIEW_CHARS);
+    }
+
+    #[test]
+    fn schema_raw_artifacts_land_beside_the_report_and_refuse_bad_ids() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = write_schema_raw_artifact(
+            tmp.path(),
+            "run-2049",
+            "agent_0007",
+            2,
+            "the full raw reply",
+        )
+        .expect("artifact path");
+        let written = std::fs::read_to_string(&path).expect("artifact written");
+        assert_eq!(written, "the full raw reply");
+        assert!(
+            path.ends_with("run-2049.schema.agent_0007.attempt2.txt"),
+            "{path}"
+        );
+        // The slug filter sanitizes hostile ids into safe file names rather
+        // than refusing: path traversal cannot survive it.
+        let sanitized = write_schema_raw_artifact(tmp.path(), "../../etc", "agent_0007", 1, "x")
+            .expect("sanitized path");
+        assert!(
+            sanitized.contains("etc.schema.agent_0007.attempt1.txt"),
+            "{sanitized}"
+        );
+        assert!(
+            !sanitized.contains(".."),
+            "no parent traversal may survive: {sanitized}"
+        );
+        assert!(
+            write_schema_raw_artifact(tmp.path(), "///", "agent_0007", 1, "x").is_none(),
+            "an id with no slug characters must refuse rather than write"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn declarative_issue_audit_fixture_runs_through_subagent_driver() {
         let _retry_guard = workflow_test_retry_guard();
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -10253,45 +9542,45 @@ SOURCE EVIDENCE
 - crates/cli/src/lib.rs: load_named_fleet
 - crates/workflow/src/role_resolve.rs: resolve_workflow_agent
 - crates/cli/src/lib.rs: start_lane
-- crates/tui/src/tools/workflow.rs: record_task_started
-- crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::GateUpdated
-- crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
+- crates/tui/src/tools/workflow/mod.rs: record_task_started
+- crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::GateUpdated
+- crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
 - crates/lane/src/runtime.rs: process_exit_receipt -> lane_reconciled"#,
             r#"APPROVE
 PLAN
 - fleets/stopship.toml: name = "stopship" -> named Fleet loading
 - crates/workflow/src/role_resolve.rs: resolve_workflow_agent -> role resolution
 - crates/cli/src/lib.rs: start_lane -> tmux Lane launch
-- crates/tui/src/tools/workflow.rs: record_task_started -> typed task_started
-- crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::GateUpdated -> gate promotion
-- crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
+- crates/tui/src/tools/workflow/mod.rs: record_task_started -> typed task_started
+- crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::GateUpdated -> gate promotion
+- crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
 - crates/lane/src/runtime.rs: process_exit_receipt -> tmux Lane reconciliation"#,
             r#"APPROVE
 EVIDENCE REVIEW
 - fleets/stopship.toml: name = "stopship"
 - crates/workflow/src/role_resolve.rs: resolve_workflow_agent
 - crates/cli/src/lib.rs: start_lane
-- crates/tui/src/tools/workflow.rs: record_task_started
-- crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::GateUpdated
-- crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
+- crates/tui/src/tools/workflow/mod.rs: record_task_started
+- crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::GateUpdated
+- crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
 - crates/lane/src/runtime.rs: process_exit_receipt -> lane_reconciled"#,
             r#"APPROVE
 EVIDENCE MATRIX
 - fleet_load: fleets/stopship.toml: name = "stopship"
 - role_resolution: crates/workflow/src/role_resolve.rs: resolve_workflow_agent
 - lane_launch: crates/cli/src/lib.rs: start_lane
-- task_started: crates/tui/src/tools/workflow.rs: record_task_started
-- gate_updated: crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::GateUpdated
-- run_completed: crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
+- task_started: crates/tui/src/tools/workflow/mod.rs: record_task_started
+- gate_updated: crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::GateUpdated
+- run_completed: crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
 - lane_exit: crates/lane/src/runtime.rs: process_exit_receipt -> lane_reconciled"#,
             r#"APPROVE
 FINAL RECEIPT
 - fleet_load: fleets/stopship.toml: name = "stopship"
 - role_resolution: crates/workflow/src/role_resolve.rs: resolve_workflow_agent
 - lane_launch: crates/cli/src/lib.rs: start_lane
-- task_started: crates/tui/src/tools/workflow.rs: record_task_started
-- gate_updated: crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::GateUpdated
-- run_completed: crates/tui/src/tools/workflow.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
+- task_started: crates/tui/src/tools/workflow/mod.rs: record_task_started
+- gate_updated: crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::GateUpdated
+- run_completed: crates/tui/src/tools/workflow/mod.rs: WorkflowUiEventKind::RunCompleted -> terminal_completed_receipt
 - lane_exit: crates/lane/src/runtime.rs: process_exit_receipt -> lane_reconciled"#,
         ];
         let (client, calls) = fake_chat_client_responses(&responses).await;
@@ -11259,6 +10548,7 @@ FINAL RECEIPT
             Some(1_000),
             WorkflowFleetBinding::None,
             Vec::new(),
+            tmp.path().to_path_buf(),
         );
         let snapshot = BudgetSnapshot {
             total: Some(1_000),

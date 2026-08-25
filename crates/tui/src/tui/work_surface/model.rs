@@ -2250,6 +2250,7 @@ fn binding_text(node: &WorkNode) -> String {
             OwnerState::Running => "running",
             OwnerState::Waiting => "waiting",
             OwnerState::Completed => "completed",
+            OwnerState::Degraded => "degraded (finished with dropped slots)",
             OwnerState::Failed => "failed",
             OwnerState::Cancelled => "cancelled",
         };

@@ -704,6 +704,7 @@ impl App {
             },
             goal: HostGoalState::default(),
             session: SessionState::default(),
+            last_billed_input_tokens: None,
             active_allowed_tools: None,
             pausable: false,
             pending_route_save: None,

@@ -269,6 +269,17 @@ impl FleetDetailView {
         }
     }
 
+    /// Open this member-focused editor directly on its model route picker.
+    /// The roster uses this for its `m` shortcut so model switching does not
+    /// require a second, undiscoverable key once the detail view opens.
+    pub(crate) fn open_model_picker(&mut self) {
+        let target = match self.selected_member_idx() {
+            Some(idx) => PickTarget::Member(idx),
+            None => PickTarget::Operator,
+        };
+        self.open_route_picker(target);
+    }
+
     fn apply_route_pick(&mut self) -> Option<ViewAction> {
         let route = self.routes.get(self.pick_row)?;
         match self.pick_target {

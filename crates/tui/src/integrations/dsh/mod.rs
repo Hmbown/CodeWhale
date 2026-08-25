@@ -639,11 +639,11 @@ pub(crate) fn launch_env_strip_list(
     provider_env_vars: &[String],
 ) -> Vec<String> {
     let mut out = vec![
-        "CODEWHALE_CLI_API_KEY".to_string(),
-        "DEEPSEEK_API_KEY_SOURCE".to_string(),
+        codewhale_config::CLI_API_KEY_ENV.to_string(),
+        codewhale_config::CLI_API_KEY_SOURCE_ENV.to_string(),
+        codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV.to_string(),
     ];
     if matches!(api_key_source, Some("cli" | "keyring")) {
-        out.push("DEEPSEEK_API_KEY".to_string());
         for var in provider_env_vars {
             if !out.contains(var) {
                 out.push(var.clone());
@@ -734,7 +734,7 @@ pub(crate) fn launch_spec(
     let provider_env_vars: Vec<String> =
         record.identity.source.api_key_env.iter().cloned().collect();
     let strip_env = launch_env_strip_list(
-        std::env::var("DEEPSEEK_API_KEY_SOURCE").ok().as_deref(),
+        crate::config::cli_api_key_source().as_deref(),
         &provider_env_vars,
     );
     Ok(LaunchSpec {

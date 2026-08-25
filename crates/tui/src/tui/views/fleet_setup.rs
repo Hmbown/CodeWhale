@@ -129,9 +129,9 @@ const ROLES: [Choice; 9] = [
     },
     Choice {
         label: Cow::Borrowed("verifier"),
-        summary: Cow::Borrowed("Runs focused validation"),
+        summary: Cow::Borrowed("Bounded validation"),
         description: Cow::Borrowed(
-            "Runs targeted validation and reports receipts back to the orchestrator.",
+            "Runs bounded validation (test/check selections) and reports receipts back to the orchestrator. Never writes — patching is denied; unbounded shell forms are refused.",
         ),
     },
     Choice {

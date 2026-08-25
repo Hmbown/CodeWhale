@@ -42,6 +42,23 @@ const archiveInstaller = read("scripts/release/install.sh");
 const cliDispatcher = read("crates/cli/src/lib.rs");
 const runbook = read("docs/RELEASE_RUNBOOK.md");
 
+const ciTestJob = ci.slice(ci.indexOf("\n  test:\n"));
+assert.match(
+  ciTestJob,
+  /matrix\.os == 'ubuntu-latest'.*github\.event_name == 'pull_request'/,
+  "heavy pull requests must select the real Ubuntu test lane",
+);
+assert.match(
+  ciTestJob,
+  /cargo nextest run --workspace --all-features --locked --profile ci/,
+  "the Ubuntu pull-request lane must run workspace nextest",
+);
+assert.match(
+  ciTestJob,
+  /name: Linux test location \(CNB\)/,
+  "the non-PR CNB fallback must be named explicitly",
+);
+
 assert.match(ci, /^  workflow_dispatch:\n    inputs:\n      expected_sha:/m);
 const manualForceBlock = ci.match(
   /if \[\[ "\$\{EVENT_NAME\}" == "workflow_dispatch" \]\]; then([\s\S]*?)\n\s+if \[\[ "\$\{EVENT_NAME\}" == "schedule" \]\]; then/,

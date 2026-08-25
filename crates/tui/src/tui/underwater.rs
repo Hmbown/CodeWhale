@@ -209,6 +209,7 @@ pub(crate) enum LiveActivityKind {
     Reasoning,
     Reading,
     UsingTool,
+    UsingSubagents,
     Verifying,
 }
 
@@ -235,6 +236,8 @@ impl LiveActivity {
             LiveActivityKind::Compacting
         } else if tools.verifying {
             LiveActivityKind::Verifying
+        } else if app_has_unfinished_subagents(app) {
+            LiveActivityKind::UsingSubagents
         } else if tools.count > 0 && tools.all_reading {
             LiveActivityKind::Reading
         } else if tools.count > 0 {
@@ -274,6 +277,7 @@ impl LiveActivity {
             LiveActivityKind::Reasoning => tr(locale, MessageId::PhaseReasoning),
             LiveActivityKind::Reading => tr(locale, MessageId::PhaseReading),
             LiveActivityKind::UsingTool => tr(locale, MessageId::PhaseUsingTool),
+            LiveActivityKind::UsingSubagents => tr(locale, MessageId::PhaseSubagents),
             LiveActivityKind::Verifying => tr(locale, MessageId::PhaseVerifying),
         }
     }
@@ -284,6 +288,19 @@ struct RunningToolFacts {
     count: usize,
     all_reading: bool,
     verifying: bool,
+}
+
+/// True when any sub-agent spawned by this session is still running: live
+/// progress rows win over the cache, whose Running entries are the persisted
+/// view of the same actors.
+fn app_has_unfinished_subagents(app: &App) -> bool {
+    !app.agent_progress.is_empty()
+        || app.subagent_cache.iter().any(|agent| {
+            matches!(
+                agent.status,
+                crate::tools::subagent::SubAgentStatus::Running
+            )
+        })
 }
 
 impl Default for RunningToolFacts {
@@ -546,6 +563,7 @@ pub(crate) fn title_activity_verb(app: &App) -> &'static str {
             LiveActivityKind::Reasoning => "reasoning…",
             LiveActivityKind::Reading => "reading…",
             LiveActivityKind::UsingTool => "using tool…",
+            LiveActivityKind::UsingSubagents => "subagents…",
             LiveActivityKind::Verifying => "verifying…",
             LiveActivityKind::Working => "working…",
         },

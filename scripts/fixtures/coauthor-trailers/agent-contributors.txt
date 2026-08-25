@@ -1,0 +1,4 @@
+Agent-assisted change crediting recognized agent contributors.
+
+Co-authored-by: Codewhale Agent <codewhale-agent@hmbown.local>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>

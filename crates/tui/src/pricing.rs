@@ -3560,39 +3560,43 @@ mod tests {
 
     #[test]
     fn provider_cost_does_not_fabricate_price_for_costless_catalog_route() {
-        let offering = crate::provider_lake::catalog_offering_for_model(
-            ApiProvider::Openai,
-            "deepseek-v4-pro",
-        )
-        .expect("bundled OpenAI-compatible route");
-        assert!(OfferingPricing::from_catalog_offering(&offering).is_none());
+        let _live = crate::provider_lake::lock_live_snapshot();
+        crate::provider_lake::clear_live_snapshot();
         let usage = Usage {
             input_tokens: 1_000_000,
             output_tokens: 0,
             ..Default::default()
         };
+        let recorded_at = Utc::now();
 
-        assert!(
-            calculate_turn_cost_estimate_for_provider_at(
-                ApiProvider::Openai,
-                "deepseek-v4-pro",
-                &usage,
-                Utc::now(),
-            )
-            .is_none()
-        );
-        assert!(
-            calculate_turn_cost_estimate_for_provider(
-                ApiProvider::Openai,
-                "deepseek-v4-pro",
-                &usage,
-            )
-            .is_none()
-        );
-        assert!(!has_pricing_for_provider(
-            ApiProvider::Openai,
-            "deepseek-v4-pro"
-        ));
+        for (provider, model) in [
+            (ApiProvider::Zai, "GLM-5.3"),
+            (ApiProvider::XiaomiMimo, "mimo-v2.5-pro"),
+            (ApiProvider::ModelstudioTokenPlan, "qwen3.8-max"),
+        ] {
+            let offering =
+                crate::provider_lake::bundled_catalog_offering_for_model(provider, model)
+                    .unwrap_or_else(|| panic!("missing bundled route: {provider:?}/{model}"));
+            assert!(
+                OfferingPricing::from_catalog_offering(&offering).is_none(),
+                "{provider:?}/{model}"
+            );
+            assert!(
+                calculate_turn_cost_estimate_for_provider_at(provider, model, &usage, recorded_at,)
+                    .is_none(),
+                "{provider:?}/{model}"
+            );
+            assert!(
+                calculate_turn_cost_estimate_for_provider(provider, model, &usage).is_none(),
+                "{provider:?}/{model}"
+            );
+            assert!(
+                !has_pricing_for_provider(provider, model),
+                "{provider:?}/{model}"
+            );
+        }
+
+        crate::provider_lake::clear_live_snapshot();
     }
 
     #[test]

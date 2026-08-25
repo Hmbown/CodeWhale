@@ -1145,7 +1145,7 @@ impl Secrets {
 /// | `openrouter` | `OPENROUTER_API_KEY` |
 /// | `xiaomi-mimo` / `mimo` | `XIAOMI_MIMO_API_KEY`, `XIAOMI_API_KEY`, `MIMO_API_KEY` |
 /// | `novita` / `novita-ai` | `NOVITA_API_KEY` |
-/// | `nvidia` / `nvidia-nim` / `nim` | `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY`, `DEEPSEEK_API_KEY` |
+/// | `nvidia` / `nvidia-nim` / `nim` | `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY` |
 /// | `fireworks` / `fireworks-ai` | `FIREWORKS_API_KEY` |
 /// | `together` / `togetherai` | `TOGETHER_API_KEY` |
 /// | `deepinfra` | `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN` |
@@ -1178,12 +1178,7 @@ pub fn env_for(name: &str) -> Option<String> {
         "novita" | "novita-ai" | "novita_ai" => &["NOVITA_API_KEY"],
         "together" | "together-ai" | "together_ai" | "togetherai" => &["TOGETHER_API_KEY"],
         "deepinfra" | "deep-infra" | "deep_infra" => &["DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN"],
-        // NVIDIA NIM falls back to `DEEPSEEK_API_KEY` last because the
-        // catalog endpoint accepts the same DeepSeek-issued key when no
-        // dedicated NVIDIA token is set. This mirrors pre-v0.7 behaviour.
-        "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => {
-            &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"]
-        }
+        "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"],
         "fireworks" | "fireworks-ai" => &["FIREWORKS_API_KEY"],
         "siliconflow" | "silicon-flow" | "silicon_flow" | "siliconflow-cn" | "siliconflow_cn"
         | "silicon-flow-cn" | "silicon_flow_cn" | "siliconflow-china" => &["SILICONFLOW_API_KEY"],
@@ -1769,12 +1764,48 @@ mod tests {
         let _lock = env_lock();
         clear_known_envs();
         // Safety: env mutation guarded by env_lock().
-        unsafe { std::env::set_var("NVIDIA_NIM_API_KEY", "nim-key") };
+        unsafe {
+            std::env::set_var("NVIDIA_API_KEY", "nvidia-key");
+            std::env::set_var("NVIDIA_NIM_API_KEY", "nim-key");
+        }
         let secrets = Secrets::new(Arc::new(InMemoryKeyringStore::new()));
-        assert_eq!(secrets.resolve("nvidia-nim").as_deref(), Some("nim-key"));
-        assert_eq!(secrets.resolve("nvidia").as_deref(), Some("nim-key"));
+        for alias in ["nvidia", "nvidia-nim", "nvidia_nim", "nim"] {
+            assert_eq!(
+                secrets.resolve(alias).as_deref(),
+                Some("nvidia-key"),
+                "NVIDIA_API_KEY should take precedence for {alias}"
+            );
+        }
+
         // Safety: env mutation guarded by env_lock().
-        unsafe { std::env::remove_var("NVIDIA_NIM_API_KEY") };
+        unsafe { std::env::remove_var("NVIDIA_API_KEY") };
+        for alias in ["nvidia", "nvidia-nim", "nvidia_nim", "nim"] {
+            assert_eq!(
+                secrets.resolve(alias).as_deref(),
+                Some("nim-key"),
+                "NVIDIA_NIM_API_KEY should resolve for {alias}"
+            );
+        }
+        clear_known_envs();
+    }
+
+    #[test]
+    fn nvidia_env_aliases_do_not_consume_deepseek_credentials() {
+        let _lock = env_lock();
+        clear_known_envs();
+        // Safety: env mutation guarded by env_lock().
+        unsafe { std::env::set_var("DEEPSEEK_API_KEY", "deepseek-key") };
+        let secrets = Secrets::new(Arc::new(InMemoryKeyringStore::new()));
+
+        for alias in ["nvidia", "nvidia-nim", "nvidia_nim", "nim"] {
+            assert_eq!(
+                secrets.resolve(alias),
+                None,
+                "DeepSeek credentials must stay isolated from {alias}"
+            );
+        }
+        assert_eq!(secrets.resolve("deepseek").as_deref(), Some("deepseek-key"));
+        clear_known_envs();
     }
 
     #[test]

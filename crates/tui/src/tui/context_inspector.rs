@@ -14,7 +14,7 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use crate::compaction::estimate_input_tokens_conservative;
+use crate::compaction::estimate_input_tokens_for_pressure;
 use crate::localization::{Locale, MessageId, tr};
 use crate::models::SystemPrompt;
 use crate::palette;
@@ -26,7 +26,6 @@ use crate::tui::views::{
     ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,
     render_underwater_surface,
 };
-use crate::utils::estimate_message_chars;
 
 /// Marker used by per-turn working-set metadata. Replicated here so the
 /// context inspector can distinguish stable prompt blocks from volatile
@@ -160,6 +159,38 @@ pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
             crate::session_manager::truncate_id(session_id)
         );
     }
+    // Real provider-token cache hit rate from the same records /cache
+    // aggregates (C3): only provider-reported cache telemetry counts, so the
+    // number is what the user actually paid to keep, not a predicted guess.
+    let mut cache_turns = 0u64;
+    let (cache_hit, cache_miss) =
+        app.session
+            .turn_cache_history
+            .iter()
+            .fold((0u64, 0u64), |(hit, miss), record| {
+                let Some(hit_tokens_u32) = record.cache_hit_tokens else {
+                    return (hit, miss);
+                };
+                let hit_tokens = u64::from(hit_tokens_u32);
+                let miss_tokens = u64::from(
+                    record
+                        .cache_miss_tokens
+                        .unwrap_or(record.input_tokens.saturating_sub(hit_tokens_u32)),
+                );
+                cache_turns += 1;
+                (hit + hit_tokens, miss + miss_tokens)
+            });
+    let cache_total = cache_hit + cache_miss;
+    if cache_turns > 0 && cache_total > 0 {
+        let cache_percent = (cache_hit as f64 / cache_total as f64 * 100.0).clamp(0.0, 100.0);
+        let _ = writeln!(
+            out,
+            "Provider cache hit rate: {cache_percent:.1}% over {cache_turns} cache-aware turn{}",
+            if cache_turns == 1 { "" } else { "s" },
+        );
+    } else {
+        let _ = writeln!(out, "Provider cache hit rate: no cache telemetry yet");
+    }
     let status_label = match context_status(percent) {
         ContextPressure::Critical => tr(locale, MessageId::CtxInspCritical),
         ContextPressure::High => tr(locale, MessageId::CtxInspHigh),
@@ -205,10 +236,24 @@ fn context_usage(app: &App) -> (usize, u32, f64) {
         app.effective_model_for_budget(),
         app.active_route_limits,
     );
+    // The meter must show the SAME pressure signal the auto-compaction trigger
+    // decides on (compaction::estimate_input_tokens_for_pressure, the
+    // non-inflated estimate with framing overhead). The old conservative
+    // overflow estimator was ~1.5x larger, so the meter showed the trigger
+    // point as "free" while compaction was still far away (ops T1) — and vice
+    // versa the meter read "free" as negative when the engine was only halfway.
     let estimated =
-        estimate_input_tokens_conservative(&app.api_messages, app.system_prompt.as_ref());
-    let total_chars = estimate_message_chars(&app.api_messages);
-    let used = estimated.max(total_chars / 4);
+        estimate_input_tokens_for_pressure(&app.api_messages, app.system_prompt.as_ref());
+    // The trigger decides on max(estimate, provider-billed prompt); the meter
+    // must too, or a provider billing above the local estimate (non-ASCII
+    // text, server-side framing) makes the meter under-show real pressure
+    // (#5577). The billed receipt is per model call, so it goes stale only
+    // until the next step or compaction updates it.
+    let used = estimated.max(
+        app.last_billed_input_tokens
+            .map(|tokens| tokens as usize)
+            .unwrap_or(0),
+    );
     let percent = ((used as f64 / f64::from(max)) * 100.0).clamp(0.0, 100.0);
     (used, max, percent)
 }
@@ -569,7 +614,7 @@ impl ContextInspectorView {
 
     pub(crate) fn refresh_from_app(&mut self, app: &App) {
         let (used, max, percent) = context_usage(app);
-        let system_tokens = estimate_input_tokens_conservative(&[], app.system_prompt.as_ref());
+        let system_tokens = estimate_input_tokens_for_pressure(&[], app.system_prompt.as_ref());
         let message_tokens = used.saturating_sub(system_tokens);
         let free_tokens = usize::try_from(max)
             .unwrap_or(usize::MAX)
@@ -824,6 +869,38 @@ mod tests {
         app.active_route_limits = None;
         app.active_context_window_override = None;
         app
+    }
+
+    #[test]
+    fn inspector_reports_the_provider_cache_hit_rate() {
+        let mut app = test_app();
+        for (input, hit) in [(1_000u32, 800u32), (1_000, 500)] {
+            app.session
+                .turn_cache_history
+                .push_back(crate::tui::app::TurnCacheRecord {
+                    provider: None,
+                    provider_identity: None,
+                    model: None,
+                    auto_model: false,
+                    input_tokens: input,
+                    output_tokens: 0,
+                    cache_hit_tokens: Some(hit),
+                    cache_miss_tokens: None,
+                    reasoning_replay_tokens: None,
+                    cache_write_tokens: None,
+                    reasoning_tokens: None,
+                    cost_audit: None,
+                    recorded_at: std::time::Instant::now(),
+                });
+        }
+        let text = build_context_inspector_text(&app, Locale::En);
+        assert!(
+            text.contains("Provider cache hit rate: 65.0% over 2 cache-aware turns"),
+            "{text}"
+        );
+
+        let empty = build_context_inspector_text(&test_app(), Locale::En);
+        assert!(empty.contains("no cache telemetry yet"), "{empty}");
     }
 
     #[test]

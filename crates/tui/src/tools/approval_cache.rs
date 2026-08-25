@@ -100,6 +100,15 @@ pub fn build_approval_grouping_key(tool_name: &str, input: &serde_json::Value) -
             let host = parse_host(input);
             format!("net:{host}")
         }
+        // MCP tools are reviewed as kinds: a trusted plugin bundle's MCP
+        // tools were human-reviewed at trust time, so the session grant the
+        // approval card offers (`2` — "approves for the session") is the
+        // reviewed kind, `mcp:<tool>`. Hashing the full params here would
+        // make every exact-argument variant its own family and silently
+        // narrow the granted kind into a one-call grant (the regression the
+        // plugin e2e acceptance catches). Shell keeps its command-family
+        // key (R2); this arm never widens shell or file tools.
+        name if crate::mcp::McpPool::is_mcp_tool(name) => format!("mcp:{name}"),
         _ => format!("tool:{tool_name}:{}", hash_json_value(input)),
     };
     ApprovalKey(fingerprint)
@@ -285,6 +294,40 @@ mod tests {
             key_a, key_b,
             "approving a command family must cover later flag variants"
         );
+    }
+
+    #[test]
+    fn grouping_key_grants_mcp_tools_as_reviewed_kinds() {
+        // A session grant for a reviewed plugin MCP tool is the kind
+        // (`mcp:<tool>`), not the exact arguments: the plugin e2e acceptance
+        // approves the echo kind once and later variants of the same reviewed
+        // tool must not re-prompt. R2's shell command-family scoping is
+        // untouched — this is the MCP arm only.
+        let key_a = build_approval_grouping_key(
+            "mcp_plugin-4-demo-local_echo",
+            &json!({"text": "acceptance", "hang": false}),
+        );
+        let key_b = build_approval_grouping_key(
+            "mcp_plugin-4-demo-local_echo",
+            &json!({"text": "acceptance", "hang": true}),
+        );
+        assert_eq!(
+            key_a, key_b,
+            "a reviewed MCP kind grant covers argument variants of that tool"
+        );
+        let key_c = build_approval_grouping_key("mcp_plugin-4-demo-local_kick", &json!({"x": 1}));
+        assert_ne!(key_a, key_c, "a different MCP tool is a different kind");
+        // The exact-call key stays per-arguments so denials still suppress
+        // only exact retries.
+        let exact_a = build_approval_key(
+            "mcp_plugin-4-demo-local_echo",
+            &json!({"text": "acceptance", "hang": false}),
+        );
+        let exact_b = build_approval_key(
+            "mcp_plugin-4-demo-local_echo",
+            &json!({"text": "acceptance", "hang": true}),
+        );
+        assert_ne!(exact_a, exact_b, "denial keys remain argument-exact");
     }
 
     #[test]

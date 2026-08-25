@@ -201,6 +201,7 @@ pub(crate) fn reset_conversation_state(app: &mut App) -> bool {
     app.queued_draft = None;
     app.session.total_tokens = 0;
     app.session.total_conversation_tokens = 0;
+    app.last_billed_input_tokens = None;
     app.session.reset_token_breakdown();
     app.session.session_cost = 0.0;
     app.session.session_cost_cny = 0.0;
@@ -996,7 +997,9 @@ mod tests {
         app.session.subagent_cost_cny = 0.80;
         app.session
             .subagent_usage_sources
-            .insert(("agent-test".to_string(), "response-test".to_string()));
+            .insert(crate::cost_status::usage_source_fingerprint(
+                "response-test",
+            ));
         app.session.displayed_cost_high_water = 0.53;
         app.session.displayed_cost_high_water_cny = 3.85;
         app.session.last_prompt_cache_hit_tokens = Some(70);

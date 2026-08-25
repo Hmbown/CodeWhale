@@ -1989,7 +1989,7 @@ fn nvidia_nim_provider_accepts_short_nim_base_url_alias() {
 }
 
 #[test]
-fn nvidia_nim_provider_can_fallback_to_deepseek_api_key_env() {
+fn nvidia_nim_provider_does_not_fallback_to_deepseek_api_key_env() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();
     // Safety: test-only environment mutation guarded by a module mutex.
@@ -2002,7 +2002,8 @@ fn nvidia_nim_provider_can_fallback_to_deepseek_api_key_env() {
     let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
 
     assert_eq!(resolved.provider, ProviderKind::NvidiaNim);
-    assert_eq!(resolved.api_key.as_deref(), Some("deepseek-compat-key"));
+    assert_eq!(resolved.api_key, None);
+    assert_eq!(resolved.api_key_source, None);
 }
 
 #[test]

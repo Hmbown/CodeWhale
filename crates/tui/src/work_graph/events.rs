@@ -166,6 +166,11 @@ pub enum OwnerState {
     Running,
     Waiting,
     Completed,
+    /// Terminal: finished and produced output, but with dropped or failed
+    /// slots the operator must be able to distinguish from an ordinary
+    /// success (#5582). Collapsing this into `Completed` let dashboards and
+    /// automation treat a partial workflow as fully accepted.
+    Degraded,
     Failed,
     Cancelled,
 }

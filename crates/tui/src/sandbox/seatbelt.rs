@@ -145,8 +145,9 @@ pub fn create_seatbelt_args(
     command: Vec<String>,
     policy: &SandboxPolicy,
     sandbox_cwd: &Path,
+    denied_read_subpaths: &[std::path::PathBuf],
 ) -> Vec<String> {
-    let full_policy = generate_policy(policy, sandbox_cwd);
+    let full_policy = generate_policy(policy, sandbox_cwd, denied_read_subpaths);
     let params = generate_params(policy, sandbox_cwd);
 
     let mut args = vec!["-p".to_string(), full_policy];
@@ -164,7 +165,11 @@ pub fn create_seatbelt_args(
 }
 
 /// Generate the complete Seatbelt policy string for the given policy.
-fn generate_policy(policy: &SandboxPolicy, cwd: &Path) -> String {
+fn generate_policy(
+    policy: &SandboxPolicy,
+    cwd: &Path,
+    denied_read_subpaths: &[std::path::PathBuf],
+) -> String {
     let mut full_policy = SEATBELT_BASE_POLICY.to_string();
 
     // Add read access policy
@@ -249,6 +254,21 @@ fn generate_policy(policy: &SandboxPolicy, cwd: &Path) -> String {
         if !matches!(policy, SandboxPolicy::ReadOnly) {
             full_policy.push('\n');
             full_policy.push_str(r#"(allow file-write* (subpath (param "NPM_CACHE_DIR")))"#);
+        }
+    }
+
+    // Opt-in read deny-list (S1, #5568). Appended LAST deliberately: SBPL is
+    // last-match-wins, so these rules override every broad read allowance
+    // above — including the full-disk `(allow file-read*)` — for the listed
+    // subpaths. Metadata reads are denied too so the paths do not enumerate.
+    if !denied_read_subpaths.is_empty() {
+        full_policy.push_str("\n\n; Opt-in read deny-list (user-configured)\n");
+        for path in denied_read_subpaths {
+            let escaped = path
+                .to_string_lossy()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"");
+            full_policy.push_str(&format!("(deny file-read* (subpath \"{escaped}\"))\n"));
         }
     }
 
@@ -461,7 +481,7 @@ mod existing_tests {
     fn test_generate_policy_with_network() {
         let policy = SandboxPolicy::workspace_with_network();
         let cwd = Path::new("/tmp/test");
-        let result = generate_policy(&policy, cwd);
+        let result = generate_policy(&policy, cwd, &[]);
 
         assert!(result.contains("network-outbound"));
         assert!(result.contains("network-inbound"));
@@ -481,7 +501,7 @@ mod existing_tests {
     fn test_darwin_user_cache_write_skipped_for_read_only() {
         let cwd = Path::new("/tmp/test");
 
-        let default_text = generate_policy(&SandboxPolicy::default(), cwd);
+        let default_text = generate_policy(&SandboxPolicy::default(), cwd, &[]);
         assert!(
             default_text
                 .contains(r#"(allow file-read* (subpath (param "DARWIN_USER_CACHE_DIR")))"#),
@@ -493,7 +513,7 @@ mod existing_tests {
             "default policy should allow writing the Darwin user cache"
         );
 
-        let read_only_text = generate_policy(&SandboxPolicy::ReadOnly, cwd);
+        let read_only_text = generate_policy(&SandboxPolicy::ReadOnly, cwd, &[]);
         assert!(
             read_only_text
                 .contains(r#"(allow file-read* (subpath (param "DARWIN_USER_CACHE_DIR")))"#),
@@ -533,7 +553,7 @@ mod existing_tests {
         let policy = SandboxPolicy::default();
         let cwd = Path::new("/tmp/test");
 
-        let policy_text = generate_policy(&policy, cwd);
+        let policy_text = generate_policy(&policy, cwd, &[]);
         assert!(policy_text.contains(r#"(allow file-read* (subpath (param "CARGO_HOME")))"#));
         assert!(policy_text.contains("CARGO_HOME_REGISTRY"));
         assert!(policy_text.contains("CARGO_HOME_GIT"));
@@ -544,7 +564,7 @@ mod existing_tests {
         assert!(params.iter().any(|(k, _)| k == "CARGO_HOME_GIT"));
 
         // Read-only policy should still emit CARGO_HOME read rule but skip writes.
-        let read_only_text = generate_policy(&SandboxPolicy::ReadOnly, cwd);
+        let read_only_text = generate_policy(&SandboxPolicy::ReadOnly, cwd, &[]);
         assert!(
             read_only_text.contains(r#"(allow file-read* (subpath (param "CARGO_HOME")))"#),
             "read-only mode should still allow reading the cargo registry: {read_only_text}"
@@ -587,7 +607,7 @@ mod existing_tests {
 
         let policy = SandboxPolicy::default();
         let cwd = Path::new("/tmp/test");
-        let policy_text = generate_policy(&policy, cwd);
+        let policy_text = generate_policy(&policy, cwd, &[]);
         let params = generate_params(&policy, cwd);
 
         assert!(!policy_text.contains("CARGO_HOME"));
@@ -627,7 +647,7 @@ mod existing_tests {
         let policy = SandboxPolicy::default();
         let cwd = Path::new("/tmp/test");
 
-        let policy_text = generate_policy(&policy, cwd);
+        let policy_text = generate_policy(&policy, cwd, &[]);
         assert!(
             policy_text.contains(r#"(allow file-read* (subpath (param "NPM_CACHE_DIR")))"#),
             "npm cache read rule missing from policy"
@@ -644,7 +664,7 @@ mod existing_tests {
         );
 
         // ReadOnly policy: read access allowed, write access must be absent.
-        let read_only_text = generate_policy(&SandboxPolicy::ReadOnly, cwd);
+        let read_only_text = generate_policy(&SandboxPolicy::ReadOnly, cwd, &[]);
         assert!(
             read_only_text.contains(r#"(allow file-read* (subpath (param "NPM_CACHE_DIR")))"#),
             "read-only mode should allow reading the npm cache"
@@ -685,7 +705,7 @@ mod existing_tests {
 
         let policy = SandboxPolicy::default();
         let cwd = Path::new("/tmp/test");
-        let policy_text = generate_policy(&policy, cwd);
+        let policy_text = generate_policy(&policy, cwd, &[]);
         let params = generate_params(&policy, cwd);
 
         assert!(!policy_text.contains("NPM_CACHE_DIR"));
@@ -709,7 +729,7 @@ mod existing_tests {
     fn test_generate_policy_allows_dev_tty() {
         let policy = SandboxPolicy::default();
         let cwd = Path::new("/tmp/test");
-        let policy_text = generate_policy(&policy, cwd);
+        let policy_text = generate_policy(&policy, cwd, &[]);
 
         assert!(
             policy_text
@@ -731,7 +751,7 @@ mod existing_tests {
             exclude_tmpdir: false,
             exclude_slash_tmp: false,
         };
-        let text = generate_policy(&restricted, cwd);
+        let text = generate_policy(&restricted, cwd, &[]);
         assert!(
             !text.contains("network-outbound"),
             "a network-restricted policy must not emit outbound rules:\n{text}"
@@ -745,7 +765,7 @@ mod existing_tests {
             exclude_tmpdir: false,
             exclude_slash_tmp: false,
         };
-        let text = generate_policy(&allowed, cwd);
+        let text = generate_policy(&allowed, cwd, &[]);
         assert!(
             text.contains("network-outbound"),
             "an explicitly granted policy must emit outbound rules:\n{text}"
@@ -753,7 +773,7 @@ mod existing_tests {
 
         // Default construction is restricted, so the shipped default profile
         // carries no network rules.
-        assert!(!generate_policy(&SandboxPolicy::default(), cwd).contains("network-outbound"));
+        assert!(!generate_policy(&SandboxPolicy::default(), cwd, &[]).contains("network-outbound"));
     }
 
     #[test]
@@ -762,7 +782,7 @@ mod existing_tests {
         let cwd = Path::new("/tmp/test");
         let command = vec!["echo".to_string(), "hello".to_string()];
 
-        let args = create_seatbelt_args(command, &policy, cwd);
+        let args = create_seatbelt_args(command, &policy, cwd, &[]);
 
         // Should start with -p and the policy
         assert_eq!(args[0], "-p");
@@ -786,7 +806,7 @@ mod existing_tests {
     fn test_apple_events_allowed_only_in_trusted_tier() {
         let cwd = Path::new("/tmp/test");
 
-        let trusted = generate_policy(&SandboxPolicy::DangerFullAccess, cwd);
+        let trusted = generate_policy(&SandboxPolicy::DangerFullAccess, cwd, &[]);
         assert!(
             trusted.contains("(allow appleevent-send)"),
             "trusted tier must allow AppleEvent sends: {trusted}"
@@ -807,13 +827,16 @@ mod existing_tests {
         for (name, restrictive) in [
             (
                 "workspace-write",
-                generate_policy(&SandboxPolicy::default(), cwd),
+                generate_policy(&SandboxPolicy::default(), cwd, &[]),
             ),
             (
                 "workspace-write+network",
-                generate_policy(&SandboxPolicy::workspace_with_network(), cwd),
+                generate_policy(&SandboxPolicy::workspace_with_network(), cwd, &[]),
             ),
-            ("read-only", generate_policy(&SandboxPolicy::ReadOnly, cwd)),
+            (
+                "read-only",
+                generate_policy(&SandboxPolicy::ReadOnly, cwd, &[]),
+            ),
         ] {
             assert!(
                 !restrictive.contains("appleevent-send"),
@@ -846,6 +869,7 @@ mod existing_tests {
             vec!["/usr/bin/true".to_string()],
             &SandboxPolicy::DangerFullAccess,
             &cwd,
+            &[],
         );
         let output = Command::new(SANDBOX_EXEC_PATH)
             .args(args)

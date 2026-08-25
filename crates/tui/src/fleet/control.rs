@@ -113,6 +113,10 @@ pub fn event_label(payload: &FleetWorkerEventPayload) -> String {
             .map(|kind| format!("workflow_event run_id={workflow_run_id} type={kind}"))
             .unwrap_or_else(|| format!("workflow_event run_id={workflow_run_id}")),
         FleetWorkerEventPayload::Heartbeat { .. } => "heartbeat".to_string(),
+        FleetWorkerEventPayload::UsageReport {
+            input_tokens,
+            output_tokens,
+        } => format!("usage_report input={input_tokens} output={output_tokens}"),
         FleetWorkerEventPayload::Artifact(artifact) => {
             format!("artifact kind={}", artifact_kind_label(&artifact.kind))
         }
@@ -699,6 +703,7 @@ mod tests {
             workflow: None,
             roles: Vec::new(),
             max_workers: Some(2),
+            usage_ceiling: None,
             task_specs: Vec::new(),
             worker_specs: Vec::new(),
             labels: BTreeMap::new(),
