@@ -845,7 +845,7 @@ mod tests {
 
     use super::*;
     use std::any::TypeId;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
     fn output_limit_stop_reason_accepts_provider_aliases_only() {
@@ -1470,5 +1470,82 @@ mod tests {
         assert!(auto_compact_default_for_model("deepseek-v4-pro"));
         assert!(auto_compact_default_for_model("mimo-v2.5-pro"));
         assert!(!auto_compact_default_for_model("unknown-model"));
+    }
+
+    fn parsed_bundled_json(raw: &str) -> serde_json::Value {
+        serde_json::from_str(raw).expect("bundled JSON")
+    }
+
+    fn output_exceeds_context(value: &serde_json::Value) -> Vec<String> {
+        codewhale_config::catalog::bundled_output_exceeds_context(value)
+    }
+
+    fn stated_limits(
+        value: &serde_json::Value,
+    ) -> BTreeMap<String, BTreeSet<(Option<u64>, Option<u64>)>> {
+        let mut map: BTreeMap<String, BTreeSet<(Option<u64>, Option<u64>)>> = BTreeMap::new();
+        for fact in codewhale_config::catalog::bundled_limit_facts(value) {
+            if fact.model_id.is_empty() {
+                continue;
+            }
+            map.entry(fact.model_id)
+                .or_default()
+                .insert((fact.context, fact.output));
+        }
+        map
+    }
+
+    #[test]
+    fn bundled_catalog_json_output_never_exceeds_context_window() {
+        let catalog = parsed_bundled_json(include_str!("../assets/model_catalog.bundled.json"));
+        assert_eq!(output_exceeds_context(&catalog), Vec::<String>::new());
+    }
+
+    #[test]
+    fn bundled_limit_facts_detect_catalog_shaped_corrupt_row() {
+        let bad = serde_json::json!({
+            "entries": {
+                "corrupt-model": {
+                    "id": "corrupt-model",
+                    "context_window": 1024,
+                    "max_output": 2048
+                }
+            }
+        });
+        let violations = output_exceeds_context(&bad);
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(violations[0].contains("corrupt-model"), "{violations:?}");
+    }
+
+    #[test]
+    fn bundled_assets_do_not_split_limit_facts_for_the_same_model_id() {
+        let models_dev = parsed_bundled_json(codewhale_config::catalog::BUNDLED_MODELS_DEV_JSON);
+        let catalog = parsed_bundled_json(include_str!("../assets/model_catalog.bundled.json"));
+        let models_dev_limits = stated_limits(&models_dev);
+        let catalog_limits = stated_limits(&catalog);
+
+        for (id, catalog_facts) in &catalog_limits {
+            let Some(models_dev_facts) = models_dev_limits.get(id) else {
+                continue;
+            };
+            if catalog_facts.len() != 1 || models_dev_facts.len() != 1 {
+                continue;
+            }
+            let (md_context, md_output) = *models_dev_facts.iter().next().expect("len == 1");
+            let (catalog_context, catalog_output) = *catalog_facts.iter().next().expect("len == 1");
+            if let (Some(models_dev_context), Some(catalog_context)) = (md_context, catalog_context)
+            {
+                assert_eq!(
+                    models_dev_context, catalog_context,
+                    "{id} context disagrees across bundled assets"
+                );
+            }
+            if let (Some(models_dev_output), Some(catalog_output)) = (md_output, catalog_output) {
+                assert_eq!(
+                    models_dev_output, catalog_output,
+                    "{id} output disagrees across bundled assets"
+                );
+            }
+        }
     }
 }

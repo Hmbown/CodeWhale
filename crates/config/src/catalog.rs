@@ -766,5 +766,117 @@ pub fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// Token-limit facts taken from one row of a bundled catalog JSON value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundledLimitFact {
+    /// JSON path to the row, e.g. `providers.moonshot.models.kimi-k2.7-code`.
+    pub path: String,
+    /// Model id from the row, or the map key when `id` is empty.
+    pub model_id: String,
+    /// Context window in tokens, when stated.
+    pub context: Option<u64>,
+    /// Maximum output tokens, when stated.
+    pub output: Option<u64>,
+}
+
+impl BundledLimitFact {
+    /// True when both limits are present and output is larger than the window.
+    #[must_use]
+    pub fn output_exceeds_context(&self) -> bool {
+        matches!(
+            (self.output, self.context),
+            (Some(output), Some(context)) if output > context
+        )
+    }
+}
+
+fn json_row_id(key: &str, row: &Value) -> String {
+    row.get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .unwrap_or(key)
+        .to_string()
+}
+
+fn push_models_dev_limit(out: &mut Vec<BundledLimitFact>, path: String, key: &str, row: &Value) {
+    let Some(limit) = row.get("limit") else {
+        return;
+    };
+    out.push(BundledLimitFact {
+        path,
+        model_id: json_row_id(key, row),
+        context: limit.get("context").and_then(Value::as_u64),
+        output: limit.get("output").and_then(Value::as_u64),
+    });
+}
+
+fn push_catalog_entry_limit(out: &mut Vec<BundledLimitFact>, path: String, key: &str, row: &Value) {
+    if row.get("context_window").is_none() && row.get("max_output").is_none() {
+        return;
+    }
+    out.push(BundledLimitFact {
+        path,
+        model_id: json_row_id(key, row),
+        context: row.get("context_window").and_then(Value::as_u64),
+        output: row.get("max_output").and_then(Value::as_u64),
+    });
+}
+
+fn for_each_object_map(value: Option<&Value>, mut visit: impl FnMut(&str, &Value)) {
+    let Some(map) = value.and_then(Value::as_object) else {
+        return;
+    };
+    for (key, row) in map {
+        visit(key, row);
+    }
+}
+
+/// Collect context/output facts from a Models.dev catalog JSON value or a
+/// TUI `model_catalog.bundled.json` value.
+///
+/// Each row with a stated `limit.{context,output}` (Models.dev) or
+/// `context_window`/`max_output` (TUI catalog) becomes one fact. Rows that
+/// omit both limits are skipped.
+#[must_use]
+pub fn bundled_limit_facts(value: &Value) -> Vec<BundledLimitFact> {
+    let mut facts = Vec::new();
+    for_each_object_map(value.get("models"), |key, row| {
+        push_models_dev_limit(&mut facts, format!("models.{key}"), key, row);
+    });
+    for_each_object_map(value.get("providers"), |provider, row| {
+        for_each_object_map(row.get("models"), |key, model| {
+            push_models_dev_limit(
+                &mut facts,
+                format!("providers.{provider}.models.{key}"),
+                key,
+                model,
+            );
+        });
+    });
+    for_each_object_map(value.get("entries"), |key, row| {
+        push_catalog_entry_limit(&mut facts, format!("entries.{key}"), key, row);
+    });
+    facts
+}
+
+/// Paths of bundled rows whose stated output cap exceeds the context window.
+#[must_use]
+pub fn bundled_output_exceeds_context(value: &Value) -> Vec<String> {
+    bundled_limit_facts(value)
+        .into_iter()
+        .filter_map(|fact| {
+            let output = fact.output?;
+            let context = fact.context?;
+            (output > context).then(|| {
+                format!(
+                    "{} ({}): output {output} > context {context}",
+                    fact.path, fact.model_id
+                )
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests;

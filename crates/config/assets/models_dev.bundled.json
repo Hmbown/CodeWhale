@@ -151,7 +151,7 @@
           "reasoning": true,
           "tool_call": true,
           "modalities": { "input": ["text"], "output": ["text"] },
-          "limit": { "context": 262144, "output": 262144 },
+          "limit": { "context": 262144, "output": 32768 },
           "cost": { "input": 0.95, "output": 4.00, "cache_read": 0.19 }
         },
         "kimi-k2.7-code-highspeed": {
@@ -161,7 +161,7 @@
           "reasoning": true,
           "tool_call": true,
           "modalities": { "input": ["text"], "output": ["text"] },
-          "limit": { "context": 262144, "output": 262144 },
+          "limit": { "context": 262144, "output": 32768 },
           "cost": { "input": 1.90, "output": 8.00, "cache_read": 0.38 }
         },
         "kimi-k2.6": {
@@ -171,7 +171,7 @@
           "reasoning": true,
           "tool_call": true,
           "modalities": { "input": ["text"], "output": ["text"] },
-          "limit": { "context": 262144, "output": 262144 },
+          "limit": { "context": 262144, "output": 32768 },
           "cost": { "input": 0.95, "output": 4.00, "cache_read": 0.16 }
         }
       }
@@ -1049,7 +1049,7 @@
           "reasoning": true,
           "tool_call": true,
           "modalities": { "input": ["text"], "output": ["text"] },
-          "limit": { "context": 262144, "output": 262140 },
+          "limit": { "context": 262144, "output": 65536 },
           "cost": { "input": 0.14, "output": 1.00, "cache_read": 0.05 }
         },
         "qwen/qwen3.7-plus": {

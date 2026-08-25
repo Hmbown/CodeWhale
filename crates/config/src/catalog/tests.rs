@@ -714,6 +714,11 @@ fn bundled_asset_yields_real_chat_offerings_for_key_models() {
         kimi_k27.limit.as_ref().and_then(|l| l.context),
         Some(262_144)
     );
+    assert_eq!(
+        kimi_k27.limit.as_ref().and_then(|l| l.output),
+        Some(32_768),
+        "K2.7 Code generation cap is 32K, not the 256K window"
+    );
 
     let kimi_k3 = find(&rows, "moonshot", "kimi-k3");
     assert_eq!(
@@ -1015,4 +1020,151 @@ fn live_offerings_normalize_models_dev_provider_aliases() {
     assert!(rows.iter().all(|r| r.provider != "moonshotai"));
     assert!(rows.iter().all(|r| r.provider != "togetherai"));
     assert!(rows.iter().all(|r| r.provider != "zhipuai"));
+}
+
+const TUI_MODEL_CATALOG_JSON: &str = include_str!("../../../tui/assets/model_catalog.bundled.json");
+
+#[test]
+fn bundled_limit_facts_reject_output_above_context() {
+    let bad = serde_json::json!({
+        "models": {
+            "canonical/corrupt": {
+                "id": "canonical/corrupt",
+                "limit": { "context": 1024, "output": 2048 }
+            }
+        },
+        "providers": {
+            "fixture": {
+                "models": {
+                    "corrupt-model": {
+                        "id": "corrupt-model",
+                        "limit": { "context": 4096, "output": 8192 }
+                    }
+                }
+            }
+        },
+        "entries": {
+            "catalog-corrupt": {
+                "id": "catalog-corrupt",
+                "context_window": 512,
+                "max_output": 1024
+            }
+        }
+    });
+    let violations = bundled_output_exceeds_context(&bad);
+    assert_eq!(violations.len(), 3, "{violations:?}");
+    assert!(
+        violations.iter().any(|row| row.contains("corrupt-model")),
+        "{violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|row| row.contains("canonical/corrupt")),
+        "{violations:?}"
+    );
+    assert!(
+        violations.iter().any(|row| row.contains("catalog-corrupt")),
+        "{violations:?}"
+    );
+
+    let ok = serde_json::json!({
+        "providers": {
+            "fixture": {
+                "models": {
+                    "fits": {
+                        "id": "fits",
+                        "limit": { "context": 8192, "output": 8192 }
+                    }
+                }
+            }
+        }
+    });
+    assert_eq!(bundled_output_exceeds_context(&ok), Vec::<String>::new());
+}
+
+#[test]
+fn bundled_models_dev_asset_output_never_exceeds_context() {
+    let raw: serde_json::Value =
+        serde_json::from_str(BUNDLED_MODELS_DEV_JSON).expect("bundled JSON");
+    assert_eq!(bundled_output_exceeds_context(&raw), Vec::<String>::new());
+}
+
+#[test]
+fn bundled_tui_catalog_asset_output_never_exceeds_context() {
+    let raw: serde_json::Value =
+        serde_json::from_str(TUI_MODEL_CATALOG_JSON).expect("tui catalog JSON");
+    assert_eq!(bundled_output_exceeds_context(&raw), Vec::<String>::new());
+}
+
+#[test]
+fn bundled_assets_do_not_split_limit_facts_for_the_same_model_id() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn stated_limits(raw: &str) -> BTreeMap<String, BTreeSet<(Option<u64>, Option<u64>)>> {
+        let value: serde_json::Value = serde_json::from_str(raw).expect("bundled JSON");
+        let mut map: BTreeMap<String, BTreeSet<(Option<u64>, Option<u64>)>> = BTreeMap::new();
+        for fact in bundled_limit_facts(&value) {
+            if fact.model_id.is_empty() {
+                continue;
+            }
+            map.entry(fact.model_id)
+                .or_default()
+                .insert((fact.context, fact.output));
+        }
+        map
+    }
+
+    let models_dev_limits = stated_limits(BUNDLED_MODELS_DEV_JSON);
+    let catalog_limits = stated_limits(TUI_MODEL_CATALOG_JSON);
+    for (id, catalog_facts) in &catalog_limits {
+        let Some(models_dev_facts) = models_dev_limits.get(id) else {
+            continue;
+        };
+        if catalog_facts.len() != 1 || models_dev_facts.len() != 1 {
+            continue;
+        }
+        let (md_context, md_output) = *models_dev_facts.iter().next().expect("len == 1");
+        let (catalog_context, catalog_output) = *catalog_facts.iter().next().expect("len == 1");
+        if let (Some(models_dev_context), Some(catalog_context)) = (md_context, catalog_context) {
+            assert_eq!(
+                models_dev_context, catalog_context,
+                "{id} context disagrees across bundled assets"
+            );
+        }
+        if let (Some(models_dev_output), Some(catalog_output)) = (md_output, catalog_output) {
+            assert_eq!(
+                models_dev_output, catalog_output,
+                "{id} output disagrees across bundled assets"
+            );
+        }
+    }
+}
+
+#[test]
+fn bundled_qwen36_35b_and_kimi_k27_output_caps_are_not_the_context_window() {
+    let rows = bundled_catalog_offerings();
+    let qwen = find(&rows, "openrouter", "qwen/qwen3.6-35b-a3b");
+    assert_eq!(
+        qwen.limit.as_ref().and_then(|limit| limit.context),
+        Some(262_144)
+    );
+    assert_eq!(
+        qwen.limit.as_ref().and_then(|limit| limit.output),
+        Some(65_536),
+        "qwen3.6-35b output is 64K, not a typo of the 256K window"
+    );
+    for wire in ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"] {
+        let row = find(&rows, "moonshot", wire);
+        assert_eq!(
+            row.limit.as_ref().and_then(|limit| limit.context),
+            Some(262_144),
+            "{wire}"
+        );
+        assert_eq!(
+            row.limit.as_ref().and_then(|limit| limit.output),
+            Some(32_768),
+            "{wire} generation cap is 32K, not the 256K window"
+        );
+    }
 }
