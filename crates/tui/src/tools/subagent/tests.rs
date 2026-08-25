@@ -5646,10 +5646,11 @@ async fn agent_message_queues_and_followup_delivers_as_user_provenance() {
     let queued: Value = serde_json::from_str(&queued.content).expect("queued receipt JSON");
     assert_eq!(queued["queued"], json!(true));
     assert_eq!(queued["woke"], json!(false));
-    assert!(matches!(
-        input_rx.try_recv(),
-        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-    ));
+    assert_eq!(queued["queue_depth"], json!(0));
+    let queued_note = input_rx
+        .try_recv()
+        .expect("message delivers for the child's next turn");
+    assert_eq!(queued_note.text, "first queued note");
 
     let followed_up = tool
         .execute(
@@ -5668,7 +5669,7 @@ async fn agent_message_queues_and_followup_delivers_as_user_provenance() {
     assert_eq!(followed_up["queue_depth"], json!(0));
 
     let mut pending_inputs = VecDeque::from([
-        input_rx.try_recv().expect("queued note delivered"),
+        queued_note,
         input_rx.try_recv().expect("followup note delivered"),
     ]);
     let mut messages = Vec::new();
@@ -5720,6 +5721,39 @@ async fn agent_message_queues_and_followup_delivers_as_user_provenance() {
         .expect_err("absent child must fail closed")
         .to_string();
     assert!(absent.contains("not found"), "{absent}");
+}
+
+#[tokio::test]
+async fn cancelled_child_requeues_untaken_parent_notes() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        2,
+    )));
+    let (agent_id, input_rx) = {
+        let mut inner = manager.write().await;
+        inner.insert_test_running_agent_with_input("drop_target", tmp.path())
+    };
+    {
+        let _guard = UntakenLiveInput {
+            agent_id: agent_id.clone(),
+            manager: Arc::clone(&manager),
+            rx: input_rx,
+        };
+        let mut inner = manager.write().await;
+        inner
+            .queue_running_parent_message(&agent_id, "do not drop".to_string())
+            .expect("live deliver");
+        assert_eq!(inner.queued_mail_depth(&agent_id), None);
+        assert!(!inner.child_was_woken(&agent_id));
+    }
+    let inner = manager.read().await;
+    assert_eq!(
+        inner.queued_mail_depth(&agent_id),
+        Some(1),
+        "notes that never reached a child turn must be restored instead of dropped"
+    );
+    assert!(!inner.child_was_woken(&agent_id));
 }
 
 #[tokio::test]
@@ -13693,7 +13727,7 @@ fn terminal_synthesis_is_scoped_to_owner_and_keeps_delivery_history() {
 fn active_session_owns_every_roster_and_control_resolution() {
     let workspace = tempdir().expect("tempdir");
     let mut manager = SubAgentManager::new(workspace.path().to_path_buf(), 5);
-    let (agent_a, _input_a) =
+    let (agent_a, mut input_a) =
         manager.insert_test_running_agent_with_input("session_a", workspace.path());
     let (agent_b, _input_b) =
         manager.insert_test_running_agent_with_input("session_b", workspace.path());
@@ -13785,7 +13819,15 @@ fn active_session_owns_every_roster_and_control_resolution() {
             "same-session message".to_string(),
         )
         .expect("same-session message");
-    assert_eq!(manager.queued_mail_depth(&agent_a), Some(1));
+    assert_eq!(
+        manager.queued_mail_depth(&agent_a),
+        None,
+        "a live child consumes queue-only mail onto its next-turn channel"
+    );
+    let delivered = input_a
+        .try_recv()
+        .expect("same-session note delivered live");
+    assert_eq!(delivered.text, "same-session message");
     manager
         .cancel_agent_for_session("session-a", &agent_a)
         .expect("same-session cancel");
@@ -17450,6 +17492,60 @@ async fn agent_wait_rejects_unknown_agent_ref() {
     .await
     .expect_err("unknown agent ref must fail fast instead of blocking");
     assert!(matches!(err, ToolError::InvalidInput { .. }));
+}
+
+#[tokio::test]
+async fn wait_until_activity_returns_on_child_progress() {
+    let tmp = tempdir().expect("tempdir");
+    let mut inner = SubAgentManager::new(tmp.path().to_path_buf(), 2);
+    let agent_id = inner.insert_test_running_agent("activity_child", tmp.path());
+    inner.record_worker_event(
+        &agent_id,
+        AgentWorkerStatus::Starting,
+        Some("started".to_string()),
+        Some(0),
+        None,
+    );
+    let manager = Arc::new(RwLock::new(inner));
+    let flip = manager.clone();
+    let flip_id = agent_id.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let mut manager = flip.write().await;
+        manager.record_worker_event(
+            &flip_id,
+            AgentWorkerStatus::Running,
+            Some("step 1: requesting model response".to_string()),
+            Some(1),
+            None,
+        );
+    });
+
+    let context = ToolContext::new(tmp.path());
+    let started = Instant::now();
+    let result = AgentsWaitTool::new(manager)
+        .execute(
+            json!({
+                "until": "activity",
+                "agent_id": agent_id,
+                "timeout_secs": 30
+            }),
+            &context,
+        )
+        .await
+        .expect("activity wait should succeed");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "wait(until=activity) must return on child progress, not the timeout"
+    );
+    let payload: serde_json::Value =
+        serde_json::from_str(&result.content).expect("wait payload should be json");
+    assert_eq!(payload["timed_out"], json!(false), "{payload}");
+    let activity = payload["activity"].as_array().expect("activity array");
+    assert!(
+        !activity.is_empty(),
+        "activity wait must report the child update: {payload}"
+    );
 }
 
 #[tokio::test]

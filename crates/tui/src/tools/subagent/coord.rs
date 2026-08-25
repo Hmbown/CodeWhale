@@ -194,7 +194,7 @@ impl ToolSpec for AgentsMessageTool {
     }
 
     fn description(&self) -> &'static str {
-        "Queue a parent message onto a running child without waking it. The message stays queued until a later agents/followup delivers it through the child's live input channel. Use agents/followup directly when you want immediate delivery."
+        "Deliver a parent note onto a running child without waking it. The child sees the note at its next turn boundary; this does not interrupt the current model call. Use agents/followup when the child is idle or interrupted and must start a new turn."
     }
 
     fn input_schema(&self) -> Value {
@@ -260,7 +260,7 @@ impl ToolSpec for AgentsMessageTool {
             "woke": false,
             "queue_depth": receipt.queue_depth,
             "status": receipt.status,
-            "note": "Message queued without waking the child.",
+            "note": receipt.note,
         });
         let mut tool_result = ToolResult::json(&payload)
             .map_err(|err| ToolError::execution_failed(err.to_string()))?;
@@ -618,7 +618,7 @@ impl ToolSpec for AgentsWaitTool {
     }
 
     fn description(&self) -> &'static str {
-        "Block briefly until watched children settle or the timeout elapses. Keep waits short: on timeout, end your turn — settled children wake you automatically as completion sentinels; polling agents/list in a loop is not the right shape either. until=all is the fan-out join: it returns only when every child running at call time has left running, with each child's outcome. until=completion (default) returns as soon as any one child settles. until=activity also returns on progress."
+        "Block briefly until watched children settle or the timeout elapses. Keep waits short: on timeout, end your turn — settled children wake you automatically as completion sentinels; polling agents/list in a loop is not the right shape either. until=all is the fan-out join: it returns only when every child running at call time has left running, with each child's outcome. until=completion (default) returns as soon as any one child settles. until=activity returns on child progress or settlement — use it to wait for a child update without joining process exit."
     }
 
     fn input_schema(&self) -> Value {
@@ -638,7 +638,7 @@ impl ToolSpec for AgentsWaitTool {
                 "until": {
                     "type": "string",
                     "enum": ["completion", "all", "activity"],
-                    "description": "completion (default): return when any one child leaves running. all: return only when every watched child has left running — use this after a fan-out so one wait covers the whole batch. activity: also return when recent progress changes. Children spawned after the call are not watched; no children means an immediate return."
+                    "description": "completion (default): return when any one child leaves running. all: return only when every watched child has left running — use this after a fan-out so one wait covers the whole batch. activity: return when a watched child publishes progress or settles. Children spawned after the call are not watched; no children means an immediate return."
                 }
             },
             "required": []
@@ -1401,7 +1401,8 @@ mod tests {
         let followup = AgentsFollowupTool::new(manager);
 
         assert!(!message.description().contains("natural resume"));
-        assert!(message.description().contains("stays queued"));
+        assert!(message.description().contains("without waking"));
+        assert!(message.description().contains("next turn"));
         assert!(followup.description().contains("attempt to resume"));
         assert!(
             followup

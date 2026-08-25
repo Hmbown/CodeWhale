@@ -1784,6 +1784,42 @@ impl SubAgentInput {
     }
 }
 
+/// Owns the child's live input receiver so notes still sitting in the
+/// channel are restored to `queued_mail` if the loop exits without taking
+/// them (cancel, park, or a natural stop racing a late send).
+struct UntakenLiveInput {
+    agent_id: String,
+    manager: SharedSubAgentManager,
+    rx: mpsc::UnboundedReceiver<SubAgentInput>,
+}
+
+impl UntakenLiveInput {
+    fn try_recv(&mut self) -> Result<SubAgentInput, mpsc::error::TryRecvError> {
+        self.rx.try_recv()
+    }
+}
+
+impl Drop for UntakenLiveInput {
+    fn drop(&mut self) {
+        let mut leftover = VecDeque::new();
+        while let Ok(input) = self.rx.try_recv() {
+            leftover.push_back(input);
+        }
+        if leftover.is_empty() {
+            return;
+        }
+        match self.manager.try_write() {
+            Ok(mut manager) => manager.requeue_untaken_live_inputs(&self.agent_id, leftover),
+            Err(_) => tracing::warn!(
+                target: "subagent",
+                agent_id = %self.agent_id,
+                leftover = leftover.len(),
+                "could not requeue parent notes that never reached a child turn"
+            ),
+        }
+    }
+}
+
 fn append_subagent_inputs_as_user_messages(
     messages: &mut Vec<Message>,
     pending_inputs: &mut VecDeque<SubAgentInput>,
@@ -3419,8 +3455,9 @@ pub struct SubAgentManager {
     /// write-locked `cleanup` on a bounded cadence, so a UI refresh storm during
     /// a sub-agent fanout no longer contends for the write lock on every request.
     last_cleanup_at: Option<Instant>,
-    /// Parent mail queued by `agents/message` without waking the child.
-    /// `agents/followup` drains into `input_tx` when a live wake is possible.
+    /// Parent mail waiting for a child turn. `agents/message` flushes this
+    /// onto a live input channel without waking; `agents/followup` flushes
+    /// and claims a wake. Untaken channel items are restored here on drop.
     queued_mail: HashMap<String, VecDeque<QueuedParentMessage>>,
     /// Follow-ups handed to a running child's live input channel that the
     /// child has not yet taken at a round boundary. Read by the rail rows.
@@ -5507,6 +5544,98 @@ impl SubAgentManager {
         self.cancel_agent(&agent_id)
     }
 
+    /// Move queued parent mail onto a running child's live input channel.
+    ///
+    /// Delivery is the child's next turn boundary (`try_recv` in the child
+    /// loop). `claim_wake` records a followup wake; queue-only mail still
+    /// lands on the channel so the child sees it without a new turn.
+    fn flush_queued_mail_to_live_input(
+        &mut self,
+        agent_id: &str,
+        claim_wake: bool,
+    ) -> (usize, usize) {
+        let input_tx = self
+            .agents
+            .get(agent_id)
+            .and_then(|agent| agent.input_tx.clone());
+        let Some(tx) = input_tx else {
+            return (
+                0,
+                self.queued_mail
+                    .get(agent_id)
+                    .map(VecDeque::len)
+                    .unwrap_or(0),
+            );
+        };
+        let pending = self.queued_mail.remove(agent_id).unwrap_or_default();
+        if pending.is_empty() {
+            return (0, 0);
+        }
+        let mut pending = pending.into_iter();
+        let mut undelivered = VecDeque::new();
+        let mut delivered = 0_usize;
+        let counter = Arc::clone(
+            self.pending_follow_ups
+                .entry(agent_id.to_string())
+                .or_default(),
+        );
+        while let Some(mail) = pending.next() {
+            counter.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            if tx
+                .send(SubAgentInput {
+                    text: mail.text.clone(),
+                    interrupt: false,
+                    pending: Some(Arc::clone(&counter)),
+                })
+                .is_ok()
+            {
+                delivered = delivered.saturating_add(1);
+            } else {
+                counter.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+                undelivered.push_back(mail);
+                undelivered.extend(pending);
+                break;
+            }
+        }
+        let remaining = undelivered.len();
+        if remaining > 0 {
+            self.queued_mail.insert(agent_id.to_string(), undelivered);
+        }
+        if claim_wake && delivered > 0 {
+            self.woken_agents.insert(agent_id.to_string(), true);
+        }
+        (delivered, remaining)
+    }
+
+    /// Restore notes that reached the live channel but never a child turn.
+    ///
+    /// A cancelled/parked child otherwise drops `input_rx` and those notes
+    /// vanish. Putting them back on `queued_mail` keeps followup/resume able
+    /// to deliver them instead of acknowledging work that never arrived.
+    fn requeue_untaken_live_inputs(&mut self, agent_id: &str, leftover: VecDeque<SubAgentInput>) {
+        if leftover.is_empty() {
+            return;
+        }
+        let mut restored = VecDeque::new();
+        for input in leftover {
+            input.mark_taken();
+            if input.text.trim().is_empty() {
+                continue;
+            }
+            restored.push_back(QueuedParentMessage {
+                text: input.text,
+                queued_at_ms: epoch_millis_now(),
+                wake: false,
+            });
+        }
+        if restored.is_empty() {
+            return;
+        }
+        let queued = self.queued_mail.entry(agent_id.to_string()).or_default();
+        restored.append(queued);
+        *queued = restored;
+    }
+
     /// Queue parent mail without waking the child (`agents/message`).
     pub fn queue_parent_message(
         &mut self,
@@ -5559,7 +5688,26 @@ impl SubAgentManager {
                 subagent_status_name(&status)
             ));
         }
-        self.queue_parent_message(&agent_id, text, false)
+        let mut receipt = self.queue_parent_message(&agent_id, text, false)?;
+        let (delivered, remaining) = self.flush_queued_mail_to_live_input(&agent_id, false);
+        receipt.queue_depth = remaining;
+        receipt.note = if delivered > 0 && remaining == 0 {
+            "queued for the child's next turn without wake".to_string()
+        } else if delivered > 0 {
+            format!(
+                "partially delivered for the child's next turn; {remaining} message(s) remain queued after the live input channel closed"
+            )
+        } else if remaining > 0
+            && self
+                .agents
+                .get(&agent_id)
+                .is_some_and(|agent| agent.input_tx.is_some())
+        {
+            "queued; running child's live input channel is closed".to_string()
+        } else {
+            receipt.note
+        };
+        Ok(receipt)
     }
 
     pub(crate) fn queue_running_parent_message_for_session(
@@ -5606,54 +5754,15 @@ impl SubAgentManager {
 
         match status {
             SubAgentStatus::Running if has_input_tx => {
-                let pending = self.queued_mail.remove(&agent_id).unwrap_or_default();
-                let input_tx = self
-                    .agents
-                    .get(&agent_id)
-                    .and_then(|agent| agent.input_tx.clone());
-                let mut pending = pending.into_iter();
-                let mut undelivered = VecDeque::new();
-                let mut delivered = 0_usize;
-                if let Some(tx) = input_tx {
-                    let counter =
-                        Arc::clone(self.pending_follow_ups.entry(agent_id.clone()).or_default());
-                    while let Some(mail) = pending.next() {
-                        counter.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                        if tx
-                            .send(SubAgentInput {
-                                text: mail.text.clone(),
-                                interrupt: false,
-                                pending: Some(Arc::clone(&counter)),
-                            })
-                            .is_ok()
-                        {
-                            delivered = delivered.saturating_add(1);
-                        } else {
-                            counter.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-                            undelivered.push_back(mail);
-                            undelivered.extend(pending);
-                            break;
-                        }
-                    }
-                }
-                if !undelivered.is_empty() {
-                    self.queued_mail.insert(agent_id.clone(), undelivered);
-                }
+                let (delivered, remaining) = self.flush_queued_mail_to_live_input(&agent_id, true);
                 receipt.woke = delivered > 0;
-                receipt.queue_depth = self
-                    .queued_mail
-                    .get(&agent_id)
-                    .map(VecDeque::len)
-                    .unwrap_or(0);
+                receipt.queue_depth = remaining;
                 receipt.continuation_handle = None;
-                receipt.note = if receipt.woke && receipt.queue_depth == 0 {
-                    self.woken_agents.insert(agent_id.clone(), true);
+                receipt.note = if receipt.woke && remaining == 0 {
                     "queued and delivered to running child".to_string()
                 } else if receipt.woke {
-                    self.woken_agents.insert(agent_id.clone(), true);
                     format!(
-                        "partially delivered to running child; {} message(s) remain queued after the live input channel closed",
-                        receipt.queue_depth
+                        "partially delivered to running child; {remaining} message(s) remain queued after the live input channel closed"
                     )
                 } else {
                     "queued; running child's live input channel is closed".to_string()
@@ -8445,12 +8554,12 @@ impl ToolSpec for AgentTool {
                 "action": {
                     "type": "string",
                     "enum": ["start", "roster", "status", "peek", "message", "followup", "interrupt", "wait", "claim", "cancel"],
-                    "description": "start launches a turn-owned worker and returns immediately. roster lists the current Fleet members and exact routes. status/peek inspect running or retained workers. message queues a note without waking a running child. followup delivers queued notes and wakes a running child for its next user-provenance model turn. interrupt stops the current turn while preserving the child checkpoint. wait only observes; see until. claim widens your own enforced write scope (see write_roots). cancel permanently cancels a running child."
+                    "description": "start launches a turn-owned worker and returns immediately. roster lists the current Fleet members and exact routes. status/peek inspect running or retained workers. message delivers a note for the child's next turn without interrupting or waking it. followup delivers queued notes and wakes a running child for its next user-provenance model turn. interrupt stops the current turn while preserving the child checkpoint. wait only observes; see until. claim widens your own enforced write scope (see write_roots). cancel permanently cancels a running child."
                 },
                 "until": {
                     "type": "string",
                     "enum": ["completion", "all", "activity"],
-                    "description": "For action=wait. completion (default) returns when any one child settles. all returns only once every child running at call time has settled, with each outcome — the fan-out join: start the batch, make one wait, then synthesize. activity also returns on progress."
+                    "description": "For action=wait. completion (default) returns when any one child settles. all returns only once every child running at call time has settled, with each outcome — the fan-out join: start the batch, make one wait, then synthesize. activity returns when a watched child publishes progress or settles — wait for a child update without joining process exit."
                 },
                 "agent_id": {
                     "type": "string",
@@ -8458,7 +8567,7 @@ impl ToolSpec for AgentTool {
                 },
                 "message": {
                     "type": "string",
-                    "description": "Parent note for action=message or action=followup. message queues only; followup also wakes a running child."
+                    "description": "Parent note for action=message or action=followup. message delivers for the child's next turn without wake; followup also wakes a running child."
                 },
                 "name": {
                     "type": "string",
@@ -8470,7 +8579,7 @@ impl ToolSpec for AgentTool {
                 },
                 "detached": {
                     "type": "boolean",
-                    "description": "False (default): the turn owns this child's non-detached subtree; the parent gets one chance to join before resumable parking. true: detached work outlives the turn; inspect or cancel it with agent(action=cancel)."
+                    "description": "False (default): the turn owns this child's non-detached subtree; the parent gets one chance to join before resumable parking. Mail and wait only reach a live child — parked work needs resume_from, or set detached=true so the child outlives the turn. true: detached work outlives the turn; inspect or cancel it with agent(action=cancel)."
                 },
                 "type": {
                     "type": "string",
@@ -11453,8 +11562,13 @@ async fn run_subagent(
     max_steps: u32,
     token_budget: Option<u64>,
     turn_end_parking: Option<Arc<std::sync::atomic::AtomicBool>>,
-    mut input_rx: mpsc::UnboundedReceiver<SubAgentInput>,
+    input_rx: mpsc::UnboundedReceiver<SubAgentInput>,
 ) -> Result<SubAgentResult> {
+    let mut input_rx = UntakenLiveInput {
+        agent_id: agent_id.clone(),
+        manager: Arc::clone(&runtime.manager),
+        rx: input_rx,
+    };
     let system_prompt =
         build_subagent_system_prompt_with_skills(&agent_type, &assignment, &runtime.context);
     let fork_context_enabled = fork_context;
