@@ -1333,6 +1333,10 @@ pub struct App {
     pub use_memory: bool,
     pub use_alt_screen: bool,
     pub use_mouse_capture: bool,
+    /// Whether right-click opens Codewhale's context menu. When false the
+    /// gesture is yielded to the terminal's own menu (UOS default terminal
+    /// opens both otherwise).
+    pub right_click_menu: bool,
     /// When true, plain Up/Down on an empty composer scroll the transcript
     /// instead of navigating input history.  Defaults to `true` when mouse
     /// capture is off: terminals that convert mouse-wheel events to arrow-key

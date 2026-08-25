@@ -1711,6 +1711,12 @@ where
 pub struct TuiConfig {
     pub alternate_screen: Option<String>,
     pub mouse_capture: Option<bool>,
+    /// Whether right-click inside the TUI opens Codewhale's own context
+    /// menu. Some terminals (e.g. UOS/deepin's default terminal) open their
+    /// native context menu on the same gesture, so users there see two
+    /// menus; `false` lets the terminal's menu own right-click. Default
+    /// `true` when omitted. CLI: `--no-right-click-menu`.
+    pub right_click_menu: Option<bool>,
     /// Timeout for startup terminal mode/probe calls in milliseconds.
     /// Defaults to 500ms when omitted.
     pub terminal_probe_timeout_ms: Option<u64>,

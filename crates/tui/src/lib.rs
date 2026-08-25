@@ -4711,6 +4711,23 @@ fn should_use_mouse_capture(cli: &Cli, config: &Config, use_alt_screen: bool) ->
     )
 }
 
+/// Whether right-click opens Codewhale's in-app context menu. Independent
+/// of mouse capture: capture decides whether mouse events arrive at all,
+/// this decides what a right-press does once they do. Terminals like the
+/// UOS/deepin default fire their own native menu on the same gesture, so
+/// users there set `[tui] right_click_menu = false` (or pass
+/// `--no-right-click-menu`) and keep the terminal's menu.
+fn should_use_right_click_menu(cli: &Cli, config: &Config) -> bool {
+    if cli.no_right_click_menu {
+        return false;
+    }
+    config
+        .tui
+        .as_ref()
+        .and_then(|tui| tui.right_click_menu)
+        .unwrap_or(true)
+}
+
 fn should_use_mouse_capture_with(
     cli: &Cli,
     config: &Config,
@@ -5399,6 +5416,7 @@ async fn run_interactive_with_notice(
     );
     let use_alt_screen = should_use_alt_screen(cli, config);
     let use_mouse_capture = should_use_mouse_capture(cli, config, use_alt_screen);
+    let right_click_menu = should_use_right_click_menu(cli, config);
     let use_bracketed_paste = crate::settings::Settings::load()
         .map(|s| s.effective_bracketed_paste())
         .unwrap_or_else(|_| !crate::settings::detected_legacy_windows_console_host());
@@ -5478,6 +5496,7 @@ async fn run_interactive_with_notice(
             allow_shell: interactive_tui_allow_shell(yolo, config),
             use_alt_screen,
             use_mouse_capture,
+            right_click_menu,
             use_bracketed_paste,
             skills_dir,
             memory_path: config.memory_path(),
@@ -11132,6 +11151,7 @@ reasoning = "high"
             tui: Some(crate::config::TuiConfig {
                 alternate_screen: Some("never".to_string()),
                 mouse_capture: None,
+                right_click_menu: None,
                 terminal_probe_timeout_ms: None,
                 stream_chunk_timeout_secs: None,
                 status_items: None,
@@ -11227,6 +11247,7 @@ reasoning = "high"
             tui: Some(crate::config::TuiConfig {
                 alternate_screen: None,
                 mouse_capture: Some(false),
+                right_click_menu: None,
                 terminal_probe_timeout_ms: None,
                 stream_chunk_timeout_secs: None,
                 status_items: None,
@@ -11254,12 +11275,35 @@ reasoning = "high"
     }
 
     #[test]
+    fn right_click_menu_defaults_on_and_yields_when_disabled() {
+        // UOS default terminal opens its own menu on right-click; the fix
+        // is letting users hand the gesture over (plan item 31).
+        let cli = parse_cli(&["codewhale"]);
+        assert!(should_use_right_click_menu(&cli, &Config::default()));
+
+        let config = Config {
+            tui: Some(crate::config::TuiConfig {
+                right_click_menu: Some(false),
+                ..crate::config::TuiConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert!(!should_use_right_click_menu(&cli, &config));
+
+        // The CLI flag wins over an explicit config `true`.
+        let cli_off = parse_cli(&["codewhale", "--no-right-click-menu"]);
+        assert!(!should_use_right_click_menu(&cli_off, &Config::default()));
+        assert!(!should_use_right_click_menu(&cli_off, &config));
+    }
+
+    #[test]
     fn config_can_enable_mouse_capture() {
         let cli = parse_cli(&["codewhale"]);
         let config = Config {
             tui: Some(crate::config::TuiConfig {
                 alternate_screen: None,
                 mouse_capture: Some(true),
+                right_click_menu: None,
                 terminal_probe_timeout_ms: None,
                 stream_chunk_timeout_secs: None,
                 status_items: None,
@@ -11347,6 +11391,7 @@ reasoning = "high"
             tui: Some(crate::config::TuiConfig {
                 alternate_screen: None,
                 mouse_capture: Some(true),
+                right_click_menu: None,
                 terminal_probe_timeout_ms: None,
                 stream_chunk_timeout_secs: None,
                 status_items: None,

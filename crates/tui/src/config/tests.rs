@@ -11280,6 +11280,18 @@ fn status_items_deser_allows_missing_field() {
 }
 
 #[test]
+fn right_click_menu_parses_and_defaults_to_none() {
+    let off: TuiConfig = toml::from_str("right_click_menu = false").expect("should parse");
+    assert_eq!(off.right_click_menu, Some(false));
+
+    let on: TuiConfig = toml::from_str("right_click_menu = true").expect("should parse");
+    assert_eq!(on.right_click_menu, Some(true));
+
+    let absent: TuiConfig = toml::from_str("mouse_capture = true").expect("should parse");
+    assert_eq!(absent.right_click_menu, None);
+}
+
+#[test]
 fn transcript_prose_measure_loads_and_resolves() -> Result<()> {
     // #5436: absent = full width; 0 also means full width; a positive
     // integer caps prose wrap at that many columns.

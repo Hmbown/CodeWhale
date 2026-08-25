@@ -675,6 +675,9 @@ pub struct TuiOptions {
     pub use_alt_screen: bool,
     /// Capture mouse input for internal scrolling/selection.
     pub use_mouse_capture: bool,
+    /// Whether right-click opens Codewhale's context menu (vs the
+    /// terminal's own). See `should_use_right_click_menu`.
+    pub right_click_menu: bool,
     /// Enable terminal bracketed-paste mode (OSC `?2004h` / `?2004l`). Defaults
     /// on; settable via `bracketed_paste = false` in `settings.toml` for the
     /// rare terminal that mishandles it.

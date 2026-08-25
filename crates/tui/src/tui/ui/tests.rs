@@ -3136,6 +3136,65 @@ fn right_click_opens_context_menu() {
 }
 
 #[test]
+fn right_click_menu_disabled_yields_the_gesture_to_the_terminal() {
+    // UOS default terminal opens its own native menu on right-click, so
+    // `right_click_menu = false` must open nothing on our side.
+    let mut app = create_test_app();
+    app.right_click_menu = false;
+
+    let events = handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 4,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(events.is_empty());
+    assert_ne!(
+        app.view_stack.top_kind(),
+        Some(ModalKind::ContextMenu),
+        "disabled right-click menu must not open a menu of its own"
+    );
+}
+
+#[test]
+fn right_click_with_menu_open_pops_when_menu_is_disabled() {
+    // A menu opened before the flag flipped (config reload) still closes on
+    // right-click instead of re-opening.
+    let mut app = create_test_app();
+    app.right_click_menu = true;
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 4,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert_eq!(app.view_stack.top_kind(), Some(ModalKind::ContextMenu));
+
+    app.right_click_menu = false;
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 4,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert_ne!(
+        app.view_stack.top_kind(),
+        Some(ModalKind::ContextMenu),
+        "right-click must close, not re-open, a disabled menu"
+    );
+}
+
+#[test]
 fn right_click_menu_includes_selection_and_clicked_cell_actions() {
     let mut app = create_test_app();
     app.history = vec![HistoryCell::Assistant {
@@ -7119,6 +7178,7 @@ fn terminal_probe_timeout_uses_tui_config_and_clamps() {
         tui: Some(crate::config::TuiConfig {
             alternate_screen: None,
             mouse_capture: None,
+            right_click_menu: None,
             terminal_probe_timeout_ms: Some(750),
             stream_chunk_timeout_secs: None,
             status_items: None,

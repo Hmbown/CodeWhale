@@ -1189,6 +1189,13 @@ fn point_hits_rect(column: u16, row: u16, area: Option<Rect>) -> bool {
 }
 
 pub(crate) fn open_context_menu(app: &mut App, mouse: MouseEvent) {
+    // Right-click may belong to the terminal (e.g. UOS default terminal
+    // opens its own menu on the same gesture); `right_click_menu = false`
+    // yields the gesture to it. Covers both the direct arm and the
+    // already-open-menu re-open arm.
+    if !app.right_click_menu {
+        return;
+    }
     let entries = build_context_menu_entries(app, mouse);
     if entries.is_empty() {
         return;

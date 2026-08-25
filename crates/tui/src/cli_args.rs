@@ -85,6 +85,12 @@ pub(crate) struct Cli {
     #[arg(long = "no-mouse-capture", conflicts_with = "mouse_capture")]
     pub(crate) no_mouse_capture: bool,
 
+    /// Disable Codewhale's right-click context menu so terminals that open
+    /// their own menu on right-click (e.g. UOS default terminal) don't show
+    /// two menus
+    #[arg(long)]
+    pub(crate) no_right_click_menu: bool,
+
     /// Skip onboarding screens
     #[arg(long)]
     pub(crate) skip_onboarding: bool,
