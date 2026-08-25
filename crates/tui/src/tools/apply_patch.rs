@@ -1330,8 +1330,7 @@ fn apply_pending_writes(pending: &[PendingWrite]) -> Result<(), ToolError> {
         };
 
         if let Err(err) = result {
-            rollback_pending_writes(&applied);
-            return Err(err);
+            return Err(apply_error_after_rollback(err, &applied));
         }
 
         applied.push(entry.clone());
@@ -1340,16 +1339,42 @@ fn apply_pending_writes(pending: &[PendingWrite]) -> Result<(), ToolError> {
     Ok(())
 }
 
-fn rollback_pending_writes(applied: &[PendingWrite]) {
+fn apply_error_after_rollback(apply_err: ToolError, applied: &[PendingWrite]) -> ToolError {
+    let Err(rollback_err) = rollback_pending_writes(applied) else {
+        return apply_err;
+    };
+    let apply_message = match &apply_err {
+        ToolError::ExecutionFailed { message } => message.clone(),
+        other => other.to_string(),
+    };
+    ToolError::execution_failed(format!(
+        "{apply_message}; rollback also failed: {rollback_err}"
+    ))
+}
+
+fn rollback_pending_writes(applied: &[PendingWrite]) -> Result<(), String> {
+    let mut failures = Vec::new();
     for entry in applied.iter().rev() {
-        match entry.original.as_ref() {
-            Some(content) => {
-                let _ = crate::utils::write_atomic_workspace(&entry.path, content.as_bytes());
-            }
-            None => {
-                let _ = fs::remove_file(&entry.path);
-            }
+        let result = match entry.original.as_ref() {
+            Some(content) => crate::utils::write_atomic_workspace(&entry.path, content.as_bytes())
+                .map_err(|error| format!("failed to restore {}: {error}", entry.path.display())),
+            None => match fs::remove_file(&entry.path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(format!(
+                    "failed to remove created file {}: {error}",
+                    entry.path.display()
+                )),
+            },
+        };
+        if let Err(message) = result {
+            failures.push(message);
         }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
     }
 }
 
@@ -2958,5 +2983,92 @@ diff --git a/two.txt b/two.txt
 
         assert!(err.to_string().contains("does not exist"), "{err}");
         assert!(!tmp.path().join("absent.txt").exists());
+    }
+
+    #[test]
+    fn apply_pending_writes_restores_earlier_files_when_a_later_write_fails() {
+        let tmp = tempdir().expect("tempdir");
+        let first = tmp.path().join("first.txt");
+        let second = tmp.path().join("second");
+        fs::write(&first, "original\n").expect("write first");
+        fs::create_dir(&second).expect("second is a directory so the write fails");
+
+        let err = apply_pending_writes(&[
+            PendingWrite {
+                path: first.clone(),
+                content: Some("patched\n".into()),
+                original: Some("original\n".into()),
+            },
+            PendingWrite {
+                path: second,
+                content: Some("nope\n".into()),
+                original: None,
+            },
+        ])
+        .expect_err("later write must fail");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("Failed to write"),
+            "apply error must be preserved: {message}"
+        );
+        assert!(
+            !message.contains("rollback also failed"),
+            "successful rollback must not be reported as a failure: {message}"
+        );
+        assert_eq!(
+            fs::read_to_string(&first).expect("read first"),
+            "original\n"
+        );
+    }
+
+    #[test]
+    fn rollback_pending_writes_reports_restore_and_remove_failures() {
+        let tmp = tempdir().expect("tempdir");
+        let restore_path = tmp.path().join("restore-me");
+        let created_path = tmp.path().join("created-me");
+        fs::create_dir(&restore_path).expect("restore target is a directory");
+        fs::create_dir(&created_path).expect("created target is a directory");
+
+        let err = rollback_pending_writes(&[
+            PendingWrite {
+                path: restore_path,
+                content: Some("new\n".into()),
+                original: Some("old\n".into()),
+            },
+            PendingWrite {
+                path: created_path,
+                content: Some("created\n".into()),
+                original: None,
+            },
+        ])
+        .expect_err("rollback of directories must fail");
+
+        assert!(err.contains("failed to restore"), "{err}");
+        assert!(err.contains("failed to remove created file"), "{err}");
+    }
+
+    #[test]
+    fn apply_error_after_rollback_surfaces_rollback_failure() {
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join("stuck");
+        fs::create_dir(&path).expect("cannot restore a directory");
+
+        let err = apply_error_after_rollback(
+            ToolError::execution_failed(format!(
+                "Failed to write {}: is a directory",
+                tmp.path().join("later.txt").display()
+            )),
+            &[PendingWrite {
+                path,
+                content: Some("new\n".into()),
+                original: Some("old\n".into()),
+            }],
+        );
+
+        let message = err.to_string();
+        assert!(message.contains("Failed to write"), "{message}");
+        assert!(message.contains("rollback also failed"), "{message}");
+        assert!(message.contains("failed to restore"), "{message}");
     }
 }
