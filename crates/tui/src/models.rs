@@ -36,6 +36,13 @@ pub const DIRECT_KIMI_K3_MAX_OUTPUT_TOKENS: u32 = 1_048_576;
 /// models resolve to their own scaled value via
 /// `compaction_threshold_for_model` (#664).
 pub const DEFAULT_COMPACTION_TOKEN_THRESHOLD: usize = 102_400;
+/// Default Codex OAuth context window for the gpt-5.6 family.
+///
+/// Codex publishes this as `context_window` and a separate expandable
+/// `max_context_window`. This table has one value, so this is the default;
+/// a fresh roster or operator override can still raise it. The public API
+/// path in [`context_window_for_model`] keeps 1.05M.
+pub(crate) const OPENAI_GPT_56_CODEX_CONTEXT_WINDOW_TOKENS: u32 = 272_000;
 #[cfg(test)]
 const COMPACTION_THRESHOLD_PERCENT: u32 = 80;
 
@@ -199,7 +206,14 @@ pub fn context_window_for_model(model: &str) -> Option<u32> {
 /// Callers that need a floor supply their own; this deliberately returns
 /// `None` rather than a default so a provider-wide fallback cannot shadow a
 /// model we actually know.
+///
+/// The OpenaiCodex capability path reads this table rather than
+/// [`context_window_for_model`], so gpt-5.6 family rows here are the Codex
+/// default rather than the public API 1.05M window.
 pub(crate) fn known_context_window_for_model(model_lower: &str) -> Option<u32> {
+    if is_openai_gpt_56_api_model(model_lower) {
+        return Some(OPENAI_GPT_56_CODEX_CONTEXT_WINDOW_TOKENS);
+    }
     match model_lower {
         // OpenAI API model docs, verified 2026-06-12:
         // https://developers.openai.com/api/docs/models/gpt-5.5
@@ -1026,6 +1040,23 @@ mod tests {
         assert_eq!(context_window_for_model("gpt-5.5-nano"), None);
         assert_eq!(max_output_tokens_for_model("gpt-5.5-nano"), None);
         assert!(!model_supports_reasoning("gpt-5.5-nano"));
+    }
+
+    #[test]
+    fn openai_gpt_56_codex_known_window_is_the_published_default_not_the_api_window() {
+        for model in ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+            assert_eq!(
+                known_context_window_for_model(model),
+                Some(OPENAI_GPT_56_CODEX_CONTEXT_WINDOW_TOKENS),
+                "{model}"
+            );
+            assert_eq!(context_window_for_model(model), Some(1_050_000), "{model}");
+            assert_ne!(
+                known_context_window_for_model(model),
+                Some(128_000),
+                "{model}"
+            );
+        }
     }
 
     #[test]

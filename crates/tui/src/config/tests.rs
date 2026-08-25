@@ -10697,8 +10697,9 @@ fn provider_capability_openai_codex_uses_responses_payload() {
     assert_eq!(cap.resolved_model, DEFAULT_OPENAI_CODEX_MODEL);
     assert_eq!(
         cap.context_window,
-        OPENAI_CODEX_EFFECTIVE_CONTEXT_WINDOW_TOKENS
+        crate::models::OPENAI_GPT_56_CODEX_CONTEXT_WINDOW_TOKENS
     );
+    assert_ne!(cap.context_window, 128_000);
     assert_eq!(cap.max_output, Some(4096));
     assert!(cap.thinking_supported);
     assert!(!cap.cache_telemetry_supported);

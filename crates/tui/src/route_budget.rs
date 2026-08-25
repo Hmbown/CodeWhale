@@ -517,6 +517,33 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn codex_gpt_56_does_not_use_the_128k_provider_floor() {
+        let window = route_context_window_tokens(ApiProvider::OpenaiCodex, "gpt-5.6", None);
+        assert_ne!(window, 128_000);
+        assert_eq!(
+            window,
+            crate::models::OPENAI_GPT_56_CODEX_CONTEXT_WINDOW_TOKENS
+        );
+        for model in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+            assert_eq!(
+                route_context_window_tokens(ApiProvider::OpenaiCodex, model, None),
+                crate::models::OPENAI_GPT_56_CODEX_CONTEXT_WINDOW_TOKENS,
+                "{model}"
+            );
+        }
+        // 80% of the 272K default (217_600) fits under the input ceiling.
+        assert_eq!(
+            compaction_threshold_for_route_at_percent(
+                ApiProvider::OpenaiCodex,
+                "gpt-5.6",
+                None,
+                80.0,
+            ),
+            217_600
+        );
+    }
+
     /// The assertion values here depend on `explicit_max_output_tokens_override`
     /// seeing no ambient env override, and sibling tests in this binary
     /// (this module, `client`, `vision/tools`, `core/engine`) set
