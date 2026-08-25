@@ -147,6 +147,21 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Editing,
     },
     KeybindingEntry {
+        chord: "y (transcript selection)",
+        description_id: crate::localization::MessageId::KbCopyFocusedBlock,
+        section: KeybindingSection::Clipboard,
+    },
+    KeybindingEntry {
+        chord: "Y (transcript selection)",
+        description_id: crate::localization::MessageId::KbCopyFocusedBlockMetadata,
+        section: KeybindingSection::Clipboard,
+    },
+    KeybindingEntry {
+        chord: "r (transcript selection)",
+        description_id: crate::localization::MessageId::KbFocusedBlockRaw,
+        section: KeybindingSection::Clipboard,
+    },
+    KeybindingEntry {
         chord: "Ctrl+Shift+E / Cmd+Shift+E",
         description_id: crate::localization::MessageId::KbToggleFileTree,
         section: KeybindingSection::Navigation,

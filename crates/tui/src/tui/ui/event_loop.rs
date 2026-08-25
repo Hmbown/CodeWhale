@@ -3352,10 +3352,15 @@ pub(crate) async fn run_event_loop(
             underwater_surface_obscured,
         );
         let shell_motion_enabled = crate::tui::underwater::decorative_shell_motion_enabled(app);
+        let live_activity = crate::tui::underwater::LiveActivity::from_app(app);
         let shell_phase_working = matches!(
-            crate::tui::underwater::ShellPhase::from_app(app),
+            crate::tui::underwater::ShellPhase::from_app_with_activity(app, live_activity),
             crate::tui::underwater::ShellPhase::Working
                 | crate::tui::underwater::ShellPhase::Verifying
+        );
+        let watchers_listening = matches!(
+            live_activity.kind(),
+            crate::tui::underwater::LiveActivityKind::Watching
         );
         // A fully idle shell settles: no live turn, no sub-agents, no active
         // durable tasks, completion exhale finished, and the user isn't
@@ -3367,6 +3372,7 @@ pub(crate) async fn run_event_loop(
             .iter()
             .any(|task| matches!(task.status.as_str(), "queued" | "running" | "waiting"));
         let ambient_busy = shell_phase_working
+            || watchers_listening
             || app.turn_started_at.is_some()
             || has_running_agents
             || durable_tasks_active
@@ -3380,7 +3386,10 @@ pub(crate) async fn run_event_loop(
         let underwater_ambient_motion = shell_motion_enabled
             && underwater_motion_visible
             && !ambient_settled
-            && (browsing_history || shell_phase_working || empty_water_visible);
+            && (browsing_history
+                || shell_phase_working
+                || watchers_listening
+                || empty_water_visible);
         let underwater_completion_motion = shell_motion_enabled
             && !underwater_surface_obscured
             && matches!(app.runtime_turn_status.as_deref(), Some("completed"))
@@ -4441,6 +4450,15 @@ pub(crate) async fn run_event_loop(
                 }
             }
 
+            // Selected-block actions (#5551). After the Tasks rail so y/Y
+            // still yank the turn id while that panel owns focus. Gated on
+            // an explicit transcript selection — empty composer + history
+            // is not focus (TUI-DOG-002).
+            if super::activity_detail::handle_focused_block_key(app, &key) {
+                app.needs_redraw = true;
+                continue;
+            }
+
             // Shifted shortcuts toggle the file-tree pane. Keep plain Ctrl+E
             // reserved for the composer end-of-line binding used by shells.
             if key_shortcuts::is_file_tree_toggle_shortcut(&key) {
@@ -4725,6 +4743,14 @@ pub(crate) async fn run_event_loop(
                         && app.input.is_empty()
                         && detail_target_cell_index(app)
                             .is_some_and(|idx| app.toggle_tool_run_expansion_at(idx)) =>
+                {
+                    continue;
+                }
+                KeyCode::Enter
+                    if key.modifiers == KeyModifiers::NONE
+                        && app.input.is_empty()
+                        && app.viewport.transcript_selection.is_active()
+                        && super::activity_detail::open_focused_cell_pager(app) =>
                 {
                     continue;
                 }

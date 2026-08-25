@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Selected transcript blocks support `y` copy content, `Y` copy metadata,
+  Enter fullscreen, and `r` raw markdown, only when an explicit selection
+  exists so empty-composer typing is not stolen (#5551).
 - Added `/tutorial` (alias `/tour`, #5556): an opt-in pager that is never
   shown automatically. The first page maps concepts for people arriving from
   Claude Code, Cursor, or Codex; later pages cover keys, the composer, models,

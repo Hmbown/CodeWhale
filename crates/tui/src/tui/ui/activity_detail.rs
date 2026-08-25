@@ -9,13 +9,14 @@
 
 use crate::localization::{MessageId, tr};
 use crate::snapshot::SnapshotRepo;
-use crate::tui::app::App;
+use crate::tui::app::{App, StatusToastLevel};
 use crate::tui::footer_ui::one_line_summary;
-use crate::tui::history::{HistoryCell, ToolCell, ToolStatus};
+use crate::tui::history::{HistoryCell, ToolCell, ToolStatus, TranscriptRenderOptions};
 use crate::tui::pager::{PagerPage, PagerView};
 use crate::tui::ui_text::{
-    history_cell_to_clipboard_text, history_cell_to_text, truncate_line_to_width,
+    history_cell_to_clipboard_text, history_cell_to_text, line_to_plain, truncate_line_to_width,
 };
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn selected_transcript_cell_index(app: &App) -> Option<usize> {
     app.viewport
@@ -500,6 +501,162 @@ pub(crate) fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> b
         pager = pager.with_copy_answer(answer);
     }
     app.view_stack.push(pager);
+    true
+}
+
+/// True when transcript block actions may steal `y` / `Y` / `r`.
+///
+/// Empty composer is not focus. Require an explicit selection so typing
+/// `yes` / `retry` after the first history cell is not eaten (TUI-DOG-002,
+/// #5551). Tasks-rail `y`/`Y` is handled earlier and remains the only
+/// empty-composer `y` claim while that panel owns focus.
+pub(super) fn transcript_block_actions_available(app: &App) -> bool {
+    app.view_stack.is_empty()
+        && app.input.is_empty()
+        && app.viewport.transcript_selection.is_active()
+        && selected_transcript_cell_index(app).is_some()
+}
+
+/// Handle `y` / `Y` / `r` for the selected transcript block. Enter is wired
+/// separately so SendQueuedNow and tool-group expansion keep precedence.
+pub(super) fn handle_focused_block_key(app: &mut App, key: &KeyEvent) -> bool {
+    if key.modifiers != KeyModifiers::NONE || !transcript_block_actions_available(app) {
+        return false;
+    }
+    match key.code {
+        KeyCode::Char('y') => copy_selected_block_content(app),
+        KeyCode::Char('Y') => copy_selected_block_metadata(app),
+        KeyCode::Char('r') => open_selected_block_raw(app),
+        _ => false,
+    }
+}
+
+fn selected_block_cell<'a>(app: &'a App) -> Option<(usize, &'a HistoryCell)> {
+    let index = selected_transcript_cell_index(app)?;
+    let cell = app.cell_at_virtual_index(index)?;
+    Some((index, cell))
+}
+
+fn copy_selected_block_content(app: &mut App) -> bool {
+    let width = app
+        .viewport
+        .last_transcript_area
+        .map(|area| area.width)
+        .unwrap_or(80);
+    let Some(text) =
+        selected_block_cell(app).map(|(_, cell)| history_cell_to_clipboard_text(cell, width))
+    else {
+        return false;
+    };
+    copy_block_text(app, &text, MessageId::ToastCopiedBlock)
+}
+
+fn copy_selected_block_metadata(app: &mut App) -> bool {
+    let width = app
+        .viewport
+        .last_transcript_area
+        .map(|area| area.width)
+        .unwrap_or(80);
+    let Some(text) = selected_block_cell(app).map(|(_, cell)| {
+        cell.lines_with_copy_metadata(width, TranscriptRenderOptions::default())
+            .into_iter()
+            .map(|line| line_to_plain(&line.line))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }) else {
+        return false;
+    };
+    copy_block_text(app, &text, MessageId::ToastCopiedBlockMetadata)
+}
+
+fn copy_block_text(app: &mut App, text: &str, ok_id: MessageId) -> bool {
+    if text.trim().is_empty() {
+        app.push_status_toast(
+            tr(app.ui_locale, MessageId::ToastBlockEmpty).into_owned(),
+            StatusToastLevel::Info,
+            Some(2_000),
+        );
+        return false;
+    }
+    if app.clipboard.write_text(text).is_ok() {
+        app.push_status_toast(
+            tr(app.ui_locale, ok_id).into_owned(),
+            StatusToastLevel::Info,
+            Some(2_000),
+        );
+        true
+    } else {
+        app.push_status_toast(
+            tr(app.ui_locale, MessageId::ToastCopyFailed).into_owned(),
+            StatusToastLevel::Error,
+            Some(2_000),
+        );
+        false
+    }
+}
+
+/// Fullscreen readable pager for the selected block. Used when empty Enter
+/// has an active selection but the selection-text pager is a no-op.
+pub(super) fn open_focused_cell_pager(app: &mut App) -> bool {
+    let width = app
+        .viewport
+        .last_transcript_area
+        .map(|area| area.width)
+        .unwrap_or(80);
+    let Some((title, content, answer)) = selected_block_cell(app).map(|(_, cell)| {
+        let title = match cell {
+            HistoryCell::User { .. } => "You",
+            HistoryCell::Assistant { .. } => "Assistant",
+            HistoryCell::System { .. } => "Note",
+            HistoryCell::Error { .. } => "Error",
+            HistoryCell::Thinking { .. } => "Reasoning",
+            HistoryCell::Tool(_) => "Tool",
+            HistoryCell::SubAgent(_) => "Sub-agent",
+            HistoryCell::ArchivedContext { .. } => "Archived Context",
+        };
+        (
+            title,
+            history_cell_to_text(cell, width),
+            completed_assistant_answer_text(cell, width),
+        )
+    }) else {
+        return false;
+    };
+    let mut pager = PagerView::from_text(title, &content, width.saturating_sub(2));
+    if let Some(answer) = answer {
+        pager = pager.with_copy_answer(answer);
+    }
+    app.view_stack.push(pager);
+    true
+}
+
+/// Raw markdown for user/assistant cells; raw tool-detail record otherwise.
+pub(super) fn open_selected_block_raw(app: &mut App) -> bool {
+    let Some(index) = selected_transcript_cell_index(app) else {
+        return false;
+    };
+    if app.tool_detail_record_for_cell(index).is_some() {
+        return open_details_pager_for_cell(app, index);
+    }
+    let width = app
+        .viewport
+        .last_transcript_area
+        .map(|area| area.width)
+        .unwrap_or(80);
+    let Some(content) = app
+        .cell_at_virtual_index(index)
+        .map(|cell| history_cell_to_clipboard_text(cell, width))
+    else {
+        return false;
+    };
+    if content.trim().is_empty() {
+        return false;
+    }
+    app.view_stack.push(PagerView::from_text(
+        "Raw markdown",
+        &content,
+        width.saturating_sub(2),
+    ));
     true
 }
 
@@ -1933,6 +2090,112 @@ mod tests {
 
         assert!(copy_cell_to_clipboard(&mut app, 0));
         assert_eq!(app.clipboard.last_written_text(), Some(content));
+    }
+
+    fn select_first_cell(app: &mut App) {
+        app.resync_history_revisions();
+        app.viewport.transcript_cache.ensure(
+            &app.history,
+            &app.history_revisions,
+            80,
+            app.transcript_render_options(),
+        );
+        app.viewport.last_transcript_area = Some(ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        app.viewport.transcript_selection.anchor =
+            Some(crate::tui::selection::TranscriptSelectionPoint {
+                line_index: 0,
+                column: 0,
+            });
+        app.viewport.transcript_selection.head =
+            Some(crate::tui::selection::TranscriptSelectionPoint {
+                line_index: 0,
+                column: 4,
+            });
+    }
+
+    #[test]
+    fn empty_composer_with_history_does_not_claim_bare_y() {
+        let mut app = test_app();
+        app.history = vec![HistoryCell::Assistant {
+            content: "hello".to_string(),
+            streaming: false,
+        }];
+        app.resync_history_revisions();
+        app.input.clear();
+        let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        assert!(
+            !handle_focused_block_key(&mut app, &key),
+            "without an explicit selection, y must remain composer input"
+        );
+        assert!(app.clipboard.last_written_text().is_none());
+    }
+
+    #[test]
+    fn selected_block_y_copies_canonical_content() {
+        let mut app = test_app();
+        app.history = vec![HistoryCell::Assistant {
+            content: "focused markdown **answer**".to_string(),
+            streaming: false,
+        }];
+        select_first_cell(&mut app);
+        let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        assert!(handle_focused_block_key(&mut app, &key));
+        assert_eq!(
+            app.clipboard.last_written_text(),
+            Some("focused markdown **answer**")
+        );
+    }
+
+    #[test]
+    fn selected_block_shift_y_copies_metadata_view() {
+        let mut app = test_app();
+        app.history = vec![HistoryCell::Assistant {
+            content: "focused markdown **answer**".to_string(),
+            streaming: false,
+        }];
+        select_first_cell(&mut app);
+        let key = KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::NONE);
+        assert!(handle_focused_block_key(&mut app, &key));
+        let copied = app.clipboard.last_written_text().expect("metadata copy");
+        assert!(
+            copied.contains("focused markdown"),
+            "metadata copy should retain the body: {copied:?}"
+        );
+    }
+
+    #[test]
+    fn selected_block_r_pages_canonical_markdown() {
+        let mut app = test_app();
+        app.history = vec![HistoryCell::Assistant {
+            content: "raw **source**".to_string(),
+            streaming: false,
+        }];
+        select_first_cell(&mut app);
+        let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+        assert!(handle_focused_block_key(&mut app, &key));
+        assert_eq!(
+            app.view_stack.top_kind(),
+            Some(crate::tui::views::ModalKind::Pager)
+        );
+    }
+
+    #[test]
+    fn selected_block_enter_opens_fullscreen_when_selection_pager_is_empty() {
+        let mut app = test_app();
+        app.history = vec![HistoryCell::User {
+            content: "prompt".to_string(),
+        }];
+        select_first_cell(&mut app);
+        assert!(open_focused_cell_pager(&mut app));
+        assert_eq!(
+            app.view_stack.top_kind(),
+            Some(crate::tui::views::ModalKind::Pager)
+        );
     }
 
     #[test]
