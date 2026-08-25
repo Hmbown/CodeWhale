@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0W25Y7BH0J5342G4WRNQZJT",
+  "session_id": "9e344e5f-36e8-4522-a487-446369a5723e",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-25T08:56:52.354338Z",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [
+    "crates/hooks/Cargo.toml",
+    "crates/hooks/src/lib.rs",
+    "crates/tui/src/tui/ui/observer_hooks.rs",
+    "crates/tui/src/tui/ui/provider_routes.rs",
+    "crates/tui/tests/integration/main.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "7b2ce8e59268",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 204,
+    "cache_creation_tokens": 556581,
+    "cache_read_tokens": 22876482,
+    "output_tokens": 110521,
+    "api_call_count": 102
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Vq2QhV8MBtzFgCVoQHS7Ue",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "artifact-design"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "7b2ce8e59268",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 302,
+        "end": 303,
+        "entry_ids": [
+          "b01557bb-52b7-4c90-8ab4-ca4df29c57fb"
+        ],
+        "tool_use_id": "toolu_01Vq2QhV8MBtzFgCVoQHS7Ue"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Vq2QhV8MBtzFgCVoQHS7Ue"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: artifact-design",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-25T08:56:52.287597Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 6261,
+    "human_modified": 15,
+    "human_removed": 0,
+    "total_committed": 6261,
+    "total_lines_changed": 6331,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
