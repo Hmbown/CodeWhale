@@ -4232,35 +4232,6 @@ pub async fn discover_manager_snapshot(
     ))
 }
 
-pub async fn discover_manager_snapshot_with_workspace_and_plugins(
-    path: &Path,
-    workspace: &Path,
-    network_policy: Option<NetworkPolicyDecider>,
-    reload_required: bool,
-    plugins: Arc<crate::plugins::PluginRegistry>,
-) -> Result<McpManagerSnapshot> {
-    let cfg = load_config_with_workspace_and_plugins(path, workspace, plugins.as_ref())?;
-    let mut pool = McpPool::new(cfg.clone());
-    pool.workspace = Some(checked_workspace_path(workspace)?);
-    pool.plugin_registry = Some(plugins);
-    if let Some(policy) = network_policy {
-        pool = pool.with_network_policy(policy);
-    }
-    let errors = pool
-        .connect_all()
-        .await
-        .into_iter()
-        .map(|(name, err)| (name, format_mcp_error_for_display(&err)))
-        .collect::<HashMap<_, _>>();
-    Ok(snapshot_from_config(
-        path,
-        path.exists(),
-        reload_required,
-        &cfg,
-        Some((&pool, &errors)),
-    ))
-}
-
 pub(crate) fn format_mcp_error_for_display(error: &anyhow::Error) -> String {
     codewhale_config::persistence::redact_secrets(&format!("{error:#}"))
 }

@@ -687,18 +687,6 @@ pub(crate) fn mcp_reload_summary(snapshot: &crate::mcp::McpManagerSnapshot) -> S
     )
 }
 
-pub(crate) fn mcp_ui_action_refreshes_discovery(action: &crate::tui::app::McpUiAction) -> bool {
-    matches!(
-        action,
-        crate::tui::app::McpUiAction::Show
-            | crate::tui::app::McpUiAction::Validate
-            | crate::tui::app::McpUiAction::Login { .. }
-            | crate::tui::app::McpUiAction::Logout { .. }
-            | crate::tui::app::McpUiAction::ImportList
-            | crate::tui::app::McpUiAction::ImportApprove { .. }
-    )
-}
-
 pub(crate) fn mcp_import_consent_path() -> PathBuf {
     codewhale_config::codewhale_home()
         .unwrap_or_else(|_| PathBuf::from("."))

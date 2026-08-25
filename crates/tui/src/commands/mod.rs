@@ -1997,14 +1997,15 @@ mod tests {
             "{task:?}"
         );
 
-        // /mcp (contextual, presentation facet): status maps to Show action.
+        // /mcp (contextual, presentation facet): bare/status opens the
+        // Extensions modal's MCP tab.
         let mcp = execute("/mcp status", &mut app);
         assert!(
             matches!(
                 mcp.action,
-                Some(crate::tui::app::AppAction::Mcp(
-                    crate::tui::app::McpUiAction::Show
-                ))
+                Some(crate::tui::app::AppAction::OpenExtensions {
+                    tab: crate::tui::views::extensions::ExtensionsTab::Mcp
+                })
             ),
             "{mcp:?}"
         );

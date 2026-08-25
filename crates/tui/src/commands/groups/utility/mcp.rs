@@ -47,7 +47,14 @@ fn mcp_contextual(contexts: CommandContexts<'_>, args: Option<&str>) -> CommandR
 fn mcp(presentation: &mut dyn CommandPresentationContext, args: Option<&str>) -> CommandResult {
     let raw = args.unwrap_or("").trim();
     if raw.is_empty() || raw.eq_ignore_ascii_case("status") || raw.eq_ignore_ascii_case("list") {
-        return CommandResult::action(AppAction::Mcp(McpUiAction::Show));
+        // The MCP manager surface is the Extensions modal's MCP tab. It opens
+        // instantly from config plus the last live-pool snapshot; the old
+        // stand-alone manager pager did a serial connect-all of every server
+        // before showing anything and offered no actions, which is why this
+        // used to take ~30s with a large server set.
+        return CommandResult::action(AppAction::OpenExtensions {
+            tab: crate::tui::views::extensions::ExtensionsTab::Mcp,
+        });
     }
 
     let mut parts = raw.split_whitespace();

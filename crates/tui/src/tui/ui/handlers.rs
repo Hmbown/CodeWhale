@@ -412,11 +412,12 @@ pub(crate) async fn handle_mcp_ui_action(
     let path = app.mcp_config_path.clone();
     let mut changed = false;
     let mut message = None;
-    let is_reload = matches!(&action, crate::tui::app::McpUiAction::Reload);
-    let discover = mcp_ui_action_refreshes_discovery(&action);
+    let is_reload = matches!(
+        &action,
+        crate::tui::app::McpUiAction::Reload | crate::tui::app::McpUiAction::Validate
+    );
 
     let action_result = match action {
-        crate::tui::app::McpUiAction::Show => Ok(()),
         crate::tui::app::McpUiAction::Init { force } => {
             changed = true;
             match mcp::init_config(&path, force) {
@@ -571,6 +572,11 @@ pub(crate) async fn handle_mcp_ui_action(
     // the retry/compatibility path for externally edited configuration.
     let rebuild_live_pool = is_reload || changed;
     let snapshot_result = if rebuild_live_pool {
+        // Validate/doctor deliberately routes through the reload path: the
+        // diagnosis comes from the engine-owned live pool reconnecting, not
+        // from a second throwaway discovery pool that used to serialize a
+        // connect-all of every configured server before the UI could show
+        // anything.
         match engine_handle.reload_mcp(path.clone()).await {
             Ok(snapshot) => {
                 app.mcp_reload_required = false;
@@ -582,18 +588,6 @@ pub(crate) async fn handle_mcp_ui_action(
                 Err(error)
             }
         }
-    } else if discover {
-        let network_policy = config.network.clone().map(|toml_cfg| {
-            crate::network_policy::NetworkPolicyDecider::with_default_audit(toml_cfg.into_runtime())
-        });
-        mcp::discover_manager_snapshot_with_workspace_and_plugins(
-            &path,
-            &app.workspace,
-            network_policy,
-            app.mcp_reload_required,
-            std::sync::Arc::clone(&app.plugin_registry),
-        )
-        .await
     } else {
         mcp::manager_snapshot_from_config_with_workspace_and_plugins(
             &path,
@@ -605,12 +599,6 @@ pub(crate) async fn handle_mcp_ui_action(
 
     match snapshot_result {
         Ok(snapshot) => {
-            if discover {
-                add_mcp_message(
-                    app,
-                    "MCP discovery refreshed for the UI. Run /mcp reload after config or credential edits to rebuild the live model-visible tool pool.".to_string(),
-                );
-            }
             // Keep the boot-time MCP-count chip in sync with the live
             // snapshot so footers and panels reflect post-/mcp edits
             // (#502).
@@ -619,7 +607,16 @@ pub(crate) async fn handle_mcp_ui_action(
             // #2068: keep the hotbar's MCP-tool actions in sync with the tools
             // that are actually loaded; the hotbar never connects on its own.
             app.hotbar_actions.replace_mcp_tools(Some(&snapshot));
-            open_mcp_manager_pager(app, &snapshot);
+            // The Extensions modal is the single MCP management surface; the
+            // row actions there round-trip through these same verbs, and the
+            // view rebuilds from this fresh snapshot on open.
+            if app.view_stack.top_kind() != Some(ModalKind::Extensions) {
+                app.view_stack
+                    .push(crate::tui::views::extensions::ExtensionsView::new(
+                        app,
+                        crate::tui::views::extensions::ExtensionsTab::Mcp,
+                    ));
+            }
         }
         Err(err) if rebuild_live_pool => add_mcp_message(
             app,

@@ -1175,7 +1175,6 @@ pub enum ShellJobAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpUiAction {
-    Show,
     Init {
         force: bool,
     },

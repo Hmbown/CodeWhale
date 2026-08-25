@@ -98,7 +98,7 @@ use crate::tui::format_helpers;
 use crate::tui::hotbar::actions::HotbarDispatch;
 use crate::tui::key_shortcuts;
 use crate::tui::live_transcript::LiveTranscriptOverlay;
-use crate::tui::mcp_routing::{add_mcp_message, open_mcp_manager_pager};
+use crate::tui::mcp_routing::add_mcp_message;
 use crate::tui::mouse_ui::*;
 use crate::tui::notifications;
 use crate::tui::onboarding;

@@ -1701,18 +1701,11 @@ fn resume_hint_omits_missing_session_id() {
 }
 
 #[test]
-fn plain_mcp_show_refreshes_discovery_counts() {
-    use crate::tui::app::McpUiAction;
-
-    assert!(mcp_ui_action_refreshes_discovery(&McpUiAction::Show));
-    assert!(mcp_ui_action_refreshes_discovery(&McpUiAction::Validate));
-    assert!(
-        !mcp_ui_action_refreshes_discovery(&McpUiAction::Reload),
-        "reload is handled by the engine-owned live pool, not a UI discovery pool"
-    );
-    assert!(!mcp_ui_action_refreshes_discovery(&McpUiAction::Init {
-        force: false,
-    }));
+fn plain_mcp_no_longer_runs_a_discovery_pool() {
+    // The Show action and its UI-side discovery pool are gone: bare /mcp and
+    // /mcp status open the Extensions modal instantly, and Validate/doctor
+    // diagnose through the engine-owned live pool (the reload path). No verb
+    // may resurrect a throwaway UI-side connect-all.
 }
 
 #[tokio::test]
