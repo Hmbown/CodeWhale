@@ -4,9 +4,9 @@
 //!
 //! Extracted verbatim from `client.rs` (#5586); visibility promoted to
 //! pub(super) so the parent re-imports keep call sites unchanged.
-//! Known follow-up (not changed by this move): wire_config_prefers_anthropic
-//! is byte-identical to the private copy in config.rs and should dedup
-//! onto one definition.
+//! wire_config_prefers_anthropic lives in config.rs (provider-config
+//! semantics) and is imported from there - it was a byte-identical
+//! duplicate before the extraction.
 
 use std::collections::HashMap;
 
@@ -19,6 +19,7 @@ use codewhale_config::is_upstream_auth_header;
 use super::WireFormat;
 use super::{xiaomi_mimo_api_key_uses_token_plan, xiaomi_mimo_base_url_uses_token_plan};
 use crate::config::ApiProvider;
+use crate::config::wire_config_prefers_anthropic;
 
 pub(super) fn build_default_headers(
     api_key: &str,
@@ -165,22 +166,6 @@ pub(super) fn provider_wire_format_for_config(
                 WireFormat::ChatCompletions
             }
         })
-}
-
-pub(super) fn wire_config_prefers_anthropic(wire: Option<&str>) -> bool {
-    let Some(raw) = wire.map(str::trim).filter(|value| !value.is_empty()) else {
-        return false;
-    };
-    let normalized = raw.to_ascii_lowercase().replace(['_', ' '], "-");
-    matches!(
-        normalized.as_str(),
-        "anthropic"
-            | "anthropic-messages"
-            | "messages"
-            | "claude"
-            | "anthropic-compatible"
-            | "anthropic-compat"
-    )
 }
 
 pub(super) fn api_provider_skips_models_probe(api_provider: ApiProvider) -> bool {
