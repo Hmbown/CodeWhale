@@ -926,6 +926,9 @@ fn recv_sync_reader_output(rx: &std::sync::mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
 pub struct BackgroundShell {
     pub id: String,
     pub command: String,
+    /// Optional caller-assigned label so later wait/kill can name the job
+    /// instead of the generated `shell_xxxxxxxx` id (#5549).
+    name: Option<String>,
     pub working_dir: PathBuf,
     pub status: ShellStatus,
     pub exit_code: Option<i64>,
@@ -1813,6 +1816,7 @@ impl ShellManager {
             BackgroundShell {
                 id,
                 command: String::new(),
+                name: None,
                 working_dir: self.default_workspace.clone(),
                 status: ShellStatus::Completed,
                 exit_code: Some(0),
@@ -2643,6 +2647,7 @@ impl ShellManager {
         let mut bg_shell = BackgroundShell {
             id: task_id.clone(),
             command: original_command.to_string(),
+            name: None,
             working_dir: working_dir.to_path_buf(),
             status: ShellStatus::Running,
             exit_code: None,
@@ -2900,6 +2905,66 @@ impl ShellManager {
     ) -> Result<ShellResult> {
         self.require_session_owner(task_id, active_session_id)?;
         self.kill(task_id)
+    }
+
+    /// Reject a duplicate background-job label in this session before spawn.
+    fn ensure_job_name_available(&self, active_session_id: &str, name: &str) -> Result<()> {
+        if let Some(existing) = self
+            .job_ids_named(active_session_id, name)
+            .into_iter()
+            .next()
+        {
+            return Err(anyhow!(
+                "Background command name `{name}` is already used by {existing}"
+            ));
+        }
+        Ok(())
+    }
+
+    fn set_job_name(&mut self, task_id: &str, name: String) -> Result<()> {
+        let shell = self
+            .processes
+            .get_mut(task_id)
+            .ok_or_else(|| anyhow!("Task {task_id} not found"))?;
+        shell.name = Some(name);
+        Ok(())
+    }
+
+    /// Resolve a `task_id`, `id`, or start-time `name` to the canonical job id.
+    /// Exact ids win; names must be unique in the session.
+    fn resolve_task_ref_for_session(
+        &self,
+        active_session_id: &str,
+        task_ref: &str,
+    ) -> Result<String> {
+        if self
+            .require_session_owner(task_ref, active_session_id)
+            .is_ok()
+        {
+            return Ok(task_ref.to_string());
+        }
+        let matches = self.job_ids_named(active_session_id, task_ref);
+        match matches.as_slice() {
+            [id] => Ok(id.clone()),
+            [] => Err(anyhow!("Task {task_ref} not found")),
+            _ => Err(anyhow!(
+                "Background command name `{task_ref}` matches {} jobs; pass a task_id",
+                matches.len()
+            )),
+        }
+    }
+
+    fn job_ids_named(&self, active_session_id: &str, name: &str) -> Vec<String> {
+        if active_session_id.is_empty() {
+            return Vec::new();
+        }
+        self.processes
+            .iter()
+            .filter_map(|(id, shell)| {
+                (shell.owner_session_id == active_session_id && shell.name.as_deref() == Some(name))
+                    .then_some(id.clone())
+            })
+            .collect()
     }
 
     /// Kill every currently running background shell process.
@@ -4575,7 +4640,7 @@ impl ToolSpec for BashTool {
         if self.read_only {
             "Inspect the workspace with the bounded read-only command subset. Commands run directly as argv, never through a shell; only action=run plus command, cwd, and timeout_ms are accepted."
         } else {
-            "Execute a shell command in the workspace. Action \"run\" (default) executes a command; \"wait\" blocks for a background task until completion or timeout; \"interact\" sends stdin to a background task; \"cancel\" kills a background task. Pass wait=false for a nonblocking task snapshot. Foreground mode is for bounded commands; use background=true for work expected to take >5 seconds. Commands run via the user's login shell ($SHELL); when that shell is zsh, a bare word starting with `=` undergoes `=command` PATH expansion (e.g. `echo ===` fails) — quote such arguments, e.g. `echo '==='`."
+            "Execute a shell command in the workspace. Action \"run\" (default) executes a command; \"wait\" blocks for a background task until completion or timeout; \"interact\" sends stdin to a background task; \"cancel\" and \"kill\" terminate a background task. Pass a `name` with background=true to label the job, then wait/kill it by that name instead of the generated task_id. Pass wait=false for a nonblocking task snapshot. Foreground mode is for bounded commands; use background=true for work expected to take >5 seconds. Commands run via the user's login shell ($SHELL); when that shell is zsh, a bare word starting with `=` undergoes `=command` PATH expansion (e.g. `echo ===` fails) — quote such arguments, e.g. `echo '==='`."
         }
     }
 
@@ -4588,8 +4653,8 @@ impl ToolSpec for BashTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["run", "wait", "interact", "cancel"],
-                    "description": "Action to perform (default: run)"
+                    "enum": ["run", "wait", "interact", "cancel", "kill"],
+                    "description": "Action to perform (default: run). kill is an alias of cancel."
                 },
                 "command": {
                     "type": "string",
@@ -4633,12 +4698,16 @@ impl ToolSpec for BashTool {
                 },
                 "task_id": {
                     "type": "string",
-                    "description": "Task ID for action=wait/interact/cancel. Also accepted as `id`."
+                    "description": "Task ID for action=wait/interact/cancel/kill. Also accepted as `id`, or as the `name` given when the job started."
                 },
                 "task_ids": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "For action=wait: wait on several background task ids at once (alternative to `task_id`)."
+                    "description": "For action=wait: wait on several background task ids (or names) at once (alternative to `task_id`)."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Optional label for a background action=run. Later wait/interact/cancel/kill accept it instead of `task_id`."
                 },
                 "until": {
                     "type": "string",
@@ -4679,8 +4748,9 @@ impl ToolSpec for BashTool {
             // `Bash{}` was schema-valid for the tool that runs shell
             // commands. What is required is per-action and cannot be spelled
             // as a flat `required` list: `run` needs `command`,
-            // `wait`/`interact`/`cancel` need `task_id` (or its `id` alias),
-            // and `cancel` needs `all` instead when cancelling everything.
+            // `wait`/`interact`/`cancel`/`kill` need `task_id` (or `id`/`name`),
+            // `wait` may pass `task_ids` instead, and `cancel`/`kill` need
+            // `all` instead when cancelling everything.
             // A root `anyOf` of `required` groups is how this repo already
             // spells that (`finance`, `apply_patch`), and `schema_sanitize`
             // knows the shape: providers that reject root composition get the
@@ -4694,6 +4764,8 @@ impl ToolSpec for BashTool {
                 { "required": ["command"] },
                 { "required": ["task_id"] },
                 { "required": ["id"] },
+                { "required": ["task_ids"] },
+                { "required": ["name"] },
                 { "required": ["all"] }
             ]
         })
@@ -4751,21 +4823,19 @@ impl ToolSpec for BashTool {
         match action {
             "wait" => return self.execute_wait(&input, context).await,
             "interact" => return self.execute_interact(&input, context).await,
-            "cancel" => return self.execute_cancel(&input, context).await,
+            "cancel" | "kill" => return self.execute_cancel(&input, context).await,
             "run" => {}
-            // Bash was the only action wrapper whose catch-all fell through to
-            // its most dangerous branch: `{"action":"kill", "command":…}` ran
-            // the command instead of cancelling, and a mis-cased "Cancel" did
-            // the same. Every sibling (`File`, `Git`, `Web`, `Run`) already
-            // refuses an unknown action; the tool that executes arbitrary code
-            // should not be the lenient one.
+            // An unknown action must not fall through to the branch that runs
+            // arbitrary code. `kill` is a real alias of `cancel`; a mis-cased
+            // "Cancel" or a junk value still refuses here.
             other => {
                 return Err(ToolError::invalid_input(format!(
-                    "Unknown Bash action \"{other}\"; nothing was run. Pass one of: run, wait, interact, cancel."
+                    "Unknown Bash action \"{other}\"; nothing was run. Pass one of: run, wait, interact, cancel, kill."
                 )));
             }
         }
         let command = required_str(&input, "command")?;
+        let job_name = parse_optional_job_name(&input)?;
         match context.shell_policy {
             ShellPolicy::None => {
                 return Ok(ToolResult::error(
@@ -4834,6 +4904,11 @@ impl ToolSpec for BashTool {
         }
 
         let persist = optional_bool(&input, "persist", false)?;
+        if job_name.is_some() && !background && !tty {
+            return Err(ToolError::invalid_input(
+                "name requires background:true (or tty:true) so the label can be used later with action=wait/kill.",
+            ));
+        }
         if persist {
             if !background {
                 return Err(ToolError::invalid_input(
@@ -5190,6 +5265,11 @@ impl ToolSpec for BashTool {
                 .shell_manager
                 .lock()
                 .map_err(|_| ToolError::execution_failed("shell manager lock poisoned"))?;
+            if let Some(name) = job_name.as_deref() {
+                manager
+                    .ensure_job_name_available(&context.state_namespace, name)
+                    .map_err(|err| ToolError::invalid_input(err.to_string()))?;
+            }
             let result = manager.execute_with_options_env_for_owner_and_work(
                 command,
                 working_dir.as_deref(),
@@ -5211,6 +5291,13 @@ impl ToolSpec for BashTool {
             {
                 manager
                     .attach_heavy_permit(task_id, permit)
+                    .map_err(|error| ToolError::execution_failed(error.to_string()))?;
+            }
+            if let (Ok(result), Some(name)) = (&result, job_name.as_ref())
+                && let Some(task_id) = result.task_id.as_deref()
+            {
+                manager
+                    .set_job_name(task_id, name.clone())
                     .map_err(|error| ToolError::execution_failed(error.to_string()))?;
             }
             result
@@ -5257,6 +5344,10 @@ impl ToolSpec for BashTool {
                     return finish_contract_bash_result(result, timeout_ms, context);
                 }
                 let task_id_str = result.task_id.clone().unwrap_or_default();
+                let named = job_name
+                    .as_deref()
+                    .map(|name| format!(" (name: {name})"))
+                    .unwrap_or_default();
                 let stdout_summary = summarize_output(&result.stdout);
                 let stderr_summary = summarize_output(&result.stderr);
                 let summary = if !stderr_summary.is_empty() {
@@ -5302,7 +5393,7 @@ impl ToolSpec for BashTool {
                         )
                     } else {
                         format!(
-                            "Background task started: {task_id_str}\n\nReturns immediately; {completion_contract} Codewhale terminates this task when the session exits. If a service must survive a successful headless exec, start it with background=true and persist=true. Keep working; call Bash action=\"wait\" task_id=\"{task_id_str}\" at a true dependency to block until completion or timeout."
+                            "Background task started: {task_id_str}{named}\n\nReturns immediately; {completion_contract} Codewhale terminates this task when the session exits. If a service must survive a successful headless exec, start it with background=true and persist=true. Keep working; call Bash action=\"wait\" task_id=\"{task_id_str}\" at a true dependency to block until completion or timeout."
                         )
                     }
                 } else if result.status == ShellStatus::Killed && was_cancelled {
@@ -5386,6 +5477,9 @@ impl ToolSpec for BashTool {
                     }),
                 });
                 metadata["backgrounded"] = json!(background || backgrounded_foreground);
+                if let Some(name) = job_name.as_deref() {
+                    metadata["name"] = json!(name);
+                }
                 if persist {
                     metadata["persist_requested"] = json!(true);
                     metadata["ownership"] = json!("managed_pending_exec_success");
@@ -5484,7 +5578,7 @@ impl BashTool {
                 .collect::<Result<Vec<_>, _>>()?;
             return self.execute_wait_many(input, context, &ids).await;
         }
-        let task_id = required_task_id(input)?;
+        let task_id = resolve_session_task_ref(context, required_task_ref(input)?)?;
         let wait = match first_present_field(input, &["wait", "block"]) {
             None => true,
             Some((name, value)) => value
@@ -5494,14 +5588,14 @@ impl BashTool {
         let timeout_ms = wait_timeout_ms(input)?;
 
         let (delta, wait_canceled) = if wait {
-            wait_for_shell_delta_cancellable(context, task_id, timeout_ms).await?
+            wait_for_shell_delta_cancellable(context, &task_id, timeout_ms).await?
         } else {
             let mut manager = context
                 .shell_manager
                 .lock()
                 .map_err(|_| ToolError::execution_failed("shell manager lock poisoned"))?;
             let delta = manager
-                .get_output_delta_for_session(&context.state_namespace, task_id, false, timeout_ms)
+                .get_output_delta_for_session(&context.state_namespace, &task_id, false, timeout_ms)
                 .map_err(|err| ToolError::execution_failed(err.to_string()))?;
             (delta, false)
         };
@@ -5558,9 +5652,24 @@ impl BashTool {
                 .ok_or_else(|| type_mismatch(name, value, "a boolean"))?,
         };
         let timeout_ms = wait_timeout_ms(input)?;
+        let task_ids = {
+            let manager = context
+                .shell_manager
+                .lock()
+                .map_err(|_| ToolError::execution_failed("shell manager lock poisoned"))?;
+            task_ids
+                .iter()
+                .map(|id| {
+                    manager
+                        .resolve_task_ref_for_session(&context.state_namespace, id)
+                        .map_err(|err| ToolError::execution_failed(err.to_string()))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
         let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
         let mut timed_out = false;
         let mut wait_canceled = false;
+        let session_id = context.state_namespace.clone();
 
         let snapshot =
             |manager: &mut ShellManager| -> Result<Vec<(String, ShellStatus)>, ToolError> {
@@ -5568,7 +5677,7 @@ impl BashTool {
                     .iter()
                     .map(|id| {
                         let detail = manager
-                            .inspect_job(id)
+                            .inspect_job_for_session(&session_id, id)
                             .map_err(|err| ToolError::execution_failed(err.to_string()))?;
                         Ok((id.clone(), detail.snapshot.status))
                     })
@@ -5685,7 +5794,7 @@ impl BashTool {
         input: &serde_json::Value,
         context: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let task_id = required_task_id(input)?;
+        let task_id = resolve_session_task_ref(context, required_task_ref(input)?)?;
         let close_stdin = optional_bool(input, "close_stdin", false)?;
         let timeout_ms = optional_u64(input, "timeout_ms", 1_000)?;
         // Same strict-type contract as `run` (2026-08-04): a non-string here
@@ -5709,7 +5818,7 @@ impl BashTool {
                 manager
                     .write_stdin_for_session(
                         &context.state_namespace,
-                        task_id,
+                        &task_id,
                         interaction_input,
                         close_stdin,
                     )
@@ -5729,7 +5838,7 @@ impl BashTool {
                     .lock()
                     .map_err(|_| ToolError::execution_failed("shell manager lock poisoned"))?;
                 let delta = manager
-                    .get_output_delta_for_session(&context.state_namespace, task_id, false, 0)
+                    .get_output_delta_for_session(&context.state_namespace, &task_id, false, 0)
                     .map_err(|err| ToolError::execution_failed(err.to_string()))?;
                 let mut result = build_shell_delta_tool_result(delta, context);
                 if let Some(metadata) = result.metadata.as_mut()
@@ -5746,7 +5855,7 @@ impl BashTool {
                     .lock()
                     .map_err(|_| ToolError::execution_failed("shell manager lock poisoned"))?;
                 manager
-                    .get_output_delta_for_session(&context.state_namespace, task_id, false, 0)
+                    .get_output_delta_for_session(&context.state_namespace, &task_id, false, 0)
                     .map_err(|err| ToolError::execution_failed(err.to_string()))?
             };
 
@@ -5810,20 +5919,26 @@ impl BashTool {
             });
         }
 
-        let task_id = required_task_id(input)?;
-        let result = manager
-            .kill_for_session(&context.state_namespace, task_id)
+        let task_ref = required_task_ref(input)?;
+        let task_id = manager
+            .resolve_task_ref_for_session(&context.state_namespace, task_ref)
             .map_err(|err| ToolError::execution_failed(err.to_string()))?;
-        let task_id = result
-            .task_id
-            .clone()
-            .unwrap_or_else(|| task_id.to_string());
+        let result = manager
+            .kill_for_session(&context.state_namespace, &task_id)
+            .map_err(|err| ToolError::execution_failed(err.to_string()))?;
+        let task_id = result.task_id.clone().unwrap_or(task_id);
+        let named = (task_ref != task_id).then_some(task_ref);
+        let content = match named {
+            Some(name) => format!("Canceled background command: {task_id} (name: {name})"),
+            None => format!("Canceled background command: {task_id}"),
+        };
         Ok(ToolResult {
-            content: format!("Canceled background command: {task_id}"),
+            content,
             success: true,
             metadata: Some(json!({
                 "status": format!("{:?}", result.status),
                 "task_id": task_id,
+                "name": named,
                 "exit_code": result.exit_code,
                 "duration_ms": result.duration_ms,
             })),
@@ -5831,15 +5946,50 @@ impl BashTool {
     }
 }
 
-fn required_task_id(input: &serde_json::Value) -> Result<&str, ToolError> {
+fn required_task_ref(input: &serde_json::Value) -> Result<&str, ToolError> {
     // A present-but-non-string task_id is a type error, not a missing field:
     // "missing required field" sends the model's retry in the wrong
     // direction when it already supplied `task_id: 42` (2026-08-04 review).
-    match first_present_field(input, &["task_id", "id"]) {
+    match first_present_field(input, &["task_id", "id", "name"]) {
         None => Err(ToolError::missing_field("task_id")),
         Some((name, value)) => value
             .as_str()
             .ok_or_else(|| type_mismatch(name, value, "a string")),
+    }
+}
+
+fn resolve_session_task_ref(context: &ToolContext, task_ref: &str) -> Result<String, ToolError> {
+    let manager = context
+        .shell_manager
+        .lock()
+        .map_err(|_| ToolError::execution_failed("shell manager lock poisoned"))?;
+    manager
+        .resolve_task_ref_for_session(&context.state_namespace, task_ref)
+        .map_err(|err| ToolError::execution_failed(err.to_string()))
+}
+
+const MAX_SHELL_JOB_NAME_CHARS: usize = 64;
+
+fn parse_optional_job_name(input: &serde_json::Value) -> Result<Option<String>, ToolError> {
+    match optional_str(input, "name")? {
+        None => Ok(None),
+        Some(raw) => {
+            let name = raw.trim();
+            if name.is_empty() {
+                return Err(ToolError::invalid_input("name must be a non-empty label"));
+            }
+            if name.chars().count() > MAX_SHELL_JOB_NAME_CHARS {
+                return Err(ToolError::invalid_input(format!(
+                    "name must be at most {MAX_SHELL_JOB_NAME_CHARS} characters"
+                )));
+            }
+            if name.chars().any(char::is_control) {
+                return Err(ToolError::invalid_input(
+                    "name cannot contain control characters",
+                ));
+            }
+            Ok(Some(name.to_string()))
+        }
     }
 }
 

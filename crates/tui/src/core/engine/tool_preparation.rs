@@ -182,7 +182,16 @@ fn registered_resource_claims(
         | "exec_wait"
         | "exec_shell_interact"
         | "exec_interact"
-        | "exec_shell_cancel" => Ok(terminal_claim(input, "task_id", None)),
+        | "exec_shell_cancel" => {
+            let key = ["task_id", "id", "name"].into_iter().find(|key| {
+                input
+                    .get(*key)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .is_some_and(|id| !id.is_empty())
+            });
+            Ok(terminal_claim(input, key.unwrap_or("task_id"), None))
+        }
         _ => Ok(global_exclusive_claim()),
     }
 }

@@ -1495,6 +1495,379 @@ async fn exec_shell_wait_many_rejects_an_unknown_task_id() {
     assert!(err.to_string().contains("nope-1"), "{err}");
 }
 
+#[test]
+fn bash_schema_advertises_named_kill() {
+    let schema = BashTool::new("Bash").input_schema();
+    let actions: Vec<&str> = schema["properties"]["action"]["enum"]
+        .as_array()
+        .expect("action enum")
+        .iter()
+        .map(|value| value.as_str().expect("action name"))
+        .collect();
+    assert!(actions.contains(&"kill"), "{actions:?}");
+    assert!(
+        schema["properties"]["name"].is_object(),
+        "name must be advertised so a model can label and later kill a job"
+    );
+    let name = schema["properties"]["name"]["description"]
+        .as_str()
+        .expect("name description");
+    assert!(name.contains("kill") || name.contains("cancel"), "{name}");
+}
+
+#[tokio::test]
+async fn background_name_is_returned_and_kills_only_that_job() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let keep = BashTool::new("Bash")
+        .execute(
+            json!({
+                "command": sleep_command(30),
+                "background": true,
+                "name": "keep-alive"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("start keep");
+    let stop = BashTool::new("Bash")
+        .execute(
+            json!({
+                "command": sleep_command(30),
+                "background": true,
+                "name": "stop-me"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("start stop");
+    assert_eq!(
+        keep.metadata
+            .as_ref()
+            .and_then(|m| m.get("name"))
+            .and_then(Value::as_str),
+        Some("keep-alive")
+    );
+    assert!(
+        keep.content.contains("name: keep-alive"),
+        "{}",
+        keep.content
+    );
+    let keep_id = keep
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("task_id"))
+        .and_then(Value::as_str)
+        .expect("keep id")
+        .to_string();
+    let stop_id = stop
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("task_id"))
+        .and_then(Value::as_str)
+        .expect("stop id")
+        .to_string();
+
+    let killed = BashTool::new("Bash")
+        .execute(json!({ "action": "kill", "name": "stop-me" }), &ctx)
+        .await
+        .expect("named kill");
+    assert!(killed.success, "{}", killed.content);
+    assert!(killed.content.contains(&stop_id), "{}", killed.content);
+    assert!(killed.content.contains("stop-me"), "{}", killed.content);
+    assert_eq!(
+        killed
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("status"))
+            .and_then(Value::as_str),
+        Some("Killed")
+    );
+
+    let mut manager = ctx.shell_manager.lock().expect("shell manager");
+    assert_eq!(
+        manager
+            .inspect_job(&stop_id)
+            .expect("stop job")
+            .snapshot
+            .status,
+        ShellStatus::Killed
+    );
+    assert_eq!(
+        manager
+            .inspect_job(&keep_id)
+            .expect("keep job")
+            .snapshot
+            .status,
+        ShellStatus::Running
+    );
+}
+
+#[tokio::test]
+async fn kill_by_task_id_field_accepts_the_start_name() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    BashTool::new("Bash")
+        .execute(
+            json!({
+                "command": sleep_command(30),
+                "background": true,
+                "name": "dev-server"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("start");
+
+    let killed = BashTool::new("Bash")
+        .execute(json!({ "action": "kill", "task_id": "dev-server" }), &ctx)
+        .await
+        .expect("kill via task_id name");
+    assert!(killed.success, "{}", killed.content);
+    assert!(killed.content.contains("dev-server"), "{}", killed.content);
+}
+
+#[tokio::test]
+async fn cancel_by_name_is_the_same_path_as_kill() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let started = BashTool::new("Bash")
+        .execute(
+            json!({
+                "command": sleep_command(30),
+                "background": true,
+                "name": "via-cancel"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("start");
+    let task_id = started
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("task_id"))
+        .and_then(Value::as_str)
+        .expect("task id")
+        .to_string();
+
+    let cancelled = BashTool::new("Bash")
+        .execute(json!({ "action": "cancel", "name": "via-cancel" }), &ctx)
+        .await
+        .expect("named cancel");
+    assert!(cancelled.success, "{}", cancelled.content);
+    let mut manager = ctx.shell_manager.lock().expect("shell manager");
+    assert_eq!(
+        manager.inspect_job(&task_id).expect("job").snapshot.status,
+        ShellStatus::Killed
+    );
+}
+
+#[tokio::test]
+async fn wait_by_name_and_wait_many_names_resolve() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    BashTool::new("Bash")
+        .execute(
+            json!({
+                "command": echo_command("named-wait-done"),
+                "background": true,
+                "name": "echo-job"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("start echo");
+    let wait = BashTool::new("Bash")
+        .execute(
+            json!({
+                "action": "wait",
+                "name": "echo-job",
+                "timeout_ms": 8_000
+            }),
+            &ctx,
+        )
+        .await
+        .expect("wait by name");
+    assert_eq!(
+        wait.metadata
+            .as_ref()
+            .and_then(|m| m.get("status"))
+            .and_then(Value::as_str),
+        Some("Completed")
+    );
+
+    let short = BashTool::new("Bash")
+        .execute(
+            json!({
+                "command": sleep_command(1),
+                "background": true,
+                "name": "short-named"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("start short");
+    let long = BashTool::new("Bash")
+        .execute(
+            json!({
+                "command": sleep_command(30),
+                "background": true,
+                "name": "long-named"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("start long");
+    let short_id = short
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("task_id"))
+        .and_then(Value::as_str)
+        .expect("short id")
+        .to_string();
+    let long_id = long
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("task_id"))
+        .and_then(Value::as_str)
+        .expect("long id")
+        .to_string();
+
+    let many = BashTool::new("Bash")
+        .execute(
+            json!({
+                "action": "wait",
+                "task_ids": ["short-named", "long-named"],
+                "until": "any",
+                "timeout_ms": 8_000
+            }),
+            &ctx,
+        )
+        .await
+        .expect("wait many names");
+    let statuses = many
+        .metadata
+        .as_ref()
+        .expect("metadata")
+        .get("statuses")
+        .expect("statuses");
+    assert_eq!(statuses[short_id.as_str()], "Completed");
+    assert_eq!(statuses[long_id.as_str()], "Running");
+
+    BashTool::new("Bash")
+        .execute(json!({ "action": "kill", "name": "long-named" }), &ctx)
+        .await
+        .expect("cleanup long");
+}
+
+#[tokio::test]
+async fn duplicate_background_name_is_refused() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    BashTool::new("Bash")
+        .execute(
+            json!({
+                "command": sleep_command(30),
+                "background": true,
+                "name": "taken"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("first");
+    let err = BashTool::new("Bash")
+        .execute(
+            json!({
+                "command": sleep_command(30),
+                "background": true,
+                "name": "taken"
+            }),
+            &ctx,
+        )
+        .await
+        .expect_err("duplicate name must fail before spawn");
+    assert!(err.to_string().contains("taken"), "{err}");
+}
+
+#[tokio::test]
+async fn empty_or_foreground_name_is_refused() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let empty = BashTool::new("Bash")
+        .execute(
+            json!({
+                "command": sleep_command(1),
+                "background": true,
+                "name": "   "
+            }),
+            &ctx,
+        )
+        .await
+        .expect_err("whitespace name");
+    assert!(empty.to_string().contains("non-empty"), "{empty}");
+
+    let foreground = BashTool::new("Bash")
+        .execute(json!({ "command": "echo hi", "name": "fg" }), &ctx)
+        .await
+        .expect_err("foreground name");
+    assert!(
+        foreground.to_string().contains("background:true"),
+        "{foreground}"
+    );
+}
+
+#[tokio::test]
+async fn kill_with_command_does_not_run_the_command() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let marker = tmp.path().join("should-not-exist");
+    let err = BashTool::new("Bash")
+        .execute(
+            json!({
+                "action": "kill",
+                "command": format!("touch {}", marker.display()),
+            }),
+            &ctx,
+        )
+        .await
+        .expect_err("kill without a task must not run");
+    let message = err.to_string();
+    assert!(
+        message.contains("task_id") || message.contains("name"),
+        "{message}"
+    );
+    assert!(!message.contains("Unknown Bash action"), "{message}");
+    assert!(!marker.exists(), "the command must not have run");
+}
+
+#[tokio::test]
+async fn named_kill_is_hidden_from_another_session() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx_a = ToolContext::new(tmp.path()).with_state_namespace("session-a");
+    let ctx_b = ctx_a.clone().with_state_namespace("session-b");
+    BashTool::new("Bash")
+        .execute(
+            json!({
+                "command": sleep_command(30),
+                "background": true,
+                "name": "private"
+            }),
+            &ctx_a,
+        )
+        .await
+        .expect("start A");
+    let err = BashTool::new("Bash")
+        .execute(json!({ "action": "kill", "name": "private" }), &ctx_b)
+        .await
+        .expect_err("foreign session must not see the name");
+    assert!(err.to_string().contains("not found"), "{err}");
+    let killed = BashTool::new("Bash")
+        .execute(json!({ "action": "kill", "name": "private" }), &ctx_a)
+        .await
+        .expect("owner can kill by name");
+    assert!(killed.success, "{}", killed.content);
+}
+
 #[tokio::test]
 async fn background_start_advertises_task_status_completion() {
     let tmp = tempdir().expect("tempdir");
@@ -3637,7 +4010,7 @@ async fn unknown_bash_action_is_refused_instead_of_running_the_command() {
     let error = BashTool::new("Bash")
         .execute(
             json!({
-                "action": "kill",
+                "action": "explode",
                 "command": format!("touch {}", marker.display()),
             }),
             &context,
@@ -3647,9 +4020,9 @@ async fn unknown_bash_action_is_refused_instead_of_running_the_command() {
 
     let message = error.to_string();
     assert!(message.contains("Unknown Bash action"), "{message}");
-    assert!(message.contains("kill"), "{message}");
+    assert!(message.contains("explode"), "{message}");
     assert!(
-        message.contains("run, wait, interact, cancel"),
+        message.contains("run, wait, interact, cancel, kill"),
         "must name the actions that dispatch: {message}"
     );
     assert!(!marker.exists(), "the command must not have run");
@@ -3780,6 +4153,7 @@ async fn every_valid_bash_action_still_dispatches() {
         json!({"action": "wait", "task_id": "no-such-task"}),
         json!({"action": "interact", "task_id": "no-such-task", "stdin": "y\n"}),
         json!({"action": "cancel", "task_id": "no-such-task"}),
+        json!({"action": "kill", "task_id": "no-such-task"}),
     ] {
         let outcome = tool.execute(input.clone(), &context).await;
         let message = match outcome {
@@ -3868,7 +4242,14 @@ fn bash_schema_declares_what_each_action_requires() {
         })
         .collect();
 
-    for expected in [["command"], ["task_id"], ["id"], ["all"]] {
+    for expected in [
+        ["command"],
+        ["task_id"],
+        ["id"],
+        ["task_ids"],
+        ["name"],
+        ["all"],
+    ] {
         assert!(
             groups.iter().any(|group| group.as_slice() == expected),
             "missing required group {expected:?} in {groups:?}"
@@ -3896,7 +4277,14 @@ fn bash_required_groups_survive_a_provider_that_drops_root_composition() {
         .expect("dropped required groups must be restated for the model");
 
     assert!(note.contains("At least one"), "{note}");
-    for name in ["`command`", "`task_id`", "`id`", "`all`"] {
+    for name in [
+        "`command`",
+        "`task_id`",
+        "`id`",
+        "`task_ids`",
+        "`name`",
+        "`all`",
+    ] {
         assert!(note.contains(name), "note must name {name}: {note}");
     }
     assert_eq!(schema["type"], "object");

@@ -21,10 +21,12 @@ pub(crate) const CANONICAL_ACTION_ALIASES: &[(&str, &str, &str)] = &[
     ("bash", "wait", "exec_shell_wait"),
     ("bash", "interact", "exec_shell_interact"),
     ("bash", "cancel", "exec_shell_cancel"),
+    ("bash", "kill", "exec_shell_cancel"),
     ("Bash", "run", "exec_shell"),
     ("Bash", "wait", "exec_shell_wait"),
     ("Bash", "interact", "exec_shell_interact"),
     ("Bash", "cancel", "exec_shell_cancel"),
+    ("Bash", "kill", "exec_shell_cancel"),
     ("File", "read", "read_file"),
     ("File", "list", "list_dir"),
     ("File", "search_name", "file_search"),
@@ -286,6 +288,10 @@ mod tests {
         );
         assert_eq!(
             canonical_action_alias("bash", &json!({"action": "cancel"})),
+            "exec_shell_cancel"
+        );
+        assert_eq!(
+            canonical_action_alias("bash", &json!({"action": "kill"})),
             "exec_shell_cancel"
         );
     }
