@@ -11226,12 +11226,13 @@ fn provider_capability_roundtrip_serialization() {
 }
 
 #[test]
-fn status_item_balance_available_only_for_deepseek_providers() {
-    // Balance item should only be offered for DeepSeek / DeepSeekCN.
+fn status_item_balance_available_for_prepaid_providers() {
     assert!(StatusItem::Balance.is_available_for(ApiProvider::Deepseek));
     assert!(StatusItem::Balance.is_available_for(ApiProvider::DeepseekCN));
-    // Sanity: all other known providers should hide the Balance toggle.
-    assert!(!StatusItem::Balance.is_available_for(ApiProvider::Openrouter));
+    assert!(StatusItem::Balance.is_available_for(ApiProvider::Openrouter));
+    assert!(StatusItem::Balance.is_available_for(ApiProvider::Siliconflow));
+    assert!(StatusItem::Balance.is_available_for(ApiProvider::SiliconflowCn));
+    // Invoice-only, local, and unimplemented prepaid vendors stay hidden.
     assert!(!StatusItem::Balance.is_available_for(ApiProvider::Novita));
     assert!(!StatusItem::Balance.is_available_for(ApiProvider::NvidiaNim));
     assert!(!StatusItem::Balance.is_available_for(ApiProvider::Fireworks));

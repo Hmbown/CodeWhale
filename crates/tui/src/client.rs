@@ -4215,6 +4215,12 @@ pub(crate) use prepared::{
 };
 pub(crate) use provider_native_search::{ProviderNativeSearchClient, ProviderNativeSearchRequest};
 
+/// Whether a route speaks ordinary `/chat/completions` (not Messages or Responses).
+#[must_use]
+pub(crate) fn provider_speaks_chat_completions(api_provider: ApiProvider) -> bool {
+    provider_default_wire_format(api_provider) == WireFormat::ChatCompletions
+}
+
 pub(crate) fn inspect_prompt_for_request(request: &MessageRequest) -> PromptInspection {
     chat::inspect_prompt_for_request(request)
 }

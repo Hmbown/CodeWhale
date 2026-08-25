@@ -2351,7 +2351,7 @@ pub enum StatusItem {
     RateLimit,
     /// Session token usage: input / cache-hit / output.
     Tokens,
-    /// DeepSeek account balance, refreshed once per turn completion.
+    /// Prepaid remaining credit, refreshed once per turn completion.
     Balance,
     /// Session metrics strip: turns · steps │ LLM · tools │ TTFT · tok/s │
     /// cache │ in — sourced from engine timings and provider usage.
@@ -2466,7 +2466,7 @@ impl StatusItem {
             StatusItem::LastToolElapsed => "ms of the most recent tool call (reserved)",
             StatusItem::RateLimit => "remaining requests in the budget (reserved)",
             StatusItem::Tokens => "input / cache-hit / output token totals",
-            StatusItem::Balance => "topped-up + granted balance from DeepSeek",
+            StatusItem::Balance => "remaining prepaid credit from the active provider",
             StatusItem::SessionMetrics => "turns · steps · LLM/tool time · TTFT · tok/s · input",
         }
     }
@@ -2499,12 +2499,24 @@ impl StatusItem {
     #[must_use]
     pub fn is_available_for(self, provider: ApiProvider) -> bool {
         match self {
-            StatusItem::Balance => {
-                matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
-            }
+            StatusItem::Balance => provider_has_balance_api(provider),
             _ => true,
         }
     }
+}
+
+/// Prepaid providers that publish a remaining-credit endpoint Codewhale
+/// can fetch. Local runtimes and invoice-only vendors stay out.
+#[must_use]
+pub fn provider_has_balance_api(provider: ApiProvider) -> bool {
+    matches!(
+        provider,
+        ApiProvider::Deepseek
+            | ApiProvider::DeepseekCN
+            | ApiProvider::Openrouter
+            | ApiProvider::Siliconflow
+            | ApiProvider::SiliconflowCn
+    )
 }
 
 /// One configurable header item

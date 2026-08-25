@@ -1108,6 +1108,8 @@ pub enum AppAction {
         title: String,
         content: String,
     },
+    /// Live remaining-credit lookup for prepaid providers (`/balance`).
+    FetchBalance,
     FetchModels,
     /// Force a Models.dev live-catalog refresh into ProviderLake (#4187).
     RefreshModelsDevCatalog,

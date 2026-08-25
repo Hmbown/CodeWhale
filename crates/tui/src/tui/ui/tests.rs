@@ -21574,7 +21574,7 @@ fn default_footer_excludes_provider_specific_diagnostic_chips() {
     );
     assert!(
         !items.contains(&crate::config::StatusItem::Balance),
-        "balance is DeepSeek-only and should not crowd the default footer for non-DeepSeek users"
+        "balance is an opt-in prepaid chip and should not crowd the default footer"
     );
     assert!(
         items.contains(&crate::config::StatusItem::Cache),
@@ -21589,27 +21589,43 @@ fn default_footer_excludes_provider_specific_diagnostic_chips() {
 // ── Balance footer chip tests ─────────────────────────────────────
 
 #[test]
-fn should_fetch_deepseek_balance_requires_balance_status_item() {
+fn should_fetch_provider_balance_requires_balance_status_item() {
     let mut app = create_test_app();
     app.api_provider = ApiProvider::Deepseek;
     app.status_items = crate::config::StatusItem::default_footer();
 
-    assert!(!should_fetch_deepseek_balance(&app));
+    assert!(!should_fetch_provider_balance(&app));
 
     app.status_items.push(crate::config::StatusItem::Balance);
-    assert!(should_fetch_deepseek_balance(&app));
+    assert!(should_fetch_provider_balance(&app));
 }
 
 #[test]
-fn should_fetch_deepseek_balance_requires_deepseek_provider() {
+fn should_fetch_provider_balance_covers_prepaid_providers() {
     let mut app = create_test_app();
     app.status_items = vec![crate::config::StatusItem::Balance];
 
+    app.api_provider = ApiProvider::Ollama;
+    assert!(!should_fetch_provider_balance(&app));
+
     app.api_provider = ApiProvider::Openrouter;
-    assert!(!should_fetch_deepseek_balance(&app));
+    assert!(should_fetch_provider_balance(&app));
+
+    app.api_provider = ApiProvider::Siliconflow;
+    assert!(should_fetch_provider_balance(&app));
 
     app.api_provider = ApiProvider::DeepseekCN;
-    assert!(should_fetch_deepseek_balance(&app));
+    assert!(should_fetch_provider_balance(&app));
+}
+
+#[test]
+fn openrouter_credits_map_remaining_usd() {
+    let info =
+        openrouter_credits_from_json(r#"{"data":{"total_credits":50.0,"total_usage":12.345}}"#)
+            .expect("openrouter credits JSON");
+    assert_eq!(info.currency, "USD");
+    assert_eq!(info.total_balance, "37.66");
+    assert_eq!(info.chip_label().as_deref(), Some("$37.66"));
 }
 
 /// Regression for issue #244: visible session spend must not decrease.

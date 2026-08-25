@@ -157,15 +157,131 @@ pub(crate) fn complete_provider_picker_onboarding_if_switched(
     }
 }
 
-/// Fetch the DeepSeek account balance from the balance API.
+/// How one prepaid provider publishes remaining credit. Each variant is a
+/// distinct wire contract — do not send DeepSeek `/user/balance` to a
+/// provider that does not speak it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BalanceApi {
+    DeepSeekUserBalance,
+    OpenRouterCredits,
+    SiliconFlowUserInfo,
+}
+
+fn balance_api_for(provider: ApiProvider) -> Option<BalanceApi> {
+    match provider {
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN => Some(BalanceApi::DeepSeekUserBalance),
+        ApiProvider::Openrouter => Some(BalanceApi::OpenRouterCredits),
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => {
+            Some(BalanceApi::SiliconFlowUserInfo)
+        }
+        _ => None,
+    }
+}
+
+/// Fetch remaining credit for the active prepaid provider.
 ///
-/// Returns `None` on any error (network, auth, parse) — callers should treat
-/// a `None` return as "balance unknown" and keep the previous value.
-pub(crate) async fn fetch_deepseek_balance(
+/// Returns `None` on any error (network, auth, parse) — callers treat that
+/// as "balance unknown" and keep the previous value.
+pub(crate) async fn fetch_provider_balance(
+    provider: ApiProvider,
+    api_key: &str,
+    base_url: &str,
+) -> Option<crate::pricing::BalanceInfo> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return None;
+    }
+    match balance_api_for(provider)? {
+        BalanceApi::DeepSeekUserBalance => fetch_deepseek_user_balance(api_key, base_url).await,
+        BalanceApi::OpenRouterCredits => fetch_openrouter_credits(api_key, base_url).await,
+        BalanceApi::SiliconFlowUserInfo => {
+            fetch_siliconflow_user_info(api_key, base_url, provider).await
+        }
+    }
+}
+
+async fn fetch_deepseek_user_balance(
     api_key: &str,
     base_url: &str,
 ) -> Option<crate::pricing::BalanceInfo> {
     let url = format!("{}/user/balance", base_url.trim_end_matches('/'));
+    let body: crate::pricing::BalanceResponse = balance_get_json(api_key, &url).await?;
+    body.balance_infos.into_iter().next()
+}
+
+#[derive(serde::Deserialize)]
+struct OpenRouterCreditsResponse {
+    data: OpenRouterCreditsData,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenRouterCreditsData {
+    total_credits: f64,
+    total_usage: f64,
+}
+
+fn openrouter_remaining_credits(total_credits: f64, total_usage: f64) -> f64 {
+    (total_credits - total_usage).max(0.0)
+}
+
+async fn fetch_openrouter_credits(
+    api_key: &str,
+    base_url: &str,
+) -> Option<crate::pricing::BalanceInfo> {
+    let url = format!("{}/credits", base_url.trim_end_matches('/'));
+    let body: OpenRouterCreditsResponse = balance_get_json(api_key, &url).await?;
+    let remaining = openrouter_remaining_credits(body.data.total_credits, body.data.total_usage);
+    Some(crate::pricing::BalanceInfo {
+        currency: "USD".to_string(),
+        total_balance: format!("{remaining:.2}"),
+        topped_up_balance: format!("{:.2}", body.data.total_credits),
+        granted_balance: String::new(),
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct SiliconFlowUserInfo {
+    data: Option<SiliconFlowUserData>,
+}
+
+#[derive(serde::Deserialize)]
+struct SiliconFlowUserData {
+    #[serde(default, alias = "totalBalance")]
+    total_balance: Option<String>,
+    #[serde(default, alias = "chargeBalance")]
+    charge_balance: Option<String>,
+    #[serde(default)]
+    balance: Option<String>,
+}
+
+async fn fetch_siliconflow_user_info(
+    api_key: &str,
+    base_url: &str,
+    provider: ApiProvider,
+) -> Option<crate::pricing::BalanceInfo> {
+    let url = format!("{}/user/info", base_url.trim_end_matches('/'));
+    let body: SiliconFlowUserInfo = balance_get_json(api_key, &url).await?;
+    let data = body.data?;
+    let total = data
+        .total_balance
+        .as_deref()
+        .or(data.balance.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let currency = if provider == ApiProvider::SiliconflowCn {
+        "CNY"
+    } else {
+        "USD"
+    };
+    Some(crate::pricing::BalanceInfo {
+        currency: currency.to_string(),
+        total_balance: total.to_string(),
+        topped_up_balance: data.charge_balance.unwrap_or_default(),
+        granted_balance: String::new(),
+    })
+}
+
+async fn balance_get_json<T: serde::de::DeserializeOwned>(api_key: &str, url: &str) -> Option<T> {
     let client = &*BALANCE_CLIENT;
     let response = client
         .get(url)
@@ -181,17 +297,62 @@ pub(crate) async fn fetch_deepseek_balance(
         );
         return None;
     }
-    let body: crate::pricing::BalanceResponse = response.json().await.ok()?;
-    // Return the first balance entry (typically the user's primary currency).
-    body.balance_infos.into_iter().next()
+    response.json().await.ok()
 }
 
-pub(crate) fn should_fetch_deepseek_balance(app: &App) -> bool {
+pub(crate) fn should_fetch_provider_balance(app: &App) -> bool {
     app.status_items.contains(&StatusItem::Balance)
-        && matches!(
-            app.api_provider,
-            ApiProvider::Deepseek | ApiProvider::DeepseekCN
-        )
+        && crate::config::provider_has_balance_api(app.api_provider)
+}
+
+/// Kick a background remaining-credit fetch for the live route.
+///
+/// `force` skips the status-item gate (used by `/balance`). Providers without
+/// a known endpoint clear the parked chip so a previous route cannot linger.
+pub(crate) fn schedule_balance_fetch(app: &mut App, api_key: &str, base_url: &str, force: bool) {
+    if !crate::config::provider_has_balance_api(app.api_provider) {
+        if let Ok(mut guard) = app.balance_cell.lock() {
+            *guard = None;
+        }
+        return;
+    }
+    if !force && !should_fetch_provider_balance(app) {
+        return;
+    }
+    if api_key.trim().is_empty() {
+        return;
+    }
+    let cooldown_ok = force
+        || app
+            .last_balance_fetch
+            .is_none_or(|t| t.elapsed() >= BALANCE_FETCH_COOLDOWN);
+    if !cooldown_ok {
+        return;
+    }
+    app.last_balance_fetch = Some(Instant::now());
+    let cell = app.balance_cell.clone();
+    let provider = app.api_provider;
+    let api_key = api_key.to_string();
+    let base_url = base_url.to_string();
+    tokio::spawn(async move {
+        if let Some(info) = fetch_provider_balance(provider, &api_key, &base_url).await
+            && let Ok(mut guard) = cell.lock()
+        {
+            *guard = Some(info);
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn openrouter_credits_from_json(json: &str) -> Option<crate::pricing::BalanceInfo> {
+    let body: OpenRouterCreditsResponse = serde_json::from_str(json).ok()?;
+    let remaining = openrouter_remaining_credits(body.data.total_credits, body.data.total_usage);
+    Some(crate::pricing::BalanceInfo {
+        currency: "USD".to_string(),
+        total_balance: format!("{remaining:.2}"),
+        topped_up_balance: format!("{:.2}", body.data.total_credits),
+        granted_balance: String::new(),
+    })
 }
 
 /// Route text from either clipboard transport into the canonical provider

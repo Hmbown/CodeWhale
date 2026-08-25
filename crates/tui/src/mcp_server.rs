@@ -71,6 +71,16 @@ struct ExposedTool {
     internal: String,
 }
 
+fn mcp_request_model(arguments: &Value, default_model: &str) -> String {
+    arguments
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .unwrap_or(default_model)
+        .to_string()
+}
+
 pub fn run_mcp_server(workspace: PathBuf) -> Result<()> {
     let settings = McpServerSettings::load()?;
     let mut server = McpServer::new(workspace, settings)?;
@@ -188,7 +198,7 @@ impl McpServer {
                                 },
                                 "model": {
                                     "type": "string",
-                                    "description": "Optional model identifier (default: deepseek-v4-pro)"
+                                    "description": "Optional model identifier. When omitted, uses the active provider's default model."
                                 },
                                 "cwd": {
                                     "type": "string",
@@ -345,10 +355,14 @@ impl McpServer {
                 message: "Missing required argument: prompt".to_string(),
             })?;
 
-        let model = arguments
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or("deepseek-v4-pro");
+        // Load config first so an omitted model follows the active provider
+        // default instead of a hardcoded DeepSeek id.
+        let config = Config::load(None, None).map_err(|e| RpcError {
+            code: -32000,
+            message: format!("Failed to load config: {e}"),
+        })?;
+        let default_model = config.default_model();
+        let model = mcp_request_model(arguments, &default_model);
 
         // Resolve thread_id
         let thread_id = if internal_name == "deepseek" {
@@ -365,11 +379,6 @@ impl McpServer {
                 .to_string()
         };
 
-        // Load config and create client
-        let config = Config::load(None, None).map_err(|e| RpcError {
-            code: -32000,
-            message: format!("Failed to load config: {e}"),
-        })?;
         let client = DeepSeekClient::new(&config).map_err(model_client_init_error)?;
 
         // Build message list
@@ -395,9 +404,9 @@ impl McpServer {
 
         // Send the API request (non-streaming for the basic version). Internal
         // chat uses the same resolved output policy as an ordinary turn.
-        let request_route = client.effective_route_envelope(model, chrono::Utc::now());
+        let request_route = client.effective_route_envelope(&model, chrono::Utc::now());
         let request = MessageRequest {
-            model: model.to_string(),
+            model: model.clone(),
             messages: messages.clone(),
             max_tokens: client.effective_max_output_tokens(&request_route.model),
             system: None,
@@ -720,5 +729,36 @@ mod tests {
 
         assert!(!init.message.contains("DeepSeek"));
         assert!(!request.message.contains("DeepSeek"));
+    }
+
+    #[test]
+    fn omitted_mcp_model_follows_the_active_provider_default() {
+        assert_eq!(mcp_request_model(&json!({}), "gpt-5.6"), "gpt-5.6");
+        assert_eq!(
+            mcp_request_model(&json!({ "model": "   " }), "GLM-5.3"),
+            "GLM-5.3"
+        );
+        assert_eq!(
+            mcp_request_model(&json!({ "model": "kimi-k2.5" }), "gpt-5.6"),
+            "kimi-k2.5"
+        );
+    }
+
+    #[test]
+    fn list_tools_does_not_hardcode_a_deepseek_default_model() {
+        let settings = McpServerSettings {
+            expose_tools: vec!["deepseek".to_string()],
+            require_approval: false,
+        };
+        let server = McpServer::new(PathBuf::from("."), settings).expect("build server");
+        let tools = server.list_tools_response();
+        let description = tools["tools"][0]["inputSchema"]["properties"]["model"]["description"]
+            .as_str()
+            .expect("model description");
+        assert!(
+            !description.to_ascii_lowercase().contains("deepseek"),
+            "{description}"
+        );
+        assert!(description.contains("active provider"), "{description}");
     }
 }

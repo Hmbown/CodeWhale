@@ -1212,23 +1212,13 @@ pub(crate) async fn run_event_loop(
         }
     }
 
-    // Fire a one-shot initial balance fetch for DeepSeek providers
-    // so the footer chip shows balance on the first frame without
+    // Fire a one-shot initial remaining-credit fetch for prepaid
+    // providers so the footer chip can show on the first frame without
     // waiting for a turn to complete.
-    if !app.balance_initiated && should_fetch_deepseek_balance(app) {
-        let cell = app.balance_cell.clone();
+    if !app.balance_initiated {
         let api_key = config.deepseek_api_key().unwrap_or_default();
         let base_url = config.deepseek_base_url();
-        if !api_key.is_empty() {
-            app.last_balance_fetch = Some(Instant::now());
-            tokio::spawn(async move {
-                if let Some(info) = fetch_deepseek_balance(&api_key, &base_url).await
-                    && let Ok(mut guard) = cell.lock()
-                {
-                    *guard = Some(info);
-                }
-            });
-        }
+        schedule_balance_fetch(app, &api_key, &base_url, false);
         app.balance_initiated = true;
     }
 
@@ -2419,28 +2409,12 @@ pub(crate) async fn run_event_loop(
                         // could not be built or queued, the in-flight
                         // checkpoint survives for startup recovery review.
 
-                        // Refresh DeepSeek account balance after each completed
+                        // Refresh prepaid remaining credit after each completed
                         // turn so the footer balance chip stays current without
                         // adding latency to any request path.
-                        let balance_cooldown_expired = app
-                            .last_balance_fetch
-                            .is_none_or(|t| t.elapsed() >= BALANCE_FETCH_COOLDOWN);
-                        if balance_cooldown_expired && should_fetch_deepseek_balance(app) {
-                            let cell = app.balance_cell.clone();
-                            let api_key = config.deepseek_api_key().unwrap_or_default();
-                            let base_url = config.deepseek_base_url();
-                            if !api_key.is_empty() {
-                                app.last_balance_fetch = Some(Instant::now());
-                                tokio::spawn(async move {
-                                    if let Some(info) =
-                                        fetch_deepseek_balance(&api_key, &base_url).await
-                                        && let Ok(mut guard) = cell.lock()
-                                    {
-                                        *guard = Some(info);
-                                    }
-                                });
-                            }
-                        }
+                        let api_key = config.deepseek_api_key().unwrap_or_default();
+                        let base_url = config.deepseek_base_url();
+                        schedule_balance_fetch(app, &api_key, &base_url, false);
 
                         // Legacy pending-steer recovery. Current keyboard
                         // handling keeps Esc as cancel-only, but older saved

@@ -1724,19 +1724,21 @@ mod tests {
     }
 
     #[test]
-    fn balance_command_reports_scaffold_without_claiming_dispatch() {
+    fn balance_command_dispatches_live_fetch_for_prepaid_providers() {
         let mut app = create_test_app();
-        app.api_provider = ApiProvider::Deepseek;
-
-        let result = execute("/balance", &mut app);
-        let msg = result
-            .message
-            .expect("balance scaffold should explain current state");
-
-        assert!(!result.is_error);
-        assert!(msg.contains("DeepSeek"));
-        assert!(msg.contains("not wired"));
-        assert!(!msg.contains("sent"));
+        for provider in [
+            ApiProvider::Deepseek,
+            ApiProvider::Openrouter,
+            ApiProvider::Siliconflow,
+        ] {
+            app.api_provider = provider;
+            let result = execute("/balance", &mut app);
+            assert!(!result.is_error, "{provider:?}");
+            assert!(
+                matches!(result.action, Some(AppAction::FetchBalance)),
+                "{provider:?} should dispatch a live remaining-credit fetch"
+            );
+        }
     }
 
     #[test]

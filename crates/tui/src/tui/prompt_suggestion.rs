@@ -149,15 +149,14 @@ impl fmt::Debug for SuggestionLaunch {
     }
 }
 
-/// Whether a provider speaks the exact DeepSeek OpenAI-compatible
+/// Whether a provider speaks the ordinary OpenAI-compatible
 /// `/chat/completions` shape [`generate_suggestion`] hardcodes.
 ///
-/// This is deliberately narrow: `DeepseekAnthropic` is a different wire
-/// protocol, and every other provider is out of scope. Widening this set is a
-/// feature change, not a bug fix.
+/// Gate on wire protocol, not a vendor enum: Anthropic Messages and the
+/// OpenAI Responses API are different request shapes and stay out.
 #[must_use]
 pub fn route_is_supported_suggestion_provider(provider: ApiProvider) -> bool {
-    matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
+    crate::client::provider_speaks_chat_completions(provider)
 }
 
 /// Resolve credentials for exactly one configured route identity.
@@ -181,8 +180,8 @@ fn resolve_credentials_for_identity(
     provider_identity: &str,
     model: &str,
 ) -> Option<SuggestionRouteCredentials> {
-    // Belt and braces: callers already gated, but this function must never be
-    // the thing that reads a non-DeepSeek route's credentials.
+    // Belt and braces: callers already gated, but this function must never
+    // read credentials for a wire this helper does not speak.
     if !route_is_supported_suggestion_provider(provider) {
         return None;
     }
@@ -225,9 +224,9 @@ fn resolve_credentials_for_identity(
 /// whatever route config describes *now*, not the route the turn is running on.
 /// The receipt was minted from the installed client itself, so it cannot drift.
 ///
-/// Unsupported providers — every non-DeepSeek route, including
-/// `DeepseekAnthropic` — return `None`, and no credential material of any
-/// provider is inspected on this path at all.
+/// Unsupported providers — Anthropic Messages, Responses, and any other
+/// non-Chat-Completions wire — return `None`, and no credential material
+/// of any provider is inspected on this path at all.
 #[must_use]
 pub fn capture_route_authority(route: &TurnRoute) -> Option<SuggestionRouteAuthority> {
     if !route_is_supported_suggestion_provider(route.provider) {
@@ -261,8 +260,8 @@ pub fn capture_route_authority(route: &TurnRoute) -> Option<SuggestionRouteAutho
 ///
 /// Fail-closed by construction:
 /// - `resolve_route_credentials` is only invoked once every non-credential gate
-///   has passed for a supported DeepSeek route, so a non-DeepSeek completion
-///   never reaches DeepSeek credential material at all.
+///   has passed for a Chat Completions route, so a Messages/Responses
+///   completion never reaches another provider's credentials at all.
 /// - The decision reads only `completed_route`, never live selection state, so
 ///   a later route switch cannot redirect it.
 /// - The route must still resolve to the *same* provider, identity, wire model,
@@ -428,15 +427,21 @@ pub async fn generate_suggestion(
         %model,
         "generating prompt suggestion"
     );
-    let response = match client
+    let mut request = client
         .post(&url)
         .header(AUTHORIZATION, format!("Bearer {api_key}"))
         .header(CONTENT_TYPE, "application/json")
         .timeout(std::time::Duration::from_secs(10))
-        .json(&body)
-        .send()
-        .await
-    {
+        .json(&body);
+    // OpenRouter app attribution: same headers the Chat Completions client
+    // already sends. Infer from the turn's actual endpoint so this helper
+    // does not grow a provider enum of its own.
+    if endpoint_identity(&url).contains("openrouter.ai") {
+        request = request
+            .header("HTTP-Referer", "https://codewhale.net")
+            .header("X-Title", "Codewhale");
+    }
+    let response = match request.send().await {
         Ok(r) => r,
         Err(_) => return None,
     };
@@ -689,9 +694,9 @@ mod tests {
     }
 
     #[test]
-    fn non_deepseek_completion_never_touches_deepseek_credentials() {
-        // A DeepSeek key exists and would resolve fine — the gate must run
-        // before the resolver is ever consulted.
+    fn non_chat_completions_completion_never_touches_foreign_credentials() {
+        // A Chat Completions key exists and would resolve fine — the gate must
+        // run before the resolver is ever consulted.
         let resolver = RecordingResolver::new(vec![(
             ApiProvider::Deepseek,
             "deepseek",
@@ -699,9 +704,7 @@ mod tests {
         )]);
         for (provider, identity, model) in [
             (ApiProvider::Anthropic, "anthropic", "claude-sonnet-4"),
-            (ApiProvider::Openai, "openai", "gpt-4.1"),
-            (ApiProvider::Openrouter, "openrouter", "some/model"),
-            (ApiProvider::Custom, "lm-studio", "local-model"),
+            (ApiProvider::OpenaiCodex, "openai-codex", "gpt-5.4"),
             (
                 ApiProvider::DeepseekAnthropic,
                 "deepseek-anthropic",
@@ -726,6 +729,65 @@ mod tests {
             "credential resolution must never be attempted for unsupported routes, got {:?}",
             resolver.asked()
         );
+    }
+
+    #[test]
+    fn chat_completions_routes_launch_with_their_own_credentials() {
+        for (provider, identity, model, base, key) in [
+            (
+                ApiProvider::Deepseek,
+                "deepseek",
+                "deepseek-chat",
+                DEEPSEEK_BASE,
+                DEEPSEEK_KEY,
+            ),
+            (
+                ApiProvider::Openai,
+                "openai",
+                "gpt-5.6",
+                "https://api.openai.com/v1",
+                "sk-openai",
+            ),
+            (
+                ApiProvider::Openrouter,
+                "openrouter",
+                "some/model",
+                "https://openrouter.ai/api/v1",
+                "sk-or",
+            ),
+            (
+                ApiProvider::Custom,
+                "lm-studio",
+                "local-model",
+                "http://127.0.0.1:1234/v1",
+                "lm-key",
+            ),
+            (
+                ApiProvider::Zai,
+                "zai",
+                "GLM-5.3",
+                "https://api.z.ai/api/paas/v4",
+                "zai-key",
+            ),
+        ] {
+            let resolver =
+                RecordingResolver::new(vec![(provider, identity, credentials(key, base, model))]);
+            let authority = route_authority(provider, identity, model, base, key);
+            let route = SuggestionRouteSnapshot {
+                provider,
+                provider_identity: identity,
+                model,
+                authority: &authority,
+                actual_base_url: Some(base),
+            };
+            let launch =
+                plan_suggestion_launch(true, true, 2, Some(route), |route| resolver.resolve(route))
+                    .unwrap_or_else(|| panic!("{provider:?} Chat Completions route must launch"));
+            assert_eq!(launch.api_key, key, "{provider:?}");
+            assert_eq!(launch.base_url, base, "{provider:?}");
+            assert_eq!(launch.model, model, "{provider:?}");
+            assert_eq!(resolver.asked(), vec![(provider, identity.to_string())]);
+        }
     }
 
     #[test]
@@ -1552,16 +1614,14 @@ mod tests {
     #[test]
     fn config_unsupported_providers_capture_no_authority() {
         let _env = seal_deepseek_env();
-        // A usable DeepSeek credential exists in this config, and each route
-        // below is even handed a DeepSeek-shaped receipt. An unsupported
+        // A usable Chat Completions credential exists in this config, and
+        // each route below is even handed a receipt. A Messages/Responses
         // completed route must still capture nothing.
         let config = deepseek_config(DEEPSEEK_KEY, DEEPSEEK_BASE);
 
         for (provider, identity, model) in [
             (ApiProvider::Anthropic, "anthropic", "claude-sonnet-4"),
-            (ApiProvider::Openai, "openai", "gpt-4.1"),
-            (ApiProvider::Openrouter, "openrouter", "some/model"),
-            (ApiProvider::Custom, "lm-studio", "local-model"),
+            (ApiProvider::OpenaiCodex, "openai-codex", "gpt-5.4"),
             (
                 ApiProvider::DeepseekAnthropic,
                 "deepseek-anthropic",
