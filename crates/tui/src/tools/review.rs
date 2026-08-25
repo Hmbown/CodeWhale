@@ -271,7 +271,9 @@ pub fn write_review_receipt(
         dir.join(format!("{stamp}-{short}.json"))
     };
     let encoded = serde_json::to_string_pretty(receipt)?;
-    fs::write(&path, encoded)?;
+    // Atomic + durable receipt writes: a torn receipt would make a review
+    // look unproven (plan item 16). Private permissions suit state-dir files.
+    crate::utils::write_atomic(&path, encoded.as_bytes())?;
     Ok(path)
 }
 

@@ -157,8 +157,22 @@ impl ToolSpec for PandocConvertTool {
         let mut cmd = Command::new(&pandoc);
         cmd.arg(&source_path);
         cmd.arg("--to").arg(&target_format);
-        if let Some(out) = resolved_output_path.as_ref() {
-            cmd.arg("--output").arg(out);
+        // Atomic landing: pandoc writes to a sibling temp file and the result
+        // is renamed into place, so a failed or killed conversion never
+        // leaves a torn half-written document at the requested path (plan
+        // item 16 — the `--output` flag wrote the target in place).
+        let staged_output = resolved_output_path.as_ref().map(|out| {
+            let file_name = out
+                .file_name()
+                .map(std::ffi::OsStr::to_string_lossy)
+                .unwrap_or_default()
+                .into_owned();
+            let mut staged = file_name;
+            staged.push_str(".pandoc-partial");
+            out.with_file_name(staged)
+        });
+        if let Some(staged) = staged_output.as_ref() {
+            cmd.arg("--output").arg(staged);
         }
         cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -170,10 +184,26 @@ impl ToolSpec for PandocConvertTool {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if let Some(staged) = staged_output.as_ref() {
+                let _ = std::fs::remove_file(staged);
+            }
             return Err(ToolError::execution_failed(format!(
                 "pandoc failed (exit {:?}): {stderr}",
                 output.status.code()
             )));
+        }
+
+        if let Some(out) = resolved_output_path.as_ref() {
+            let staged = staged_output
+                .as_ref()
+                .expect("staged path exists whenever the resolved output does");
+            std::fs::rename(staged, out).map_err(|e| {
+                ToolError::execution_failed(format!(
+                    "pandoc succeeded but moving the converted file into place failed: {e} (converted bytes left at {})"
+                    ,
+                    staged.display()
+                ))
+            })?;
         }
 
         let summary = if let Some(out) = resolved_output_path {

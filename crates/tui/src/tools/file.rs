@@ -1463,6 +1463,11 @@ impl ToolSpec for WriteFileTool {
             })?;
         }
 
+        // Serialize with the contract path: the legacy `File write` action
+        // must hold the same file_mutation lock the contract writer takes,
+        // or a concurrent edit/write pair can interleave (plan item 16).
+        let _mutation_guard = acquire_file_mutation(&file_path, context).await?;
+
         crate::utils::write_atomic_workspace(&file_path, file_content.as_bytes()).map_err(|e| {
             ToolError::execution_failed(format!("Failed to write {}: {}", file_path.display(), e))
         })?;
@@ -2128,6 +2133,10 @@ impl ToolSpec for EditFileTool {
                 "edit_file internal fidelity check failed: replace text missing from updated buffer — refusing write",
             ));
         }
+
+        // Same file_mutation lock as the contract editor — the legacy `File
+        // edit` action is not exempt from interleaving writers (plan item 16).
+        let _mutation_guard = acquire_file_mutation(&file_path, context).await?;
 
         crate::utils::write_atomic_workspace(&file_path, updated.as_bytes()).map_err(|e| {
             ToolError::execution_failed(format!("Failed to write {}: {}", file_path.display(), e))
