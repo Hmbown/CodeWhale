@@ -1,5 +1,7 @@
 # Keybindings
 
+> 阅读简体中文版：[zh_hans/KEYBINDINGS.md](zh_hans/KEYBINDINGS.md)
+
 This is the source-of-truth catalog of every keyboard shortcut the TUI recognizes. Bindings are grouped by **context** — the focus or modal state they fire in. A binding listed under "Composer" only takes effect when the composer is focused; one under "Transcript" only when the transcript has focus; and so on.
 
 Global key chords are not yet user-configurable — tracked for a future release (#436, #437). Hotbar slot actions are configurable with `[[hotbar]]` and `/hotbar`; the Hotbar activation chord remains `Alt-1` through `Alt-8`.

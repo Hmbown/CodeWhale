@@ -1,5 +1,7 @@
 # Codewhale product telemetry
 
+> 阅读简体中文版：[zh_hans/TELEMETRY.md](zh_hans/TELEMETRY.md)
+
 **Status for 0.9.11: anonymous usage counting is on by default and can be
 disabled immediately.** The first interactive launch shows one localized,
 nonblocking notice after the terminal is ready. It says what is never collected,

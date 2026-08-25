@@ -46,7 +46,9 @@ runtime model.
 ## 2. First Launch
 
 Install Codewhale with the path that fits your machine. Release installers
-provide the same runtime under the `codewhale` and `codew` command names.
+provide the same runtime under the `codewhale` and `codew` command names, and
+every supported install path ships the `codewhale` dispatcher with the
+`codewhale-tui` runtime built in.
 
 ```bash
 # npm

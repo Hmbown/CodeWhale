@@ -3431,7 +3431,7 @@ Welcome — and thank you.
   unsupported platforms don't fail the whole `npm install`.
 
 ### Docs
-- New [`docs/INSTALL.md`](docs/INSTALL.md) — every supported platform,
+- New [`INSTALL.md`](INSTALL.md) — every supported platform,
   prebuilt vs. `cargo install` vs. manual download, cross-compiling x64 → ARM64
   Linux with `cross` or `gcc-aarch64-linux-gnu`, and a troubleshooting section
   covering the common `Unsupported architecture`, `MISSING_COMPANION_BINARY`,

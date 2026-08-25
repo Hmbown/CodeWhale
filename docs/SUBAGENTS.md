@@ -1,5 +1,7 @@
 # Fleet Workers and Sub-Agent Compatibility
 
+> 阅读简体中文版：[zh_hans/SUBAGENTS.md](zh_hans/SUBAGENTS.md)
+
 Fleet roles are the user-facing vocabulary for delegated work: a parent
 launches a focused `worker`, `scout`, `planner`, `reviewer`, `builder`,
 `verifier`, or `consultant` through `agent` and gets back an `agent_id` plus transcript handle

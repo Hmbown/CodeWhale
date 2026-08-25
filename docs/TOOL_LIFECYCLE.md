@@ -1,5 +1,7 @@
 # Historical Tool-Surface Lifecycle Policy (v0.8.53)
 
+> 阅读简体中文版：[zh_hans/TOOL_LIFECYCLE.md](zh_hans/TOOL_LIFECYCLE.md)
+
 **Status:** Historical design record, not current runtime documentation. The
 v0.9.1 canonical action surface and replay-only alias contract are documented in
 [`RUNTIME_SIMPLIFICATION_DESIGN.md`](RUNTIME_SIMPLIFICATION_DESIGN.md) and

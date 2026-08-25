@@ -1,5 +1,7 @@
 # Modes and Permission Postures
 
+> 阅读简体中文版：[zh_hans/MODES.md](zh_hans/MODES.md)
+
 Codewhale has three related concepts:
 
 - **TUI mode**: what kind of visible interaction you're in (Plan/Work/Operate).
