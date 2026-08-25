@@ -1,5 +1,7 @@
 # Agent Fleet
 
+> 阅读简体中文版：[zh_hans/FLEET.md](zh_hans/FLEET.md)
+
 Agent Fleet is the local-first roster and member-selection layer for durable
 multi-worker runs. It does not execute or authorize work. After Fleet resolves
 who should participate, the delegated coordinator launches a headless

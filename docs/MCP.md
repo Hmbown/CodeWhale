@@ -1,5 +1,7 @@
 # MCP (External Tool Servers)
 
+> 阅读简体中文版：[zh_hans/MCP.md](zh_hans/MCP.md)
+
 codewhale can load additional tools via MCP (Model Context Protocol). MCP servers can be local stdio processes that the TUI starts, or remote URL-based servers that speak Streamable HTTP with legacy SSE fallback.
 
 Browsing note:

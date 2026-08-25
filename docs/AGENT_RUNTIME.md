@@ -1,5 +1,7 @@
 # The CodeWhale Agent Runtime — one durable substrate, familiar launchers
 
+> 阅读简体中文版：[zh_hans/AGENT_RUNTIME.md](zh_hans/AGENT_RUNTIME.md)
+
 This document explains how sub-agents, the headless `exec` path, Agent Fleet,
 and Runtime relate. These concepts had drifted into *two* parallel "worker"
 systems. The fix is to make the **Runtime worker run** the durable execution

@@ -1,5 +1,7 @@
 # Skills Manager
 
+> 阅读简体中文版：[zh_hans/SKILLS.md](zh_hans/SKILLS.md)
+
 Skills are reusable `SKILL.md` instruction packs. Codewhale discovers them from
 several roots, but **only CodeWhale-owned directories are writable**. The unified
 `/skills` manager is the interactive surface for audit and mutation; slash

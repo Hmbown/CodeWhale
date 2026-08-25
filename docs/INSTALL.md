@@ -1,5 +1,7 @@
 # Installing Codewhale
 
+> 阅读简体中文版：[zh_hans/INSTALL.md](zh_hans/INSTALL.md)
+
 This page covers every supported install path and the most common
 "it didn't install" failures, including **Linux ARM64** and other less
 common platforms.
