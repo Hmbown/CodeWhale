@@ -1068,6 +1068,15 @@ mod tests {
         let snapshot = output.snapshot(true).expect("snapshot");
         assert!(snapshot.truncated);
         assert!(snapshot.retained_bytes <= BOUNDED_OUTPUT_MAX_BYTES);
+        // 0xFF is invalid UTF-8, so a UTF-8 decode is lossy and leaves the
+        // replacement character behind. Windows decodes shell output through
+        // the ANSI code page instead (#5602): under CP1252 every 0xFF is a
+        // valid 'ÿ' and nothing is replaced, while under a DBCS page it still
+        // is. Demanding UTF-8's answer on Windows asserted the mojibake that
+        // #5602 exists to remove, so assert the property both decodes owe and
+        // keep the strict check where the decode is unambiguously UTF-8.
+        assert!(!snapshot.content.is_empty());
+        #[cfg(not(windows))]
         assert!(snapshot.content.contains('\u{FFFD}'));
         let path = output
             .full_output_path()
