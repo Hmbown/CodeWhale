@@ -83,3 +83,7 @@ Ok please keep working on everything
 ---
 
 Ok can you prove that too and get fully done
+
+---
+
+We we don't have, like, the actual website working, like, the web app, then we need to take down the login and registration part for now. Um, so I need you to figure out if that's actually working or not based on Superbase and, like, logs and seeing if users are using it, but... and figure that out and make a call, please. Thank you.
