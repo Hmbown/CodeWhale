@@ -2584,6 +2584,9 @@ pub struct SubAgentRuntime {
     /// Whether the host can answer an approval prompt for a child (an
     /// interactive TUI). Headless hosts keep the fail-closed denial.
     pub parent_can_prompt: bool,
+    /// Durable approval evidence inherited from the parent session. Legacy
+    /// runtimes that do not install a store cannot open child approval prompts.
+    approval_receipt_store: Option<Result<crate::approval_log::ApprovalReceiptStore, String>>,
 }
 
 impl SubAgentRuntime {
@@ -2641,6 +2644,7 @@ impl SubAgentRuntime {
                 crate::tui::auto_review::AutoReviewPolicy::default(),
             ),
             parent_can_prompt: false,
+            approval_receipt_store: None,
         }
     }
 
@@ -2664,6 +2668,16 @@ impl SubAgentRuntime {
         self.approval_mode = approval_mode;
         self.auto_review_policy = auto_review_policy;
         self.parent_can_prompt = parent_can_prompt;
+        self
+    }
+
+    /// Install the parent session's append-only approval receipt store.
+    #[must_use]
+    pub(crate) fn with_approval_receipt_store(
+        mut self,
+        store: Result<crate::approval_log::ApprovalReceiptStore, String>,
+    ) -> Self {
+        self.approval_receipt_store = Some(store);
         self
     }
 
@@ -2983,6 +2997,7 @@ impl SubAgentRuntime {
             approval_mode: self.approval_mode,
             auto_review_policy: Arc::clone(&self.auto_review_policy),
             parent_can_prompt: self.parent_can_prompt,
+            approval_receipt_store: self.approval_receipt_store.clone(),
         }
     }
 
@@ -14669,6 +14684,61 @@ impl SubAgentToolRegistry {
         }
     }
 
+    async fn commit_child_approval_receipt(
+        &self,
+        receipt: crate::approval_log::ApprovalReceipt,
+    ) -> Result<(), ToolError> {
+        let store = self
+            .gate_runtime
+            .approval_receipt_store
+            .clone()
+            .ok_or_else(|| {
+                tracing::warn!(
+                    target: "approval",
+                    "child approval receipt store was not installed"
+                );
+                ToolError::execution_failed(
+                    "Approval evidence could not be committed; tool execution was blocked."
+                        .to_string(),
+                )
+            })?
+            .map_err(|error| {
+                tracing::warn!(
+                    target: "approval",
+                    %error,
+                    "child approval receipt store is unavailable"
+                );
+                ToolError::execution_failed(
+                    "Approval evidence could not be committed; tool execution was blocked."
+                        .to_string(),
+                )
+            })?;
+        let session_id = self.gate_runtime.context.state_namespace.clone();
+        let write = tokio::task::spawn_blocking(move || store.append(&session_id, &receipt))
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    target: "approval",
+                    %error,
+                    "child approval receipt writer did not complete"
+                );
+                ToolError::execution_failed(
+                    "Approval evidence could not be committed; tool execution was blocked."
+                        .to_string(),
+                )
+            })?;
+        write.map_err(|error| {
+            tracing::warn!(
+                target: "approval",
+                error_kind = ?error.kind(),
+                "child approval receipt write failed"
+            );
+            ToolError::execution_failed(
+                "Approval evidence could not be committed; tool execution was blocked.".to_string(),
+            )
+        })
+    }
+
     /// Ask: raise the held call as an approval prompt in the parent's UI and
     /// wait for the person, visibly (`waiting for user`). Hosts that cannot
     /// prompt keep the fail-closed denial with the reason.
@@ -14696,6 +14766,20 @@ impl SubAgentToolRegistry {
             .write()
             .await
             .register_child_approval(agent_id);
+        if let Err(error) = self
+            .commit_child_approval_receipt(crate::approval_log::ApprovalReceipt::asked(
+                approval_id.clone(),
+                name,
+            ))
+            .await
+        {
+            self.gate_runtime
+                .manager
+                .write()
+                .await
+                .cancel_child_approval(&approval_id);
+            return ChildGateVerdict::Deny(error.to_string());
+        }
         let description = format!(
             "{} (worker {}) wants to run '{name}': {reason}",
             self.owner_agent_name,
@@ -14721,6 +14805,15 @@ impl SubAgentToolRegistry {
                 .write()
                 .await
                 .cancel_child_approval(&approval_id);
+            if let Err(error) = self
+                .commit_child_approval_receipt(crate::approval_log::ApprovalReceipt::decided(
+                    approval_id,
+                    crate::approval_log::ApprovalOutcome::Unavailable,
+                ))
+                .await
+            {
+                return ChildGateVerdict::Deny(error.to_string());
+            }
             return ChildGateVerdict::Deny(format!(
                 "{reason} (the session could not be asked; the call was denied)"
             ));
@@ -14732,34 +14825,77 @@ impl SubAgentToolRegistry {
                 .with_tool(name.to_string()),
             format!("waiting for your decision on '{name}'"),
         );
+        #[derive(Clone, Copy)]
+        enum WaitOutcome {
+            Answer(ChildApprovalOutcome),
+            Cancelled,
+            Unavailable,
+        }
         let outcome = tokio::select! {
-            () = self.gate_runtime.cancel_token.cancelled() => None,
-            answer = receiver => answer.ok(),
+            () = self.gate_runtime.cancel_token.cancelled() => WaitOutcome::Cancelled,
+            answer = receiver => match answer {
+                Ok(answer) => WaitOutcome::Answer(answer),
+                Err(_) => WaitOutcome::Unavailable,
+            },
         };
-        if outcome.is_none() {
+        if !matches!(outcome, WaitOutcome::Answer(_)) {
             self.gate_runtime
                 .manager
                 .write()
                 .await
                 .cancel_child_approval(&approval_id);
         }
+        let receipt_outcome = match outcome {
+            WaitOutcome::Answer(ChildApprovalOutcome::Approved) => {
+                crate::approval_log::ApprovalOutcome::ApprovedOnce
+            }
+            WaitOutcome::Answer(ChildApprovalOutcome::Denied) => {
+                crate::approval_log::ApprovalOutcome::Denied
+            }
+            WaitOutcome::Cancelled => crate::approval_log::ApprovalOutcome::Cancelled,
+            WaitOutcome::Unavailable => crate::approval_log::ApprovalOutcome::Unavailable,
+        };
+        if let Err(error) = self
+            .commit_child_approval_receipt(crate::approval_log::ApprovalReceipt::decided(
+                approval_id,
+                receipt_outcome,
+            ))
+            .await
+        {
+            record_agent_progress(
+                &self.gate_runtime,
+                agent_id,
+                AgentProgressEventMeta::new(AgentWorkerStatus::RunningTool)
+                    .with_tool(name.to_string()),
+                format!("blocked '{name}': approval evidence could not be committed"),
+            );
+            return ChildGateVerdict::Deny(error.to_string());
+        }
         record_agent_progress(
             &self.gate_runtime,
             agent_id,
             AgentProgressEventMeta::new(AgentWorkerStatus::RunningTool).with_tool(name.to_string()),
             match outcome {
-                Some(ChildApprovalOutcome::Approved) => format!("approved '{name}'"),
-                Some(ChildApprovalOutcome::Denied) => format!("denied '{name}'"),
-                None => format!("stopped waiting on '{name}'"),
+                WaitOutcome::Answer(ChildApprovalOutcome::Approved) => {
+                    format!("approved '{name}'")
+                }
+                WaitOutcome::Answer(ChildApprovalOutcome::Denied) => {
+                    format!("denied '{name}'")
+                }
+                WaitOutcome::Cancelled => format!("stopped waiting on '{name}'"),
+                WaitOutcome::Unavailable => format!("lost approval channel for '{name}'"),
             },
         );
         match outcome {
-            Some(ChildApprovalOutcome::Approved) => ChildGateVerdict::Proceed,
-            Some(ChildApprovalOutcome::Denied) => {
+            WaitOutcome::Answer(ChildApprovalOutcome::Approved) => ChildGateVerdict::Proceed,
+            WaitOutcome::Answer(ChildApprovalOutcome::Denied) => {
                 ChildGateVerdict::Deny(format!("Tool {name} was denied by the user"))
             }
-            None => ChildGateVerdict::Deny(format!(
+            WaitOutcome::Cancelled => ChildGateVerdict::Deny(format!(
                 "Tool {name} was cancelled while awaiting the user's decision"
+            )),
+            WaitOutcome::Unavailable => ChildGateVerdict::Deny(format!(
+                "Tool {name} approval could no longer reach the worker; tool execution was blocked"
             )),
         }
     }

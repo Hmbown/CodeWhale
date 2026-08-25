@@ -12740,6 +12740,7 @@ pub(crate) fn stub_runtime() -> SubAgentRuntime {
             crate::tui::auto_review::AutoReviewPolicy::default(),
         ),
         parent_can_prompt: false,
+        approval_receipt_store: None,
         mcp_pool: None,
         step_api_timeout: DEFAULT_STEP_API_TIMEOUT,
         api_timeout_retry_base_backoff: SUBAGENT_API_TIMEOUT_INITIAL_BACKOFF,
@@ -20257,6 +20258,7 @@ fn user_follow_up_to_completed_child_requires_a_runtime_to_resume() {
 
 mod child_permission_gate {
     use super::*;
+    use crate::approval_log::{ApprovalOutcome, ApprovalReceipt, ApprovalReceiptStore};
     use crate::core::events::{Event, ToolGate, ToolGateVerdict};
     use crate::tui::approval::ApprovalMode;
 
@@ -20278,10 +20280,15 @@ mod child_permission_gate {
         if let Some(client) = client {
             runtime.client = client;
         }
-        runtime.context = ToolContext::new(tmp.path().to_path_buf());
+        let session_id = format!("child_gate_{}", uuid::Uuid::new_v4().simple());
+        runtime.context =
+            ToolContext::new(tmp.path().to_path_buf()).with_state_namespace(session_id);
         runtime.context.auto_approve = auto_approve;
         runtime.allow_shell = true;
         runtime.event_tx = Some(tx);
+        runtime = runtime.with_approval_receipt_store(Ok(
+            crate::approval_log::ApprovalReceiptStore::new(tmp.path().join("sessions")),
+        ));
         runtime = runtime.with_permission_posture(
             approval_mode,
             std::sync::Arc::new(crate::tui::auto_review::AutoReviewPolicy::default()),
@@ -20320,6 +20327,44 @@ mod child_permission_gate {
             }
         }
         out
+    }
+
+    fn receipt_context(registry: &SubAgentToolRegistry) -> (ApprovalReceiptStore, String) {
+        let store = registry
+            .gate_runtime
+            .approval_receipt_store
+            .as_ref()
+            .expect("test runtime installs a receipt store")
+            .as_ref()
+            .expect("test receipt store is available")
+            .clone();
+        (store, registry.gate_runtime.context.state_namespace.clone())
+    }
+
+    async fn next_child_approval_id(rx: &mut tokio::sync::mpsc::Receiver<Event>) -> String {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while let Some(event) = rx.recv().await {
+                if let Event::ApprovalRequired { id, .. } = event {
+                    return id;
+                }
+            }
+            panic!("approval event channel closed before the child prompt arrived");
+        })
+        .await
+        .expect("child approval prompt arrives")
+    }
+
+    fn assert_completed_receipt(
+        store: &ApprovalReceiptStore,
+        session_id: &str,
+        expected: ApprovalOutcome,
+    ) {
+        let replay = store
+            .replay(session_id)
+            .expect("the completed child approval replays");
+        assert_eq!(replay.completed.len(), 1);
+        assert_eq!(replay.completed[0].outcome, expected);
+        assert!(replay.unmatched_asks.is_empty());
     }
 
     /// A chat-completions mock that answers every request with `content`.
@@ -20382,6 +20427,29 @@ mod child_permission_gate {
     }
 
     #[tokio::test]
+    async fn ask_without_a_durable_receipt_store_fails_closed_before_prompting() {
+        let (mut registry, mut rx, _) = worker_registry(ApprovalMode::Suggest, false, true, None);
+        registry.gate_runtime.approval_receipt_store = None;
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            registry.execute("agent_gate", "bash", json!({"command": "echo gated"})),
+        )
+        .await
+        .expect("a missing receipt store must fail closed without waiting for a decision");
+        let err = result.expect_err("the call must not run without durable approval evidence");
+        assert!(
+            err.to_string()
+                .contains("Approval evidence could not be committed"),
+            "{err}"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "the host must not see an approval prompt that cannot be persisted"
+        );
+    }
+
+    #[tokio::test]
     async fn ask_with_a_prompting_host_raises_the_prompt_and_honours_the_answer() {
         for (answer, expect_ok) in [
             (ChildApprovalOutcome::Approved, true),
@@ -20389,6 +20457,9 @@ mod child_permission_gate {
         ] {
             let (registry, mut rx, manager) =
                 worker_registry(ApprovalMode::Suggest, false, true, None);
+            let (receipt_store, session_id) = receipt_context(&registry);
+            let receipt_store_for_answer = receipt_store.clone();
+            let session_id_for_answer = session_id.clone();
             let manager_for_answer = Arc::clone(&manager);
             let answerer = tokio::spawn(async move {
                 // Wait for the prompt, then answer it exactly like the engine
@@ -20412,6 +20483,9 @@ mod child_permission_gate {
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                 }
                 let approval_id = approval_id.expect("child prompt must reach the host");
+                let replay_before_decision = receipt_store_for_answer
+                    .replay(&session_id_for_answer)
+                    .expect("the durable ask replays before the prompt is answered");
                 assert_eq!(manager_for_answer.read().await.pending_child_approvals(), 1);
                 assert!(
                     manager_for_answer
@@ -20426,11 +20500,14 @@ mod child_permission_gate {
                         .await
                         .resolve_child_approval(&approval_id, answer)
                 );
+                replay_before_decision
             });
             let result = registry
                 .execute("agent_gate", "bash", json!({"command": "echo gated"}))
                 .await;
-            answerer.await.expect("answerer task");
+            let replay_before_decision = answerer.await.expect("answerer task");
+            assert_eq!(replay_before_decision.unmatched_asks.len(), 1);
+            assert!(replay_before_decision.completed.is_empty());
             match (expect_ok, result) {
                 (true, Ok(output)) => assert!(output.contains("gated"), "{output}"),
                 (false, Err(err)) => {
@@ -20439,8 +20516,125 @@ mod child_permission_gate {
                 (true, Err(err)) => panic!("approved call must run: {err}"),
                 (false, Ok(output)) => panic!("denied call must not run: {output}"),
             }
+            let replay = receipt_store
+                .replay(&session_id)
+                .expect("the completed child approval replays");
+            assert!(replay.unmatched_asks.is_empty());
+            assert_eq!(replay.completed.len(), 1);
+            let expected_outcome = if expect_ok {
+                ApprovalOutcome::ApprovedOnce
+            } else {
+                ApprovalOutcome::Denied
+            };
+            assert_eq!(replay.completed[0].outcome, expected_outcome);
+            assert!(matches!(
+                &replay.completed[0].ask,
+                ApprovalReceipt::Asked { tool_name, .. } if tool_name == "bash"
+            ));
             assert_eq!(manager.read().await.pending_child_approvals(), 0);
         }
+    }
+
+    #[tokio::test]
+    async fn closed_child_approval_waiter_persists_unavailable_not_cancelled() {
+        let (registry, mut rx, manager) = worker_registry(ApprovalMode::Suggest, false, true, None);
+        let (receipt_store, session_id) = receipt_context(&registry);
+        let manager_for_close = Arc::clone(&manager);
+        let closer = tokio::spawn(async move {
+            let id = next_child_approval_id(&mut rx).await;
+            manager_for_close.write().await.cancel_child_approval(&id);
+        });
+
+        let err = registry
+            .execute("agent_gate", "bash", json!({"command": "echo gated"}))
+            .await
+            .expect_err("a closed decision channel must fail closed");
+        closer.await.expect("closer task");
+        assert!(err.to_string().contains("could no longer reach"), "{err}");
+        assert_completed_receipt(&receipt_store, &session_id, ApprovalOutcome::Unavailable);
+        assert_eq!(manager.read().await.pending_child_approvals(), 0);
+    }
+
+    #[tokio::test]
+    async fn cancelled_child_approval_persists_cancelled() {
+        let (registry, mut rx, manager) = worker_registry(ApprovalMode::Suggest, false, true, None);
+        let (receipt_store, session_id) = receipt_context(&registry);
+        let cancel_token = registry.gate_runtime.cancel_token.clone();
+        let canceller = tokio::spawn(async move {
+            let _ = next_child_approval_id(&mut rx).await;
+            cancel_token.cancel();
+        });
+
+        let err = registry
+            .execute("agent_gate", "bash", json!({"command": "echo gated"}))
+            .await
+            .expect_err("runtime cancellation must fail the held call closed");
+        canceller.await.expect("canceller task");
+        assert!(err.to_string().contains("was cancelled"), "{err}");
+        assert_completed_receipt(&receipt_store, &session_id, ApprovalOutcome::Cancelled);
+        assert_eq!(manager.read().await.pending_child_approvals(), 0);
+    }
+
+    #[tokio::test]
+    async fn unavailable_prompt_host_persists_unavailable() {
+        let (registry, rx, manager) = worker_registry(ApprovalMode::Suggest, false, true, None);
+        let (receipt_store, session_id) = receipt_context(&registry);
+        drop(rx);
+
+        let err = registry
+            .execute("agent_gate", "bash", json!({"command": "echo gated"}))
+            .await
+            .expect_err("an unavailable prompt host must fail closed");
+        assert!(err.to_string().contains("could not be asked"), "{err}");
+        assert_completed_receipt(&receipt_store, &session_id, ApprovalOutcome::Unavailable);
+        assert_eq!(manager.read().await.pending_child_approvals(), 0);
+    }
+
+    #[tokio::test]
+    async fn terminal_receipt_failure_blocks_an_approved_child_call() {
+        let (registry, mut rx, manager) = worker_registry(ApprovalMode::Suggest, false, true, None);
+        let (receipt_store, session_id) = receipt_context(&registry);
+        let marker = registry
+            .gate_runtime
+            .context
+            .workspace
+            .join("approved-child-command-ran");
+        let log_path = receipt_store
+            .sessions_dir()
+            .join(session_id)
+            .join("approval_receipts.jsonl");
+        let manager_for_answer = Arc::clone(&manager);
+        let answerer = tokio::spawn(async move {
+            let approval_id = next_child_approval_id(&mut rx).await;
+            std::fs::remove_file(&log_path).expect("remove log after durable ask");
+            std::fs::create_dir(&log_path).expect("replace log with unwritable directory");
+            assert!(
+                manager_for_answer
+                    .write()
+                    .await
+                    .resolve_child_approval(&approval_id, ChildApprovalOutcome::Approved)
+            );
+        });
+
+        let err = registry
+            .execute(
+                "agent_gate",
+                "bash",
+                json!({"command": "touch approved-child-command-ran"}),
+            )
+            .await
+            .expect_err("an uncommitted terminal approval must not grant execution");
+        answerer.await.expect("answerer task");
+        assert!(
+            err.to_string()
+                .contains("Approval evidence could not be committed"),
+            "{err}"
+        );
+        assert!(
+            !marker.exists(),
+            "the approved command must not have executed"
+        );
+        assert_eq!(manager.read().await.pending_child_approvals(), 0);
     }
 
     #[tokio::test]
