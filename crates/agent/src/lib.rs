@@ -637,10 +637,13 @@ impl Default for ModelRegistry {
             ModelInfo {
                 id: "deepseek-ai/DeepSeek-V4-Pro".to_string(),
                 provider: ProviderKind::Siliconflow,
+                // `deepseek-reasoner` and `deepseek-r1` deliberately do NOT
+                // appear here. Every other provider maps both to V4-Flash, so
+                // listing them on a Pro row made one alias mean two tiers —
+                // and Pro costs ~3x Flash per input token. An alias must name
+                // one model everywhere or it is a silent substitution.
                 aliases: vec![
                     "deepseek-v4-pro".to_string(),
-                    "deepseek-reasoner".to_string(),
-                    "deepseek-r1".to_string(),
                     "siliconflow-deepseek-v4-pro".to_string(),
                 ],
                 supports_tools: true,

@@ -194,7 +194,12 @@ pub fn context_window_for_model(model: &str) -> Option<u32> {
     None
 }
 
-fn known_context_window_for_model(model_lower: &str) -> Option<u32> {
+/// Context window for an id we have a documented fact for, or `None`.
+///
+/// Callers that need a floor supply their own; this deliberately returns
+/// `None` rather than a default so a provider-wide fallback cannot shadow a
+/// model we actually know.
+pub(crate) fn known_context_window_for_model(model_lower: &str) -> Option<u32> {
     match model_lower {
         // OpenAI API model docs, verified 2026-06-12:
         // https://developers.openai.com/api/docs/models/gpt-5.5
@@ -436,9 +441,41 @@ pub fn model_supports_reasoning(model: &str) -> bool {
     // #3016 plus the 2026 Kimi Code K2.7 update: Moonshot-native Kimi IDs,
     // including the stable `kimi-for-coding` coding route, emit
     // reasoning_content that must stay out of answer prose.
-    if lower.starts_with("kimi-") {
+    // Provider-qualified spellings of the same model, which a bare `kimi-`
+    // prefix test missed even though the context-window table already
+    // treats them as one product.
+    //
+    // Bare `k3` is deliberately NOT here. It is the Kimi Code membership
+    // route id, and its reasoning semantics are route-scoped: reasoning on
+    // the Kimi Code host, not on the direct Moonshot host. This function
+    // only sees a model id, so it cannot answer that; the route-aware pair
+    // in `client/chat.rs` owns it (see
+    // `bare_k3_reasoning_semantics_are_scoped_to_exact_kimi_code_route`).
+    if lower.starts_with("kimi-")
+        || matches!(lower.as_str(), "moonshotai/kimi-k3" | "opencode-go/kimi-k3")
+    {
         return true;
     }
+    // Google's reasoning models. `crates/agent` has carried the correct
+    // answer for these since they were added; this table had no Gemini arm
+    // at all, so every Gemini id — including DEFAULT_GOOGLE_MODEL — reported
+    // non-reasoning here while the agent registry reported the opposite for
+    // the same id.
+    if matches!(
+        lower.as_str(),
+        "gemini-3.1-pro-preview"
+            | "gemini-3-pro-preview"
+            | "gemini-3.7-flash"
+            | "gemini-3.6-flash"
+            | "gemini-3.5-flash"
+            | "gemini-2.5-pro"
+            | "gemini-2.5-flash"
+    ) {
+        return true;
+    }
+    // `gemini-3.5-flash-lite` is deliberately absent: it is the one Gemini
+    // row `crates/agent` marks non-reasoning.
+
     if lower.starts_with("mistral-medium")
         || lower.starts_with("mistral-small")
         || lower.starts_with("magistral")
@@ -760,6 +797,38 @@ pub struct MessageDelta {
 
 #[cfg(test)]
 mod tests {
+    /// One alias must name one model, and one model must have one answer on
+    /// every spelling. Each case below was a real divergence between this
+    /// table and `crates/agent`'s registry.
+    #[test]
+    fn reasoning_support_agrees_across_every_spelling_of_a_model() {
+        // Kimi K3: the context table already treats these as one product.
+        for id in ["kimi-k3", "moonshotai/kimi-k3", "opencode-go/kimi-k3"] {
+            assert!(
+                model_supports_reasoning(id),
+                "{id} must report reasoning; otherwise reasoning_content leaks into answer prose"
+            );
+        }
+        // Bare `k3` stays false here on purpose: its reasoning semantics are
+        // route-scoped and only the route-aware path in client/chat.rs can
+        // decide them.
+        assert!(!model_supports_reasoning("k3"));
+        // Gemini: crates/agent has always had these right.
+        for id in [
+            "gemini-3.1-pro-preview",
+            "gemini-3-pro-preview",
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+        ] {
+            assert!(model_supports_reasoning(id), "{id} must report reasoning");
+        }
+        // The one Gemini row that genuinely is not a reasoning model.
+        assert!(!model_supports_reasoning("gemini-3.5-flash-lite"));
+    }
+
     use super::*;
     use std::any::TypeId;
     use std::collections::BTreeMap;

@@ -670,7 +670,18 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
         return ProviderCapability {
             provider,
             resolved_model: resolved_model.to_string(),
-            context_window: OPENAI_CODEX_EFFECTIVE_CONTEXT_WINDOW_TOKENS,
+            // The constant is documented as a "conservative offline floor
+            // for an OAuth model absent from a fresh Codex roster", but it
+            // was returned for every model on the route, so a model we do
+            // know stayed pinned to it: gpt-5.6 — the Codex default — has a
+            // 1,050,000 window and was budgeted at 128,000, compacting more
+            // than eight times earlier than it needed to. Use the model's
+            // own window when there is one and keep the floor for the case
+            // the constant actually describes.
+            context_window: crate::models::known_context_window_for_model(
+                &resolved_model.to_ascii_lowercase(),
+            )
+            .unwrap_or(OPENAI_CODEX_EFFECTIVE_CONTEXT_WINDOW_TOKENS),
             // The OAuth cache does not publish an output ceiling. This 4K is a
             // deliberate, long-standing product decision for the Codex route
             // (not a fallback): keep the compatibility capability conservative

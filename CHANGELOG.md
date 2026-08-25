@@ -118,6 +118,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receipt write returns `Deny`, never `Proceed`, and a dropped decision
   channel is recorded as unavailable instead of being mislabelled as user
   cancellation.
+- Fixed four model-fact errors found by auditing the categorization tables
+  against each other. `claude-opus-5` was missing from the server-side
+  web-search table, so the current Anthropic flagship silently lost the
+  capability, while `claude-mythos-5`/`claude-mythos-preview` were listed
+  there and exist nowhere else in the repo. `deepseek-reasoner` and
+  `deepseek-r1` resolved to V4-Pro on SiliconFlow and V4-Flash on seven other
+  providers, so one alias meant two tiers at roughly 3x the input price.
+  Every Gemini id reported non-reasoning in the TUI — including the Google
+  default — while `crates/agent` reported the opposite for the same ids. The
+  Codex route budgeted every model at the 128,000-token offline floor, so
+  `gpt-5.6` compacted at 128,000 against a 1,050,000 window.
 - Fixed first-run provider setup rejecting valid MiniMax and Xiaomi MiMo API
   keys (#5601): those first-party routes answer 404 on the `GET /models`
   probe because they only implement chat completions, and the wizard treated
