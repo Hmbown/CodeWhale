@@ -3764,7 +3764,7 @@ fn exec_shell_input_is_parallel_readonly_shape(input: &serde_json::Value) -> boo
 }
 
 fn hardened_readonly_argv(command: &str) -> Result<(String, Vec<String>)> {
-    let mut argv = shell_words::split(command)
+    let mut argv = shell_words::split(&protect_windows_path_backslashes(command))
         .map_err(|error| anyhow!("could not parse classifier-approved read command: {error}"))?;
     if argv.is_empty() {
         return Err(anyhow!("classifier-approved read command was empty"));
@@ -3824,12 +3824,59 @@ fn hardened_readonly_argv(command: &str) -> Result<(String, Vec<String>)> {
     Ok((program, argv))
 }
 
+/// `shell_words` splits with POSIX backslash-escaping, which silently eats the
+/// separators of Windows absolute paths (`C:\Users\...` becomes `C:Users...`)
+/// and mangles the `\\?\` verbatim prefix before operand classification can
+/// see it. Double the backslashes inside Windows-absolute-path-like words so
+/// the splitter preserves them; every other word is untouched, so POSIX escape
+/// semantics and unix hosts are unaffected.
+fn protect_windows_path_backslashes(command: &str) -> String {
+    let mut out = String::with_capacity(command.len());
+    let mut word_start = 0;
+    let bytes = command.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_whitespace() {
+            let word = &command[word_start..i];
+            if looks_like_windows_absolute_path(word) {
+                out.push_str(&word.replace('\\', r"\\"));
+            } else {
+                out.push_str(word);
+            }
+            out.push(bytes[i] as char);
+            word_start = i + 1;
+        }
+        i += 1;
+    }
+    if word_start < bytes.len() {
+        let word = &command[word_start..];
+        if looks_like_windows_absolute_path(word) {
+            out.push_str(&word.replace('\\', r"\\"));
+        } else {
+            out.push_str(word);
+        }
+    }
+    out
+}
+
+/// A whitespace-delimited word is treated as a Windows absolute path when it
+/// starts (after optional quotes) with a drive letter plus colon, a verbatim
+/// (`\\?\`/`\\.\`) prefix, or a UNC (`\\`) prefix.
+fn looks_like_windows_absolute_path(word: &str) -> bool {
+    let word = word.trim_start_matches(['\'', '"']);
+    let bytes = word.as_bytes();
+    (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+        || word.starts_with(r"\\?\")
+        || word.starts_with(r"\\.\")
+        || word.starts_with("\\\\")
+}
+
 fn enforce_readonly_workspace_operands(
     command: &str,
     workspace: &std::path::Path,
     effective_cwd: &std::path::Path,
 ) -> Result<(), ToolError> {
-    let argv = shell_words::split(command).map_err(|error| {
+    let argv = shell_words::split(&protect_windows_path_backslashes(command)).map_err(|error| {
         ToolError::invalid_input(format!(
             "Could not parse read-only command arguments: {error}"
         ))
