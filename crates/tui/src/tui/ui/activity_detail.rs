@@ -513,6 +513,12 @@ pub(crate) fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> b
 pub(super) fn transcript_block_actions_available(app: &App) -> bool {
     app.view_stack.is_empty()
         && app.input.is_empty()
+        // A keystroke that arrives inside a paste/typing burst belongs to the
+        // composer, not to the transcript. A mouse selection is not cleared by
+        // typing — only by resize, click-away, or an explicit command — so
+        // without this the first `y`/`Y`/`r` of a typed message is swallowed
+        // as a block action while the composer still reads empty (#5608).
+        && !app.paste_burst.is_active()
         && app.viewport.transcript_selection.is_active()
         && selected_transcript_cell_index(app).is_some()
 }
@@ -2131,6 +2137,84 @@ mod tests {
         assert!(
             !handle_focused_block_key(&mut app, &key),
             "without an explicit selection, y must remain composer input"
+        );
+        assert!(app.clipboard.last_written_text().is_none());
+    }
+
+    /// A live typing burst must not lose its first character to a block
+    /// action, even with a transcript selection standing.
+    ///
+    /// Found by @wuisabel-gif while diagnosing the CI failure on #5608: the
+    /// `r` in `/plugin t-r-ust` opened a raw-detail pager mid-command. That
+    /// PR gated on `detail_target_cell_index().is_some()`, which our
+    /// selection gate already refuses — but the selection gate alone does not
+    /// close it. A selection made with the mouse is not cleared by typing
+    /// (only by resize, click-away, or an explicit command), so the next
+    /// `y`/`Y`/`r` a user types is still consumed as an action while the
+    /// composer sits empty. Deferring to an in-flight burst keeps the
+    /// keystroke with the composer, where the typist meant it to go.
+    #[test]
+    fn typing_burst_keeps_its_first_char_out_of_block_actions() {
+        let mut app = test_app();
+        app.history = vec![HistoryCell::Assistant {
+            content: "previous command output".to_string(),
+            streaming: false,
+        }];
+        select_first_cell(&mut app);
+
+        let now = std::time::Instant::now();
+        app.paste_burst.append_char_to_buffer('r', now);
+        assert!(
+            app.paste_burst.is_active(),
+            "precondition: a burst must be in flight"
+        );
+
+        let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+        assert!(
+            !handle_focused_block_key(&mut app, &key),
+            "a keystroke inside a typing burst must stay composer input"
+        );
+        assert!(
+            app.view_stack.is_empty(),
+            "no pager may open from typed text"
+        );
+
+        // Once the burst settles, the selection still owns the key.
+        app.paste_burst.clear_after_explicit_paste();
+        assert!(
+            handle_focused_block_key(&mut app, &key),
+            "with no burst in flight, a standing selection still claims r"
+        );
+    }
+
+    /// The exact scenario @wuisabel-gif reproduced from CI on #5608: typing
+    /// `/plugin trust demo` must reach the composer whole. The `r` in
+    /// `t-r-ust` was opening a raw-detail pager, which is what failed
+    /// `plugin_toml_binary_lifecycle_skill_and_stdio_mcp_acceptance` on both
+    /// ubuntu and macOS. Pinned here against the selection-gated wiring so
+    /// the same command can never be eaten again.
+    #[test]
+    fn typed_plugin_command_survives_a_standing_selection() {
+        let mut app = test_app();
+        app.history = vec![HistoryCell::Assistant {
+            content: "previous command output".to_string(),
+            streaming: false,
+        }];
+        select_first_cell(&mut app);
+
+        let now = std::time::Instant::now();
+        for (offset, ch) in "/plugin trust demo".chars().enumerate() {
+            app.paste_burst
+                .append_char_to_buffer(ch, now + std::time::Duration::from_millis(offset as u64));
+            let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
+            assert!(
+                !handle_focused_block_key(&mut app, &key),
+                "{ch:?} in a typed command must not fire a block action"
+            );
+        }
+        assert!(
+            app.view_stack.is_empty(),
+            "typing a command must not open a pager"
         );
         assert!(app.clipboard.last_written_text().is_none());
     }
