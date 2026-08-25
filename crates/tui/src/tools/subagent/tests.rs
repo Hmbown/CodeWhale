@@ -11329,6 +11329,97 @@ fn subagent_registry_with_mcp_action(auto_approve: bool) -> SubAgentToolRegistry
     registry
 }
 
+fn mcp_catalog_entry(name: &str) -> (String, crate::mcp::McpTool) {
+    (
+        name.to_string(),
+        crate::mcp::McpTool {
+            name: name.to_string(),
+            description: Some(format!("discovered tool {name}")),
+            input_schema: serde_json::json!({"type": "object"}),
+        },
+    )
+}
+
+/// Regression (plan item 17): the sub-agent registry used to capture the MCP
+/// catalog with a non-blocking `try_lock` at build time, so any in-flight MCP
+/// operation holding the pool mutex silently dropped *every* MCP tool from
+/// the child's registry — the child then ran its whole turn with no MCP tools
+/// and no error. The catalog is now captured under a real `.await` by the
+/// async caller and threaded through `new_with_owner`, so a contended pool can
+/// no longer shrink the child's tool surface.
+#[tokio::test]
+async fn registry_keeps_mcp_tools_when_pool_is_contended() {
+    let pool = Arc::new(tokio::sync::Mutex::new(crate::mcp::McpPool::new(
+        crate::mcp::McpConfig::default(),
+    )));
+
+    // A concurrent MCP operation holds the pool mutex across an await point
+    // for the whole duration of the registry build below.
+    let (acquired_tx, acquired_rx) = tokio::sync::oneshot::channel::<()>();
+    let holder = {
+        let pool = Arc::clone(&pool);
+        tokio::spawn(async move {
+            let _guard = pool.lock().await;
+            let _ = acquired_tx.send(());
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        })
+    };
+    acquired_rx
+        .await
+        .expect("fixture error: the spawned holder task must acquire the pool mutex first");
+    assert!(
+        pool.try_lock().is_err(),
+        "fixture error: the pool mutex is not actually contended"
+    );
+
+    // Snapshot captured exactly the way the async caller (`run_subagent`)
+    // captures it: under a real `.await` on the pool lock, before the sync
+    // registry build. Three discovered tools across two servers.
+    let snapshot = vec![
+        mcp_catalog_entry("mcp_alpha_echo"),
+        mcp_catalog_entry("mcp_alpha_fetch"),
+        mcp_catalog_entry("mcp_beta_search"),
+    ];
+    let expected_mcp_count = snapshot.len();
+
+    let mut runtime = stub_runtime();
+    runtime.mcp_pool = Some(Arc::clone(&pool));
+    let registry = SubAgentToolRegistry::new_with_owner(
+        runtime,
+        FleetRole::Worker,
+        "agent_contended".into(),
+        "implementer".into(),
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+        snapshot,
+    );
+
+    // The build above is synchronous, so the other task still holds the
+    // mutex — and every MCP adapter must be registered anyway.
+    assert!(
+        pool.try_lock().is_err(),
+        "fixture error: the pool mutex must still be contended after the build"
+    );
+    let names = registry.registry.names();
+    for expected in ["mcp_alpha_echo", "mcp_alpha_fetch", "mcp_beta_search"] {
+        assert!(
+            names.contains(&expected),
+            "contended pool dropped MCP tool {expected}; registered: {names:?}"
+        );
+    }
+    let registered_mcp = names
+        .iter()
+        .filter(|tool_name| tool_name.starts_with("mcp_"))
+        .count();
+    assert_eq!(
+        registered_mcp, expected_mcp_count,
+        "every MCP tool from the captured snapshot must be registered: {names:?}"
+    );
+
+    holder.abort();
+}
+
 #[tokio::test]
 async fn child_write_tool_fails_closed_outside_registered_scope() {
     let _env_lock = crate::test_support::lock_test_env();
@@ -11385,6 +11476,7 @@ async fn child_write_tool_fails_closed_outside_registered_scope() {
         ]),
         Arc::new(Mutex::new(TodoList::new())),
         Arc::new(Mutex::new(PlanState::default())),
+        Vec::new(),
     );
     registry
         .execute(
@@ -11574,6 +11666,7 @@ async fn lone_shared_writer_keeps_unbounded_shell() {
         ]),
         Arc::new(Mutex::new(TodoList::new())),
         Arc::new(Mutex::new(PlanState::default())),
+        Vec::new(),
     );
 
     let result = registry
@@ -21115,6 +21208,7 @@ async fn agent_claim_expands_the_callers_write_scope() {
         Some(vec!["File".into(), "agent".into()]),
         Arc::new(Mutex::new(TodoList::new())),
         Arc::new(Mutex::new(PlanState::default())),
+        Vec::new(),
     );
 
     let refused = registry

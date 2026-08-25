@@ -2862,6 +2862,17 @@ impl McpPool {
             .collect()
     }
 
+    /// Owned snapshot of [`McpPool::all_tools`], for callers that hold the
+    /// pool lock across an `.await` and must not keep the guard alive (e.g.
+    /// building the sub-agent tool registry). Clones the discovered tool
+    /// definitions so the mutex guard can drop immediately.
+    pub fn all_tools_owned(&self) -> Vec<(String, McpTool)> {
+        self.all_tools()
+            .into_iter()
+            .map(|(name, tool)| (name, tool.clone()))
+            .collect()
+    }
+
     /// Get all discovered resources with server-prefixed names
     pub fn all_resources(&self) -> Vec<(String, &McpResource)> {
         let mut resources = Vec::new();

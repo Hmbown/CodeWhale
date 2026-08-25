@@ -11635,6 +11635,13 @@ async fn run_subagent(
             work_source: Some(todo_source.clone()),
         },
     );
+    // Snapshot the MCP catalog while actually holding the pool lock, so the
+    // registry below can never be built from a half-visible pool (see
+    // `SubAgentToolRegistry::new_with_owner`).
+    let mcp_tools_snapshot = match runtime_for_tools.mcp_pool.as_ref() {
+        Some(pool) => pool.lock().await.all_tools_owned(),
+        None => Vec::new(),
+    };
     let tool_registry = SubAgentToolRegistry::new_with_owner(
         runtime_for_tools,
         agent_type.clone(),
@@ -11652,6 +11659,12 @@ async fn run_subagent(
         // checklist or work graph.
         runtime.todos.clone(),
         Arc::new(Mutex::new(PlanState::default())),
+        // MCP catalog captured under a real `.await` on the pool mutex. The
+        // old non-blocking capture inside the builder silently dropped every
+        // MCP tool whenever another in-flight MCP operation held the pool
+        // lock, so the child ran its whole turn with no MCP tools and no
+        // error.
+        mcp_tools_snapshot,
     );
     let unavailable_tools = tool_registry.unavailable_allowed_tools();
     if !unavailable_tools.is_empty() {
@@ -14433,11 +14446,14 @@ impl SubAgentToolRegistry {
             explicit_allowed_tools,
             todo_list,
             plan_state,
+            // Test runtimes carry no MCP pool; pass an empty captured catalog.
+            Vec::new(),
         );
         registry.enforce_write_claim = false;
         registry
     }
 
+    #[allow(clippy::too_many_arguments)] // snapshot threaded from the async caller (plan item 17)
     fn new_with_owner(
         runtime: SubAgentRuntime,
         agent_type: FleetRole,
@@ -14446,6 +14462,7 @@ impl SubAgentToolRegistry {
         explicit_allowed_tools: Option<Vec<String>>,
         todo_list: SharedTodoList,
         plan_state: SharedPlanState,
+        mcp_tools: Vec<(String, crate::mcp::McpTool)>,
     ) -> Self {
         let can_spawn_child = !runtime.would_exceed_depth();
         let coordination_manager = Arc::clone(&runtime.manager);
@@ -14481,7 +14498,10 @@ impl SubAgentToolRegistry {
         );
 
         if let Some(pool) = runtime.mcp_pool.as_ref() {
-            registry = registry.with_mcp_tools(std::sync::Arc::clone(pool));
+            // `mcp_tools` was captured by the async caller while holding the
+            // pool lock, so contention on the pool can no longer silently
+            // drop the child's entire MCP tool surface here.
+            registry = registry.with_mcp_tools_snapshot(std::sync::Arc::clone(pool), mcp_tools);
         }
 
         let mut registry = registry.build(context);
