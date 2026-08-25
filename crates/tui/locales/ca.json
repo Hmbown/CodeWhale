@@ -1145,6 +1145,7 @@
   "PhaseReasoning": "raonant",
   "PhaseReading": "llegint",
   "PhaseUsingTool": "usant una eina",
+  "PhaseSubagents": "subagents en execució",
   "PhaseVerifying": "verificant",
   "PhaseWaitingOnYou": "esperant-te",
   "PhaseDone": "fet",

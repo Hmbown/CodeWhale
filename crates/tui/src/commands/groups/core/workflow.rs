@@ -141,7 +141,27 @@ fn user_instruction(message: &crate::models::Message) -> Option<&str> {
     })
 }
 
-fn pending_workflow_draft(app: &App) -> Option<WorkflowDraftEnvelope> {
+enum PendingWorkflowDraft {
+    Ready(WorkflowDraftEnvelope),
+    NoDraft,
+    NotReviewed,
+}
+
+/// Find the latest reviewed, not-yet-confirmed Workflow draft.
+///
+/// The rule set is deliberately small (the old five-branch scan kept biting
+/// users: any ordinary message between the draft and `/workflow confirm`
+/// cancelled the draft, so a confirm attempt after a failed first attempt
+/// could never succeed):
+///
+/// 1. An explicit confirm always picks the *latest* unconfirmed draft.
+/// 2. Ordinary user/assistant messages in between are ignored — only a newer
+///    draft instruction supersedes an older one (the scan is latest-first).
+/// 3. The draft must have at least one assistant text reply after it; a draft
+///    whose review turn is still in flight cannot be confirmed yet.
+/// 4. A draft that was already confirmed (a confirm instruction exists for its
+///    id) is never picked again.
+fn pending_workflow_draft(app: &App) -> PendingWorkflowDraft {
     let mut resolved = std::collections::HashSet::new();
 
     for queued in app.queued_messages.iter().chain(app.queued_draft.iter()) {
@@ -155,15 +175,16 @@ fn pending_workflow_draft(app: &App) -> Option<WorkflowDraftEnvelope> {
 
     let mut reviewed = false;
     for message in app.api_messages.iter().rev() {
-        if message.role == "assistant"
-            && message.content.iter().any(
-                |block| matches!(block, ContentBlock::Text { text, .. } if !text.trim().is_empty()),
-            )
-        {
-            reviewed = true;
-            continue;
-        }
         let Some(instruction) = user_instruction(message) else {
+            // Assistant text after the draft is the review reply. Tool-call
+            // turns and other assistant messages do not count as review.
+            if message.role == "assistant"
+                && message.content.iter().any(|block| {
+                    matches!(block, ContentBlock::Text { text, .. } if !text.trim().is_empty())
+                })
+            {
+                reviewed = true;
+            }
             continue;
         };
         if let Some(envelope) =
@@ -176,15 +197,16 @@ fn pending_workflow_draft(app: &App) -> Option<WorkflowDraftEnvelope> {
             envelope_from_instruction(WORKFLOW_DRAFT_INSTRUCTION_PREFIX, instruction)
             && !resolved.contains(&envelope.id)
         {
-            // A failed or still-queued draft turn is not a review. Likewise,
-            // any newer ordinary user request supersedes the old proposal.
-            return reviewed.then_some(envelope);
+            return if reviewed {
+                PendingWorkflowDraft::Ready(envelope)
+            } else {
+                PendingWorkflowDraft::NotReviewed
+            };
         }
-        if !instruction.starts_with(WORKFLOW_DRAFT_INSTRUCTION_PREFIX) {
-            return None;
-        }
+        // Ordinary user requests between draft and confirm are ignored: the
+        // explicit `/workflow confirm` means the current draft, not a new one.
     }
-    None
+    PendingWorkflowDraft::NoDraft
 }
 
 pub fn workflow(app: &mut App, arg: Option<&str>) -> CommandResult {
@@ -218,7 +240,7 @@ fn parse_workflow_control_action(app: &App, arg: Option<&str>) -> Option<Command
     };
     match verb {
         "confirm" if rest.is_empty() => Some(match pending_workflow_draft(app) {
-            Some(draft) => {
+            PendingWorkflowDraft::Ready(draft) => {
                 let display = match draft.source_path.as_deref() {
                     Some(path) => workflow_display("Workflow file confirmed: ", Some(path)),
                     None => workflow_display("Workflow confirmed: ", draft.objective.as_deref()),
@@ -231,8 +253,11 @@ fn parse_workflow_control_action(app: &App, arg: Option<&str>) -> Option<Command
                     },
                 )
             }
-            None => CommandResult::error(
-                "There is no reviewed Workflow draft to confirm. Use /workflow <objective> first.",
+            PendingWorkflowDraft::NotReviewed => CommandResult::error(
+                "The current Workflow draft has not been reviewed yet. Wait for the proposal turn to finish, then run /workflow confirm.",
+            ),
+            PendingWorkflowDraft::NoDraft => CommandResult::error(
+                "There is no Workflow draft to confirm. Use /workflow <objective> to draft one first.",
             ),
         }),
         "status" | "runs" | "list" | "inspect" => Some(workflow_status(app, rest)),
@@ -598,6 +623,80 @@ mod tests {
             envelope_from_instruction(WORKFLOW_CONFIRM_INSTRUCTION_PREFIX, &instruction)
                 .expect("typed workflow confirmation envelope");
         assert_eq!(confirmed.objective.as_deref(), Some(objective));
+    }
+
+    #[test]
+    fn confirm_survives_ordinary_messages_between_draft_and_confirm() {
+        let mut app = test_app();
+        let drafted = workflow(&mut app, Some("audit provider error handling"));
+        let Some(AppAction::WorkflowInstruction {
+            display,
+            instruction,
+        }) = drafted.action
+        else {
+            panic!("expected WorkflowInstruction action");
+        };
+        app.api_messages.push(crate::models::Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: format!("{instruction}\n\n---\n\nUser request: {display}"),
+                cache_control: None,
+            }],
+        });
+        app.api_messages.push(crate::models::Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text {
+                text: "Objective, phases, workers, and risks. Run /workflow confirm to start."
+                    .to_string(),
+                cache_control: None,
+            }],
+        });
+
+        // The user types or the model replies again before confirming — the
+        // explicit confirm must still find the reviewed draft (regression: the
+        // old supersede rule cancelled the draft on any ordinary message and
+        // made repeated confirm attempts impossible).
+        app.api_messages.push(crate::models::Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: "hmm it won't let me confirm it lol".to_string(),
+                cache_control: None,
+            }],
+        });
+        let confirmed = workflow(&mut app, Some("confirm"));
+        assert!(!confirmed.is_error, "{:?}", confirmed.message);
+        let Some(AppAction::WorkflowInstruction { instruction, .. }) = confirmed.action else {
+            panic!("expected confirmed WorkflowInstruction action");
+        };
+        assert!(instruction.starts_with(WORKFLOW_CONFIRM_INSTRUCTION_PREFIX));
+
+        // A newer DRAFT still supersedes the older one.
+        let redrafted = workflow(&mut app, Some("fix the confirm flow"));
+        let Some(AppAction::WorkflowInstruction {
+            instruction: redraft_instruction,
+            display: redraft_display,
+        }) = redrafted.action
+        else {
+            panic!("expected WorkflowInstruction action");
+        };
+        app.api_messages.push(crate::models::Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: format!("{redraft_instruction}\n\n---\n\nUser request: {redraft_display}"),
+                cache_control: None,
+            }],
+        });
+        let still_unreviewed = workflow(&mut app, Some("confirm"));
+        assert!(
+            still_unreviewed.is_error
+                && still_unreviewed
+                    .message
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("not been reviewed"),
+            "a newer, unreviewed draft must be confirmed only after its review: {:?}",
+            still_unreviewed.message
+        );
     }
 
     #[test]

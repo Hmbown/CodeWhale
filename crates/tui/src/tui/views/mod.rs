@@ -927,6 +927,13 @@ pub enum ViewEvent {
         /// identify which row the operator selected.
         member_id: String,
     },
+    /// Emitted by the `/fleet` roster `m` shortcut to open the selected
+    /// member's exact Fleet editor directly on its model picker.
+    FleetRosterOpenModelRequested {
+        /// Exact Fleet member id; roles are not unique and therefore cannot
+        /// identify which row the operator selected.
+        member_id: String,
+    },
     /// Open the live workers tab from the unified Fleet surface.
     FleetRosterOpenWorkersRequested,
 

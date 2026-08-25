@@ -44,93 +44,127 @@ impl StreamableHttpTransport {
         &mut self,
         msg: Vec<u8>,
     ) -> std::result::Result<(), StreamableSendError> {
-        // Apply user-configured custom headers after protocol framing so
-        // reserved Accept / Content-Type overrides can be filtered out.
-        let headers = self
-            .auth
-            .resolved_headers()
-            .await
-            .map_err(StreamableSendError::Other)?;
-        let mut request = apply_safe_custom_headers(
-            with_default_mcp_http_headers(self.client.post(&self.url), true),
-            &headers,
-        );
-        // Attach any previously captured session ID per the Streamable
-        // HTTP spec so the server can correlate this request to the
-        // existing session.
-        if let Some(ref sid) = self.session_id {
-            request = request.header("Mcp-Session-Id", sid.as_str());
-        }
-        let response = request
-            .body(msg)
-            .send()
-            .await
-            .map_err(|err| StreamableSendError::Other(err.into()))?;
+        // Reactive OAuth recovery (T4): a 401/403 may mean the server no
+        // longer accepts a token that the local expiry clock still trusts.
+        // Retry once after a forced refresh; then surface a login hint instead
+        // of a raw rejection that reads like a broken server.
+        let mut retried = false;
+        loop {
+            // Apply user-configured custom headers after protocol framing so
+            // reserved Accept / Content-Type overrides can be filtered out.
+            let headers = self
+                .auth
+                .resolved_headers()
+                .await
+                .map_err(StreamableSendError::Other)?;
+            let mut request = apply_safe_custom_headers(
+                with_default_mcp_http_headers(self.client.post(&self.url), true),
+                &headers,
+            );
+            // Attach any previously captured session ID per the Streamable
+            // HTTP spec so the server can correlate this request to the
+            // existing session.
+            if let Some(ref sid) = self.session_id {
+                request = request.header("Mcp-Session-Id", sid.as_str());
+            }
+            let response = request
+                .body(msg.clone())
+                .send()
+                .await
+                .map_err(|err| StreamableSendError::Other(err.into()))?;
 
-        let status = response.status();
+            let status = response.status();
 
-        // Capture session ID from any response (2xx, 202, 4xx, ...). The
-        // server may return it on the `initialize` response or on a
-        // best-effort GET preflight below.
-        if let Some(sid) = response
-            .headers()
-            .get("Mcp-Session-Id")
-            .and_then(|v| v.to_str().ok())
-            && self.session_id.as_deref() != Some(sid)
-        {
-            let session_ref = crate::utils::redacted_identifier_for_log(sid);
-            tracing::debug!(target: "mcp", session = %session_ref, "captured MCP session ID");
-            self.session_id = Some(sid.to_string());
-        }
-        if status == StatusCode::ACCEPTED || status == StatusCode::NO_CONTENT {
-            return Ok(());
-        }
+            // Capture session ID from any response (2xx, 202, 4xx, ...). The
+            // server may return it on the `initialize` response or on a
+            // best-effort GET preflight below.
+            if let Some(sid) = response
+                .headers()
+                .get("Mcp-Session-Id")
+                .and_then(|v| v.to_str().ok())
+                && self.session_id.as_deref() != Some(sid)
+            {
+                let session_ref = crate::utils::redacted_identifier_for_log(sid);
+                tracing::debug!(target: "mcp", session = %session_ref, "captured MCP session ID");
+                self.session_id = Some(sid.to_string());
+            }
+            if status == StatusCode::ACCEPTED || status == StatusCode::NO_CONTENT {
+                return Ok(());
+            }
 
-        if !status.is_success() {
-            let body_excerpt = bounded_body_excerpt(response, ERROR_BODY_PREVIEW_BYTES).await;
-            let stale_session = self.session_id.is_some()
-                && is_streamable_http_stale_session_status(status, &body_excerpt);
-            let body_excerpt = self.auth.server_error_preview(&body_excerpt);
-            if stale_session {
-                return Err(StreamableSendError::StaleSession(format!(
-                    "status={status} body={body_excerpt}"
+            if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+                if !retried && let Some(oauth) = self.auth.oauth.as_ref() {
+                    match oauth.force_refresh().await {
+                        Ok(()) => {
+                            retried = true;
+                            continue;
+                        }
+                        Err(refresh_error) => {
+                            return Err(StreamableSendError::Other(anyhow::anyhow!(
+                                "MCP server {} rejected the request with {status} and refreshing the OAuth session failed: {refresh_error:#}. Re-authorize this server (/mcp auth <name>) or configure a fresh bearer token.",
+                                mask_url_secrets(&self.url),
+                            )));
+                        }
+                    }
+                }
+                let hint = if self.auth.oauth.is_some() {
+                    "Re-authorize this server (/mcp auth <name>) to continue."
+                } else {
+                    "Check the configured bearer token (or its environment variable)."
+                };
+                return Err(StreamableSendError::Other(anyhow::anyhow!(
+                    "MCP server {} rejected the request with {status}; the session is no longer accepted. {hint}",
+                    mask_url_secrets(&self.url),
                 )));
             }
-            if is_streamable_http_incompatible_status(status) {
-                return Err(StreamableSendError::Incompatible(format!(
-                    "status={status} body={body_excerpt}"
+
+            if !status.is_success() {
+                let body_excerpt = bounded_body_excerpt(response, ERROR_BODY_PREVIEW_BYTES).await;
+                let stale_session = self.session_id.is_some()
+                    && is_streamable_http_stale_session_status(status, &body_excerpt);
+                let body_excerpt = self.auth.server_error_preview(&body_excerpt);
+                if stale_session {
+                    return Err(StreamableSendError::StaleSession(format!(
+                        "status={status} body={body_excerpt}"
+                    )));
+                }
+                if is_streamable_http_incompatible_status(status) {
+                    return Err(StreamableSendError::Incompatible(format!(
+                        "status={status} body={body_excerpt}"
+                    )));
+                }
+                return Err(StreamableSendError::Other(anyhow::anyhow!(
+                    "MCP Streamable HTTP rejected (transport=http url={} status={}): {}",
+                    mask_url_secrets(&self.url),
+                    status,
+                    body_excerpt,
                 )));
             }
-            return Err(StreamableSendError::Other(anyhow::anyhow!(
-                "MCP Streamable HTTP rejected (transport=http url={} status={}): {}",
-                mask_url_secrets(&self.url),
-                status,
-                body_excerpt,
-            )));
-        }
 
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string);
-        // Reject an over-large declared body before reading anything (fast
-        // path), then bound the read itself so chunked / length-less
-        // responses cannot OOM us either — Content-Length alone does not
-        // protect against a server that streams without declaring a length.
-        if let Some(len) = response.content_length()
-            && len > MAX_MCP_RESPONSE_BYTES as u64
-        {
-            return Err(StreamableSendError::Other(anyhow::anyhow!(
-                "MCP response Content-Length {len} exceeds {} bytes — aborting",
-                MAX_MCP_RESPONSE_BYTES
-            )));
+            let content_type = response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            // Reject an over-large declared body before reading anything (fast
+            // path), then bound the read itself so chunked / length-less
+            // responses cannot OOM us either — Content-Length alone does not
+            // protect against a server that streams without declaring a length.
+            if let Some(len) = response.content_length()
+                && len > MAX_MCP_RESPONSE_BYTES as u64
+            {
+                return Err(StreamableSendError::Other(anyhow::anyhow!(
+                    "MCP response Content-Length {len} exceeds {} bytes — aborting",
+                    MAX_MCP_RESPONSE_BYTES
+                )));
+            }
+            let body = read_body_capped(response, MAX_MCP_RESPONSE_BYTES)
+                .await
+                .map_err(StreamableSendError::Other)?;
+            return self
+                .store_response_body(content_type.as_deref(), &body)
+                .map_err(StreamableSendError::Other);
         }
-        let body = read_body_capped(response, MAX_MCP_RESPONSE_BYTES)
-            .await
-            .map_err(StreamableSendError::Other)?;
-        self.store_response_body(content_type.as_deref(), &body)
-            .map_err(StreamableSendError::Other)
     }
 
     pub(super) async fn recv(&mut self) -> Result<Vec<u8>> {

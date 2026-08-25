@@ -259,6 +259,7 @@ mod tests {
             InstallMethod::Npm,
             InstallMethod::Homebrew,
             InstallMethod::Cargo,
+            InstallMethod::Omarchy,
         ] {
             let plan = resolve_updater(
                 Some(Path::new("/opt/whatever/codewhale")),

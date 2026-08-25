@@ -310,6 +310,10 @@ pub async fn run_tui(
     let mut config = config.clone();
     let config = &mut config;
     let mut app = App::new_with_plugin_registry(options.clone(), config, plugin_registry);
+    let _cursor_accent_guard = crate::tui::cursor_accent::CursorAccentGuard::install(
+        app.low_motion || !app.fancy_animations,
+        app.ui_theme.accent_primary,
+    );
     crate::startup_trace::mark("app_constructed");
     sync_config_provider_from_app(config, &app);
     surface_prompt_override_notices(&mut app);
@@ -543,7 +547,7 @@ pub async fn run_tui(
     app.dispatch_completion_tx = Some(dispatch_completion_tx);
 
     if std::mem::take(&mut app.start_remote_control_on_launch) {
-        start_remote_control_session(&mut app);
+        start_remote_control_session(&mut app, config);
     }
     submit_initial_input_if_ready(&mut app, config, &engine_handle).await?;
 
@@ -624,6 +628,7 @@ pub async fn run_tui(
     }
 
     cleanup_guard.defused = true;
+    crate::tui::cursor_accent::restore_cursor_accent();
     pop_keyboard_enhancement_flags(terminal.backend_mut());
     disable_alternate_scroll_mode(terminal.backend_mut());
     execute!(terminal.backend_mut(), DisableFocusChange)?;
@@ -1483,6 +1488,9 @@ pub(crate) async fn run_event_loop(
                         }
                     }
                     EngineEvent::TurnStarted { turn_id, .. } => {
+                        // A prior turn that died without its `TurnComplete`
+                        // must not leak its provisional estimate into this one.
+                        app.clear_pending_turn_cost();
                         app.goal_continuation_waiting = false;
                         app.session.last_tool_request_snapshot = None;
                         app.ocean_completion_started_at = None;
@@ -1545,6 +1553,11 @@ pub(crate) async fn run_event_loop(
                             transcript_batch_updated = true;
                         }
                         let completed_turn = app.active_turn.take();
+                        // The in-flight provisional estimate hands off to the
+                        // authoritative cumulative price accrued below; the
+                        // high-water mark keeps the displayed total monotonic
+                        // through the swap (#244).
+                        app.clear_pending_turn_cost();
                         app.session.last_tool_catalog = tool_catalog;
                         // The endpoint this turn's client actually used. Kept
                         // separately from the mutable session/config surfaces
@@ -2979,16 +2992,44 @@ pub(crate) async fn run_event_loop(
                         first_token_ms,
                         request_ms,
                     } => {
-                        // Per-step usage receipt. The TUI's token surfaces
-                        // are driven by the cumulative `TurnComplete` usage;
-                        // the session metrics strip folds each model call's
-                        // timing (stream time, TTFT, whole-call time) here.
+                        // Per-step usage receipt. The session metrics strip
+                        // folds each model call's timing (stream time, TTFT,
+                        // whole-call time) here.
                         app.session_metrics.record_model_call(
                             usage.output_tokens,
                             duration_ms,
                             first_token_ms,
                             request_ms,
                         );
+                        // Billed prompt receipt for the context meter: what
+                        // the provider says the model actually processed
+                        // (#5577). Reviewer/REPL child receipts also arrive
+                        // here, but their prompt is never larger than the
+                        // parent context, and the meter takes a max.
+                        if usage.input_tokens > 0 {
+                            app.last_billed_input_tokens = Some(
+                                app.last_billed_input_tokens
+                                    .map_or(usage.input_tokens, |prior| {
+                                        prior.max(usage.input_tokens)
+                                    }),
+                            );
+                        }
+                        // Live cost: price this call against the route that
+                        // was actually dispatched so the cost surfaces move
+                        // during a long agentic turn instead of only at its
+                        // end. Provisional by design — `TurnComplete` clears
+                        // this and lands the authoritative cumulative price
+                        // through the same audit path, so nothing counts
+                        // twice and the two can never disagree on route.
+                        let step_cost = app
+                            .active_turn
+                            .as_ref()
+                            .and_then(|turn| turn.route.as_ref())
+                            .and_then(crate::core::events::TurnRoute::cost_envelope)
+                            .and_then(|route| route.audit(&usage).estimate);
+                        if let Some(cost) = step_cost {
+                            app.accrue_pending_turn_cost_estimate(cost);
+                        }
                     }
                     EngineEvent::AdvisoryNote { note, .. } => {
                         // Advisor background watcher note. Display as a
@@ -3321,11 +3362,21 @@ pub(crate) async fn run_event_loop(
         // observations of the pool (#4318).
         let pending_bg = crate::cost_status::drain();
         if !pending_bg.is_empty() {
+            let runtime_usage_arrived = app.absorb_pending_background_cost(&pending_bg);
             if pending_bg.estimate.is_positive() {
-                app.accrue_subagent_cost_estimate(pending_bg.estimate);
                 app.needs_redraw = true;
             }
-            app.absorb_background_cost_coverage(&pending_bg);
+            // Runtime-owned child usage can land after the parent's
+            // TurnComplete snapshot. Queue a fresh snapshot from the same
+            // drained money+identity batch so an immediate reload agrees with
+            // the live footer and worker record.
+            if runtime_usage_arrived
+                && let Ok(manager) = SessionManager::default_location()
+                && let Ok(session) = build_session_snapshot(app, &manager)
+            {
+                app.current_session_id = Some(session.metadata.id.clone());
+                persistence_actor::persist(PersistRequest::SessionSnapshot(session));
+            }
         }
         // Drain completed file-tree walks (initial build / expands) so the
         // spliced children repaint without waiting for an input event (#3900).

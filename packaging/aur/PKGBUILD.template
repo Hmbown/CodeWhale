@@ -1,0 +1,41 @@
+# shellcheck shell=bash
+# shellcheck disable=SC2034,SC2154
+# makepkg consumes the metadata variables and defines CARCH/srcdir/pkgdir.
+pkgname=codewhale-bin
+pkgver=@PKGVER@
+pkgrel=@PKGREL@
+pkgdesc='Provider-neutral coding agent for the terminal (prebuilt binary)'
+arch=('x86_64' 'aarch64')
+url='https://codewhale.net'
+license=('MIT')
+depends=('glibc' 'gcc-libs' 'dbus')
+provides=("codewhale=${pkgver}" 'codewhale-tui' 'deepseek' 'deepseek-tui')
+conflicts=('codewhale' 'codewhale-tui' 'deepseek' 'deepseek-tui' 'deepseek-tui-bin')
+replaces=('deepseek-tui-bin')
+options=('!strip')
+
+_release_url="https://github.com/Hmbown/CodeWhale/releases/download/v${pkgver}"
+
+source=("LICENSE-${pkgver}::https://raw.githubusercontent.com/Hmbown/CodeWhale/v${pkgver}/LICENSE")
+sha256sums=('@LICENSE_SHA256@')
+source_x86_64=("${pkgname}-${pkgver}-x86_64.tar.gz::${_release_url}/codewhale-linux-x64.tar.gz")
+sha256sums_x86_64=('@X86_64_SHA256@')
+source_aarch64=("${pkgname}-${pkgver}-aarch64.tar.gz::${_release_url}/codewhale-linux-arm64.tar.gz")
+sha256sums_aarch64=('@AARCH64_SHA256@')
+
+package() {
+    local release_arch
+    case "${CARCH}" in
+        x86_64) release_arch='x64' ;;
+        aarch64) release_arch='arm64' ;;
+        *) printf 'unsupported architecture: %s\n' "${CARCH}" >&2; return 1 ;;
+    esac
+
+    install -Dm755 "${srcdir}/codewhale-linux-${release_arch}/codewhale" \
+        "${pkgdir}/usr/bin/codewhale"
+    install -Dm755 "${srcdir}/codewhale-linux-${release_arch}/codew" \
+        "${pkgdir}/usr/bin/codew"
+    ln -s codewhale "${pkgdir}/usr/bin/codewhale-tui"
+    install -Dm644 "${srcdir}/LICENSE-${pkgver}" \
+        "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

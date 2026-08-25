@@ -424,6 +424,10 @@ pub struct SessionCostSnapshot {
     /// credential, or a filesystem path.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub route_receipts: BTreeSet<String>,
+    /// Redacted provider-response identities already included in the live and
+    /// durable sub-agent totals. Worker records persist the same fingerprints.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub usage_source_fingerprints: BTreeSet<String>,
     /// Written by builds that track coverage, so a reader can tell "this session
     /// genuinely had zero money-metered turns" apart from "this session predates
     /// coverage tracking". Absent on legacy rows.
@@ -2614,6 +2618,7 @@ mod tests {
                  surface=first-party-payg endpoint_fp=abc123 currency=usd"
                 .to_string()]
             .into(),
+            usage_source_fingerprints: ["response-fingerprint".to_string()].into(),
             coverage_recorded: true,
         };
         let json = serde_json::to_string(&full).expect("serialize");
@@ -2627,6 +2632,10 @@ mod tests {
         assert_eq!(back.unpriced_classes, full.unpriced_classes);
         assert_eq!(back.pricing_provenances, full.pricing_provenances);
         assert_eq!(back.live_pricing_defects, full.live_pricing_defects);
+        assert_eq!(
+            back.usage_source_fingerprints,
+            full.usage_source_fingerprints
+        );
         assert_eq!(
             back.live_pricing_unusable_defects,
             full.live_pricing_unusable_defects

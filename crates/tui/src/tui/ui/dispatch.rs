@@ -1172,9 +1172,24 @@ pub(crate) async fn dispatch_composer_message(
     recovery: DispatchRecovery,
     action: ComposerSubmitAction,
 ) -> Result<()> {
-    // Mirror semantics: a connected web mirror never blocks local prompts.
-    // One-turn-at-a-time is enforced by is_loading/dispatch_in_flight below,
-    // which equally governs local and remote prompts.
+    // The ordinary web mirror does not block local prompts. Isolated Runtime
+    // Chat is different: it owns a provider-backed native turn that is not
+    // reflected by the interactive engine's `is_loading` bit. Preserve the
+    // local message in the queue until that exact turn and its terminal relay
+    // receipt have settled, so one attached run never has two inference loops.
+    if app.remote_control.runtime_chat_blocks_local_dispatch() {
+        enqueue_offline_message(app, message);
+        let queued = app
+            .tr(MessageId::AgentRailQueuedCount)
+            .replace("{count}", &app.queued_message_count().to_string());
+        let status = format!(
+            "Runtime Chat · {} · {queued}",
+            app.tr(MessageId::PhaseFinishing)
+        );
+        app.push_status_toast(status, StatusToastLevel::Info, Some(4_000));
+        return Ok(());
+    }
+
     // Agent focus: the composer addresses one child's fork, not the main
     // session. The follow-up is real runtime work (Op::FollowUpSubAgent); the
     // main transcript keeps a receipt line and the focused view echoes the

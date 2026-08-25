@@ -1245,7 +1245,9 @@ mod tests {
         app.session.subagent_cost_cny = 5.48;
         app.session
             .subagent_usage_sources
-            .insert(("agent-test".to_string(), "response-test".to_string()));
+            .insert(crate::cost_status::usage_source_fingerprint(
+                "response-test",
+            ));
         app.session.displayed_cost_high_water = 2.0;
         app.session.displayed_cost_high_water_cny = 14.61;
         app.session.last_prompt_tokens = Some(120);

@@ -33,9 +33,11 @@ const OPTIONAL_FILES = [
   "docs-configuration.ts",
   "docs-constitution.ts",
   "docs-fleet.ts",
+  "docs-mcp.ts",
   "docs-modes.ts",
   "docs-runtime-api.ts",
   "docs-sandbox.ts",
+  "docs-subagents.ts",
   "docs-web.ts",
 ];
 

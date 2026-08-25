@@ -543,14 +543,131 @@ async fn parallel_surfaces_response_schema_errors_instead_of_null() {
         .await,
     );
 
+    // The default bounded repair (#5583) re-asks once — the fake's rule
+    // matches the repair too, so it fails identically and the run still
+    // fails loud instead of degrading to a null slot.
     assert!(message.contains("responseSchema validation"), "{message}");
+    assert_eq!(
+        driver.spawn_count(),
+        2,
+        "default repair re-asks exactly once"
+    );
     assert!(
         driver.events().iter().any(|event| matches!(
             event,
-            ProgressEvent::TaskSchemaValidationFailed { message, .. }
+            ProgressEvent::TaskSchemaRepairAttempted { attempt: 1, raw, .. }
+                if raw.contains("yes")
+        )),
+        "the failed first attempt should be receipted before the repair"
+    );
+    assert!(
+        driver.events().iter().any(|event| matches!(
+            event,
+            ProgressEvent::TaskSchemaValidationFailed { message, attempt: 2, .. }
                 if message.contains("responseSchema validation")
         )),
         "schema validation error should be emitted as workflow progress"
+    );
+}
+
+#[tokio::test]
+async fn parallel_partial_mode_keeps_schema_failures_as_structured_slots() {
+    let driver = Arc::new(FakeDriver::new());
+    // Repair is disabled per-task so each slot fails terminally on its own
+    // reply; the mixed fan-out then exercises partial mode directly.
+    driver.on(
+        "good slot",
+        FakeReply::Complete(r#"{"refuted": true}"#.to_string()),
+    );
+    driver.on(
+        "bad slot",
+        FakeReply::Complete("not json at all".to_string()),
+    );
+    driver.on("dead slot", FakeReply::Fail("boom".to_string()));
+
+    let value = run(
+        &driver,
+        r#"
+        const results = await parallel([
+            () => task({
+                description: "good slot",
+                responseSchema: { "type": "object" },
+            }),
+            () => task({
+                description: "bad slot",
+                schemaRepairAttempts: 0,
+                responseSchema: { "type": "object" },
+            }),
+            () => task({ description: "dead slot" }),
+        ], { mode: "partial" });
+        return results.map((slot) =>
+            slot && typeof slot === "object" && slot.__taskError !== undefined
+                ? "schema:" + slot.__taskError.kind
+                : slot === null
+                  ? "null"
+                  : "value:" + JSON.stringify(slot)
+        );
+        "#,
+        json!(null),
+    )
+    .await
+    .expect("partial mode completes the fan-out");
+
+    assert_eq!(
+        value,
+        json!([
+            "value:{\"refuted\":true}",
+            // The JS-level kind is the fatal "schema"; the finer decode kind
+            // (json_parse) lives on the receipt events, asserted below.
+            "schema:schema",
+            "null"
+        ])
+    );
+    // Every failed slot still leaves its terminal receipt.
+    assert!(
+        driver.events().iter().any(|event| matches!(
+            event,
+            ProgressEvent::TaskSchemaValidationFailed { kind, .. } if kind == "json_parse"
+        )),
+        "partial mode must not swallow the schema-failure receipt"
+    );
+}
+
+#[tokio::test]
+async fn parallel_partial_mode_still_fails_the_run_on_cancellation() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("hang", FakeReply::Never);
+    let cancel = WorkflowRunCancel::new();
+    let run_cancel = cancel.clone();
+    let run_driver = driver.clone();
+    let handle = tokio::spawn(async move {
+        WorkflowVm::new()
+            .run_script_with_cancel(
+                r#"
+                await parallel([
+                    () => task({ description: "hang", responseSchema: { "type": "object" } }),
+                ], { mode: "partial" });
+                "#,
+                json!(null),
+                run_driver as Arc<dyn codewhale_workflow_js::WorkflowDriver>,
+                run_cancel,
+            )
+            .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while driver.spawn_count() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("task should start");
+    cancel.cancel();
+
+    let result = handle.await.expect("VM task should join");
+    assert!(
+        matches!(result, Err(WorkflowJsError::Cancelled)),
+        "partial mode must not downgrade cancellation into a slot value: {result:?}"
     );
 }
 
@@ -559,7 +676,7 @@ async fn pipeline_surfaces_response_schema_errors_instead_of_null() {
     let driver = Arc::new(FakeDriver::new());
     driver.on(
         "bad schema",
-        FakeReply::Complete(r#"{"refuted":"yes"}"#.to_string()),
+        FakeReply::Complete("not json at all".to_string()),
     );
 
     let message = script_message(
@@ -570,6 +687,7 @@ async fn pipeline_surfaces_response_schema_errors_instead_of_null() {
                 ["bad schema"],
                 (description) => task({
                     description,
+                    schemaRepairAttempts: 0,
                     responseSchema: {
                         type: "object",
                         properties: { refuted: { type: "boolean" } },
@@ -583,7 +701,366 @@ async fn pipeline_surfaces_response_schema_errors_instead_of_null() {
         .await,
     );
 
-    assert!(message.contains("responseSchema validation"), "{message}");
+    // Repair disabled: the first decode failure is terminal.
+    assert!(message.contains("not valid JSON"), "{message}");
+    assert_eq!(driver.spawn_count(), 1);
+    assert!(
+        driver.events().iter().any(|event| matches!(
+            event,
+            ProgressEvent::TaskSchemaValidationFailed { kind, attempt: 1, .. }
+                if kind == "json_parse"
+        )),
+        "a disabled repair must fail terminally on attempt 1 with the parse kind"
+    );
+}
+
+#[tokio::test]
+async fn prose_wrapped_json_repairs_in_one_attempt() {
+    let driver = Arc::new(FakeDriver::new());
+    // First match wins: the repair spawn's description carries the
+    // "[schema repair 2]" marker, the first attempt's does not.
+    driver.on(
+        "[schema repair",
+        FakeReply::Complete(r#"{"refuted": true}"#.to_string()),
+    );
+    driver.on(
+        "score the claim",
+        FakeReply::Complete(
+            "Sure! Happy to help. Here is my verdict:\n\
+             ```json\n{\"refuted\": true}\n```\n\
+             Let me know if you need anything else."
+                .to_string(),
+        ),
+    );
+
+    let value = run(
+        &driver,
+        r#"
+        return await task({
+            description: "score the claim",
+            responseSchema: {
+                type: "object",
+                properties: { refuted: { type: "boolean" } },
+                required: ["refuted"],
+            },
+        });
+        "#,
+        json!(null),
+    )
+    .await
+    .expect("prose-wrapped JSON should repair in one attempt");
+
+    assert_eq!(value, json!({ "refuted": true }));
+    assert_eq!(driver.spawn_count(), 2);
+    let requests = driver.requests();
+    assert_eq!(requests[0].response_schema, requests[1].response_schema);
+    assert!(
+        requests[1].description.starts_with("[schema repair 2]"),
+        "the repair spawn must identify itself: {}",
+        requests[1].description
+    );
+    assert!(
+        requests[1].description.contains("score the claim"),
+        "the repair prompt must embed the original task"
+    );
+    assert!(
+        driver.events().iter().any(|event| matches!(
+            event,
+            ProgressEvent::TaskSchemaRepairAttempted {
+                kind, attempt: 1, raw, raw_truncated: false, ..
+            } if kind == "json_parse" && raw.contains("Happy to help")
+        )),
+        "the prose failure should be receipted with the parse kind"
+    );
+    assert!(
+        !driver
+            .events()
+            .iter()
+            .any(|event| matches!(event, ProgressEvent::TaskSchemaValidationFailed { .. })),
+        "a successful repair must not leave a terminal schema-failure receipt"
+    );
+}
+
+#[tokio::test]
+async fn schema_violation_receipt_names_the_validation_kind() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on(
+        "[schema repair",
+        FakeReply::Complete(r#"{"refuted": false}"#.to_string()),
+    );
+    driver.on(
+        "check the gate",
+        FakeReply::Complete(r#"{"refuted":"no"}"#.to_string()),
+    );
+
+    let value = run(
+        &driver,
+        r#"
+        return await task({
+            description: "check the gate",
+            responseSchema: {
+                type: "object",
+                properties: { refuted: { type: "boolean" } },
+                required: ["refuted"],
+            },
+        });
+        "#,
+        json!(null),
+    )
+    .await
+    .expect("valid JSON of the wrong shape should repair");
+
+    assert_eq!(value, json!({ "refuted": false }));
+    assert!(
+        driver.events().iter().any(|event| matches!(
+            event,
+            ProgressEvent::TaskSchemaRepairAttempted { kind, message, .. }
+                if kind == "schema_validation"
+                    && message.contains("responseSchema validation")
+        )),
+        "a parsed-but-invalid reply must receipt as schema_validation, not json_parse"
+    );
+}
+
+#[tokio::test]
+async fn schema_repair_attempts_is_bounded_at_the_parse_gate() {
+    let driver = Arc::new(FakeDriver::new());
+    let message = script_message(
+        run(
+            &driver,
+            r#"
+            return await task({
+                description: "bound me",
+                schemaRepairAttempts: 4,
+                responseSchema: { "type": "object" },
+            });
+            "#,
+            json!(null),
+        )
+        .await,
+    );
+    assert!(message.contains("bounded to 3"), "{message}");
+    assert_eq!(
+        driver.spawn_count(),
+        0,
+        "no child may spawn for a bad option"
+    );
+}
+
+#[tokio::test]
+async fn repair_is_refused_when_the_shared_budget_is_exhausted() {
+    let driver = Arc::new(FakeDriver::new());
+    // Attempt 1 is admitted with an empty pool and debits it fully at spawn.
+    driver.set_budget(Some(100), 100);
+    driver.on(
+        "spend it all",
+        FakeReply::Complete("sure thing, no JSON here".to_string()),
+    );
+
+    let message = script_message(
+        run(
+            &driver,
+            r#"
+            return await task({
+                description: "spend it all",
+                responseSchema: { "type": "object" },
+            });
+            "#,
+            json!(null),
+        )
+        .await,
+    );
+
+    assert!(
+        message.contains("repair skipped: budget exhausted"),
+        "{message}"
+    );
+    assert_eq!(
+        driver.spawn_count(),
+        1,
+        "the repair must not spawn on an empty pool"
+    );
+    assert!(
+        driver.events().iter().any(|event| matches!(
+            event,
+            ProgressEvent::TaskSchemaValidationFailed { attempt: 1, message, .. }
+                if message.contains("repair skipped: budget exhausted")
+        )),
+        "the refused repair must stay a schema failure with the reason named"
+    );
+}
+
+#[tokio::test]
+async fn repair_is_refused_when_the_shared_wall_clock_is_spent() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on_with_delay(
+        "slow prose",
+        FakeReply::Complete("eventually, still not json".to_string()),
+        Duration::from_millis(1_100),
+    );
+
+    let message = script_message(
+        run(
+            &driver,
+            r#"
+            return await task({
+                description: "slow prose",
+                wallTimeSecs: 1,
+                responseSchema: { "type": "object" },
+            });
+            "#,
+            json!(null),
+        )
+        .await,
+    );
+
+    assert!(
+        message.contains("repair skipped: no wall-time left from wallTimeSecs"),
+        "{message}"
+    );
+    assert_eq!(
+        driver.spawn_count(),
+        1,
+        "the repair inherits the spent clock, not a fresh one"
+    );
+}
+
+#[tokio::test]
+async fn cancellation_during_repair_terminates_cleanly() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("[schema repair", FakeReply::Never);
+    driver.on(
+        "hang the repair",
+        FakeReply::Complete("prose, no json".to_string()),
+    );
+    let cancel = WorkflowRunCancel::new();
+    let run_cancel = cancel.clone();
+    let run_driver = driver.clone();
+    let handle = tokio::spawn(async move {
+        WorkflowVm::new()
+            .run_script_with_cancel(
+                r#"
+                return await task({
+                    description: "hang the repair",
+                    responseSchema: { "type": "object" },
+                });
+                "#,
+                json!(null),
+                run_driver as Arc<dyn codewhale_workflow_js::WorkflowDriver>,
+                run_cancel,
+            )
+            .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while driver.spawn_count() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("repair should start");
+    cancel.cancel();
+
+    let result = handle.await.expect("VM task should join");
+    assert!(
+        matches!(result, Err(WorkflowJsError::Cancelled)),
+        "{result:?}"
+    );
+    assert!(
+        !driver
+            .events()
+            .iter()
+            .any(|event| matches!(event, ProgressEvent::TaskSchemaValidationFailed { .. })),
+        "cancellation must not be rewritten into a schema failure"
+    );
+}
+
+#[tokio::test]
+async fn parallel_fail_fast_rejects_with_the_typed_slot_error() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("beta", FakeReply::Fail("boom".to_string()));
+    let value = run(
+        &driver,
+        r#"
+        try {
+            await parallel([
+                () => task({ description: "alpha" }),
+                () => task({ description: "beta" }),
+            ], { mode: "fail-fast" });
+            return "no-error";
+        } catch (err) {
+            return (err && err.kind) + ":" + (err && err.message);
+        }
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+    let text = value.as_str().unwrap();
+    assert!(
+        text.starts_with("task:") && text.contains("boom"),
+        "fail-fast must reject with the typed slot error: {text}"
+    );
+    assert!(
+        driver.events().iter().any(|event| matches!(
+            event,
+            ProgressEvent::Log { message } if message.contains("fail-fast slot error")
+        )),
+        "fail-fast must leave a breadcrumb with the slot error"
+    );
+}
+
+#[tokio::test]
+async fn task_errors_carry_typed_kinds() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("budget", FakeReply::BudgetExhausted("limit 10".to_string()));
+    driver.on("cancelled", FakeReply::Cancelled);
+    driver.on("admission", FakeReply::Reject("admission cap".to_string()));
+    let value = run(
+        &driver,
+        r#"
+        const kinds = {};
+        for (const description of ["budget", "cancelled", "admission"]) {
+            try {
+                await task({ description });
+                kinds[description] = "none";
+            } catch (err) {
+                kinds[description] = err && err.kind;
+            }
+        }
+        return kinds;
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        value,
+        json!({"budget": "budget", "cancelled": "cancelled", "admission": "admission"})
+    );
+}
+
+#[tokio::test]
+async fn pipeline_fail_fast_rejects_instead_of_nulling_the_item() {
+    let value = run(
+        &Arc::new(FakeDriver::new()),
+        r#"
+        const stage = async (value) => {
+            if (value === 1) throw new Error("stage boom");
+            return value * 2;
+        };
+        try {
+            await pipeline([1, 2], { stages: [stage], mode: "fail-fast" });
+            return "no-error";
+        } catch (err) {
+            return (err && err.kind) + ":" + (err && err.message);
+        }
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+    assert_eq!(value, json!("task:stage boom"));
 }
 
 #[tokio::test]

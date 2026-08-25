@@ -1085,13 +1085,28 @@ fn local_context_from_file_mentions(
             continue;
         }
 
+        // `@path:START-END` attaches a line range of a file (issue #5550).
+        // Exact resolution wins first: a file that literally contains a colon
+        // is treated as its full self. Only a genuine miss re-reads the token
+        // as `path:START-END`.
+        let mut range = None;
+        let mut mention_path = mention.as_str();
         // `Workspace::resolve_exact` already returns absolute paths when the root
         // is absolute (TUI always runs from an absolute workspace), so we
         // skip `canonicalize()` here — it's per-mention I/O on the
         // message-send hot path. Accept the rare symlink-aliasing dedup
         // miss as the cost of avoiding a syscall (Gemini code-review).
-        let (path, display_path, exists) =
-            resolve_mention_for_send(&ws, &mention, completion_index);
+        let (mut path, mut display_path, mut exists) =
+            resolve_mention_for_send(&ws, mention_path, completion_index);
+        if !exists && let Some((path_part, parsed)) = split_mention_range(&mention) {
+            let (ranged_path, ranged_display, ranged_exists) =
+                resolve_mention_for_send(&ws, path_part, completion_index);
+            if ranged_exists {
+                range = Some(parsed);
+                mention_path = path_part;
+                (path, display_path, exists) = (ranged_path, ranged_display, ranged_exists);
+            }
+        }
         tracing::debug!(
             target: "codewhale_tui::file_mention",
             raw_typed = %mention,
@@ -1117,7 +1132,12 @@ fn local_context_from_file_mentions(
         }
 
         if exists {
-            blocks.push(render_file_mention_context(&mention, &path, &display_path));
+            blocks.push(render_file_mention_context(
+                mention_path,
+                &path,
+                &display_path,
+                range,
+            ));
         } else {
             // Honest miss: name only what the user typed. Emitting the
             // workspace-root join as `path=` presented a non-existent file
@@ -1131,6 +1151,42 @@ fn local_context_from_file_mentions(
     } else {
         Some(blocks.join("\n\n"))
     }
+}
+
+/// Endpoints of a `@path:START-END` mention (1-based, inclusive).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+/// Split a trailing `:START-END` range off a mention token.
+///
+/// Only an exact `digits-digits` suffix after a non-empty path part is
+/// treated as a range, so `notes.txt`, `x:1`, `x:a-b`, `:1-2`, and Windows
+/// `C:\\dir\\file` (digits requirement) all stay whole. The caller must have
+/// already failed an exact path resolution for the full token before calling.
+fn split_mention_range(raw: &str) -> Option<(&str, FileRange)> {
+    let (path_part, range_part) = raw.rsplit_once(':')?;
+    if path_part.is_empty() {
+        return None;
+    }
+    let (start, end) = range_part.split_once('-')?;
+    if start.is_empty()
+        || end.is_empty()
+        || !start.bytes().all(|b| b.is_ascii_digit())
+        || !end.bytes().all(|b| b.is_ascii_digit())
+        || start.len() > 5
+        || end.len() > 5
+    {
+        return None;
+    }
+    let start: u32 = start.parse().ok()?;
+    let end: u32 = end.parse().ok()?;
+    if start == 0 || end < start {
+        return None;
+    }
+    Some((path_part, FileRange { start, end }))
 }
 
 /// Send-time mention resolution: exact two-pass lookup first (workspace root,
@@ -1312,7 +1368,12 @@ fn trim_unquoted_mention(raw: &str) -> &str {
     trimmed
 }
 
-fn render_file_mention_context(raw: &str, path: &Path, display_path: &str) -> String {
+fn render_file_mention_context(
+    raw: &str,
+    path: &Path,
+    display_path: &str,
+    range: Option<FileRange>,
+) -> String {
     if !path.exists() {
         return format!("<missing-file mention=\"@{raw}\" path=\"{display_path}\" />");
     }
@@ -1328,11 +1389,20 @@ fn render_file_mention_context(raw: &str, path: &Path, display_path: &str) -> St
         );
     }
 
-    match read_text_prefix(path) {
-        Ok((text, truncated)) => {
+    let range_attr = match range {
+        Some(FileRange { start, end }) => format!(r#" lines="{start}-{end}""#),
+        None => String::new(),
+    };
+    match read_file_content(path, range) {
+        Ok((text, truncated, beyond_eof)) => {
             let truncated_attr = if truncated { " truncated=\"true\"" } else { "" };
+            let beyond_attr = if beyond_eof {
+                " beyond-eof=\"true\""
+            } else {
+                ""
+            };
             format!(
-                "<file mention=\"@{raw}\" path=\"{display_path}\"{truncated_attr}>\n{text}\n</file>"
+                "<file mention=\"@{raw}\" path=\"{display_path}\"{range_attr}{truncated_attr}{beyond_attr}>\n{text}\n</file>"
             )
         }
         Err(err) => {
@@ -1373,6 +1443,30 @@ fn render_directory_mention_context(raw: &str, path: &Path, display_path: &str) 
         let _ = write!(body, "\n... {omitted} more entries");
     }
     format!("<directory mention=\"@{raw}\" path=\"{display_path}\">\n{body}\n</directory>")
+}
+
+/// Bounded read of a mention's file content, optionally sliced to a line
+/// range. Returns `(text, truncated, beyond_eof)`: `truncated` mirrors the
+/// full-file byte bound; `beyond_eof` is set only when the requested range
+/// starts past the end of the file.
+fn read_file_content(
+    path: &Path,
+    range: Option<FileRange>,
+) -> std::io::Result<(String, bool, bool)> {
+    let (text, truncated) = read_text_prefix(path)?;
+    let Some(FileRange { start, end }) = range else {
+        return Ok((text, truncated, false));
+    };
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    if lines.last().copied() == Some("") {
+        lines.pop();
+    }
+    let start_idx = usize::try_from(start.saturating_sub(1)).unwrap_or(usize::MAX);
+    if start_idx >= lines.len() {
+        return Ok((String::new(), truncated, true));
+    }
+    let end_idx = usize::try_from(end).unwrap_or(usize::MAX).min(lines.len());
+    Ok((lines[start_idx..end_idx].join("\n"), truncated, false))
 }
 
 fn read_text_prefix(path: &Path) -> std::io::Result<(String, bool)> {
@@ -1859,7 +1953,8 @@ mod tests {
         f.write_all(&padding).expect("write padding");
         f.write_all("中".as_bytes()).expect("write CJK");
 
-        let (text, truncated) = read_text_prefix(&path).expect("should succeed");
+        let (text, truncated, beyond_eof) = read_file_content(&path, None).expect("should succeed");
+        assert!(!beyond_eof);
         assert!(
             truncated,
             "file exceeds limit so should be marked truncated"
@@ -1868,6 +1963,83 @@ mod tests {
             !text.contains('\u{FFFD}'),
             "truncated text must not contain replacement characters; got: {text:?}",
         );
+    }
+
+    #[test]
+    fn mention_range_splitting_accepts_only_exact_digit_pairs() {
+        assert_eq!(
+            split_mention_range("src/lib.rs:120-160"),
+            Some((
+                "src/lib.rs",
+                FileRange {
+                    start: 120,
+                    end: 160
+                }
+            )),
+        );
+        assert_eq!(
+            split_mention_range("x:1-2"),
+            Some(("x", FileRange { start: 1, end: 2 })),
+        );
+        for whole in [
+            "notes.txt",
+            "x:1",
+            "x:a-b",
+            ":1-2",
+            "x:1-a",
+            "x:0-2",
+            "x:2-1",
+        ] {
+            assert_eq!(split_mention_range(whole), None, "{whole} must stay whole");
+        }
+    }
+
+    #[test]
+    fn ranged_file_mention_slices_lines_and_reports_beyond_eof() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("lines.rs");
+        std::fs::write(&path, "one\ntwo\nthree\nfour\nfive\n").expect("write");
+
+        let (text, truncated, beyond_eof) =
+            read_file_content(&path, Some(FileRange { start: 2, end: 4 })).expect("range read");
+        assert!(!truncated);
+        assert!(!beyond_eof);
+        assert_eq!(text, "two\nthree\nfour");
+
+        // An end past the file clamps to what exists.
+        let (text, _, beyond_eof) =
+            read_file_content(&path, Some(FileRange { start: 4, end: 99 })).expect("clamped range");
+        assert!(!beyond_eof);
+        assert_eq!(text, "four\nfive");
+
+        // A start past the end is flagged honestly.
+        let (text, _, beyond_eof) =
+            read_file_content(&path, Some(FileRange { start: 9, end: 12 })).expect("beyond range");
+        assert!(beyond_eof);
+        assert!(text.is_empty());
+    }
+
+    #[test]
+    fn ranged_mention_render_annotates_lines_and_honours_the_byte_bound() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("notes.rs");
+        std::fs::write(&path, "a\nb\nc\nd\n").expect("write");
+        let rendered = render_file_mention_context(
+            "notes.rs:2-3",
+            &path,
+            "notes.rs",
+            Some(FileRange { start: 2, end: 3 }),
+        );
+        assert!(rendered.contains(r#"lines="2-3""#), "{rendered}");
+        assert!(rendered.contains("\nb\nc\n"));
+
+        let beyond = render_file_mention_context(
+            "notes.rs:80-90",
+            &path,
+            "notes.rs",
+            Some(FileRange { start: 80, end: 90 }),
+        );
+        assert!(beyond.contains(r#"beyond-eof="true""#), "{beyond}");
     }
     // ---------------------------------------------------------------------
     //  #4067 — @git / @diff composer mentions

@@ -14,7 +14,10 @@ use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{
+    Mutex as AsyncMutex, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, OwnedSemaphorePermit, RwLock,
+    Semaphore,
+};
 
 use codewhale_config::catalog::{
     CatalogOffering, CatalogRefreshError, CatalogSnapshot, CatalogSource, CatalogStatus,
@@ -38,6 +41,83 @@ use crate::models::Role;
 use crate::models::{
     ContentBlock, Message, MessageRequest, MessageResponse, ServerToolUsage, SystemPrompt, Usage,
 };
+
+/// Every provider request that can feed the interactive TUI's attached CWC run
+/// takes a shared permit at this lowest common dispatch seam. Runtime Chat holds
+/// the exclusive permit from native admission through durable terminal
+/// acknowledgement. This covers ordinary turns, auto-route classification,
+/// advisor calls, detached subagents, compaction, purge, and streaming without
+/// serializing independent RuntimeThreadManager stores.
+#[cfg(not(test))]
+static RUNTIME_CHAT_INFERENCE_GATE: OnceLock<Arc<RwLock<()>>> = OnceLock::new();
+
+/// Unit tests run many independent Tokio runtimes in one process. Keying the
+/// otherwise-identical gate by runtime keeps unrelated libtest cases from
+/// manufacturing contention while preserving exact read/write behavior among
+/// tasks on the same current-thread or multi-thread runtime.
+#[cfg(test)]
+static RUNTIME_CHAT_INFERENCE_TEST_GATES: OnceLock<
+    StdMutex<HashMap<RuntimeChatInferenceTestScope, std::sync::Weak<RwLock<()>>>>,
+> = OnceLock::new();
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum RuntimeChatInferenceTestScope {
+    Runtime(tokio::runtime::Id),
+    Thread(std::thread::ThreadId),
+}
+
+#[cfg(not(test))]
+fn runtime_chat_inference_gate() -> Arc<RwLock<()>> {
+    Arc::clone(RUNTIME_CHAT_INFERENCE_GATE.get_or_init(|| Arc::new(RwLock::new(()))))
+}
+
+#[cfg(test)]
+fn runtime_chat_inference_gate() -> Arc<RwLock<()>> {
+    let scope = tokio::runtime::Handle::try_current()
+        .map(|handle| RuntimeChatInferenceTestScope::Runtime(handle.id()))
+        .unwrap_or_else(|_| RuntimeChatInferenceTestScope::Thread(std::thread::current().id()));
+    let mut gates = RUNTIME_CHAT_INFERENCE_TEST_GATES
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(gate) = gates.get(&scope).and_then(std::sync::Weak::upgrade) {
+        return gate;
+    }
+    let gate = Arc::new(RwLock::new(()));
+    gates.insert(scope, Arc::downgrade(&gate));
+    gate
+}
+
+/// Exclusive ownership retained by isolated Runtime Chat.
+pub(crate) struct RuntimeChatInferenceOwnership {
+    _gate: OwnedRwLockWriteGuard<()>,
+}
+
+/// Shared participation retained for the full provider-output lifecycle.
+pub(crate) struct RemoteControlInferencePermit {
+    _gate: OwnedRwLockReadGuard<()>,
+}
+
+#[cfg(test)]
+pub(crate) async fn acquire_runtime_chat_inference_ownership() -> RuntimeChatInferenceOwnership {
+    let gate = runtime_chat_inference_gate().write_owned().await;
+    RuntimeChatInferenceOwnership { _gate: gate }
+}
+
+pub(crate) fn try_acquire_runtime_chat_inference_ownership() -> Option<RuntimeChatInferenceOwnership>
+{
+    let gate = runtime_chat_inference_gate().try_write_owned().ok()?;
+    Some(RuntimeChatInferenceOwnership { _gate: gate })
+}
+
+/// Join the attached interactive CWC run as a provider-output participant.
+/// Standalone background adapters that bypass `DeepSeekClient::create_message`
+/// use this guard and retain it through response decoding.
+pub(crate) async fn acquire_remote_control_inference_participant() -> RemoteControlInferencePermit {
+    let gate = runtime_chat_inference_gate().read_owned().await;
+    RemoteControlInferencePermit { _gate: gate }
+}
 
 pub(super) fn to_api_tool_name(name: &str) -> String {
     let mut out = String::new();
@@ -201,6 +281,11 @@ pub struct DeepSeekClient {
     /// Auxiliary inspection calls use the normal bounded retry schedule but
     /// never publish retry/rate-limit state into process-global UI cells.
     isolated_request_state: bool,
+    /// Whether this concrete client can contribute provider output to the
+    /// interactive TUI's attached CWC run. Isolated Runtime Chat executes under
+    /// the host's exclusive permit; independent RuntimeThreadManager stores do
+    /// not share that run and remain concurrent.
+    remote_control_inference_participant: bool,
     default_model: String,
     connection_health: Arc<AsyncMutex<ConnectionHealth>>,
     rate_limiter: Arc<AsyncMutex<TokenBucket>>,
@@ -472,6 +557,7 @@ impl Clone for DeepSeekClient {
             wire_format: self.wire_format,
             retry: self.retry.clone(),
             isolated_request_state: self.isolated_request_state,
+            remote_control_inference_participant: self.remote_control_inference_participant,
             default_model: self.default_model.clone(),
             connection_health: self.connection_health.clone(),
             rate_limiter: self.rate_limiter.clone(),
@@ -648,6 +734,13 @@ fn redact_model_bound_text(text: &str, exact_secret_values: &[String]) -> String
 
 /// Maximum bytes to read from an error response body (64 KB).
 pub(super) const ERROR_BODY_MAX_BYTES: usize = 64 * 1024;
+
+/// Read/overall timeout for the shared client's non-streaming requests
+/// (`/models` listing, catalog refresh, health probes). Streaming requests
+/// keep their own idle-timeout envelope; without this, a provider that accepts
+/// the connection and never answers hangs model-list, catalog refresh, and
+/// health checks forever (ops R4).
+pub(super) const NON_STREAMING_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Read an error response body with a size limit to prevent unbounded allocation.
 pub(super) async fn bounded_error_text(response: reqwest::Response, max_bytes: usize) -> String {
@@ -1197,6 +1290,8 @@ impl DeepSeekClient {
             wire_format,
             retry,
             isolated_request_state: false,
+            remote_control_inference_participant: !config.runtime_chat_isolated
+                && !config.runtime_thread_inference_unrelated,
             default_model,
             connection_health: Arc::new(AsyncMutex::new(ConnectionHealth::default())),
             rate_limiter: Arc::new(AsyncMutex::new(TokenBucket::from_env())),
@@ -1543,6 +1638,20 @@ fn build_default_headers(
             HeaderValue::from_str(api_key)?
         };
         headers.insert(header_name.clone(), header_value);
+    }
+    // OpenRouter app attribution: these two headers are how apps appear on
+    // openrouter.ai's app rankings — there is no manual submission. They
+    // identify the app, never the user, and a user-configured header of the
+    // same name below still wins (the extra-header loop overwrites).
+    if api_provider == ApiProvider::Openrouter {
+        headers.insert(
+            HeaderName::from_static("http-referer"),
+            HeaderValue::from_static("https://codewhale.net"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-title"),
+            HeaderValue::from_static("Codewhale"),
+        );
     }
     for (name, value) in extra_headers {
         let name = name.trim();
@@ -2123,9 +2232,31 @@ impl DeepSeekClient {
         }
     }
 
+    pub(crate) async fn acquire_remote_control_inference_permit(
+        &self,
+    ) -> Option<RemoteControlInferencePermit> {
+        if !self.remote_control_inference_participant {
+            return None;
+        }
+        Some(acquire_remote_control_inference_participant().await)
+    }
+
     fn hold_provider_request_permit_for_stream(
         stream: crate::llm_client::StreamEventBox,
         permit: Option<ProviderRequestPermit>,
+    ) -> crate::llm_client::StreamEventBox {
+        Box::pin(async_stream::stream! {
+            let _permit = permit;
+            let mut stream = stream;
+            while let Some(event) = stream.next().await {
+                yield event;
+            }
+        })
+    }
+
+    fn hold_remote_control_inference_permit_for_stream(
+        stream: crate::llm_client::StreamEventBox,
+        permit: Option<RemoteControlInferencePermit>,
     ) -> crate::llm_client::StreamEventBox {
         Box::pin(async_stream::stream! {
             let _permit = permit;
@@ -2148,6 +2279,8 @@ impl DeepSeekClient {
         model: &str,
         target_language: &str,
     ) -> Result<String> {
+        let _inference = self.acquire_remote_control_inference_permit().await;
+        let _permit = self.acquire_provider_request_permit().await;
         let model = wire_model_for_provider_route(self.api_provider, &self.base_url, model);
         let max_tokens = self.effective_max_output_tokens(&model);
         if self.wire_format != WireFormat::ChatCompletions {
@@ -2212,7 +2345,13 @@ impl DeepSeekClient {
     /// List available models from the provider.
     pub async fn list_models(&self) -> Result<Vec<AvailableModel>> {
         let url = api_url(&self.base_url, "models");
-        let response = self.send_with_retry(|| self.http_client.get(&url)).await?;
+        let response = self
+            .send_with_retry(|| {
+                self.http_client
+                    .get(&url)
+                    .timeout(NON_STREAMING_HTTP_TIMEOUT)
+            })
+            .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -2265,6 +2404,7 @@ impl DeepSeekClient {
         let response = self
             .http_client
             .get(&url)
+            .timeout(NON_STREAMING_HTTP_TIMEOUT)
             .send()
             .await
             .map_err(|_| CatalogRefreshError::Network)?;
@@ -2453,6 +2593,8 @@ impl DeepSeekClient {
         &self,
         request: SpeechSynthesisRequest,
     ) -> Result<SpeechSynthesisResponse> {
+        let _inference = self.acquire_remote_control_inference_permit().await;
+        let _permit = self.acquire_provider_request_permit().await;
         if self.api_provider != crate::config::ApiProvider::XiaomiMimo {
             anyhow::bail!(
                 "speech synthesis requires provider 'xiaomi-mimo' (current: {})",
@@ -2574,7 +2716,12 @@ impl DeepSeekClient {
             return;
         }
         let health_url = api_url(&self.base_url, "models");
-        let probe = self.http_client.get(health_url).send().await;
+        let probe = self
+            .http_client
+            .get(health_url)
+            .timeout(NON_STREAMING_HTTP_TIMEOUT)
+            .send()
+            .await;
         match probe {
             Ok(resp) if resp.status().is_success() => {
                 // Consume the response body so the connection can be returned to the pool.
@@ -2818,6 +2965,7 @@ impl DeepSeekClient {
         // auxiliary classifier call, however: it must neither consume nor
         // inherit that mutable foreground state.
         isolated.rate_limiter = Arc::new(AsyncMutex::new(TokenBucket::from_env()));
+        let _inference = isolated.acquire_remote_control_inference_permit().await;
         let _permit = isolated.acquire_provider_request_permit().await;
         let prepared = isolated.prepare_outbound_request(request, false)?;
         match prepared.dialect {
@@ -2867,7 +3015,12 @@ impl LlmClient for DeepSeekClient {
         }
         let health_url = api_url(&self.base_url, "models");
         self.wait_for_rate_limit().await;
-        let response = self.http_client.get(health_url).send().await;
+        let response = self
+            .http_client
+            .get(health_url)
+            .timeout(NON_STREAMING_HTTP_TIMEOUT)
+            .send()
+            .await;
         match response {
             Ok(resp) if resp.status().is_success() => {
                 // Consume the response body so the connection can be returned to the pool.
@@ -2889,6 +3042,7 @@ impl LlmClient for DeepSeekClient {
     }
 
     async fn create_message(&self, request: MessageRequest) -> Result<MessageResponse> {
+        let _inference = self.acquire_remote_control_inference_permit().await;
         let _permit = self.acquire_provider_request_permit().await;
         // Cacheability is a property of the caller's request, not of the wire
         // body, so it is read before the request is consumed by the seam.
@@ -2908,12 +3062,16 @@ impl LlmClient for DeepSeekClient {
         &self,
         request: MessageRequest,
     ) -> Result<crate::llm_client::StreamEventBox> {
+        let inference = self.acquire_remote_control_inference_permit().await;
         let permit = self.acquire_provider_request_permit().await;
         let prepared = self.prepare_outbound_request(request, true)?;
         if self.api_provider == crate::config::ApiProvider::Antigravity {
-            return Ok(Self::hold_provider_request_permit_for_stream(
+            let stream = Self::hold_provider_request_permit_for_stream(
                 self.handle_cloud_code_stream(&prepared).await?,
                 permit,
+            );
+            return Ok(Self::hold_remote_control_inference_permit_for_stream(
+                stream, inference,
             ));
         }
         let stream = match prepared.dialect {
@@ -2924,8 +3082,9 @@ impl LlmClient for DeepSeekClient {
                 unreachable!("Antigravity streams before dialect match")
             }
         };
-        Ok(Self::hold_provider_request_permit_for_stream(
-            stream, permit,
+        let stream = Self::hold_provider_request_permit_for_stream(stream, permit);
+        Ok(Self::hold_remote_control_inference_permit_for_stream(
+            stream, inference,
         ))
     }
 }
@@ -3730,6 +3889,8 @@ impl DeepSeekClient {
         suffix: &str,
         max_tokens: u32,
     ) -> anyhow::Result<String> {
+        let _inference = self.acquire_remote_control_inference_permit().await;
+        let _permit = self.acquire_provider_request_permit().await;
         if self.api_provider == ApiProvider::OpencodeZen
             || self.wire_format != WireFormat::ChatCompletions
         {
@@ -3964,6 +4125,68 @@ mod tests {
     use serde_json::json;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// OpenRouter app attribution: the two headers that put an app on
+    /// openrouter.ai's rankings are sent for OpenRouter routes only, and a
+    /// user-configured header of the same name wins.
+    #[test]
+    fn openrouter_routes_carry_app_attribution_headers() {
+        let headers = build_default_headers(
+            "sk-or-key",
+            &HashMap::new(),
+            ApiProvider::Openrouter,
+            "https://openrouter.ai/api/v1",
+            WireFormat::ChatCompletions,
+            false,
+        )
+        .expect("headers");
+        assert_eq!(
+            headers.get("http-referer").and_then(|v| v.to_str().ok()),
+            Some("https://codewhale.net")
+        );
+        assert_eq!(
+            headers.get("x-title").and_then(|v| v.to_str().ok()),
+            Some("Codewhale")
+        );
+
+        // Attribution identifies this app to OpenRouter's rankings and has
+        // no business on any other route, whichever provider that is.
+        for provider in [
+            ApiProvider::Deepseek,
+            ApiProvider::Moonshot,
+            ApiProvider::Zai,
+            ApiProvider::Openai,
+            ApiProvider::Custom,
+        ] {
+            let other = build_default_headers(
+                "sk-key",
+                &HashMap::new(),
+                provider,
+                "https://example.invalid/v1",
+                WireFormat::ChatCompletions,
+                false,
+            )
+            .expect("headers");
+            assert!(
+                other.get("http-referer").is_none() && other.get("x-title").is_none(),
+                "{provider:?} must not receive OpenRouter attribution headers"
+            );
+        }
+
+        let overridden = build_default_headers(
+            "sk-or-key",
+            &HashMap::from([("X-Title".to_string(), "My Fork".to_string())]),
+            ApiProvider::Openrouter,
+            "https://openrouter.ai/api/v1",
+            WireFormat::ChatCompletions,
+            false,
+        )
+        .expect("headers");
+        assert_eq!(
+            overridden.get("x-title").and_then(|v| v.to_str().ok()),
+            Some("My Fork")
+        );
+    }
 
     #[test]
     fn openrouter_pricing_maps_cache_write_per_token_to_per_million() {
@@ -6619,6 +6842,67 @@ mod tests {
         .expect("zai client")
     }
 
+    fn runtime_chat_gate_client(isolated: bool, unrelated: bool) -> DeepSeekClient {
+        DeepSeekClient::new(&Config {
+            provider: Some("ollama".to_string()),
+            default_text_model: Some(crate::config::DEFAULT_OLLAMA_MODEL.to_string()),
+            runtime_chat_isolated: isolated,
+            runtime_thread_inference_unrelated: unrelated,
+            ..Config::default()
+        })
+        .expect("runtime chat gate test client")
+    }
+
+    #[tokio::test]
+    async fn runtime_chat_provider_gate_blocks_only_attached_run_participants() {
+        let participant = runtime_chat_gate_client(false, false);
+        let participant_clone = participant.clone();
+        assert!(participant.remote_control_inference_participant);
+        assert!(participant_clone.remote_control_inference_participant);
+        assert!(
+            !runtime_chat_gate_client(true, false).remote_control_inference_participant,
+            "the isolated relay client must not deadlock on its own exclusive lease"
+        );
+        assert!(
+            !runtime_chat_gate_client(false, true).remote_control_inference_participant,
+            "an unrelated RuntimeThreadManager must remain concurrent"
+        );
+
+        let ownership = acquire_runtime_chat_inference_ownership().await;
+        let waiting = tokio::spawn(async move {
+            participant_clone
+                .acquire_remote_control_inference_permit()
+                .await
+        });
+        let mut waiting = waiting;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), &mut waiting)
+                .await
+                .is_err(),
+            "an attached-run provider call must wait behind Runtime Chat ownership"
+        );
+        assert!(
+            runtime_chat_gate_client(true, false)
+                .acquire_remote_control_inference_permit()
+                .await
+                .is_none()
+        );
+        assert!(
+            runtime_chat_gate_client(false, true)
+                .acquire_remote_control_inference_permit()
+                .await
+                .is_none()
+        );
+        drop(ownership);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), waiting)
+                .await
+                .expect("participant should resume")
+                .expect("permit task")
+                .is_some()
+        );
+    }
+
     #[tokio::test]
     async fn provider_request_concurrency_limiter_is_shared_across_client_clones() {
         let client = zai_client_for_test();
@@ -6660,6 +6944,32 @@ mod tests {
         assert!(wrapped.next().await.is_some());
         assert!(wrapped.next().await.is_none());
         assert_eq!(client.active_provider_requests(), 0);
+    }
+
+    #[tokio::test]
+    async fn runtime_chat_read_permit_lives_until_stream_is_dropped() {
+        let client = runtime_chat_gate_client(false, false);
+        let permit = client
+            .acquire_remote_control_inference_permit()
+            .await
+            .expect("interactive participant read permit");
+        let stream: crate::llm_client::StreamEventBox = Box::pin(futures_util::stream::pending());
+        let wrapped =
+            DeepSeekClient::hold_remote_control_inference_permit_for_stream(stream, Some(permit));
+
+        let mut writer = tokio::spawn(acquire_runtime_chat_inference_ownership());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), &mut writer)
+                .await
+                .is_err(),
+            "a live participant stream must retain attached-run ownership through EOF/drop"
+        );
+        drop(wrapped);
+        let ownership = tokio::time::timeout(Duration::from_secs(1), writer)
+            .await
+            .expect("writer resumes after stream drop")
+            .expect("writer task");
+        drop(ownership);
     }
 
     #[test]

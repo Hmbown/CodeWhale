@@ -1016,6 +1016,30 @@ pub(crate) async fn apply_provider_fallback_switch(
     ));
 }
 
+pub(super) fn reject_inline_inference_while_runtime_chat_owns_run(
+    app: &mut App,
+    result: &commands::CommandResult,
+) -> bool {
+    let blocked_inline_inference = matches!(
+        result.action.as_ref(),
+        Some(AppAction::VoiceCapture | AppAction::CacheWarmup)
+    ) && app.remote_control.runtime_chat_blocks_local_dispatch();
+    if !blocked_inline_inference {
+        return false;
+    }
+    if matches!(result.action.as_ref(), Some(AppAction::VoiceCapture)) {
+        // `/voice` toggles this before returning the action. Restore the state
+        // so a retry after relay settlement starts capture rather than merely
+        // toggling the stale flag off.
+        app.voice_enabled = false;
+    }
+    let notice = app
+        .tr(MessageId::SettingLockedDuringTurn)
+        .replace("{setting}", "Codewhale Runtime");
+    app.push_status_toast(notice, crate::tui::app::StatusToastLevel::Info, Some(6_000));
+    true
+}
+
 pub(crate) async fn apply_command_result(
     terminal: &mut AppTerminal,
     app: &mut App,
@@ -1027,6 +1051,14 @@ pub(crate) async fn apply_command_result(
     >,
     result: commands::CommandResult,
 ) -> Result<bool> {
+    // These two actions await participant inference inline on the UI event
+    // loop. Waiting behind Runtime Chat's exclusive writer here would
+    // deadlock: this same loop must drain the terminal projection/server
+    // cursor that releases the writer. Fail closed before displaying the
+    // command's optimistic message or invoking recorder/provider code.
+    if reject_inline_inference_while_runtime_chat_owns_run(app, &result) {
+        return Ok(false);
+    }
     if let Some(msg) = result.message {
         app.add_message(HistoryCell::System { content: msg });
     }
@@ -1985,7 +2017,7 @@ pub(crate) async fn apply_command_result(
             }
             AppAction::RemoteControl(action) => match action {
                 crate::remote_control::RemoteControlAction::Start => {
-                    start_remote_control_session(app);
+                    start_remote_control_session(app, config);
                 }
                 crate::remote_control::RemoteControlAction::Stop => {
                     app.remote_control.stop();
@@ -2141,6 +2173,24 @@ pub(crate) fn apply_workspace_runtime_state(app: &mut App, config: &Config, work
     ) {
         tracing::warn!(target: "plugins", "{error}");
     }
+    // A plugin that failed to load used to be invisible until someone
+    // happened to open /plugin. Surface a one-line hint instead of leaving
+    // the discovery result buried in the trace log; warnings stay quiet.
+    let plugin_load_errors = app
+        .plugin_registry
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.level == crate::plugins::types::PluginDiagnosticLevel::Error
+        })
+        .count();
+    if plugin_load_errors > 0 {
+        app.status_message = Some(if plugin_load_errors == 1 {
+            "1 plugin failed to load — /plugin for details".to_string()
+        } else {
+            format!("{plugin_load_errors} plugins failed to load — /plugin for details")
+        });
+    }
     app.active_skill = None;
     app.active_skill_provenance = None;
     // Switching workspace reloads the hook set (project hooks are per-repo)
@@ -2197,11 +2247,18 @@ pub(crate) async fn apply_approval_decision(
     event: ApprovalDecisionEvent,
 ) {
     if event.decision == ReviewDecision::ApprovedForSession {
-        // Store the tool name (backward compat) and the lossy grouping key so
-        // later flag variants of the same command family are also auto-approved
-        // (v0.8.37).
-        app.approval_session_approved
-            .insert(event.tool_name.clone());
+        // Only the lossy grouping key is stored: a session grant is scoped to
+        // the command family (e.g. `shell:git status`), never to the whole
+        // tool — approving one shell command must not approve every shell
+        // command for the session (ops R2). The tool name is recorded as
+        // audit evidence, not as a grant.
+        crate::audit::log_sensitive_event(
+            "tool.approval.session_grant",
+            serde_json::json!({
+                "tool_name": event.tool_name,
+                "grouping_key": event.approval_grouping_key,
+            }),
+        );
         app.approval_session_approved
             .insert(event.approval_grouping_key.clone());
     }
@@ -3045,11 +3102,28 @@ pub(crate) fn apply_loaded_session_with_goal(
         cny: session.metadata.cost.subagent_cost_cny,
     }
     .sanitized();
+    // A restored session has no live billed receipt; the estimate rules the
+    // meter until the next model call reports one.
+    app.last_billed_input_tokens = None;
     app.session.session_cost = restored_parent.usd;
     app.session.session_cost_cny = restored_parent.cny;
     app.session.subagent_cost = restored_background.usd;
     app.session.subagent_cost_cny = restored_background.cny;
-    app.session.subagent_usage_sources.clear();
+    app.session.subagent_usage_sources = session
+        .metadata
+        .cost
+        .usage_source_fingerprints
+        .iter()
+        .cloned()
+        .collect();
+    crate::cost_status::restore_usage_source_fingerprints(
+        session
+            .metadata
+            .cost
+            .usage_source_fingerprints
+            .iter()
+            .cloned(),
+    );
     // Coverage is restored *with* the money, and the live counters are cleared
     // first: whatever the previous session in this process priced is not inside
     // the total being loaded, so carrying those counters over would describe the

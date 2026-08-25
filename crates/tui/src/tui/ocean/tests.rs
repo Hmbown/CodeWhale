@@ -244,7 +244,8 @@ fn ambient_ink_matches_sunk_sky_shades_and_survives_reset_surfaces() {
     // RGB themes: fish wear two sunk sky shades; seafoam remains live-work ink.
     let theme = crate::palette::UI_THEME;
     let ramp = OceanRamp::for_theme(&theme).expect("RGB theme");
-    let (primary, secondary) = ambient_inks(&theme);
+    let baseline = crate::tui::ambient_life::AmbientActivity::Baseline;
+    let (primary, secondary) = ambient_inks_for_activity(&theme, baseline);
     assert_ne!(primary, ramp.ambient);
     assert_ne!(primary, secondary);
     assert_ne!(primary, theme.accent_secondary);
@@ -252,7 +253,52 @@ fn ambient_ink_matches_sunk_sky_shades_and_survives_reset_surfaces() {
     // Terminal-owned surfaces have no RGB base; the raw secondary accent
     // lets the terminal's own palette color the life.
     let terminal = crate::palette::TERMINAL_UI_THEME;
-    assert_eq!(ambient_inks(&terminal), (terminal.info, terminal.info));
+    assert_eq!(
+        ambient_inks_for_activity(&terminal, baseline),
+        (terminal.info, terminal.info)
+    );
+}
+
+#[test]
+fn ambient_ink_reads_the_activity_at_a_glance() {
+    use crate::tui::ambient_life::AmbientActivity;
+    let theme = crate::palette::UI_THEME;
+    let baseline = ambient_inks_for_activity(&theme, AmbientActivity::Baseline);
+    let reasoning = ambient_inks_for_activity(&theme, AmbientActivity::Reasoning);
+    let tools = ambient_inks_for_activity(&theme, AmbientActivity::Tools);
+    let subagents = ambient_inks_for_activity(&theme, AmbientActivity::Subagents);
+
+    // Each activity wears its own water: dim deep for reasoning, bright
+    // current for tools, seafoam for orchestration.
+    assert_ne!(reasoning, baseline);
+    assert_ne!(tools, baseline);
+    assert_ne!(subagents, baseline);
+    assert_ne!(subagents, tools);
+    // Verifying keeps the metered baseline treatment.
+    assert_eq!(
+        ambient_inks_for_activity(&theme, AmbientActivity::Verifying),
+        baseline
+    );
+}
+
+#[test]
+fn attention_phases_tint_the_water_even_when_life_has_settled() {
+    let viewport = Rect::new(0, 0, 80, 24);
+    let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
+    // presence 0 + animated false is the fully settled, reduced-motion case —
+    // exactly where the old treatment went neutral and a blocked session was
+    // indistinguishable from an idle one across the room.
+    let waiting = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Approval, false, 0);
+    let failed = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Failed, false, 0);
+    let idle = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Idle, false, 0);
+
+    assert_ne!(waiting.color_at_y(0), idle.color_at_y(0));
+    assert_ne!(failed.color_at_y(0), idle.color_at_y(0));
+    assert_ne!(waiting.color_at_y(0), failed.color_at_y(0));
+
+    // The tint is steady across time and motion settings alike.
+    let later = OceanColumn::new(ramp, viewport, 700, None, ShellPhase::Approval, true, 0);
+    assert_eq!(waiting.color_at_y(0), later.color_at_y(0));
 }
 
 #[test]
@@ -275,8 +321,11 @@ fn shimmer_is_subtle_and_concentrated_near_the_surface() {
 }
 
 #[test]
-fn attention_phases_are_still_and_work_phases_have_distinct_depth_bias() {
+fn attention_phases_carry_their_own_water_and_work_phases_have_distinct_depth_bias() {
     let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
+    // Attention tints are steady — the color itself is the signal, and a
+    // slow breath read as flicker rather than intent — but never neutral:
+    // each attention phase differs from the plain water.
     for phase in [
         ShellPhase::Waiting,
         ShellPhase::Approval,
@@ -286,11 +335,29 @@ fn attention_phases_are_still_and_work_phases_have_distinct_depth_bias() {
             ramp.color_at_phase(4, 20, 0, phase),
             ramp.color_at_phase(4, 20, 45_000, phase)
         );
+        assert_ne!(ramp.color_at_phase(4, 20, 0, phase), ramp.color_at(4, 20));
     }
     assert_ne!(
         ramp.color_at_phase(10, 20, 22_500, ShellPhase::Working),
         ramp.color_at_phase(10, 20, 22_500, ShellPhase::Verifying)
     );
+}
+
+#[test]
+fn tall_columns_darken_continuously_without_an_anchor_shelf() {
+    // The old two-segment ramp met at 0.42 with zero color velocity on both
+    // sides: on a tall window that shelf read as a horizontal seam. The
+    // Bézier column must keep moving through the former anchor zone.
+    let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
+    let height = 120;
+    let anchor = 50; // ~0.42 of 120
+    let above = ramp.color_at(anchor - 6, height);
+    let at = ramp.color_at(anchor, height);
+    let below = ramp.color_at(anchor + 6, height);
+    assert_ne!(above, at, "water must still darken entering the old anchor");
+    assert_ne!(at, below, "water must still darken leaving the old anchor");
+    assert_eq!(ramp.color_at(0, height), ramp.surface);
+    assert_eq!(ramp.color_at(height - 1, height), ramp.deep);
 }
 
 #[test]
@@ -312,12 +379,16 @@ fn cache_fingerprint_changes_when_only_ramp_colors_change() {
         middle: Color::Rgb(4, 5, 6),
         deep: Color::Rgb(7, 8, 9),
         ambient: Color::Rgb(10, 11, 12),
+        attention: Color::Rgb(240, 180, 60),
+        failure: Color::Rgb(220, 80, 80),
     };
     let second_ramp = OceanRamp {
         surface: Color::Rgb(21, 22, 23),
         middle: Color::Rgb(24, 25, 26),
         deep: Color::Rgb(27, 28, 29),
         ambient: Color::Rgb(30, 31, 32),
+        attention: Color::Rgb(240, 180, 60),
+        failure: Color::Rgb(220, 80, 80),
     };
     let first = OceanColumn::new(
         first_ramp,
@@ -354,6 +425,8 @@ fn each_ramp_color_participates_in_the_typed_cache_identity() {
         middle: Color::Rgb(4, 5, 6),
         deep: Color::Rgb(7, 8, 9),
         ambient: Color::Rgb(10, 11, 12),
+        attention: Color::Rgb(240, 180, 60),
+        failure: Color::Rgb(220, 80, 80),
     };
     let baseline = OceanColumn::new(
         ramp,
@@ -379,6 +452,14 @@ fn each_ramp_color_participates_in_the_typed_cache_identity() {
         },
         OceanRamp {
             ambient: Color::Rgb(110, 11, 12),
+            ..ramp
+        },
+        OceanRamp {
+            attention: Color::Rgb(255, 200, 90),
+            ..ramp
+        },
+        OceanRamp {
+            failure: Color::Rgb(255, 90, 90),
             ..ramp
         },
     ];

@@ -129,7 +129,9 @@ mod tests {
             ..crate::test_support::test_tui_options(PathBuf::from("."))
         };
         let mut app = crate::test_support::test_app_with_options(options);
-        app.remote_control.activate_prompt("run-1", "turn-1");
+        app.remote_control
+            .activate_prompt("run-1", "turn-1")
+            .unwrap();
 
         let result = RemoteControlCmd::execute(&mut app, Some("stop"));
 

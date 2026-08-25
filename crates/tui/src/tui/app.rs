@@ -697,6 +697,9 @@ pub struct ViewportState {
     pub transcript_scrollbar_dragging: bool,
     pub last_transcript_area: Option<Rect>,
     pub last_composer_area: Option<Rect>,
+    /// Last left-click trace over the composer, for double/triple-click
+    /// word/line selection (crossterm does not decode click counts).
+    pub composer_click_trace: Option<crate::tui::mouse_ui::ComposerClickTrace>,
     /// Painted band occupied by the active inline approval. Stored so wheel
     /// routing can prefer the visible card over side surfaces underneath it.
     pub last_approval_area: Option<Rect>,
@@ -731,6 +734,7 @@ impl Default for ViewportState {
             transcript_scrollbar_dragging: false,
             last_transcript_area: None,
             last_composer_area: None,
+            composer_click_trace: None,
             last_approval_area: None,
             last_workflow_panel_area: None,
             last_workflow_cancel_area: None,
@@ -772,11 +776,18 @@ pub struct HostGoalState {
 pub struct SessionState {
     pub session_cost: f64,
     pub session_cost_cny: f64,
+    /// Priced estimate accumulated from the in-flight turn's per-step
+    /// `TurnUsage` receipts, so the cost surfaces move while a long agentic
+    /// turn is still running. Display-only: cleared at `TurnComplete`, which
+    /// re-prices the whole turn's cumulative usage authoritatively into
+    /// `session_cost`. Never persisted.
+    pub pending_turn_cost: f64,
+    pub pending_turn_cost_cny: f64,
     pub subagent_cost: f64,
     pub subagent_cost_cny: f64,
-    /// Child usage envelopes already accrued, keyed by child and the stable
-    /// provider-response identity carried by `TokenUsage`.
-    pub subagent_usage_sources: HashSet<(String, String)>,
+    /// Redacted provider-response identities already accrued. The same
+    /// fingerprints are persisted by the session and worker projections.
+    pub subagent_usage_sources: HashSet<String>,
     pub displayed_cost_high_water: f64,
     pub displayed_cost_high_water_cny: f64,
     pub last_prompt_tokens: Option<u32>,
@@ -955,6 +966,8 @@ impl Default for SessionState {
         Self {
             session_cost: 0.0,
             session_cost_cny: 0.0,
+            pending_turn_cost: 0.0,
+            pending_turn_cost_cny: 0.0,
             subagent_cost: 0.0,
             subagent_cost_cny: 0.0,
             subagent_usage_sources: HashSet::new(),
@@ -1766,6 +1779,13 @@ pub struct App {
     pub streaming_state: StreamingState,
     /// Live approximate output tokens for the current assistant stream.
     pub streaming_output_token_estimate: u64,
+    /// Provider-billed prompt tokens from the most recent parent model call
+    /// (per-step `TurnUsage`). The context meter takes the max of this and
+    /// the local estimate — the same rule the auto-compaction trigger uses —
+    /// so the two can never disagree about pressure (#5577). Cleared when
+    /// compaction rewrites history, since the receipt describes the
+    /// pre-compaction context.
+    pub last_billed_input_tokens: Option<u32>,
     /// Accumulated reasoning text
     pub reasoning_buffer: String,
     /// Live reasoning header extracted from bold text
@@ -3383,6 +3403,25 @@ impl App {
         }
     }
 
+    /// Fold one atomic background batch into the live session projection.
+    /// Returns whether the batch carried runtime-owned response identities and
+    /// therefore needs a fresh durable snapshot (it may have landed after the
+    /// ordinary TurnComplete save).
+    pub fn absorb_pending_background_cost(
+        &mut self,
+        pool: &crate::cost_status::PendingBackgroundCost,
+    ) -> bool {
+        let runtime_usage_arrived = !pool.usage_source_fingerprints.is_empty();
+        self.session
+            .subagent_usage_sources
+            .extend(pool.usage_source_fingerprints.iter().cloned());
+        if pool.estimate.is_positive() {
+            self.accrue_subagent_cost_estimate(pool.estimate);
+        }
+        self.absorb_background_cost_coverage(pool);
+        runtime_usage_arrived
+    }
+
     /// Clear every live cost-coverage counter.
     ///
     /// Used by `/new` and by the session-load path: loading a session must not
@@ -3413,6 +3452,31 @@ impl App {
         self.session.session_cost = total.usd;
         self.session.session_cost_cny = total.cny;
         self.refresh_displayed_cost_high_water();
+    }
+
+    /// Fold one in-flight model call's priced receipt into the pending-turn
+    /// estimate so cost surfaces move during a long agentic turn rather than
+    /// only when it completes. The turn's authoritative price still lands via
+    /// `accrue_session_cost_estimate` at `TurnComplete`; callers must
+    /// `clear_pending_turn_cost` there first so nothing counts twice.
+    pub fn accrue_pending_turn_cost_estimate(&mut self, estimate: CostEstimate) {
+        let total = CostEstimate {
+            usd: self.session.pending_turn_cost,
+            cny: self.session.pending_turn_cost_cny,
+        }
+        .saturating_add(estimate);
+        self.session.pending_turn_cost = total.usd;
+        self.session.pending_turn_cost_cny = total.cny;
+        self.refresh_displayed_cost_high_water();
+    }
+
+    /// Drop the in-flight turn's provisional estimate. Called at
+    /// `TurnComplete` (any outcome) immediately before the authoritative
+    /// cumulative price accrues; the display stays monotonic through the
+    /// swap via the high-water mark (#244).
+    pub fn clear_pending_turn_cost(&mut self) {
+        self.session.pending_turn_cost = 0.0;
+        self.session.pending_turn_cost_cny = 0.0;
     }
 
     /// Add `delta` to the running sub-agent cost and bump the displayed
@@ -3459,6 +3523,12 @@ impl App {
         metadata.cost.live_pricing_unusable_defects =
             self.session.cost_live_pricing_unusable_defects.clone();
         metadata.cost.route_receipts = self.session.cost_route_receipts.clone();
+        metadata.cost.usage_source_fingerprints = self
+            .session
+            .subagent_usage_sources
+            .iter()
+            .cloned()
+            .collect();
         // A session restored as legacy-unknown stays unknown when re-saved:
         // re-writing it as "recorded" would launder the missing evidence into an
         // apparently complete zero.
@@ -3475,6 +3545,10 @@ impl App {
             usd: self.session.session_cost,
             cny: self.session.session_cost_cny,
         }
+        .saturating_add(CostEstimate {
+            usd: self.session.pending_turn_cost,
+            cny: self.session.pending_turn_cost_cny,
+        })
         .saturating_add(CostEstimate {
             usd: self.session.subagent_cost,
             cny: self.session.subagent_cost_cny,
@@ -3504,6 +3578,10 @@ impl App {
                     cny: 0.0,
                 }
                 .saturating_add(CostEstimate {
+                    usd: self.session.pending_turn_cost,
+                    cny: 0.0,
+                })
+                .saturating_add(CostEstimate {
                     usd: self.session.subagent_cost,
                     cny: 0.0,
                 })
@@ -3517,6 +3595,10 @@ impl App {
                 }
                 .saturating_add(CostEstimate {
                     usd: 0.0,
+                    cny: self.session.pending_turn_cost_cny,
+                })
+                .saturating_add(CostEstimate {
+                    usd: 0.0,
                     cny: self.session.subagent_cost_cny,
                 })
                 .cny;
@@ -3525,10 +3607,14 @@ impl App {
         }
     }
 
+    /// The session's own display share: settled turns plus the in-flight
+    /// turn's provisional estimate (the running turn's money is session
+    /// money, so the sidebar breakdown keeps summing to the displayed total
+    /// mid-turn).
     pub fn session_cost_for_currency(&self, currency: CostCurrency) -> f64 {
         match self.cost_display_currency(currency) {
-            CostCurrency::Usd => self.session.session_cost,
-            CostCurrency::Cny => self.session.session_cost_cny,
+            CostCurrency::Usd => self.session.session_cost + self.session.pending_turn_cost,
+            CostCurrency::Cny => self.session.session_cost_cny + self.session.pending_turn_cost_cny,
         }
     }
 

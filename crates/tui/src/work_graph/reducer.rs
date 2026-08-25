@@ -320,7 +320,11 @@ fn reconcile(
                 OwnerState::Initializing => NodeState::Initializing,
                 OwnerState::Running => NodeState::Active,
                 OwnerState::Waiting => NodeState::Waiting,
-                OwnerState::Completed => NodeState::Completed,
+                // Degraded ended like Completed at the graph level — where
+                // Completed already means "ended, NOT done" and acceptance
+                // is verification's job — but the observation summary above
+                // keeps the owner's Degraded truth for every reader (#5582).
+                OwnerState::Completed | OwnerState::Degraded => NodeState::Completed,
                 OwnerState::Failed => NodeState::Failed,
                 OwnerState::Cancelled => NodeState::Cancelled,
             })

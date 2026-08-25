@@ -185,13 +185,6 @@ const fn theme_green(ui: &UiTheme) -> Color {
     ui.diff_added_fg
 }
 
-/// Per-preset red accent, used for diff "−" line foreground when present.
-#[must_use]
-#[allow(dead_code)]
-const fn theme_red(ui: &UiTheme) -> Color {
-    ui.diff_deleted_fg
-}
-
 /// Per-preset dark-green diff-added background tint.
 #[must_use]
 const fn theme_diff_added_bg(ui: &UiTheme) -> Color {

@@ -809,6 +809,43 @@ fn open_fleet_setup_target(app: &mut App, config: &Config, member_id: Option<&st
     }
 }
 
+fn open_fleet_model_target(app: &mut App, config: &Config, member_id: &str) {
+    use crate::tui::views::fleet_setup::{FleetSetupEditTarget, resolve_fleet_setup_edit_target};
+
+    match resolve_fleet_setup_edit_target(&app.workspace) {
+        Ok(FleetSetupEditTarget::SelectedFleet { name, scope }) => {
+            if app.view_stack.top_kind() == Some(ModalKind::FleetDetail) {
+                return;
+            }
+            let Some(mut view) = crate::tui::views::fleet_detail::FleetDetailView::open_for_member(
+                app,
+                config,
+                &name,
+                scope,
+                Some(member_id),
+            ) else {
+                app.set_sticky_status(
+                    "Selected Fleet is invalid or unreadable; open /fleet fleets to repair or clear the selection."
+                        .to_string(),
+                    StatusToastLevel::Error,
+                    None,
+                );
+                return;
+            };
+            view.open_model_picker();
+            app.view_stack.push(view);
+            let fleet_name = crate::safe_label::SafeLabel::phrase(&name);
+            app.status_message = Some(format!(
+                "Editing member `{member_id}` in Fleet `{fleet_name}` — choose a model route.",
+            ));
+        }
+        Ok(FleetSetupEditTarget::LegacyProfiles) => {
+            open_fleet_setup_target(app, config, Some(member_id));
+        }
+        Err(message) => app.set_sticky_status(message, StatusToastLevel::Error, None),
+    }
+}
+
 pub(crate) struct ProviderFallbackRollback {
     identity: ProviderIdentity,
     chain: Option<codewhale_config::ProviderChain>,

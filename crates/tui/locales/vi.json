@@ -1168,6 +1168,7 @@
   "PhaseReasoning": "đang suy luận",
   "PhaseReading": "đang đọc",
   "PhaseUsingTool": "đang dùng công cụ",
+  "PhaseSubagents": "đang chạy tác tử con",
   "PhaseVerifying": "đang kiểm chứng",
   "PhaseWaitingOnYou": "chờ bạn",
   "PhaseDone": "xong",

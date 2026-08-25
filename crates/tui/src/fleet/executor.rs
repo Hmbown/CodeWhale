@@ -306,6 +306,8 @@ fn build_worker_exec_command_from_prompt(
         "--auto".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
+        // R7: the worker shuts itself down when the manager dies (stdin EOF).
+        "--parent-death-watch".to_string(),
     ]);
 
     // Non-secret thinking tier only (#4137). This is profile metadata and
@@ -379,11 +381,30 @@ pub fn map_exec_stream_line(line: &str) -> Option<FleetWorkerEventPayload> {
             workflow_run_id: value.get("run_id")?.as_str()?.to_string(),
             event: value.get("event")?.clone(),
         }),
-        // Streaming model output / tool results / per-step usage receipts mean
-        // the worker is alive and making progress; surface a coarse Running
-        // heartbeat. `turn_usage` covers thinking-heavy model calls that
-        // produce no visible content between tool calls.
-        "content" | "tool_result" | "turn_usage" => Some(FleetWorkerEventPayload::Running),
+        // Streaming model output / tool results mean the worker is alive and
+        // making progress; surface a coarse Running heartbeat.
+        "content" | "tool_result" => Some(FleetWorkerEventPayload::Running),
+        // Per-step usage receipts feed the run-level accumulator behind the
+        // fleet usage ceiling (R6, #5567); a malformed line still counts as
+        // liveness.
+        "turn_usage" => {
+            let tokens = |field: &str| {
+                value
+                    .get(field)
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0)
+            };
+            let input_tokens = tokens("input_tokens");
+            let output_tokens = tokens("output_tokens");
+            if input_tokens == 0 && output_tokens == 0 {
+                Some(FleetWorkerEventPayload::Running)
+            } else {
+                Some(FleetWorkerEventPayload::UsageReport {
+                    input_tokens,
+                    output_tokens,
+                })
+            }
+        }
         "done" => Some(FleetWorkerEventPayload::Completed {
             exit_code: Some(0),
             summary: None,
@@ -524,6 +545,8 @@ struct WorkerStream {
     pending: Vec<u8>,
     terminal: bool,
     terminal_route: TerminalRouteEvidence,
+    /// When this worker process was started, for per-task wall-clock limits (R5).
+    started_at: std::time::Instant,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -686,6 +709,7 @@ impl FleetExecutor {
                 pending: Vec::new(),
                 terminal: false,
                 terminal_route: TerminalRouteEvidence::default(),
+                started_at: std::time::Instant::now(),
             },
         );
         Ok(handle)
@@ -703,6 +727,15 @@ impl FleetExecutor {
         self.streams
             .get(worker_id)
             .and_then(|stream| stream.attempt.clone())
+    }
+
+    /// Wall-clock time this worker process has been running (R5). `None` when
+    /// the worker is not tracked.
+    #[must_use]
+    pub fn worker_running_for(&self, worker_id: &str) -> Option<std::time::Duration> {
+        self.streams
+            .get(worker_id)
+            .map(|stream| stream.started_at.elapsed())
     }
 
     /// Stop a tracked worker at the host boundary.
@@ -958,6 +991,7 @@ mod tests {
                 pending: Vec::new(),
                 terminal: false,
                 terminal_route: TerminalRouteEvidence::default(),
+                started_at: std::time::Instant::now(),
             },
         );
     }
@@ -1335,8 +1369,14 @@ mod tests {
             cmd.args
         );
         assert_eq!(
-            &cmd.args[exec_idx..exec_idx + 4],
-            ["exec", "--auto", "--output-format", "stream-json"],
+            &cmd.args[exec_idx..exec_idx + 5],
+            [
+                "exec",
+                "--auto",
+                "--output-format",
+                "stream-json",
+                "--parent-death-watch"
+            ],
             "exec flags must remain behind the subcommand: {:?}",
             cmd.args
         );

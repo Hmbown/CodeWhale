@@ -323,6 +323,27 @@ manifest omits a required row; or the assets predate the matching release
 workflow run. If the command fails, rerun or repair `release.yml`; do not
 publish Cargo or npm against stale assets.
 
+## AUR / Omarchy Package
+
+`codewhale-bin` is a downstream package of the same Linux release, not a new
+Codewhale semantic version. After the public asset gate above passes, render
+its AUR metadata from the verified release directory:
+
+```bash
+./packaging/aur/render.sh /path/to/release-assets /tmp/codewhale-bin
+```
+
+The renderer reads the workspace version and extracts the x64/arm64 archive
+hashes only after both release checksum manifests agree with the actual files.
+It emits no `SKIP` checksums or source-controlled per-release values. Follow
+[`packaging/aur/README.md`](../packaging/aur/README.md) for the clean Arch build,
+`.SRCINFO` comparison, and package-content checks.
+
+The GitHub release workflows only verify that the AUR metadata can be rendered
+from their candidate assets. They do not publish to AUR. AUR publication is a
+separate, explicitly authorized maintainer action after the matching tag and
+assets are public.
+
 ## npm Wrapper Release
 
 `release.yml` publishes `codewhale` through npm Trusted Publishing after the
@@ -408,6 +429,45 @@ If the workflow failed for the release tag, use the exact-tag rerun or
 [docs/CNB_MIRROR.md](CNB_MIRROR.md#manual-fallback).
 
 ## Recovery and Rollback
+
+### Re-tagging an UNPUBLISHED release (pulled before npm/crates)
+
+If `vX.Y.Z` was tagged and a GitHub Release was created, but **no package was
+published** (npm still on the prior version, `check-published.sh` shows the
+crates unpublished), the tag is still recoverable — a bug found after tagging
+can be fixed and the same version recut. Confirm first that nothing consumed it:
+`npm view codewhale version` and crates.io both show the PRIOR version, no
+Homebrew/Winget/mirror points at it, and the GitHub Release download counts are
+only the release pipeline's own verification passes. Then, with explicit
+maintainer approval:
+
+```bash
+# 1. land the fix on main (normal PR + required CI)
+# 2. delete the premature Release + tag
+gh release delete vX.Y.Z --repo Hmbown/CodeWhale --yes --cleanup-tag
+git push origin :refs/tags/vX.Y.Z    # belt-and-suspenders
+git tag -d vX.Y.Z                    # local
+# 3. recut at the fixed HEAD (workspace version unchanged)
+gh workflow run auto-tag.yml --repo Hmbown/CodeWhale --ref main
+# 4. release.yml rebuilds assets; rebuild + reinstall locally from the new tag
+```
+
+This is the sanctioned path from "do not delete/move/recreate a release tag
+implicitly": it is explicit, approved, and only for a tag no registry consumer
+has treated as public. Never do it once a crate or the npm wrapper is published
+for that version — bump to the next patch instead.
+
+### External publish gates (not code defects)
+
+- **crates.io:** publishing needs a valid `cargo login` token on the operator
+  machine (`curl -H "Authorization: <token>" https://crates.io/api/v1/me`
+  returning 200). A 403 means the token is missing/expired — `cargo login`,
+  then `./scripts/release/publish-crates.sh publish`.
+- **npm:** the OIDC job publishes only if the npmjs.com Trusted Publisher for
+  `Hmbown` / `CodeWhale` / workflow `release.yml` / blank environment is
+  configured. Missing config → the `npm` job fails `E404 No match found`. Fix
+  the binding (or use the manual WebAuthn recovery above), then re-run the
+  failed `npm` job: `gh run rerun <release-run-id> --failed`.
 
 - User-facing rollback:
   - npm: `npm install -g codewhale@X.Y.Z`

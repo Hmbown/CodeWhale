@@ -437,7 +437,7 @@ export function receiptPresentation(item = {}) {
   };
 }
 
-function workflowReceiptPresentation(item, detail, raw) {
+export function workflowReceiptPresentation(item, detail, raw) {
   const metadata = item?.metadata && typeof item.metadata === "object"
     ? item.metadata
     : {};

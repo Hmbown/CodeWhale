@@ -124,6 +124,20 @@ fn agent_list_event(manager: &SubAgentManager, active_session_id: &str) -> Event
 
 const MCP_REGISTRY_FIRST_INSTRUCTION_SOURCE: &str = "runtime:mcp-registry-first";
 const MCP_REGISTRY_FIRST_INSTRUCTION: &str = "## MCP Registry-first policy\n\nFor any task centered on a specialized capability, including media or document conversion, data transformation, browser automation, database or service access, or a developer utility, you must call `registry_sync` with a `query` describing that capability before `exec_shell`, `fetch_url`, code execution, local programs, custom code, or a manual implementation. It scores the local Registry snapshot host-side and returns at most eight matches; the full catalog never enters the conversation. Treat a returned server as a match when it plausibly covers the core capability; wording need not be exact. If any plausible match exists, you must call `start_registry_mcp_server` with its exact name and inspect its tools before considering a local alternative. If nothing matches, refine the query once; a still-empty refined result means every Registry entry is clearly irrelevant. An installed or familiar shell command is not a reason to skip Registry discovery. Use local tools directly only for ordinary repo-native work and simple file operations, or after the matching server fails to start.";
+const ISOLATED_CHAT_ENGINE_PROMPT: &str = "You are Codewhale Chat. Answer the user's request directly and conversationally. This isolated chat-only session has no local workspace, project, memory, skill, account, credential, path, runtime context, or tools.";
+
+fn sanitize_isolated_chat_attachments(mut text: String) -> String {
+    let references = crate::tui::file_mention::media_attachment_references(&text);
+    for reference in references.into_iter().rev() {
+        let replacement = if text[reference.start_byte..reference.end_byte].ends_with('\n') {
+            "[Attachment omitted: Runtime Chat is text-only.]\n"
+        } else {
+            "[Attachment omitted: Runtime Chat is text-only.]"
+        };
+        text.replace_range(reference.start_byte..reference.end_byte, replacement);
+    }
+    text
+}
 
 /// Snapshot of parent state that can be passed to forked sub-agents without
 /// rewriting the parent transcript.
@@ -420,6 +434,10 @@ pub struct EngineConfig {
     /// User-configured bwrap mount extensions (#5410): extra read-only roots
     /// and writable device nodes such as `/dev/null`.
     pub bwrap_extensions: crate::sandbox::BwrapMountExtensions,
+    /// Opt-in sandbox read deny-list (S1, #5568): subpaths sandboxed shell
+    /// commands must not read even under full-disk-read postures. `~` expands
+    /// at the sandbox boundary. Empty keeps today's behavior.
+    pub denied_read_subpaths: Vec<std::path::PathBuf>,
     /// Tool override and plugin configuration (`[tools]` table in config.toml).
     /// Applied to the per-turn tool registry after built-in tools are registered.
     /// When `None`, no overrides or plugin loading occurs.
@@ -517,6 +535,7 @@ impl Default for EngineConfig {
             tools_always_load: HashSet::new(),
             prefer_bwrap: false,
             bwrap_extensions: crate::sandbox::BwrapMountExtensions::default(),
+            denied_read_subpaths: Vec::new(),
             verbosity: None,
             tools: None,
             workspace_follow_symlinks: false,
@@ -1269,7 +1288,7 @@ impl Engine {
 
         // Compaction re-states the user's `/anchor` file after its summary;
         // hand it the workspace root once so every prepared pass can read it.
-        if config.compaction.workspace.is_none() {
+        if config.compaction.workspace.is_none() && !api_config.runtime_chat_isolated {
             config.compaction.workspace = Some(config.workspace.clone());
         }
 
@@ -1278,7 +1297,7 @@ impl Engine {
         // ranking and the model compares the full user context with the full
         // Registry catalog. Append it after configured instruction sources so
         // the Registry-first decision sits close to the current user turn.
-        if config.features.enabled(Feature::Mcp) {
+        if config.features.enabled(Feature::Mcp) && !api_config.runtime_chat_isolated {
             config
                 .instructions
                 .push(crate::prompts::InstructionSource::Inline {
@@ -1370,7 +1389,9 @@ impl Engine {
         } else {
             prompts::PromptHost::Headless
         };
-        let system_prompt =
+        let system_prompt = if api_config.runtime_chat_isolated {
+            SystemPrompt::Text(ISOLATED_CHAT_ENGINE_PROMPT.to_string())
+        } else {
             prompts::system_prompt_for_mode_with_context_skills_session_and_approval_for_host(
                 &config.workspace,
                 None,
@@ -1398,7 +1419,8 @@ impl Engine {
                     mode: AppMode::Agent,
                 },
                 prompt_host,
-            );
+            )
+        };
         let stable_prompt = Some(system_prompt);
         session.last_system_prompt_hash = Some(system_prompt_hash(stable_prompt.as_ref()));
         session.system_prompt = stable_prompt;
@@ -1443,11 +1465,13 @@ impl Engine {
             Ok(mut manager) => {
                 manager.set_prefer_bwrap(config.prefer_bwrap);
                 manager.set_bwrap_extensions(config.bwrap_extensions.clone());
+                manager.set_denied_read_subpaths(config.denied_read_subpaths.clone());
             }
             Err(poisoned) => {
                 let mut manager = poisoned.into_inner();
                 manager.set_prefer_bwrap(config.prefer_bwrap);
                 manager.set_bwrap_extensions(config.bwrap_extensions.clone());
+                manager.set_denied_read_subpaths(config.denied_read_subpaths.clone());
             }
         }
         let file_read_tracker = new_shared_file_read_tracker();
@@ -2410,9 +2434,35 @@ impl Engine {
                         else {
                             continue;
                         };
+                        // Host-injected tokens carry their own quiet period:
+                        // host-managed sessions never run the engine-owned
+                        // scheduler, so this arm is their only continuation
+                        // dispatch site and must honor
+                        // [goal] continuation_delay_seconds itself before
+                        // dispatching. The wait is biased-cancellable (Esc,
+                        // steer, or host cancel always wins over a racing
+                        // expiry), and the live goal is re-read below only
+                        // after it, so a pause/clear/complete/blocked landing
+                        // during the quiet period cancels the pass and
+                        // failures never continue. Engine-owned tokens (Some)
+                        // already waited out ready_at in the scheduler and
+                        // keep those semantics untouched.
+                        if engine_schedule_id.is_none()
+                            && crate::goal_loop::await_continuation_wait(
+                                crate::goal_loop::continuation_wait(
+                                    self.config.goal_continuation_delay_seconds,
+                                ),
+                                &self.cancel_token,
+                            )
+                            .await
+                                == crate::goal_loop::ContinuationWaitOutcome::Cancelled
+                        {
+                            continue;
+                        }
                         // Status controls queued while the previous turn was
-                        // running are processed before this operation. Re-read
-                        // the live goal now so pause/clear/complete/blocked can
+                        // running are processed before this operation, and a
+                        // host-injected quiet period has now elapsed. Re-read
+                        // the live goal so pause/clear/complete/blocked can
                         // cancel a stale continuation without starting a turn.
                         let (content, goal_snapshot) = match self.goal_continuation_if_active() {
                             GoalContinuationAction::Inactive => continue,
@@ -3335,6 +3385,15 @@ impl Engine {
     /// Whether the model can *see* the result is decided per request, not
     /// here — see `image_attach::strip_images_when_unsupported`.
     fn user_content_blocks(&self, text: String) -> Vec<ContentBlock> {
+        // Managed Chat currently accepts text only. Treat attachment-marker
+        // syntax as an omitted attachment so an account prompt can never make
+        // this host read a local path or echo that host path to a provider.
+        if self.api_config.runtime_chat_isolated {
+            return vec![ContentBlock::Text {
+                text: sanitize_isolated_chat_attachments(text),
+                cache_control: None,
+            }];
+        }
         let expanded = crate::image_attach::expand_attachment_blocks(&text);
         let mut content = Vec::with_capacity(2 + expanded.blocks.len());
         content.push(ContentBlock::Text {
@@ -3365,17 +3424,21 @@ impl Engine {
         provenance: UserInputProvenance,
         snapshot: TurnMetadataSnapshot<'_>,
     ) -> Message {
-        let turn_metadata = self.turn_metadata_block_from_snapshot(
-            routed_model,
-            auto_model,
-            reasoning_effort,
-            reasoning_effort_auto,
-            provenance,
-            &text,
-            snapshot,
-        );
+        let turn_metadata = (!self.api_config.runtime_chat_isolated).then(|| {
+            self.turn_metadata_block_from_snapshot(
+                routed_model,
+                auto_model,
+                reasoning_effort,
+                reasoning_effort_auto,
+                provenance,
+                &text,
+                snapshot,
+            )
+        });
         let mut content = self.user_content_blocks(text);
-        content.push(turn_metadata);
+        if let Some(turn_metadata) = turn_metadata {
+            content.push(turn_metadata);
+        }
         Message {
             role: Role::User,
             content,
@@ -3442,17 +3505,21 @@ impl Engine {
         // message prefix is invalidated at every date boundary. Moving it
         // to the tail preserves the user-input prefix and limits cache
         // invalidation to the trailing metadata block.
-        let turn_metadata = self.turn_metadata_block(
-            routed_model,
-            auto_model,
-            reasoning_effort,
-            reasoning_effort_auto,
-            provenance,
-            &text,
-            self.last_policy_narrowing.as_ref(),
-        );
+        let turn_metadata = (!self.api_config.runtime_chat_isolated).then(|| {
+            self.turn_metadata_block(
+                routed_model,
+                auto_model,
+                reasoning_effort,
+                reasoning_effort_auto,
+                provenance,
+                &text,
+                self.last_policy_narrowing.as_ref(),
+            )
+        });
         let mut content = self.user_content_blocks(text);
-        content.push(turn_metadata);
+        if let Some(turn_metadata) = turn_metadata {
+            content.push(turn_metadata);
+        }
         Message {
             role: Role::User,
             content,
@@ -3951,6 +4018,32 @@ impl Engine {
         route: TurnRouteContext,
         turn_id: &str,
     ) -> TurnToolBuild {
+        // Account-owned Chat is a text-only inference boundary. Do not build
+        // native/plugin/dynamic registries, connect or snapshot MCP, capture a
+        // sub-agent fork context, or create a sub-agent mailbox before an
+        // empty allow-list later filters the wire catalog.
+        if self.api_config.runtime_chat_isolated {
+            let registry = ToolRegistryBuilder::new().build(ToolContext::for_empty_registry());
+            return TurnToolBuild {
+                surface: ToolSurfacePolicy::new(
+                    registry,
+                    Some(Vec::new()),
+                    input_policy.mode,
+                    &HashSet::new(),
+                    &[],
+                    false,
+                    Some(Vec::new()),
+                    None,
+                    Some(0),
+                    input_policy.approval_mode_for_session(),
+                ),
+                mcp_tool_names: Vec::new(),
+                mcp: McpToolState::Disabled,
+                subagent_runtime_model: None,
+                mailbox: None,
+                plugin_tool_names: HashSet::new(),
+            };
+        }
         // Build tool registry and tool list for the current mode
         let todo_list = self.config.todos.clone();
         let plan_state = self.config.plan_state.clone();
@@ -4508,6 +4601,24 @@ impl Engine {
         // no provider request can observe a partially updated route.
         self.active_route_limits = route_limits;
         self.config.compaction = compaction;
+        // Headless/runtime hosts supply their durable turn owner. Interactive
+        // turns historically supplied none, leaving a detached child with
+        // only the soon-to-be-sealed mailbox. Give this turn an owner whose
+        // sink folds into the existing session cost pool; cloned child leases
+        // keep it live beyond TurnComplete without reopening the mailbox.
+        let interactive_runtime_cost_owner = if self.config.terminal_chrome_enabled
+            && self.config.compaction.runtime_cost_owner.is_none()
+        {
+            let owner = format!("interactive:{}:{}", self.session.id, turn.id);
+            crate::cost_status::register_interactive_runtime_usage_sink(
+                &owner,
+                crate::cost_status::scope_token(),
+            );
+            self.config.compaction.runtime_cost_owner = Some(owner.clone());
+            Some(owner)
+        } else {
+            None
+        };
 
         // Snapshot the workspace BEFORE we touch a single tool. Run the git
         // work on the blocking pool so the async runtime stays responsive;
@@ -4711,11 +4822,21 @@ impl Engine {
         // killing the whole engine-event-loop task — which left the UI stuck
         // on "working" forever with the engine silently dead (#2583, #1269).
         use futures_util::FutureExt as _;
-        let turn_result =
-            std::panic::AssertUnwindSafe(self.run_turn(&mut turn, surface, Some(tool_surface)))
-                .catch_unwind()
-                .await;
-        let (status, error) = match turn_result {
+        let foreground_children_for_turn = mailbox_for_runtime
+            .as_ref()
+            .map(|barrier| Arc::clone(&barrier.foreground_children));
+        let turn_result = std::panic::AssertUnwindSafe(async {
+            self.run_turn(
+                &mut turn,
+                surface,
+                foreground_children_for_turn,
+                Some(tool_surface),
+            )
+            .await
+        })
+        .catch_unwind()
+        .await;
+        let (mut status, error) = match turn_result {
             Ok(outcome) => outcome,
             Err(panic) => {
                 let detail = crate::utils::panic_message(&*panic);
@@ -4735,13 +4856,37 @@ impl Engine {
         self.session.total_usage.add(&turn.usage);
         self.record_goal_usage_for_turn(&turn.usage, turn.elapsed());
 
+        // Cancellation wins until the terminal settlement decision. `run_turn`
+        // performs its own final check, but an Esc/interrupt can arrive while
+        // its clean-exit receipts are being appended. Recheck at this seam so
+        // that pre-settlement cancellation remains terminal Cancelled child
+        // work rather than being relabelled as a normal resumable park.
+        let status_at_settlement =
+            terminal_turn_status_at_settlement(status, self.cancel_token.is_cancelled());
+        if status_at_settlement != status {
+            status = status_at_settlement;
+            let _ = self
+                .tx_event
+                .send(Event::status(
+                    "Request cancelled while settling turn-owned sub-agents",
+                ))
+                .await;
+        }
+
         // Seal and fully forward every accepted mailbox envelope before the
         // terminal event. This is the durability barrier for child usage: an
         // event can no longer arrive after `TurnComplete` and be mistaken for
         // the following turn (or lost by a runtime monitor that already
         // settled the record).
         if let Some(barrier) = mailbox_for_runtime.take() {
-            barrier.cancel_and_flush().await;
+            if status == TurnOutcomeStatus::Completed {
+                barrier.park_and_flush().await;
+            } else {
+                barrier.cancel_and_flush().await;
+            }
+        }
+        if let Some(owner) = interactive_runtime_cost_owner.as_deref() {
+            crate::cost_status::finish_runtime_usage_owner(owner);
         }
 
         // Emit turn complete event — after all post-turn bookkeeping so
@@ -5897,6 +6042,9 @@ impl Engine {
         &self,
         context: &NextTurnPromptContext,
     ) -> Option<SystemPrompt> {
+        if self.api_config.runtime_chat_isolated {
+            return Some(SystemPrompt::Text(ISOLATED_CHAT_ENGINE_PROMPT.to_string()));
+        }
         let user_memory_block = crate::native_memory::native_prompt_block(
             self.config.memory_enabled,
             &self.config.memory_path,
@@ -6626,12 +6774,35 @@ pub(crate) struct TurnMailboxBarrier {
     pub(crate) drain_handle: tokio::task::JoinHandle<()>,
 }
 
+fn terminal_turn_status_at_settlement(
+    status: TurnOutcomeStatus,
+    cancellation_requested: bool,
+) -> TurnOutcomeStatus {
+    if status == TurnOutcomeStatus::Completed && cancellation_requested {
+        TurnOutcomeStatus::Interrupted
+    } else {
+        status
+    }
+}
+
 impl TurnMailboxBarrier {
-    /// Settle direct foreground work before closing the turn's mailbox.  The
+    /// Settle the foreground subtree before closing the turn's mailbox. The
     /// ordering is intentional: a terminal turn event must never be emitted
     /// while an owned child can still publish into this turn's shared state.
     pub(crate) async fn cancel_and_flush(self) {
         self.foreground_children.cancel_and_wait().await;
+        self.flush().await;
+    }
+
+    /// A normally completed parent turn parks any still-running owned work as
+    /// resumable before closing the mailbox. Failed or interrupted turns use
+    /// [`Self::cancel_and_flush`] and retain explicit cancellation semantics.
+    pub(crate) async fn park_and_flush(self) {
+        self.foreground_children.park_and_wait().await;
+        self.flush().await;
+    }
+
+    async fn flush(self) {
         self.mailbox.seal();
         let _ = self.flush_tx.send(());
         let _ = self.drain_handle.await;
@@ -6651,8 +6822,8 @@ struct TurnToolBuild {
     subagent_runtime_model: Option<String>,
     /// Turn-scoped sub-agent mailbox and its flush barrier, when sub-agent
     /// wiring was live. The engine must seal, flush, and await this before it
-    /// emits `TurnComplete`: that is what makes detached-child usage accounting
-    /// exactly-once rather than "whatever arrived in time".
+    /// emits `TurnComplete`. Detached children never reopen this ordering
+    /// boundary; their owner-scoped usage lease is the separate durable path.
     mailbox: Option<TurnMailboxBarrier>,
     /// Tools this build loaded from the plugin surface rather than the built-in
     /// registry builder. Carried out so the read-only request projection can

@@ -212,6 +212,68 @@ pub struct WhaleCameo {
     pub anchor_y: u16,
 }
 
+/// How the ambient scene is shaped by live agent activity. The underwater
+/// used to be phase-agnostic: same fish, same pace, whether the agent was
+/// thinking, running tools, or orchestrating sub-agents. Each treatment is a
+/// bounded parameter shift — never a second scene graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AmbientActivity {
+    #[default]
+    Baseline,
+    Reasoning,
+    /// Read-shaped exploration: quieter than generic tool work, brighter
+    /// than hidden reasoning — skimming, not digging.
+    Reading,
+    Tools,
+    Subagents,
+    Verifying,
+}
+
+impl AmbientActivity {
+    #[must_use]
+    pub fn from_kind(kind: crate::tui::underwater::LiveActivityKind) -> Self {
+        match kind {
+            crate::tui::underwater::LiveActivityKind::Reasoning => Self::Reasoning,
+            crate::tui::underwater::LiveActivityKind::Reading => Self::Reading,
+            crate::tui::underwater::LiveActivityKind::UsingTool => Self::Tools,
+            crate::tui::underwater::LiveActivityKind::UsingSubagents => Self::Subagents,
+            crate::tui::underwater::LiveActivityKind::Verifying => Self::Verifying,
+            _ => Self::Baseline,
+        }
+    }
+
+    /// Ocean-clock speed factor: thinking reads as the slow deep, tool work
+    /// as the fast current.
+    fn speed(self) -> f32 {
+        match self {
+            Self::Reasoning => 0.6,
+            Self::Reading => 0.8,
+            Self::Tools | Self::Subagents => 1.25,
+            Self::Verifying => 1.0,
+            Self::Baseline => 1.0,
+        }
+    }
+
+    fn scaled_time_ms(self, elapsed_ms: u128) -> u128 {
+        let speed = self.speed();
+        if (speed - 1.0).abs() < f32::EPSILON {
+            elapsed_ms
+        } else {
+            ((elapsed_ms as f64) * f64::from(speed)) as u128
+        }
+    }
+
+    /// A sub-agent run surfaces as a pod: the completion cameo becomes three
+    /// whales at staggered offsets instead of one.
+    fn pod_cameo(self) -> bool {
+        self == Self::Subagents
+    }
+
+    fn pod_offsets(self) -> &'static [i16] {
+        if self.pod_cameo() { &[-5, 0, 5] } else { &[0] }
+    }
+}
+
 const WHALE_CAMEO_MS: u128 = 2_400;
 
 /// Render ambient life into empty water cells of `area`.
@@ -228,17 +290,25 @@ pub fn render_ambient_life(
     presence: f32,
     cursor: AmbientCursor,
     whale: WhaleCameo,
+    activity: AmbientActivity,
 ) -> AmbientFrameStats {
     if area.width < AMBIENT_MIN_WIDTH || area.height < AMBIENT_MIN_HEIGHT {
         return AmbientFrameStats::default();
     }
+
+    // Activity shifts the ocean clock: reading feels like the deep (slow
+    // drift), tool work like a brighter current (faster), verification stays
+    // on the metered pulse. Density stays bounded by MAX_FRAME_MARKS.
+    let elapsed_ms = activity.scaled_time_ms(elapsed_ms);
 
     let density = LifeDensity::from_area(area);
     let mut stats = AmbientFrameStats::default();
     // Positions always ride the live monotonic clock; `presence` fades the
     // marks in and out, so the animated/static boundary eases instead of
     // snapping fish between t=0 and their mid-path positions.
-    let frame = build_frame_marks(area, elapsed_ms, density, lines, cursor, whale, &mut stats);
+    let frame = build_frame_marks(
+        area, elapsed_ms, density, lines, cursor, whale, activity, &mut stats,
+    );
     paint_marks(area, buf, inks, lines, &frame, presence, &mut stats);
     stats
 }
@@ -251,6 +321,7 @@ fn build_frame_marks(
     lines: &[Line<'static>],
     cursor: AmbientCursor,
     whale: WhaleCameo,
+    activity: AmbientActivity,
     stats: &mut AmbientFrameStats,
 ) -> FrameMarks {
     let mut marks = Vec::with_capacity(48);
@@ -527,10 +598,20 @@ fn build_frame_marks(
 
     // --- Rare whale cameo (completion only) ---
     if let Some(cameo_ms) = whale.elapsed_ms.filter(|ms| *ms < WHALE_CAMEO_MS) {
-        let phase = whale_cameo_phase(cameo_ms);
-        if phase != WhaleCameoPhase::Hidden {
+        for (pod_index, offset) in activity.pod_offsets().iter().enumerate() {
+            // Pod members ride the same cameo breath, staggered so a sub-agent
+            // completion reads as a group surfacing rather than one whale.
+            let pod_cameo_ms = cameo_ms.saturating_add((pod_index as u128) * 240);
+            if pod_cameo_ms >= WHALE_CAMEO_MS {
+                continue;
+            }
+            let phase = whale_cameo_phase(pod_cameo_ms);
+            if phase == WhaleCameoPhase::Hidden {
+                continue;
+            }
             let ax = whale
                 .anchor_x
+                .saturating_add_signed(*offset)
                 .saturating_sub(area.x)
                 .min(area.width.saturating_sub(4));
             let ay = whale
@@ -1134,8 +1215,15 @@ pub fn apply_caustic_shimmer(
             let cell = &mut buf[(area.x + local_x, area.y + local_y)];
             // Soften toward ambient ink without replacing semantic glyphs.
             if cell.symbol() == " " || cell.symbol().is_empty() {
-                let shimmer =
-                    ocean::scale_color(row_bg, caustic_brightness(elapsed_ms, local_x, local_y));
+                // Sunlight dissolves with depth instead of stopping: full
+                // amplitude at the surface easing to zero at the band's
+                // floor. The former hard cutoff at `band` drew a visible
+                // horizontal line across tall windows.
+                let depth_fade = 1.0 - f32::from(local_y) / f32::from(band.max(1));
+                let shimmer = ocean::scale_color(
+                    row_bg,
+                    caustic_brightness(elapsed_ms, local_x, local_y, depth_fade * depth_fade),
+                );
                 cell.set_bg(shimmer);
             }
         }
@@ -1146,7 +1234,7 @@ pub fn apply_caustic_shimmer(
 /// toggled cells fully on/off at 12.5 Hz; truecolor made that quantization look
 /// like dropped frames. A narrow cosine crest preserves the same sparse light
 /// band while cross-fading every sampled cell between frames.
-fn caustic_brightness(elapsed_ms: u128, local_x: u16, local_y: u16) -> f32 {
+fn caustic_brightness(elapsed_ms: u128, local_x: u16, local_y: u16, depth_fade: f32) -> f32 {
     const CYCLE_MS: f64 = 960.0;
     const SPATIAL_SLOTS: f64 = 4.0;
     let time = (elapsed_ms % CYCLE_MS as u128) as f64 / CYCLE_MS;
@@ -1156,7 +1244,7 @@ fn caustic_brightness(elapsed_ms: u128, local_x: u16, local_y: u16) -> f32 {
     let slot = (u32::from(local_x / 3) + u32::from(local_y)) % 4;
     let phase = (time + f64::from(slot) / SPATIAL_SLOTS) * std::f64::consts::TAU;
     let crest = ((phase.cos() + 1.0) * 0.5).powi(8);
-    (1.0 + 0.08 * crest) as f32
+    1.0 + 0.08 * (crest as f32) * depth_fade.clamp(0.0, 1.0)
 }
 
 /// Cached ocean row colors invalidated only when phase/dimensions/palette/breath tick.

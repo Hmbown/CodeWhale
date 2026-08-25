@@ -49,15 +49,16 @@ fn dispatcher_diagnostics_are_in_process_and_read_only() {
         // dispatches through `run_tui_in_process` -> `codewhale_tui::run`. No
         // `DEEPSEEK_TUI_BIN` sibling is spawned, so there is no receipt to read;
         // assert the in-process behavior and the read-only invariants instead.
-        let output = Command::new(codewhale_binary())
+        let mut command = Command::new(codewhale_binary());
+        command
             .args(args)
             .env_clear()
             .env("HOME", &sealed_home)
             .env("USERPROFILE", &sealed_home)
             .env("CODEWHALE_HOME", &codewhale_home)
-            .env("CODEWHALE_SECRET_BACKEND", "file")
-            .output()
-            .expect("run dispatcher diagnostic");
+            .env("CODEWHALE_SECRET_BACKEND", "file");
+        preserve_host_rustup_home(&mut command);
+        let output = command.output().expect("run dispatcher diagnostic");
 
         assert!(
             output.status.success(),
@@ -188,4 +189,21 @@ fn codewhale_binary() -> PathBuf {
     }
     path.push(format!("codewhale{}", std::env::consts::EXE_SUFFIX));
     path
+}
+
+/// A rustup shim may initialize its own toolchain state below `$HOME` when
+/// `doctor` asks `rustc --version`. Preserve an already-configured toolchain
+/// root so this test isolates Codewhale's own state contract.
+fn preserve_host_rustup_home(command: &mut Command) {
+    let rustup_home = std::env::var_os("RUSTUP_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|home| home.join(".rustup"))
+                .filter(|path| path.is_dir())
+        });
+    if let Some(rustup_home) = rustup_home {
+        command.env("RUSTUP_HOME", rustup_home);
+    }
 }

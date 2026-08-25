@@ -388,6 +388,12 @@ pub async fn generate_suggestion(
     model: &str,
     recent_messages: &str,
 ) -> Option<String> {
+    // Suggestions are model output derived from the just-completed
+    // interactive transcript. They therefore participate in the same
+    // attached CWC run even though this narrow adapter owns a raw reqwest
+    // client instead of a `DeepSeekClient`. Retain the permit through decode
+    // so Runtime Chat cannot overlap or project a second inference lifecycle.
+    let _inference = crate::client::acquire_remote_control_inference_participant().await;
     let client = suggestion_client();
     let body = serde_json::json!({
         "model": model,
@@ -504,14 +510,56 @@ mod tests {
     use super::{
         ApiProvider, Config, SuggestionRouteAuthority, SuggestionRouteCredentials,
         SuggestionRouteSnapshot, TurnRoute, TurnRouteReceipt, capture_route_authority,
-        endpoint_identity, plan_suggestion_launch, plan_suggestion_launch_with_config,
-        resolve_credentials_for_identity,
+        endpoint_identity, generate_suggestion, plan_suggestion_launch,
+        plan_suggestion_launch_with_config, resolve_credentials_for_identity,
     };
     use crate::config::ProvidersConfig;
     use crate::test_support::{EnvVarGuard, TestEnvLock, lock_test_env};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const DEEPSEEK_BASE: &str = "https://api.deepseek.com/v1";
     const DEEPSEEK_KEY: &str = "sk-deepseek-secret";
+
+    #[tokio::test]
+    async fn suggestion_inference_waits_for_runtime_chat_ownership() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{ "message": { "content": "What should we do next?" } }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let ownership = crate::client::acquire_runtime_chat_inference_ownership().await;
+        let base_url = format!("{}/v1", server.uri());
+        let mut suggestion = tokio::spawn(async move {
+            generate_suggestion(
+                "fixture-key",
+                &base_url,
+                "deepseek-v4-flash",
+                "User: hello\nAssistant: hi",
+            )
+            .await
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(40), &mut suggestion)
+                .await
+                .is_err(),
+            "background suggestion provider output must wait behind Runtime Chat"
+        );
+        drop(ownership);
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), suggestion)
+                .await
+                .expect("suggestion resumes after relay settlement")
+                .expect("suggestion task")
+                .as_deref(),
+            Some("What should we do next?")
+        );
+    }
 
     /// Stand-in for the real credential resolver. Records every identity it was
     /// asked about so a test can prove it was never consulted at all.

@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::ApiProvider;
 use crate::fleet::roster::FleetRoster;
 use crate::tools::{AgentToolSurfaceOptions, ToolRegistryBuilder};
 use crate::worker_profile::ShellPolicy;
@@ -377,6 +378,7 @@ fn worker_record_usage_accumulates_provider_tokens() {
 
     manager.record_worker_usage(
         "agent_usage",
+        "agent_usage:response:1",
         &Usage {
             input_tokens: 100,
             output_tokens: 25,
@@ -388,6 +390,17 @@ fn worker_record_usage_accumulates_provider_tokens() {
     );
     manager.record_worker_usage(
         "agent_usage",
+        "agent_usage:response:1",
+        &Usage {
+            input_tokens: 9_999,
+            output_tokens: 9_999,
+            ..Usage::default()
+        },
+        Some(9_999),
+    );
+    manager.record_worker_usage(
+        "agent_usage",
+        "agent_usage:response:2",
         &Usage {
             input_tokens: 40,
             output_tokens: 10,
@@ -404,6 +417,14 @@ fn worker_record_usage_accumulates_provider_tokens() {
     assert_eq!(record.usage.output_tokens, Some(35));
     assert_eq!(record.usage.total_tokens, Some(175));
     assert_eq!(record.usage.cost_microusd, Some(175));
+    assert_eq!(record.usage_source_fingerprints.len(), 2);
+    let persisted = serde_json::to_vec(&record).expect("serialize worker record");
+    let reloaded: AgentWorkerRecord =
+        serde_json::from_slice(&persisted).expect("reload worker record");
+    assert_eq!(
+        reloaded.usage_source_fingerprints,
+        record.usage_source_fingerprints
+    );
     assert_eq!(record.usage.token_budget, None);
     assert!(
         record.usage.note.contains("175 tokens"),
@@ -427,6 +448,7 @@ fn token_budget_scope_is_shared_across_nested_workers_and_blocks_when_spent() {
     manager.attach_budget_scope("agent_root", root_scope);
     manager.record_worker_usage(
         "agent_root",
+        "agent_root:response:1",
         &Usage {
             input_tokens: 40,
             output_tokens: 10,
@@ -448,6 +470,7 @@ fn token_budget_scope_is_shared_across_nested_workers_and_blocks_when_spent() {
     manager.attach_budget_scope("agent_child", child_scope);
     manager.record_worker_usage(
         "agent_child",
+        "agent_child:response:1",
         &Usage {
             input_tokens: 30,
             output_tokens: 20,
@@ -2024,6 +2047,158 @@ async fn delayed_chat_client(
     (client, calls, bodies)
 }
 
+#[tokio::test]
+async fn detached_interactive_usage_after_mailbox_seal_reaches_session_accounting() {
+    let _cost_scope = crate::cost_status::test_scope();
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        2,
+    )));
+    let (mailbox, mut mailbox_rx) = Mailbox::new(CancellationToken::new());
+    let mut root = stub_runtime();
+    root.manager = Arc::clone(&manager);
+    root.context = ToolContext::new(tmp.path()).with_state_namespace("session-detached-usage");
+    root.mailbox = Some(mailbox.clone());
+    let runtime_owner = "interactive:session-detached-usage:turn-parent";
+    crate::cost_status::register_interactive_runtime_usage_sink(
+        runtime_owner,
+        crate::cost_status::scope_token(),
+    );
+    root.runtime_usage_lease = crate::cost_status::acquire_runtime_usage_lease(runtime_owner);
+    let detached = root.background_runtime();
+
+    let cases = [
+        (
+            "agent_deepseek",
+            "subagent:agent_deepseek:step:1:response:late",
+            crate::cost_status::EffectiveRouteEnvelope::capture(
+                None,
+                ApiProvider::Deepseek,
+                "deepseek-direct",
+                "deepseek-v4-flash",
+                Some(ApiProvider::Deepseek.default_base_url()),
+                chrono::Utc::now(),
+            ),
+            Usage {
+                input_tokens: 11,
+                output_tokens: 5,
+                ..Usage::default()
+            },
+        ),
+        (
+            "agent_anthropic",
+            "subagent:agent_anthropic:step:1:response:late",
+            crate::cost_status::EffectiveRouteEnvelope::capture(
+                None,
+                ApiProvider::Anthropic,
+                "anthropic-direct",
+                "claude-sonnet-4-5",
+                Some(ApiProvider::Anthropic.default_base_url()),
+                chrono::Utc::now(),
+            ),
+            Usage {
+                input_tokens: 13,
+                output_tokens: 7,
+                ..Usage::default()
+            },
+        ),
+        (
+            "agent_custom",
+            "subagent:agent_custom:step:1:response:late",
+            crate::cost_status::EffectiveRouteEnvelope::capture(
+                None,
+                ApiProvider::Custom,
+                "lab-compatible-route",
+                "lab-model-v1",
+                Some("https://models.example.test/v1"),
+                chrono::Utc::now(),
+            ),
+            Usage {
+                input_tokens: 17,
+                output_tokens: 9,
+                ..Usage::default()
+            },
+        ),
+    ];
+    for (worker_id, ..) in &cases {
+        manager.write().await.register_worker_for_session(
+            make_worker_spec(worker_id, tmp.path().to_path_buf()),
+            "session-detached-usage",
+        );
+    }
+    let (release_usage_tx, release_usage_rx) = tokio::sync::oneshot::channel();
+    let child = tokio::spawn(async move {
+        release_usage_rx
+            .await
+            .expect("parent releases the detached provider response");
+        for (worker_id, source_id, route, usage) in &cases {
+            record_provider_response_usage(&detached, worker_id, source_id, route.clone(), usage)
+                .await;
+            // Simulate a monitor retrying the same durable receipt. Worker and
+            // session projections must reject it under the same identity.
+            record_provider_response_usage(&detached, worker_id, source_id, route.clone(), usage)
+                .await;
+        }
+        cases
+    });
+
+    mailbox.seal();
+    crate::cost_status::finish_runtime_usage_owner(runtime_owner);
+    release_usage_tx
+        .send(())
+        .expect("detached child remains live after mailbox seal");
+    let cases = tokio::time::timeout(Duration::from_secs(2), child)
+        .await
+        .expect("detached usage settles after the sealed parent turn")
+        .expect("detached usage task exits cleanly");
+    assert!(mailbox.is_closed());
+    assert!(
+        !mailbox_rx.has_pending(),
+        "post-seal usage must not weaken the mailbox ordering boundary"
+    );
+
+    let session_usage = crate::cost_status::drain();
+    assert_eq!(session_usage.usage_source_fingerprints.len(), cases.len());
+    assert!(
+        session_usage.estimate.is_positive(),
+        "direct provider routes must reach the live money total"
+    );
+    assert_eq!(
+        session_usage
+            .priced_turns
+            .saturating_add(session_usage.unpriced_turns),
+        cases.len() as u32,
+        "every metered or unknown-basis route contributes exactly one coverage receipt"
+    );
+    for (worker_id, source_id, _route, usage) in cases {
+        let worker = manager
+            .read()
+            .await
+            .get_worker_record(worker_id)
+            .expect("worker usage is durable")
+            .clone();
+        assert_eq!(
+            worker.usage.input_tokens,
+            Some(u64::from(usage.input_tokens))
+        );
+        assert_eq!(
+            worker.usage.output_tokens,
+            Some(u64::from(usage.output_tokens))
+        );
+        let fingerprint = crate::cost_status::usage_source_fingerprint(source_id);
+        assert_eq!(
+            worker.usage_source_fingerprints,
+            [fingerprint.clone()].into()
+        );
+        assert!(
+            session_usage
+                .usage_source_fingerprints
+                .contains(&fingerprint)
+        );
+    }
+}
+
 /// Like [`delayed_chat_client`] but delays *every* attempt, so the per-step
 /// API timeout fires on the first call and on every retry — the shape needed
 /// to drive the timeout-retry budget to exhaustion.
@@ -2106,6 +2281,7 @@ async fn tool_free_subagent_omits_chat_tools_and_tool_choice() {
         false,
         Instant::now(),
         1,
+        None,
         None,
         input_rx,
     )
@@ -7313,6 +7489,108 @@ fn scout_posture_gate_admits_agent_readonly_bash_commands() {
     );
 }
 
+/// #5595: catalog admission, role posture, and the execution envelope are not
+/// enough. The concrete read-only executor must accept the canonical Git shape
+/// agents use when the repository is not their process cwd. This is the exact
+/// end-to-end gap from the v0.9.11 dogfood failure.
+#[tokio::test]
+async fn read_only_inspection_roles_execute_pwd_and_absolute_git_log() {
+    let tmp = tempdir().expect("tempdir");
+    init_claim_repo(tmp.path());
+    let workspace = tmp.path().canonicalize().expect("canonical workspace");
+    let git_log = format!("git -C {} log --oneline -20", workspace.to_string_lossy());
+
+    for role in [FleetRole::Scout, FleetRole::Reviewer, FleetRole::Planner] {
+        let mut runtime =
+            stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
+        runtime.context = ToolContext::new(workspace.clone());
+        runtime.worker_profile = WorkerRuntimeProfile::for_role(role.clone());
+        seed_read_only_role_deny_list(&mut runtime);
+        let registry = SubAgentToolRegistry::new(
+            runtime,
+            role.clone(),
+            None,
+            crate::tools::todo::new_shared_todo_list(),
+            crate::tools::plan::new_shared_plan_state(),
+        );
+
+        for input in [
+            json!({"command": "pwd"}),
+            json!({"command": git_log.as_str()}),
+            json!({"command": git_log.as_str(), "timeout": 5}),
+        ] {
+            let command = input["command"]
+                .as_str()
+                .expect("command string")
+                .to_string();
+            assert!(
+                registry.posture_permits_tool("bash", Some(&input)),
+                "{role:?} posture must admit {command}"
+            );
+            assert!(
+                registry.envelope_refusal("bash", &input).is_none(),
+                "{role:?} envelope must admit {command}"
+            );
+            let output = registry
+                .execute("agent_read_only_e2e", "bash", input)
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("{role:?} concrete executor must run {command}: {error}")
+                });
+            assert!(!output.trim().is_empty(), "{role:?} {command}");
+        }
+    }
+}
+
+/// Read-only text filters may transform stdout, but they must not reach their
+/// file-output or helper-program forms through the same bounded bash carve-out.
+#[tokio::test]
+async fn read_only_inspection_roles_cannot_write_through_text_filters() {
+    for role in [FleetRole::Scout, FleetRole::Reviewer, FleetRole::Planner] {
+        let tmp = tempdir().expect("tempdir");
+        let input_path = tmp.path().join("input.txt");
+        std::fs::write(&input_path, "b\na\n").expect("input fixture");
+        let output_path = tmp.path().join("filter-output.txt");
+        let mut runtime =
+            stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
+        runtime.context = ToolContext::new(tmp.path().to_path_buf());
+        runtime.worker_profile = WorkerRuntimeProfile::for_role(role.clone());
+        seed_read_only_role_deny_list(&mut runtime);
+        let registry = SubAgentToolRegistry::new(
+            runtime,
+            role.clone(),
+            None,
+            crate::tools::todo::new_shared_todo_list(),
+            crate::tools::plan::new_shared_plan_state(),
+        );
+
+        let call = json!({"command": "sort -o filter-output.txt input.txt"});
+        let envelope_refusal = registry
+            .envelope_refusal("bash", &call)
+            .expect("the envelope must independently refuse the write-capable filter");
+        assert!(
+            envelope_refusal.contains("[execution_envelope.executes.write_denied]"),
+            "{role:?} envelope refusal did not identify its failed rule: {envelope_refusal}"
+        );
+
+        let posture_refusal = registry
+            .execute("agent_read_only_filter", "bash", call)
+            .await
+            .expect_err("a read-only inspection role must not write through sort")
+            .to_string();
+        assert!(
+            posture_refusal.contains("[shell.readonly.command]"),
+            "{role:?} posture refusal did not identify its failed rule: {posture_refusal}"
+        );
+        assert!(
+            !output_path.exists(),
+            "{role:?} read-only filter created {} from {}",
+            output_path.display(),
+            input_path.display()
+        );
+    }
+}
+
 #[test]
 fn explore_catalog_inherits_web_but_hides_write_shell_and_fim_tools() {
     let tmp = tempdir().expect("tempdir");
@@ -11852,8 +12130,10 @@ async fn foreground_turn_cancellation_joins_direct_children_once_and_excludes_de
     let foreground = root.child_runtime();
     let foreground_token = foreground.cancel_token.clone();
     let foreground_registration = foreground
-        .foreground_child_registration()
+        .foreground_child_registration("agent_foreground_cancel")
+        .expect("foreground registry remains open")
         .expect("a direct child of the turn must register ownership");
+    let foreground_parking = foreground_registration.parking_signal();
     let foreground_done = tokio::spawn(async move {
         foreground_token.cancelled().await;
         drop(foreground_registration);
@@ -11861,7 +12141,10 @@ async fn foreground_turn_cancellation_joins_direct_children_once_and_excludes_de
 
     let detached = root.background_runtime();
     assert!(
-        detached.foreground_child_registration().is_none(),
+        detached
+            .foreground_child_registration("agent_detached_cancel")
+            .expect("detached admission does not consult the foreground barrier")
+            .is_none(),
         "explicitly detached work must not join the foreground turn barrier"
     );
     let detached_token = detached.cancel_token.clone();
@@ -11877,27 +12160,32 @@ async fn foreground_turn_cancellation_joins_direct_children_once_and_excludes_de
     foreground_done
         .await
         .expect("foreground task exits after cancellation");
+    assert!(
+        !foreground_parking.load(std::sync::atomic::Ordering::Acquire),
+        "explicit cancellation must remain terminal rather than masquerading as parking"
+    );
     assert!(!detached_token.is_cancelled());
 
-    // A spawn racing turn-end gets a latched cancellation before it can make a
-    // provider request; its later completion cannot reopen the settled barrier.
+    // A spawn racing turn-end is refused before it can make a provider request
+    // or escape the one-shot terminal join.
     let late = root.child_runtime();
     let late_token = late.cancel_token.clone();
-    let late_registration = late
-        .foreground_child_registration()
-        .expect("late direct child still registers then observes cancellation");
+    let error = match late.foreground_child_registration("agent_late_cancel") {
+        Err(error) => error,
+        Ok(_) => panic!("the closed foreground registry must refuse late admission"),
+    };
+    assert!(error.to_string().contains("already settling"), "{error:#}");
     assert!(late_token.is_cancelled());
-    drop(late_registration);
-    tokio::time::timeout(Duration::from_secs(1), registry.cancel_and_wait())
-        .await
-        .expect("late completion keeps cancellation idempotent");
+    assert_eq!(registry.active_count(), 0);
 }
 
 #[tokio::test]
 async fn foreground_registration_releases_when_the_child_future_returns_or_unwinds() {
     let registry = Arc::new(ForegroundChildRegistry::new());
 
-    let completed = registry.register(CancellationToken::new());
+    let completed = registry
+        .register("agent_completed_registration", CancellationToken::new())
+        .expect("registry open");
     let result: Result<(), ()> = async move {
         let _registration = completed;
         Err(())
@@ -11905,7 +12193,9 @@ async fn foreground_registration_releases_when_the_child_future_returns_or_unwin
     .await;
     assert!(result.is_err());
 
-    let panicked = registry.register(CancellationToken::new());
+    let panicked = registry
+        .register("agent_panicked_registration", CancellationToken::new())
+        .expect("registry open");
     let task = tokio::spawn(async move {
         let _registration = panicked;
         panic!("test direct-child unwind");
@@ -11918,6 +12208,217 @@ async fn foreground_registration_releases_when_the_child_future_returns_or_unwin
     tokio::time::timeout(Duration::from_secs(1), registry.cancel_and_wait())
         .await
         .expect("return and panic-unwind both release foreground ownership");
+}
+
+#[tokio::test]
+async fn turn_owned_descendants_join_and_park_with_the_same_foreground_registry() {
+    let registry = Arc::new(ForegroundChildRegistry::new());
+    let root = stub_runtime().with_foreground_children(Arc::clone(&registry));
+
+    let child = root.child_runtime();
+    let child_token = child.cancel_token.clone();
+    let child_registration = child
+        .foreground_child_registration("agent_owned_child")
+        .expect("foreground registry remains open")
+        .expect("a direct turn-owned child must register");
+    let child_parking = child_registration.parking_signal();
+    let grandchild = child.child_runtime();
+    let grandchild_token = grandchild.cancel_token.clone();
+    let grandchild_registration = grandchild
+        .foreground_child_registration("agent_owned_grandchild")
+        .expect("foreground registry remains open")
+        .expect("a turn-owned descendant must register with the root turn barrier");
+    let grandchild_parking = grandchild_registration.parking_signal();
+    assert_eq!(registry.active_count(), 2);
+    assert_eq!(
+        registry.active_agent_ids(),
+        vec![
+            "agent_owned_child".to_string(),
+            "agent_owned_grandchild".to_string()
+        ]
+    );
+
+    let child_task = tokio::spawn(async move {
+        child_token.cancelled().await;
+        let parked = child_parking.load(std::sync::atomic::Ordering::Acquire);
+        drop(child_registration);
+        parked
+    });
+    let grandchild_task = tokio::spawn(async move {
+        grandchild_token.cancelled().await;
+        let parked = grandchild_parking.load(std::sync::atomic::Ordering::Acquire);
+        drop(grandchild_registration);
+        parked
+    });
+
+    tokio::time::timeout(Duration::from_secs(1), registry.park_and_wait())
+        .await
+        .expect("turn-end parking should settle every owned generation");
+    assert!(child_task.await.expect("child task"));
+    assert!(grandchild_task.await.expect("grandchild task"));
+    assert_eq!(registry.active_count(), 0);
+
+    // A descendant that races the terminal barrier is rejected before task
+    // scheduling, so one park-and-wait call remains a complete join.
+    let late = root.child_runtime();
+    let late_token = late.cancel_token.clone();
+    let error = match late.foreground_child_registration("agent_late_park") {
+        Err(error) => error,
+        Ok(_) => panic!("the closed foreground registry must refuse late admission"),
+    };
+    assert!(error.to_string().contains("already settling"), "{error:#}");
+    assert!(late_token.is_cancelled());
+    assert_eq!(registry.active_count(), 0);
+
+    let detached = root.background_runtime();
+    assert!(
+        detached
+            .foreground_child_registration("agent_detached_park")
+            .expect("detached admission does not consult the foreground barrier")
+            .is_none()
+    );
+    assert!(!detached.cancel_token.is_cancelled());
+}
+
+#[test]
+fn derived_child_cancellation_reaches_tool_context_while_detached_stays_independent() {
+    let root = stub_runtime();
+    let child = root.child_runtime();
+    let child_tool_token = child
+        .context
+        .cancel_token
+        .as_ref()
+        .expect("derived child tool context has a cancellation token")
+        .clone();
+    assert!(!child_tool_token.is_cancelled());
+    child.cancel_token.cancel();
+    assert!(
+        child_tool_token.is_cancelled(),
+        "foreground parking must reach tools that poll ToolContext cancellation"
+    );
+
+    let detached = root.background_runtime();
+    let detached_tool_token = detached
+        .context
+        .cancel_token
+        .as_ref()
+        .expect("detached tool context has its independent token")
+        .clone();
+    root.cancel_token.cancel();
+    assert!(!detached.cancel_token.is_cancelled());
+    assert!(!detached_tool_token.is_cancelled());
+
+    let replacement = CancellationToken::new();
+    let rebound = stub_runtime().with_cancel_token(replacement.clone());
+    replacement.cancel();
+    assert!(rebound.cancel_token.is_cancelled());
+    assert!(
+        rebound
+            .context
+            .cancel_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+    );
+}
+
+#[tokio::test]
+async fn turn_end_parking_preserves_a_step_zero_resumable_checkpoint() {
+    let tmp = tempdir().expect("tempdir");
+    let agent_id = "agent_turn_end_step_zero";
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    runtime.cancel_token.cancel();
+    let parking = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let (_input_tx, input_rx) = mpsc::unbounded_channel();
+
+    let result = run_subagent(
+        &runtime,
+        agent_id.to_string(),
+        FleetRole::Worker,
+        "Inspect the workspace and report findings.".to_string(),
+        make_assignment(),
+        Some(Vec::new()),
+        false,
+        Instant::now(),
+        1,
+        None,
+        Some(parking),
+        input_rx,
+    )
+    .await
+    .expect("turn-end parking should return a terminal projection");
+
+    let SubAgentStatus::Interrupted(reason) = &result.status else {
+        panic!("turn-end parking must interrupt resumably: {result:?}");
+    };
+    assert!(
+        reason.contains(&format!("resume_from=\"{agent_id}\"")),
+        "{reason}"
+    );
+    assert_eq!(result.steps_taken, 0);
+    let checkpoint = result
+        .checkpoint
+        .as_ref()
+        .expect("step-zero parking must synthesize a checkpoint");
+    assert!(checkpoint.continuable);
+    assert!(!checkpoint.messages.is_empty());
+    assert!(subagent_checkpoint_is_continuable(&result));
+    assert_eq!(
+        worker_status_from_subagent_result(&result),
+        AgentWorkerStatus::WaitingForUser
+    );
+    let recovery = result
+        .needs_input
+        .as_ref()
+        .expect("parked work must carry an actionable recovery instruction");
+    assert!(
+        recovery
+            .question
+            .contains(&format!("resume_from=\"{agent_id}\"")),
+        "{}",
+        recovery.question
+    );
+    assert!(matches!(
+        terminal_mailbox_message(&result, None),
+        MailboxMessage::Interrupted {
+            agent_id: ref delivered_agent_id,
+            reason: ref delivered_reason,
+        } if delivered_agent_id == agent_id
+            && delivered_reason.contains(&format!("resume_from=\"{agent_id}\""))
+    ));
+
+    let (explicit_status, _, _, explicit_needs_input, explicit_worker_status, _) =
+        subagent_cancellation_projection(agent_id, &checkpoint.messages, 0, Some(checkpoint), None);
+    assert_eq!(explicit_status, SubAgentStatus::Cancelled);
+    assert!(explicit_needs_input.is_none());
+    assert_eq!(explicit_worker_status, AgentWorkerStatus::Cancelled);
+}
+
+#[test]
+fn turn_end_parking_wins_over_the_final_child_step_limit() {
+    let agent_id = "agent_turn_end_final_step";
+    let messages = vec![text_message(
+        "user",
+        "Inspect the workspace and report findings.",
+    )];
+    let parking = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+    assert_eq!(
+        subagent_loop_boundary(1, 1, true),
+        SubAgentLoopBoundary::Cancellation,
+        "parking/cancellation must be projected before step exhaustion"
+    );
+    assert_eq!(
+        subagent_loop_boundary(1, 1, false),
+        SubAgentLoopBoundary::StepLimit
+    );
+
+    let (status, _, checkpoint, needs_input, worker_status, _) =
+        subagent_cancellation_projection(agent_id, &messages, 1, None, Some(&parking));
+    assert!(matches!(status, SubAgentStatus::Interrupted(_)));
+    assert!(checkpoint.is_some_and(|checkpoint| checkpoint.continuable));
+    assert!(needs_input.is_some());
+    assert_eq!(worker_status, AgentWorkerStatus::Interrupted);
 }
 
 #[test]
@@ -15136,6 +15637,161 @@ async fn launch_gate_queues_extra_direct_children() {
         started_b > queued_b && completed_b > started_b,
         "queued child must start only after queuing, then complete: {messages:?}"
     );
+}
+
+#[tokio::test]
+async fn queued_turn_owned_child_parks_without_a_false_start_transition() {
+    use tokio::sync::Semaphore;
+    use tokio_util::sync::CancellationToken;
+
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        2,
+    )));
+    let (input_tx, input_rx) = mpsc::unbounded_channel();
+    let agent_id = "agent_queued_turn_end_park".to_string();
+    let model = "provider-neutral-test-model".to_string();
+    let mut agent = SubAgent::new(
+        agent_id.clone(),
+        FleetRole::Worker,
+        "Answer".to_string(),
+        make_assignment(),
+        model.clone(),
+        None,
+        Some(vec![]),
+        input_tx,
+        tmp.path().to_path_buf(),
+        "boot_test".to_string(),
+    );
+    agent.status = SubAgentStatus::Running;
+
+    let (mailbox, mut mailbox_rx) = Mailbox::new(CancellationToken::new());
+    let mut runtime = stub_runtime();
+    runtime.manager = Arc::clone(&manager);
+    runtime.context = ToolContext::new(tmp.path());
+    runtime.model = model;
+    runtime.mailbox = Some(mailbox);
+    runtime.spawn_depth = 1;
+    runtime = runtime.with_cancel_token(CancellationToken::new());
+
+    let foreground_children = Arc::new(ForegroundChildRegistry::new());
+    let registration = foreground_children
+        .register(&agent_id, runtime.cancel_token.clone())
+        .expect("turn-owned queued child registers before settlement");
+    let gate = Arc::new(Semaphore::new(1));
+    let held_launch_permit = Arc::clone(&gate)
+        .acquire_owned()
+        .await
+        .expect("test holds the only launch permit");
+    let task = SubAgentTask {
+        manager_handle: Arc::clone(&manager),
+        runtime,
+        agent_id: agent_id.clone(),
+        agent_type: FleetRole::Worker,
+        prompt: "Answer".to_string(),
+        assignment: make_assignment(),
+        allowed_tools: Some(vec![]),
+        fork_context: false,
+        started_at: Instant::now(),
+        max_steps: 1,
+        token_budget: None,
+        wall_time: Duration::from_secs(5),
+        input_rx,
+        launch_gate: Some(Arc::clone(&gate)),
+        _foreground_child_registration: Some(registration),
+    };
+    {
+        let mut manager = manager.write().await;
+        manager.register_worker(make_worker_spec(&agent_id, tmp.path().to_path_buf()));
+        manager.agents.insert(agent_id.clone(), agent);
+    }
+
+    let task_handle = tokio::spawn(run_subagent_task(task));
+    let queued = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let envelope = mailbox_rx
+                .recv()
+                .await
+                .expect("queued progress mailbox remains open");
+            let message = envelope.message;
+            if matches!(
+                &message,
+                MailboxMessage::Progress { agent_id, status }
+                    if agent_id == "agent_queued_turn_end_park" && status.contains("queued")
+            ) {
+                break message;
+            }
+        }
+    })
+    .await
+    .expect("child publishes queued progress before parking");
+
+    tokio::time::timeout(Duration::from_secs(2), foreground_children.park_and_wait())
+        .await
+        .expect("parking settles the queued child without acquiring the held permit");
+    task_handle.await.expect("parked queued task exits cleanly");
+
+    let mut messages = vec![queued];
+    while let Ok(Some(envelope)) =
+        tokio::time::timeout(Duration::from_millis(50), mailbox_rx.recv()).await
+    {
+        messages.push(envelope.message);
+    }
+    assert!(
+        !messages.iter().any(|message| matches!(
+            message,
+            MailboxMessage::Started { agent_id, .. }
+                if agent_id == "agent_queued_turn_end_park"
+        )),
+        "a parked queued child must never claim it started: {messages:?}"
+    );
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            MailboxMessage::Interrupted { agent_id, reason }
+                if agent_id == "agent_queued_turn_end_park"
+                    && reason.contains("resume_from=\"agent_queued_turn_end_park\"")
+        )),
+        "parking must publish an actionable interrupted receipt: {messages:?}"
+    );
+
+    let manager = manager.read().await;
+    let snapshot = manager
+        .get_result(&agent_id)
+        .expect("parked queued child remains inspectable");
+    assert!(matches!(snapshot.status, SubAgentStatus::Interrupted(_)));
+    assert!(
+        snapshot
+            .checkpoint
+            .as_ref()
+            .is_some_and(|checkpoint| checkpoint.continuable)
+    );
+    let worker = manager
+        .get_worker_record(&agent_id)
+        .expect("parked queued worker remains inspectable");
+    let queued_seq = worker
+        .events
+        .iter()
+        .find(|event| event.status == AgentWorkerStatus::Queued)
+        .expect("worker receipt retains the queued phase")
+        .seq;
+    assert!(
+        !worker
+            .events
+            .iter()
+            .any(|event| event.status == AgentWorkerStatus::Starting && event.seq > queued_seq),
+        "parking must not emit a second Starting transition after Queued: {worker:?}"
+    );
+    assert!(
+        !worker
+            .events
+            .iter()
+            .any(|event| event.status == AgentWorkerStatus::Cancelled)
+    );
+
+    drop(manager);
+    drop(held_launch_permit);
 }
 
 #[tokio::test]

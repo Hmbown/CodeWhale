@@ -18,7 +18,10 @@
 //! * `await task(opts)` — dispatch one subagent; resolves to the full result
 //!   text, or to a parsed + schema-validated object when `opts.responseSchema`
 //!   is set. Throws on rejection, failure, cancellation, budget exhaustion,
-//!   or once [`WORKFLOW_LIFETIME_CAP`] spawn attempts have been made.
+//!   or once [`WORKFLOW_LIFETIME_CAP`] spawn attempts have been made. A reply
+//!   that fails `responseSchema` gets up to
+//!   [`SCHEMA_REPAIR_MAX_ATTEMPTS`] bounded repairs (#5583) before it throws;
+//!   the failed attempts are reported as driver receipts either way.
 //! * `parallel(thunks)` — all-settled fan-out; an ordinary failed slot becomes
 //!   `null`; schema-contract failures and run cancellation still fail the run;
 //!   at most [`PARALLEL_MAX_ITEMS`] items.
@@ -53,6 +56,7 @@ pub use driver::{
     normalize_profile,
 };
 pub use error::{DriverError, WorkflowJsError};
+pub use schema::{SCHEMA_RAW_CARRY_CHARS, SCHEMA_RAW_PREVIEW_CHARS, SCHEMA_REPAIR_MAX_ATTEMPTS};
 pub use vm::{VmLimits, WorkflowRunCancel, WorkflowVm};
 
 /// Maximum `task()` spawn attempts per run (design §4.3). Counted in the VM
