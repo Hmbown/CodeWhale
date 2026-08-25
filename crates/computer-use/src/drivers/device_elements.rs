@@ -216,34 +216,56 @@ pub fn act(
                 ..Default::default()
             })
         }
-        ElementAction::Type { text, index, point } => {
+        ElementAction::Type {
+            text,
+            index,
+            point,
+            clear,
+            submit,
+            activate: _,
+        } => {
             let focus = match (index, point) {
                 (Some(index), _) => Some((center(nodes, index)?, describe(nodes, index))),
                 (None, Some((x, y))) => Some((Point { x, y }, format!("({x:.0}, {y:.0})"))),
                 (None, None) => None,
             };
-            if let Some((at, where_)) = focus {
-                driver.click(at, Button::Left, 1, 0)?;
-                driver.type_text(&text)?;
-                Ok(ActionReceipt {
-                    text: format!(
-                        "tapped {where_} then typed {} characters",
-                        text.chars().count()
-                    ),
-                    ..Default::default()
-                })
-            } else {
-                driver.type_text(&text)?;
-                Ok(ActionReceipt {
-                    text: format!(
-                        "typed {} characters into the focused field",
-                        text.chars().count()
-                    ),
-                    ..Default::default()
-                })
+            if let Some((at, _)) = &focus {
+                driver.click(*at, Button::Left, 1, 0)?;
             }
+            if clear {
+                driver.key(&crate::keys::select_all())?;
+                driver.key(&crate::keys::named(crate::keys::NamedKey::Backspace))?;
+            }
+            if !text.is_empty() {
+                driver.type_text(&text)?;
+            }
+            if submit {
+                driver.key(&crate::keys::named(crate::keys::NamedKey::Enter))?;
+            }
+            let mut bits: Vec<String> = Vec::new();
+            if let Some((_, where_)) = focus {
+                bits.push(format!("tapped {where_}"));
+            }
+            if clear {
+                bits.push("cleared the field".into());
+            }
+            let count = text.chars().count();
+            if count > 0 {
+                bits.push(format!("typed {count} characters"));
+            }
+            if submit {
+                bits.push("pressed enter".into());
+            }
+            Ok(ActionReceipt {
+                text: if bits.is_empty() {
+                    "typed 0 characters into the focused field".into()
+                } else {
+                    bits.join(", then ")
+                },
+                ..Default::default()
+            })
         }
-        ElementAction::Key { combo } => {
+        ElementAction::Key { combo, activate: _ } => {
             driver.key(&combo)?;
             Ok(ActionReceipt {
                 text: format!("sent {combo}"),
@@ -415,6 +437,9 @@ mod tests {
                 text: "hi".into(),
                 index: Some(0),
                 point: None,
+                clear: false,
+                submit: false,
+                activate: false,
             },
             &nodes,
         )
@@ -446,6 +471,9 @@ mod tests {
                 text: "hi".into(),
                 index: None,
                 point: None,
+                clear: false,
+                submit: false,
+                activate: false,
             },
             &[],
         )

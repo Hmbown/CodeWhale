@@ -188,6 +188,25 @@ fn parse_named(token: &str) -> Option<NamedKey> {
 /// plus sign (`"ctrl++"` is Ctrl and `+`). Modifier aliases: `cmd`, `command`,
 /// `super`, `win`, `windows`, `meta` → meta; `option`, `opt`, `alt` → alt;
 /// `control`, `ctl`, `ctrl` → ctrl; `shift` → shift.
+/// Select-all on this host: Command-A on macOS, Control-A everywhere else.
+pub fn select_all() -> KeyCombo {
+    KeyCombo {
+        modifiers: Modifiers {
+            meta: cfg!(target_os = "macos"),
+            ctrl: !cfg!(target_os = "macos"),
+            ..Modifiers::default()
+        },
+        key: Key::Char('a'),
+    }
+}
+
+pub fn named(key: NamedKey) -> KeyCombo {
+    KeyCombo {
+        modifiers: Modifiers::default(),
+        key: Key::Named(key),
+    }
+}
+
 pub fn parse_combo(input: &str) -> Result<KeyCombo, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -250,6 +269,15 @@ pub fn parse_combo(input: &str) -> Result<KeyCombo, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn select_all_uses_the_host_meta_key() {
+        let combo = select_all();
+        assert_eq!(combo.key, Key::Char('a'));
+        assert_eq!(combo.modifiers.meta, cfg!(target_os = "macos"));
+        assert_eq!(combo.modifiers.ctrl, !cfg!(target_os = "macos"));
+        assert_eq!(named(NamedKey::Enter).key, Key::Named(NamedKey::Enter));
+    }
 
     #[test]
     fn parses_modifier_combo() {

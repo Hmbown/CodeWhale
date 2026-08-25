@@ -256,6 +256,9 @@ pub fn tool_catalog() -> Vec<Value> {
                     "index": { "type": "integer", "minimum": 0, "description": "Element index from computer_app_state; click-focus this element before typing (requires app)." },
                     "x": coord("X in frame pixels (or app-state image pixels when app is set); with y, click-focus before typing"),
                     "y": coord("Y in frame pixels (or app-state image pixels when app is set); with x, click-focus before typing"),
+                    "clear": { "type": "boolean", "description": "Select-all then delete before typing so the field is replaced rather than appended." },
+                    "submit": { "type": "boolean", "description": "Press Return after the text lands." },
+                    "activate": { "type": "boolean", "description": "Fallback only: briefly raise a covered window so keys that would otherwise be deferred actually land." },
                     "frame": frame_param()
                 },
                 "required": ["text"],
@@ -267,7 +270,11 @@ pub fn tool_catalog() -> Vec<Value> {
             "description": "Press a key or combination, e.g. \"enter\", \"ctrl+s\", \"cmd+shift+t\", \"alt+f4\", \"back\" (phone back), \"apphome\" (phone home). Modifiers: ctrl, alt, shift, meta/cmd/win. Returns a fresh screenshot. With app set, the keystroke goes to that app in the background (macOS).",
             "inputSchema": {
                 "type": "object",
-                "properties": { "keys": { "type": "string" }, "app": app_param() },
+                "properties": {
+                    "keys": { "type": "string" },
+                    "app": app_param(),
+                    "activate": { "type": "boolean", "description": "Fallback only: briefly raise a covered window so the key lands." }
+                },
                 "required": ["keys"],
                 "additionalProperties": false
             }
@@ -422,11 +429,14 @@ fn get_usize_opt(args: &Value, key: &str) -> Result<Option<usize>, String> {
 }
 
 fn parse_type_text(args: &Value) -> Result<&str, String> {
-    let text =
-        get_str_opt(args, "text").ok_or_else(|| "missing required argument `text`".to_string())?;
+    let clear = get_bool_opt(args, "clear", false);
+    let text = get_str_opt(args, "text").unwrap_or("");
+    if !has_arg(args, "text") && !clear {
+        return Err("missing required argument `text`".to_string());
+    }
     let count = text.chars().count();
-    if count == 0 {
-        return Err("text must not be empty".to_string());
+    if count == 0 && !clear {
+        return Err("text must not be empty (pass clear=true to empty a field)".to_string());
     }
     if count > MAX_TYPE_CHARS {
         return Err(format!(
@@ -860,6 +870,8 @@ impl Session {
             );
         }
         let text = parse_type_text(args)?;
+        let clear = get_bool_opt(args, "clear", false);
+        let submit = get_bool_opt(args, "submit", false);
         let count = text.chars().count();
         let focus = if has_arg(args, "x") || has_arg(args, "y") {
             if !has_arg(args, "x") || !has_arg(args, "y") {
@@ -876,14 +888,41 @@ impl Session {
                 .click(p, Button::Left, 1, 0)
                 .map_err(|e| e.to_string())?;
             std::thread::sleep(Duration::from_millis(TYPE_FOCUS_SETTLE_MS));
-            self.driver.type_text(text).map_err(|e| e.to_string())?;
-            return Ok(self.after_action(format!(
-                "clicked at device ({:.0}, {:.0}) then typed {count} characters",
-                p.x, p.y
-            )));
         }
-        self.driver.type_text(text).map_err(|e| e.to_string())?;
-        Ok(self.after_action(format!("typed {count} characters")))
+        if clear {
+            self.driver
+                .key(&keys::select_all())
+                .map_err(|e| e.to_string())?;
+            self.driver
+                .key(&keys::named(keys::NamedKey::Backspace))
+                .map_err(|e| e.to_string())?;
+        }
+        if !text.is_empty() {
+            self.driver.type_text(text).map_err(|e| e.to_string())?;
+        }
+        if submit {
+            self.driver
+                .key(&keys::named(keys::NamedKey::Enter))
+                .map_err(|e| e.to_string())?;
+        }
+        let mut bits = Vec::new();
+        if let Some(p) = focus {
+            bits.push(format!("clicked at device ({:.0}, {:.0})", p.x, p.y));
+        }
+        if clear {
+            bits.push("cleared the field".into());
+        }
+        if count > 0 {
+            bits.push(format!("typed {count} characters"));
+        }
+        if submit {
+            bits.push("pressed Return".into());
+        }
+        Ok(self.after_action(if bits.is_empty() {
+            "typed 0 characters".into()
+        } else {
+            bits.join(" then ")
+        }))
     }
 
     fn tool_key(&mut self, args: &Value) -> Result<ToolOutcome, String> {
@@ -1269,13 +1308,21 @@ impl Session {
             "type" => {
                 let text = parse_type_text(args)?.to_string();
                 let (index, point) = type_focus_point(args, Some(&snapshot))?;
-                ElementAction::Type { text, index, point }
+                ElementAction::Type {
+                    text,
+                    index,
+                    point,
+                    clear: get_bool_opt(args, "clear", false),
+                    submit: get_bool_opt(args, "submit", false),
+                    activate: get_bool_opt(args, "activate", false),
+                }
             }
             "key" => {
                 let keys = get_str_opt(args, "keys")
                     .ok_or_else(|| "`keys` is required for action=key".to_string())?;
                 ElementAction::Key {
                     combo: keys::parse_combo(keys)?,
+                    activate: get_bool_opt(args, "activate", false),
                 }
             }
             "drag" => {
@@ -1375,13 +1422,21 @@ impl Session {
             "computer_type" => {
                 let text = parse_type_text(args)?.to_string();
                 let (index, point) = type_focus_point(args, Some(&snapshot))?;
-                ElementAction::Type { text, index, point }
+                ElementAction::Type {
+                    text,
+                    index,
+                    point,
+                    clear: get_bool_opt(args, "clear", false),
+                    submit: get_bool_opt(args, "submit", false),
+                    activate: get_bool_opt(args, "activate", false),
+                }
             }
             "computer_key" => {
                 let keys = get_str_opt(args, "keys")
                     .ok_or_else(|| "missing required argument `keys`".to_string())?;
                 ElementAction::Key {
                     combo: keys::parse_combo(keys)?,
+                    activate: get_bool_opt(args, "activate", false),
                 }
             }
             "computer_drag" => {
@@ -1769,7 +1824,12 @@ mod tests {
             _ => None,
         });
         match act {
-            Some(("Notes", ElementAction::Type { text, index, point })) => {
+            Some((
+                "Notes",
+                ElementAction::Type {
+                    text, index, point, ..
+                },
+            )) => {
                 assert_eq!(text, "query");
                 assert_eq!(*index, Some(0));
                 assert_eq!(*point, None);
@@ -1797,7 +1857,9 @@ mod tests {
             _ => None,
         });
         match act {
-            Some(ElementAction::Type { text, index, point }) => {
+            Some(ElementAction::Type {
+                text, index, point, ..
+            }) => {
                 assert_eq!(text, "hi");
                 assert_eq!(index, None);
                 assert_eq!(point, Some((100.0, 50.0)));
@@ -1822,7 +1884,9 @@ mod tests {
             _ => None,
         });
         match act {
-            Some(ElementAction::Type { text, index, point }) => {
+            Some(ElementAction::Type {
+                text, index, point, ..
+            }) => {
                 assert_eq!(text, "hi");
                 assert_eq!(index, None);
                 assert_eq!(point, None);
@@ -1865,12 +1929,55 @@ mod tests {
             _ => None,
         });
         match act {
-            Some(ElementAction::Type { text, index, point }) => {
+            Some(ElementAction::Type {
+                text, index, point, ..
+            }) => {
                 assert_eq!(text, "hello");
                 assert_eq!(index, Some(0));
                 assert_eq!(point, None);
             }
             other => panic!("expected Type with index, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn type_clear_and_submit_flags_reach_the_element_action() {
+        use crate::drivers::mock::ElementCall;
+        let (mut s, calls) = element_session();
+        assert!(
+            !s.call("computer_app_state", &json!({"app": "Notes"}))
+                .is_error
+        );
+        let out = s.call(
+            "computer_type",
+            &json!({
+                "app": "Notes",
+                "index": 0,
+                "text": "query",
+                "clear": true,
+                "submit": true
+            }),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        let recorded = calls.borrow();
+        let act = recorded.iter().find_map(|c| match c {
+            ElementCall::Act(_, action) => Some(action.clone()),
+            _ => None,
+        });
+        match act {
+            Some(ElementAction::Type {
+                text,
+                clear,
+                submit,
+                activate,
+                ..
+            }) => {
+                assert_eq!(text, "query");
+                assert!(clear);
+                assert!(submit);
+                assert!(!activate);
+            }
+            other => panic!("expected Type with clear/submit, got {other:?}"),
         }
     }
 }

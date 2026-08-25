@@ -155,9 +155,7 @@ pub struct ElementCaps {
 pub enum ElementAction {
     /// AXPress on the indexed element; falls back to a background click at
     /// its center.
-    Press {
-        index: usize,
-    },
+    Press { index: usize },
     Click {
         x: f64,
         y: f64,
@@ -167,25 +165,27 @@ pub enum ElementAction {
     },
     /// Write `value` to the indexed element with read-back verification;
     /// text-field fallback is focus + select-all + type.
-    SetValue {
-        index: usize,
-        value: String,
-    },
+    SetValue { index: usize, value: String },
     /// Type into current focus. Optional `index`/`point` click-focus first
     /// with a posted mouse click (not AXPress) so web renderers receive
-    /// keystrokes.
+    /// keystrokes. `clear` select-alls then deletes first; `submit` presses
+    /// Return after the text lands; `activate` briefly raises the window
+    /// (visible fallback for apps that drop occluded keys).
     Type {
         text: String,
         index: Option<usize>,
         point: Option<(f64, f64)>,
+        clear: bool,
+        submit: bool,
+        activate: bool,
     },
     Key {
         combo: KeyCombo,
+        /// Briefly raise the window before posting the key. Default false.
+        activate: bool,
     },
     /// Open the indexed element's menu (AXShowMenu / secondary action).
-    Menu {
-        index: usize,
-    },
+    Menu { index: usize },
     /// Scroll by whole pages at the indexed element or a point; the receipt
     /// reports whether the window actually moved.
     Scroll {
