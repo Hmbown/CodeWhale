@@ -3,7 +3,7 @@
   "checkpoint_id": "01M0VVH0FV2CMPF34T96KSCQWV",
   "strategy": "manual-commit",
   "branch": "codex/v0912-integration-20260823",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     "CHANGELOG.md",
     "Cargo.lock",
@@ -31,13 +31,27 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 190,
-    "cache_creation_tokens": 551906,
-    "cache_read_tokens": 20556506,
-    "output_tokens": 105785,
-    "api_call_count": 95
+    "input_tokens": 198,
+    "cache_creation_tokens": 559283,
+    "cache_read_tokens": 23112107,
+    "output_tokens": 113571,
+    "api_call_count": 99,
+    "subagent_tokens": {
+      "input_tokens": 24,
+      "cache_creation_tokens": 20479,
+      "cache_read_tokens": 1912659,
+      "output_tokens": 444,
+      "api_call_count": 12
+    }
   }
 }

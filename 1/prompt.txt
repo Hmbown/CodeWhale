@@ -1,0 +1,200 @@
+Ok please continue working on CodeWhale and ultracode
+
+---
+
+Yes take it please sure
+
+---
+
+I mean, it's fine. I just... you can put fable five and Opus five. I don't really care if you wanna just keep it accurate. I mean, it's probably good for us to keep record of which models do what so we can start to figure out, like, who does the best stuff and where we have to fix stuff. You know?
+
+---
+
+Also look at the provider screen there’s no reason for senseflow to get a special button lol
+
+---
+
+Also did we fix the antigravity thing if possible?
+
+---
+
+Fix it now lol just on main if we can
+
+---
+
+ok got it ummm i don't want to take that remote control feature that dude made
+
+---
+
+and can we also send out other agents to look for more model / provider issues and what we need to do to have it be consistently correct?
+
+---
+
+ok can we actually just like ...... fix everything then? like make a list of what to do to keep fixing for this in codewhale ops? and also get rid of old unnecessary files that exist in codewhale ops?
+
+---
+
+<task-notification>
+<task-id>aac97ce6f7c8b4516</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/d03b7366-8d29-42d7-a7bf-a2d7afbc864a/tasks/aac97ce6f7c8b4516.output</output-file>
+<status>completed</status>
+<summary>Agent "Triage stale GitHub issues" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All verification is done. Here is the report.
+
+---
+
+# Codewhale issue-hygiene triage — 129 open issues
+
+**Verified against** local clone `/Volumes/VIXinSSD/CW/codewhale`, branch `codex/v0912-integration-20260823` @ `fc02c2b36`, and `origin/main` @ `3a50fdca2`. No issue or PR was mutated; no file was edited.
+
+**Read this first.** Every bucket-A fix lives on the integration branch. Thirteen of the nineteen are *also* on `main` (carried by the rebased PR #5606); **six are branch-only and will vanish from `main` if the branch reconciliation goes wrong**. The `on main` column below says which. Closing a branch-only issue before the branch lands on `main` is a claim you can't back.
+
+---
+
+## Bucket A — Demonstrably done, safe to close
+
+| Issue | Title (truncated) | Evidence | On main | Recommended action |
+|---|---|---|---|---|
+| #5543 | Persist child tool approvals through the durable receipt path | `30c55f28b` (merge of PR #5584, @cyq1017) + receipt `47ceab9bb`. `crates/tui/src/tools/subagent/mod.rs:2676` `with_approval_receipt_store`, `:3000` propagation, `:14693` use; `crates/tui/src/approval_log.rs:27` `ApprovalReceipt::Asked` | **NO** | Close **after** PR #5584 is marked ready and merged upstream — the code is on the branch only, and the PR is still `draft`. Credit @cyq1017. |
+| #5548 | Embedded Web: app.test.mjs coverage for the workflow dispatch-rejection summary | `211789dbf`. `crates/tui/src/runtime_web/app.test.mjs:51` and `:67` (singular + plural cases) | YES | Close |
+| #5552 | `codewhale doctor --fix`: offer and apply automatic repairs with consent | `c9c067c26`. `crates/tui/src/doctor_fix.rs:187` `plan_fixes`; wiring at `crates/tui/src/lib.rs:682-689` incl. `--yes` | YES | Close |
+| #5553 | `/context`: attribute token cost to tool definitions and each MCP server | `bc4012181` (PR #5603, @wuisabel-gif), merged as `3451c0f58`. `crates/tui/src/tui/context_inspector.rs:569` `push_tool_schema_costs`, `:602` per-MCP-server totals | **NO** | Close after branch lands; also close PR #5603 upstream (already merged into the branch) |
+| #5555 | Clipboard export: last-copy backup file named when clipboard fails | `e9c310f5a`. `crates/tui/src/commands/groups/session/export.rs:239-248` `write_last_copy` → `&lt;home&gt;/exports/last-copy.md`; failure paths at `:227` | YES | Close |
+| #5562 | Stale write-claims lock sub-agents out; verifier role contradicts itself | `2b50126cb` + `360bff053`. All three reported bugs: `crates/tui/src/tools/subagent/coord/ledger.rs:576` `release_stale_claims`; `crates/tui/src/tools/subagent/mod.rs:4940` `is_live_coordination_owner`, `:4203` peer gate (bug 2's cause); role docs `360bff053` (bug 3) | YES | Close, thank @slowly247 |
+| #5564 | docs: REBRAND.md still lists api.deepseeki.com as a "China fallback" | `f65ca0970`. `docs/REBRAND.md:66` now reads "not an official DeepSeek endpoint" | YES | Close, thank @jdstark4 |
+| #5567 | R6: fleet-wide cost/token ceiling — accumulator, admission gate, alert | `b2d0212ed` + `99246ef3e`. `crates/protocol/src/fleet.rs:846` `FleetUsageCeiling`; accumulator `crates/tui/src/fleet/ledger.rs:205`; alert class `crates/tui/src/lib.rs:1663`; test `fleet/ledger.rs:2588` `usage_ceiling_breach_pauses_run_refuses_admissions_and_alerts_once` | YES | Close — **but flag**: `max_total_tokens` only. All four acceptance bullets are met, yet the title says "cost/token" and there is no currency ceiling. If a $ ceiling is wanted, file it fresh rather than reopening. |
+| #5571 | C5: request-extension invariant — debug-assert prefix continuity | `492a3c6ad`. `crates/tui/src/core/engine/turn_loop.rs:1120-1131`: `#[cfg(debug_assertions)]` fires on `Drift`/`Repinned` with no declared change, first-check exempt | YES | Close — **minor gap**: acceptance also asked for two tests; the commit adds none. |
+| #5572 | T4: MCP OAuth expiry looks like a broken server | `a1fc9cab0`. `crates/tui/src/mcp/streamable_http.rs:47-51` (retry-once-after-refresh, then login hint); classifier `crates/tui/src/mcp/oauth.rs:50`, `:233`; test `oauth.rs:1216` | YES | Close |
+| #5577 | DeepSeek session at 842k/1M never auto-compacted | `807aac5c1` (typed `CompactionDecision`, refusals named once per turn) + `fda5d245f` (meter honors billed prompt). Reproduced scenario pinned at `crates/tui/src/compaction.rs:2382` `billed_842k_on_a_1m_window_compacts_despite_a_small_estimate` | YES | Close |
+| #5578 | Cost surfaces only move at TurnComplete | `e4cf03124`. `crates/tui/src/tui/app.rs:783-785` `pending_turn_cost`/`_cny` with the display-only + clear-at-TurnComplete contract documented in place; tests in `app/tests.rs` | YES | Close |
+| #5582 | Workflow owner snapshots collapse Degraded into Completed | `30cbbf4e2`. `crates/tui/src/tools/workflow/mod.rs:241` — `WorkflowRunStatus::Degraded =&gt; OwnerState::Degraded` (first-class terminal state); rationale for the graph-level mapping at `crates/tui/src/work_graph/reducer.rs:323-327` | YES | Close, thank @jbovard2016 |
+| #5583 | Workflow responseSchema failures need bounded repair and raw-output receipts | `a2740af60` (bounded repair, typed receipts) + `de4e60180` (durable artifacts) + `d959068b6` (parallel partial success). `crates/tui/src/tools/workflow/mod.rs:293`, `:341`, `:588`; artifacts `workflow/report.rs:43`, `:54` | YES | Close, thank @jbovard2016 |
+| #5585 | Test `setup_confirm_toast_names_secret_store_and_global_scope` dies by stack overflow | `b3def2cb9` + `63b6d318c`. `crates/config/src/lib.rs:5140` and `crates/tui/src/config.rs:3975` (16 MiB parse threads); test at `crates/tui/src/tui/ui/tests.rs:7793` now runs on an explicit 16 MiB thread | **NO** | Close after branch lands |
+| #5595 | Read-only inspection children reject in-workspace absolute `git -C` | `792cd0b3f` + Windows follow-up `d82e11246`. `crates/tui/src/command_safety.rs` (canonical-resolution operand gate, stable sub-rule prefixes), `tools/execution_envelope.rs`, `tools/subagent/mod.rs`; tests in `tools/subagent/tests.rs` | YES | Close |
+| #5597 | Detached interactive agents lose post-turn usage from session cost totals | `8343c89d5`. `crates/tui/src/cost_status.rs:544` `RuntimeUsageLease`, `:713` `acquire_runtime_usage_lease`, `:524` hashed response identity for exactly-once | YES | Close |
+| #5601 | 全新安装时，第一次配置 MiniMax 和 Xiaomi 模型，出现返回404 | `7e0950a1c`. `crates/tui/src/client.rs:1447-1450` `KeyProbeOutcome::{Verified,Unverifiable}`, `:1470`/`:1524` 404/405 → Unverifiable, 401/403 still block; test `client.rs:9241` | **NO** | Close after branch lands, thank @Brook-WZ |
+| #5607 | Auto update for Opencode Go model list | `93e0ffd24`. `crates/tui/src/client.rs:2897` `provider_serves_its_own_catalog`, gate applied at `:2240`; test `:9452` | **NO** | Close after branch lands, thank @diegovskytl. **Caveat**: the commit message states it was not verified against a live OpenCode Go endpoint. |
+
+---
+
+## Bucket B — Fold into a newer issue
+
+| Issue | Title (truncated) | Evidence | Recommended action |
+|---|---|---|---|
+| #4785 | Dead-code sweep: 464 `#[allow(dead_code)]` attributes are hiding drift | Its own author refuted the headline metric in comment 5: "stripping all 428 strippable attributes and recompiling showed most of them were suppressing nothing at all," replacing it with `docs/DEAD_CODE_INVENTORY.md` (513 compiler-verified items). #5587 is the audited continuation of that same work with sites tiered. Current tree: 384 `allow(dead_code)` occurrences | **Survivor #5587.** Close #4785, carrying forward the ratchet-ceiling contract, the `DEAD_CODE_INVENTORY.md` pointer, and the 2026-08-07 "don't over-invest in Go-bound subsystems" overlay |
+| #3306 | v0.9.3 Refactor: converge runtime ownership, delete duplication, ship one executable | Stale premise: its ownership map cites `crates/tui/src/ui.rs` at 18,911 lines — **that file no longer exists**. Its own last comment claims authoritative-epic status, but #5316 (EPIC-005) took that role with merged PRs #5328/#5506 and #5525 in flight. v0.9.3 milestone shipped; tree is at 0.9.12 | **Survivor #5316.** Close #3306 as superseded |
+| #5093 | Extract Responses dialect policy behind a language-neutral conformance harness | Same seam, same file, same evidence as #5092: both extract `build_responses_body_for_provider`'s provider-enum branches in `crates/tui/src/client/responses.rs` behind a typed dialect profile. #5093's only additive content is the golden-fixture conformance harness | **Survivor #5092.** Close #5093, pasting its fixture-harness section into #5092 verbatim first |
+| #5249 | Epic: v0.9.5 build-time lane — stop the monolith tax | #5316's body names itself "the direct answer to the compilation-time discussion in #4991"; #5249 cites the same #4991 thread. #4991 is now closed; #5249 targeted v0.9.5 (seven releases ago) and its own overlay concedes the crate split is the structural answer | **Partial fold only.** Move the decomposition half into #5316; the build-SHA commit invalidation, 25 re-linking test binaries, and fat-LTO release gate items are independent of crate boundaries and must be re-filed or retained. **Not on the close list** — this needs a human scope call |
+
+**Explicitly checked and NOT duplicates** (do not merge these; they read clusterable by keyword only): #5586 / #5580 / #5316 (three different axes: files-within-tui, event_loop specifically, and code-out-of-tui — #5586's body states event_loop is #5580's); #5578 / #5581 (#5581 lists cost under "Already live — fixed in #5578"); #4166 / #4168 / #4173 / #5588 / #4720; #5103 / #5443 (#5103 is a Tier-1 rename absent from #5443's checklist — add it as a line item); #3358 / #3361 / #3145 (a dependency chain, not overlap); #1984 / #1989 / #1990 / #2968; #790 / #5482 / #5519 / #5290; #3957 / #3954 (disjoint files — but they belong under the live decomposition tracker, not dead #3306); #3851 (verified live: `TurnScratch` at `crates/tui/src/prompt_zones.rs:291` is test-only, and `commands/groups/debug/cache.rs:498` literally prints "Phase 1 scaffolding — not yet wired into engine"; not in #5587's enumerated tiers, so folding loses it).
+
+---
+
+## Bucket C — Partially done (stay open; the value is an accurate comment)
+
+| Issue | Title (truncated) | Evidence | What remains |
+|---|---|---|---|
+| #5549 | Bash tool: wait on multiple background task ids + named kill | `7be48ca33`. `crates/tui/src/tools/shell.rs:5470`, `:5545` `until=any\|all` | The named-kill half. The commit says so explicitly: background tasks have no name/label source yet, so cancel-by-name needs a label mechanism first |
+| #5550 | `@path:START-END` line-range mentions and hidden-file prefix in the picker | `6ae8bf119`. `crates/tui/src/tui/file_mention.rs` (range splitter, clamping, `beyond-eof`) | The hidden-file picker toggle. Commit states it needs the Workspace discovery walker |
+| #5557 | `/import-claude`: migrate ~/.claude permissions, env vars, MCP, hooks, paths | `d05f604e2`. `crates/tui/src/import_claude.rs` (531 lines); MCP → `/mcp import` consent, env → unapplied portable bundle | **Permissions and hooks are read and listed, not mapped.** `import_claude.rs:14` says hooks and paths are "listed as manual follow-ups"; `:104-110` capture `permissions.{defaultMode,allow,ask,deny}` for display only. No permissions→approval-policy mapping ships |
+| #5567-adjacent #5568 | S1: sandbox reads full disk in every posture — opt-in deny-list | `58b0c523f`. Config key `sandbox_denied_read_paths`; Seatbelt last-match-wins deny rules, bubblewrap tmpfs/`/dev/null` masking, live `sandbox-exec` acceptance test | **Default is empty**, so out of the box a ReadOnly child still reads `~/.ssh`. Acceptance bullet 2 ("ReadOnly sessions never offer workspace-external reads unless explicitly allowed") is unmet. Decide whether a default list ships |
+| #5569 | S2: hard-link write escape — workspace-write tools must resolve links | `a7561d95f`. `crates/tui/src/utils.rs`, fail-closed link-count check in `write_atomic_workspace` | **Unix only.** Windows is unguarded. The commit's stated reason ("no std link-count introspection") is true of `std` but the repo already carries a Windows path: `crates/tui/src/lib.rs:1361-1375` uses `GetFileInformationByHandle` for the `.env` guard. Also, symlinks (named in the acceptance) are not covered by this commit |
+| #5579 | Plugin UX parity with Claude Code | `13cd2fae1`. `crates/tui/src/tui/ui/apply.rs` — one startup status hint naming plugin load-failure count | Three of four gaps untouched: proactive in-context recommendation (gap 1), hot-reload / on-disk-change nudge (gap 2's real ask), model-assisted ranking (gap 3), plugin-skill description parity (gap 4) |
+| #5586 | Decompose the mega files | Twelve `(#5586)` commits on the branch (`0d2cbde67`, `ef3775c6a`, `523a4ac1f`, `9219cc8e1`, `37fd1f8a6`, `5fad9d59f`, `e9e4f8729`, `546adadbc`, `9f9e52847`, `6fb3172b4`, plus workflow slices) | Measured now: `lib.rs` **13,125** (title says 18.7k), `config.rs` **10,217** (12.3k), `client.rs` **10,592** (11.1k), `runtime_threads.rs` **8,316** (9.3k). Real progress, no file at target. **Title numbers are stale and should be refreshed** |
+| #5588 | Provider neutrality: 18 DeepSeek-exclusive gates | `b88462574`. Three gates fixed (NVIDIA NIM env leak, shared error copy, `DEFAULT_OPENAI_MODEL`) | 15 of 18 remain. Confirmed still present: the balance chip is DeepSeek-gated — `crates/tui/src/config.rs:2392`, `crates/tui/src/tui/ui/apply.rs:1513` `should_fetch_deepseek_balance`, and the test `crates/tui/src/config/tests.rs:11131` is literally named `status_item_balance_available_only_for_deepseek_providers` |
+| #5589 | Fleet config view: Enter loops back, model switching is buried | `d89c26f39` (PR #5604, @wuisabel-gif). `m` → model picker: `crates/tui/src/tui/views/fleet_roster.rs:254`, `views/fleet_detail.rs:269` `open_model_picker`, `ui/handlers.rs:1270`; footer/row affordance `fleet_roster.rs:207` | Complaints 2 and 3 addressed. **Complaint 1 (the Enter loop) is not**: `fleet_roster.rs:240` still routes `Enter`/`s` to `FleetRosterOpenSetupRequested`, unchanged by the commit. Ask the reporter whether `m` is enough |
+| #5528 | Workflow runs fail silently: dispatch/schema errors never surface in the TUI | Embedded web surfaces a summary at `crates/tui/src/runtime_web/app.mjs:459-465`; schema receipts landed under #5583 | **The TUI half is not built.** Grepping `crates/tui/src/tui/` for a workflow failure toast or status line returns nothing. See the phantom-receipt section below. Its point 2 (run-state visualization) is the same deliverable as #4754 item 1 — fold that point into #4754 and keep #5528 for the silent-failure bug |
+| #3975 | v0.9.3 Tools: expose LSP navigation, references, rename, code actions | `crates/tui/src/tools/lsp.rs:40` — operations enum is `["diagnostics","read_lints","symbols","definition","references"]` | **rename** and **code actions** are missing. (Note: the old `feat(#3975)` commit `135fffef1` is not an ancestor of the branch or main; the shipped tool is a different implementation) |
+| #5479 | Fleet/agents: first-class sub-agent and workflow management in the TUI | `175ecfdc3` "first slice of the agents roster — every agent this session, receipts-only" (on branch) | Live list, per-agent status/elapsed/tokens, focus, message, stop, history-over-time |
+| #5443 | Epic: retire the deepseek-tui-era identifiers | `78a3004ec` `fix(tui): warn on legacy runtime token env (#5443)` | Tier 1 internals and Tier 3 storage-key migration. `DeepSeekClient` still has ~279 references in `crates/` (that rename is #5103, and it is **absent from #5443's Tier 1 checklist** — add it) |
+| #1754 | about execute tool_call, let AI select shell and lang | `29625945d` `feat: add ShellDispatcher` (names `Closes #1690`, not #1754). `crates/tui/src/shell_dispatcher.rs:10-12` shell detection, per-shell quoting; prompt tells the model the shell at `crates/tui/src/prompts.rs:191-196` | Expected behaviors 1 and 3 are met. The per-command `shell: powershell` declaration (behavior 2) and the wrong-syntax detect-and-rewrite loop (behavior 4) are not. Worth a comment saying so and asking @superzmy whether the environment block suffices |
+| #1097 | FreeBSD support (npm binary / pkg) | `be676502d`. `packaging/freebsd/README.md:3` and `docs/INSTALL.md:676` both say "resolves #1097"; `.github/workflows/release-artifacts.yml:56-58` validates `x86_64-unknown-freebsd` via `cargo check` | **Both asks in the issue are declined by design**: no prebuilt asset, and `npm i -g` still errors on FreeBSD deliberately. The delivered answer is a documented `cargo install` path. Maintainer said "leaving open and linked" on 2026-08-07. Closing this is a product call, not an evidence call |
+| #855 | Feature request: Automatically switch profiles to continue | `662a459ee`. `App::advance_fallback` `crates/tui/src/tui/app.rs:5800-5856`; `ProviderChain::advance` `crates/config/src/lib.rs:1507`; config key `fallback_providers` `crates/tui/src/config.rs:2942`; 429 is a recoverable `ErrorCategory::RateLimit` (`error_taxonomy.rs:184`) | The chain is `Vec&lt;ProviderKind&gt;` — **provider-level, not profile-level**. Rotating between multiple accounts on the *same* provider (the actual ask) is not served |
+| #790 | Improve i18n coverage for commands, modals, and widgets | Approval dialogs done (40 `MessageId::` hits); context menu localized by `e2d6d2253`; `339952ef0` covered tool-family labels | The config modal is untouched: `crates/tui/src/config_ui.rs` has **0** `MessageId::` references; the composer has 1 |
+
+---
+
+## Bucket D — Stale / obsolete premise
+
+| Issue | Title (truncated) | Evidence | Recommended action |
+|---|---|---|---|
+| #5290 | fix(web): restore clickable controls on non-English routes | @Lstarsky0 swept `main` at `cfc2f2b13` with an `elementFromPoint` hit-test harness across `a[href] / button / select / [role=button] / input`, matrix en/zh/ja/ru/id × 5 viewports × home + `/install`, and **could not reproduce**. Maintainer rolled it twice noting only "deployed /zh pass is still owed" | **Rescope, don't close.** The remaining obligation is a verification pass on the deployed site, not a code fix. Maintainer explicitly wrote "nothing here is closed or dropped" — so this is not mine to put on a close list |
+| #4720 | Provider/model setup and auto-switching feel under-baked | The issue asked for a written assessment first; that assessment was delivered in its single comment (against candidate `634d9f692`) and found the seam sound | Close-as-answered candidate, or rescope to the residual first-run flow work. Human call |
+| #1569 | PR: Integrate RTK filtering into shell tool pipeline | Body is a bare `.md` attachment link with zero prose and zero comments (filed 2026-05-13). `grep -ril rtk crates/` → **zero hits**; no PR was ever opened. Adjacent-but-different work exists: `crates/tui/src/tools/shell_output.rs` `truncate_with_meta` / `summarize_output` | Ask @JiangWeiHn to open a real PR or close as unactionable. See the flag section — this is a proposal filed in the wrong place, not spam |
+| #2327 | COPYRIGHT concerns over UNOFFICIAL codewhale extensions on vscode marketplace | Legitimate report, but **no code change closes it**: `extensions/vscode` exists as an unpublished local scaffold; the remedy is a Marketplace trademark report plus shipping the official extension (#2828). Maintainer already answered twice | Move to a discussion or link to #2828 and close the issue-tracker entry. Not an engineering task |
+
+---
+
+## Bucket E — Genuinely open and still valid (87 issues)
+
+**0.9.12 lane, unstarted or in-flight (13):** 5551 (PR #5608 open, mergeable, unmerged), 5556, 5566-adjacent 5573 (tracker — keep open), 5575, 5580, 5581, 5587, 5605, 5529, 5531, 5532, 5533 (last three are PRs #5592/#5593/#5594, all `CONFLICTING`), 5482.
+
+**Architecture / refactor epics (9):** 5316, 5586-adjacent 3957, 3954, 4173, 4166, 4167, 4168, 4161, 3389.
+
+**Tools not built (7):** 3358, 3361, 3145, 3977, 3980, 3981, 4066.
+
+**Context / compaction / privacy (5):** 4394, 4069, 4326, 5059, 5061.
+
+**Responses API + providers (6):** 5092, 5094, 5103, 5085, 1330, 3751.
+
+**Fleet / subagents / workflows (7):** 4754, 5271, 5269, 5268, 5263, 3210, 2094.
+
+**UX / TUI (10):** 4703, 4721, 5522, 5550-adjacent, 2342, 2323, 1261, 1917, 436, 4847.
+
+**Web / i18n / docs (5):** 5519, 3276, 1985, 1986, 1977.
+
+**Platform / sandbox / packaging (5):** 4955, 2617, 2535, 4986, 5226.
+
+**Remote workbench program — dormant, all v0.8.46-era (4):** 1984, 1989, 1990, 2968. Nothing landed (`docs/` has only `CNB_MIRROR.md`). Recommend one umbrella + explicit deprioritization rather than folds.
+
+**Release / process (4):** 4650, 2025, 5062, 5249.
+
+**Preserved-branch follow-ups (4):** 4663, 4664, 4666, 4667.
+
+**Needs-info, author never engaged (3):** 4568 (36d, only the intake bot ever commented), 4564 (36d, and its premise is partly wrong — there is no `--toolsets` flag, it is `--allowed-tools` at `crates/tui/src/cli_args.rs:267`, and `CODEWHALE_MODEL` already exists at `:711`), 4956 (27d, reporter never replied once). All three got `needs-info` in the same bulk pass on 2026-08-12, so label age is not a staleness signal here. **Below a &gt;30d bar for 4956; I am not recommending closure on any of them.**
+
+**Security / other (5):** 3368, 3999, 3997, 3851, 5290-adjacent 5519, 5443, 855, 790, 1097, 1754, 5528 (counted in C above where partial).
+
+---
+
+## Flags
+
+### Spam / off-topic
+**None found among the 129 open issues.** Every open issue is about Codewhale. Two are non-engineering and should leave the code tracker: **#2327** (trademark/Marketplace enforcement — no code change closes it) and **#1569** (a real proposal — "RTK", a shell-output compression scheme — filed as an issue with a PR body attached, no PR ever opened, zero comments in 14 weeks).
+
+For the record: the previous handoff's claim about **#5600** is confirmed false in the direction you described. #5600 is not in the open set at all, and `git log --all --grep=5600` finds no implementing commit.
+
+### Phantom receipt — CHANGELOG claims a fix the code does not deliver
+**#5528.** The `[Unreleased]` section reads:
+
+&gt; "...raw-output receipts persisted as artifacts that survive reload, and failures surfaced instead of null success (#5528)."
+
+The #5583 work it is attached to is real. The #5528 citation is not earned:
+- `git log --all --grep="#5528"` returns **no implementing commit** — only `de6a29f18` (a changelog correction) and two `#5548` test commits.
+- #5528's primary ask is "a failed workflow run must be loud… toast/status line in the TUI the moment a run transitions to `failed`". Grepping `crates/tui/src/tui/` for any workflow failure toast or status line returns **nothing**.
+- What does exist is on a different surface: the *embedded web* runtime renders "N task dispatch(es) were rejected" at `crates/tui/src/runtime_web/app.mjs:459-465` (that is what #5548 added a test for), and the schema-error path is typed. The issue is about **dispatch** errors and **TUI** visibility; the shipped work covers **schema** errors and the **web** surface.
+
+Recommendation: strike `(#5528)` from that CHANGELOG line, or narrow it to name the web surface. Do not close #5528.
+
+### Two narrowness notes worth carrying into the release notes
+- **#5567** shipped as `max_total_tokens` only. An earlier draft of the release note claimed it bounded "spend"; it bounds tokens.
+- **#5569** is `#[cfg(unix)]`. The commit's justification ("no std link-count introspection" on Windows) is accurate about `std` but incomplete — `crates/tui/src/lib.rs:1361` already does Windows link-count introspection via `GetFileInformationByHandle` for the `.env` guard, so the Windows half is reachable.
+
+---
+
+## Proposed close list
+
+Conservative. Nineteen bucket-A issues plus three clean bucket-B folds.
+
+```
+3306, 4785, 5093, 5543, 5548, 5552, 5553, 5555, 5562, 5564, 5567, 5571, 5572,
+5577, 5578, 5582, 5583, 5585, 5595, 5597, 5601, 5607
+```
+
+**Sequencing constraint:** six of these are branch-only and are not yet on `main` — **#5543, #5553, #5585, #5601, #5607** (and #5543 additionally depends on PR #5584 being marked ready by @cyq1017). Close those five only after `codex/v0912-integration-20260823` reconciles with `main`. The other seventeen are safe to close today.
+
+**Deliberately left off, with reasons:** #5249 (partial fold — the build-time items need a human scope call), #5290 (maintainer said nothing is dropped; the owed work is a deployed-site verification pass), #1097 (both literal asks were declined by design — closing is a product decision), #4720 (close-as-answered is defensible but it is a judgment call, not evidence), #4956/#4564/#4568 (needs-info, but the label was applied in a bulk pass and one is three days under a 30-day bar), #5589 and #5528 (real work landed but the reporter's headline complaint is unaddressed in both).</result>
+<usage><subagent_tokens>172102</subagent_tokens><tool_uses>74</tool_uses><duration_ms>738116</duration_ms></usage>
+</task-notification>
