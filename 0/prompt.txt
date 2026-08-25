@@ -1,0 +1,105 @@
+TASK: Finish Codewhale computer-use Phase 2 (background element control on the host lane)
+
+You are taking over mid-implementation in the repo /Volumes/VIXinSSD/CW/codewhale, branch codex/v0912-integration-20260823. The work is uncommitted (19 modified, 15 untracked files). Stable Rust, edition 2024, workspace lint warnings = "deny" — so every warning is a build error. Edition 2024 requires explicit unsafe { } blocks with // SAFETY: comments inside unsafe fn.
+
+Context / scope decision (already made, do not re-litigate):
+Computer use has three future environments: workspace (agent's own machine, the Devin-shaped product), host (the user's real desktop), device (Android/HarmonyOS). The user decided to build host-only first, and the workspace lane comes later built on the same primitives. The north-star doc is already written at docs/design/COMPUTER_USE_WORKSPACE.md — don't rewrite it, just keep new work compatible. The phase-2 design is docs/design/COMPUTER_USE_BACKGROUND.md (element-level AX control, background input via AXPress/CGEventPostToPid, per-app consent). The phase-1 crate (crates/computer-use) is pixel-based foreground control and is complete; your job is phase 2 on top of it.
+
+Architecture already in place (all compiles or nearly so):
+
+1. src/consent.rs (NEW, done): per-app consent. Policy { allow, deny, host_terminal, host_terminal_pid }, Verdict { Allowed, NeedsApproval, Denied, Excluded }, hard exclusions (SecurityAgent, loginwindow, System Settings, Codewhale itself, host terminal). needs_approval_error() returns a structured needs_app_approval: message naming the app and the exact [apps] allow = [...] line to add. Has tests.
+
+2. src/elements.rs (NEW, done): ElementDriver trait (apps, app_state, act, raise, caps), types AppInfo, WindowInfo, AppState, ElementNode, ElementAction enum (Press/Click/SetValue/Type/Key/Menu/Scroll/SelectText/Drag), ActionReceipt { text, verified, moved }, StateMode { Full, Image, Ax }, render_nodes(). Has tests.
+
+3. src/driver.rs (MODIFIED, done): added fn element(&mut self) -> Option<&mut dyn ElementDriver> with default None to the Driver trait.
+
+4. src/config.rs (MODIFIED, done): added [apps] allow/deny TOML section parsing into Config.apps: Policy, plus config_hint/path_hint() for approval messages. Has tests.
+
+5. src/session.rs (MODIFIED, done): new tools computer_apps, computer_app_state, computer_element, computer_raise in the catalog; app argument added to computer_click/scroll/type/key/drag routed via routed_app_action(); consent gate gate_app(); app resolution resolve_app(); AppSnapshot cache keyed by app label. All wired into call() dispatch.
+
+6. src/drivers/mock.rs (MODIFIED, done): MockDriver implements ElementDriver when element_enabled.
+
+7. src/drivers/macos.rs (MODIFIED, done): MacDriver gained element_snapshot: Option<MacElementSnapshot> field, element() returns Some(self), pub(crate) helpers backing_scale(), accessibility_granted(), need_accessibility(), and keycode()/modifier_flags() made pub(crate). Added cf_boolean_true() helper.
+
+8. src/drivers/mod.rs (MODIFIED): registers #[cfg(target_os = "macos")] pub mod macos_ax;.
+
+9. src/lib.rs (MODIFIED): registers consent + elements modules; calls macos_ax::detect_host_terminal() at startup to populate cfg.apps.host_terminal_pid.
+
+THE BLOCKER / what to finish first:
+
+src/drivers/macos_ax.rs — I DELETED it after a bad first draft. You must rewrite it from scratch. It is the macOS AX element backend. Requirements:
+
+- FFI bindings to CoreFoundation (CFString/CFArray/CFDictionary/CFRelease), ApplicationServices (AXUIElement, CGWindowListCopyWindowInfo, CGWindowListCreateImage, CGEventPostToPid), CoreGraphics (CGEventCreate, CGImage*, CGRectMakeWithDictionaryRepresentation), and libproc (proc_pidpath).
+- Implement ElementDriver for MacDriver (methods: apps, app_state, act, raise, caps).
+- apps(): use CGWindowListCopyWindowInfo to build the running-app list; group windows by owner pid; only layer==0 windows; get bundle ids by reading the .app's Info.plist CFBundleIdentifier (parse from the plist XML, handle $(PRODUCT_BUNDLE_IDENTIFIER) as None).
+- app_state(): match the AX window by title (fallback: position), walk the AX tree with AXUIElementCopyAttributeValue(kAXChildrenAttribute) capped at depth ~24 / ~1500 nodes, capture the window image with CGWindowListCreateImage(kCGWindowListOptionIncludingWindow, window_id), convert BGRA→RGBA, downscale to opts.max_edge, convert node frames from window-local points to image pixels using backing scale. Detect occluded by checking if any layer-0 window in front of it fully covers it. Store a MacElementSnapshot (retained AXUIElement refs + window geometry) so index-based actions work later.
+- act(): take the snapshot, dispatch on ElementAction. Press → AXPress, fallback background click at node center via CGEventPostToPid (window-local points, NOT global). SetValue → AXUIElementSetAttributeValue(kAXValueAttribute) + read-back for verified, fallback focus+select-all+type for Electron. Type/Key → CGEventPostToPid keyboard events. Menu → AXShowMenu. Scroll → CGEventCreateScrollWheelEvent2 posted to pid, read scroll bar AXValue before/after for moved. SelectText → AXValueCreate with CFRange → kAXSelectedTextRangeAttribute. Drag → mouse down/dragged/up posted to pid.
+- raise() → osascript set frontmost of (first process whose unix id is PID) to true.
+- detect_host_terminal() -> Option<(u32, String)>: walk the parent-pid chain with /bin/ps -o ppid=,comm= -p PID skipping shells/codewhale itself.
+- Tests: parse_bundle_identifier (plist XML), bgra_to_rgba_image (BGRA swizzle with stride), bundle_id_from_executable_path.
+
+Key correctness notes:
+- CGEventPostToPid coordinates are window-local points (origin at the window's top-left), not global screen points. Do not add the window origin.
+- All AXUIElement refs retained in the snapshot must be CFReleased in Drop for MacElementSnapshot.
+- encode_png takes &RgbImage not &RgbaImage — convert before encoding, or add an RGBA encode path.
+- warnings = "deny" means no unused imports, no unused variables.
+
+After macos_ax.rs compiles and tests pass:
+
+1. Add ElementDriver to the Windows driver (src/drivers/windows.rs) — reads only for now: apps() via EnumWindows, app_state() with window_image only (no AX tree on Windows yet, return empty nodes with a note), act() returns DriverError::Unsupported for everything. caps() = { tree: false, window_image: true, background_actions: false, note: "Windows: window capture only; use foreground pixel tools for actions" }.
+
+2. Add ElementDriver to Android (src/drivers/android.rs) and HarmonyOS (src/drivers/harmony.rs): map Press → tap at node center via existing input tap, SetValue → input text, apps() → running packages, app_state() → existing ui_tree() nodes converted to ElementNode with a synthetic full-screen image. caps() = { tree: true, window_image: false, background_actions: false }.
+
+3. Update the bundle files in crates/computer-use/bundle/:
+- skills/computer-use/SKILL.md: add the background/element workflow (computer_apps → computer_app_state → computer_element by index, app arg on click/type/key/scroll/drag, consent gate, needs_app_approval handling).
+- plugin.json: bump version to 0.2.0.
+- README.md: note the new tools.
+
+4. Update docs/COMPUTER_USE.md: add a "Background / element control" section covering the new tools, the consent model, and the macOS permission requirements.
+
+5. Update src/setup.rs: write an initial [apps] section to computer-use.toml during setup (with a comment explaining the allow/deny lists), and detect the host terminal to add it to the exclusion list in the printed next-steps.
+
+Verification gates (must all pass before you're done):
+- cargo test -p codewhale-computer-use — all tests green
+- cargo fmt --all -- --check
+- cargo clippy -p codewhale-computer-use --all-targets -- -D warnings
+- cargo build --release -p codewhale-computer-use
+- The TUI bundle validation test: cargo test -p codewhale-tui shipped_computer_use_bundle — the bundle files you update must match what the TUI expects (it validates plugin.json structure, skill count, MCP server command, etc.)
+- OHOS dependency guard: bash scripts/ohos/*.sh or whatever the OHOS guard script is (check scripts/ohos/)
+
+What NOT to do:
+- Do not commit to main. Work on the existing branch or a new codex/... branch.
+- Do not touch crates/tui/src/ except if the bundle validation test fails and requires a TUI-side fix.
+- Do not implement the workspace/container lane — that's phase 3, documented in COMPUTER_USE_WORKSPACE.md.
+- Do not add nightly features.
+- Do not weaken any existing safety or data-integrity behavior to make a gate pass.
+
+Current test count: 58 passing in the crate (up from 46 at phase-1 baseline). Your job is to get that number higher with the new element/consent tests, then finish the platform drivers and bundle updates.
+
+---
+
+Ok please keep working on everything
+
+---
+
+Ok can you prove that too and get fully done
+
+---
+
+We we don't have, like, the actual website working, like, the web app, then we need to take down the login and registration part for now. Um, so I need you to figure out if that's actually working or not based on Superbase and, like, logs and seeing if users are using it, but... and figure that out and make a call, please. Thank you.
+
+---
+
+Ok yeah I just think they can’t actually do work right now and we need to still fix it there’s so much to fix in it
+
+---
+
+Yeah but i dont efen hsve mh email setup yet
+
+---
+
+How do we setup my email from hunter@shannonlabs.dev
+
+---
+
+Sure please do whatever you need and use computer use
