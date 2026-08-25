@@ -124,6 +124,7 @@ pub(super) fn merge_config(base: Config, override_cfg: Config) -> Config {
         tui: override_cfg.tui.or(base.tui),
         transcript: override_cfg.transcript.or(base.transcript),
         hooks: override_cfg.hooks.or(base.hooks),
+        lifecycle_outbox: override_cfg.lifecycle_outbox.or(base.lifecycle_outbox),
         providers: merge_providers(base.providers, override_cfg.providers),
         features: merge_features(base.features, override_cfg.features),
         notifications: override_cfg.notifications.or(base.notifications),

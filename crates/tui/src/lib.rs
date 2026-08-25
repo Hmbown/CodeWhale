@@ -82,6 +82,7 @@ mod models_dev_live;
 mod native_memory;
 mod network_policy;
 mod oauth;
+mod outbox_signal;
 mod palette;
 mod plugins;
 mod prefix_cache;
@@ -8050,6 +8051,41 @@ mod doctor_setup_state_tests {
         let report = doctor_setup_report_json(&config, &workspace);
         assert_eq!(report["runtime_posture"]["telemetry"]["value"], false);
         assert_eq!(report["runtime_posture"]["telemetry"]["source"], "config");
+    }
+
+    /// The lifecycle outbox posture row: opt-in via `[lifecycle_outbox].path`;
+    /// off is the default and must be named, and an enabled config must show
+    /// the resolved sink path the writer appends to.
+    #[test]
+    fn doctor_reports_lifecycle_outbox_posture() {
+        let _guard = crate::test_support::lock_test_env();
+        let tmp = TempDir::new().expect("tempdir");
+        let (_home_guard, _codewhale_home) = prepare_env(&tmp);
+
+        // Nothing configured: the opt-in default applies and is named.
+        let config = Config::default();
+        assert!(config.lifecycle_outbox.is_none());
+        assert_eq!(
+            doctor_lifecycle_outbox_posture_line(&config),
+            "lifecycle_outbox=off (default)"
+        );
+
+        // A configured path is reported with the sink path.
+        let outbox_path = tmp.path().join("outbox.jsonl");
+        let config = Config {
+            lifecycle_outbox: Some(codewhale_config::LifecycleOutboxToml {
+                path: Some(outbox_path.clone()),
+                webhook_url: None,
+                webhook_token: None,
+            }),
+            ..Config::default()
+        };
+        let line = doctor_lifecycle_outbox_posture_line(&config);
+        assert!(line.starts_with("lifecycle_outbox=on (path: "), "{line}");
+        assert!(
+            line.contains(&outbox_path.display().to_string()),
+            "posture row must show the resolved sink path: {line}"
+        );
     }
 
     #[test]

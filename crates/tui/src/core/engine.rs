@@ -693,6 +693,13 @@ impl EngineHandle {
 pub struct Engine {
     config: EngineConfig,
     api_config: Config,
+    /// Lifecycle outbox (`[lifecycle_outbox]`) handle wired by the interactive
+    /// TUI at engine spawn. Turn-boundary events (`turn_start`/`turn_end`) are
+    /// emitted engine-side so synthetic goal-continuation turns — which
+    /// bypass the UI's user-message dispatch path — produce the same pair as
+    /// user turns. `None` (exec, hosted/runtime-thread engines, tests without
+    /// an outbox) means no engine-side emits at all.
+    pub(crate) lifecycle_outbox: Option<codewhale_hooks::LifecycleOutbox>,
     /// Runtime-host authority consulted only when constructing a later turn
     /// descriptor (goal continuation, idle child completion, `/edit`). Active
     /// turns keep their already-installed immutable descriptor.
@@ -1522,6 +1529,7 @@ impl Engine {
         let engine = Engine {
             config,
             api_config: api_config.clone(),
+            lifecycle_outbox: None,
             authoritative_route_config: None,
             deepseek_client,
             model_client,
@@ -3062,6 +3070,19 @@ impl Engine {
         self.config.runtime_services.active_thread_id.is_some()
     }
 
+    /// Thread id for engine-side outbox turn events. The interactive TUI
+    /// installs its hook executor on the engine config, so this is the same
+    /// hook session identity the TUI-side `session_start`/`session_end`/
+    /// subagent/stall events carry; engines without one (tests) fall back to
+    /// the engine session id.
+    fn outbox_thread_id(&self) -> String {
+        self.config
+            .hook_executor
+            .as_ref()
+            .map(|hooks| hooks.session_id().to_string())
+            .unwrap_or_else(|| self.session.id.clone())
+    }
+
     async fn emit_session_updated(&self) {
         let _ = self
             .tx_event
@@ -4597,6 +4618,29 @@ impl Engine {
             })
             .await;
 
+        // Lifecycle outbox (`[lifecycle_outbox]`): turn boundaries are
+        // emitted engine-side so synthetic goal-continuation turns — which
+        // never pass through the UI's user-message dispatch — produce the
+        // same `turn_start`/`turn_end` pair as user turns. Only the
+        // interactive TUI wires a handle (at engine spawn); exec and hosted
+        // engines leave this `None`. No-op when the feature is disabled.
+        if let Some(outbox) = self.lifecycle_outbox.as_ref() {
+            outbox.emit(codewhale_hooks::LifecycleEvent {
+                event: "turn_start".to_string(),
+                kind: "turn.started".to_string(),
+                thread_id: self.outbox_thread_id(),
+                turn_id: Some(turn.id.clone()),
+                item_id: None,
+                payload: serde_json::json!({
+                    "model": codewhale_hooks::bounded_text(
+                        &model,
+                        codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
+                    ),
+                    "workspace": self.session.workspace.display().to_string(),
+                }),
+            });
+        }
+
         // Apply the host-resolved route budget before building the request.
         // The model, limits, and compaction policy arrive in one operation so
         // no provider request can observe a partially updated route.
@@ -4987,6 +5031,38 @@ impl Engine {
         // their host must create the next durable claim before dispatching any
         // further turn. A Failed or Interrupted turn never continues.
         let outcome = SendMessageOutcome::Finished { status, error };
+        // Lifecycle outbox: the matching `turn_end` for the engine-emitted
+        // `turn_start`, one per dispatched turn, with the kind projected from
+        // the terminal status. Only the interactive TUI wires a handle;
+        // no-op otherwise (and when the feature is disabled).
+        if let Some(outbox) = self.lifecycle_outbox.as_ref()
+            && let SendMessageOutcome::Finished { status, error } = &outcome
+        {
+            let (outbox_status, kind) = match status {
+                TurnOutcomeStatus::Completed => ("completed", "turn.completed"),
+                TurnOutcomeStatus::Failed => ("failed", "turn.failed"),
+                TurnOutcomeStatus::Interrupted => ("interrupted", "turn.interrupted"),
+            };
+            outbox.emit(codewhale_hooks::LifecycleEvent {
+                event: "turn_end".to_string(),
+                kind: kind.to_string(),
+                thread_id: self.outbox_thread_id(),
+                turn_id: Some(turn.id.clone()),
+                item_id: None,
+                payload: serde_json::json!({
+                    "status": outbox_status,
+                    "duration_ms": chrono::Utc::now()
+                        .signed_duration_since(turn_started_at)
+                        .num_milliseconds()
+                        .max(0) as u64,
+                    "workspace": self.session.workspace.display().to_string(),
+                    "error": error.as_deref().map(|message| codewhale_hooks::bounded_text(
+                        message,
+                        codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
+                    )),
+                }),
+            });
+        }
         if !self.host_managed_turns()
             && matches!(
                 &outcome,

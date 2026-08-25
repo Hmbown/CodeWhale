@@ -1271,6 +1271,175 @@ async fn goal_continuation_preserves_goal_and_resolves_updated_authoritative_rou
     run_task.await.expect("engine task");
 }
 
+/// Lifecycle outbox: a synthetic goal-continuation turn — which never passes
+/// through the UI's user-message dispatch — must still produce a
+/// `turn_start`+`turn_end` pair in the outbox file, same envelope shape and
+/// same seq discipline as the user-dispatched turn before it.
+#[tokio::test]
+async fn goal_continuation_turn_emits_turn_start_and_turn_end_pair_to_the_outbox() {
+    let _lock = lock_test_env();
+    let dir = tempdir().expect("tempdir");
+    let outbox_path = dir.path().join("outbox.jsonl");
+    let outbox = codewhale_hooks::LifecycleOutbox::new(Some(outbox_path.clone()), None, None);
+
+    let second_request_entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release_second_request = std::sync::Arc::new(tokio::sync::Notify::new());
+    let model = std::sync::Arc::new(GatedGoalModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        requests: std::sync::Mutex::new(Vec::new()),
+        second_request_entered: std::sync::Arc::clone(&second_request_entered),
+        release_second_request: std::sync::Arc::clone(&release_second_request),
+        first_usage: None,
+    });
+    let mut custom = HashMap::new();
+    custom.insert(
+        "custom-a".to_string(),
+        crate::config::ProviderConfig {
+            kind: Some("openai-compatible".to_string()),
+            base_url: Some("http://127.0.0.1:18183/v1".to_string()),
+            model: Some("local-model".to_string()),
+            api_key: Some("local-test-key".to_string()),
+            ..crate::config::ProviderConfig::default()
+        },
+    );
+    let config = Config {
+        provider: Some("custom-a".to_string()),
+        providers: Some(crate::config::ProvidersConfig {
+            custom,
+            ..crate::config::ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+    let engine_config = EngineConfig {
+        max_steps: 1,
+        snapshots_enabled: false,
+        terminal_chrome_enabled: false,
+        workspace: dir.path().to_path_buf(),
+        goal_objective: Some("keep going".to_string()),
+        goal_token_budget: Some(50_000),
+        ..EngineConfig::default()
+    };
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let (mut engine, handle) = Engine::new_with_model_client(engine_config, &config, client);
+    // The interactive TUI wires its outbox handle at engine spawn
+    // (`spawn_tui_engine`); the test installs the equivalent seam directly.
+    engine.lifecycle_outbox = Some(outbox);
+
+    handle
+        .send(Op::SendMessage {
+            content: "first turn".to_string(),
+            mode: AppMode::Agent,
+            route: resolved_route_for_test(&config, "local-model"),
+            compaction: Box::new(CompactionConfig::default()),
+            goal_objective: Some("keep going".to_string()),
+            goal_token_budget: Some(50_000),
+            goal_status: crate::tools::goal::GoalStatus::Active,
+            reasoning_effort: None,
+            reasoning_effort_auto: false,
+            auto_model: false,
+            allow_shell: false,
+            trust_mode: false,
+            auto_approve: false,
+            approval_mode: crate::tui::approval::ApprovalMode::Suggest,
+            translation_enabled: false,
+            allowed_tools: None,
+            dynamic_tools: Vec::new(),
+            hook_executor: None,
+            verbosity: None,
+            provenance: UserInputProvenance::ExternalUser,
+        })
+        .await
+        .expect("send first goal turn");
+    let run_task = tokio::spawn(engine.run());
+
+    // Two turns must run: the user turn, then the synthetic continuation.
+    // During the continuation's model request, queue a goal pause so the
+    // FIFO control ordering deterministically stops any third turn.
+    let mut completes = 0;
+    while completes < 2 {
+        let event = tokio::time::timeout(Duration::from_secs(3), async {
+            handle.rx_event.write().await.recv().await
+        })
+        .await
+        .expect("goal engine event timeout")
+        .expect("goal engine event");
+        if let Event::TurnComplete { .. } = event {
+            completes += 1;
+            if completes == 1 {
+                tokio::time::timeout(Duration::from_secs(3), second_request_entered.notified())
+                    .await
+                    .expect("continuation model request was never entered");
+                handle
+                    .send(Op::SetGoalStatus {
+                        status: crate::tools::goal::GoalStatus::Paused,
+                        clear: false,
+                    })
+                    .await
+                    .expect("queue goal pause");
+                release_second_request.notify_one();
+            }
+        }
+    }
+    handle.send(Op::Shutdown).await.expect("queue shutdown");
+    run_task.await.expect("engine task");
+
+    // The outbox writer task drains asynchronously; wait for all four lines.
+    let mut lines = Vec::new();
+    for _ in 0..400 {
+        if let Ok(text) = tokio::fs::read_to_string(&outbox_path).await {
+            lines = text
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("json"))
+                .collect();
+            if lines.len() >= 4 {
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    assert_eq!(
+        lines.len(),
+        4,
+        "one turn_start/turn_end pair per turn (user, then continuation): {lines:#?}"
+    );
+    for (line, expected_event, expected_kind, expected_seq) in [
+        (&lines[0], "turn_start", "turn.started", 1u64),
+        (&lines[1], "turn_end", "turn.completed", 2u64),
+        (&lines[2], "turn_start", "turn.started", 3u64),
+        (&lines[3], "turn_end", "turn.completed", 4u64),
+    ] {
+        assert_eq!(line["event"], expected_event);
+        assert_eq!(line["kind"], expected_kind);
+        assert_eq!(line["schema_version"], 1);
+        assert_eq!(line["seq"].as_u64(), Some(expected_seq));
+        assert!(
+            line["thread_id"].as_str().is_some_and(|id| !id.is_empty()),
+            "every line must carry the thread id: {line:#?}"
+        );
+        assert!(
+            line["turn_id"].as_str().is_some_and(|id| !id.is_empty()),
+            "every line must carry its turn id: {line:#?}"
+        );
+        assert_eq!(
+            line["payload"]["workspace"],
+            serde_json::json!(dir.path().to_string_lossy().as_ref()),
+            "every payload must carry the workspace"
+        );
+    }
+    // The continuation turn gets its own correlated pair, distinct from the
+    // user turn's — a supervisor sees two complete turns, not one split pair.
+    assert_eq!(lines[0]["turn_id"], lines[1]["turn_id"]);
+    assert_eq!(lines[2]["turn_id"], lines[3]["turn_id"]);
+    assert_ne!(lines[0]["turn_id"], lines[2]["turn_id"]);
+    assert_eq!(lines[1]["payload"]["status"], "completed");
+    assert_eq!(lines[3]["payload"]["status"], "completed");
+    assert!(lines[1]["payload"]["duration_ms"].as_u64().is_some());
+    assert!(lines[3]["payload"]["duration_ms"].as_u64().is_some());
+    assert_eq!(lines[0]["payload"]["model"], "local-model");
+    assert_eq!(lines[2]["payload"]["model"], "local-model");
+}
+
 #[tokio::test]
 async fn saturated_mailbox_does_not_deadlock_goal_continuation_self_dispatch() {
     let request_entered = std::sync::Arc::new(tokio::sync::Notify::new());

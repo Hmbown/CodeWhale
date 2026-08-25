@@ -12,11 +12,60 @@ pub(super) fn execute_subagent_observer_hook(
     text_field: &str,
     text: &str,
 ) -> Result<(), String> {
+    let (preview, truncated) = bounded_subagent_hook_preview(text);
+
+    // Lifecycle outbox (`[lifecycle_outbox]`): fires even when no shell hook
+    // is configured for this event — the outbox is independent of the hook
+    // command list. Preview is bounded (preview ceiling) and only ever the
+    // preview text, never the raw prompt/result. No-op when disabled.
+    match &event {
+        HookEvent::SubagentSpawn => {
+            app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+                event: "subagent_spawn".to_string(),
+                kind: "subagent.spawned".to_string(),
+                thread_id: app.hooks.session_id().to_string(),
+                turn_id: app.runtime_turn_id.clone(),
+                item_id: None,
+                payload: serde_json::json!({
+                    "agent_id": agent_id,
+                    "subagent": agent_id,
+                    "workspace": app.workspace.display().to_string(),
+                    "prompt_preview": codewhale_hooks::bounded_text(
+                        &preview,
+                        codewhale_hooks::OUTBOX_PREVIEW_MAX_CHARS,
+                    ),
+                    "prompt_truncated": truncated,
+                }),
+            });
+        }
+        HookEvent::SubagentComplete => {
+            let status = subagent_completion_status(text).unwrap_or_else(|| "unknown".to_string());
+            app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+                event: "subagent_complete".to_string(),
+                kind: "subagent.completed".to_string(),
+                thread_id: app.hooks.session_id().to_string(),
+                turn_id: app.runtime_turn_id.clone(),
+                item_id: None,
+                payload: serde_json::json!({
+                    "agent_id": agent_id,
+                    "subagent": agent_id,
+                    "workspace": app.workspace.display().to_string(),
+                    "status": status,
+                    "result_preview": codewhale_hooks::bounded_text(
+                        &preview,
+                        codewhale_hooks::OUTBOX_PREVIEW_MAX_CHARS,
+                    ),
+                    "result_truncated": truncated,
+                }),
+            });
+        }
+        _ => {}
+    }
+
     if !app.hooks.has_hooks_for_event(event) {
         return Ok(());
     }
 
-    let (preview, truncated) = bounded_subagent_hook_preview(text);
     let context = app.base_hook_context().with_message(&preview);
     let mut payload = serde_json::json!({
         "event": event.as_str(),

@@ -3023,6 +3023,12 @@ pub struct Config {
     #[serde(default)]
     pub hooks: Option<HooksConfig>,
 
+    /// Lifecycle event outbox (`[lifecycle_outbox]`). Opt-in: an unset or
+    /// empty `path` disables the feature and leaves behavior unchanged.
+    /// Fires for interactive TUI sessions and headless `codewhale exec` runs.
+    #[serde(default)]
+    pub lifecycle_outbox: Option<codewhale_config::LifecycleOutboxToml>,
+
     /// Provider-specific credentials and defaults shared with the `codewhale` facade.
     #[serde(default)]
     pub providers: Option<ProvidersConfig>,

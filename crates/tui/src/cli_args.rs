@@ -550,6 +550,13 @@ pub(crate) fn spawn_signal_cleanup_task() {
             #[cfg(unix)]
             crate::tools::shell::abort_pending_persistent_process_groups_for_exit();
             crate::tui::ui::emergency_restore_terminal();
+            // Session-owned outbox events: append the missing `turn_end` for
+            // any turn this session left open before the process dies. The
+            // flush derives the open turn from the outbox *file* under the
+            // cross-process lock, so it cannot duplicate an end; a SIGKILL
+            // skips this path entirely and the next boot's reconciliation
+            // covers it. Best effort: it logs and proceeds on failure.
+            crate::outbox_signal::flush_open_turn_on_signal(signal_name(exit_code));
             // Nothing async survives the `exit` below, so this is the last
             // chance to say how the session ended. `record_blocking` is one
             // `O_APPEND` write with no lock: taking the compaction lock here
@@ -564,6 +571,17 @@ pub(crate) fn spawn_signal_cleanup_task() {
         }
         std::process::exit(exit_code);
     });
+}
+
+/// Human-readable signal name for the outbox's reconciliation reason, from
+/// the conventional `128 + signal` exit code the cleanup task computes.
+fn signal_name(exit_code: i32) -> &'static str {
+    match exit_code {
+        143 => "SIGTERM",
+        130 => "SIGINT",
+        129 => "SIGHUP",
+        _ => "SIGNAL",
+    }
 }
 
 /// When this process's armed telemetry session began. Set once, at arming, and
