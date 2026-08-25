@@ -2400,6 +2400,138 @@ iTerm2, WezTerm, Ghostty, and kitty are matched first and use their own
 notification protocols, and `method = "osc9"` / `"bel"` / `"off"` opt out
 of the `osascript` path explicitly.
 
+## Lifecycle Outbox (`[lifecycle_outbox]`)
+
+The lifecycle outbox is an opt-in, machine-readable stream of session,
+turn, and sub-agent lifecycle events. With a path configured, Codewhale
+appends one JSON line per event to that file — for interactive TUI
+sessions *and* headless `codewhale exec` runs — so a supervisor
+(terminal multiplexer wrapper, automation harness, alerting setup) can
+react to what happened without scraping the screen or installing per-hook
+shell commands. Unset or empty `path` = the feature is **off** and
+behavior is unchanged.
+
+```toml
+[lifecycle_outbox]
+path = "~/.codewhale/notifications/outbox.jsonl" # unset/empty = OFF
+webhook_url = ""     # optional; POSTs events as JSON when set
+webhook_token = ""   # optional bearer token for webhook_url
+```
+
+### Events emitted
+
+| Event | Kind | Fired at |
+|---|---|---|
+| `turn_start` | `turn.started` | a new turn begins (TUI TurnStarted; `exec` at message dispatch) |
+| `turn_end` | `turn.completed` / `turn.failed` / `turn.interrupted` | turn completion, kind projected from the turn status |
+| `turn_stalled` | `turn.stalled` | the stall watchdog recovers a wedged turn |
+| `subagent_spawn` | `subagent.spawned` | a sub-agent is spawned |
+| `subagent_complete` | `subagent.completed` | a sub-agent reaches a terminal state |
+| `session_start` | `session.started` | interactive session start |
+| `session_end` | `session.ended` | interactive session end |
+
+Every payload carries `"workspace"` (the resolved workspace path) so a
+consumer can route the event to the right project without guessing;
+sub-agent events (`subagent_spawn`, `subagent_complete`) additionally
+carry `"subagent"` (the sub-agent id, alongside `"agent_id"`). On the TUI
+failure path, a turn killed mid-flight by a disconnected engine (stream
+idle/error, crash) also emits a folded `turn_end` with
+`kind: "turn.failed"` — every `turn_start` gets a matching `turn_end`,
+exactly like `codewhale exec`'s channel-closed guarantee.
+
+`turn_end` kinds are projected exhaustively from the terminal turn
+status: exactly `turn.completed`, `turn.failed`, or `turn.interrupted`.
+There is no unknown-status fallback kind — an earlier `turn.ended`
+fallback for degenerate states (a turn completion observed after a
+disconnect cleared the status) was removed when the turn-boundary emits
+moved into the engine — so consumers should only ever see the three
+listed kinds.
+
+### File contract
+
+Each line is a `RuntimeEventEnvelope`:
+
+```json
+{"schema_version": 1, "seq": 3, "event": "turn_start", "kind": "turn.started",
+ "thread_id": "…", "turn_id": "…", "item_id": null, "timestamp": "…",
+ "created_at": "…", "payload": {…}}
+```
+
+- `seq` is unique and monotonic per outbox file: every append holds an
+  exclusive advisory lock on a `<path>.lock` sidecar file across the
+  tail-scan recovery of the last written line and the append itself, so
+  concurrent sessions sharing one path get unique, increasing seqs — no
+  duplicates, no out-of-order appends.
+- Lines are written one complete JSON line per append, serialized by an
+  internal writer task and flushed before the next event; concurrent
+  sessions writing the same path interleave whole lines (never bytes
+  mid-line) in seq order, so sharing one file across sessions is safe.
+- Parent directories are created lazily on the first event.
+- `path` is expanded like every other config path: `~` and environment
+  variables resolve before the file is opened, so the documented
+  `~/.codewhale/notifications/outbox.jsonl` example lands under `$HOME`.
+- Payloads are constructed from bounded, pre-redacted fields only — never
+  raw tool arguments, environment, or full transcript text. Free-form
+  fields (error messages, previews) are capped at the notification limits
+  (80 headline / 120 detail / 200 preview characters) and stripped of
+  control characters and ANSI escape sequences.
+
+### Webhook delivery
+
+With `webhook_url` set, every event is additionally POSTed as
+`{"at": "<ISO 8601 timestamp>", "event": {…}}` with
+`Authorization: Bearer <webhook_token>` when a token is configured.
+Delivery uses bounded retries inside the sink (two retries with
+exponential back-off); failures are logged and dropped, never fed back
+into the agent loop, and a failing webhook never blocks the local file
+append. Each delivery runs on a detached task after its append, bounded
+to at most four in flight — a full backlog drops the newest delivery
+rather than queueing — so a consumer must not assume POST arrival order
+matches file `seq` order.
+
+## Control Socket (`[control_socket]`)
+
+Per-session control surface for supervised operation: with the feature
+enabled, the interactive TUI binds one unix domain socket per *running*
+session at `<sessions-dir>/<session-id>/control.sock` (mode `0600`;
+`<sessions-dir>` is the same directory the session store uses, typically
+`~/.codewhale/sessions`). The socket is removed with the session's
+artifact directory, and a stale socket left by a crashed process is taken
+over by the next launch. Unset or `enabled = false` = the feature is
+**off** (the default) and behavior is unchanged. Unix-only; on other
+platforms the key parses but no socket is bound.
+
+```toml
+[control_socket]
+enabled = false # default: OFF
+```
+
+The socket speaks newline-framed JSON-RPC, one request per connection:
+write one request line, read one response line, close.
+
+```json
+{"id":"1","method":"message","params":{"text":"hello"}}
+{"id":"2","method":"interrupt","params":{}}
+{"id":"3","method":"relaunch","params":{}}
+{"id":"4","method":"status","params":{}}
+```
+
+- `message` — delivers `text` as a structured user message through the
+  ordinary composer dispatch path; dispatched immediately when idle,
+  queued when a turn is in flight (the response's `delivery` field says
+  which).
+- `interrupt` — the Esc-shaped cancel of the active turn; `cancelled`
+  reports whether active work was in flight.
+- `relaunch` — routed through the `/relaunch` slash-command path (same
+  save-and-resume handoff, no separate mechanics).
+- `status` — answers `turn_state` (`idle` / `in_progress` / `waiting`) and
+  `goal` (`objective`, `status`, `paused`).
+
+Success responses echo the request id with a `type`-tagged result;
+failures carry `error.code` (`invalid_request`, `command_error`,
+`timeout`, `server_unavailable`). Requests are bounded at 1 MiB per line
+and a handler that does not answer within 5 s is reported as `timeout`.
+
 ## Tool Catalog
 
 Codewhale loads a small core native tool catalog by default and leaves less

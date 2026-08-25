@@ -442,6 +442,7 @@
   "CmdQueueMissingIndex": "Falta l'índex. Ús: /queue edit <n> o /queue drop <n>",
   "CmdQueueIndexPositive": "L'índex ha de ser un número positiu",
   "CmdQueueIndexMin": "L'índex ha de ser >= 1",
+  "CmdRelaunchDescription": "Desa la sessió, reinicia l'aplicació i reprèn-la",
   "CmdRelayDescription": "Crea un relay de sessió (接力) per a un fil nou",
   "CmdRemoteControlDescription": "Reprèn aquesta sessió exacta des del teu compte web de Codewhale",
   "CmdRemoteEnvDescription": "Obre un Work allotjat nou des de la punta d'una branca de GitHub o CNB",

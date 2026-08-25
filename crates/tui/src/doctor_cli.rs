@@ -1714,6 +1714,14 @@ pub(crate) fn print_doctor_setup_report(
         "  · runtime posture: {}",
         doctor_runtime_posture_line(config, workspace)
     );
+    println!(
+        "  · lifecycle outbox: {}",
+        doctor_lifecycle_outbox_posture_line(config)
+    );
+    println!(
+        "  · control socket: {}",
+        doctor_control_socket_posture_line(config)
+    );
     let consistency = doctor_setup_consistency(state, source);
     if consistency["status"] == "inconsistent" {
         let issues = consistency["issues"]
@@ -1931,6 +1939,39 @@ pub(crate) fn doctor_runtime_posture_line(config: &Config, workspace: &Path) -> 
     format!(
         "default_mode={default_mode} ({default_mode_source}), permission_posture={permission_posture} ({permission_posture_source}), approval_policy={approval} ({approval_source}), allow_shell={allow_shell} ({allow_shell_source}), sandbox={sandbox} ({sandbox_source}), network.default={network} ({network_source}), telemetry={telemetry} ({telemetry_source}), trust={trust}"
     )
+}
+
+/// Observability posture row for the lifecycle outbox: the feature is opt-in
+/// via `[lifecycle_outbox].path` (unset/empty = off, the default). Truth and
+/// resilience theme: report the resolved state and, when enabled, the sink
+/// path the writer appends to.
+pub(crate) fn doctor_lifecycle_outbox_posture_line(config: &Config) -> String {
+    let path = config
+        .lifecycle_outbox
+        .as_ref()
+        .and_then(|outbox| outbox.path.as_deref())
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    if path.trim().is_empty() {
+        return "lifecycle_outbox=off (default)".to_string();
+    }
+    format!("lifecycle_outbox=on (path: {path})")
+}
+
+/// Doctor posture for the per-session control socket, enabled via
+/// `[control_socket].enabled` (false = off, the default). Report the
+/// resolved state and, when enabled, where the socket appears for the
+/// running session.
+pub(crate) fn doctor_control_socket_posture_line(config: &Config) -> String {
+    let enabled = config
+        .control_socket
+        .as_ref()
+        .is_some_and(|socket| socket.enabled);
+    if enabled {
+        "control_socket=on (sessions/<id>/control.sock per running session)".to_string()
+    } else {
+        "control_socket=off (default)".to_string()
+    }
 }
 
 /// Resolved telemetry consent and where it came from (#5441).

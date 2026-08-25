@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional per-session control socket (`[control_socket]` config table,
+  Unix, off by default): when enabled, the interactive TUI binds a
+  newline-framed JSON-RPC socket at `<sessions-dir>/<session-id>/control.sock`
+  (0600) with the verbs `message`, `interrupt`, `relaunch`, and `status`,
+  typed error codes, bounded request sizes and dispatch timeouts, and
+  socket lifecycle riding the session lifecycle (stale-file takeover,
+  live-bind refusal with retry backoff). Windows parses the key but refuses
+  to bind with a clear error (#5533).
+- New `/relaunch` command: save like `/exit`, then self-exec `resume
+  <session-id>` so a session switches to the current binary in one step. The
+  executable path falls back to `argv[0]` when `current_exe` resolves to a
+  deleted or renamed path (the updater's rename-replacement case); if the
+  replacement fails the session is already saved and the error names the
+  `resume` command to continue with. Unix-only by design — Windows keeps the
+  documented manual-restart behavior (#5532).
+- Optional machine-readable lifecycle event outbox
+  (`[lifecycle_outbox]` config table): opt-in JSONL event stream
+  (`turn_start` / `turn_end` / `turn_stalled` / `subagent_spawn` /
+  `subagent_complete` / `session_start` / `session_end`) for interactive TUI
+  sessions and headless `codewhale exec` runs, with an optional webhook fan-out
+  of the same events. Unset or empty `path` keeps the feature off and behavior
+  unchanged. Every payload carries the resolved `workspace` for routing;
+  subagent events additionally carry `subagent`. `seq` is monotonic across
+  processes sharing one outbox file (exclusive-lock appends + tail recovery),
+  and a session owns its turn boundaries: catchable-signal shutdown appends a
+  synthetic `turn_end` for open turns, and boot reconciliation pairs turns a
+  SIGKILLed session left unpaired. Bounded preview/redaction rules apply to
+  every field. Design record: `docs/rfcs/1365-lifecycle-outbox.md` (#5531).
 - Added the `computer-use` plugin bundle (`crates/computer-use/bundle/`) and the
   `codewhale computer-use` subcommand backing it: a stdio MCP server
   (`crates/computer-use`) that captures the screen and injects input on

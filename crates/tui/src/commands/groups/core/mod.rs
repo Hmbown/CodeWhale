@@ -31,6 +31,7 @@ mod pin;
 mod profile;
 mod provider;
 mod queue;
+mod relaunch;
 mod rlm;
 mod setup;
 mod stash;
@@ -72,6 +73,10 @@ impl CommandGroup for CoreCommands {
             Box::new(FunctionCommand::new(
                 exit::ExitCmd::info(),
                 exit::ExitCmd::execute,
+            )),
+            Box::new(FunctionCommand::new(
+                relaunch::RelaunchCmd::info(),
+                relaunch::RelaunchCmd::execute,
             )),
             Box::new(FunctionCommand::new(
                 model::ModelCmd::info(),

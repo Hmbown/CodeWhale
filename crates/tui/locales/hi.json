@@ -442,6 +442,7 @@
   "CmdQueueMissingIndex": "इंडेक्स नहीं दिया। उपयोग: /queue edit <n> या /queue drop <n>",
   "CmdQueueIndexPositive": "इंडेक्स धनात्मक संख्या होनी चाहिए",
   "CmdQueueIndexMin": "इंडेक्स >= 1 होनी चाहिए",
+  "CmdRelaunchDescription": "सत्र सहेजें, ऐप पुनः आरंभ करें और उसे फिर से शुरू करें",
   "CmdRelayDescription": "नए थ्रेड के लिए सत्र रिले (接力) बनाएँ",
   "CmdRemoteControlDescription": "अपने Codewhale वेब खाते से यही सत्र जारी रखें",
   "CmdRemoteEnvDescription": "GitHub या CNB ब्रांच टिप से नया होस्टेड Work खोलें",

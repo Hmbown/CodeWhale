@@ -445,6 +445,7 @@
   "CmdQueueMissingIndex": "인덱스가 없습니다. 사용법: /queue edit <n> 또는 /queue drop <n>",
   "CmdQueueIndexPositive": "인덱스는 양수여야 합니다",
   "CmdQueueIndexMin": "인덱스는 1 이상이어야 합니다",
+  "CmdRelaunchDescription": "세션을 저장하고 앱을 다시 시작하여 이어갑니다",
   "CmdRelayDescription": "새 스레드를 위한 세션 릴레이(接力)를 생성합니다",
   "CmdRemoteControlDescription": "Codewhale 웹 계정에서 이 세션을 그대로 재개합니다",
   "CmdRemoteEnvDescription": "GitHub 또는 CNB 브랜치 끝에서 새 호스팅 Work 열기",

@@ -442,6 +442,7 @@
   "CmdQueueMissingIndex": "Немає індексу. Використання: /queue edit <n> або /queue drop <n>",
   "CmdQueueIndexPositive": "Індекс має бути додатним числом",
   "CmdQueueIndexMin": "Індекс має бути >= 1",
+  "CmdRelaunchDescription": "Зберегти сеанс, перезапустити застосунок і відновити його",
   "CmdRelayDescription": "Створити релей сеансу (接力) для нового ланцюжка",
   "CmdRemoteControlDescription": "Продовжити саме цей сеанс із веб-акаунта Codewhale",
   "CmdRemoteEnvDescription": "Відкрити новий розміщений Work із вершини гілки GitHub або CNB",

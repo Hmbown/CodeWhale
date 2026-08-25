@@ -3023,6 +3023,18 @@ pub struct Config {
     #[serde(default)]
     pub hooks: Option<HooksConfig>,
 
+    /// Lifecycle event outbox (`[lifecycle_outbox]`). Opt-in: an unset or
+    /// empty `path` disables the feature and leaves behavior unchanged.
+    /// Fires for interactive TUI sessions and headless `codewhale exec` runs.
+    #[serde(default)]
+    pub lifecycle_outbox: Option<codewhale_config::LifecycleOutboxToml>,
+    /// Per-session control socket (`[control_socket]`). Opt-in: an absent
+    /// table or `enabled = false` (the default) leaves the feature off.
+    /// When enabled, the interactive TUI binds a unix socket per running
+    /// session (see `crate::tui::control_socket`).
+    #[serde(default)]
+    pub control_socket: Option<codewhale_config::ControlSocketToml>,
+
     /// Provider-specific credentials and defaults shared with the `codewhale` facade.
     #[serde(default)]
     pub providers: Option<ProvidersConfig>,
