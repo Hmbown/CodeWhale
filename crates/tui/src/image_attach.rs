@@ -42,7 +42,10 @@
 //! PNG/JPEG/GIF/WebP, and so, therefore, do we. Refusing a BMP here with a
 //! readable message beats letting one through to a provider-side 400.
 
-use std::path::Path;
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
@@ -535,6 +538,316 @@ pub fn strip_images_when_unsupported(
         }
     }
     stripped
+}
+
+/// Image extensions worth sniffing. Matches the four formats
+/// [`sniff_media_type`] accepts; other raster types are left as path text.
+const ATTACHABLE_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
+const MAX_AUTO_ATTACHED_IMAGES: usize = 8;
+const IMAGE_PATH_WINDOW: usize = 12;
+
+fn looks_like_windows_drive(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
+}
+
+fn looks_like_unc(s: &str) -> bool {
+    s.starts_with("\\\\")
+}
+
+/// Absolute, home, file-URL, or Windows-rooted. A bare `foo.png` in prose is
+/// not an attachment — drag-and-drop and Finder/Explorer paste emit anchors.
+fn looks_like_path_anchor(s: &str) -> bool {
+    let s = s.trim();
+    s.starts_with('/')
+        || s.starts_with("~/")
+        || s.starts_with("file://")
+        || looks_like_windows_drive(s)
+        || looks_like_unc(s)
+}
+
+fn strip_matching_quotes(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return &s[1..s.len() - 1];
+        }
+    }
+    s
+}
+
+fn shell_unescape(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains('\\') || looks_like_windows_drive(s) || looks_like_unc(s) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some(next) => result.push(next),
+                None => result.push(c),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    std::borrow::Cow::Owned(result)
+}
+
+fn percent_decode_to_string(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3])
+            && let Ok(value) = u8::from_str_radix(hex, 16)
+        {
+            out.push(value);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn decode_file_url(s: &str) -> Option<PathBuf> {
+    let rest = s.strip_prefix("file://")?;
+    let rest = rest
+        .strip_prefix("localhost")
+        .or_else(|| rest.strip_prefix("LOCALHOST"))
+        .unwrap_or(rest);
+    let decoded = percent_decode_to_string(rest);
+    if decoded.is_empty() || decoded == "/" {
+        return None;
+    }
+    Some(crate::config::expand_path(&decoded))
+}
+
+fn token_to_path(token: &str) -> Option<PathBuf> {
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let unquoted = strip_matching_quotes(token);
+    if unquoted.starts_with("file://") {
+        return decode_file_url(unquoted);
+    }
+    if !looks_like_path_anchor(unquoted) {
+        return None;
+    }
+    let unescaped = shell_unescape(unquoted);
+    Some(crate::config::expand_path(unescaped.as_ref()))
+}
+
+fn has_attachable_image_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ATTACHABLE_IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
+fn path_sniffs_as_image(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    let mut buf = [0u8; 16];
+    let Ok(n) = file.read(&mut buf) else {
+        return false;
+    };
+    sniff_media_type(&buf[..n]).is_some()
+}
+
+fn is_attachable_image_path(path: &Path) -> bool {
+    has_attachable_image_extension(path) && path_sniffs_as_image(path)
+}
+
+fn push_unique_image(path: PathBuf, out: &mut Vec<String>, seen: &mut HashSet<String>) {
+    if !is_attachable_image_path(&path) {
+        return;
+    }
+    let display = path.to_string_lossy().into_owned();
+    if seen.insert(display.clone()) {
+        out.push(display);
+    }
+}
+
+fn markdown_image_paths(text: &str, out: &mut Vec<String>, seen: &mut HashSet<String>) {
+    for (bang, _) in text.match_indices("![") {
+        let after_alt = bang + 2;
+        let Some(rel_close) = text[after_alt..].find("](") else {
+            continue;
+        };
+        let path_start = after_alt + rel_close + 2;
+        let Some(rel_end) = text[path_start..].find(')') else {
+            continue;
+        };
+        let raw = text[path_start..path_start + rel_end].trim();
+        if let Some(path) = token_to_path(raw) {
+            push_unique_image(path, out, seen);
+        }
+    }
+}
+
+fn quoted_and_mention_paths(text: &str, out: &mut Vec<String>, seen: &mut HashSet<String>) {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '@' => {
+                if let Some(quote @ ('"' | '\'')) = chars.get(i + 1).copied()
+                    && let Some(rel) = chars[i + 2..].iter().position(|&ch| ch == quote)
+                {
+                    let raw: String = chars[i + 2..i + 2 + rel].iter().collect();
+                    if let Some(path) = token_to_path(&raw) {
+                        push_unique_image(path, out, seen);
+                    }
+                    i += 3 + rel;
+                    continue;
+                }
+                let mut end = i + 1;
+                while end < chars.len() && !chars[end].is_whitespace() {
+                    end += 1;
+                }
+                let raw: String = chars[i + 1..end].iter().collect();
+                if let Some(path) = token_to_path(raw.trim_end_matches(|ch: char| {
+                    matches!(ch, ',' | '.' | ';' | ':' | ')' | ']' | '}')
+                })) {
+                    push_unique_image(path, out, seen);
+                }
+                i = end;
+            }
+            quote @ ('"' | '\'') => {
+                if let Some(rel) = chars[i + 1..]
+                    .iter()
+                    .take_while(|&&ch| ch != '\n')
+                    .position(|&ch| ch == quote)
+                {
+                    let raw: String = chars[i + 1..i + 1 + rel].iter().collect();
+                    if let Some(path) = token_to_path(&raw) {
+                        push_unique_image(path, out, seen);
+                    }
+                    i += 2 + rel;
+                    continue;
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+}
+
+fn image_extension_token_windows(text: &str, out: &mut Vec<String>, seen: &mut HashSet<String>) {
+    let chars: Vec<char> = text.chars().collect();
+    let mut tokens: Vec<(usize, usize)> = Vec::new();
+    let mut start = None;
+    for (idx, ch) in chars.iter().enumerate() {
+        match (ch.is_whitespace(), start) {
+            (true, Some(s)) => {
+                tokens.push((s, idx));
+                start = None;
+            }
+            (false, None) => start = Some(idx),
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        tokens.push((s, chars.len()));
+    }
+    for (seed, &(token_start, token_end)) in tokens.iter().enumerate() {
+        let token: String = chars[token_start..token_end].iter().collect();
+        let trimmed = token.trim_end_matches(|ch: char| {
+            matches!(ch, ',' | '.' | ';' | ':' | ')' | ']' | '}' | '!' | '?')
+        });
+        let ext = Path::new(trimmed)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase);
+        if !ext.is_some_and(|ext| ATTACHABLE_IMAGE_EXTENSIONS.contains(&ext.as_str())) {
+            continue;
+        }
+        let max_span = tokens.len().min(IMAGE_PATH_WINDOW);
+        let mut found = None;
+        for left in 0..=seed.min(max_span) {
+            let (ws, we) = (tokens[seed - left].0, token_end);
+            let raw: String = chars[ws..we].iter().collect();
+            let joined = raw
+                .trim_start_matches(|ch: char| {
+                    matches!(ch, '(' | '[' | '{' | '<' | '"' | '\'' | '@')
+                })
+                .trim_end_matches(|ch: char| {
+                    matches!(ch, ',' | '.' | ';' | ':' | ')' | ']' | '}' | '!' | '?')
+                })
+                .to_string();
+            let Some(path) = token_to_path(&joined) else {
+                continue;
+            };
+            if is_attachable_image_path(&path) {
+                found = Some(path);
+                break;
+            }
+        }
+        if let Some(path) = found {
+            push_unique_image(path, out, seen);
+        }
+    }
+}
+
+/// Existing image files named in user text, in encounter order.
+///
+/// Anchored paths only (`/`, `~/`, `file://`, Windows drive/UNC). Bytes must
+/// sniff as PNG/JPEG/GIF/WebP. Spaced names are recovered by expanding left
+/// from an extension token until a real file is found.
+pub(crate) fn discover_image_paths(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    markdown_image_paths(text, &mut out, &mut seen);
+    quoted_and_mention_paths(text, &mut out, &mut seen);
+    image_extension_token_windows(text, &mut out, &mut seen);
+    out
+}
+
+/// Append `[Attached image: …]` markers for every existing image path named
+/// in `text` that is not already marked. Clipboard `/attach` lines are left
+/// alone. Never errors: a path that is not an image stays ordinary text.
+#[must_use]
+pub fn ensure_image_attachment_markers(text: &str) -> String {
+    let already: HashSet<String> = crate::tui::file_mention::media_attachment_references(text)
+        .into_iter()
+        .filter(|reference| reference.kind == "image")
+        .map(|reference| reference.path)
+        .collect();
+    let mut extra = Vec::new();
+    let mut seen = already;
+    for path in discover_image_paths(text) {
+        if extra.len() >= MAX_AUTO_ATTACHED_IMAGES {
+            break;
+        }
+        if seen.insert(path.clone()) {
+            extra.push(path);
+        }
+    }
+    if extra.is_empty() {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    if !out.ends_with('\n') && !out.is_empty() {
+        out.push('\n');
+    }
+    for path in extra {
+        out.push_str("[Attached image: ");
+        out.push_str(&path);
+        out.push_str("]\n");
+    }
+    out
 }
 
 /// Render dropped-attachment notices as a block the model will read.

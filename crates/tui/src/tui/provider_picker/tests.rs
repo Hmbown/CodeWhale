@@ -157,6 +157,35 @@ fn list_footer_advertises_jump_not_lm_studio_or_ds4() {
         !rendered.contains("D DS4"),
         "DS4 must not steal d from type-ahead: {rendered}"
     );
+    assert!(
+        !rendered.contains("revoke external"),
+        "X must not advertise on a row that cannot revoke: {rendered}"
+    );
+    assert!(
+        !rendered.contains("external access choices"),
+        "E must not advertise on a row without an external-consent target: {rendered}"
+    );
+}
+
+#[test]
+fn type_ahead_jumps_to_xiaomi_when_x_is_not_revoke() {
+    // `x` only revokes external consent on rows that can use it. On a
+    // DeepSeek/Ollama row the advertised a-z jump must reach Xiaomi MiMo.
+    let config = Config::default();
+    let mut picker = ProviderPickerView::new(ApiProvider::Ollama, &config);
+    picker.toggle_view();
+    assert_eq!(picker.stage, Stage::List);
+
+    picker.handle_key(key(KeyCode::Char('x')));
+    assert_eq!(picker.query, "x");
+    assert_eq!(picker.stage, Stage::List);
+    assert!(
+        picker
+            .filtered_rows()
+            .iter()
+            .any(|(_, row)| row.provider == ApiProvider::XiaomiMimo),
+        "Xiaomi MiMo must be reachable by x when the row cannot revoke"
+    );
 }
 
 #[test]
@@ -1683,6 +1712,8 @@ fn p_opens_template_list_with_catalog_rows() {
     assert!(rendered.contains("OpenCode Zen"), "{rendered}");
     assert!(rendered.contains("OpenCode Go"), "{rendered}");
     assert!(rendered.contains("SenseNova"), "{rendered}");
+    assert!(rendered.contains("LM Studio"), "{rendered}");
+    assert!(rendered.contains("DS4"), "{rendered}");
     assert!(rendered.contains("Agnes"), "{rendered}");
     assert!(
         rendered.contains("no published") || rendered.contains("unpublished"),
@@ -1959,6 +1990,106 @@ fn plain_t_stays_type_ahead_and_does_not_probe() {
     assert!(matches!(action, ViewAction::None));
     assert_eq!(picker.query, "t");
     assert_eq!(picker.stage, Stage::List);
+}
+
+#[test]
+fn p_opens_lm_studio_from_the_template_list() {
+    let config = Config::default();
+    let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+    assert!(matches!(
+        picker.handle_key(key(KeyCode::Char('p'))),
+        ViewAction::None
+    ));
+    assert_eq!(picker.stage, Stage::TemplateList);
+    let index = provider_setup_templates()
+        .iter()
+        .position(|template| template.id == codewhale_config::LM_STUDIO_TEMPLATE_ID)
+        .expect("LM Studio template");
+    while picker.template_selected_idx < index {
+        picker.handle_key(key(KeyCode::Down));
+    }
+    while picker.template_selected_idx > index {
+        picker.handle_key(key(KeyCode::Up));
+    }
+    assert!(matches!(
+        picker.handle_key(key(KeyCode::Enter)),
+        ViewAction::None
+    ));
+    assert_eq!(picker.stage, Stage::CustomForm);
+    assert_eq!(
+        picker.custom_provider_id,
+        codewhale_config::LM_STUDIO_PROVIDER_ID
+    );
+    assert_eq!(
+        picker.custom_provider_base_url,
+        codewhale_config::LM_STUDIO_BASE_URL
+    );
+    assert!(picker.custom_provider_model.is_empty());
+    assert!(picker.custom_provider_api_key_env.is_empty());
+}
+
+#[test]
+fn p_opens_ds4_from_the_template_list() {
+    let config = Config::default();
+    let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+    assert!(matches!(
+        picker.handle_key(key(KeyCode::Char('p'))),
+        ViewAction::None
+    ));
+    assert_eq!(picker.stage, Stage::TemplateList);
+    let index = provider_setup_templates()
+        .iter()
+        .position(|template| template.id == codewhale_config::DS4_TEMPLATE_ID)
+        .expect("DS4 template");
+    while picker.template_selected_idx < index {
+        picker.handle_key(key(KeyCode::Down));
+    }
+    while picker.template_selected_idx > index {
+        picker.handle_key(key(KeyCode::Up));
+    }
+    assert!(matches!(
+        picker.handle_key(key(KeyCode::Enter)),
+        ViewAction::None
+    ));
+    assert_eq!(picker.stage, Stage::CustomForm);
+    assert_eq!(picker.custom_provider_id, codewhale_config::DS4_PROVIDER_ID);
+    assert_eq!(
+        picker.custom_provider_base_url,
+        codewhale_config::DS4_BASE_URL
+    );
+    assert_eq!(
+        picker.custom_provider_model,
+        codewhale_config::DS4_DEFAULT_MODEL
+    );
+    assert!(picker.custom_provider_api_key_env.is_empty());
+}
+
+#[test]
+fn new_for_template_setup_opens_the_same_lm_studio_form_as_the_dedicated_constructor() {
+    let config = Config::default();
+    let from_template = ProviderPickerView::new_for_template_setup(
+        ApiProvider::Deepseek,
+        "lm-studio",
+        &config,
+        None,
+    )
+    .expect("lm-studio template");
+    let dedicated =
+        ProviderPickerView::new_for_lm_studio_setup(ApiProvider::Deepseek, &config, None);
+    assert_eq!(from_template.stage, Stage::CustomForm);
+    assert_eq!(from_template.stage, dedicated.stage);
+    assert_eq!(
+        from_template.custom_provider_id,
+        dedicated.custom_provider_id
+    );
+    assert_eq!(
+        from_template.custom_provider_base_url,
+        dedicated.custom_provider_base_url
+    );
+    assert_eq!(
+        from_template.custom_provider_model,
+        dedicated.custom_provider_model
+    );
 }
 
 #[test]

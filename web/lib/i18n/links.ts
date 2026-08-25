@@ -20,11 +20,12 @@ export const DISCORD_URL = "https://discord.gg/37gfS3ksug";
 /** The hosted Codewhale app (account sign-in / sign-up). */
 export const APP_URL = "https://app.codewhale.net";
 /**
- * Sign-in / registration entry points are hidden on the marketing site while
- * web auth is being repaired: `POST /api/auth/session-exchange` was failing 15
- * of 16 attempts, so visitors who clicked these got an error *after* an account
- * had already been created for them. app.codewhale.net stays reachable for
- * existing users and the CLI device flow. Flip this back to `true` to restore.
+ * Sign-in / registration stay off the marketing chrome until a full browser
+ * GitHub/Google login and `codewhale account login` approve have been seen on
+ * app.codewhale.net. Session-exchange on api.codewhale.net is 200 again
+ * (2026-08-25); start endpoints for GitHub, Google, and CLI device-code are
+ * also 200. That is necessary, not sufficient. Flip to `true` only after the
+ * browser round-trip, not after API start calls.
  */
 export const SHOW_APP_AUTH_LINKS = false;
 

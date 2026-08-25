@@ -8,7 +8,8 @@
 
 use crate::models::{ContentBlock, Message};
 use crate::workspace_discovery::{
-    DISCOVERY_ALWAYS_DIRS, path_is_excluded_from_discovery, should_skip_unignored_discovery_entry,
+    DISCOVERY_ALWAYS_DIRS, parse_hidden_file_prefix, path_is_excluded_from_discovery,
+    should_skip_unignored_discovery_entry,
 };
 use ignore::WalkBuilder;
 use regex::Regex;
@@ -495,7 +496,8 @@ impl Workspace {
         }
         let display_dir_part = safe_dir_part.to_string_lossy().replace('\\', "/");
 
-        let show_hidden = name_part.starts_with('.');
+        let (include_hidden, name_part) = parse_hidden_file_prefix(name_part);
+        let show_hidden = include_hidden || name_part.starts_with('.');
         let needle = name_part.to_lowercase();
         let mut entries = Vec::new();
 
@@ -505,6 +507,11 @@ impl Workspace {
             .follow_links(self.follow_links)
             .max_depth(Some(1));
         let _ = builder.add_custom_ignore_filename(".deepseekignore");
+        if include_hidden {
+            // `!` is the explicit hidden-file toggle: include gitignored
+            // dotfiles such as `.env`, still skipping bulky/generated trees.
+            builder.git_ignore(false).ignore(false);
+        }
 
         let mut visited = 0usize;
         for entry in builder.build().flatten() {
@@ -516,6 +523,9 @@ impl Workspace {
             if path == dir || path_is_excluded_from_discovery(&self.root, path) {
                 continue;
             }
+            if include_hidden && should_skip_unignored_discovery_entry(&self.root, path) {
+                continue;
+            }
             let Some(file_type) = entry.file_type() else {
                 continue;
             };
@@ -523,7 +533,11 @@ impl Workspace {
                 continue;
             }
             let name = entry.file_name().to_string_lossy();
-            if !needle.is_empty() && !name.to_lowercase().starts_with(&needle) {
+            let name_lc = name.to_lowercase();
+            if !needle.is_empty()
+                && !name_lc.starts_with(&needle)
+                && !(show_hidden && name_lc.trim_start_matches('.').starts_with(&needle))
+            {
                 continue;
             }
             let mut candidate = if display_dir_part.is_empty() {
@@ -2073,6 +2087,11 @@ mod tests {
 
         let dot_entries = ws.browser_completions(".", 16);
         assert_eq!(dot_entries, vec![".agents/", ".env"]);
+
+        let bang_entries = ws.browser_completions("!", 16);
+        assert_eq!(bang_entries, vec![".agents/", ".env", "app.rs"]);
+        let bang_env = ws.browser_completions("!env", 16);
+        assert_eq!(bang_env, vec![".env"]);
     }
 
     #[test]

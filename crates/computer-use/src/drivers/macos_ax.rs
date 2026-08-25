@@ -1608,6 +1608,19 @@ impl ElementDriver for MacDriver {
         action: ElementAction,
     ) -> Result<ActionReceipt, DriverError> {
         MacDriver::need_accessibility()?;
+        if matches!(
+            &action,
+            ElementAction::Type {
+                activate: true,
+                ..
+            } | ElementAction::Key {
+                activate: true,
+                ..
+            }
+        ) {
+            self.raise(app)?;
+            std::thread::sleep(Duration::from_millis(80));
+        }
         let snapshot = self.snapshot_for(app)?;
         let pid = snapshot.pid;
         let window_id = snapshot.window_id;
@@ -1724,7 +1737,14 @@ impl ElementDriver for MacDriver {
                     moved: None,
                 })
             }
-            ElementAction::Type { text, index, point } => {
+            ElementAction::Type {
+                text,
+                index,
+                point,
+                clear,
+                submit,
+                activate,
+            } => {
                 if let Some(index) = index {
                     let node = snapshot.node(index)?;
                     if node.secure {
@@ -1734,37 +1754,66 @@ impl ElementDriver for MacDriver {
                         )));
                     }
                 }
-                if let Some((global, where_)) = type_focus_target(snapshot, index, point)? {
-                    // Posted mouse click, not AXPress: web renderers take
-                    // keyboard focus from a click, not from an accessibility
-                    // press.
-                    click_to_pid(pid, window_id, global, Button::Left, 1, 0)?;
-                    std::thread::sleep(Duration::from_millis(40));
-                    type_to_pid(pid, &text)?;
-                    Ok(ActionReceipt {
-                        text: format!(
-                            "clicked {where_} then typed {} characters into `{}` in the background",
-                            text.chars().count(),
-                            app.label()
-                        ),
-                        ..Default::default()
-                    })
-                } else {
-                    type_to_pid(pid, &text)?;
-                    Ok(ActionReceipt {
-                        text: format!(
-                            "typed {} characters into `{}` in the background",
-                            text.chars().count(),
-                            app.label()
-                        ),
-                        ..Default::default()
-                    })
+                let focused =
+                    if let Some((global, where_)) = type_focus_target(snapshot, index, point)? {
+                        click_to_pid(pid, window_id, global, Button::Left, 1, 0)?;
+                        std::thread::sleep(Duration::from_millis(40));
+                        Some(where_)
+                    } else {
+                        None
+                    };
+                if clear {
+                    combo_to_pid(pid, &crate::keys::select_all())?;
+                    combo_to_pid(pid, &crate::keys::named(crate::keys::NamedKey::Backspace))?;
+                    std::thread::sleep(Duration::from_millis(20));
                 }
+                if !text.is_empty() {
+                    type_to_pid(pid, &text)?;
+                }
+                if submit {
+                    combo_to_pid(pid, &crate::keys::named(crate::keys::NamedKey::Enter))?;
+                }
+                let mut bits: Vec<String> = Vec::new();
+                if activate {
+                    bits.push("raised the window".into());
+                }
+                if let Some(where_) = focused {
+                    bits.push(format!("clicked {where_}"));
+                }
+                if clear {
+                    bits.push("cleared the field".into());
+                }
+                let count = text.chars().count();
+                if count > 0 {
+                    bits.push(format!("typed {count} characters"));
+                }
+                if submit {
+                    bits.push("pressed Return".into());
+                }
+                if bits.is_empty() {
+                    bits.push("typed 0 characters".into());
+                }
+                Ok(ActionReceipt {
+                    text: format!(
+                        "{} into `{}` in the background",
+                        bits.join(", then "),
+                        app.label()
+                    ),
+                    ..Default::default()
+                })
             }
-            ElementAction::Key { combo } => {
+            ElementAction::Key { combo, activate } => {
                 combo_to_pid(pid, &combo)?;
                 Ok(ActionReceipt {
-                    text: format!("sent {combo} to `{}` in the background", app.label()),
+                    text: format!(
+                        "{}sent {combo} to `{}` in the background",
+                        if activate {
+                            "raised the window, then "
+                        } else {
+                            ""
+                        },
+                        app.label()
+                    ),
                     ..Default::default()
                 })
             }

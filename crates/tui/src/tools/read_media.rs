@@ -219,10 +219,6 @@ impl ToolSpec for ReadMediaTool {
         true
     }
 
-    fn defer_loading(&self) -> bool {
-        true
-    }
-
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         self.execute_rich(input, context)
             .await
@@ -257,10 +253,16 @@ pub(crate) async fn execute_read_media(
     let detail_mode = DetailMode::from_str_opt(detail_str)?;
     let crop_region = CropRegion::parse_from_value(input.get("crop"))?;
 
-    // 1. Check active route vision capability
+    // 1. Check active route vision capability. Unknown still proceeds so a
+    // custom/self-hosted route without modality metadata is not dead on arrival.
     if context.route_capabilities.image_input == CapabilityState::Unsupported {
         return Err(ToolError::execution_failed(
-            "read_media: the active model route does not support image input. Switch to a route marked vision-capable with /model, or configure the route's image_input capability, then try again.",
+            "read_media: the active model route does not support image input. \
+             Switch to a vision-capable route with /model, add a [vision_model] \
+             table in config.toml and enable the `vision_model` feature for a \
+             dedicated vision route, or set the route's image_input capability \
+             if this model can already see pictures. Do not shell out to sips, \
+             OCR, or metadata tools to guess at the picture.",
         ));
     }
 
@@ -627,7 +629,10 @@ mod tests {
         assert!(tool.capabilities().contains(&ToolCapability::ReadOnly));
         assert!(tool.capabilities().contains(&ToolCapability::Sandboxable));
         assert!(tool.supports_parallel());
-        assert!(tool.defer_loading());
+        assert!(
+            !tool.defer_loading(),
+            "read_media must be eager; a deferred vision tool is unreachable"
+        );
         assert_eq!(tool.approval_requirement(), ApprovalRequirement::Auto);
     }
 

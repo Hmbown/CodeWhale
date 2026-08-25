@@ -182,4 +182,24 @@ mod tests {
         assert!(result.is_error);
         assert!(result.action.is_none());
     }
+
+    #[test]
+    fn handler_is_contextual_and_requests_presentation_facet() {
+        let CommandHandler::Contextual {
+            capabilities,
+            handler,
+        } = LoopCmd::handler()
+        else {
+            panic!("loop must be contextual");
+        };
+        assert_eq!(capabilities, CommandCapabilities::PRESENTATION);
+        let missing = handler(CommandContexts::empty(), Some("list"));
+        assert!(missing.is_error);
+        assert_eq!(
+            missing.message.as_deref(),
+            Some("Error: Command capability unavailable: presentation")
+        );
+        assert_eq!(LoopCmd::info().description_key, "cmd_loop_description");
+        assert_eq!(LoopCmd::info().aliases, &["watch", "watcher"]);
+    }
 }

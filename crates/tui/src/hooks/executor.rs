@@ -2506,7 +2506,7 @@ fn tool_category_for(tool_name: &str, tool_args: Option<&str>) -> &'static str {
         // `shell.rs` still stamps it for the `shell_env` hook event.
         "bash" | "Bash" | "exec_shell" => "shell",
         // The lowercase primitives ship without an action envelope.
-        "read" | "todo_write" => "safe",
+        "read" | "todo_write" | "read_media" => "safe",
         "write" | "edit" => "file_write",
         "File" | "file" => match action.as_deref() {
             Some("read" | "list" | "search_name" | "search_content") => "safe",
@@ -5771,6 +5771,7 @@ command = "echo project"
             // The router itself touches nothing a hook needs to gate.
             ("agent", "other"),
             ("todo_write", "safe"),
+            ("read_media", "safe"),
         ];
         for name in crate::core::engine::tool_catalog::DEFAULT_ACTIVE_NATIVE_TOOLS {
             let expected = EXPECTED.iter().find(|(n, _)| n == name).map(|(_, c)| *c);

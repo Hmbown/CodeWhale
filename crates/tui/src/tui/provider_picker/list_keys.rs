@@ -7,8 +7,8 @@
 //! when the selected row can use them.
 //!
 //! LM Studio and DS4 are filled-in custom forms, not catalog filters, so
-//! they do not steal `i`/`d` from type-ahead. Reach them via the dedicated
-//! setup constructors (and custom form), not a per-preset hotkey.
+//! they do not steal `i`/`d` from type-ahead. Reach them via `P` (template
+//! list) or the dedicated setup constructors, not a per-preset hotkey.
 
 use std::borrow::Cow;
 
@@ -230,6 +230,12 @@ impl ProviderPickerView {
             hints.push(ActionHint::new(
                 "X",
                 self.tr(MessageId::ProviderExternalActionRevoke),
+            ));
+        }
+        if self.list_key_context().has_external_consent_target {
+            hints.push(ActionHint::new(
+                "E",
+                self.tr(MessageId::ProviderExternalActionChoices),
             ));
         }
         hints.push(ActionHint::new("M", self.tr(MessageId::PickerActionModels)));

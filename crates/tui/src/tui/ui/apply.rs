@@ -1812,23 +1812,25 @@ pub(crate) async fn apply_command_result(
                                 .with_provider_health(&app.provider_health),
                         );
                         let template = codewhale_config::provider_setup_template(&template_id);
-                        let message = match template {
-                            Some(template) if template.is_unpublished() => {
-                                app.tr(MessageId::ProviderTemplateUnpublished).into_owned()
-                            }
-                            Some(template) if template.is_compatible() => app
-                                .tr(MessageId::ProviderTemplateOpenedEnvOnly)
-                                .replace("{id}", &template_id),
-                            _ => app
-                                .tr(MessageId::ProviderTemplateOpened)
-                                .replace("{id}", &template_id),
-                        };
-                        let level = if template.is_some_and(|item| item.is_unpublished()) {
-                            StatusToastLevel::Warning
-                        } else {
-                            StatusToastLevel::Info
-                        };
-                        app.push_status_toast(message, level, Some(8_000));
+                        if !template.is_some_and(|item| item.is_keyless_local()) {
+                            let message = match template {
+                                Some(template) if template.is_unpublished() => {
+                                    app.tr(MessageId::ProviderTemplateUnpublished).into_owned()
+                                }
+                                Some(template) if template.is_compatible() => app
+                                    .tr(MessageId::ProviderTemplateOpenedEnvOnly)
+                                    .replace("{id}", &template_id),
+                                _ => app
+                                    .tr(MessageId::ProviderTemplateOpened)
+                                    .replace("{id}", &template_id),
+                            };
+                            let level = if template.is_some_and(|item| item.is_unpublished()) {
+                                StatusToastLevel::Warning
+                            } else {
+                                StatusToastLevel::Info
+                            };
+                            app.push_status_toast(message, level, Some(8_000));
+                        }
                     } else {
                         app.push_status_toast(
                             app.tr(MessageId::ProviderTemplateUnknown)

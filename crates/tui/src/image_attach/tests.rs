@@ -435,6 +435,83 @@ fn text_with_no_attachments_produces_nothing() {
 }
 
 #[test]
+fn a_bare_image_path_in_prose_gets_an_attachment_marker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = write_png(dir.path(), "shot.png");
+    let text = format!("please look at {}", path.display());
+
+    let marked = ensure_image_attachment_markers(&text);
+
+    assert!(
+        marked.contains(&format!("[Attached image: {}]", path.display())),
+        "got: {marked}"
+    );
+    let expanded = expand_attachment_blocks(&marked);
+    assert!(expanded.notices.is_empty(), "{expanded:?}");
+    assert_eq!(expanded.blocks.len(), 3, "{expanded:?}");
+}
+
+#[test]
+fn spaced_desktop_screenshot_name_is_attached_not_split() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = write_png(dir.path(), "Screenshot 2026-08-25 at 00.14.07.png");
+    let text = format!("see {}", path.display());
+
+    let marked = ensure_image_attachment_markers(&text);
+    let marker = format!("[Attached image: {}]", path.display());
+    assert!(marked.contains(&marker), "got: {marked}");
+
+    let expanded = expand_attachment_blocks(&marked);
+    assert!(expanded.notices.is_empty(), "{expanded:?}");
+    assert_eq!(expanded.blocks.len(), 3, "{expanded:?}");
+}
+
+#[test]
+fn quoted_image_path_attaches() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let png = write_png(dir.path(), "clip.png");
+    let quoted = format!("see \"{}\"", png.display());
+    let marked = ensure_image_attachment_markers(&quoted);
+    assert!(
+        marked.contains(&format!("[Attached image: {}]", png.display())),
+        "got: {marked}"
+    );
+}
+
+#[test]
+fn existing_attached_marker_is_not_duplicated() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = write_png(dir.path(), "already.png");
+    let text = format!("[Attached image: {}]", path.display());
+    let marked = ensure_image_attachment_markers(&text);
+    assert_eq!(
+        marked.matches("[Attached image:").count(),
+        1,
+        "got: {marked}"
+    );
+}
+
+#[test]
+fn relative_filename_in_prose_is_not_auto_attached() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let _ = write_png(dir.path(), "foo.png");
+    let marked = ensure_image_attachment_markers("the asset is foo.png in this folder");
+    assert!(
+        !marked.contains("[Attached image:"),
+        "relative names stay text: {marked}"
+    );
+}
+
+#[test]
+fn non_image_file_is_not_attached() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("notes.txt");
+    std::fs::write(&path, b"hello").expect("write");
+    let marked = ensure_image_attachment_markers(&format!("read {}", path.display()));
+    assert!(!marked.contains("[Attached image:"), "got: {marked}");
+}
+
+#[test]
 fn notice_block_names_the_failure_and_forbids_guessing() {
     assert_eq!(notice_block(&[]), None);
     let block =

@@ -9326,7 +9326,15 @@ fn approval_stamp_preserves_existing_metadata() {
 #[test]
 fn core_primitives_and_todo_write_default_to_eager() {
     let always_load = HashSet::new();
-    for core in ["read", "write", "edit", "bash", "agent", "todo_write"] {
+    for core in [
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "agent",
+        "todo_write",
+        "read_media",
+    ] {
         assert!(!should_default_defer_tool(core, &always_load));
     }
     for searchable in ["File", "Bash", "Git", "Run", "tasks", "git_blame"] {
@@ -9336,7 +9344,15 @@ fn core_primitives_and_todo_write_default_to_eager() {
 
 #[test]
 fn default_active_contract_keeps_discovery_and_core_tools_eager() {
-    const EXPECTED_NATIVE: [&str; 6] = ["read", "write", "edit", "bash", "agent", "todo_write"];
+    const EXPECTED_NATIVE: [&str; 7] = [
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "agent",
+        "todo_write",
+        "read_media",
+    ];
     assert_eq!(
         default_active_native_tool_names(),
         EXPECTED_NATIVE.as_slice()
@@ -9370,7 +9386,15 @@ fn default_active_contract_keeps_discovery_and_core_tools_eager() {
 #[test]
 fn non_yolo_mode_retains_default_defer_policy() {
     let always_load = HashSet::new();
-    for core in ["read", "write", "edit", "bash", "agent", "todo_write"] {
+    for core in [
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "agent",
+        "todo_write",
+        "read_media",
+    ] {
         assert!(!should_default_defer_tool(core, &always_load));
     }
     for searchable in [
@@ -9642,8 +9666,8 @@ async fn registry_discovery_and_start_handlers_exist_in_agent_and_plan_modes() {
         );
         assert_eq!(
             media_tools[0].defer_loading,
-            Some(true),
-            "read_media must remain default-off/deferred in {mode:?}"
+            Some(false),
+            "read_media must be eager in {mode:?}; a deferred vision tool is unreachable"
         );
         assert!(
             registry.contains("start_registry_mcp_server"),

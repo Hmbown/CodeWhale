@@ -47,7 +47,9 @@ pub(crate) fn is_tool_search_tool(name: &str) -> bool {
 #[rustfmt::skip]
 pub(crate) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     // Specialized native, MCP, plugin, and durable-work tools stay searchable.
-    "read", "write", "edit", "bash", "agent", "todo_write",
+    // `read_media` is eager: a deferred vision tool is unreachable in practice
+    // because nothing prompts a tool_search for it when the user pastes a path.
+    "read", "write", "edit", "bash", "agent", "todo_write", "read_media",
 ];
 
 const CORE_ACTION_TOOL_FALLBACKS: &[CoreActionToolFallback] = &[

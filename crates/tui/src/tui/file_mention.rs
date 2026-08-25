@@ -754,6 +754,46 @@ pub struct MediaAttachmentReference {
     pub end_byte: usize,
 }
 
+/// Pull the path out of an `[Attached image: …]` body.
+///
+/// Clipboard paste writes `8x4 PNG at /tmp/pasted.png`. A path that itself
+/// contains ` at ` (macOS default screenshot names, many desktop exports)
+/// must stay intact: only split when the right-hand side already looks like
+/// a filesystem path.
+pub(crate) fn attachment_path_from_marker_rest(rest: &str) -> &str {
+    let rest = rest.trim();
+    if looks_like_path_anchor(rest) {
+        return rest;
+    }
+    if let Some((_, rhs)) = rest.rsplit_once(" at ") {
+        let rhs = rhs.trim();
+        if looks_like_path_anchor(rhs) {
+            return rhs;
+        }
+    }
+    rest
+}
+
+fn looks_like_path_anchor(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    s.starts_with('/')
+        || s.starts_with("~/")
+        || s.starts_with("./")
+        || s.starts_with("../")
+        || s.starts_with("file://")
+        || {
+            let b = s.as_bytes();
+            b.len() >= 3
+                && b[0].is_ascii_alphabetic()
+                && b[1] == b':'
+                && (b[2] == b'\\' || b[2] == b'/')
+        }
+        || s.starts_with("\\\\")
+}
+
 pub fn media_attachment_references(input: &str) -> Vec<MediaAttachmentReference> {
     let mut out = Vec::new();
     let mut offset = 0usize;
@@ -771,10 +811,7 @@ pub fn media_attachment_references(input: &str) -> Vec<MediaAttachmentReference>
         let Some((kind, rest)) = body.split_once(": ") else {
             continue;
         };
-        let path = rest
-            .rsplit_once(" at ")
-            .map_or(rest, |(_, path)| path)
-            .trim();
+        let path = attachment_path_from_marker_rest(rest);
         if !path.is_empty() {
             out.push(MediaAttachmentReference {
                 kind: kind.trim().to_string(),
@@ -1909,6 +1946,34 @@ mod tests {
             &input[reference.start_byte..reference.end_byte],
             "[Attached image: 8x4 PNG at /tmp/pasted.png]\n"
         );
+    }
+
+    #[test]
+    fn attachment_marker_keeps_screenshot_names_that_contain_at() {
+        let path = "/var/folders/x/T/Temporary Items/NSIRD_screencaptureui_ABC/Screenshot 2026-08-25 at 00.14.07.png";
+        assert_eq!(
+            attachment_path_from_marker_rest(path),
+            path,
+            "an absolute path containing ' at ' must not be split"
+        );
+        assert_eq!(
+            attachment_path_from_marker_rest("Screenshot 2026-08-25 at 00.14.07.png"),
+            "Screenshot 2026-08-25 at 00.14.07.png",
+            "a filename containing ' at ' is not a description+path split"
+        );
+        assert_eq!(
+            attachment_path_from_marker_rest("8x4 PNG at /tmp/pasted.png"),
+            "/tmp/pasted.png"
+        );
+        assert_eq!(
+            attachment_path_from_marker_rest("8x4 PNG (2KB) at /tmp/pasted.png"),
+            "/tmp/pasted.png"
+        );
+
+        let input = format!("[Attached image: {path}]");
+        let references = media_attachment_references(&input);
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].path, path);
     }
 
     #[test]

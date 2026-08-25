@@ -132,6 +132,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Migrated `/note` and `/memory` onto the portable command-contract handlers
+  (FEAT-019, #5609, by @aboimpinto): the envelope now carries a `MEMORY`
+  facet and registrations declare least capabilities. `/loop` on this branch
+  was adapted to the same `Contextual { capabilities, handler }` shape so
+  the watcher command compiles with the new dispatcher.
 - Bare family aliases now track the current GA default: `glm-5` / `glm5` /
   `zai-glm-5` resolve to `DEFAULT_ZAI_MODEL` (`GLM-5.3`), and `gpt-5` /
   `gpt5` / `openai-gpt-5` resolve to `DEFAULT_OPENAI_MODEL` (`gpt-5.6`).

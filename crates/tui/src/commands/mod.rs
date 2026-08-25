@@ -1969,6 +1969,25 @@ mod tests {
             "{automation:?}"
         );
 
+        // /loop (contextual, presentation facet): interval + prompt creates
+        // a minute-level watcher through the same AutomationAction path.
+        let loop_create = execute("/loop 45m continue the market-readiness handoff", &mut app);
+        match loop_create.action {
+            Some(crate::tui::app::AppAction::Automation(
+                crate::tui::app::AutomationAction::Create {
+                    prompt,
+                    rrule,
+                    interval_label,
+                    ..
+                },
+            )) => {
+                assert_eq!(prompt, "continue the market-readiness handoff");
+                assert_eq!(rrule, "FREQ=MINUTELY;INTERVAL=45");
+                assert_eq!(interval_label, "45m");
+            }
+            _ => panic!("expected /loop create, got {loop_create:?}"),
+        }
+
         // /task (contextual, workspace facet): digest without a runtime must
         // produce the canonical no-active text.
         let task = execute("/task digest", &mut app);

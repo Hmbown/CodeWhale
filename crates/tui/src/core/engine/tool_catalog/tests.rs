@@ -72,13 +72,22 @@ fn published_synthetic_names_agree_with_the_synthetic_predicate() {
 fn first_turn_surface_is_stable_across_plan_work_and_full_access() {
     assert_eq!(
         DEFAULT_ACTIVE_NATIVE_TOOLS,
-        &["read", "write", "edit", "bash", "agent", "todo_write"]
+        &[
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "agent",
+            "todo_write",
+            "read_media",
+        ]
     );
     let expected = [
         "agent",
         "bash",
         "edit",
         "read",
+        "read_media",
         "todo_write",
         "tool_search",
         "write",
@@ -94,6 +103,7 @@ fn first_turn_surface_is_stable_across_plan_work_and_full_access() {
             "bash",
             "agent",
             "todo_write",
+            "read_media",
             "Git",
             "Run",
             "tasks",
@@ -253,10 +263,18 @@ fn unknown_and_wildcard_allowlists_keep_mcp_startup() {
 #[test]
 fn compact_surface_keeps_the_exact_eager_agent_head() {
     let catalog = build_model_tool_catalog_with_surface(
-        ["read", "write", "edit", "bash", "agent", "todo_write"]
-            .into_iter()
-            .map(tool)
-            .collect(),
+        [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "agent",
+            "todo_write",
+            "read_media",
+        ]
+        .into_iter()
+        .map(tool)
+        .collect(),
         Vec::new(),
         AppMode::Agent,
         &HashSet::new(),
