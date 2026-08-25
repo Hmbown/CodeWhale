@@ -48,7 +48,9 @@ impl std::fmt::Display for McpAuthStatus {
 pub fn error_looks_auth_required(error: &anyhow::Error) -> bool {
     let text = format!("{error:#}").to_ascii_lowercase();
     text.contains("401")
+        || text.contains("403")
         || text.contains("unauthorized")
+        || text.contains("forbidden")
         || text.contains("authentication_required")
         || text.contains("not logged in")
         || text.contains("not-logged-in")
@@ -1215,6 +1217,9 @@ mod tests {
     #[test]
     fn auth_required_classifier_matches_http_401_shapes() {
         let err = anyhow!("MCP Streamable HTTP rejected status=401 Unauthorized");
+        assert!(error_looks_auth_required(&err));
+
+        let err = anyhow!("MCP server 'nordic-mcp' rejected the request with 403 Forbidden");
         assert!(error_looks_auth_required(&err));
 
         let err = anyhow!("authentication_required for remote server");

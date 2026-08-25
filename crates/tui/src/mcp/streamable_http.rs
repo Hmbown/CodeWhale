@@ -1,10 +1,13 @@
 use std::collections::VecDeque;
+#[cfg(test)]
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_TYPE;
 
 use super::headers::{apply_safe_custom_headers, with_default_mcp_http_headers};
+use super::oauth;
 use super::wire::{MAX_MCP_RESPONSE_BYTES, parse_sse_message_data};
 use super::{ERROR_BODY_PREVIEW_BYTES, McpHttpAuth, bounded_body_excerpt, mask_url_secrets};
 
@@ -20,6 +23,11 @@ pub(super) struct StreamableHttpTransport {
     /// request so the server can correlate messages within the same
     /// session.
     pub(super) session_id: Option<String>,
+    /// Test double for [`oauth::McpOAuthRuntime::force_refresh`] so the
+    /// 401/403 retry-once path can be exercised on loopback without a
+    /// real AuthorizationManager.
+    #[cfg(test)]
+    test_force_refresh: Option<Arc<dyn Fn() -> Result<()> + Send + Sync>>,
 }
 
 #[derive(Debug)]
@@ -37,6 +45,37 @@ impl StreamableHttpTransport {
             auth,
             pending_messages: VecDeque::new(),
             session_id: None,
+            #[cfg(test)]
+            test_force_refresh: None,
+        }
+    }
+
+    /// Install a test-only OAuth refresh hook (T4 loopback).
+    #[cfg(test)]
+    pub(super) fn with_test_oauth_refresh(
+        mut self,
+        refresh: impl Fn() -> Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        self.test_force_refresh = Some(Arc::new(refresh));
+        self
+    }
+
+    fn has_refreshable_oauth(&self) -> bool {
+        #[cfg(test)]
+        if self.test_force_refresh.is_some() {
+            return true;
+        }
+        self.auth.oauth.is_some()
+    }
+
+    async fn try_force_oauth_refresh(&self) -> Option<Result<()>> {
+        #[cfg(test)]
+        if let Some(hook) = self.test_force_refresh.as_ref() {
+            return Some(hook());
+        }
+        match self.auth.oauth.as_ref() {
+            Some(oauth) => Some(oauth.force_refresh().await),
+            None => None,
         }
     }
 
@@ -93,28 +132,36 @@ impl StreamableHttpTransport {
             }
 
             if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-                if !retried && let Some(oauth) = self.auth.oauth.as_ref() {
-                    match oauth.force_refresh().await {
-                        Ok(()) => {
+                if !retried {
+                    match self.try_force_oauth_refresh().await {
+                        Some(Ok(())) => {
                             retried = true;
                             continue;
                         }
-                        Err(refresh_error) => {
-                            return Err(StreamableSendError::Other(anyhow::anyhow!(
-                                "MCP server {} rejected the request with {status} and refreshing the OAuth session failed: {refresh_error:#}. Re-authorize this server (/mcp auth <name>) or configure a fresh bearer token.",
-                                mask_url_secrets(&self.url),
+                        Some(Err(_)) => {
+                            tracing::warn!(
+                                target: "mcp",
+                                server = %self.auth.server_name,
+                                status = %status,
+                                "MCP OAuth force-refresh failed; surfacing login hint"
+                            );
+                            return Err(StreamableSendError::Other(auth_challenge_error(
+                                &self.auth.server_name,
+                                &self.url,
+                                status,
+                                true,
+                                true,
                             )));
                         }
+                        None => {}
                     }
                 }
-                let hint = if self.auth.oauth.is_some() {
-                    "Re-authorize this server (/mcp auth <name>) to continue."
-                } else {
-                    "Check the configured bearer token (or its environment variable)."
-                };
-                return Err(StreamableSendError::Other(anyhow::anyhow!(
-                    "MCP server {} rejected the request with {status}; the session is no longer accepted. {hint}",
-                    mask_url_secrets(&self.url),
+                return Err(StreamableSendError::Other(auth_challenge_error(
+                    &self.auth.server_name,
+                    &self.url,
+                    status,
+                    self.has_refreshable_oauth(),
+                    false,
                 )));
             }
 
@@ -193,6 +240,43 @@ impl StreamableHttpTransport {
 
         self.pending_messages.push_back(body.as_bytes().to_vec());
         Ok(())
+    }
+}
+
+/// Fail-closed 401/403 message (T4). Names the recovery command; never
+/// interpolates the refresh error or URL userinfo, so a leaked token cannot
+/// persist in the log.
+pub(super) fn auth_challenge_error(
+    server_name: &str,
+    url: &str,
+    status: StatusCode,
+    has_oauth: bool,
+    refresh_failed: bool,
+) -> anyhow::Error {
+    let display_url = mask_url_secrets(url);
+    let name = {
+        let trimmed = server_name.trim();
+        if trimmed.is_empty() {
+            "this MCP server"
+        } else {
+            trimmed
+        }
+    };
+    if has_oauth {
+        let hint = oauth::auth_required_login_hint(name);
+        if refresh_failed {
+            anyhow::anyhow!(
+                "MCP server '{name}' ({display_url}) rejected the request with {status} and refreshing the OAuth session failed. {hint}"
+            )
+        } else {
+            anyhow::anyhow!(
+                "MCP server '{name}' ({display_url}) rejected the request with {status}; the session is no longer accepted. {hint}"
+            )
+        }
+    } else {
+        anyhow::anyhow!(
+            "MCP server '{name}' ({display_url}) rejected the request with {status}; the session is no longer accepted. Check the configured bearer token (or its environment variable)."
+        )
     }
 }
 

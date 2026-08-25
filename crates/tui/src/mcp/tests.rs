@@ -1,6 +1,6 @@
 use super::headers::{MCP_HTTP_ACCEPT, is_safe_custom_header, with_default_mcp_http_headers};
 use super::http::{HttpTransport, McpHttpAuth};
-use super::streamable_http::StreamableHttpTransport;
+use super::streamable_http::{StreamableHttpTransport, StreamableSendError, auth_challenge_error};
 use super::wire::{
     find_sse_event_separator, find_sse_event_separator_bytes, is_mcp_stale_session_error,
     parse_sse_message_data,
@@ -5548,6 +5548,327 @@ async fn session_id_captured_from_post_response_and_replayed() {
         .await
         .unwrap();
 
+    server.abort();
+}
+
+fn scripted_mcp_http_response(status: u16) -> String {
+    if status == 200 {
+        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+            .to_string()
+    } else {
+        let reason = match status {
+            401 => "Unauthorized",
+            403 => "Forbidden",
+            _ => "Error",
+        };
+        format!("HTTP/1.1 {status} {reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+    }
+}
+
+async fn read_loopback_http_request(socket: &mut tokio::net::TcpStream) -> Option<String> {
+    use tokio::io::AsyncReadExt;
+
+    let mut request = Vec::new();
+    let mut buf = [0; 4096];
+    let header_end = loop {
+        let n = socket.read(&mut buf).await.ok()?;
+        if n == 0 {
+            return None;
+        }
+        request.extend_from_slice(&buf[..n]);
+        if let Some(pos) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            break pos + 4;
+        }
+    };
+    let headers = String::from_utf8_lossy(&request[..header_end]).to_string();
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    while request.len() < header_end + content_length {
+        let n = socket.read(&mut buf).await.ok()?;
+        if n == 0 {
+            return None;
+        }
+        request.extend_from_slice(&buf[..n]);
+    }
+    Some(headers)
+}
+
+/// Loopback server that answers successive POSTs with the given status
+/// codes (the last status repeats). Returns the URL, POST count, and task.
+async fn spawn_auth_challenge_loopback(
+    statuses: Vec<u16>,
+) -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let post_count = Arc::new(AtomicUsize::new(0));
+    let server_post_count = Arc::clone(&post_count);
+    let server = tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let statuses = statuses.clone();
+            let post_count = Arc::clone(&server_post_count);
+            tokio::spawn(async move {
+                let Some(headers) = read_loopback_http_request(&mut socket).await else {
+                    return;
+                };
+                if !headers.starts_with("POST ") {
+                    let _ = socket
+                        .write_all(b"HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+                        .await;
+                    return;
+                }
+                let n = post_count.fetch_add(1, AtomicOrdering::SeqCst);
+                let status = statuses
+                    .get(n)
+                    .copied()
+                    .or_else(|| statuses.last().copied())
+                    .unwrap_or(401);
+                let response = scripted_mcp_http_response(status);
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.flush().await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (format!("http://{addr}/mcp"), post_count, server)
+}
+
+fn auth_challenge_send_error(err: StreamableSendError) -> String {
+    match err {
+        StreamableSendError::Other(err) => format!("{err:#}"),
+        other => panic!("expected fail-closed Other error, got {other:?}"),
+    }
+}
+
+#[test]
+fn auth_challenge_error_uses_login_hint_and_omits_url_secrets() {
+    let secret = "cw-secret-mcp-oauth-5572";
+    let err = auth_challenge_error(
+        "nordic-mcp",
+        &format!("https://user:{secret}@mcp.example/path?token={secret}"),
+        reqwest::StatusCode::UNAUTHORIZED,
+        true,
+        true,
+    );
+    let text = format!("{err:#}");
+    assert!(text.contains("nordic-mcp"), "{text}");
+    assert!(text.contains("codewhale mcp login nordic-mcp"), "{text}");
+    assert!(!text.contains(secret), "{text}");
+    assert!(!text.contains("access_token"), "{text}");
+    assert!(oauth::error_looks_auth_required(&err), "{text}");
+}
+
+/// T4: 401 with a working refresh succeeds on the single retry.
+#[tokio::test]
+async fn streamable_http_oauth_401_refreshes_once_then_succeeds() {
+    let _lock = lock_mcp_loopback_tests().await;
+    let (url, post_count, server) = spawn_auth_challenge_loopback(vec![401, 200]).await;
+    let refresh_calls = Arc::new(AtomicUsize::new(0));
+    let refresh_calls_hook = Arc::clone(&refresh_calls);
+    let mut transport = StreamableHttpTransport::new(
+        test_http_client(),
+        url,
+        McpHttpAuth {
+            server_name: "nordic-mcp".to_string(),
+            ..Default::default()
+        },
+    )
+    .with_test_oauth_refresh(move || {
+        refresh_calls_hook.fetch_add(1, AtomicOrdering::SeqCst);
+        Ok(())
+    });
+
+    transport
+        .send(json_frame(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {}
+        })))
+        .await
+        .expect("401 then refresh must retry once and succeed");
+
+    assert_eq!(refresh_calls.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(post_count.load(AtomicOrdering::SeqCst), 2);
+    server.abort();
+}
+
+/// T4: 403 follows the same refresh-once path as 401.
+#[tokio::test]
+async fn streamable_http_oauth_403_refreshes_once_then_succeeds() {
+    let _lock = lock_mcp_loopback_tests().await;
+    let (url, post_count, server) = spawn_auth_challenge_loopback(vec![403, 200]).await;
+    let refresh_calls = Arc::new(AtomicUsize::new(0));
+    let refresh_calls_hook = Arc::clone(&refresh_calls);
+    let mut transport = StreamableHttpTransport::new(
+        test_http_client(),
+        url,
+        McpHttpAuth {
+            server_name: "nordic-mcp".to_string(),
+            ..Default::default()
+        },
+    )
+    .with_test_oauth_refresh(move || {
+        refresh_calls_hook.fetch_add(1, AtomicOrdering::SeqCst);
+        Ok(())
+    });
+
+    transport
+        .send(json_frame(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {}
+        })))
+        .await
+        .expect("403 then refresh must retry once and succeed");
+
+    assert_eq!(refresh_calls.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(post_count.load(AtomicOrdering::SeqCst), 2);
+    server.abort();
+}
+
+/// T4: refresh-then-still-401 fails closed with a login hint, and does not
+/// retry a third time.
+#[tokio::test]
+async fn streamable_http_oauth_401_retry_still_401_fails_closed_with_login_hint() {
+    let _lock = lock_mcp_loopback_tests().await;
+    let secret = "cw-secret-mcp-oauth-5572-retry";
+    let (url, post_count, server) = spawn_auth_challenge_loopback(vec![401]).await;
+    let refresh_calls = Arc::new(AtomicUsize::new(0));
+    let refresh_calls_hook = Arc::clone(&refresh_calls);
+    let mut transport = StreamableHttpTransport::new(
+        test_http_client(),
+        url,
+        McpHttpAuth {
+            server_name: "nordic-mcp".to_string(),
+            headers: HashMap::from([("Authorization".to_string(), format!("Bearer {secret}"))]),
+            ..Default::default()
+        },
+    )
+    .with_test_oauth_refresh(move || {
+        refresh_calls_hook.fetch_add(1, AtomicOrdering::SeqCst);
+        Ok(())
+    });
+
+    let err = transport
+        .send(json_frame(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {}
+        })))
+        .await
+        .expect_err("second 401 must fail closed");
+    let text = auth_challenge_send_error(err);
+    assert!(text.contains("nordic-mcp"), "{text}");
+    assert!(text.contains("codewhale mcp login nordic-mcp"), "{text}");
+    assert!(text.contains("401"), "{text}");
+    assert!(!text.contains(secret), "{text}");
+    assert!(!text.contains("Bearer "), "{text}");
+    assert!(
+        oauth::error_looks_auth_required(&anyhow::anyhow!("{text}")),
+        "{text}"
+    );
+    assert_eq!(refresh_calls.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(post_count.load(AtomicOrdering::SeqCst), 2);
+    server.abort();
+}
+
+/// T4: a failed refresh fails closed with the login hint and never echoes
+/// the refresh error (which may contain a token).
+#[tokio::test]
+async fn streamable_http_oauth_401_refresh_failure_fails_closed_without_echoing_secret() {
+    let _lock = lock_mcp_loopback_tests().await;
+    let secret = "cw-secret-mcp-refresh-5572";
+    let (url, post_count, server) = spawn_auth_challenge_loopback(vec![401]).await;
+    let refresh_calls = Arc::new(AtomicUsize::new(0));
+    let refresh_calls_hook = Arc::clone(&refresh_calls);
+    let mut transport = StreamableHttpTransport::new(
+        test_http_client(),
+        url,
+        McpHttpAuth {
+            server_name: "nordic-mcp".to_string(),
+            ..Default::default()
+        },
+    )
+    .with_test_oauth_refresh(move || {
+        refresh_calls_hook.fetch_add(1, AtomicOrdering::SeqCst);
+        Err(anyhow::anyhow!("refresh failed token={secret}"))
+    });
+
+    let err = transport
+        .send(json_frame(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {}
+        })))
+        .await
+        .expect_err("failed refresh must fail closed");
+    let text = auth_challenge_send_error(err);
+    assert!(text.contains("nordic-mcp"), "{text}");
+    assert!(text.contains("codewhale mcp login nordic-mcp"), "{text}");
+    assert!(
+        text.contains("refreshing the OAuth session failed"),
+        "{text}"
+    );
+    assert!(!text.contains(secret), "{text}");
+    assert!(!text.contains("token="), "{text}");
+    assert_eq!(refresh_calls.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(
+        post_count.load(AtomicOrdering::SeqCst),
+        1,
+        "must not retry after a failed refresh"
+    );
+    server.abort();
+}
+
+/// T4: without an OAuth session, 401 fails closed on the first attempt
+/// (no refresh loop) and names the bearer recovery path.
+#[tokio::test]
+async fn streamable_http_401_without_oauth_fails_closed_without_retry() {
+    let _lock = lock_mcp_loopback_tests().await;
+    let (url, post_count, server) = spawn_auth_challenge_loopback(vec![401]).await;
+    let mut transport = StreamableHttpTransport::new(
+        test_http_client(),
+        url,
+        McpHttpAuth {
+            server_name: "nordic-mcp".to_string(),
+            ..Default::default()
+        },
+    );
+
+    let err = transport
+        .send(json_frame(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {}
+        })))
+        .await
+        .expect_err("bearer 401 must fail closed");
+    let text = auth_challenge_send_error(err);
+    assert!(text.contains("nordic-mcp"), "{text}");
+    assert!(
+        text.contains("bearer token"),
+        "expected bearer recovery hint, got {text}"
+    );
+    assert!(!text.contains("codewhale mcp login"), "{text}");
+    assert!(!text.contains("/mcp auth"), "{text}");
+    assert_eq!(post_count.load(AtomicOrdering::SeqCst), 1);
     server.abort();
 }
 
