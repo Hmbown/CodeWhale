@@ -1021,6 +1021,48 @@ fn readonly_operands_are_workspace_bounded_and_symlink_aware() {
 }
 
 #[test]
+fn windows_verbatim_and_drive_operands_survive_posix_split() {
+    // `shell_words` splits with POSIX backslash-escaping, which silently eats
+    // the separators of Windows absolute paths (`C:\Users\...` becomes
+    // `C:Users...`) and mangles the `\\?\` verbatim prefix before operand
+    // classification can see it. The protection doubles those backslashes so
+    // the splitter round-trips the real path (the `\\?\` cases that the
+    // verbatim strip alone could never reach).
+    for (raw, expected) in [
+        (r"\\?\C:\Users\foo\inside.txt", r"C:\Users\foo\inside.txt"),
+        (r"C:\Users\foo\inside.txt", r"C:\Users\foo\inside.txt"),
+        (r"\\server\share\secret", r"\\server\share\secret"),
+        (r"\\.\device\path", r"\\.\device\path"),
+    ] {
+        let protected = normalize_windows_command_paths(&format!("cat {raw}"));
+        let argv = shell_words::split(&protected).expect("split must succeed");
+        assert_eq!(
+            argv,
+            vec!["cat".to_string(), expected.to_string()],
+            "{raw} must survive the POSIX split"
+        );
+    }
+}
+
+#[test]
+fn windows_path_protection_leaves_other_words_untouched() {
+    // POSIX escapes, drive-relative spellings, and plain relative operands
+    // are not Windows absolute paths and must round-trip unchanged.
+    assert_eq!(
+        normalize_windows_command_paths("echo a\\ b && cat inside.txt"),
+        "echo a\\ b && cat inside.txt"
+    );
+    assert_eq!(
+        normalize_windows_command_paths("cat C:secret"),
+        "cat C:secret"
+    );
+    assert_eq!(
+        normalize_windows_command_paths("cat inside.txt"),
+        "cat inside.txt"
+    );
+}
+
+#[test]
 fn readonly_github_shell_calls_obey_the_host_network_policy_before_spawn() {
     let tmp = tempdir().expect("tempdir");
     let context = |default| {

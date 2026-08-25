@@ -3356,7 +3356,7 @@ pub fn new_shared_shell_manager(workspace: PathBuf) -> SharedShellManager {
 
 use crate::command_safety::{
     SafetyLevel, analyze_command, extract_primary_command, is_agent_readonly_shell_command,
-    is_github_readonly_command, is_parallel_readonly_command,
+    is_github_readonly_command, is_parallel_readonly_command, normalize_windows_command_paths,
 };
 use crate::execpolicy::{ExecPolicyDecision, load_default_policy};
 use crate::features::Feature;
@@ -3764,7 +3764,7 @@ fn exec_shell_input_is_parallel_readonly_shape(input: &serde_json::Value) -> boo
 }
 
 fn hardened_readonly_argv(command: &str) -> Result<(String, Vec<String>)> {
-    let mut argv = shell_words::split(command)
+    let mut argv = shell_words::split(&normalize_windows_command_paths(command))
         .map_err(|error| anyhow!("could not parse classifier-approved read command: {error}"))?;
     if argv.is_empty() {
         return Err(anyhow!("classifier-approved read command was empty"));
@@ -3829,7 +3829,7 @@ fn enforce_readonly_workspace_operands(
     workspace: &std::path::Path,
     effective_cwd: &std::path::Path,
 ) -> Result<(), ToolError> {
-    let argv = shell_words::split(command).map_err(|error| {
+    let argv = shell_words::split(&normalize_windows_command_paths(command)).map_err(|error| {
         ToolError::invalid_input(format!(
             "Could not parse read-only command arguments: {error}"
         ))
