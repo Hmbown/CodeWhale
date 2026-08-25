@@ -377,6 +377,7 @@
   "CmdQueueNotFound": "未找到已排隊的訊息",
   "CmdQueueTip": "提示: /queue send <n> 立即傳送, /queue drop <n> 刪除",
   "CmdQueueUsage": "用法: /queue [list|send <n>|edit <n>|drop <n>|clear]",
+  "CmdRelaunchDescription": "儲存此工作階段，重新啟動套用並恢復它",
   "CmdRelayDescription": "為新執行緒建立會話接力摘要",
   "CmdRemoteControlDescription": "從 Codewhale 網頁帳戶繼續這個會話",
   "CmdRemoteEnvDescription": "從 GitHub 或 CNB 分支尖端開啟新的託管 Work",

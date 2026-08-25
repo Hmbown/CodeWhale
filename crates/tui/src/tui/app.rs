@@ -1413,6 +1413,10 @@ pub struct App {
     pub pending_launch_action: Option<crate::tui::underwater::LaunchAction>,
     /// Mouse-selected hotbar slot, consumed by the async UI loop.
     pub pending_hotbar_slot: Option<u8>,
+    /// Session id the `/relaunch` command wants the next process image to
+    /// resume. Consumed at the end of `run_tui`, after the quit path has
+    /// flushed and saved the session (see `crate::relaunch`).
+    pub pending_relaunch: Option<String>,
     /// Whether the renderer should wrap each frame in DEC mode 2026
     /// synchronized output. Resolved from `Settings::synchronized_output`
     /// at construction; `auto`/`on` → `true`, `off` → `false`. The Ptyxis

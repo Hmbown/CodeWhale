@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New `/relaunch` command: save like `/exit`, then self-exec `resume
+  <session-id>` so a session switches to the current binary in one step. The
+  executable path falls back to `argv[0]` when `current_exe` resolves to a
+  deleted or renamed path (the updater's rename-replacement case); if the
+  replacement fails the session is already saved and the error names the
+  `resume` command to continue with. Unix-only by design — Windows keeps the
+  documented manual-restart behavior (#5532).
 - Optional machine-readable lifecycle event outbox
   (`[lifecycle_outbox]` config table): opt-in JSONL event stream
   (`turn_start` / `turn_end` / `turn_stalled` / `subagent_spawn` /
