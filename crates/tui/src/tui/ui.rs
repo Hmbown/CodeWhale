@@ -59,7 +59,7 @@ use crate::config::{
 };
 use crate::config_ui::{self, ConfigUiMode, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::{
-    DEFAULT_MAX_STEPS, DEFAULT_MAX_WALL_TIME, Engine, EngineConfig, EngineHandle, spawn_engine,
+    DEFAULT_MAX_STEPS, DEFAULT_MAX_WALL_TIME, Engine, EngineConfig, EngineHandle,
 };
 use crate::core::events::Event as EngineEvent;
 use crate::core::ops::{Op, ProviderRuntimeStatus, USER_SHELL_TOOL_ID_PREFIX, UserInputProvenance};
