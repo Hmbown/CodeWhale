@@ -3,7 +3,7 @@
   "checkpoint_id": "01M0VS4W7HHD6074K24F4BCAGX",
   "strategy": "manual-commit",
   "branch": "codex/v0912-integration-20260823",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     "CHANGELOG.md",
     "crates/agent/src/lib.rs",
@@ -25,13 +25,20 @@
       "compact_transcript": "/1/transcript.jsonl",
       "content_hash": "/1/content_hash.txt",
       "prompt": "/1/prompt.txt"
+    },
+    {
+      "metadata": "/2/metadata.json",
+      "transcript": "/2/full.jsonl",
+      "compact_transcript": "/2/transcript.jsonl",
+      "content_hash": "/2/content_hash.txt",
+      "prompt": "/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 910,
-    "cache_creation_tokens": 1214633,
-    "cache_read_tokens": 156270490,
-    "output_tokens": 410536,
-    "api_call_count": 455
+    "input_tokens": 962,
+    "cache_creation_tokens": 1243014,
+    "cache_read_tokens": 168590339,
+    "output_tokens": 429633,
+    "api_call_count": 481
   }
 }
