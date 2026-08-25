@@ -3004,6 +3004,48 @@ mod tests {
     }
 
     #[test]
+    fn reused_provider_tool_call_id_does_not_fail_session_save() {
+        let tmp = tempdir().expect("tempdir");
+        let sessions_dir = tmp.path().join("sessions");
+        let manager = SessionManager::new(sessions_dir.clone()).expect("manager");
+        let mut session = create_saved_session(
+            &[make_test_message("user", "reused call id")],
+            "test-model",
+            tmp.path(),
+            0,
+            None,
+        );
+        let first = ApprovalReceipt::asked("call-reused", "exec_shell");
+        let decided = ApprovalReceipt::decided("call-reused", ApprovalOutcome::ApprovedOnce);
+        let second = ApprovalReceipt::asked("call-reused", "write_file");
+        session.approval_receipts = vec![first.clone(), decided.clone(), second.clone()];
+
+        manager
+            .save_session(&session)
+            .expect("reused tool_call_id must not brick session save");
+        manager
+            .save_checkpoint(&session)
+            .expect("reused tool_call_id must not brick checkpoint save");
+
+        let store = ApprovalReceiptStore::new(sessions_dir);
+        store
+            .append(&session.metadata.id, &first)
+            .expect("persist first ask");
+        store
+            .append(&session.metadata.id, &decided)
+            .expect("persist first decision");
+        store
+            .append(&session.metadata.id, &second)
+            .expect("persist reused ask");
+        manager
+            .save_session(&session)
+            .expect("sidecar reuse must not brick session save");
+        manager
+            .save_checkpoint(&session)
+            .expect("sidecar reuse must not brick checkpoint save");
+    }
+
+    #[test]
     fn session_boot_owner_stamps_only_the_creating_instance() {
         let tmp = tempdir().expect("tempdir");
         let manager = SessionManager::new(tmp.path().to_path_buf()).expect("manager");

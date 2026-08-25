@@ -112,9 +112,14 @@ impl ApprovalReplay {
                             "approval ask '{approval_id}' does not match tool call '{tool_call_id}'"
                         ));
                     }
-                    if closed.contains(approval_id) || open.contains_key(approval_id) {
-                        return Err(format!("approval '{approval_id}' was asked more than once"));
+                    // Provider tool_call_id values are reused across turns.
+                    // An exact duplicate Asked is ignored; a later distinct
+                    // Asked last-write-wins the open slot (or starts a new
+                    // cycle after the previous one closed).
+                    if open.get(approval_id) == Some(receipt) {
+                        continue;
                     }
+                    closed.remove(approval_id);
                     open.insert(approval_id.clone(), receipt.clone());
                 }
                 ApprovalReceipt::Decided {
@@ -344,6 +349,88 @@ mod tests {
     }
 
     #[test]
+    fn replay_ignores_an_exact_duplicate_ask() {
+        let ask = ApprovalReceipt::asked("call-reused", "exec_shell");
+        let replay = ApprovalReplay::from_receipts(&[ask.clone(), ask.clone()])
+            .expect("exact duplicate Asked is not a hard error");
+
+        assert!(replay.completed.is_empty());
+        assert_eq!(replay.unmatched_asks, vec![ask]);
+    }
+
+    #[test]
+    fn replay_last_write_wins_an_open_ask_for_the_same_id() {
+        let first = ApprovalReceipt::asked("call-reused", "exec_shell");
+        let second = ApprovalReceipt::asked("call-reused", "write_file");
+        let replay = ApprovalReplay::from_receipts(&[first, second.clone()])
+            .expect("a later distinct Asked replaces the open one");
+
+        assert!(replay.completed.is_empty());
+        assert_eq!(replay.unmatched_asks, vec![second]);
+    }
+
+    #[test]
+    fn replay_accepts_provider_tool_call_id_reuse_across_turns() {
+        let first = ApprovalReceipt::asked("call-reused", "exec_shell");
+        let decided = ApprovalReceipt::decided("call-reused", ApprovalOutcome::ApprovedOnce);
+        let second = ApprovalReceipt::asked("call-reused", "write_file");
+        let replay = ApprovalReplay::from_receipts(&[first.clone(), decided, second.clone()])
+            .expect("a reused provider tool_call_id starts a new cycle");
+
+        assert_eq!(replay.completed.len(), 1);
+        assert_eq!(replay.completed[0].ask, first);
+        assert_eq!(replay.completed[0].outcome, ApprovalOutcome::ApprovedOnce);
+        assert_eq!(replay.unmatched_asks, vec![second]);
+    }
+
+    #[test]
+    fn replay_keeps_each_closed_cycle_when_the_call_id_is_reused() {
+        let first = ApprovalReceipt::asked("call-reused", "exec_shell");
+        let first_decision = ApprovalReceipt::decided("call-reused", ApprovalOutcome::ApprovedOnce);
+        let second = ApprovalReceipt::asked("call-reused", "write_file");
+        let second_decision = ApprovalReceipt::decided("call-reused", ApprovalOutcome::Denied);
+        let replay = ApprovalReplay::from_receipts(&[
+            first.clone(),
+            first_decision,
+            second.clone(),
+            second_decision,
+        ])
+        .expect("each closed cycle is retained");
+
+        assert_eq!(replay.completed.len(), 2);
+        assert_eq!(replay.completed[0].ask, first);
+        assert_eq!(replay.completed[0].outcome, ApprovalOutcome::ApprovedOnce);
+        assert_eq!(replay.completed[1].ask, second);
+        assert_eq!(replay.completed[1].outcome, ApprovalOutcome::Denied);
+        assert!(replay.unmatched_asks.is_empty());
+    }
+
+    #[test]
+    fn store_appends_a_reused_tool_call_id_as_a_new_cycle() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ApprovalReceiptStore::new(tmp.path().join("sessions"));
+        let first = ApprovalReceipt::asked("call-reused", "exec_shell");
+        let decided = ApprovalReceipt::decided("call-reused", ApprovalOutcome::ApprovedOnce);
+        let second = ApprovalReceipt::asked("call-reused", "write_file");
+
+        store
+            .append("session-1", &first)
+            .expect("persist first ask");
+        store
+            .append("session-1", &decided)
+            .expect("persist first decision");
+        store
+            .append("session-1", &second)
+            .expect("reused tool_call_id must append");
+
+        let receipts = store.load("session-1").expect("load reused-id log");
+        assert_eq!(receipts, vec![first, decided, second]);
+        let replay = ApprovalReplay::from_receipts(&receipts).expect("replay reused-id log");
+        assert_eq!(replay.completed.len(), 1);
+        assert_eq!(replay.unmatched_asks.len(), 1);
+    }
+
+    #[test]
     fn store_appends_and_replays_a_session_owned_log() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = ApprovalReceiptStore::new(tmp.path().join("sessions"));
@@ -410,8 +497,14 @@ mod tests {
             .into_iter()
             .map(|writer| writer.join().expect("writer thread"))
             .collect::<Vec<_>>();
-        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
-        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 7);
-        assert_eq!(store.load("session-race").expect("load receipts").len(), 1);
+        assert!(
+            results.iter().all(Result::is_ok),
+            "a duplicate Asked for the same id must not fail the writer: {results:?}"
+        );
+        let receipts = store.load("session-race").expect("load receipts");
+        assert_eq!(receipts.len(), 8);
+        let replay = ApprovalReplay::from_receipts(&receipts).expect("replay raced asks");
+        assert!(replay.completed.is_empty());
+        assert_eq!(replay.unmatched_asks.len(), 1);
     }
 }
