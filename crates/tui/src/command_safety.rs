@@ -405,10 +405,102 @@ const GITHUB_READONLY_PREFIXES: &[&str] = &[
     "gh workflow view",
 ];
 
+/// Windows verbatim-path prefix that Win32 APIs hand back for canonicalized
+/// operands: `\\?\C:\Users\dev\ws\file.txt`.
+const WINDOWS_VERBATIM_PREFIX: &str = "\\\\?\\";
+/// Verbatim spelling of a UNC path: `\\?\UNC\server\share` names the same
+/// share as `\\server\share`.
+const WINDOWS_VERBATIM_UNC_PREFIX: &str = "\\\\?\\UNC\\";
+
+/// Heuristic: does `token` look like an absolute Windows path?
+///
+/// Admits the three shapes a Windows-side operand can carry — a drive letter
+/// (`C:\Users\dev`), a verbatim prefix (`\\?\C:\Users\dev`), or a UNC share
+/// (`\\server\share`) — and rejects relative spellings and unix paths. Pure
+/// classification aid that runs on every platform; it never gates execution.
+fn looks_like_windows_absolute_path(token: &str) -> bool {
+    let trimmed = token.trim_matches(['"', '\'']);
+    let mut chars = trimmed.chars();
+    match (chars.next(), chars.next()) {
+        // `C:\...` or `C:/...`
+        (Some(drive), Some(':')) if drive.is_ascii_alphabetic() => {
+            matches!(chars.next(), Some('\\' | '/'))
+        }
+        // `\\server\share`, `\\?\C:\...`, `\\?\UNC\server\share`: a leading
+        // backslash pair whose third character names something.
+        (Some('\\'), Some('\\')) => matches!(chars.next(), Some(third) if third != '\\'),
+        _ => false,
+    }
+}
+
+/// Strip `\\?\` verbatim prefixes from a command line's operands so the
+/// read-only classifiers can see the path shape underneath (adapted #5610).
+///
+/// Windows canonicalizes operands into verbatim paths like
+/// `\\?\C:\Users\dev\ws\file.txt`. That `?` is load-bearing Win32 syntax,
+/// not a glob, but it trips the classifiers' metacharacter gates, and the
+/// POSIX tokenizer (`shlex`) eats the backslashes around it. Stripping the
+/// prefix — mapping the verbatim UNC form back to `\\server\share` — lets
+/// such commands classify by their real program and options.
+///
+/// This is a CLASSIFICATION-ONLY rewrite: the executed argv is never
+/// rewritten, because real splitting goes through `tools::shell`, which keeps
+/// backslashes literal on Windows. It is pure string logic with no platform
+/// gating, and a no-op unless a whitespace-delimited operand both *starts*
+/// with the verbatim prefix and still looks like an absolute Windows path
+/// afterwards — unix paths, relative operands, and mid-token `\\?\`
+/// sequences (regex patterns, prose) pass through untouched, so any `?`
+/// outside the prefix keeps rejecting the command.
+fn normalize_windows_command_paths(command: &str) -> String {
+    if !command.contains(WINDOWS_VERBATIM_PREFIX) {
+        return command.to_owned();
+    }
+    command
+        .split_whitespace()
+        .map(normalize_windows_operand)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Strip the verbatim prefix from one operand, keeping any shell quoting
+/// intact: `"\\?\C:\x"` becomes `"C:\x"`, `\\?\UNC\s\v` becomes `\\s\v`.
+fn normalize_windows_operand(word: &str) -> String {
+    let quote = match word.chars().next() {
+        Some(q @ ('"' | '\'')) => Some(q),
+        _ => None,
+    };
+    let body = match quote {
+        // Only a matched pair of quotes is treated as wrapping the path; a
+        // stray opening quote leaves the word alone (fail closed).
+        Some(q) if word.len() > q.len_utf8() && word.ends_with(q) => {
+            &word[q.len_utf8()..word.len() - q.len_utf8()]
+        }
+        _ => word,
+    };
+    let stripped = if let Some(rest) = body.strip_prefix(WINDOWS_VERBATIM_UNC_PREFIX) {
+        format!("\\\\{rest}")
+    } else if let Some(rest) = body.strip_prefix(WINDOWS_VERBATIM_PREFIX) {
+        rest.to_owned()
+    } else {
+        return word.to_owned();
+    };
+    if !looks_like_windows_absolute_path(&stripped) {
+        return word.to_owned();
+    }
+    match quote {
+        Some(q) => format!("{q}{stripped}{q}"),
+        None => stripped,
+    }
+}
+
 /// Return `true` when a shell command is safe to auto-approve and run in a
 /// parallel read-only chunk.
 pub fn is_parallel_readonly_command(command: &str) -> bool {
-    let trimmed = command.trim();
+    // Windows canonicalizes operands to `\\?\`-prefixed verbatim paths; that
+    // prefix is Win32 syntax rather than a glob, so strip it before the
+    // metacharacter gate sees a `?` that was never a wildcard (#5610).
+    let normalized = normalize_windows_command_paths(command);
+    let trimmed = normalized.trim();
     if trimmed.is_empty() {
         return false;
     }
@@ -522,7 +614,10 @@ fn readonly_tokens_admitted(trimmed: &str) -> bool {
 /// redirects, backgrounding, command/parameter expansion, subshells, or
 /// env-assignment prefixes.
 pub fn is_agent_readonly_shell_command(command: &str) -> bool {
-    let trimmed = command.trim();
+    // Same verbatim-prefix normalization as the parallel classifier: the `?`
+    // in `\\?\C:\...` is not one of the metacharacters this gate bans.
+    let normalized = normalize_windows_command_paths(command);
+    let trimmed = normalized.trim();
     if trimmed.is_empty() {
         return false;
     }
@@ -2152,6 +2247,112 @@ mod tests {
             );
             assert!(is_agent_readonly_shell_command(command));
         }
+    }
+
+    #[test]
+    fn windows_verbatim_path_operands_classify_readonly() {
+        // Windows canonicalizes operands to `\\?\`-prefixed verbatim paths;
+        // the `?` there is Win32 syntax, not a glob, and must not block
+        // read-only classification (adapted from #5610).
+        for command in [
+            "cat \\\\?\\C:\\Users\\dev\\ws\\file.txt",
+            "cat \"\\\\?\\C:\\Users\\dev\\ws\\file.txt\"",
+            "wc -l \\\\?\\C:\\Users\\dev\\ws\\src\\main.rs",
+            "head -n 5 \\\\?\\C:\\Users\\dev\\ws\\README.md",
+            "stat \\\\?\\C:\\Users\\dev\\ws\\Cargo.toml",
+            "git log --oneline -n 3 -- \\\\?\\C:\\Users\\dev\\ws\\crates",
+        ] {
+            assert!(
+                is_parallel_readonly_command(command),
+                "{command} should be parallel read-only with a verbatim operand"
+            );
+            assert!(
+                is_agent_readonly_shell_command(command),
+                "{command} should be agent read-only with a verbatim operand"
+            );
+        }
+        // The agent surface additionally admits `git -C <dir>` preambles,
+        // including verbatim-path spellings of the directory; the parent's
+        // parallel surface keeps rejecting any `-C` preamble, as today.
+        assert!(is_agent_readonly_shell_command(
+            "git -C \\\\?\\C:\\Users\\dev\\ws status --short"
+        ));
+        assert!(!is_parallel_readonly_command(
+            "git -C \\\\?\\C:\\Users\\dev\\ws status --short"
+        ));
+    }
+
+    #[test]
+    fn windows_verbatim_path_operands_do_not_widen_classification() {
+        // Read operands carry no workspace bounds in these classifiers —
+        // `cat /etc/passwd` is read-only today — so an out-of-workspace
+        // verbatim path stays read-only for a read verb, matching existing
+        // semantics. Every other gate keeps rejecting.
+        assert!(is_parallel_readonly_command(
+            "cat \\\\?\\C:\\Windows\\System32\\drivers\\etc\\hosts"
+        ));
+        // A `?` outside the verbatim prefix is still a wildcard.
+        assert!(!is_parallel_readonly_command(
+            "cat \\\\?\\C:\\ws\\file?.txt"
+        ));
+        assert!(!is_agent_readonly_shell_command(
+            "cat \\\\?\\C:\\ws\\file?.txt"
+        ));
+        // Globs stay banned on the parent surface beside a verbatim path.
+        assert!(!is_parallel_readonly_command(
+            "rg needle \\\\?\\C:\\ws\\*.rs"
+        ));
+        // Mutating verbs stay non-read-only whatever the operand spelling.
+        assert!(!is_parallel_readonly_command("cp \\\\?\\C:\\ws\\a.txt ."));
+        assert!(!is_agent_readonly_shell_command("rm -rf \\\\?\\C:\\ws"));
+        // `\\?\` mid-token is not a path prefix and is left alone, so its
+        // `?` still rejects the command in both classifiers.
+        assert!(!is_parallel_readonly_command("cat x\\\\?\\y"));
+        assert!(!is_agent_readonly_shell_command("cat x\\\\?\\y"));
+    }
+
+    #[test]
+    fn windows_path_normalization_is_identity_for_unix_commands() {
+        for command in [
+            "git status -s",
+            "cat /etc/passwd",
+            "rg needle crates/tui/src",
+            "echo C:\\Users\\dev",
+            "grep 'x\\\\?\\y' README.md",
+            "",
+        ] {
+            assert_eq!(
+                normalize_windows_command_paths(command),
+                command,
+                "{command} must pass through normalization untouched"
+            );
+        }
+        // Verbatim prefixes strip for classification only; quoting survives.
+        assert_eq!(
+            normalize_windows_command_paths("cat \\\\?\\C:\\Users\\dev\\ws\\file.txt"),
+            "cat C:\\Users\\dev\\ws\\file.txt"
+        );
+        assert_eq!(
+            normalize_windows_command_paths("stat \\\\?\\UNC\\build\\ws\\file.txt"),
+            "stat \\\\build\\ws\\file.txt"
+        );
+        assert_eq!(
+            normalize_windows_command_paths("wc -l \"\\\\?\\C:\\ws\\main.rs\""),
+            "wc -l \"C:\\ws\\main.rs\""
+        );
+        // A `\\?\`-prefixed word with no Windows absolute path underneath
+        // (no drive letter, no UNC share) is left untouched.
+        assert_eq!(
+            normalize_windows_command_paths("cat \\\\?\\relative"),
+            "cat \\\\?\\relative"
+        );
+        assert!(looks_like_windows_absolute_path("C:\\Users\\dev"));
+        assert!(looks_like_windows_absolute_path("\\\\?\\C:\\Users\\dev"));
+        assert!(looks_like_windows_absolute_path("\\\\server\\share"));
+        assert!(!looks_like_windows_absolute_path("crates/tui"));
+        assert!(!looks_like_windows_absolute_path("C:relative"));
+        assert!(!looks_like_windows_absolute_path("\\\\"));
+        assert!(!looks_like_windows_absolute_path("CC:\\x"));
     }
 
     #[test]
