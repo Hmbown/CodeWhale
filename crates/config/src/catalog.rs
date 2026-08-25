@@ -878,5 +878,7 @@ pub fn bundled_output_exceeds_context(value: &Value) -> Vec<String> {
         .collect()
 }
 
+pub mod fact_guard;
+
 #[cfg(test)]
 mod tests;
