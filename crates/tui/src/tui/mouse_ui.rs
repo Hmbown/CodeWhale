@@ -1,5 +1,101 @@
 use std::time::{Duration, Instant};
 
+/// Timing trace of the last left-click in the composer. crossterm never
+/// decodes click counts, so double/triple-click detection keeps the prior
+/// click's time and position; a fast click within the slop window increments
+/// the count, anything else resets it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ComposerClickTrace {
+    at: Instant,
+    column: u16,
+    row: u16,
+    count: u8,
+}
+
+const COMPOSER_DOUBLE_CLICK_MS: u128 = 400;
+const COMPOSER_CLICK_SLOP_CELLS: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ComposerClickGesture {
+    Caret,
+    Word,
+    Line,
+}
+
+fn classify_composer_click(
+    trace: &mut Option<ComposerClickTrace>,
+    column: u16,
+    row: u16,
+) -> ComposerClickGesture {
+    let at = Instant::now();
+    let next = match trace.as_ref() {
+        Some(prev)
+            if at.duration_since(prev.at).as_millis() <= COMPOSER_DOUBLE_CLICK_MS
+                && prev.row.abs_diff(row) <= COMPOSER_CLICK_SLOP_CELLS
+                && prev.column.abs_diff(column) <= COMPOSER_CLICK_SLOP_CELLS =>
+        {
+            ComposerClickTrace {
+                at,
+                column,
+                row,
+                count: prev.count.saturating_add(1),
+            }
+        }
+        _ => ComposerClickTrace {
+            at,
+            column,
+            row,
+            count: 1,
+        },
+    };
+    let count = next.count;
+    *trace = Some(next);
+    match count {
+        2 => ComposerClickGesture::Word,
+        n if n >= 3 => ComposerClickGesture::Line,
+        _ => ComposerClickGesture::Caret,
+    }
+}
+
+/// Byte bounds of the word (or CJK run) containing `pos`.
+fn composer_word_bounds(text: &str, pos: usize) -> (usize, usize) {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    if chars.is_empty() {
+        return (0, 0);
+    }
+    let is_word = |ch: char| ch.is_alphanumeric() || (ch as u32) >= 0x80;
+    let idx = chars.partition_point(|(byte, _)| *byte < pos);
+    let idx = idx.min(chars.len().saturating_sub(1));
+    if !is_word(chars[idx].1) {
+        return (chars[idx].0, chars[idx].0 + chars[idx].1.len_utf8());
+    }
+    let mut start = idx;
+    while start > 0 && is_word(chars[start - 1].1) {
+        start -= 1;
+    }
+    let mut end = idx + 1;
+    while end < chars.len() && is_word(chars[end].1) {
+        end += 1;
+    }
+    let start_byte = chars[start].0;
+    let end_byte = if end < chars.len() {
+        chars[end].0
+    } else {
+        text.len()
+    };
+    (start_byte, end_byte)
+}
+
+/// Byte bounds of the logical line containing `pos` (excluding the newline).
+fn composer_line_bounds(text: &str, pos: usize) -> (usize, usize) {
+    let pos = pos.min(text.len());
+    let start = text[..pos].rfind('\n').map_or(0, |i| i + 1);
+    let end = text[pos..]
+        .find('\n')
+        .map_or(text.len(), |offset| pos + offset);
+    (start, end)
+}
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use unicode_segmentation::UnicodeSegmentation;
@@ -256,8 +352,26 @@ pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
         ),
         MouseEventKind::Down(MouseButton::Left) => {
             if let Some(pos) = mouse_pos_to_char_index(app, mouse.column, mouse.row, text_area) {
-                app.cursor_position = pos;
-                app.selection_anchor = None;
+                match classify_composer_click(
+                    &mut app.viewport.composer_click_trace,
+                    mouse.column,
+                    mouse.row,
+                ) {
+                    ComposerClickGesture::Word => {
+                        let (start, end) = composer_word_bounds(&app.input, pos);
+                        app.selection_anchor = Some(start);
+                        app.cursor_position = end;
+                    }
+                    ComposerClickGesture::Line => {
+                        let (start, end) = composer_line_bounds(&app.input, pos);
+                        app.selection_anchor = Some(start);
+                        app.cursor_position = end;
+                    }
+                    ComposerClickGesture::Caret => {
+                        app.cursor_position = pos;
+                        app.selection_anchor = None;
+                    }
+                }
                 app.needs_redraw = true;
             }
             true
@@ -2070,5 +2184,63 @@ mod tests {
             focus.omitted_messages, 0,
             "Open must use the complete artifact, not the compacted resident tail"
         );
+    }
+
+    #[cfg(test)]
+    mod composer_selection_tests {
+        use super::super::*;
+
+        #[test]
+        fn word_bounds_select_words_and_respect_cjk() {
+            // Bytes: fix(0-2) sp(3) the(4-6) sp(7) 深=3B(8-10) 海=3B(11-13) sp(14) test.rs(15-21)
+            let text = "fix the 深海 test.rs";
+            assert_eq!(composer_word_bounds(text, 2), (0, 3)); // 'fix'
+            assert_eq!(composer_word_bounds(text, 5), (4, 7)); // 'the'
+            assert_eq!(composer_word_bounds(text, 10), (8, 14)); // '深海' (space at 14)
+            assert_eq!(composer_word_bounds(text, 15), (15, 19)); // 'test' (stops at '.')
+            assert_eq!(composer_word_bounds(text, 19), (19, 20)); // '.'
+            assert_eq!(composer_word_bounds(text, 20), (20, 22)); // 'rs'
+        }
+
+        #[test]
+        fn word_bounds_at_punctuation_returns_the_single_char() {
+            let text = "a, b";
+            assert_eq!(composer_word_bounds(text, 1), (1, 2)); // ','
+        }
+
+        #[test]
+        fn line_bounds_exclude_the_newline() {
+            let text = "first\nsecond third\nfourth";
+            assert_eq!(composer_line_bounds(text, 2), (0, 5));
+            assert_eq!(composer_line_bounds(text, 9), (6, 18));
+            assert_eq!(composer_line_bounds(text, 20), (19, 25));
+            assert_eq!(composer_line_bounds(text, 0), (0, 5));
+        }
+
+        #[test]
+        fn click_classification_resets_outside_the_window_or_slop() {
+            let mut trace = None;
+            assert_eq!(
+                classify_composer_click(&mut trace, 10, 4),
+                ComposerClickGesture::Caret
+            );
+            assert_eq!(
+                classify_composer_click(&mut trace, 10, 4),
+                ComposerClickGesture::Word
+            );
+            assert_eq!(
+                classify_composer_click(&mut trace, 10, 4),
+                ComposerClickGesture::Line
+            );
+            // A click far away resets the chain back to a caret.
+            assert_eq!(
+                classify_composer_click(&mut trace, 10, 40),
+                ComposerClickGesture::Caret
+            );
+            assert_eq!(
+                classify_composer_click(&mut trace, 10, 40),
+                ComposerClickGesture::Word
+            );
+        }
     }
 }

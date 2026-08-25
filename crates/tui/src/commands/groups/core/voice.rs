@@ -36,9 +36,6 @@ use crate::tui::app::{App, AppAction};
 
 /// Transcription model requested from the provider's chat-completions API.
 const ASR_MODEL: &str = "mimo-v2.5-asr";
-/// Free ASR: Groq Whisper (cloud, free tier) — fast, cross-platform, no local model download.
-#[allow(dead_code)]
-const GROQ_ASR_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
 const GROQ_ASR_MODEL: &str = "whisper-large-v3-turbo";
 /// Local whisper binary names to probe (whisper.cpp, faster-whisper, OpenAI whisper).
 const LOCAL_WHISPER_BINS: &[&str] = &["whisper", "whisper.cpp", "whisper-cpp", "faster-whisper"];
@@ -319,6 +316,7 @@ async fn post_chat_completions(
     base_url: &str,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    let _inference = crate::client::acquire_remote_control_inference_participant().await;
     let client = crate::tls::reqwest_client();
     let resp = client
         .post(chat_completions_url(base_url))

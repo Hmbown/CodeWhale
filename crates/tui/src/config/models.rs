@@ -13,7 +13,7 @@ pub const DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL: &str = "https://api.deepseek.com/
 pub const DEFAULT_NVIDIA_NIM_MODEL: &str = "deepseek-ai/deepseek-v4-pro";
 pub const DEFAULT_NVIDIA_NIM_FLASH_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
 pub const DEFAULT_NVIDIA_NIM_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
-pub const DEFAULT_OPENAI_MODEL: &str = "deepseek-v4-pro";
+pub const DEFAULT_OPENAI_MODEL: &str = codewhale_config::provider::OPENAI_DEFAULT_MODEL;
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_ATLASCLOUD_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
 pub const DEFAULT_ATLASCLOUD_BASE_URL: &str = "https://api.atlascloud.ai/v1";
@@ -173,6 +173,12 @@ pub const OFFICIAL_DEEPSEEK_MODELS: &[&str] = &[
     // Vision-experimental sibling of v4-flash; verified live on
     // api.deepseek.com /models 2026-08-21. Same family aliases apply.
     "deepseek-v4-flash-vision-exp",
+];
+pub const OFFICIAL_OPENAI_MODELS: &[&str] = &[
+    DEFAULT_OPENAI_MODEL,
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
 ];
 // GLM-5.3 is live on the Z.ai Coding Plan (2026-08-13) and is the default
 // for new Z.ai routes. Limits and reasoning options still inherit from

@@ -204,12 +204,13 @@ pub(crate) async fn cycle_permission_posture(
 }
 
 /// Open the one canonical provider setup surface for onboarding. Fresh
-/// onboarding starts with the small local-runtime list and leaves the full
-/// cloud catalog one explicit `A` away. Missing-key recovery instead focuses
-/// the already-configured route so an exact Kimi Code K3 configuration can
-/// expose its plan route before a secret is entered. Either way the picker
-/// opens on the navigable list (#4763): onboarding never drops a user straight
-/// into a key/OAuth prompt for a route they were not shown.
+/// onboarding opens on the full provider catalog, hosted providers included
+/// (#5563), with `L` as the explicit opt-in local-only view. Missing-key
+/// recovery instead focuses the already-configured route so an exact Kimi
+/// Code K3 configuration can expose its plan route before a secret is entered.
+/// Either way the picker opens on the navigable list (#4763): onboarding never
+/// drops a user straight into a key/OAuth prompt for a route they were not
+/// shown.
 pub(crate) async fn open_onboarding_provider_picker(
     app: &mut App,
     config: &Config,

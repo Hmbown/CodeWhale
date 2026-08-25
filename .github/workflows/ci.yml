@@ -124,7 +124,7 @@ jobs:
               scripts/release/npm-wrapper-smoke.js|scripts/mobile-smoke.sh|scripts/check-provider-registry.py)
                 heavy=true
                 ;;
-              docs/*|*.md|.github/PULL_REQUEST_TEMPLATE.md|.github/ISSUE_TEMPLATE/*|.github/scripts/agent-task-metadata.test.sh|.github/workflows/agent-task-labels.yml|.github/workflows/auto-tag.yml|.github/workflows/stale.yml|.github/workflows/triage.yml|scripts/release/check-versions.sh|scripts/release/check-ohos-deps.sh|scripts/release/install-dogfood.sh|scripts/release/install-dogfood.test.sh|scripts/release/prepare-release.sh|scripts/release/prepare-release.test.sh|scripts/check-coauthor-trailers.py|scripts/dev-cache.sh|scripts/dev-cache.test.sh|scripts/dev-cargo.sh|scripts/dev-test.sh)
+              docs/*|*.md|packaging/aur/*|.github/PULL_REQUEST_TEMPLATE.md|.github/ISSUE_TEMPLATE/*|.github/scripts/agent-task-metadata.test.sh|.github/workflows/agent-task-labels.yml|.github/workflows/auto-tag.yml|.github/workflows/stale.yml|.github/workflows/triage.yml|scripts/release/check-versions.sh|scripts/release/check-ohos-deps.sh|scripts/release/install-dogfood.sh|scripts/release/install-dogfood.test.sh|scripts/release/prepare-release.sh|scripts/release/prepare-release.test.sh|scripts/check-coauthor-trailers.py|scripts/dev-cache.sh|scripts/dev-cache.test.sh|scripts/dev-cargo.sh|scripts/dev-test.sh)
                 ;;
               *)
                 heavy=true
@@ -190,6 +190,7 @@ jobs:
           bash scripts/release/require-release-tag-checkout.test.sh
           bash scripts/release/validate-crate-publish-order.test.sh
           bash scripts/release/verify-remote-tag.test.sh
+          bash packaging/aur/render.test.sh
           sh scripts/dev-cache.test.sh
           bash .github/scripts/update-homebrew-tap.test.sh
           node .github/scripts/release-workflows.test.js
@@ -410,11 +411,40 @@ jobs:
       - name: Check harvested contributor credit
         if: github.event_name != 'schedule'
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_MERGE_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            BASE_SHA="${{ github.event.pull_request.base.sha }}"
-            git fetch --no-tags origin "${BASE_SHA}"
-            RANGE="${BASE_SHA}..HEAD"
+          set -euo pipefail
+          python3 scripts/test_check_coauthor_trailers.py
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            # Pull-request base.sha can lag the merge ref's actual base parent.
+            # Comparing it to the synthetic merge checkout therefore
+            # rechecks unrelated commits that landed on the base after the PR
+            # opened. Use the merge ref's immutable parents: the base snapshot
+            # used to synthesize it and the exact PR head, while excluding the
+            # synthetic merge itself.
+            if [[ "$(git rev-parse HEAD)" != "${PR_MERGE_SHA}" ]]; then
+              echo "::error::credit check is not running at the event merge SHA" >&2
+              exit 1
+            fi
+            read -r BASE_PARENT HEAD_PARENT EXTRA_PARENT < <(
+              git show -s --format='%P' "${PR_MERGE_SHA}"
+            )
+            if [[ -z "${BASE_PARENT}" || -z "${HEAD_PARENT}" || -n "${EXTRA_PARENT}" ]]; then
+              echo "::error::pull-request merge ref must have exactly two parents" >&2
+              exit 1
+            fi
+            if [[ "${HEAD_PARENT}" != "${PR_HEAD_SHA}" ]]; then
+              echo "::error::merge ref head parent does not match the event PR head" >&2
+              exit 1
+            fi
+            RANGE="${BASE_PARENT}..${HEAD_PARENT}"
+            if [[ -z "$(git rev-list -1 "${RANGE}")" ]]; then
+              echo "::error::pull-request credit range is empty" >&2
+              exit 1
+            fi
           elif [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
             RANGE="${{ github.event.before }}..${{ github.sha }}"
           else
@@ -464,7 +494,8 @@ jobs:
     # "Test (windows-latest)" derive from job name + matrix.os and are
     # independent of runs-on. For light changes the macOS/Windows legs only
     # echo a skip line, so run them on ubuntu instead of queueing for scarce
-    # macOS/Windows runners. Heavy changes use the real matrix OS as before.
+    # macOS/Windows runners. Heavy pull requests run the Linux lane directly;
+    # non-PR release/main pushes use CNB for Linux.
     # The ternary is safe: matrix.os is always a non-empty literal, so
     # runs-on can never evaluate to empty.
     timeout-minutes: 90
@@ -474,15 +505,15 @@ jobs:
       # other one. We need both conclusions to diagnose and release safely.
       fail-fast: false
       matrix:
-        # Linux workspace tests moved to CNB; GitHub keeps the platform
-        # coverage CNB cannot provide.
+        # Linux workspace tests run directly for pull requests. CNB remains
+        # the Linux lane for non-PR release/main pushes.
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - name: Skip tests for light change
         if: needs.changes.outputs.heavy != 'true'
         run: echo "No executable Rust changes detected; preserving required Test context."
       - uses: actions/checkout@v7
-        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
+        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
       - name: Test Windows installer PATH helper
         if: needs.changes.outputs.heavy == 'true' && matrix.os == 'windows-latest'
         shell: pwsh
@@ -519,20 +550,20 @@ jobs:
         shell: pwsh
         run: ./scripts/installer/installer-path-regression.tests.ps1 -AllowUserPathMutation
       - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
+        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
       - uses: mozilla-actions/sccache-action@v0.0.11
         id: sccache
         continue-on-error: true
-        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
+        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
       - name: Enable sccache
-        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch') && steps.sccache.outcome == 'success'
+        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') && steps.sccache.outcome == 'success'
         shell: bash
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> "${GITHUB_ENV}"
           echo "RUSTC_WRAPPER=sccache" >> "${GITHUB_ENV}"
           echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "${GITHUB_ENV}"
       - name: Install Linux system dependencies
-        if: needs.changes.outputs.heavy == 'true' && matrix.os == 'ubuntu-latest' && github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.heavy == 'true' && matrix.os == 'ubuntu-latest' && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
         run: |
           for i in 1 2 3 4 5; do
             sudo apt-get update && break
@@ -541,12 +572,12 @@ jobs:
           done
           sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
+        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
         with:
           cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@nextest
-        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
+        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
       - name: Run tests
         # Same test binaries as `cargo test`, run by cargo-nextest: one
         # process per test, all runner cores busy, slow tests named instead
@@ -554,7 +585,7 @@ jobs:
         # binary and bounds the integration binary that spawns the real
         # executable; retries are off, so a flake is a red run, not a hidden
         # one. nextest does not run doctests — the next step keeps them.
-        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
+        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
         run: cargo nextest run --workspace --all-features --locked --profile ci
         env:
           # Give test threads the stack the product gives itself. main.rs runs
@@ -571,7 +602,7 @@ jobs:
           # both libtest's per-test threads and tokio's workers.
           RUST_MIN_STACK: '16777216'
       - name: Run doctests
-        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
+        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
         run: cargo test --workspace --all-features --locked --doc
         env:
           RUST_MIN_STACK: '16777216'
@@ -582,7 +613,7 @@ jobs:
         if: needs.changes.outputs.heavy == 'true' && matrix.os == 'macos-latest'
         run: python3 scripts/check-persistence-backlog-budget.py
       - name: Lockfile drift guard
-        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
+        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
         run: git diff --exit-code -- Cargo.lock
       - name: Run Offline Eval Harness
         # The eval harness is OS-independent prompt/composition checking;
@@ -592,13 +623,13 @@ jobs:
         if: needs.changes.outputs.heavy == 'true' && matrix.os == 'macos-latest'
         run: cargo run -p codewhale-tui --all-features -- eval
       - name: sccache stats
-        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch') && steps.sccache.outcome == 'success'
+        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') && steps.sccache.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: sccache --show-stats
-      - name: Linux test location
-        if: needs.changes.outputs.heavy == 'true' && matrix.os == 'ubuntu-latest' && github.event_name != 'workflow_dispatch'
-        run: echo "Linux workspace tests run on CNB for mirrored first-party branches."
+      - name: Linux test location (CNB)
+        if: needs.changes.outputs.heavy == 'true' && matrix.os == 'ubuntu-latest' && github.event_name != 'workflow_dispatch' && github.event_name != 'pull_request'
+        run: echo "Linux workspace tests run on CNB for non-PR release/main pushes; pull requests run directly on Ubuntu."
 
   npm-wrapper-smoke:
     name: npm wrapper smoke

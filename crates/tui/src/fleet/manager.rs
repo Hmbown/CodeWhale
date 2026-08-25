@@ -417,6 +417,7 @@ impl FleetManager {
             workflow: descriptor.workflow,
             roles: descriptor.roles,
             max_workers: Some(max_workers),
+            usage_ceiling: doc.usage_ceiling.clone(),
             task_specs: doc.tasks.clone(),
             worker_specs: doc.workers.clone(),
             labels: doc.labels,
@@ -900,6 +901,19 @@ impl FleetManager {
                     executor.forget_worker(&worker_id);
                     continue;
                 };
+                // Per-task wall-clock limit (R5): the process is the
+                // completion authority, so a deadline kills the worker first
+                // and finalizes with an honest Timeout receipt afterwards.
+                if let Some(limit) = task_wall_clock_limit(&task.task_spec)
+                    && let Some(running) = executor.worker_running_for(&worker_id)
+                    && running >= limit
+                {
+                    executor.stop_worker(&worker_id)?;
+                    executor.forget_worker(&worker_id);
+                    self.record_task_timeout(&task, limit)?;
+                    report.terminals += 1;
+                    continue;
+                }
                 if self.record_task_outcome(&task, terminal)? {
                     report.terminals += 1;
                 }
@@ -1750,6 +1764,62 @@ impl FleetManager {
             .is_some())
     }
 
+    /// Mark a leased task timed out after its wall-clock limit (R5). The
+    /// caller stops and forgets the worker before this runs; the ledger's
+    /// implicit rule maps a Timeout receipt onto the Failed terminal status.
+    fn record_task_timeout(
+        &self,
+        task: &FleetExecutorTaskContext,
+        limit: std::time::Duration,
+    ) -> Result<bool> {
+        let state = self.ledger.rebuild_state()?;
+        let key = task_key(&task.entry.run_id.0, &task.entry.task_id);
+        let Some(current) = state.tasks.get(&key) else {
+            return Ok(false);
+        };
+        if current.status != FleetTaskLedgerStatus::Leased
+            || current.leased_to.as_deref() != Some(task.worker_id.as_str())
+            || current.entry.attempts != task.entry.attempts
+        {
+            return Ok(false);
+        }
+        let artifacts = self.task_artifacts_for_receipt(
+            &task.entry.run_id,
+            &task.entry.task_id,
+            &task.worker_id,
+        )?;
+        let receipt = FleetReceipt {
+            run_id: task.entry.run_id.clone(),
+            task_id: task.entry.task_id.clone(),
+            worker_id: task.worker_id.clone(),
+            attempt: Some(task.entry.attempts),
+            terminal_seq: None,
+            completed_at: timestamp(),
+            result: FleetTaskResult::Timeout,
+            failure_kind: None,
+            artifacts,
+            score: None,
+            resolved_route: self.resolve_task_route(&task.task_spec),
+            effective_permissions: self.resolve_task_effective_permissions(task),
+        };
+        let payload = FleetWorkerEventPayload::Cancelled {
+            cancelled_by: Some(format!("driver-timeout-{}-seconds", limit.as_secs())),
+        };
+        Ok(self
+            .ledger
+            .finalize_task_attempt_if_leased(
+                &task.entry.run_id,
+                &task.worker_id,
+                &task.entry.task_id,
+                task.entry.attempts,
+                &timestamp(),
+                payload,
+                Some(FleetTaskLedgerStatus::Failed),
+                receipt,
+            )?
+            .is_some())
+    }
+
     /// Resolve the route snapshot to persist on a task's receipt (#3154).
     ///
     /// Loads the merged agent roster so role/loadout intent composes the same
@@ -2391,6 +2461,27 @@ fn validate_task_cwd_for_host(
     Ok(())
 }
 
+/// Effective wall-clock limit for a Fleet task (R5).
+///
+/// `FleetTaskSpec::timeout_seconds` and `FleetTaskBudget::max_seconds` were
+/// both dead config — nothing ever read them. The tighter of the two wins;
+/// zero/None mean unbounded.
+fn task_wall_clock_limit(task_spec: &FleetTaskSpec) -> Option<std::time::Duration> {
+    let mut seconds: Option<u64> = task_spec.timeout_seconds.filter(|s| *s > 0);
+    if let Some(budget_seconds) = task_spec
+        .budget
+        .as_ref()
+        .and_then(|budget| budget.max_seconds)
+        .filter(|s| *s > 0)
+    {
+        seconds = Some(match seconds {
+            Some(current) => current.min(budget_seconds),
+            None => budget_seconds,
+        });
+    }
+    seconds.map(std::time::Duration::from_secs)
+}
+
 fn task_receipt_outcome(
     payload: &FleetWorkerEventPayload,
     exit_code: Option<i32>,
@@ -2592,6 +2683,7 @@ mod tests {
                     security_policy: None,
                     workers: vec![worker],
                     tasks: vec![nested],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -2641,6 +2733,7 @@ mod tests {
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![spec],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -2669,6 +2762,7 @@ mod tests {
                     security_policy: None,
                     workers: vec![resume_worker_spec("worker\r\nforged")],
                     tasks: vec![task("task-a")],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -2700,6 +2794,7 @@ mod tests {
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![task("task-a")],
+                    usage_ceiling: None,
                 },
                 1,
                 ManagedFleetRunDescriptor {
@@ -2788,6 +2883,7 @@ mod tests {
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![task("task-a")],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -2842,6 +2938,7 @@ mod tests {
                         security_policy: None,
                         workers: Vec::new(),
                         tasks: vec![write_task(task_id)],
+                        usage_ceiling: None,
                     },
                     1,
                 )
@@ -2893,6 +2990,7 @@ mod tests {
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![spec],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -3073,6 +3171,43 @@ mod tests {
 
     const RESUME_T0: &str = "2026-06-13T01:00:00Z";
 
+    #[test]
+    fn task_wall_clock_limit_prefers_the_tighter_configured_limit() {
+        let mut spec = task("timeout-task");
+        spec.timeout_seconds = Some(120);
+        spec.budget = Some(FleetTaskBudget {
+            max_tokens: None,
+            max_steps: None,
+            max_tool_calls: None,
+            max_seconds: Some(60),
+        });
+        assert_eq!(
+            task_wall_clock_limit(&spec),
+            Some(std::time::Duration::from_secs(60)),
+            "the tightest limit must win"
+        );
+
+        spec.timeout_seconds = Some(30);
+        assert_eq!(
+            task_wall_clock_limit(&spec),
+            Some(std::time::Duration::from_secs(30)),
+        );
+    }
+
+    #[test]
+    fn task_wall_clock_limit_is_unbounded_when_not_configured() {
+        assert_eq!(task_wall_clock_limit(&task("no-limit")), None);
+        let mut spec = task("zero-limits");
+        spec.timeout_seconds = Some(0);
+        spec.budget = Some(FleetTaskBudget {
+            max_tokens: None,
+            max_steps: None,
+            max_tool_calls: None,
+            max_seconds: Some(0),
+        });
+        assert_eq!(task_wall_clock_limit(&spec), None);
+    }
+
     fn role_task_with_retry(id: &str, role: &str, max_attempts: u32) -> FleetTaskSpec {
         let mut spec = task(id);
         spec.worker = Some(FleetTaskWorkerProfile {
@@ -3134,6 +3269,7 @@ mod tests {
                 workflow: None,
                 roles: Vec::new(),
                 max_workers: Some(workers.len().max(1)),
+                usage_ceiling: None,
                 task_specs: tasks.to_vec(),
                 worker_specs: workers.to_vec(),
                 labels: BTreeMap::new(),
@@ -3428,6 +3564,7 @@ mod tests {
             security_policy: None,
             workers: Vec::new(),
             tasks: vec![task],
+            usage_ceiling: None,
         };
 
         let err = manager
@@ -4257,6 +4394,7 @@ esac
                 default_local_worker("local-verifier"),
             ],
             tasks: vec![task_failed, transport, verifier_failed],
+            usage_ceiling: None,
         };
 
         let report = manager.create_run(doc, 3).unwrap();
@@ -4310,6 +4448,7 @@ printf '%s\n' '{"type":"done"}'
                     security_policy: None,
                     workers: vec![],
                     tasks: vec![task("route-drift")],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -4388,6 +4527,7 @@ printf '%s\n' '{"type":"done"}'
                     security_policy: None,
                     workers: vec![],
                     tasks: vec![task("invalid-route")],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -4514,6 +4654,7 @@ esac
                     security_policy: None,
                     workers: vec![],
                     tasks,
+                    usage_ceiling: None,
                 },
                 3,
             )
@@ -4909,6 +5050,7 @@ esac
                     security_policy: None,
                     workers: vec![],
                     tasks,
+                    usage_ceiling: None,
                 },
                 2,
             )
@@ -4979,6 +5121,7 @@ esac
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![task("task-a")],
+                    usage_ceiling: None,
                 },
                 1,
             )

@@ -91,6 +91,12 @@ impl ProviderNativeSearchClient {
         &self,
         request: &ProviderNativeSearchRequest,
     ) -> Result<ProviderNativeSearchResponse> {
+        // This adapter performs model-backed inference directly instead of
+        // calling `DeepSeekClient::create_message*`. It must therefore join
+        // the same attached-run ownership boundary explicitly. The guard is
+        // retained through response decode so a relay writer cannot start
+        // while this result is still able to feed the interactive turn.
+        let _inference = self.inner.acquire_remote_control_inference_permit().await;
         let body = match self.inner.api_provider {
             ApiProvider::Openai => build_responses_search_body(
                 &self.inner.default_model,
@@ -418,6 +424,30 @@ mod tests {
         }
     }
 
+    fn xai_client_with_boundary(
+        server: &MockServer,
+        isolated: bool,
+        unrelated: bool,
+    ) -> ProviderNativeSearchClient {
+        let config = Config {
+            provider: Some("xai".to_string()),
+            providers: Some(ProvidersConfig {
+                xai: ProviderConfig {
+                    api_key: Some("xai-test-key".to_string()),
+                    base_url: Some(format!("{}/v1", server.uri())),
+                    model: Some("grok-4.5".to_string()),
+                    ..ProviderConfig::default()
+                },
+                ..ProvidersConfig::default()
+            }),
+            runtime_chat_isolated: isolated,
+            runtime_thread_inference_unrelated: unrelated,
+            ..Config::default()
+        };
+        ProviderNativeSearchClient::new(DeepSeekClient::new(&config).expect("test xAI client"))
+            .expect("xAI native adapter")
+    }
+
     #[test]
     fn responses_payload_requires_search_and_keeps_domains_provider_side() {
         let body =
@@ -563,5 +593,55 @@ mod tests {
         assert_eq!(response.answer.as_deref(), Some("Grounded answer."));
         assert_eq!(response.citations.len(), 1);
         assert_eq!(response.citations[0].url, "https://example.com/source");
+    }
+
+    #[tokio::test]
+    async fn native_search_obeys_attached_run_ownership_without_blocking_unrelated_runtime() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "output_text": "Grounded answer.",
+                "citations": ["https://example.com/source"]
+            })))
+            .expect(3)
+            .mount(&server)
+            .await;
+        let participant = xai_client_with_boundary(&server, false, false);
+        let isolated = xai_client_with_boundary(&server, true, false);
+        let unrelated = xai_client_with_boundary(&server, false, true);
+
+        let ownership = crate::client::acquire_runtime_chat_inference_ownership().await;
+        let participant_request = request();
+        let mut waiting =
+            tokio::spawn(async move { participant.search(&participant_request).await });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(40), &mut waiting)
+                .await
+                .is_err(),
+            "provider-native inference from the attached run must wait behind Runtime Chat"
+        );
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            isolated.search(&request()),
+        )
+        .await
+        .expect("isolated relay request must not self-deadlock")
+        .expect("isolated native search fixture");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            unrelated.search(&request()),
+        )
+        .await
+        .expect("unrelated Runtime manager stays concurrent")
+        .expect("unrelated native search fixture");
+
+        drop(ownership);
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .expect("attached participant resumes after relay settlement")
+            .expect("participant task")
+            .expect("participant native search fixture");
     }
 }

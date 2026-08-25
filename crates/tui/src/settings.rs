@@ -4065,6 +4065,11 @@ mod tests {
     #[test]
     fn ghostty_term_program_keeps_full_motion_without_the_legacy_30_fps_cap() {
         let _g = term_program_test_guard();
+        // Neutralize the SSH markers: production intentionally caps motion
+        // over SSH, and the suite routinely runs inside one.
+        let _ssh_client = crate::test_support::EnvVarGuard::remove("SSH_CLIENT");
+        let _ssh_connection = crate::test_support::EnvVarGuard::remove("SSH_CONNECTION");
+        let _ssh_tty = crate::test_support::EnvVarGuard::remove("SSH_TTY");
         let prev = std::env::var_os("TERM_PROGRAM");
         // SAFETY: serialised by the guard.
         unsafe {
@@ -4088,6 +4093,11 @@ mod tests {
     #[test]
     fn ghostty_term_fallback_keeps_full_motion_without_the_legacy_30_fps_cap() {
         let _g = term_program_test_guard();
+        // Neutralize the SSH markers: production intentionally caps motion
+        // over SSH, and the suite routinely runs inside one.
+        let _ssh_client = crate::test_support::EnvVarGuard::remove("SSH_CLIENT");
+        let _ssh_connection = crate::test_support::EnvVarGuard::remove("SSH_CONNECTION");
+        let _ssh_tty = crate::test_support::EnvVarGuard::remove("SSH_TTY");
         let prev_program = std::env::var_os("TERM_PROGRAM");
         let prev_term = std::env::var_os("TERM");
         // SAFETY: serialised by the guard.
@@ -4183,6 +4193,11 @@ mod tests {
     #[test]
     fn tilix_and_terminator_cap_redraws_without_disabling_motion() {
         let _g = term_program_test_guard();
+        // Neutralize the SSH markers: production intentionally caps motion
+        // over SSH, and the suite routinely runs inside one.
+        let _ssh_client = crate::test_support::EnvVarGuard::remove("SSH_CLIENT");
+        let _ssh_connection = crate::test_support::EnvVarGuard::remove("SSH_CONNECTION");
+        let _ssh_tty = crate::test_support::EnvVarGuard::remove("SSH_TTY");
         let prev_term_program = std::env::var_os("TERM_PROGRAM");
         let prev_tilix_id = std::env::var_os("TILIX_ID");
         let prev_terminator_uuid = std::env::var_os("TERMINATOR_UUID");

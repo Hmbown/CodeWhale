@@ -1361,6 +1361,9 @@ pub enum MessageId {
     PhaseReasoning,
     PhaseReading,
     PhaseUsingTool,
+    /// Live sub-users (agent spawns) are running — reading differently from
+    /// tool work so the shell can signal orchestration.
+    PhaseSubagents,
     /// Metered verification pass (tests/checks) — distinct from `working`
     /// so checking reads differently from searching (ocean state model).
     PhaseVerifying,
@@ -3081,6 +3084,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::PhaseReasoning,
     MessageId::PhaseReading,
     MessageId::PhaseUsingTool,
+    MessageId::PhaseSubagents,
     MessageId::PhaseVerifying,
     MessageId::PhaseWaitingOnYou,
     MessageId::PhaseDone,

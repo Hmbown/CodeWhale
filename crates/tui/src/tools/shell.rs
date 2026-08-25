@@ -1833,6 +1833,12 @@ impl ShellManager {
         self.sandbox_manager.set_bwrap_extensions(extensions);
     }
 
+    /// Forward the opt-in sandbox read deny-list (S1, #5568) to the sandbox
+    /// manager; `~` prefixes expand there.
+    pub fn set_denied_read_subpaths(&mut self, paths: Vec<std::path::PathBuf>) {
+        self.sandbox_manager.set_denied_read_subpaths(paths);
+    }
+
     /// Return the OS sandbox wrapper this shell manager is configured and able
     /// to apply to commands.
     pub fn configured_sandbox_type(&self) -> Option<SandboxType> {
@@ -3692,7 +3698,13 @@ fn exec_shell_input_agent_readonly(input: &serde_json::Value) -> bool {
 /// posture gate can admit a proven-readonly call without ever widening past
 /// the execute-time refusal.
 pub(crate) fn agent_readonly_bash_input(input: &serde_json::Value) -> bool {
-    exec_shell_input_agent_readonly(input)
+    // Canonical lowercase `bash` advertises `timeout` in seconds, while the
+    // internal executor contract uses `timeout_ms`. Normalize through the same
+    // translator the concrete tool uses so posture, session approval, envelope,
+    // and execute judge one input (#5595). Legacy/internal shapes fall back to
+    // their existing direct classification.
+    let translated = contract_bash_legacy_input(input).unwrap_or_else(|_| input.clone());
+    exec_shell_input_agent_readonly(&translated)
 }
 
 fn exec_shell_input_is_parallel_readonly(input: &serde_json::Value) -> bool {
@@ -3839,20 +3851,30 @@ fn enforce_readonly_workspace_operands(
     })?;
     if !effective_cwd.starts_with(&workspace) {
         return Err(ToolError::permission_denied(
-            "Read-only Scout shell working directory resolves outside the workspace.",
+            "[shell.readonly.cwd.outside_workspace] Read-only Scout shell working directory resolves outside the workspace.",
         ));
     }
 
     for token in argv.iter().skip(1) {
         if token.starts_with('-') && (token.contains('/') || token.contains('\\')) {
             return Err(ToolError::permission_denied(format!(
-                "Read-only Scout shell options may not carry attached paths; refused {token:?}. Use the bounded File read/search actions for project evidence."
+                "[shell.readonly.option.attached_path] Read-only Scout shell options may not carry attached paths; refused {token:?}. Use the bounded File read/search actions for project evidence."
             )));
         }
         let value = token
             .split_once('=')
             .map_or(token.as_str(), |(_, value)| value)
             .trim();
+        // Windows `Path::canonicalize` returns verbatim device paths
+        // (`\\?\C:\...`), which `Path::is_absolute` does not recognize; without
+        // stripping the prefix the operand falls into the shape refusal and
+        // every canonical absolute read is denied on Windows. The stripped
+        // form resolves to the same location, so location-based judgement is
+        // unchanged. On unix hosts such spellings stay fail-closed below.
+        let value = value
+            .strip_prefix(r"\\?\")
+            .or_else(|| value.strip_prefix(r"\\.\"))
+            .unwrap_or(value);
         if value.is_empty() || value == "-" {
             continue;
         }
@@ -3864,6 +3886,25 @@ fn enforce_readonly_workspace_operands(
                 || candidate
                     .components()
                     .any(|component| matches!(component, std::path::Component::Prefix(_)));
+
+        // #5595: an absolute operand is safe by resolved location, not by
+        // spelling. This is the canonical `git -C /absolute/workspace log`
+        // case. Requiring canonicalization also keeps nonexistent output-like
+        // targets fail-closed, while symlinks are judged by their destination.
+        if candidate.is_absolute() {
+            let resolved = candidate.canonicalize().map_err(|error| {
+                ToolError::permission_denied(format!(
+                    "[shell.readonly.operand.unresolved] Could not prove absolute read-only operand {value:?} stays inside the workspace because it could not be resolved: {error}"
+                ))
+            })?;
+            if !resolved.starts_with(&workspace) {
+                return Err(ToolError::permission_denied(format!(
+                    "[shell.readonly.operand.outside_workspace] Read-only Scout shell operand {value:?} resolves outside the workspace. Use the bounded File read/search actions for project evidence."
+                )));
+            }
+            continue;
+        }
+
         if value.starts_with('~')
             || value.contains('\\')
             || windows_prefixed
@@ -3873,7 +3914,7 @@ fn enforce_readonly_workspace_operands(
                 .any(|component| matches!(component, std::path::Component::ParentDir))
         {
             return Err(ToolError::permission_denied(format!(
-                "Read-only Scout shell operands must stay inside the workspace; refused {value:?}. Use the bounded File read/search actions for project evidence."
+                "[shell.readonly.operand.shape] Read-only Scout shell operands must stay inside the workspace; refused {value:?}. Use the bounded File read/search actions for project evidence."
             )));
         }
 
@@ -3881,12 +3922,12 @@ fn enforce_readonly_workspace_operands(
         if joined.exists() {
             let resolved = joined.canonicalize().map_err(|error| {
                 ToolError::permission_denied(format!(
-                    "Could not prove read-only operand {value:?} stays in the workspace: {error}"
+                    "[shell.readonly.operand.unresolved] Could not prove read-only operand {value:?} stays in the workspace: {error}"
                 ))
             })?;
             if !resolved.starts_with(&workspace) {
                 return Err(ToolError::permission_denied(format!(
-                    "Read-only Scout shell operand {value:?} resolves outside the workspace. Use the bounded File read/search actions for project evidence."
+                    "[shell.readonly.operand.outside_workspace] Read-only Scout shell operand {value:?} resolves outside the workspace. Use the bounded File read/search actions for project evidence."
                 )));
             }
         }
@@ -4506,6 +4547,16 @@ impl ToolSpec for BashTool {
                 "task_id": {
                     "type": "string",
                     "description": "Task ID for action=wait/interact/cancel. Also accepted as `id`."
+                },
+                "task_ids": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "For action=wait: wait on several background task ids at once (alternative to `task_id`)."
+                },
+                "until": {
+                    "type": "string",
+                    "enum": ["any", "all"],
+                    "description": "For action=wait with `task_ids`: return as soon as any task is terminal (`any`) or when every task is terminal (`all`, default)."
                 },
                 "id": {
                     "type": "string",
@@ -5329,6 +5380,23 @@ impl BashTool {
         input: &serde_json::Value,
         context: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
+        // Multi-task wait (#5549): task_ids + until=any|all. The validated
+        // single-task path stays unchanged below when task_ids is absent.
+        if let Some(task_ids) = input.get("task_ids") {
+            let ids = task_ids
+                .as_array()
+                .ok_or_else(|| type_mismatch("task_ids", task_ids, "an array of strings"))?;
+            let ids = ids
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .ok_or_else(|| type_mismatch("task_ids", value, "strings"))
+                        .map(str::to_string)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            return self.execute_wait_many(input, context, &ids).await;
+        }
         let task_id = required_task_id(input)?;
         let wait = match first_present_field(input, &["wait", "block"]) {
             None => true,
@@ -5373,6 +5441,156 @@ impl BashTool {
         }
 
         Ok(result)
+    }
+
+    /// Wait on several background tasks at once (#5549).
+    ///
+    /// `until` selects the completion condition: `any` returns as soon as one
+    /// task is terminal, `all` waits for every one. Unknown task ids fail the
+    /// call (same contract as the single-task path); a timeout reports the
+    /// still-running ids so the caller can cancel or wait again.
+    async fn execute_wait_many(
+        &self,
+        input: &serde_json::Value,
+        context: &ToolContext,
+        task_ids: &[String],
+    ) -> Result<ToolResult, ToolError> {
+        let until = match input.get("until").and_then(serde_json::Value::as_str) {
+            None | Some("all") => "all",
+            Some("any") => "any",
+            Some(other) => {
+                return Err(ToolError::invalid_input(format!(
+                    "until must be \"any\" or \"all\", got {other}"
+                )));
+            }
+        };
+        let wait = match first_present_field(input, &["wait", "block"]) {
+            None => true,
+            Some((name, value)) => value
+                .as_bool()
+                .ok_or_else(|| type_mismatch(name, value, "a boolean"))?,
+        };
+        let timeout_ms = wait_timeout_ms(input)?;
+        let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let mut timed_out = false;
+        let mut wait_canceled = false;
+
+        let snapshot =
+            |manager: &mut ShellManager| -> Result<Vec<(String, ShellStatus)>, ToolError> {
+                task_ids
+                    .iter()
+                    .map(|id| {
+                        let detail = manager
+                            .inspect_job(id)
+                            .map_err(|err| ToolError::execution_failed(err.to_string()))?;
+                        Ok((id.clone(), detail.snapshot.status))
+                    })
+                    .collect()
+            };
+
+        let statuses = loop {
+            let current = {
+                let mut manager = context
+                    .shell_manager
+                    .lock()
+                    .map_err(|_| ToolError::execution_failed("shell manager lock poisoned"))?;
+                snapshot(&mut manager)?
+            };
+            if context
+                .cancel_token
+                .as_ref()
+                .is_some_and(|token| token.is_cancelled())
+            {
+                wait_canceled = true;
+                break current;
+            }
+            let running = current
+                .iter()
+                .filter(|(_, status)| *status == ShellStatus::Running)
+                .count();
+            let terminal = current.len().saturating_sub(running);
+            let satisfied = if until == "any" {
+                terminal >= 1
+            } else {
+                running == 0
+            };
+            if !wait || satisfied {
+                break current;
+            }
+            if std::time::Instant::now() >= deadline {
+                timed_out = true;
+                break current;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+
+        let running_after = statuses
+            .iter()
+            .filter(|(_, status)| *status == ShellStatus::Running)
+            .count();
+        let settled = statuses.len().saturating_sub(running_after);
+        let lines: Vec<String> = statuses
+            .iter()
+            .map(|(id, status)| format!("{id}: {status:?}"))
+            .collect();
+        let still_running: Vec<&str> = statuses
+            .iter()
+            .filter(|(_, status)| *status == ShellStatus::Running)
+            .map(|(id, _)| id.as_str())
+            .collect();
+        let summary = if timed_out {
+            format!(
+                "wait timed out after {}ms; still running: {}",
+                timeout_ms,
+                if still_running.is_empty() {
+                    "none".to_string()
+                } else {
+                    still_running.join(", ")
+                }
+            )
+        } else if wait_canceled {
+            format!(
+                "wait canceled; still running: {}",
+                if still_running.is_empty() {
+                    "none".to_string()
+                } else {
+                    still_running.join(", ")
+                }
+            )
+        } else {
+            format!(
+                "{settled} of {} background command{} settled; remaining running: {}",
+                statuses.len(),
+                if statuses.len() == 1 { "" } else { "s" },
+                if still_running.is_empty() {
+                    "none".to_string()
+                } else {
+                    still_running.join(", ")
+                }
+            )
+        };
+        let content = format!("{summary}\n{}\n", lines.join("\n"));
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(
+            "statuses".to_string(),
+            serde_json::Value::Object(
+                statuses
+                    .iter()
+                    .map(|(id, status)| (id.clone(), serde_json::json!(format!("{status:?}"))))
+                    .collect::<serde_json::Map<_, _>>(),
+            ),
+        );
+        metadata.insert("wait_timeout_ms".to_string(), json!(timeout_ms));
+        metadata.insert("until".to_string(), json!(until));
+        metadata.insert("timed_out".to_string(), json!(timed_out));
+        if wait_canceled {
+            metadata.insert("wait_canceled".to_string(), json!(true));
+        }
+        Ok(ToolResult {
+            content: content.trim().to_string(),
+            success: true,
+            metadata: Some(serde_json::Value::Object(metadata)),
+        })
     }
 
     async fn execute_interact(

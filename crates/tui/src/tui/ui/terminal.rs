@@ -387,6 +387,7 @@ pub(crate) fn disable_alternate_scroll_mode<W: Write>(writer: &mut W) {
 /// `^[[>5u` shell pollution reported in #1583.
 pub fn emergency_restore_terminal() {
     let mut stdout = std::io::stdout();
+    crate::tui::cursor_accent::restore_cursor_accent();
     pop_keyboard_enhancement_flags(&mut stdout);
     disable_alternate_scroll_mode(&mut stdout);
     let _ = execute!(stdout, DisableFocusChange);

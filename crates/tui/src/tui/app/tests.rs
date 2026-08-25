@@ -1863,6 +1863,32 @@ fn app_new_respects_explicit_auto_compact_false_for_v4_class_models() {
 }
 
 #[test]
+fn pending_turn_cost_moves_displayed_total_mid_turn() {
+    let mut app = App::new(test_options(false), &Config::default());
+
+    // Two model calls land per-step receipts while the turn is still running:
+    // the displayed total must move now, not at TurnComplete (#5578).
+    app.accrue_pending_turn_cost_estimate(CostEstimate::usd_only(0.06));
+    app.accrue_pending_turn_cost_estimate(CostEstimate::usd_only(0.04));
+    assert_eq!(
+        app.displayed_session_cost_for_currency(CostCurrency::Usd),
+        0.1
+    );
+    assert_eq!(app.session_cost_for_currency(CostCurrency::Usd), 0.1);
+
+    // TurnComplete: provisional hands off to the authoritative cumulative
+    // price. A slightly lower settled figure must not make the display
+    // reverse (#244), and nothing may count twice.
+    app.clear_pending_turn_cost();
+    app.accrue_session_cost_estimate(CostEstimate::usd_only(0.09));
+    assert_eq!(app.session.session_cost, 0.09);
+    assert_eq!(
+        app.displayed_session_cost_for_currency(CostCurrency::Usd),
+        0.1
+    );
+}
+
+#[test]
 fn cny_display_falls_back_to_usd_for_usd_only_costs() {
     let mut app = App::new(test_options(false), &Config::default());
     app.cost_currency = CostCurrency::Cny;

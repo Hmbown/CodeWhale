@@ -429,6 +429,27 @@ export interface DocsFleetDict {
   sourceNote: string;
 }
 
+/** `app/[locale]/docs/mcp/page.tsx`. */
+export interface DocsMcpDict {
+  metaTitle: string;
+  metaDescription: string;
+  /** Body-copy typography for this locale (CJK needs looser leading). */
+  bodyClassName: string;
+  overviewLead: string;
+  overviewConfig: string;
+  setupTitle: string;
+  setupLead: string;
+  setupReload: string;
+  authTitle: string;
+  authLead: string;
+  toolsTitle: string;
+  toolsLead: string;
+  toolsTrust: string;
+  serverTitle: string;
+  serverLead: string;
+  sourceNote: string;
+}
+
 /** `app/[locale]/docs/modes/page.tsx`. */
 export interface DocsModesDict {
   metaTitle: string;
@@ -483,6 +504,26 @@ export interface DocsSandboxDict {
   diagnosticsTitle: string;
   diagnosticsLead: string;
   diagnosticsLimits: string;
+  sourceNote: string;
+}
+
+/** `app/[locale]/docs/subagents/page.tsx`. */
+export interface DocsSubagentsDict {
+  metaTitle: string;
+  metaDescription: string;
+  /** Body-copy typography for this locale (CJK needs looser leading). */
+  bodyClassName: string;
+  overviewTitle: string;
+  overviewLead: string;
+  overviewFleetNote: string;
+  /** Eight `[key, detail]` rows; the key names the page's role literal. */
+  roles: [string, string][];
+  forkTitle: string;
+  forkLead: string;
+  worktreeTitle: string;
+  worktreeLead: string;
+  capacityTitle: string;
+  capacityLead: string;
   sourceNote: string;
 }
 

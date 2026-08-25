@@ -422,6 +422,29 @@ Install into a NixOS module:
 
 ---
 
+## Omarchy / AUR
+
+On Omarchy, install the prebuilt AUR package:
+
+```bash
+omarchy pkg aur add codewhale-bin
+codewhale --version
+```
+
+`codewhale-bin` packages the same checksum-pinned Linux release archives as the
+other binary install paths and provides both `codewhale` and `codew`. It does
+not carry a separate Codewhale version; the existing `codewhale-tui`
+compatibility command remains an alias to the same runtime. Package updates
+arrive through `omarchy update`; the in-app updater leaves the pacman-owned
+binary to Omarchy.
+
+The AUR update follows the matching Codewhale tag and release assets, so it may
+appear after the GitHub release while its generated `PKGBUILD` and `.SRCINFO`
+are validated. Release-maintainer instructions live in
+[`packaging/aur/README.md`](../packaging/aur/README.md).
+
+---
+
 ## Homebrew
 
 The formula is `codewhale`. The tap GitHub repo is still

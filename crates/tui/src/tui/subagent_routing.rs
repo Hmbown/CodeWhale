@@ -424,7 +424,7 @@ pub(super) fn handle_subagent_mailbox_for_turn(
 ) -> bool {
     // Accumulate sub-agent token costs for the real-time footer counter (#166).
     if let MailboxMessage::TokenUsage {
-        agent_id,
+        agent_id: _,
         source_id,
         route,
         usage,
@@ -443,10 +443,34 @@ pub(super) fn handle_subagent_mailbox_for_turn(
         } else {
             source_id.clone()
         };
+        let source_fingerprint = crate::cost_status::usage_source_fingerprint(&stable_source);
+        if crate::cost_status::usage_source_seen(&stable_source) {
+            // The runtime sink runs synchronously before mailbox publication.
+            // Fold its identity and money into App together, before a following
+            // TurnComplete can snapshot either half. A post-seal response has
+            // no mailbox event and is swept by the event loop instead.
+            let first_live_delivery = !app
+                .session
+                .subagent_usage_sources
+                .contains(&source_fingerprint);
+            let pending_runtime_cost = crate::cost_status::drain();
+            if !pending_runtime_cost.is_empty() {
+                app.absorb_pending_background_cost(&pending_runtime_cost);
+            }
+            if first_live_delivery
+                && app
+                    .session
+                    .subagent_usage_sources
+                    .contains(&source_fingerprint)
+            {
+                record_agent_current_activity(app, message);
+            }
+            return false;
+        }
         if app
             .session
             .subagent_usage_sources
-            .insert((agent_id.clone(), stable_source))
+            .insert(source_fingerprint)
         {
             // Update the Work-row receipt under the same replay guard as
             // cost. A mailbox replay must not make either total grow twice.

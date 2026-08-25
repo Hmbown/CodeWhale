@@ -23,6 +23,7 @@ import {
   sessionTarget,
   streamCursor,
   threadTarget,
+  workflowReceiptPresentation,
 } from "./app.mjs";
 
 describe("receiptPresentation", () => {
@@ -43,6 +44,69 @@ describe("receiptPresentation", () => {
       raw: "3 tests passed",
       failed: false,
     });
+  });
+});
+
+describe("workflowReceiptPresentation", () => {
+  it("summarises a single rejected dispatch and keeps the raw receipt", () => {
+    const raw = '{"status":"degraded","dispatch_failure_count":1}';
+    expect(
+      workflowReceiptPresentation(
+        { summary: "workflow: check", status: "completed" },
+        raw,
+        "---"
+      ),
+    ).toEqual({
+      label: "Workflow · Needs attention",
+      summary: "1 task dispatch was rejected",
+      raw: "---",
+      failed: true,
+    });
+  });
+
+  it("summarises multiple rejected dispatches in the plural", () => {
+    const raw = '{"status":"degraded","dispatch_failure_count":3}';
+    const result = workflowReceiptPresentation(
+      { summary: "workflow: check", status: "completed" },
+      raw,
+      null
+    );
+    expect(result.summary).toBe("3 task dispatches were rejected");
+    expect(result.failed).toBe(true);
+  });
+
+  it("keeps a failed workflow without a dispatch count honest", () => {
+    const result = workflowReceiptPresentation(
+      { summary: "workflow: gate", status: "completed" },
+      '{"status":"failed"}',
+      null
+    );
+    expect(result).toEqual({
+      label: "Workflow · Failed",
+      summary: "The workflow did not complete",
+      raw: null,
+      failed: true,
+    });
+  });
+
+  it("labels degraded completions without rejected dispatches as needs attention", () => {
+    const result = workflowReceiptPresentation(
+      { summary: "workflow: check", status: "completed" },
+      '{"status":"degraded"}',
+      null
+    );
+    expect(result.label).toBe("Workflow · Needs attention");
+    expect(result.summary).toBe("The workflow completed with degraded results");
+  });
+
+  it("returns null for non-workflow receipts", () => {
+    expect(
+      workflowReceiptPresentation(
+        { summary: "3 tests passed", status: "completed" },
+        "3 tests passed",
+        null
+      )
+    ).toBeNull();
   });
 });
 

@@ -106,6 +106,7 @@ pub fn build_bwrap_command(
     writable_roots: &[WritableRoot],
     network_access: bool,
     extensions: &crate::sandbox::BwrapMountExtensions,
+    denied_read_subpaths: &[std::path::PathBuf],
 ) -> Vec<String> {
     let (writable_mounts, read_only_mounts) = safe_mounts(writable_roots);
     let (extra_read_only, device_mounts) = extensions.resolve();
@@ -170,6 +171,25 @@ pub fn build_bwrap_command(
         cmd.push("--ro-bind".to_string());
         cmd.push(root.clone());
         cmd.push(root);
+    }
+
+    // Opt-in read deny-list (S1, #5568), applied after every bind so nothing
+    // re-exposes a denied path: an existing directory is masked with an empty
+    // tmpfs, an existing file with a bind of /dev/null. Non-existent paths
+    // are skipped — there is nothing to deny.
+    for denied in denied_read_subpaths {
+        let Ok(meta) = std::fs::metadata(denied) else {
+            continue;
+        };
+        let denied_str = denied.to_string_lossy().into_owned();
+        if meta.is_dir() {
+            cmd.push("--tmpfs".to_string());
+            cmd.push(denied_str);
+        } else {
+            cmd.push("--ro-bind".to_string());
+            cmd.push("/dev/null".to_string());
+            cmd.push(denied_str);
+        }
     }
 
     // Change to the working directory inside the container.
@@ -262,6 +282,7 @@ mod tests {
             &[WritableRoot::new(cwd.to_path_buf())],
             false,
             &crate::sandbox::BwrapMountExtensions::default(),
+            &[],
         );
 
         // Should start with bwrap
@@ -300,6 +321,7 @@ mod tests {
             &[],
             false,
             &crate::sandbox::BwrapMountExtensions::default(),
+            &[],
         );
 
         assert!(!cmd.iter().any(|arg| arg == "--bind"));
@@ -333,6 +355,7 @@ mod tests {
             &roots,
             true,
             &crate::sandbox::BwrapMountExtensions::default(),
+            &[],
         );
 
         for root in [&workspace, &extra] {
@@ -380,7 +403,7 @@ mod tests {
                 PathBuf::from("/dev/does-not-exist"),
             ],
         };
-        let cmd = build_bwrap_command(cwd, "true", &[], &[], false, &extensions);
+        let cmd = build_bwrap_command(cwd, "true", &[], &[], false, &extensions, &[]);
 
         assert!(has_mount(
             &cmd,
@@ -416,7 +439,7 @@ mod tests {
             read_only_roots: vec![narrowed.clone()],
             device_roots: vec![],
         };
-        let cmd = build_bwrap_command(&workspace, "true", &[], &roots, false, &extensions);
+        let cmd = build_bwrap_command(&workspace, "true", &[], &roots, false, &extensions, &[]);
 
         let writable_pos = cmd
             .windows(3)

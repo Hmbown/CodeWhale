@@ -2386,6 +2386,10 @@ mod tests {
 
         assert!(managed_install_warning(InstallMethod::Cargo).is_some());
 
+        let omarchy =
+            managed_install_warning(InstallMethod::Omarchy).expect("Omarchy is package-managed");
+        assert!(omarchy.contains("omarchy update"));
+
         // A plain release binary is exactly what this updater is for.
         assert!(managed_install_warning(InstallMethod::Binary).is_none());
     }

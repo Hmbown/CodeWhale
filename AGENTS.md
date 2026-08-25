@@ -96,6 +96,9 @@ artifacts, CI, and public release state. Describe the evidence actually needed
 for the claim; a test count is not a proxy for product quality.
 
 Community reports, PRs, logs, and reviews are evidence. Canonical human
-identities come from `.github/AUTHOR_MAP`; `Co-authored-by` is for humans only.
+identities come from `.github/AUTHOR_MAP`; `Co-authored-by` credit is for
+humans and for recognized agent contributors (the exact identities listed in
+`AGENT_CONTRIBUTOR_IDENTITIES` in `scripts/check-coauthor-trailers.py`, such as
+`Codewhale Agent`); unknown bot/tool trailers are still rejected.
 Leave unrelated work intact and keep new enforcement dry-run unless explicitly
 approved.

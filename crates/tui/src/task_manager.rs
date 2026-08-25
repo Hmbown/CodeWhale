@@ -22,7 +22,7 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::config::{Config, DEFAULT_TEXT_MODEL};
+use crate::config::Config;
 use crate::runtime_threads::{
     CreateThreadRequest, RuntimeEventRecord, RuntimeThreadManager, RuntimeThreadManagerConfig,
     RuntimeTurnStatus, SharedRuntimeThreadManager, StartTurnRequest,
@@ -566,12 +566,7 @@ impl TaskManagerConfig {
             data_dir: default_tasks_dir(),
             worker_count: worker_count.unwrap_or(DEFAULT_WORKERS),
             default_workspace: workspace,
-            default_model: default_model.unwrap_or_else(|| {
-                config
-                    .default_text_model
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_TEXT_MODEL.to_string())
-            }),
+            default_model: default_model.unwrap_or_else(|| config.default_model()),
             default_mode: "agent".to_string(),
             allow_shell: config.allow_shell(),
             trust_mode: false,
@@ -2636,6 +2631,55 @@ mod tests {
     use tokio::time::Duration;
 
     struct MockExecutor;
+
+    fn provider_default_model_cases() -> Vec<(&'static str, Config, &'static str)> {
+        let deepseek = Config {
+            provider: Some("deepseek".to_string()),
+            default_text_model: Some("deepseek-v4-flash".to_string()),
+            ..Config::default()
+        };
+
+        let zai = Config {
+            provider: Some("zai".to_string()),
+            // Exercise provider-aware rejection of a stale DeepSeek root default.
+            default_text_model: Some(crate::config::DEFAULT_TEXT_MODEL.to_string()),
+            ..Config::default()
+        };
+
+        let mut custom_providers = crate::config::ProvidersConfig::default();
+        custom_providers.custom.insert(
+            "acme".to_string(),
+            crate::config::ProviderConfig {
+                base_url: Some("http://127.0.0.1:1/v1".to_string()),
+                model: Some("acme-coder".to_string()),
+                kind: Some("openai-compatible".to_string()),
+                ..crate::config::ProviderConfig::default()
+            },
+        );
+        let custom = Config {
+            provider: Some("acme".to_string()),
+            providers: Some(custom_providers),
+            ..Config::default()
+        };
+
+        vec![
+            ("deepseek", deepseek, "deepseek-v4-flash"),
+            ("zai", zai, crate::config::DEFAULT_ZAI_MODEL),
+            ("custom", custom, "acme-coder"),
+        ]
+    }
+
+    #[test]
+    fn task_manager_config_uses_the_active_provider_default() {
+        for (label, config, expected) in provider_default_model_cases() {
+            let task_config =
+                TaskManagerConfig::from_runtime(&config, PathBuf::from("."), None, Some(1));
+            assert_eq!(
+                task_config.default_model, expected,
+                "{label} durable task default"
+            );
+        }
+    }
 
     #[async_trait]
     impl TaskExecutor for MockExecutor {

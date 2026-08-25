@@ -402,6 +402,8 @@ jobs:
         run: |
           node --test scripts/release/assemble-release-assets.test.js
           node --test npm/codewhale/test/artifacts.test.js npm/codewhale/test/release-assets.test.js
+      - name: Render AUR metadata from candidate Linux archives
+        run: bash packaging/aur/render.sh release-assets "${RUNNER_TEMP}/codewhale-bin"
       - name: Smoke packed npm wrapper against candidate assets
         env:
           CODEWHALE_SMOKE_ASSETS_DIR: ${{ github.workspace }}/release-assets

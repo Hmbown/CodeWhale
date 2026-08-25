@@ -56,13 +56,33 @@ impl OceanTreatment {
 pub const AMBIENT_MIN_WIDTH: u16 = 40;
 pub const AMBIENT_MIN_HEIGHT: u16 = 10;
 
-/// Ambient-life inks for a theme, independent of the ombre ramp. Fish use two
-/// sunk sky-blue shades so seafoam remains reserved for live work.
+/// Ambient-life ink pair, independent of the ombre ramp and shaped by what
+/// the agent is doing so the marks themselves carry the state at a glance:
+/// reasoning dims toward the deep, tool work brightens like a faster current,
+/// and a sub-agent pod swims in seafoam — the hue reserved for orchestration.
 #[must_use]
-pub fn ambient_inks(theme: &UiTheme) -> (Color, Color) {
-    let sky = rgb(theme.info).unwrap_or((106, 174, 242));
+pub fn ambient_inks_for_activity(
+    theme: &UiTheme,
+    activity: crate::tui::ambient_life::AmbientActivity,
+) -> (Color, Color) {
+    use crate::tui::ambient_life::AmbientActivity;
+    let sky = match activity {
+        AmbientActivity::Subagents => rgb(theme.accent_secondary).unwrap_or((79, 209, 197)),
+        _ => rgb(theme.info).unwrap_or((106, 174, 242)),
+    };
+    // `mix(sky, base, t)`: larger `t` sits closer to the background — dimmer.
+    let (toward_base_a, toward_base_b) = match activity {
+        AmbientActivity::Reasoning => (0.58, 0.44),
+        AmbientActivity::Reading => (0.50, 0.36),
+        AmbientActivity::Tools => (0.30, 0.18),
+        AmbientActivity::Subagents => (0.34, 0.22),
+        AmbientActivity::Verifying | AmbientActivity::Baseline => (0.42, 0.28),
+    };
     match rgb(theme.surface_bg) {
-        Some(base) => (color(mix(sky, base, 0.42)), color(mix(sky, base, 0.28))),
+        Some(base) => (
+            color(mix(sky, base, toward_base_a)),
+            color(mix(sky, base, toward_base_b)),
+        ),
         None => (theme.info, theme.info),
     }
 }
@@ -131,6 +151,13 @@ pub struct OceanRamp {
     pub middle: Color,
     pub deep: Color,
     pub ambient: Color,
+    /// Tint for phases that are blocked on the user (Waiting / Approval).
+    /// The whole water field warms toward this so "needs you" is legible
+    /// from across the room, not only in the phase strip.
+    pub attention: Color,
+    /// Tint for the Failed outcome: a steady cast, not a pulse — it reports,
+    /// it does not ask.
+    pub failure: Color,
 }
 
 /// One continuous water column shared by every shell band in a frame.
@@ -173,6 +200,8 @@ impl OceanRampCacheIdentity {
             color_cache_code(self.ramp.middle),
             color_cache_code(self.ramp.deep),
             color_cache_code(self.ramp.ambient),
+            color_cache_code(self.ramp.attention),
+            color_cache_code(self.ramp.failure),
             u32::from(self.top),
             u32::from(self.height),
             u32::from(self.phase_tag),
@@ -241,6 +270,17 @@ impl OceanColumn {
         if let Some(elapsed) = self.completion_elapsed_ms {
             self.ramp.color_at_completion(row, self.height, elapsed)
         } else {
+            // Attention states tint the water itself, independent of life
+            // presence: a session blocked on approval or ended in failure
+            // must stay legible from across the room even after ambient life
+            // has fully settled, and under reduced motion (where the tint is
+            // steady instead of breathing).
+            if matches!(
+                self.phase,
+                ShellPhase::Waiting | ShellPhase::Approval | ShellPhase::Failed
+            ) {
+                return self.ramp.color_at_attention(row, self.height, self.phase);
+            }
             // Ease between the static gradient and the phase treatment by
             // life presence, so mood/activity changes blend instead of snap.
             let static_color = self.ramp.color_at(row, self.height);
@@ -354,6 +394,8 @@ impl OceanRamp {
                 middle: Color::Rgb(0x0a, 0x1e, 0x33),
                 deep: Color::Rgb(0x06, 0x13, 0x20),
                 ambient: Color::Rgb(0x26, 0x48, 0x66),
+                attention: theme.warning,
+                failure: theme.error_fg,
             });
         }
         if theme.name == crate::palette::LIGHT_UI_THEME.name
@@ -364,6 +406,8 @@ impl OceanRamp {
                 middle: Color::Rgb(0xf4, 0xf7, 0xfb),
                 deep: Color::Rgb(0xf0, 0xf4, 0xf9),
                 ambient: Color::Rgb(0x9a, 0xb8, 0xe0),
+                attention: theme.warning,
+                failure: theme.error_fg,
             });
         }
 
@@ -388,6 +432,8 @@ impl OceanRamp {
             middle: color(middle),
             deep: color(deep),
             ambient: color(mix(seafoam, base, 0.42)),
+            attention: theme.warning,
+            failure: theme.error_fg,
         })
     }
 
@@ -397,13 +443,14 @@ impl OceanRamp {
             return self.surface;
         }
         let position = f32::from(row.min(height - 1)) / f32::from(height - 1);
-        if position <= 0.42 {
-            // Ease into each depth anchor so large empty regions read as calm
-            // water bands rather than a mechanically uniform color ramp.
-            mix_colors(self.surface, self.middle, smoothstep(position / 0.42))
-        } else {
-            mix_colors(self.middle, self.deep, smoothstep((position - 0.42) / 0.58))
-        }
+        // One continuous darkening curve (quadratic Bézier through
+        // surface → middle → deep, via de Casteljau). The former two eased
+        // segments met at a 0.42 anchor where the color velocity dropped to
+        // zero on both sides — on a tall window that shelf of unchanging
+        // middle color read as a horizontal seam across the water.
+        let toward_middle = mix_colors(self.surface, self.middle, position);
+        let toward_deep = mix_colors(self.middle, self.deep, position);
+        mix_colors(toward_middle, toward_deep, position)
     }
 
     #[must_use]
@@ -424,7 +471,7 @@ impl OceanRamp {
             phase,
             ShellPhase::Waiting | ShellPhase::Approval | ShellPhase::Failed
         ) {
-            return base;
+            return self.color_at_attention(row, height, phase);
         }
         let cycle = (elapsed_ms % 90_000) as f32 / 90_000.0;
         let breath = (cycle * std::f32::consts::TAU).sin() * 0.5 + 0.5;
@@ -437,6 +484,29 @@ impl OceanRamp {
             ShellPhase::Waiting | ShellPhase::Approval | ShellPhase::Failed => unreachable!(),
         };
         mix_colors(base, self.ambient, breath * phase_bias * phase_depth)
+    }
+
+    /// Water tint for the states that need to read from across the room.
+    ///
+    /// Waiting/Approval warm the field toward `attention`, concentrated near
+    /// the surface where the eye lands first; Failed casts a steady `failure`
+    /// tone. Deliberately time-invariant: the color itself is the signal, and
+    /// a slow breath read as flicker rather than intent.
+    #[must_use]
+    pub fn color_at_attention(self, row: u16, height: u16, phase: ShellPhase) -> Color {
+        let base = self.color_at(row, height);
+        let depth = if height <= 1 {
+            0.0
+        } else {
+            f32::from(row.min(height - 1)) / f32::from(height - 1)
+        };
+        match phase {
+            ShellPhase::Waiting | ShellPhase::Approval => {
+                mix_colors(base, self.attention, 0.10 * (0.6 + 0.4 * (1.0 - depth)))
+            }
+            ShellPhase::Failed => mix_colors(base, self.failure, 0.09),
+            _ => base,
+        }
     }
 
     #[must_use]

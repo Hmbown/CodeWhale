@@ -20,6 +20,8 @@
 //! (`turnBudget` per-task, resumable after budget-reached). Log when the
 //! backstop fires.
 
+use std::time::Duration;
+
 /// Default automatic cross-turn continuation policy for one goal run (#5052).
 ///
 /// Goals are unlimited by default: completion, blocked status, or explicit
@@ -182,6 +184,53 @@ pub fn decide_continuation(
 
     // 4. Keep going.
     ContinuationDecision::Continue
+}
+
+/// Outcome of waiting out the between-continuation quiet period.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuationWaitOutcome {
+    /// The quiet period elapsed — dispatch the continuation.
+    Elapsed,
+    /// Cancelled during the quiet period — never dispatch.
+    Cancelled,
+}
+
+/// Compute the quiet-period wait for a configured between-continuation delay.
+/// `None` continues immediately (unset or zero delay); a positive delay
+/// returns the capped wait shared by every dispatch path so no caller can
+/// construct an effectively uninterruptible schedule receipt.
+#[must_use]
+pub const fn continuation_wait(delay_seconds: u64) -> Option<Duration> {
+    if delay_seconds == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(
+            if delay_seconds > MAX_GOAL_CONTINUATION_DELAY_SECONDS {
+                MAX_GOAL_CONTINUATION_DELAY_SECONDS
+            } else {
+                delay_seconds
+            },
+        ))
+    }
+}
+
+/// Wait out the between-continuation quiet period, honoring cancellation.
+/// `None` resolves to `Elapsed` immediately so callers have a single dispatch
+/// gate. Cancellation is biased and always wins over a racing expiry — the
+/// same semantics as the interactive cadence (#5508) for host-managed turns,
+/// where the turn loop is the only continuation dispatcher.
+pub async fn await_continuation_wait(
+    wait: Option<Duration>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+) -> ContinuationWaitOutcome {
+    let Some(wait) = wait else {
+        return ContinuationWaitOutcome::Elapsed;
+    };
+    tokio::select! {
+        biased;
+        () = cancel_token.cancelled() => ContinuationWaitOutcome::Cancelled,
+        () = tokio::time::sleep(wait) => ContinuationWaitOutcome::Elapsed,
+    }
 }
 
 /// Whether the durable token usage has reached the active goal's budget.
@@ -379,6 +428,63 @@ mod tests {
         assert_eq!(
             decide_continuation(GoalRunStatus::Completed, progress, budget),
             ContinuationDecision::Stop(StopReason::Completed)
+        );
+    }
+
+    #[test]
+    fn continuation_wait_honors_configured_delay() {
+        assert_eq!(
+            continuation_wait(300),
+            Some(Duration::from_secs(300)),
+            "a positive configured delay must become the quiet-period wait"
+        );
+        assert_eq!(
+            continuation_wait(MAX_GOAL_CONTINUATION_DELAY_SECONDS + 1),
+            Some(Duration::from_secs(MAX_GOAL_CONTINUATION_DELAY_SECONDS)),
+            "the shared cap must bound an oversized configured delay"
+        );
+    }
+
+    #[test]
+    fn zero_delay_continues_immediately() {
+        assert_eq!(
+            continuation_wait(0),
+            None,
+            "an unset or zero delay must dispatch immediately"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_wins_over_pending_quiet_period() {
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let canceller = cancel_token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            canceller.cancel();
+        });
+        assert_eq!(
+            await_continuation_wait(
+                continuation_wait(MAX_GOAL_CONTINUATION_DELAY_SECONDS),
+                &cancel_token,
+            )
+            .await,
+            ContinuationWaitOutcome::Cancelled,
+            "an explicit cancel during the quiet period must win and never dispatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn elapsed_quiet_period_dispatches() {
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        assert_eq!(
+            await_continuation_wait(None, &cancel_token).await,
+            ContinuationWaitOutcome::Elapsed,
+            "an unset wait must gate the dispatch through immediately"
+        );
+        assert_eq!(
+            await_continuation_wait(Some(Duration::from_millis(1)), &cancel_token).await,
+            ContinuationWaitOutcome::Elapsed,
+            "an expired quiet period must dispatch"
         );
     }
 }
