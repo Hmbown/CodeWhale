@@ -345,6 +345,8 @@ kept in the provider registry document.
 
 Soft-auto multi-agent work: [AUTOMATIC_WORKFLOWS.md](AUTOMATIC_WORKFLOWS.md).
 
+Durable scheduled agent runs: [AUTOMATION.md](AUTOMATION.md).
+
 Next for durable multi-worker work: [FLEET_WORKFLOW_TUTORIAL.md](FLEET_WORKFLOW_TUTORIAL.md)
 walks through Fleet task specs, monitoring, and Workflow authoring.
 

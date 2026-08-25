@@ -73,7 +73,7 @@ stack and [configuration](docs/CONFIGURATION.md) for local settings.
 
 - [Providers and local models](docs/PROVIDERS.md)
 - [Agent teams](docs/FLEET.md)
-- [MCP](docs/MCP.md), [hooks](docs/HOOKS.md), and [configuration](docs/CONFIGURATION.md)
+- [MCP](docs/MCP.md), [hooks](docs/HOOKS.md), [automations](docs/AUTOMATION.md), and [configuration](docs/CONFIGURATION.md)
 - [Local web client](docs/WEB.md)
 - [All documentation](docs)
 
