@@ -1724,16 +1724,42 @@ impl ElementDriver for MacDriver {
                     moved: None,
                 })
             }
-            ElementAction::Type { text } => {
-                type_to_pid(pid, &text)?;
-                Ok(ActionReceipt {
-                    text: format!(
-                        "typed {} characters into `{}` in the background",
-                        text.chars().count(),
-                        app.label()
-                    ),
-                    ..Default::default()
-                })
+            ElementAction::Type { text, index, point } => {
+                if let Some(index) = index {
+                    let node = snapshot.node(index)?;
+                    if node.secure {
+                        return Err(DriverError::Failed(format!(
+                            "{} is a secure text field; Codewhale never writes into password fields — ask the user to type it",
+                            describe(node, index)
+                        )));
+                    }
+                }
+                if let Some((global, where_)) = type_focus_target(snapshot, index, point)? {
+                    // Posted mouse click, not AXPress: web renderers take
+                    // keyboard focus from a click, not from an accessibility
+                    // press.
+                    click_to_pid(pid, window_id, global, Button::Left, 1, 0)?;
+                    std::thread::sleep(Duration::from_millis(40));
+                    type_to_pid(pid, &text)?;
+                    Ok(ActionReceipt {
+                        text: format!(
+                            "clicked {where_} then typed {} characters into `{}` in the background",
+                            text.chars().count(),
+                            app.label()
+                        ),
+                        ..Default::default()
+                    })
+                } else {
+                    type_to_pid(pid, &text)?;
+                    Ok(ActionReceipt {
+                        text: format!(
+                            "typed {} characters into `{}` in the background",
+                            text.chars().count(),
+                            app.label()
+                        ),
+                        ..Default::default()
+                    })
+                }
             }
             ElementAction::Key { combo } => {
                 combo_to_pid(pid, &combo)?;
@@ -1965,6 +1991,26 @@ fn verify_value(snapshot: &MacElementSnapshot, index: usize, expected: &str) -> 
     last
 }
 
+/// Global click target used to focus before typing. `index` wins over
+/// `point`. `None` means type into whatever already has focus.
+fn type_focus_target(
+    snapshot: &MacElementSnapshot,
+    index: Option<usize>,
+    point: Option<(f64, f64)>,
+) -> Result<Option<((f64, f64), String)>, DriverError> {
+    match (index, point) {
+        (Some(index), _) => {
+            let label = describe(snapshot.node(index)?, index);
+            Ok(Some((snapshot.to_global(snapshot.center(index)?), label)))
+        }
+        (None, Some(point)) => Ok(Some((
+            snapshot.to_global(point),
+            format!("({:.0}, {:.0})", point.0, point.1),
+        ))),
+        (None, None) => Ok(None),
+    }
+}
+
 fn describe(node: &SnapNode, index: usize) -> String {
     if node.title.trim().is_empty() {
         format!("#{index} [{}]", node.role)
@@ -1986,6 +2032,52 @@ fn truncate(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn snapshot_with_field() -> MacElementSnapshot {
+        MacElementSnapshot {
+            pid: 1,
+            window_id: 2,
+            window_x: 100.0,
+            window_y: 200.0,
+            window_w: 400.0,
+            window_h: 300.0,
+            app: std::ptr::null_mut(),
+            window: std::ptr::null_mut(),
+            nodes: vec![SnapNode {
+                element: std::ptr::null_mut(),
+                x: 10.0,
+                y: 20.0,
+                w: 80.0,
+                h: 40.0,
+                role: "AXTextField".into(),
+                title: "Search".into(),
+                secure: false,
+                depth: 2,
+                in_web: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn type_focus_clicks_the_element_centre_in_global_space() {
+        let snapshot = snapshot_with_field();
+        let (global, label) = type_focus_target(&snapshot, Some(0), None)
+            .unwrap()
+            .expect("index should produce a click target");
+        assert_eq!(global, (150.0, 240.0), "window origin + field centre");
+        assert!(label.contains("#0"), "{label}");
+        assert!(label.contains("Search"), "{label}");
+        let (global, label) = type_focus_target(&snapshot, None, Some((88.0, 211.0)))
+            .unwrap()
+            .expect("point should produce a click target");
+        assert_eq!(global, (188.0, 411.0));
+        assert_eq!(label, "(88, 211)");
+        assert!(
+            type_focus_target(&snapshot, None, None).unwrap().is_none(),
+            "no index/point types into current focus"
+        );
+        assert!(type_focus_target(&snapshot, Some(3), None).is_err());
+    }
 
     #[test]
     fn window_local_points_become_global_display_points() {

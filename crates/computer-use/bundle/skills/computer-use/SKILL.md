@@ -71,6 +71,12 @@ window still works. Prefer it whenever the target is a specific app.
    - `computer_element {app, action: "scroll", index: n, direction, pages}`
      reports `moved: false` when you are already at the end of the content
    - `computer_element {app, action: "select_text", index: n, start, end}`
+   - `computer_type {app, index: 12, text: "…"}` click-focuses the indexed
+     field (a real background click, not an accessibility press) then types.
+     Use this for Electron/web inputs that ignore accessibility focus;
+     `computer_element press` / `click` on the field then `computer_type` will
+     miss. Optional `x`/`y` (pixels of the last `computer_app_state` image)
+     do the same at a point. With neither, typing goes to current focus.
 4. Or act by pixel *inside that app*: `computer_click`, `computer_type`,
    `computer_key`, `computer_scroll`, `computer_drag` all take an optional
    `app` argument. With `app` set, x/y are pixels of the **last
@@ -132,9 +138,13 @@ Secure text fields refuse `set_value` — ask the user to type the password.
 - After any action the previous zoom is stale; take a new one if needed.
 - Double-click: `clicks: 2`. Long press / context menu on phones:
   `hold_ms: 800` or `button: "right"`. Drag/swipe: `computer_drag`.
-- Typing goes to the focused control: click the field first, then
-  `computer_type`. Newlines in text press Enter. Use `computer_key` for
-  shortcuts (`ctrl+a`, `cmd+shift+t`, `alt+f4`, `enter`, `esc`).
+- Typing goes to the focused control. Pass `index` (from
+  `computer_app_state`) or `x`/`y` on `computer_type` to click-focus first;
+  without them, text goes to whatever is already focused. Electron/web
+  inputs need that click — an accessibility press sets AX focus but not
+  renderer focus, so typing misses. Newlines in text press Enter. Use
+  `computer_key` for shortcuts (`ctrl+a`, `cmd+shift+t`, `alt+f4`,
+  `enter`, `esc`).
 - Slow UI (page loads, app launches): `computer_wait` returns a screenshot
   after the delay instead of acting on a stale frame.
 

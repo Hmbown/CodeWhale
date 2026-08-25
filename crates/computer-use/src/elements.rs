@@ -171,8 +171,13 @@ pub enum ElementAction {
         index: usize,
         value: String,
     },
+    /// Type into current focus. Optional `index`/`point` click-focus first
+    /// with a posted mouse click (not AXPress) so web renderers receive
+    /// keystrokes.
     Type {
         text: String,
+        index: Option<usize>,
+        point: Option<(f64, f64)>,
     },
     Key {
         combo: KeyCombo,

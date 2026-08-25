@@ -216,15 +216,32 @@ pub fn act(
                 ..Default::default()
             })
         }
-        ElementAction::Type { text } => {
-            driver.type_text(&text)?;
-            Ok(ActionReceipt {
-                text: format!(
-                    "typed {} characters into the focused field",
-                    text.chars().count()
-                ),
-                ..Default::default()
-            })
+        ElementAction::Type { text, index, point } => {
+            let focus = match (index, point) {
+                (Some(index), _) => Some((center(nodes, index)?, describe(nodes, index))),
+                (None, Some((x, y))) => Some((Point { x, y }, format!("({x:.0}, {y:.0})"))),
+                (None, None) => None,
+            };
+            if let Some((at, where_)) = focus {
+                driver.click(at, Button::Left, 1, 0)?;
+                driver.type_text(&text)?;
+                Ok(ActionReceipt {
+                    text: format!(
+                        "tapped {where_} then typed {} characters",
+                        text.chars().count()
+                    ),
+                    ..Default::default()
+                })
+            } else {
+                driver.type_text(&text)?;
+                Ok(ActionReceipt {
+                    text: format!(
+                        "typed {} characters into the focused field",
+                        text.chars().count()
+                    ),
+                    ..Default::default()
+                })
+            }
         }
         ElementAction::Key { combo } => {
             driver.key(&combo)?;
@@ -373,5 +390,69 @@ mod tests {
         let app = device_identity(1201, "com.android.settings");
         assert_eq!(app.label(), "com.android.settings");
         assert_eq!(app.aliases(), vec!["com.android.settings".to_string()]);
+    }
+
+    #[test]
+    fn type_with_index_taps_then_types() {
+        let (mut driver, calls) = crate::drivers::mock::MockDriver::new(200, 100);
+        let node = UiNode {
+            class: "android.widget.EditText".into(),
+            label: "Search".into(),
+            id: String::new(),
+            bounds: (10, 20, 110, 60),
+            clickable: true,
+            scrollable: false,
+            editable: true,
+            focused: false,
+            depth: 3,
+        };
+        let nodes = vec![element_from_ui_node(0, &node)];
+        let app = device_identity(1, "com.example.app");
+        let receipt = act(
+            &mut driver,
+            &app,
+            ElementAction::Type {
+                text: "hi".into(),
+                index: Some(0),
+                point: None,
+            },
+            &nodes,
+        )
+        .unwrap();
+        assert!(receipt.text.contains("tapped"), "{}", receipt.text);
+        assert!(receipt.text.contains("Search"), "{}", receipt.text);
+        let recorded = calls.borrow();
+        assert_eq!(recorded.len(), 2, "{recorded:?}");
+        match &recorded[0] {
+            crate::drivers::mock::Call::Click(p, Button::Left, 1, 0) => {
+                assert!(
+                    (p.x - 60.0).abs() < 0.5 && (p.y - 40.0).abs() < 0.5,
+                    "{p:?}"
+                );
+            }
+            other => panic!("expected tap, got {other:?}"),
+        }
+        assert_eq!(recorded[1], crate::drivers::mock::Call::Type("hi".into()));
+    }
+
+    #[test]
+    fn type_without_focus_only_types() {
+        let (mut driver, calls) = crate::drivers::mock::MockDriver::new(200, 100);
+        let app = device_identity(1, "com.example.app");
+        act(
+            &mut driver,
+            &app,
+            ElementAction::Type {
+                text: "hi".into(),
+                index: None,
+                point: None,
+            },
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            *calls.borrow(),
+            vec![crate::drivers::mock::Call::Type("hi".into())]
+        );
     }
 }

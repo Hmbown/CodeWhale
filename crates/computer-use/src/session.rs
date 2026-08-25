@@ -17,6 +17,9 @@ use crate::frame::{self, Frame, Zoom};
 use crate::keys;
 
 pub const MAX_TYPE_CHARS: usize = 4000;
+/// Pause after a focus click so the control can take keyboard focus
+/// before characters arrive (web renderers in particular).
+const TYPE_FOCUS_SETTLE_MS: u64 = 40;
 pub const MAX_WAIT_MS: u64 = 15_000;
 pub const MAX_DRAG_MS: u64 = 5_000;
 pub const MAX_HOLD_MS: u64 = 5_000;
@@ -244,10 +247,17 @@ pub fn tool_catalog() -> Vec<Value> {
         }),
         json!({
             "name": "computer_type",
-            "description": "Type text into the focused control (click it first). Newlines are typed as Enter. Returns a fresh screenshot. With app set, types into the focused control of that app in the background (macOS).",
+            "description": "Type text into the focused control. Optional index (from computer_app_state) or x/y click-focus first via a real click — needed for Electron/web inputs; do not press the field then type. Newlines are typed as Enter. Returns a fresh screenshot. With app set, types into that app in the background (macOS).",
             "inputSchema": {
                 "type": "object",
-                "properties": { "text": { "type": "string", "maxLength": MAX_TYPE_CHARS }, "app": app_param() },
+                "properties": {
+                    "text": { "type": "string", "maxLength": MAX_TYPE_CHARS },
+                    "app": app_param(),
+                    "index": { "type": "integer", "minimum": 0, "description": "Element index from computer_app_state; click-focus this element before typing (requires app)." },
+                    "x": coord("X in frame pixels (or app-state image pixels when app is set); with y, click-focus before typing"),
+                    "y": coord("Y in frame pixels (or app-state image pixels when app is set); with x, click-focus before typing"),
+                    "frame": frame_param()
+                },
                 "required": ["text"],
                 "additionalProperties": false
             }
@@ -316,13 +326,13 @@ pub fn tool_catalog() -> Vec<Value> {
         }),
         json!({
             "name": "computer_element",
-            "description": "Act on an app through its elements (from the last computer_app_state). action: press (AXPress or background click on the indexed element), set_value (write + read-back), menu (open a menu), scroll (pages, reports moved), select_text (character range), click/type/key/coords/drag alternatives. Never types into secure fields.",
+            "description": "Act on an app through its elements (from the last computer_app_state). action: press (AXPress or background click on the indexed element), set_value (write + read-back), menu (open a menu), scroll (pages, reports moved), select_text (character range), click/type/key/coords/drag alternatives. For type, optional index or x/y click-focus first (same as computer_type). Never types into secure fields.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "app": { "type": "string", "description": "App to act on (bundle id, name, or pid)." },
                     "action": { "type": "string", "enum": ["press", "set_value", "menu", "scroll", "select_text", "click", "type", "key", "drag"], "description": "The element action." },
-                    "index": { "type": "integer", "minimum": 0, "description": "Element index from computer_app_state (press/set_value/menu/select_text; optional for scroll)." },
+                    "index": { "type": "integer", "minimum": 0, "description": "Element index from computer_app_state (press/set_value/menu/select_text; optional for type/scroll)." },
                     "value": { "type": "string", "description": "New value for set_value." },
                     "text": { "type": "string", "description": "Text for the type action." },
                     "keys": { "type": "string", "description": "Key combo for the key action." },
@@ -396,6 +406,68 @@ fn get_str_opt<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
 
 fn get_bool_opt(args: &Value, key: &str, default: bool) -> bool {
     args.get(key).and_then(Value::as_bool).unwrap_or(default)
+}
+
+fn has_arg(args: &Value, key: &str) -> bool {
+    args.get(key).is_some_and(|v| !v.is_null())
+}
+
+fn get_usize_opt(args: &Value, key: &str) -> Result<Option<usize>, String> {
+    if !has_arg(args, key) {
+        return Ok(None);
+    }
+    Ok(Some(
+        get_u64_opt(args, key, 0, u64::from(u32::MAX))? as usize
+    ))
+}
+
+fn parse_type_text(args: &Value) -> Result<&str, String> {
+    let text =
+        get_str_opt(args, "text").ok_or_else(|| "missing required argument `text`".to_string())?;
+    let count = text.chars().count();
+    if count == 0 {
+        return Err("text must not be empty".to_string());
+    }
+    if count > MAX_TYPE_CHARS {
+        return Err(format!(
+            "text is {count} characters; the limit is {MAX_TYPE_CHARS}"
+        ));
+    }
+    Ok(text)
+}
+
+/// `index` wins over `x`/`y` when both are present. `x` and `y` must
+/// arrive together.
+fn type_focus_point(
+    args: &Value,
+    snapshot: Option<&AppSnapshot>,
+) -> Result<(Option<usize>, Option<(f64, f64)>), String> {
+    if let Some(index) = get_usize_opt(args, "index")? {
+        if let Some(snapshot) = snapshot
+            && index >= snapshot.node_count
+        {
+            return Err(format!(
+                "index {index} is out of range; the last app-state of `{}` listed {} elements",
+                snapshot.identity.label(),
+                snapshot.node_count
+            ));
+        }
+        return Ok((Some(index), None));
+    }
+    if has_arg(args, "x") || has_arg(args, "y") {
+        if !has_arg(args, "x") || !has_arg(args, "y") {
+            return Err(
+                "`x` and `y` must be passed together to click-focus before typing".to_string(),
+            );
+        }
+        let point = if let Some(snapshot) = snapshot {
+            Some(snapshot.to_window(get_f64(args, "x")?, get_f64(args, "y")?)?)
+        } else {
+            None
+        };
+        return Ok((None, point));
+    }
+    Ok((None, None))
 }
 
 fn describe_nodes(nodes: &[UiNode], frame: &Frame, max: usize) -> String {
@@ -782,16 +854,33 @@ impl Session {
         if let Some(out) = self.routed_app_action(args, "computer_type")? {
             return Ok(out);
         }
-        let text = get_str_opt(args, "text")
-            .ok_or_else(|| "missing required argument `text`".to_string())?;
-        let count = text.chars().count();
-        if count == 0 {
-            return Err("text must not be empty".to_string());
+        if has_arg(args, "index") {
+            return Err(
+                "`index` focuses an element from computer_app_state; pass `app` too".to_string(),
+            );
         }
-        if count > MAX_TYPE_CHARS {
-            return Err(format!(
-                "text is {count} characters; the limit is {MAX_TYPE_CHARS}"
-            ));
+        let text = parse_type_text(args)?;
+        let count = text.chars().count();
+        let focus = if has_arg(args, "x") || has_arg(args, "y") {
+            if !has_arg(args, "x") || !has_arg(args, "y") {
+                return Err(
+                    "`x` and `y` must be passed together to click-focus before typing".to_string(),
+                );
+            }
+            Some(self.point_from(args, "x", "y")?)
+        } else {
+            None
+        };
+        if let Some(p) = focus {
+            self.driver
+                .click(p, Button::Left, 1, 0)
+                .map_err(|e| e.to_string())?;
+            std::thread::sleep(Duration::from_millis(TYPE_FOCUS_SETTLE_MS));
+            self.driver.type_text(text).map_err(|e| e.to_string())?;
+            return Ok(self.after_action(format!(
+                "clicked at device ({:.0}, {:.0}) then typed {count} characters",
+                p.x, p.y
+            )));
         }
         self.driver.type_text(text).map_err(|e| e.to_string())?;
         Ok(self.after_action(format!("typed {count} characters")))
@@ -1178,14 +1267,9 @@ impl Session {
                 }
             }
             "type" => {
-                let text = get_str_opt(args, "text")
-                    .ok_or_else(|| "`text` is required for action=type".to_string())?;
-                if text.is_empty() {
-                    return Err("text must not be empty".to_string());
-                }
-                ElementAction::Type {
-                    text: text.to_string(),
-                }
+                let text = parse_type_text(args)?.to_string();
+                let (index, point) = type_focus_point(args, Some(&snapshot))?;
+                ElementAction::Type { text, index, point }
             }
             "key" => {
                 let keys = get_str_opt(args, "keys")
@@ -1289,20 +1373,9 @@ impl Session {
                 }
             }
             "computer_type" => {
-                let text = get_str_opt(args, "text")
-                    .ok_or_else(|| "missing required argument `text`".to_string())?;
-                let count = text.chars().count();
-                if count == 0 {
-                    return Err("text must not be empty".to_string());
-                }
-                if count > MAX_TYPE_CHARS {
-                    return Err(format!(
-                        "text is {count} characters; the limit is {MAX_TYPE_CHARS}"
-                    ));
-                }
-                ElementAction::Type {
-                    text: text.to_string(),
-                }
+                let text = parse_type_text(args)?.to_string();
+                let (index, point) = type_focus_point(args, Some(&snapshot))?;
+                ElementAction::Type { text, index, point }
             }
             "computer_key" => {
                 let keys = get_str_opt(args, "keys")
@@ -1556,6 +1629,248 @@ mod tests {
         for tool in &catalog {
             assert_eq!(tool["inputSchema"]["type"], "object");
             assert!(tool["description"].as_str().unwrap().len() > 20);
+        }
+        let type_tool = catalog
+            .iter()
+            .find(|t| t["name"] == "computer_type")
+            .unwrap();
+        let props = &type_tool["inputSchema"]["properties"];
+        assert!(props.get("index").is_some(), "{props}");
+        assert!(props.get("x").is_some(), "{props}");
+        assert!(props.get("y").is_some(), "{props}");
+        assert!(props.get("app").is_some(), "{props}");
+        assert!(props.get("frame").is_some(), "{props}");
+    }
+
+    fn notes_app() -> crate::elements::AppInfo {
+        crate::elements::AppInfo {
+            identity: AppIdentity {
+                pid: 42,
+                name: "Notes".into(),
+                bundle_id: "com.apple.Notes".into(),
+                process_name: "Notes".into(),
+            },
+            windows: vec![crate::elements::WindowInfo {
+                id: 1,
+                title: "Notes".into(),
+                x: 0,
+                y: 0,
+                w: 800,
+                h: 600,
+            }],
+        }
+    }
+
+    fn element_session() -> (
+        Session,
+        std::rc::Rc<std::cell::RefCell<Vec<crate::drivers::mock::ElementCall>>>,
+    ) {
+        let (mut driver, _) = MockDriver::new(800, 600);
+        driver.element_enabled = true;
+        driver.apps_list = vec![notes_app()];
+        driver.element_nodes = vec![crate::elements::ElementNode {
+            index: 0,
+            role: "AXTextField".into(),
+            title: "Search".into(),
+            x: 40,
+            y: 20,
+            w: 200,
+            h: 24,
+            actions: vec!["set_value".into()],
+            focused: false,
+            enabled: true,
+            secure: false,
+            depth: 2,
+        }];
+        let element_calls = driver.element_calls.clone();
+        let cfg = Config {
+            settle_ms_desktop: 0,
+            screenshot_after_action: false,
+            apps: crate::consent::Policy {
+                allow: vec!["com.apple.Notes".into()],
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+        (Session::new(Box::new(driver), cfg), element_calls)
+    }
+
+    #[test]
+    fn type_with_xy_clicks_to_focus_first() {
+        let (mut s, calls) = session(800, 600);
+        s.call("computer_screenshot", &json!({}));
+        let out = s.call(
+            "computer_type",
+            &json!({"text": "hello", "x": 100, "y": 50}),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        assert!(
+            out.text
+                .contains("clicked at device (100, 50) then typed 5 characters"),
+            "{}",
+            out.text
+        );
+        let recorded = calls.borrow();
+        let click_at = recorded
+            .iter()
+            .position(|c| matches!(c, Call::Click(..)))
+            .expect("focus click");
+        let type_at = recorded
+            .iter()
+            .position(|c| matches!(c, Call::Type(_)))
+            .expect("typed text");
+        assert!(click_at < type_at, "{recorded:?}");
+        match &recorded[click_at] {
+            Call::Click(p, Button::Left, 1, 0) => {
+                assert!(
+                    (p.x - 100.0).abs() < 0.5 && (p.y - 50.0).abs() < 0.5,
+                    "{p:?}"
+                );
+            }
+            other => panic!("expected click, got {other:?}"),
+        }
+        assert_eq!(recorded[type_at], Call::Type("hello".into()));
+    }
+
+    #[test]
+    fn type_index_without_app_is_rejected() {
+        let (mut s, calls) = session(800, 600);
+        s.call("computer_screenshot", &json!({}));
+        let out = s.call("computer_type", &json!({"text": "hi", "index": 0}));
+        assert!(out.is_error, "{}", out.text);
+        assert!(out.text.contains("pass `app` too"), "{}", out.text);
+        assert!(!calls.borrow().iter().any(|c| matches!(c, Call::Type(_))));
+    }
+
+    #[test]
+    fn type_xy_must_arrive_together() {
+        let (mut s, _) = session(800, 600);
+        s.call("computer_screenshot", &json!({}));
+        let out = s.call("computer_type", &json!({"text": "hi", "x": 10}));
+        assert!(out.is_error, "{}", out.text);
+        assert!(out.text.contains("`x` and `y`"), "{}", out.text);
+    }
+
+    #[test]
+    fn app_type_with_index_routes_through_element_action() {
+        use crate::drivers::mock::ElementCall;
+        let (mut s, calls) = element_session();
+        let state = s.call("computer_app_state", &json!({"app": "Notes"}));
+        assert!(!state.is_error, "{}", state.text);
+        let out = s.call(
+            "computer_type",
+            &json!({"app": "Notes", "index": 0, "text": "query"}),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        assert!(out.text.contains("background"), "{}", out.text);
+        let recorded = calls.borrow();
+        let act = recorded.iter().find_map(|c| match c {
+            ElementCall::Act(name, action) => Some((name.as_str(), action)),
+            _ => None,
+        });
+        match act {
+            Some(("Notes", ElementAction::Type { text, index, point })) => {
+                assert_eq!(text, "query");
+                assert_eq!(*index, Some(0));
+                assert_eq!(*point, None);
+            }
+            other => panic!("expected Type with index, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn app_type_with_xy_routes_window_point() {
+        use crate::drivers::mock::ElementCall;
+        let (mut s, calls) = element_session();
+        assert!(
+            !s.call("computer_app_state", &json!({"app": "Notes"}))
+                .is_error
+        );
+        let out = s.call(
+            "computer_type",
+            &json!({"app": "Notes", "text": "hi", "x": 100, "y": 50}),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        let recorded = calls.borrow();
+        let act = recorded.iter().find_map(|c| match c {
+            ElementCall::Act(_, action) => Some(action.clone()),
+            _ => None,
+        });
+        match act {
+            Some(ElementAction::Type { text, index, point }) => {
+                assert_eq!(text, "hi");
+                assert_eq!(index, None);
+                assert_eq!(point, Some((100.0, 50.0)));
+            }
+            other => panic!("expected Type with point, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn app_type_without_focus_stays_current_focus() {
+        use crate::drivers::mock::ElementCall;
+        let (mut s, calls) = element_session();
+        assert!(
+            !s.call("computer_app_state", &json!({"app": "Notes"}))
+                .is_error
+        );
+        let out = s.call("computer_type", &json!({"app": "Notes", "text": "hi"}));
+        assert!(!out.is_error, "{}", out.text);
+        let recorded = calls.borrow();
+        let act = recorded.iter().find_map(|c| match c {
+            ElementCall::Act(_, action) => Some(action.clone()),
+            _ => None,
+        });
+        match act {
+            Some(ElementAction::Type { text, index, point }) => {
+                assert_eq!(text, "hi");
+                assert_eq!(index, None);
+                assert_eq!(point, None);
+            }
+            other => panic!("expected unfocused Type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn app_type_index_out_of_range_is_rejected() {
+        let (mut s, _) = element_session();
+        assert!(
+            !s.call("computer_app_state", &json!({"app": "Notes"}))
+                .is_error
+        );
+        let out = s.call(
+            "computer_type",
+            &json!({"app": "Notes", "index": 9, "text": "hi"}),
+        );
+        assert!(out.is_error, "{}", out.text);
+        assert!(out.text.contains("out of range"), "{}", out.text);
+    }
+
+    #[test]
+    fn element_type_with_index_uses_the_same_action() {
+        use crate::drivers::mock::ElementCall;
+        let (mut s, calls) = element_session();
+        assert!(
+            !s.call("computer_app_state", &json!({"app": "Notes"}))
+                .is_error
+        );
+        let out = s.call(
+            "computer_element",
+            &json!({"app": "Notes", "action": "type", "index": 0, "text": "hello"}),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        let recorded = calls.borrow();
+        let act = recorded.iter().find_map(|c| match c {
+            ElementCall::Act(_, action) => Some(action.clone()),
+            _ => None,
+        });
+        match act {
+            Some(ElementAction::Type { text, index, point }) => {
+                assert_eq!(text, "hello");
+                assert_eq!(index, Some(0));
+                assert_eq!(point, None);
+            }
+            other => panic!("expected Type with index, got {other:?}"),
         }
     }
 }
