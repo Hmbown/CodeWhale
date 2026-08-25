@@ -1,0 +1,57 @@
+What’s the results on the terminal bench
+
+---
+
+There should be a 0.9.11 one
+
+---
+
+Can you look at when we switched tk concurrency 4 and go hack and awitch tk 2 amd re run those?
+
+---
+
+is it even running
+
+---
+
+how about now
+
+---
+
+so whats the current average or whatever
+
+---
+
+how about now
+
+---
+
+nah its fine how its going
+
+---
+
+results?
+
+---
+
+how about now
+
+---
+
+how about now
+
+---
+
+ok i need us to do the 7 that failed out then or whatever :/ tere's still too big of infra issues
+
+---
+
+ok got it yeah we should def try it  and figure out what never gogt a fair shot and do it with concurrency of 1 instead of making this have unique issues ok?
+
+---
+
+no 0.9.7 lol
+
+---
+
+whath appened
