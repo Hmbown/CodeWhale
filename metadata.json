@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0VVH0FV2CMPF34T96KSCQWV",
+  "strategy": "manual-commit",
+  "branch": "codex/v0912-integration-20260823",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "CHANGELOG.md",
+    "Cargo.lock",
+    "Cargo.toml",
+    "crates/cli/Cargo.toml",
+    "crates/cli/src/lib.rs",
+    "crates/tui/Cargo.toml",
+    "crates/tui/src/commands/groups/plugins/marketplace.rs",
+    "crates/tui/src/commands/groups/plugins/marketplace_tests.rs",
+    "crates/tui/src/commands/groups/plugins/mod.rs",
+    "crates/tui/src/plugins/install/mod.rs",
+    "crates/tui/src/plugins/install/stage.rs",
+    "crates/tui/src/plugins/marketplace/parsers/codewhale.rs",
+    "crates/tui/src/plugins/marketplace/types.rs",
+    "crates/tui/src/plugins/tests.rs",
+    "docs/PLUGIN_BUNDLES.md",
+    "scripts/release/crates.sh",
+    "web/app/[locale]/install/page.tsx",
+    "web/lib/facts.generated.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 190,
+    "cache_creation_tokens": 551906,
+    "cache_read_tokens": 20556506,
+    "output_tokens": 105785,
+    "api_call_count": 95
+  }
+}
