@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added `/tutorial` (alias `/tour`, #5556): an opt-in pager that is never
+  shown automatically. The first page maps concepts for people arriving from
+  Claude Code, Cursor, or Codex; later pages cover keys, the composer, models,
+  Fleet, and workflows.
 - Optional per-session control socket (`[control_socket]` config table,
   Unix, off by default): when enabled, the interactive TUI binds a
   newline-framed JSON-RPC socket at `<sessions-dir>/<session-id>/control.sock`
@@ -95,7 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `@path:START-END` ranged line mentions (#5550, picker half to follow),
   a predictable last-copy backup file for clipboard exports with the path
   named when the clipboard fails (#5555), `wait` on multiple background shell
-  tasks with `until=any|all` (#5549, named-kill half to follow), and composer
+  tasks with `until=any|all` plus named `kill` (#5549), and composer
   double-click word / triple-click line selection.
 - Added workflow parallel-`schema` slot partial success (#5583): a slot that
   produces a schema-valid partial result no longer fails the whole parallel

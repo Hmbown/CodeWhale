@@ -39,6 +39,7 @@ mod subagents;
 mod transcript;
 mod translate;
 mod turn;
+mod tutorial;
 pub mod util;
 pub mod voice;
 mod workflow;
@@ -65,6 +66,10 @@ impl CommandGroup for CoreCommands {
             Box::new(FunctionCommand::new(
                 help::HelpCmd::info(),
                 help::HelpCmd::execute,
+            )),
+            Box::new(FunctionCommand::new(
+                tutorial::TutorialCmd::info(),
+                tutorial::TutorialCmd::execute,
             )),
             Box::new(FunctionCommand::new(
                 clear::ClearCmd::info(),
