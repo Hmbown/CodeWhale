@@ -242,6 +242,47 @@ fn make_write_worker_spec(worker_id: &str, workspace: PathBuf, root: &str) -> Ag
 }
 
 #[test]
+fn child_approval_ids_stay_unique_within_and_across_manager_boots() {
+    // #5615: the per-manager sequence restarts at zero, so a resumed agent
+    // under a NEW manager used to reissue ids from an earlier lifecycle.
+    // Durable receipts (#5584) make that a live hazard, not a cosmetic one.
+    let tmp = tempdir().expect("tempdir");
+    let mut first = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+
+    let mut first_ids = Vec::new();
+    for _ in 0..3 {
+        let (id, _rx) = first.register_child_approval("resumed-agent-7");
+        assert!(
+            SubAgentManager::is_child_approval_id(&id),
+            "routing hint must still recognize {id}"
+        );
+        first_ids.push(id);
+    }
+    let unique: std::collections::HashSet<_> = first_ids.iter().collect();
+    assert_eq!(
+        unique.len(),
+        first_ids.len(),
+        "ids must be unique per manager"
+    );
+
+    // A second manager over the same persisted state file (the resumed-agent
+    // scenario) must never reissue the first manager's ids.
+    let mut second = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+    let mut second_ids = Vec::new();
+    for _ in 0..3 {
+        let (id, _rx) = second.register_child_approval("resumed-agent-7");
+        assert!(SubAgentManager::is_child_approval_id(&id));
+        second_ids.push(id);
+    }
+    for id in &second_ids {
+        assert!(
+            !first_ids.contains(id),
+            "id {id} from the second manager collides with the first boot's ids"
+        );
+    }
+}
+
+#[test]
 fn active_worker_records_are_never_pruned_by_history_retention() {
     let tmp = tempdir().expect("tempdir");
     let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);

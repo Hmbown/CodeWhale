@@ -3496,7 +3496,15 @@ impl SubAgentManager {
         agent_id: &str,
     ) -> (String, tokio::sync::oneshot::Receiver<ChildApprovalOutcome>) {
         self.child_approval_seq = self.child_approval_seq.wrapping_add(1);
-        let id = format!("agent:{agent_id}:approval:{}", self.child_approval_seq);
+        // Namespace with the manager's boot id (#5615): the sequence restarts
+        // with every manager, and a resumed agent under a new manager would
+        // otherwise reuse ids from an earlier lifecycle. Durable approval
+        // receipts (#5584) make a stale id a live hazard — the old receipt
+        // could auto-answer the new prompt.
+        let id = format!(
+            "agent:{agent_id}:approval:{}:{}",
+            self.current_session_boot_id, self.child_approval_seq
+        );
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.child_approvals.insert(id.clone(), tx);
         (id, rx)
