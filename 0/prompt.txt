@@ -1,0 +1,193 @@
+// migration scaffolding; see docs/architecture/command-dispatch.md.
+⌥V:details
+run issue · python3 -c "
+command: python3 -c "
+import json
+d = json.load(open('crates/tui/locales/en.json'))
+ks = [k for k in d if 'cmd_config'
+          in k o
+r 'cmd_trust' in k]
+print(ks[:6]); print(d[ks[0]][:100])"
+output: Failed to execute tool: Traceback (most recent call last):
+  File "<string>", line 5, in <module>
+    print(ks[:6]); print(d[ks[0]][:100])
+                           ~~^^^
+IndexError: list index out of range
+[]
+
+
+Command exited with code 1
+run done · python3 -c "
+output: <class 'dict'> 1683
+['ExtensionsActionAdd', 'ExtensionsActionEnable', 'ExtensionsActionReload', 'ExtensionsActionFocus', 'ExtensionsActi
+onFold']
+KEY: /CmdBalanceDescription
+KEY: /FooterBalancePrefix
+run done · python3 -c "
+output: "Check the active provider account balance"
+"Manage workspace trust and the per-path allowlist"
+reasoning done · 9s
+Flat JSON: top-level keys are MessageId names. Simple. Now write the planner module. Env allowlist decision — keep to a
+conservative set:
+
+run done · awk '/fn extract_servers_map/,/^}/' crates/tui/src/mcp/external_impor...
+output: fn extract_servers_map(value: &Value) -> Vec<(String, Value)> {
+    // Claude / team: { "mcpServers": { name: {...} } }
+    // Marketplace catalog: { "servers": { name: {...} } } or array of {name, ...}
+    if let Some(map) = value
+        .get("mcpServers")
+⌥V:details
+reasoning done · 820ms
+Only top-level mcpServers. Per-project servers: I'll collect names from projects.<path>.mcpServers in my planner for
+the report (names only).
+
+Writing the planner module:
+tool done · Created crates/tui/src/import_claude.rs
+Created crates/tui/src/import_claude.rs · +513 -0
+--- a/crates/tui/src/import_claude.rs
++++ b/crates/tui/src/import_claude.rs
+@@ -0,0 +1,513 @@
+   0    1 + //! `/import-claude`: explicit, reviewable migration from Claude Code (#5557).
+   0    2 + //!
+   0    3 + //! Reads `~/.claude.json` and `~/.claude/settings.json` (bounded, read-only)
+   0    4 + //! and builds a plan — never a silent import:
+   0    5 + //!
+   0    6 + //! - **MCP servers** are surfaced through the existing external-import consent
+   0    7 + //! flow (`/mcp import <name> --approve`); nothing merges automatically.
+   0    8 + //! - **Env vars** that are known-safe (timeouts, output caps, editor choices)
+   0    9 + //! are proposed as a portable bundle file for `codewhale config import`,
+   0   10 + //! which carries its own plan/consent/rollback. Secret-shaped or unknown
+   0   11 + //! keys are named but never imported or echoed.
++508 diff lines · ⌥V:change
+reasoning done · 4s
+Now the command. Wire into the config group:
+1. mod import_claude; in lib.rs (next to doctor_fix).
+
+Now the command wiring — checking CommandResult, workspace access, and where FunctionCommand run fns live:
+run done · grep -rn 'fn run_trust' crates/tui/src/commands/groups/config/*.rs | ...
+output: crates/tui/src/commands/groups/config/mod.rs:146:fn run_trust(app: &mut App, arg: Option<&str>) -> CommandResu
+        lt {
+crates/tui/src/commands/groups/config/status.rs:46:        &display_path(&app.workspace),
+crates/tui/src/commands/groups/config/status.rs:52:        &project_docs(&app.workspace, locale),
+crates/tui/src/commands/groups/config/status.rs:268:        &app.workspace,
+run done · sed -n '140,175p' crates/tui/src/commands/groups/config/mod.rs; grep ...
+output: fn run_theme(app: &mut App, arg: Option<&str>) -> CommandResult {
+    run_registered(app, "theme", arg)
+}
+fn run_verbose(app: &mut App, arg: Option<&str>) -> CommandResult {
+    run_registered(app, "verbose", arg)
+⌥V:details
+reasoning done · 9s
+There's a dispatch in config/mod.rs. I'll register a new command file in the config group:
+groups/config/import_claude.rs with import_claude_command(app, arg) -> CommandResult, add IMPORT_CLAUDE_INFO static,
+
+tool done · Created crates/tui/src/commands/groups/config/import_claude.rs
+Created crates/tui/src/commands/groups/config/import_claude.rs · +84 -0
+--- a/crates/tui/src/commands/groups/config/import_claude.rs
++++ b/crates/tui/src/commands/groups/config/import_claude.rs
+@@ -0,0 +1,84 @@
+   0    1 + //! `/import-claude` — explicit, reviewable Claude Code migration (#5557).
+   0    2 + 
+   0    3 + use crate::commands::CommandResult;
+   0    4 + use crate::import_claude::{self, McpCandidateLine};
+   0    5 + use crate::tui::app::App;
+   0    6 + 
+   0    7 + pub(super) fn import_claude_command(app: &mut App, _arg: Option<&str>) -> CommandResult {
+   0    8 +     let home = crate::config::effective_home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+   0    9 +     let (sources, claude, settings) = import_claude::read_sources(&home);
+   0   10 + 
+   0   11 +     // MCP candidates come from the same discovery the `/mcp import` consent
++74 diff lines · ⌥V:change
+Now the registration, MessageId, and locale entries:
+tool done · Updated crates/tui/src/commands/groups/config/mod.rs
+Updated crates/tui/src/commands/groups/config/mod.rs · +11 -0
+--- a/crates/tui/src/commands/groups/config/mod.rs
++++ b/crates/tui/src/commands/groups/config/mod.rs
+@@ -5,6 +5,7 @@
+   5    5   // migration scaffolding; see docs/architecture/command-dispatch.md.
+   6    6   #[allow(clippy::module_inception)]
+   7    7   pub mod config;
+   8    8 + mod import_claude;
+   8    9   mod permissions;
+   9   10   mod status;
+  10   11   
+@@ -19,6 +20,7 @@
+  19   20   fn commands(&self) -> &'static [Box<dyn Command>] {
+  20   21   cached_command_list!(vec![
+  21   22   Box::new(FunctionCommand::new(&CONFIG_INFO, run_config)),
++27 diff lines · ⌥V:change
+tool done · Updated crates/tui/src/lib.rs
+Updated crates/tui/src/lib.rs · +1 -0
+--- a/crates/tui/src/lib.rs
++++ b/crates/tui/src/lib.rs
+@@ -48,6 +48,7 @@
+  48   48   mod dependencies;
+  49   49   mod doctor;
+  50   50   mod doctor_fix;
+  51   51 + mod import_claude;
+  51   52   mod dsh_credentials;
+  52   53   mod elapsed;
+  53   54   mod error_taxonomy;
+⌥V:change
+tool done · Updated crates/tui/src/localization.rs
+Updated crates/tui/src/localization.rs · +1 -0
+--- a/crates/tui/src/localization.rs
++++ b/crates/tui/src/localization.rs
+@@ -354,6 +354,7 @@
+ 354  354   CmdChangeTranslationUnavailable,
+ 355  355   CmdChangePreviousVersion,
+ 356  356   CmdBalanceDescription,
+ 357  357 +     CmdImportClaudeDescription,
+ 357  358   CmdClearDescription,
+ 358  359   CmdCompactDescription,
+ 359  360   CmdPurgeDescription,
+⌥V:change
+Warn Rate limit exc hi are you able to figure out where this model left off on getting 0.9.12 completed and take over? look for new issues + PRs that we should be taking as well [Image #2]
+
+---
+
+<task-notification>
+<task-id>byp1vs4jo</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/670e3a3c-98aa-4266-849e-0b610ad39bfb/tasks/byp1vs4jo.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll CI matrix for pushed commit until completion" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bn6pwckab</task-id>
+<tool-use-id>toolu_0173437UT447c5GsfVjgM5zY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/670e3a3c-98aa-4266-849e-0b610ad39bfb/tasks/bn6pwckab.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll main CI workflow until completion" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bc43nqp88</task-id>
+<tool-use-id>toolu_015noseXHhNX6SCgVem1KKgT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/670e3a3c-98aa-4266-849e-0b610ad39bfb/tasks/bc43nqp88.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch CI on the fix commit until completion" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b1eyrcly8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Volumes-VIXinSSD-CW-codewhale/670e3a3c-98aa-4266-849e-0b610ad39bfb/tasks/b1eyrcly8.output</output-file>
+<status>killed</status>
+<summary>Background command "Watch remaining macOS leg until CI completes" was stopped</summary>
+</task-notification>
+
+---
+
+ok can you give me a texto nly prompt for another model to take over please?
+
+---
+
+hold on i want to fix the god files though so make the prompt about not releasing 0.9.12 yet but still making teh fixes we need please
