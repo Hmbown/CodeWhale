@@ -152,6 +152,10 @@ When `[memory] enabled = true`, typing `# foo` and pressing `Enter` appends `foo
 | `Alt-[` / `Alt-]`    | Jump between tool output blocks                     |
 | `Esc Esc`            | Backtrack to a previous user message (`←`/`→` steps, `Enter` rewinds) |
 | `Esc`                | Return focus to composer                           |
+| `y`                  | Copy the focused transcript block content          |
+| `Y`                  | Copy the focused transcript block with metadata    |
+| `Enter`              | Open the focused transcript block fullscreen       |
+| `r`                  | Open the focused block's raw markdown/detail view  |
 | Mouse drag           | Select transcript text in Codewhale                |
 | `Ctrl-C`             | Copy an active Codewhale selection                 |
 | `Cmd-click` (macOS) / `Ctrl-click` (Linux/Windows) | Open an OSC 8 link in a supporting terminal (terminal-owned) |

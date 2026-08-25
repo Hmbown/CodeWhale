@@ -11,10 +11,10 @@ use crate::localization::{MessageId, tr};
 use crate::snapshot::SnapshotRepo;
 use crate::tui::app::App;
 use crate::tui::footer_ui::one_line_summary;
-use crate::tui::history::{HistoryCell, ToolCell, ToolStatus};
+use crate::tui::history::{HistoryCell, ToolCell, ToolStatus, TranscriptRenderOptions};
 use crate::tui::pager::{PagerPage, PagerView};
 use crate::tui::ui_text::{
-    history_cell_to_clipboard_text, history_cell_to_text, truncate_line_to_width,
+    history_cell_to_clipboard_text, history_cell_to_text, line_to_plain, truncate_line_to_width,
 };
 
 fn selected_transcript_cell_index(app: &App) -> Option<usize> {
@@ -503,6 +503,38 @@ pub(crate) fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> b
     true
 }
 
+/// Open the focused transcript cell as a full-screen readable pager.
+pub(crate) fn open_focused_cell_pager(app: &mut App) -> bool {
+    let Some(cell_index) = detail_target_cell_index(app) else {
+        return false;
+    };
+    let Some(cell) = app.cell_at_virtual_index(cell_index) else {
+        return false;
+    };
+    let title = match cell {
+        HistoryCell::User { .. } => "You",
+        HistoryCell::Assistant { .. } => "Assistant",
+        HistoryCell::System { .. } => "Note",
+        HistoryCell::Error { .. } => "Error",
+        HistoryCell::Thinking { .. } => "Reasoning",
+        HistoryCell::Tool(_) => "Tool",
+        HistoryCell::SubAgent(_) => "Sub-agent",
+        HistoryCell::ArchivedContext { .. } => "Archived Context",
+    };
+    let width = app
+        .viewport
+        .last_transcript_area
+        .map(|area| area.width)
+        .unwrap_or(80);
+    let content = history_cell_to_text(cell, width);
+    let mut pager = PagerView::from_text(title, &content, width.saturating_sub(2));
+    if let Some(answer) = completed_assistant_answer_text(cell, width) {
+        pager = pager.with_copy_answer(answer);
+    }
+    app.view_stack.push(pager);
+    true
+}
+
 /// Copy the "focused" transcript cell to the system clipboard.
 /// The focused cell is determined by the detail-target heuristic
 /// (viewport centre or most recent cell). Returns true when text
@@ -513,6 +545,40 @@ pub(super) fn copy_focused_cell(app: &mut App) -> bool {
         return false;
     };
     copy_cell_to_clipboard(app, index)
+}
+
+/// Copy the focused cell with the transcript's role/metadata presentation.
+/// Unlike content copy, this retains the metadata prefixes used by the
+/// transcript surface and is useful for sharing a receipt or event record.
+pub(super) fn copy_focused_cell_metadata(app: &mut App) -> bool {
+    let Some(index) = detail_target_cell_index(app) else {
+        return false;
+    };
+    let Some(cell) = app.cell_at_virtual_index(index) else {
+        return false;
+    };
+    let width = app
+        .viewport
+        .last_transcript_area
+        .map(|area| area.width)
+        .unwrap_or(80);
+    let text = cell
+        .lines_with_copy_metadata(width, TranscriptRenderOptions::default())
+        .into_iter()
+        .map(|line| line_to_plain(&line.line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.trim().is_empty() {
+        app.status_message = Some("Message is empty".to_string());
+        return false;
+    }
+    if app.clipboard.write_text(&text).is_ok() {
+        app.status_message = Some("Message metadata copied".to_string());
+        true
+    } else {
+        app.status_message = Some("Copy failed".to_string());
+        false
+    }
 }
 
 pub(crate) fn copy_cell_to_clipboard(app: &mut App, cell_index: usize) -> bool {
@@ -1933,6 +1999,34 @@ mod tests {
 
         assert!(copy_cell_to_clipboard(&mut app, 0));
         assert_eq!(app.clipboard.last_written_text(), Some(content));
+    }
+
+    #[test]
+    fn focused_pager_and_metadata_copy_use_the_same_cell_target() {
+        let mut app = test_app();
+        app.history = vec![HistoryCell::Assistant {
+            content: "focused markdown **answer**".to_string(),
+            streaming: false,
+        }];
+        app.resync_history_revisions();
+        app.viewport.last_transcript_area = Some(ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        assert!(open_focused_cell_pager(&mut app));
+        assert_eq!(
+            app.view_stack.top_kind(),
+            Some(crate::tui::views::ModalKind::Pager)
+        );
+        app.view_stack.pop();
+        assert!(copy_focused_cell_metadata(&mut app));
+        assert_eq!(
+            app.clipboard.last_written_text(),
+            Some("● focused markdown answer")
+        );
     }
 
     #[test]

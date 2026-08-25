@@ -4302,6 +4302,27 @@ pub(crate) async fn run_event_loop(
                 }
             }
 
+            // Focused transcript actions are deliberately below the Tasks rail
+            // shortcuts so y/Y keep their existing meaning when that panel
+            // owns focus. They only fire with an empty composer and no modal.
+            if app.view_stack.is_empty()
+                && app.input.is_empty()
+                && key.modifiers == KeyModifiers::NONE
+                && detail_target_cell_index(app).is_some()
+            {
+                match key.code {
+                    KeyCode::Char('y') if copy_focused_cell(app) => continue,
+                    KeyCode::Char('Y') if copy_focused_cell_metadata(app) => continue,
+                    KeyCode::Char('r')
+                        if detail_target_cell_index(app)
+                            .is_some_and(|index| open_details_pager_for_cell(app, index)) =>
+                    {
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+
             // Shifted shortcuts toggle the file-tree pane. Keep plain Ctrl+E
             // reserved for the composer end-of-line binding used by shells.
             if key_shortcuts::is_file_tree_toggle_shortcut(&key) {
@@ -4578,6 +4599,14 @@ pub(crate) async fn run_event_loop(
                         && app.input.is_empty()
                         && app.viewport.transcript_selection.is_active()
                         && open_pager_for_selection(app) =>
+                {
+                    continue;
+                }
+                KeyCode::Enter
+                    if key.modifiers == KeyModifiers::NONE
+                        && app.input.is_empty()
+                        && detail_target_cell_index(app).is_some()
+                        && open_focused_cell_pager(app) =>
                 {
                     continue;
                 }

@@ -163,11 +163,12 @@ use super::widgets::{ChatWidget, ComposerWidget, Renderable};
 // import the ui-internal entry points used from this file's own body.
 pub(crate) use self::activity_detail::{
     completed_assistant_answer_text, copy_cell_to_clipboard, detail_target_label,
-    open_details_pager_for_cell, turn_handoff_markdown,
+    open_details_pager_for_cell, open_focused_cell_pager, turn_handoff_markdown,
 };
 use self::activity_detail::{
-    copy_focused_cell, detail_target_cell_index, extract_reasoning_header,
-    open_reasoning_detail_pager, open_tool_details_pager, open_turn_inspector_pager,
+    copy_focused_cell, copy_focused_cell_metadata, detail_target_cell_index,
+    extract_reasoning_header, open_reasoning_detail_pager, open_tool_details_pager,
+    open_turn_inspector_pager,
 };
 // Ctrl+O now opens the full recorded Reasoning Detail for the selected or
 // current reasoning block. The whole-turn Turn Inspector moved to Ctrl+Alt+O
