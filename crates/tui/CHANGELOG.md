@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional per-session control socket (`[control_socket]` config table,
+  Unix, off by default): when enabled, the interactive TUI binds a
+  newline-framed JSON-RPC socket at `<sessions-dir>/<session-id>/control.sock`
+  (0600) with the verbs `message`, `interrupt`, `relaunch`, and `status`,
+  typed error codes, bounded request sizes and dispatch timeouts, and
+  socket lifecycle riding the session lifecycle (stale-file takeover,
+  live-bind refusal with retry backoff). Windows parses the key but refuses
+  to bind with a clear error (#5533).
 - New `/relaunch` command: save like `/exit`, then self-exec `resume
   <session-id>` so a session switches to the current binary in one step. The
   executable path falls back to `argv[0]` when `current_exe` resolves to a

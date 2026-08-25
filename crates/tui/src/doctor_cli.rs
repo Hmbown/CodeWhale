@@ -1718,6 +1718,10 @@ pub(crate) fn print_doctor_setup_report(
         "  · lifecycle outbox: {}",
         doctor_lifecycle_outbox_posture_line(config)
     );
+    println!(
+        "  · control socket: {}",
+        doctor_control_socket_posture_line(config)
+    );
     let consistency = doctor_setup_consistency(state, source);
     if consistency["status"] == "inconsistent" {
         let issues = consistency["issues"]
@@ -1952,6 +1956,22 @@ pub(crate) fn doctor_lifecycle_outbox_posture_line(config: &Config) -> String {
         return "lifecycle_outbox=off (default)".to_string();
     }
     format!("lifecycle_outbox=on (path: {path})")
+}
+
+/// Doctor posture for the per-session control socket, enabled via
+/// `[control_socket].enabled` (false = off, the default). Report the
+/// resolved state and, when enabled, where the socket appears for the
+/// running session.
+pub(crate) fn doctor_control_socket_posture_line(config: &Config) -> String {
+    let enabled = config
+        .control_socket
+        .as_ref()
+        .is_some_and(|socket| socket.enabled);
+    if enabled {
+        "control_socket=on (sessions/<id>/control.sock per running session)".to_string()
+    } else {
+        "control_socket=off (default)".to_string()
+    }
 }
 
 /// Resolved telemetry consent and where it came from (#5441).

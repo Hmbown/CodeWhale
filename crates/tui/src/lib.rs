@@ -8119,6 +8119,25 @@ mod doctor_setup_state_tests {
     }
 
     #[test]
+    fn doctor_reports_control_socket_posture() {
+        let config = Config::default();
+        assert!(config.control_socket.is_none());
+        assert_eq!(
+            doctor_control_socket_posture_line(&config),
+            "control_socket=off (default)"
+        );
+
+        let config = Config {
+            control_socket: Some(codewhale_config::ControlSocketToml { enabled: true }),
+            ..Config::default()
+        };
+        assert_eq!(
+            doctor_control_socket_posture_line(&config),
+            "control_socket=on (sessions/<id>/control.sock per running session)"
+        );
+    }
+
+    #[test]
     fn doctor_setup_report_json_fails_closed_without_operate_receipts() {
         let _guard = crate::test_support::lock_test_env();
         let tmp = TempDir::new().expect("tempdir");
