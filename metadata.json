@@ -3,9 +3,10 @@
   "checkpoint_id": "01M0VBMGJK89EXW5WR6WPEJW9A",
   "strategy": "manual-commit",
   "branch": "codex/v0912-integration-20260823",
-  "checkpoints_count": 5,
+  "checkpoints_count": 6,
   "files_touched": [
-    "crates/tui/src/agy_credentials.rs"
+    "crates/tui/src/agy_credentials.rs",
+    "crates/tui/src/agy_credentials/envelope.rs"
   ],
   "sessions": [
     {
@@ -14,13 +15,20 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 382,
-    "cache_creation_tokens": 786373,
-    "cache_read_tokens": 37037999,
-    "output_tokens": 105505,
-    "api_call_count": 191
+    "input_tokens": 550,
+    "cache_creation_tokens": 1022499,
+    "cache_read_tokens": 48801275,
+    "output_tokens": 186031,
+    "api_call_count": 275
   }
 }
