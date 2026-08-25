@@ -14,7 +14,7 @@
 //!
 //! ## Authoritative host-proxy design (D1)
 //!
-//! `CommandContexts` holds seven independently borrowed facet objects, while
+//! `CommandContexts` holds ten independently borrowed facet objects, while
 //! important behavior (mode transitions, model invalidation, cost accounting,
 //! skill refresh) is authoritative on `App`. The adapters therefore share a
 //! synchronous TUI-owned host proxy. Each trait call borrows `App` only for the
@@ -257,7 +257,7 @@ pub(crate) fn key_to_message_id(key: &'static str) -> Option<MessageId> {
 
 /// Shared TUI host hidden behind the portable command facets.
 ///
-/// The envelope needs seven independently borrowed facet objects, while the
+/// The envelope needs ten independently borrowed facet objects, while the
 /// authoritative mutation methods live on `App`. Each adapter therefore owns
 /// an `Rc` clone of this synchronous host proxy. Trait calls borrow `App` only
 /// for the duration of one method, delegate to the real TUI authority, and
@@ -814,7 +814,7 @@ impl CommandMemoryContext for MemoryAdapter<'_> {
 // Envelope construction (D1)
 // ---------------------------------------------------------------------------
 
-/// Owns seven facet objects sharing one synchronous TUI host proxy.
+/// Owns ten facet objects sharing one synchronous TUI host proxy.
 ///
 /// Handlers borrow only these adapters. Every method delegates to the real App
 /// authority and releases its `RefCell` borrow before returning, so facets can
