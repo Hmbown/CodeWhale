@@ -344,6 +344,11 @@ pub(crate) fn queued_message_content_for_app(
         &message.display,
         &stabilization_dir,
     );
+    // Any existing image file the user named (quoted, @-mentioned, file://,
+    // or an anchored path whose bytes sniff as PNG/JPEG/GIF/WebP) becomes an
+    // `[Attached image: …]` marker so expand_attachment_blocks can load it.
+    // macOS screencapture temps are copied above; this pass is not macOS-only.
+    let display = crate::image_attach::ensure_image_attachment_markers(&display);
     let user_request = crate::tui::file_mention::user_request_with_file_mentions_cached(
         &display,
         &app.workspace,
