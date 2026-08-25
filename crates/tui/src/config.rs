@@ -1213,12 +1213,27 @@ fn canonical_zai_model_id(model: &str) -> Option<&'static str> {
     let normalized = normalized.replace(['_', ' '], "-");
     match normalized.as_str() {
         "glm-5.1" | "glm-5-1" | "zai-glm-5.1" | "zai-glm-5-1" => Some(ZAI_GLM_5_1_MODEL),
-        // Each alias resolves to its own constant, never through
+        // Each versioned alias resolves to its own constant, never through
         // `DEFAULT_ZAI_MODEL`: moving the default (now GLM-5.3) must not
         // silently re-point an explicit GLM-5.2 request.
         "glm-5.2" | "glm-5-2" | "zai-glm-5.2" | "zai-glm-5-2" => Some(ZAI_GLM_5_2_MODEL),
         "glm-5.3" | "glm-5-3" | "zai-glm-5.3" | "zai-glm-5-3" => Some(ZAI_GLM_5_3_MODEL),
         "glm-5-turbo" | "glm-5turbo" | "zai-glm-5-turbo" => Some(ZAI_GLM_5_TURBO_MODEL),
+        // Bare family id tracks the current default. Explicit 5.1/5.2/5.3 stay
+        // pinned above; turbo is its own row.
+        "glm-5" | "glm5" | "zai-glm-5" => Some(DEFAULT_ZAI_MODEL),
+        _ => None,
+    }
+}
+
+fn canonical_openai_model_id(model: &str) -> Option<&'static str> {
+    let normalized = model.trim().to_ascii_lowercase();
+    let normalized = normalized.replace(['_', ' '], "-");
+    match normalized.as_str() {
+        // Bare family id tracks the current OpenAI default (gpt-5.6). Exact
+        // match only: gpt-5.5, gpt-5.6-sol, gpt-5-codex, and gpt-5-nano stay
+        // pinned as their own ids.
+        "gpt-5" | "gpt5" | "openai-gpt-5" => Some(DEFAULT_OPENAI_MODEL),
         _ => None,
     }
 }
@@ -1300,6 +1315,7 @@ pub fn canonical_model_id_for_provider(provider: ApiProvider, model: &str) -> Op
         ApiProvider::Arcee => canonical_arcee_model_id(trimmed),
         ApiProvider::Moonshot => canonical_moonshot_model_id(trimmed),
         ApiProvider::Zai => canonical_zai_model_id(trimmed),
+        ApiProvider::Openai => canonical_openai_model_id(trimmed),
         ApiProvider::Minimax | ApiProvider::MinimaxAnthropic => canonical_minimax_model_id(trimmed),
         _ => None,
     };

@@ -526,7 +526,8 @@ fn modelstudio_model_supports_preserve_thinking(model: &str) -> bool {
 
 fn modelstudio_model_supports_reasoning_effort(model: &str) -> bool {
     let model = model.trim().to_ascii_lowercase();
-    model.starts_with("deepseek-v4") || matches!(model.as_str(), "glm-5.2" | "glm-5.1" | "glm-5")
+    model.starts_with("deepseek-v4")
+        || matches!(model.as_str(), "glm-5.3" | "glm-5.2" | "glm-5.1" | "glm-5")
 }
 
 fn modelstudio_reasoning_effort_for_model(effort: &str) -> Option<&'static str> {
@@ -4799,6 +4800,29 @@ mod alias_thinking_detection_tests {
 
             assert_eq!(body["enable_thinking"], json!(true), "{requested}");
             assert_eq!(body["reasoning_effort"], json!(expected), "{requested}");
+        }
+    }
+
+    #[test]
+    fn modelstudio_glm_family_maps_effort_including_glm_5_3() {
+        let base_url = crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL;
+        for model in ["glm-5.3", "glm-5.2", "glm-5.1", "glm-5"] {
+            for (requested, expected) in [("low", "high"), ("high", "high"), ("xhigh", "max")] {
+                let mut body = json!({});
+                apply_route_reasoning_controls(
+                    &mut body,
+                    ApiProvider::ModelstudioTokenPlan,
+                    base_url,
+                    model,
+                    Some(requested),
+                );
+                assert_eq!(body["enable_thinking"], json!(true), "{model} {requested}");
+                assert_eq!(
+                    body["reasoning_effort"],
+                    json!(expected),
+                    "{model} {requested}"
+                );
+            }
         }
     }
 

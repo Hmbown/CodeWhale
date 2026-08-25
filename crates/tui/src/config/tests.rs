@@ -6658,6 +6658,9 @@ fn normalize_model_name_for_zai_canonicalizes_current_glm_models() {
         ("glm-5.3", DEFAULT_ZAI_MODEL),
         ("glm-5-3", ZAI_GLM_5_3_MODEL),
         ("zai-glm-5-3", ZAI_GLM_5_3_MODEL),
+        ("glm-5", DEFAULT_ZAI_MODEL),
+        ("glm5", DEFAULT_ZAI_MODEL),
+        ("zai-glm-5", DEFAULT_ZAI_MODEL),
         ("glm-5-turbo", ZAI_GLM_5_TURBO_MODEL),
         ("zai-glm-5-turbo", ZAI_GLM_5_TURBO_MODEL),
     ] {
@@ -6677,6 +6680,25 @@ fn normalize_model_name_for_zai_canonicalizes_current_glm_models() {
         normalize_model_name_for_provider(ApiProvider::Zai, "glm-next-preview").as_deref(),
         Some("glm-next-preview")
     );
+}
+
+#[test]
+fn normalize_model_name_for_openai_tracks_gpt5_family_without_collapsing_explicit_ids() {
+    assert_eq!(DEFAULT_OPENAI_MODEL, "gpt-5.6");
+    for alias in ["gpt-5", "gpt5", "openai-gpt-5"] {
+        assert_eq!(
+            canonical_model_id_for_provider(ApiProvider::Openai, alias).as_deref(),
+            Some(DEFAULT_OPENAI_MODEL),
+            "{alias} must track DEFAULT_OPENAI_MODEL"
+        );
+    }
+    for pinned in ["gpt-5.5", "gpt-5.5-pro", "gpt-5.6-sol", "gpt-5-codex"] {
+        assert_eq!(
+            canonical_model_id_for_provider(ApiProvider::Openai, pinned).as_deref(),
+            Some(pinned),
+            "{pinned} must stay pinned"
+        );
+    }
 }
 
 #[test]
@@ -7606,6 +7628,26 @@ model = "mimo-v2.5-pro"
         "https://token-plan-sgp.xiaomimimo.com/v1"
     );
     assert_eq!(config.default_model(), DEFAULT_XIAOMI_MIMO_MODEL);
+    Ok(())
+}
+
+#[test]
+fn xiaomi_mimo_sk_key_without_base_url_uses_pay_as_you_go() -> Result<()> {
+    let config: Config = toml::from_str(
+        r#"
+provider = "xiaomi-mimo"
+
+[providers.xiaomi_mimo]
+api_key = "sk-payg-key"
+"#,
+    )?;
+
+    config.validate()?;
+    assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
+    assert_eq!(
+        config.deepseek_base_url(),
+        XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL
+    );
     Ok(())
 }
 

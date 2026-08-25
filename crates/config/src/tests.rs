@@ -5253,6 +5253,15 @@ fn zai_aliases_resolve_to_canonical_models() {
             "{alias} must canonicalize to GLM-5.3"
         );
     }
+    // Bare family id tracks the current default so `glm-5` auto-follows
+    // GLM-5.3 (and whatever DEFAULT_ZAI_MODEL becomes next).
+    for alias in ["glm-5", "glm5", "zai-glm-5", "GLM-5", "ZAI_GLM_5"] {
+        assert_eq!(
+            normalize_model_for_provider(ProviderKind::Zai, alias),
+            DEFAULT_ZAI_MODEL,
+            "{alias} must track DEFAULT_ZAI_MODEL"
+        );
+    }
     // GLM-5.2 is a peer, no longer the default: an explicit 5.2 selection
     // must keep its own id and must never fold into DEFAULT_ZAI_MODEL.
     for alias in ["glm-5.2", "glm-5-2", "zai-glm-5.2", "zai-glm-5-2"] {
@@ -5275,6 +5284,36 @@ fn zai_aliases_resolve_to_canonical_models() {
         normalize_model_for_provider(ProviderKind::Zai, "custom-glm-preview"),
         "custom-glm-preview"
     );
+}
+
+#[test]
+fn openai_family_alias_tracks_default_without_collapsing_explicit_ids() {
+    assert_eq!(DEFAULT_OPENAI_MODEL, "gpt-5.6");
+    for alias in ["gpt-5", "gpt5", "openai-gpt-5", "GPT-5", "OPENAI_GPT_5"] {
+        assert_eq!(
+            normalize_model_for_provider(ProviderKind::Openai, alias),
+            DEFAULT_OPENAI_MODEL,
+            "{alias} must track DEFAULT_OPENAI_MODEL"
+        );
+    }
+    for pinned in [
+        "gpt-5.5",
+        "gpt-5.5-pro",
+        "gpt-5.4",
+        "gpt-5.6-sol",
+        "gpt-5-codex",
+        "gpt-5-nano",
+    ] {
+        assert_eq!(
+            normalize_model_for_provider(ProviderKind::Openai, pinned),
+            pinned,
+            "{pinned} must stay pinned"
+        );
+        assert_ne!(
+            pinned, DEFAULT_OPENAI_MODEL,
+            "{pinned} must not be the OpenAI default"
+        );
+    }
 }
 
 #[test]

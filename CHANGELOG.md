@@ -104,6 +104,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Bare family aliases now track the current GA default: `glm-5` / `glm5` /
+  `zai-glm-5` resolve to `DEFAULT_ZAI_MODEL` (`GLM-5.3`), and `gpt-5` /
+  `gpt5` / `openai-gpt-5` resolve to `DEFAULT_OPENAI_MODEL` (`gpt-5.6`).
+  Explicit versioned ids (`GLM-5.2`, `gpt-5.5`, `gpt-5.6-sol`, …) stay
+  pinned. A catalog guard fails CI if a higher `GLM-5.<N>` or `gpt-5.<N>`
+  GA/sol row is added without bumping the matching default.
 - The marketing site hides the Sign in / Register links behind
   `SHOW_APP_AUTH_LINKS = false` while web auth is being repaired:
   `POST /api/auth/session-exchange` was failing 15 of 16 attempts, so

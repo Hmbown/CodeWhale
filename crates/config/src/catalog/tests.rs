@@ -814,6 +814,79 @@ fn bundled_asset_yields_real_chat_offerings_for_key_models() {
     );
 }
 
+/// GA family ids like `GLM-5.3` / `gpt-5.6` / `gpt-5.6-sol`. Turbo, flash,
+/// lite, preview, and other suffix variants (terra, luna, pro, codex) are
+/// not the family default.
+fn ga_family_minor(prefix: &str, wire: &str, extra_allowed_suffixes: &[&str]) -> Option<u32> {
+    let lower = wire.trim().to_ascii_lowercase().replace('_', "-");
+    for marker in ["turbo", "flash", "lite", "preview"] {
+        if lower.split(['-', '.']).any(|part| part == marker) {
+            return None;
+        }
+    }
+    let rest = lower.strip_prefix(prefix)?;
+    let (num, suffix) = match rest.split_once('-') {
+        Some((num, suffix)) => (num, Some(suffix)),
+        None => (rest, None),
+    };
+    if let Some(suffix) = suffix
+        && !extra_allowed_suffixes
+            .iter()
+            .any(|allowed| suffix == *allowed)
+    {
+        return None;
+    }
+    num.parse().ok()
+}
+
+#[test]
+fn bundled_zai_default_tracks_highest_glm5_ga() {
+    // Adding GLM-5.4 to the zai catalog without bumping DEFAULT_ZAI_MODEL
+    // must fail CI. Turbo/flash/lite/preview rows do not count.
+    let highest = bundled_catalog_offerings()
+        .into_iter()
+        .filter(|row| row.provider == "zai")
+        .filter_map(|row| {
+            ga_family_minor("glm-5.", &row.wire_model_id, &[])
+                .map(|minor| (minor, row.wire_model_id))
+        })
+        .max_by_key(|(minor, _)| *minor)
+        .expect("bundled zai catalog must list at least one GLM-5.<N> GA id");
+    let expected = format!("GLM-5.{}", highest.0);
+    assert!(
+        crate::DEFAULT_ZAI_MODEL.eq_ignore_ascii_case(&expected),
+        "DEFAULT_ZAI_MODEL ({}) must equal the highest bundled zai GLM-5.<N> GA ({expected}; catalog id {})",
+        crate::DEFAULT_ZAI_MODEL,
+        highest.1
+    );
+}
+
+#[test]
+fn bundled_openai_default_tracks_highest_gpt5_sol_or_ga() {
+    // Same pattern as Z.ai: a new gpt-5.7 / gpt-5.7-sol catalog row without
+    // bumping DEFAULT_OPENAI_MODEL must fail CI. Explicit 5.5, terra/luna,
+    // pro, and codex suffixes are not the family default.
+    let highest = bundled_catalog_offerings()
+        .into_iter()
+        .filter(|row| row.provider == "openai")
+        .filter_map(|row| {
+            ga_family_minor("gpt-5.", &row.wire_model_id, &["sol"])
+                .map(|minor| (minor, row.wire_model_id))
+        })
+        .max_by_key(|(minor, _)| *minor);
+    let Some(highest) = highest else {
+        return;
+    };
+    let expected = format!("gpt-5.{}", highest.0);
+    assert_eq!(
+        crate::DEFAULT_OPENAI_MODEL,
+        expected,
+        "DEFAULT_OPENAI_MODEL ({}) must equal the highest bundled openai gpt-5.<N> sol/GA ({expected}; catalog id {})",
+        crate::DEFAULT_OPENAI_MODEL,
+        highest.1
+    );
+}
+
 #[test]
 fn bundled_asset_pricing_is_honest() {
     let rows = bundled_catalog_offerings();
