@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:a56bca473dbd -->
+<!-- source: README.md sha256:8abbd1ce2919 -->
 # Codewhale
 
 Codewhale은 Rust로 만든 터미널용 오픈 소스 코딩 에이전트로, 사용자들과 함께 공개적으로 개선해 나갑니다.
@@ -58,7 +58,7 @@ Codewhale은 사용자가 허용한 접근 권한으로 사용자의 컴퓨터�
 
 - [공급자와 로컬 모델](docs/PROVIDERS.md)
 - [에이전트 팀](docs/FLEET.md)
-- [MCP](docs/MCP.md), [훅](docs/HOOKS.md), [구성](docs/CONFIGURATION.md)
+- [MCP](docs/MCP.md), [훅](docs/HOOKS.md), [자동화](docs/AUTOMATION.md), [구성](docs/CONFIGURATION.md)
 - [로컬 웹 클라이언트](docs/WEB.md)
 - [전체 문서](docs)
 

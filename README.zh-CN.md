@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:a56bca473dbd -->
+<!-- source: README.md sha256:8abbd1ce2919 -->
 # Codewhale
 
 Codewhale 是一款面向终端的开源编程智能体，使用 Rust 构建，并与用户一起在公开协作中不断改进。
@@ -58,7 +58,7 @@ Codewhale 在你的机器上运行，并仅拥有你授予的访问权限。审�
 
 - [提供商和本地模型](docs/PROVIDERS.md)
 - [智能体团队](docs/FLEET.md)
-- [MCP](docs/MCP.md)、[钩子](docs/HOOKS.md)和[配置](docs/CONFIGURATION.md)
+- [MCP](docs/MCP.md)、[钩子](docs/HOOKS.md)、[自动化](docs/AUTOMATION.md)和[配置](docs/CONFIGURATION.md)
 - [本地 Web 客户端](docs/WEB.md)
 - [全部文档](docs)
 

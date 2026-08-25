@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:a56bca473dbd -->
+<!-- source: README.md sha256:8abbd1ce2919 -->
 # Codewhale
 
 Codewhale — це агент програмування з відкритим кодом для вашого термінала, створений на Rust і вдосконалюваний публічно разом із людьми, які ним користуються.
@@ -58,7 +58,7 @@ Codewhale працює на вашому комп’ютері з доступо
 
 - [Провайдери та локальні моделі](docs/PROVIDERS.md)
 - [Команди агентів](docs/FLEET.md)
-- [MCP](docs/MCP.md), [хуки](docs/HOOKS.md) і [конфігурація](docs/CONFIGURATION.md)
+- [MCP](docs/MCP.md), [хуки](docs/HOOKS.md), [автоматизації](docs/AUTOMATION.md) і [конфігурація](docs/CONFIGURATION.md)
 - [Локальний вебклієнт](docs/WEB.md)
 - [Уся документація](docs)
 

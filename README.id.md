@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:a56bca473dbd -->
+<!-- source: README.md sha256:8abbd1ce2919 -->
 # Codewhale
 
 Codewhale adalah agen pemrograman sumber terbuka untuk terminal Anda, dibuat dengan Rust dan dikembangkan secara terbuka bersama orang-orang yang menggunakannya.
@@ -58,7 +58,7 @@ Baca [urutan otorisasi](docs/AUTHORIZATION_ORDER.md) untuk susunan kebijakan yan
 
 - [Penyedia dan model lokal](docs/PROVIDERS.md)
 - [Tim agen](docs/FLEET.md)
-- [MCP](docs/MCP.md), [hook](docs/HOOKS.md), dan [konfigurasi](docs/CONFIGURATION.md)
+- [MCP](docs/MCP.md), [hook](docs/HOOKS.md), [otomatisasi](docs/AUTOMATION.md), dan [konfigurasi](docs/CONFIGURATION.md)
 - [Klien web lokal](docs/WEB.md)
 - [Semua dokumentasi](docs)
 

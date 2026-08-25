@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:a56bca473dbd -->
+<!-- source: README.md sha256:8abbd1ce2919 -->
 # Codewhale
 
 Codewhale وكيل مفتوح المصدر للبرمجة عبر الطرفية، مبني بلغة Rust ويتطور علنًا بالتعاون مع الأشخاص الذين يستخدمونه.
@@ -58,7 +58,7 @@ codewhale exec "fix the failing tests and explain what changed"
 
 - [الموفّرون والنماذج المحلية](docs/PROVIDERS.md)
 - [فرق الوكلاء](docs/FLEET.md)
-- [MCP](docs/MCP.md) و[الخطافات](docs/HOOKS.md) و[الإعدادات](docs/CONFIGURATION.md)
+- [MCP](docs/MCP.md) و[الخطافات](docs/HOOKS.md) و[الأتمتة](docs/AUTOMATION.md) و[الإعدادات](docs/CONFIGURATION.md)
 - [عميل الويب المحلي](docs/WEB.md)
 - [جميع الوثائق](docs)
 
