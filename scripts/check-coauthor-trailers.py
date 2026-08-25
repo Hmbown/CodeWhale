@@ -56,6 +56,7 @@ AGENT_CONTRIBUTOR_IDENTITIES = {
     ("codewhale agent", "codewhale-agent@hmbown.local"),
     ("claude fable 5", "noreply@anthropic.com"),
     ("claude opus 5", "noreply@anthropic.com"),
+    ("grok 4.6", "noreply@anthropic.com"),
 }
 
 # This commit is already immutable history on origin/main. Its trailer names a

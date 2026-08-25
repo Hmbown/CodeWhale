@@ -8413,21 +8413,10 @@ impl ToolSpec for AgentTool {
 
     fn description(&self) -> &'static str {
         concat!(
-            "Start with action=start and prompt; returns a turn-owned agent_id immediately. Read-only roles need no extra fields. Set detached=true only for work that must remain independently observable after the turn. ",
-            "Use multiple starts for independent parallel tasks. ",
-            "type selects the Fleet role: worker (full tool access), scout (fast read-only exploration), planner (grounded strategy, read-only probes), reviewer (reads and grades code), builder (lands focused code changes), verifier (runs tests and reports evidence), consultant (read-only design counsel), or custom (allowed_tools on the parent's posture). ",
-            "profile runs the child as a named Fleet profile (roster member) — its role posture, model route, and thinking tier — so pass a profile only when the task needs that member. Without a profile the child inherits the parent's model; per-call model or thinking overrides are not part of this surface. ",
-            "Use action=roster to inspect the current selected Fleet's member ids, names, roles, and exact provider/model routes before choosing a profile. ",
-            "Child run budgets (model turns, wall time) come from Fleet role defaults and operator [subagents] config, not per-call fields. ",
-            "worktree=true gives the child an isolated git worktree — use it whenever parallel writers must not collide with the parent checkout. ",
-            "A write-capable child defaults write scope to the parent workspace; narrow it with write_roots (repo-relative directory trees) so parallel children claim disjoint scope. ",
-            "Prefer type=builder for write work and type=verifier (or the Run tool with action=\"verifiers\") after writes settle — dispatch is not completion. ",
-            "Coordinate through this same tool: action=message queues a note without waking the child; action=followup delivers queued notes and wakes a running child for its next user-provenance turn; action=interrupt stops the current child turn while preserving its checkpoint; action=wait blocks without changing child state, and until=\"all\" joins a whole fan-out in one call. ",
-            "action=claim widens your own enforced write scope: pass write_roots (and optionally exact_files, coordination_contracts) before mutating anything a fail-closed write refusal named. It records a durable claim receipt and fails on contention with a peer claim; it never touches another agent's scope. ",
-            "Action contract: start requires prompt; message/followup require a target and message; peek/interrupt/cancel require a target; claim requires at least one scope entry; roster, status, and wait are unscoped. ",
-            "This is the whole model-facing sub-agent surface; there is no second transport. ",
-            "In Operate, use detached=true only for independent or long work that must outlive the active turn; a write-capable root start defaults write scope to the parent workspace unless narrowed with write_roots; arbitrary shell remains gated. ",
-            "Legacy action=status|peek|cancel remain for compatibility."
+            "Start with action=start and prompt. ",
+            "action=roster lists Fleet members. ",
+            "Set detached=true only if the work must outlive this turn. ",
+            "Use action=claim only when a write was refused."
         )
     }
 

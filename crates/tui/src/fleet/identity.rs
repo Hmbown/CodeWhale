@@ -1,9 +1,11 @@
 //! Effective Fleet roster loading and deterministic member identity.
 //!
-//! A selected v2 Fleet is the runtime source of truth. Legacy profile layers
-//! are consulted only when no Fleet is selected. The same selector resolver
-//! feeds Agent spawn and model-visible roster discovery so a label cannot
-//! resolve to one member in the UI and another at dispatch.
+//! A selected v2 Fleet is the runtime source of truth. When no `fleets/selected`
+//! marker exists, a personal `$CODEWHALE_HOME/fleets/default.toml` is the
+//! implicit selected Fleet. Legacy profile layers are consulted only when
+//! neither exists. The same selector resolver feeds Agent spawn and
+//! model-visible roster discovery so a label cannot resolve to one member in
+//! the UI and another at dispatch.
 
 use std::path::Path;
 
@@ -29,9 +31,9 @@ const MAX_IDENTITY_FIELD_CHARS: usize = 160;
 
 /// Load the one roster the session must display and dispatch against.
 ///
-/// A broken explicit selection becomes a failed roster. It must never be
-/// indistinguishable from "no selection", which is the only state allowed to
-/// fall back to the legacy profile merge.
+/// A broken explicit selection or a broken personal `default.toml` becomes a
+/// failed roster. It must never be indistinguishable from "no selection",
+/// which is the only state allowed to fall back to the legacy profile merge.
 #[must_use]
 pub fn load_effective_roster(
     fleet_config: &FleetConfigToml,
@@ -447,7 +449,9 @@ fn push_unique<'a>(members: &mut Vec<&'a AgentProfile>, member: &'a AgentProfile
 
 #[cfg(test)]
 mod tests {
-    use super::super::store::{FLEET_SCHEMA_KIND, FLEET_SCHEMA_REVISION, FleetMember};
+    use super::super::store::{
+        DEFAULT_FLEET_FILE, FLEET_SCHEMA_KIND, FLEET_SCHEMA_REVISION, FleetMember,
+    };
     use super::*;
     use std::path::PathBuf;
 
@@ -713,6 +717,80 @@ mod tests {
         let error = roster.load_error().expect("visible selected-Fleet error");
         assert!(error.contains("Selected folder Fleet `Broken`"), "{error}");
         assert!(!error.contains(&workspace.path().display().to_string()));
+        assert!(!error.contains("must pin both provider and model"));
+        assert!(!error.contains("provider ="));
+        assert!(error.chars().count() <= 200, "{error}");
+    }
+
+    fn write_personal_default_toml(home: &Path, body: &str) {
+        let fleets = home.join("fleets");
+        std::fs::create_dir_all(&fleets).unwrap();
+        std::fs::write(fleets.join(DEFAULT_FLEET_FILE), body).unwrap();
+    }
+
+    fn default_toml_with_members(count: usize) -> (String, Vec<String>) {
+        let mut members = Vec::new();
+        let mut body =
+            String::from("schema = \"fleet\"\nschema_revision = 2\nname = \"Default\"\n");
+        for index in 0..count {
+            let id = format!("member-{index}");
+            body.push_str(&format!(
+                "\n[[members]]\nid = \"{id}\"\ndisplay_name = \"Member {index}\"\nrole = \"worker\"\nprovider = \"zai\"\nmodel = \"glm-5.3\"\n"
+            ));
+            members.push(id);
+        }
+        (body, members)
+    }
+
+    #[test]
+    fn personal_default_toml_is_the_effective_roster_when_nothing_is_selected() {
+        let _lock = crate::test_support::lock_test_env();
+        let home = tempfile::TempDir::new().expect("home");
+        let _codewhale_home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let workspace = tempfile::TempDir::new().expect("workspace");
+        let member_count = 4;
+        let (body, ids) = default_toml_with_members(member_count);
+        write_personal_default_toml(home.path(), &body);
+
+        let roster = load_effective_roster(&FleetConfigToml::default(), workspace.path(), None);
+        assert!(roster.load_error().is_none(), "{:?}", roster.load_error());
+        assert!(roster.is_exact_selection());
+        assert_eq!(roster.members().len(), member_count);
+        for id in &ids {
+            let member = roster.get(id).unwrap_or_else(|| panic!("missing {id}"));
+            assert_eq!(member.profile.provider.as_deref(), Some("zai"));
+            assert_eq!(member.profile.model.as_deref(), Some("glm-5.3"));
+        }
+        let identities = roster_identities(&roster);
+        assert_eq!(identities.len(), member_count);
+        assert_eq!(
+            identities
+                .iter()
+                .map(|member| member.member_id.as_str())
+                .collect::<Vec<_>>(),
+            ids.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn broken_personal_default_toml_fails_visibly_without_legacy_members() {
+        let _lock = crate::test_support::lock_test_env();
+        let home = tempfile::TempDir::new().expect("home");
+        let _codewhale_home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let workspace = tempfile::TempDir::new().expect("workspace");
+        write_personal_default_toml(
+            home.path(),
+            "schema = \"fleet\"\nschema_revision = 2\nname = \"Broken Default\"\n[[members]]\nid = \"scout\"\nprovider = \"deepseek\"\n",
+        );
+
+        let roster = load_effective_roster(&FleetConfigToml::default(), workspace.path(), None);
+        assert!(roster.members().is_empty());
+        let error = roster.load_error().expect("visible default.toml error");
+        assert!(
+            error.contains("Selected user Fleet `Broken Default`"),
+            "{error}"
+        );
+        assert!(!error.contains(&home.path().display().to_string()));
         assert!(!error.contains("must pin both provider and model"));
         assert!(!error.contains("provider ="));
         assert!(error.chars().count() <= 200, "{error}");

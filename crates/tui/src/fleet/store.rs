@@ -22,7 +22,9 @@
 //! root is the user-global default; the same file under the workspace root is
 //! an intentional workspace selection. Workspace selection wins; both are
 //! labeled in the UI. A workspace selection can never hide or rewrite a
-//! personal Fleet.
+//! personal Fleet. When neither `selected` file exists, a personal
+//! `fleets/default.toml` is the implicit selected Fleet so that file is never
+//! invisible to roster discovery.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -42,6 +44,8 @@ const MAX_MEMBER_DISPLAY_NAME_CHARS: usize = 80;
 /// v2 files in the same directory are simply a newer schema.
 pub const FLEET_DIR: &str = "fleets";
 pub const SELECTED_FILE: &str = "selected";
+/// Personal Fleet used when no `fleets/selected` marker names one.
+pub const DEFAULT_FLEET_FILE: &str = "default.toml";
 
 /// Where a Fleet was saved. This is the pin target: personal = user-global,
 /// workspace = folder-scoped.
@@ -621,6 +625,11 @@ pub fn delete_fleet(
 /// user-global default. Each file is scope-explicit; a workspace selection
 /// can never hide the personal Fleet — the personal default is only overridden
 /// for this folder, visibly.
+///
+/// When neither `selected` file exists, a present personal
+/// [`DEFAULT_FLEET_FILE`] is the implicit selected Fleet. A broken file is
+/// still returned here so loaders fail visibly instead of falling back to the
+/// legacy profile merge.
 pub fn resolve_selected_fleet(workspace: &Path) -> Result<Option<SelectedFleet>, FleetStoreError> {
     let ws_dir = workspace_fleets_dir(workspace);
     if let Some(name) = read_selection_result(&ws_dir)? {
@@ -666,7 +675,35 @@ pub fn resolve_selected_fleet(workspace: &Path) -> Result<Option<SelectedFleet>,
             dir.join(SELECTED_FILE).display()
         )));
     }
-    Ok(None)
+    Ok(implicit_personal_default_fleet())
+}
+
+/// Personal `$CODEWHALE_HOME/fleets/default.toml` when that file exists.
+///
+/// Presence alone is enough: parse happens at load so a broken default is
+/// indistinguishable from a broken explicit selection, never from "no Fleet".
+fn implicit_personal_default_fleet() -> Option<SelectedFleet> {
+    let dir = personal_fleets_dir().ok()?;
+    let path = dir.join(DEFAULT_FLEET_FILE);
+    if !path.is_file() {
+        return None;
+    }
+    Some(SelectedFleet {
+        name: fleet_display_name(&path).unwrap_or_else(|| "Default".to_string()),
+        scope: FleetScope::Personal,
+        path,
+    })
+}
+
+fn fleet_display_name(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    toml::from_str::<toml::Value>(&text)
+        .ok()?
+        .get("name")?
+        .as_str()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 /// Compatibility projection for display-only callers. Runtime callers must
@@ -1168,6 +1205,49 @@ role = "scout"
         let error = resolve_selected_fleet(ws.path()).expect_err("stale selection must fail");
         assert!(error.to_string().contains("Missing Fleet"), "{error}");
         assert!(error.to_string().contains("folder selection"), "{error}");
+    }
+
+    #[test]
+    fn personal_default_toml_is_implicit_selection_when_nothing_is_selected() {
+        let _lock = crate::test_support::lock_test_env();
+        let home = tempfile::TempDir::new().unwrap();
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let ws = tempfile::TempDir::new().unwrap();
+        let fleets = home.path().join(FLEET_DIR);
+        std::fs::create_dir_all(&fleets).unwrap();
+
+        assert!(
+            resolve_selected_fleet(ws.path())
+                .expect("no selection")
+                .is_none()
+        );
+
+        let mut fleet = sample_fleet();
+        fleet.name = "Default".to_string();
+        std::fs::write(
+            fleets.join(DEFAULT_FLEET_FILE),
+            fleet.render_toml().unwrap(),
+        )
+        .unwrap();
+
+        let sel = resolve_selected_fleet(ws.path())
+            .expect("implicit default")
+            .expect("default.toml must count as selected");
+        assert_eq!(sel.scope, FleetScope::Personal);
+        assert_eq!(sel.name, "Default");
+        assert!(sel.path.ends_with("fleets/default.toml"), "{:?}", sel.path);
+
+        save_fleet(&sample_fleet(), FleetScope::Personal, ws.path()).unwrap();
+        set_selected("DeepSeek Flash", FleetScope::Personal, ws.path()).unwrap();
+        let sel = resolve_selected_fleet(ws.path())
+            .expect("explicit selection")
+            .expect("selected");
+        assert_eq!(sel.name, "DeepSeek Flash");
+        assert!(
+            sel.path.ends_with("fleets/deepseek-flash.toml"),
+            "{:?}",
+            sel.path
+        );
     }
 
     #[test]

@@ -2788,11 +2788,9 @@ fn agent_description_explains_background_child_and_transcript_handle() {
     let description = tool.description();
 
     assert!(description.contains("Start with action=start and prompt"));
-    assert!(description.contains("Read-only roles need no extra fields"));
-    assert!(description.contains("multiple starts"));
-    assert!(description.contains("action=wait"));
-    assert!(description.contains("action=claim"));
-    assert!(description.contains("Fleet profile"));
+    assert!(description.contains("action=roster lists Fleet members"));
+    assert!(description.contains("detached=true only if the work must outlive this turn"));
+    assert!(description.contains("action=claim only when a write was refused"));
     assert!(
         estimate_tool_description_tokens_conservative(description) <= 1024,
         "agent description exceeds the conservative 1024-token budget"
@@ -3889,6 +3887,57 @@ async fn agent_roster_action_redacts_selected_fleet_load_details() {
     assert!(!message.contains(secret_marker));
     assert!(!message.contains("not valid TOML"));
     assert!(message.chars().count() <= 300, "{message}");
+}
+
+#[tokio::test]
+async fn agent_roster_lists_personal_default_toml_members_when_nothing_is_selected() {
+    let _lock = crate::test_support::lock_test_env();
+    let home = tempdir().expect("home");
+    let _codewhale_home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+    let workspace = tempdir().expect("workspace");
+    let fleets = home.path().join("fleets");
+    std::fs::create_dir_all(&fleets).expect("fleets dir");
+    let member_count = 3;
+    let mut body = String::from("schema = \"fleet\"\nschema_revision = 2\nname = \"Default\"\n");
+    for index in 0..member_count {
+        body.push_str(&format!(
+            "\n[[members]]\nid = \"member-{index}\"\nrole = \"worker\"\nprovider = \"zai\"\nmodel = \"glm-5.3\"\n"
+        ));
+    }
+    std::fs::write(fleets.join("default.toml"), body).expect("default.toml");
+
+    let roster = crate::fleet::identity::load_effective_roster(
+        &codewhale_config::FleetConfigToml::default(),
+        workspace.path(),
+        None,
+    );
+    assert_eq!(roster.members().len(), member_count);
+    assert!(roster.load_error().is_none(), "{:?}", roster.load_error());
+
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(workspace.path());
+    let tool = AgentTool::new(
+        new_shared_subagent_manager(workspace.path().to_path_buf(), 1),
+        runtime,
+    );
+    let result = tool
+        .execute(
+            json!({"action": "roster"}),
+            &ToolContext::new(workspace.path()),
+        )
+        .await
+        .expect("roster action");
+    let payload: Value = serde_json::from_str(&result.content).expect("roster JSON");
+    assert_eq!(payload["count"], json!(member_count));
+    assert_eq!(payload["total_count"], json!(member_count));
+    assert_eq!(payload["truncated"], json!(false));
+    for index in 0..member_count {
+        assert_eq!(
+            payload["members"][index]["member_id"],
+            json!(format!("member-{index}"))
+        );
+        assert_eq!(payload["members"][index]["route"], "zai/glm-5.3");
+    }
 }
 
 #[test]
