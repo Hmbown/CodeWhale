@@ -405,10 +405,66 @@ const GITHUB_READONLY_PREFIXES: &[&str] = &[
     "gh workflow view",
 ];
 
+/// Normalize Windows absolute path spellings before any POSIX-style splitter
+/// (`shlex` / `shell_words`) or glob-charset gate in this module:
+///
+/// - `Path::canonicalize` on Windows embeds the verbatim prefix `\\?\C:\...`
+///   whose `?` trips the glob-charset gates and whose backslashes the POSIX
+///   splitters eat as escapes; strip it so the remaining spelling resolves to
+///   the same location (device `\\.\` paths are preserved verbatim);
+/// - double the backslashes of Windows-absolute-path-like words so the
+///   splitters round-trip the real path instead of `C:\Users\...` collapsing
+///   to `C:Users...`.
+///
+/// Words that do not look like Windows absolute paths are untouched, so POSIX
+/// escapes and unix hosts are unaffected.
+pub(crate) fn normalize_windows_command_paths(command: &str) -> String {
+    let stripped = command.replace(r"\\?\", "");
+    let mut out = String::with_capacity(stripped.len());
+    let mut word_start = 0;
+    let bytes = stripped.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_whitespace() {
+            let word = &stripped[word_start..i];
+            if looks_like_windows_absolute_path(word) {
+                out.push_str(&word.replace('\\', r"\\"));
+            } else {
+                out.push_str(word);
+            }
+            out.push(bytes[i] as char);
+            word_start = i + 1;
+        }
+        i += 1;
+    }
+    if word_start < bytes.len() {
+        let word = &stripped[word_start..];
+        if looks_like_windows_absolute_path(word) {
+            out.push_str(&word.replace('\\', r"\\"));
+        } else {
+            out.push_str(word);
+        }
+    }
+    out
+}
+
+/// A whitespace-delimited word is treated as a Windows absolute path when it
+/// starts (after optional quotes) with a drive letter plus colon, a verbatim
+/// (`\\?\`/`\\.\`) prefix, or a UNC (`\\`) prefix.
+fn looks_like_windows_absolute_path(word: &str) -> bool {
+    let word = word.trim_start_matches(['\'', '"']);
+    let bytes = word.as_bytes();
+    (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+        || word.starts_with(r"\\?\")
+        || word.starts_with(r"\\.\")
+        || word.starts_with("\\\\")
+}
+
 /// Return `true` when a shell command is safe to auto-approve and run in a
 /// parallel read-only chunk.
 pub fn is_parallel_readonly_command(command: &str) -> bool {
-    let trimmed = command.trim();
+    let trimmed = normalize_windows_command_paths(command);
+    let trimmed = trimmed.trim();
     if trimmed.is_empty() {
         return false;
     }
@@ -522,7 +578,8 @@ fn readonly_tokens_admitted(trimmed: &str) -> bool {
 /// redirects, backgrounding, command/parameter expansion, subshells, or
 /// env-assignment prefixes.
 pub fn is_agent_readonly_shell_command(command: &str) -> bool {
-    let trimmed = command.trim();
+    let trimmed = normalize_windows_command_paths(command);
+    let trimmed = trimmed.trim();
     if trimmed.is_empty() {
         return false;
     }
@@ -2034,6 +2091,25 @@ mod tests {
             "npm view codewhale version",
             "sort deps.txt | uniq -c",
             "ls -la *.md",
+        ] {
+            assert!(
+                is_agent_readonly_shell_command(command),
+                "{command} should be agent read-only"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_readonly_shell_admits_windows_verbatim_paths() {
+        // `Path::canonicalize` on Windows embeds `\\?\` verbatim prefixes whose
+        // `?` trips the glob-charset gate and whose backslashes POSIX splitters
+        // eat as escapes. The normalize step must admit the same commands with
+        // either spelling (the classifier is pure string logic, so this is
+        // platform-independent).
+        for command in [
+            r"git -C \\?\C:\Users\foo log --oneline -20",
+            r"git -C C:\Users\foo log --oneline -20",
+            "git -C crates/tui log --oneline -n 5",
         ] {
             assert!(
                 is_agent_readonly_shell_command(command),
