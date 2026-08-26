@@ -1782,20 +1782,27 @@ pub(crate) fn build_runtime(command: Option<&Commands>) -> Result<tokio::runtime
     if let Some(workers) = diagnostic_worker_count(command) {
         builder.worker_threads(workers);
     }
-    builder.build().context("Failed to build the Codewhale Tokio runtime")
+    builder
+        .build()
+        .context("Failed to build the Codewhale Tokio runtime")
 }
 
 /// Number of async workers to request from tokio.
 ///
 /// Unset means tokio's default: one worker per CPU. That default is right for
-/// interactive sessions and long-running servers, but a short-lived diagnostic
-/// command gains nothing from a 20-worker pool — it pays thread spawn, stack
-/// reservation, and teardown futex traffic for capacity it never uses (perf
+/// interactive sessions and long-running servers, but short-lived offline
+/// commands gain nothing from a full-CPU pool — they pay thread spawn, stack
+/// reservation, and teardown futex traffic for capacity they never use (perf
 /// attribution: pthread_create under `Builder::build` dominates init samples).
 const DIAGNOSTIC_WORKER_CAP: usize = 2;
 
 fn diagnostic_worker_count(command: Option<&Commands>) -> Option<usize> {
-    if matches!(command, Some(Commands::Doctor(_))) {
+    if matches!(
+        command,
+        Some(Commands::Doctor(_))
+            // Offline sequential tool-loop harness: no concurrent async work.
+            | Some(Commands::Eval(_))
+    ) {
         Some(DIAGNOSTIC_WORKER_CAP)
     } else {
         None
