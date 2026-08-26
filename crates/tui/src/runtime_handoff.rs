@@ -898,6 +898,149 @@ pub(crate) fn restored_subagent_checkpoint_display(message: &Message) -> Option<
     Some(text)
 }
 
+/// Classification used when locating a user-authored turn in the session log.
+///
+/// Runtime and tool messages are skipped because their provider-compatible
+/// `role = "user"` is not user authority. Unsupported user content is a real
+/// turn boundary, however, so callers must not skip it and edit an older turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UserTurnPromptKind {
+    /// Assistant messages, tool results, and runtime-owned control messages.
+    NotPrompt,
+    /// A genuine user turn containing editable text.
+    Editable,
+    /// A genuine user turn without editable text, such as an image-only turn.
+    Unsupported,
+}
+
+/// Authoritative target selection for edit-last-turn operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EditLastTurnTarget {
+    /// Index of the latest editable user-authored turn.
+    Editable(usize),
+    /// The latest real user turn exists but has no editable text.
+    Unsupported,
+    /// The history contains no user-authored turn.
+    Missing,
+}
+
+/// Classify `message` for edit-last-turn and admitted-display handling.
+#[must_use]
+pub(crate) fn classify_user_turn_prompt(message: &Message) -> UserTurnPromptKind {
+    if message.role != Role::User {
+        return UserTurnPromptKind::NotPrompt;
+    }
+    if message.content.iter().any(|block| {
+        matches!(
+            block,
+            ContentBlock::ToolResult { .. }
+                | ContentBlock::ToolSearchToolResult { .. }
+                | ContentBlock::CodeExecutionToolResult { .. }
+        )
+    }) {
+        return UserTurnPromptKind::NotPrompt;
+    }
+    if is_runtime_owned_user_message(message) {
+        return UserTurnPromptKind::NotPrompt;
+    }
+
+    let turn_metadata_index = turn_metadata_text(message).map(|(index, _)| index);
+    if message.content.iter().enumerate().any(|(index, block)| {
+        Some(index) != turn_metadata_index && matches!(block, ContentBlock::Text { .. })
+    }) {
+        UserTurnPromptKind::Editable
+    } else {
+        UserTurnPromptKind::Unsupported
+    }
+}
+
+/// Locate the latest real user boundary without skipping unsupported content.
+#[must_use]
+pub(crate) fn edit_last_turn_target(messages: &[Message]) -> EditLastTurnTarget {
+    messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(
+            |(index, message)| match classify_user_turn_prompt(message) {
+                UserTurnPromptKind::NotPrompt => None,
+                UserTurnPromptKind::Editable => Some(EditLastTurnTarget::Editable(index)),
+                UserTurnPromptKind::Unsupported => Some(EditLastTurnTarget::Unsupported),
+            },
+        )
+        .unwrap_or(EditLastTurnTarget::Missing)
+}
+
+/// True when a `role = "user"` message is runtime-owned rather than
+/// user-authored. Runtime authority is accepted only from the engine-owned
+/// structural `<turn_meta>` block, never from arbitrary user text that happens
+/// to resemble a runtime envelope or metadata marker.
+fn is_runtime_owned_user_message(message: &Message) -> bool {
+    restored_subagent_checkpoint_display(message).is_some()
+        || has_non_authoritative_turn_provenance(message)
+}
+
+/// Return engine-owned metadata in either the current trailing shape or the
+/// historical leading shape. Requiring a separate prompt block prevents a
+/// user who submits `<turn_meta>…</turn_meta>` as ordinary text from minting
+/// authority.
+fn turn_metadata_text(message: &Message) -> Option<(usize, &str)> {
+    if message.content.len() < 2 {
+        return None;
+    }
+    if let Some(ContentBlock::Text {
+        text,
+        cache_control: None,
+    }) = message.content.last()
+    {
+        let trimmed = text.trim();
+        if is_complete_turn_metadata(trimmed) {
+            return Some((message.content.len() - 1, trimmed));
+        }
+    }
+    // Sessions written before the metadata-tail migration used
+    // `[turn_meta, prompt, ...]`. Match the same conservative legacy shape as
+    // the transcript renderer: a metadata envelope first and ordinary text
+    // last. A single user-authored metadata example is never hidden.
+    let ContentBlock::Text {
+        text,
+        cache_control: None,
+    } = message.content.first()?
+    else {
+        return None;
+    };
+    let trimmed = text.trim();
+    let trailing_text_is_ordinary = matches!(
+        message.content.last(),
+        Some(ContentBlock::Text { text, .. }) if !is_complete_turn_metadata(text.trim())
+    );
+    (is_complete_turn_metadata(trimmed) && trailing_text_is_ordinary).then_some((0, trimmed))
+}
+
+fn is_complete_turn_metadata(text: &str) -> bool {
+    text.starts_with("<turn_meta>") && text.ends_with("</turn_meta>")
+}
+
+/// Recognize both the current condensed provenance line and the legacy
+/// provenance/authority pair. Any explicitly non-authoritative provenance is
+/// runtime-owned; this stays correct as new provenance variants are added.
+fn has_non_authoritative_turn_provenance(message: &Message) -> bool {
+    let Some((_, metadata)) = turn_metadata_text(message) else {
+        return false;
+    };
+    let mut has_provenance = false;
+    let mut condensed_non_authoritative = false;
+    let mut legacy_non_authoritative = false;
+    for line in metadata.lines().map(str::trim) {
+        if let Some(value) = line.strip_prefix("Input provenance: ") {
+            has_provenance = true;
+            condensed_non_authoritative |= value.ends_with(" (non-authoritative)");
+        }
+        legacy_non_authoritative |= line == "Input authority: non_authoritative";
+    }
+    condensed_non_authoritative || (has_provenance && legacy_non_authoritative)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1106,6 +1249,186 @@ mod tests {
     }
 
     #[test]
+    fn user_turn_prompt_separates_prompts_from_tool_results_and_envelopes() {
+        let prompt = Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: "Fix the resume regression".to_string(),
+                cache_control: None,
+            }],
+        };
+        assert_eq!(
+            classify_user_turn_prompt(&prompt),
+            UserTurnPromptKind::Editable
+        );
+
+        let tool_result = Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "call_1".to_string(),
+                content: "tool output".to_string(),
+                is_error: None,
+                content_blocks: None,
+            }],
+        };
+        assert_eq!(
+            classify_user_turn_prompt(&tool_result),
+            UserTurnPromptKind::NotPrompt
+        );
+
+        let raw = subagent_completion_runtime_message(&completion_payload(
+            "agent_abc",
+            "completed",
+            "Implemented the shared restore projection.",
+        ));
+        assert_eq!(
+            classify_user_turn_prompt(&raw),
+            UserTurnPromptKind::NotPrompt
+        );
+
+        let projected = project_messages_for_restore(&[raw]);
+        assert_eq!(
+            classify_user_turn_prompt(&projected[0]),
+            UserTurnPromptKind::NotPrompt
+        );
+
+        for provenance in [
+            "runtime",
+            "subagent_handoff",
+            "shell_completion",
+            "imported_transcript",
+            "memory_recall",
+            "assistant_generated",
+            "future_runtime_origin",
+        ] {
+            let runtime_provenance = Message {
+                role: Role::User,
+                content: vec![
+                    ContentBlock::Text {
+                        text: "diagnostic text".to_string(),
+                        cache_control: None,
+                    },
+                    ContentBlock::Text {
+                        text: format!(
+                            "<turn_meta>\nInput provenance: {provenance} (non-authoritative)\n</turn_meta>"
+                        ),
+                        cache_control: None,
+                    },
+                ],
+            };
+            assert_eq!(
+                classify_user_turn_prompt(&runtime_provenance),
+                UserTurnPromptKind::NotPrompt,
+                "non-authoritative provenance {provenance} must never become a user prompt"
+            );
+        }
+
+        let legacy_non_authoritative = Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "legacy recalled text".to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Text {
+                    text: concat!(
+                        "<turn_meta>\n",
+                        "Input provenance: memory_recall\n",
+                        "Input authority: non_authoritative\n",
+                        "</turn_meta>"
+                    )
+                    .to_string(),
+                    cache_control: None,
+                },
+            ],
+        };
+        assert_eq!(
+            classify_user_turn_prompt(&legacy_non_authoritative),
+            UserTurnPromptKind::NotPrompt
+        );
+
+        let legacy_leading_non_authoritative = Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: concat!(
+                        "<turn_meta>\n",
+                        "Input provenance: memory_recall\n",
+                        "Input authority: non_authoritative\n",
+                        "</turn_meta>"
+                    )
+                    .to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Text {
+                    text: "legacy recalled text".to_string(),
+                    cache_control: None,
+                },
+            ],
+        };
+        assert_eq!(
+            classify_user_turn_prompt(&legacy_leading_non_authoritative),
+            UserTurnPromptKind::NotPrompt
+        );
+
+        let legacy_leading_external = Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "<turn_meta>\nCurrent local date: 2026-08-25\n</turn_meta>".to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Text {
+                    text: "legacy external prompt".to_string(),
+                    cache_control: None,
+                },
+            ],
+        };
+        assert_eq!(
+            classify_user_turn_prompt(&legacy_leading_external),
+            UserTurnPromptKind::Editable
+        );
+
+        let image_only = Message {
+            role: Role::User,
+            content: vec![ContentBlock::ImageUrl {
+                image_url: crate::models::ImageUrlContent {
+                    url: "data:image/png;base64,AAAA".to_string(),
+                },
+            }],
+        };
+        assert_eq!(
+            classify_user_turn_prompt(&image_only),
+            UserTurnPromptKind::Unsupported
+        );
+        assert_eq!(
+            edit_last_turn_target(&[
+                prompt.clone(),
+                Message {
+                    role: Role::Assistant,
+                    content: vec![ContentBlock::Text {
+                        text: "older response".to_string(),
+                        cache_control: None,
+                    }],
+                },
+                image_only,
+            ]),
+            EditLastTurnTarget::Unsupported,
+            "an unsupported latest user turn must stop the backward scan"
+        );
+        assert_eq!(
+            edit_last_turn_target(&[Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Text {
+                    text: "assistant only".to_string(),
+                    cache_control: None,
+                }],
+            }]),
+            EditLastTurnTarget::Missing
+        );
+    }
+
+    #[test]
     fn restore_projection_accepts_failed_error_location_sentinel() {
         let raw = subagent_completion_runtime_message(concat!(
             "Failed: child tool timed out\n",
@@ -1244,7 +1567,17 @@ mod tests {
         };
 
         let projected = project_messages_for_restore(&[lookalike.clone(), wrong_authority.clone()]);
-        assert_eq!(projected, vec![lookalike, wrong_authority]);
+        assert_eq!(projected, vec![lookalike.clone(), wrong_authority.clone()]);
+        assert_eq!(
+            classify_user_turn_prompt(&lookalike),
+            UserTurnPromptKind::Editable,
+            "runtime-looking user text without trusted metadata stays editable"
+        );
+        assert_eq!(
+            classify_user_turn_prompt(&wrong_authority),
+            UserTurnPromptKind::Editable,
+            "explicit external-user authority must not be hidden by text lookalikes"
+        );
     }
 
     #[test]

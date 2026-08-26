@@ -218,9 +218,9 @@ impl AppendLog {
         self.messages.extend(batch);
     }
 
-    /// Truncate to keep only the most recent `new_len` messages.
-    /// Discards older messages (and their prefix-cache contribution)
-    /// from the front.
+    /// Truncate to keep only the first `new_len` messages.
+    /// Discards newer messages (and their prefix-cache contribution)
+    /// from the tail.
     pub fn truncate_to(&mut self, new_len: usize) {
         self.messages.truncate(new_len);
     }
