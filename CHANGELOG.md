@@ -11,8 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added an enterprise operator packet (`docs/ENTERPRISE.md`) and a first-party
   docs page for security review: local runtime, BYOK, first-party telemetry
-  kill switches, local crash dumps, sandbox, and air-gap controls. The page
-  does not invent SOC 2, SSO, or a hosted SLA.
+  kill switches, local crash dumps, sandbox, air-gap controls, and the
+  current one-owner runtime-store lock. The page does not invent SOC 2, SSO,
+  or a hosted SLA.
+- Documented the runtime-store owner lock (#5630): one Codewhale per default
+  store (`$CODEWHALE_HOME/tasks/runtime`). The lock stays; the 0.9.12 fix is
+  a per-session store root coordinated with the `runtime_threads.rs` split.
+  Until then, a second session must set `CODEWHALE_RUNTIME_DIR`. The startup
+  error now names that workaround.
 
 ### Fixed
 

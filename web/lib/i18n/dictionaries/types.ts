@@ -547,6 +547,8 @@ export interface DocsEnterpriseDict {
   policyLead: string;
   airgapTitle: string;
   airgapLead: string;
+  sessionsTitle: string;
+  sessionsLead: string;
   claimsTitle: string;
   claimsLead: string;
   sourceNote: string;

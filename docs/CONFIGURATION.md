@@ -1128,6 +1128,11 @@ the `CODEWHALE_*` value wins.
 - `CODEWHALE_TASKS_DIR` (runtime task queue/artifact storage, default
   `~/.codewhale/tasks`, with legacy `~/.deepseek/tasks` fallback when only the
   legacy directory exists)
+- `CODEWHALE_RUNTIME_DIR` (override the runtime thread store root; default
+  `$CODEWHALE_HOME/tasks/runtime`). The store is single-owner: a second
+  process on the same root fails at startup. Use a per-session path to run
+  more than one Codewhale on a machine (#5630). Legacy alias:
+  `DEEPSEEK_RUNTIME_DIR`.
 - `CODEWHALE_ALLOW_INSECURE_HTTP` (`1`/`true` allows non-local `http://` base URLs; default is reject)
 - `CODEWHALE_FORCE_HTTP1` (`1|true|yes|on` pins the HTTP client to HTTP/1.1, disabling HTTP/2; useful on Windows or behind proxies that mishandle long-lived H2 streams)
 - `CODEWHALE_HOME` (override the base data directory; defaults to `~/.codewhale`).

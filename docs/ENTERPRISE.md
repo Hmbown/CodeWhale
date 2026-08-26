@@ -135,6 +135,32 @@ or image-managed desktops. Install from a verified channel in
 `CODEWHALE_HOME` isolates all product state, including crash dumps and
 telemetry files, onto a path you choose.
 
+## Concurrent sessions
+
+The runtime thread store is not multi-writer safe. At startup the process
+takes an exclusive lock on
+`$CODEWHALE_HOME/tasks/runtime/runtime-process.owner.lock` (unless
+`CODEWHALE_RUNTIME_DIR` relocates the store) and holds it for the process
+lifetime. A second Codewhale on the same default store fails immediately:
+
+```
+This Runtime thread store is already active in another process; close the
+other Runtime before retrying, or set CODEWHALE_RUNTIME_DIR to a
+per-session store root
+```
+
+That is today's contract: one owner per store, which with the default path
+is one Codewhale per machine. Do not remove the lock. The 0.9.12 fix is a
+per-session store root, coordinated with the `runtime_threads.rs` split
+([#5630](https://github.com/Hmbown/CodeWhale/issues/5630)). Until that
+lands, give each supervised session its own store:
+
+```sh
+CODEWHALE_RUNTIME_DIR=$CODEWHALE_HOME/tasks/runtime-$SESSION_ID codewhale
+```
+
+`DEEPSEEK_RUNTIME_DIR` is the legacy alias.
+
 ## Fleet and remote control
 
 - Fleet workers do not emit product telemetry.
@@ -164,6 +190,7 @@ issue.
 | Authorization order | [AUTHORIZATION_ORDER.md](AUTHORIZATION_ORDER.md) |
 | Sandbox threat model | [SANDBOX.md](SANDBOX.md) |
 | Configuration, update checks, account login | [CONFIGURATION.md](CONFIGURATION.md) |
+| Concurrent sessions / runtime store lock | [CONFIGURATION.md](CONFIGURATION.md) (`CODEWHALE_RUNTIME_DIR`), [#5630](https://github.com/Hmbown/CodeWhale/issues/5630) |
 | Install channels | [INSTALL.md](INSTALL.md) |
 | Fleet policy | [FLEET.md](FLEET.md) |
 | Security disclosure | [SECURITY.md](../SECURITY.md) |

@@ -67,6 +67,14 @@ export default async function EnterprisePage({ params }: { params: Promise<{ loc
 check_for_updates = false`}</pre>
       </section>
 
+      <section id="sessions" className="scroll-mt-32">
+        <h2 className="font-display text-2xl mb-1">{t.sessionsTitle}</h2>
+        <p className={`${t.bodyClassName} mt-3`}>{t.sessionsLead}</p>
+        <pre className="code-block mt-4">
+          {"CODEWHALE_RUNTIME_DIR=$CODEWHALE_HOME/tasks/runtime-$SESSION_ID codewhale"}
+        </pre>
+      </section>
+
       <section id="claims" className="scroll-mt-32">
         <h2 className="font-display text-2xl mb-1">{t.claimsTitle}</h2>
         <p className={`${t.bodyClassName} mt-3`}>{t.claimsLead}</p>

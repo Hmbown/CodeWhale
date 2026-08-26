@@ -60,6 +60,9 @@ export const docsEnterprise: DocsEnterpriseDict = {
   airgapTitle: "Air-gapped and managed desktops",
   airgapLead:
     "Persist telemetry = false and [update] check_for_updates = false for air-gapped, corporate-proxy, or image-managed desktops. CODEWHALE_HOME isolates crash dumps, telemetry files, and the rest of product state onto a path you choose.",
+  sessionsTitle: "Concurrent sessions",
+  sessionsLead:
+    "The runtime thread store is single-owner. A second Codewhale on the default store ($CODEWHALE_HOME/tasks/runtime) fails at startup. Until 0.9.12 scopes the store per session (#5630), set CODEWHALE_RUNTIME_DIR to a per-session path. Do not share one store across processes, and do not drop the owner lock — the store is not multi-writer safe.",
   claimsTitle: "What this page does not claim",
   claimsLead:
     "No SOC 2, ISO 27001, FedRAMP, or HIPAA certification. No enterprise SSO / SAML / SCIM surface in this open-source runtime. No requirement to use the managed app. Vulnerability reports go through SECURITY.md, not a public issue.",

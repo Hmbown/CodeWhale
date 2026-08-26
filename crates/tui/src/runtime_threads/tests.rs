@@ -3703,6 +3703,10 @@ fn runtime_manager_store_has_one_lifetime_process_owner() -> Result<()> {
         message.contains("already active in another process"),
         "unexpected owner-lock error: {error:#}"
     );
+    assert!(
+        message.contains("CODEWHALE_RUNTIME_DIR"),
+        "owner-lock error must name the per-session workaround (#5630): {error:#}"
+    );
 
     let distinct_dir = test_runtime_dir();
     let distinct = test_manager(distinct_dir)?;

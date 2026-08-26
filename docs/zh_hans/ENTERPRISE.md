@@ -79,6 +79,31 @@ CODEWHALE_TELEMETRY=0 codewhale
 
 `CODEWHALE_HOME` 会把全部产品状态（包括崩溃转储和遥测文件）隔离到你选择的路径。
 
+## 并发会话
+
+运行时线程存储不是多写安全的。启动时进程会对
+`$CODEWHALE_HOME/tasks/runtime/runtime-process.owner.lock` 加独占锁（除非
+`CODEWHALE_RUNTIME_DIR` 把存储根改走），并在整个进程生命周期内持有。第二
+个使用同一默认存储的 Codewhale 会立刻失败：
+
+```
+This Runtime thread store is already active in another process; close the
+other Runtime before retrying, or set CODEWHALE_RUNTIME_DIR to a
+per-session store root
+```
+
+这是当前合同：每个存储根只有一个所有者；在默认路径下就是一台机器一个
+Codewhale。不要去掉这把锁。0.9.12 的修复是按会话划分存储根，并与
+`runtime_threads.rs` 的拆分一起做
+（[#5630](https://github.com/Hmbown/CodeWhale/issues/5630)）。在落地之前，
+给每个受监管的会话单独的存储：
+
+```sh
+CODEWHALE_RUNTIME_DIR=$CODEWHALE_HOME/tasks/runtime-$SESSION_ID codewhale
+```
+
+`DEEPSEEK_RUNTIME_DIR` 是遗留别名。
+
 ## Fleet 与远程控制
 
 - Fleet worker 不发送产品遥测。

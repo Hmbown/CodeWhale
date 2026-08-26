@@ -79,6 +79,14 @@ const EVENT_TRANSACTION_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const EVENT_TRANSACTION_LOCK_POLL: Duration = Duration::from_millis(5);
 const EVENT_TRANSACTION_LOCK_FILE: &str = "events.lock";
 const RUNTIME_PROCESS_OWNER_LOCK_FILE: &str = "runtime-process.owner.lock";
+/// Exclusive process-lifetime claim on one runtime store root.
+///
+/// The default root is `$CODEWHALE_HOME/tasks/runtime` for every session, so
+/// this is currently a one-Codewhale-per-machine guard. Do not drop the lock:
+/// the store is not multi-writer safe. The 0.9.12 fix is a per-session store
+/// root, coordinated with the `runtime_threads.rs` split (#5630). Until then,
+/// a second session must set `CODEWHALE_RUNTIME_DIR`.
+const RUNTIME_PROCESS_OWNER_LOCK_HELD: &str = "This Runtime thread store is already active in another process; close the other Runtime before retrying, or set CODEWHALE_RUNTIME_DIR to a per-session store root";
 const AGENT_MAIL_OWNER_FILE: &str = "owner.json";
 const TURN_OPERATION_BINDING_SCHEMA_VERSION: u32 = 1;
 const REQUEST_USER_INPUT_TOOL_NAME: &str = "request_user_input";
@@ -2027,6 +2035,9 @@ pub struct RuntimeThreadManagerConfig {
 impl RuntimeThreadManagerConfig {
     #[must_use]
     pub fn from_task_data_dir(task_data_dir: PathBuf) -> Self {
+        // Default root is shared by every session on the machine. Combined
+        // with RuntimeProcessOwnerLock this is one Codewhale per host
+        // (#5630). Relocate with CODEWHALE_RUNTIME_DIR; do not drop the lock.
         let data_dir = std::env::var("CODEWHALE_RUNTIME_DIR")
             .or_else(|_| std::env::var("DEEPSEEK_RUNTIME_DIR"))
             .ok()
@@ -2827,9 +2838,7 @@ impl RuntimeProcessOwnerLock {
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
                 let error = std::io::Error::last_os_error();
                 if error.kind() == std::io::ErrorKind::WouldBlock {
-                    bail!(
-                        "This Runtime thread store is already active in another process; close the other Runtime before retrying"
-                    );
+                    bail!("{RUNTIME_PROCESS_OWNER_LOCK_HELD}");
                 }
                 return Err(error).context("Failed to acquire Runtime process owner lock");
             }
@@ -2842,9 +2851,7 @@ impl RuntimeProcessOwnerLock {
             if unsafe { LockFile(file.as_raw_handle() as _, 0, 0, u32::MAX, u32::MAX) } == 0 {
                 let error = std::io::Error::last_os_error();
                 if matches!(error.raw_os_error(), Some(32 | 33)) {
-                    bail!(
-                        "This Runtime thread store is already active in another process; close the other Runtime before retrying"
-                    );
+                    bail!("{RUNTIME_PROCESS_OWNER_LOCK_HELD}");
                 }
                 return Err(error).context("Failed to acquire Runtime process owner lock");
             }
