@@ -1,0 +1,16 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M102C0XJQSMERY4NW5ND6CFA",
+  "strategy": "manual-commit",
+  "branch": "cursor/enterprise-launch-readiness-8ed3",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/tui/src/tui/underwater.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "prompt": ""
+    }
+  ]
+}
