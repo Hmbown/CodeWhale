@@ -646,37 +646,55 @@ pub fn record_caught_panic(name: &'static str, message: &str) {
     });
 }
 
-/// Write a panic dump file to `~/.codewhale/crashes/`.
+/// Canonical local crash-dump directory.
+///
+/// Resolves to `$CODEWHALE_HOME/crashes` when that isolation boundary is set,
+/// otherwise `~/.codewhale/crashes`. New dumps are never written under the
+/// legacy `.deepseek` tree — that path remains a compatibility *read* for
+/// migrated state, not a write target for diagnostics.
+#[must_use]
+pub fn crash_dump_dir() -> Option<PathBuf> {
+    codewhale_paths::codewhale_home()
+        .ok()
+        .flatten()
+        .map(|home| home.join("crashes"))
+}
+
+/// Write a process-level panic dump using a preformatted location string.
+///
+/// Used by the process panic hook, which already reduced `panic_info` to
+/// display strings before it calls here.
+pub fn write_process_panic_dump(location: &str, message: &str) -> std::io::Result<()> {
+    write_named_panic_dump("process-panic", location, message)
+}
+
+/// Write a panic dump file to the canonical crash directory.
 ///
 /// Creates the directory if needed and writes a timestamped log
 /// with the task name, caller location, and panic message.
-/// Best-effort — failures are silently ignored.
+/// Best-effort — failures are silently ignored by callers.
 fn write_panic_dump(
     name: &str,
     location: &std::panic::Location<'_>,
     message: &str,
 ) -> std::io::Result<()> {
-    let home = crate::config::effective_home_dir().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "home directory not found")
+    write_named_panic_dump(name, &location.to_string(), message)
+}
+
+fn write_named_panic_dump(name: &str, location: &str, message: &str) -> std::io::Result<()> {
+    let crash_dir = crash_dump_dir().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "crash dump directory not found",
+        )
     })?;
-    // Prefer .codewhale, fall back to .deepseek
-    let crash_dir = home.join(".codewhale").join("crashes");
-    if !crash_dir.exists() {
-        // Try legacy path for reading, but prefer new for writing
-        let _ = std::fs::create_dir_all(&crash_dir);
-    }
-    let crash_dir = if crash_dir.exists() {
-        crash_dir
-    } else {
-        home.join(".deepseek").join("crashes")
-    };
     write_panic_dump_to(&crash_dir, name, location, message)
 }
 
 fn write_panic_dump_to(
     crash_dir: &Path,
     name: &str,
-    location: &std::panic::Location<'_>,
+    location: &str,
     message: &str,
 ) -> std::io::Result<()> {
     use chrono::Utc;
@@ -1463,8 +1481,13 @@ mod spawn_supervised_tests {
     fn write_panic_dump_writes_named_log() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let crash_dir = tmp.path().join("crashes");
-        let location = std::panic::Location::caller();
-        write_panic_dump_to(&crash_dir, "panic-fixture", location, "boom").expect("write dump");
+        write_panic_dump_to(
+            &crash_dir,
+            "panic-fixture",
+            "crates/tui/src/utils.rs:1:1",
+            "boom",
+        )
+        .expect("write dump");
 
         let entries: Vec<_> = std::fs::read_dir(&crash_dir)
             .expect("crashes dir exists")
@@ -1479,6 +1502,52 @@ mod spawn_supervised_tests {
         assert!(
             dump.contains("boom"),
             "dump must include the panic message; got: {dump}"
+        );
+    }
+
+    #[test]
+    fn crash_dump_dir_never_uses_legacy_deepseek() {
+        let dir = crash_dump_dir().expect("crash dump dir");
+        let rendered = dir.to_string_lossy();
+        assert!(
+            rendered.ends_with("crashes") || rendered.ends_with("crashes\\"),
+            "expected a crashes/ suffix, got {rendered}"
+        );
+        assert!(
+            !rendered.contains(".deepseek"),
+            "new crash dumps must not target the legacy tree: {rendered}"
+        );
+    }
+
+    #[test]
+    fn write_panic_dump_honors_codewhale_home_isolation() {
+        use crate::test_support::EnvVarGuard;
+
+        let _lock = crate::test_support::lock_test_env();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let isolated = tmp.path().join("isolated-home");
+        std::fs::create_dir_all(&isolated).expect("create isolated home");
+        let _home = EnvVarGuard::set("CODEWHALE_HOME", isolated.as_os_str());
+        let _no_legacy_home = EnvVarGuard::remove("DEEPSEEK_HOME");
+
+        write_process_panic_dump("crates/tui/src/lib.rs:1:1", "isolated boom")
+            .expect("write isolated dump");
+
+        let crash_dir = isolated.join("crashes");
+        assert!(
+            crash_dir.is_dir(),
+            "dumps must land under $CODEWHALE_HOME/crashes"
+        );
+        let entries: Vec<_> = std::fs::read_dir(&crash_dir)
+            .expect("crashes dir exists")
+            .flatten()
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one crash dump expected");
+        let dump = std::fs::read_to_string(entries[0].path()).expect("read dump");
+        assert!(dump.contains("isolated boom"), "got: {dump}");
+        assert!(
+            !tmp.path().join(".deepseek").exists(),
+            "isolation must not create a sibling .deepseek tree"
         );
     }
 }

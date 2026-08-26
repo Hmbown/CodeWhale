@@ -10,6 +10,7 @@ import {
   EN_DOCS_SANDBOX,
   EN_DOCS_SUBAGENTS,
   EN_DOCS_WEB,
+  EN_DOCS_ENTERPRISE,
   EN_DOCS_SHELL,
   EN_DOCS_TROUBLESHOOTING,
   EN_HOME,
@@ -23,6 +24,7 @@ import {
   getDocsSandbox,
   getDocsSubagents,
   getDocsWeb,
+  getDocsEnterprise,
   getDocsShell,
   getDocsTroubleshooting,
   getHome,
@@ -259,6 +261,7 @@ describe("website dictionaries", () => {
       ["docs-subagents", getDocsSubagents, EN_DOCS_SUBAGENTS],
       ["docs-mcp", getDocsMcp, EN_DOCS_MCP],
       ["docs-web", getDocsWeb, EN_DOCS_WEB],
+      ["docs-enterprise", getDocsEnterprise, EN_DOCS_ENTERPRISE],
     ] as const) {
       const enKeys = Object.keys(reference).sort();
       for (const locale of [...DICTIONARY_LOCALES, "fr", "und"]) {
@@ -294,6 +297,8 @@ describe("website dictionaries", () => {
       // The platform rows are keyed by their own translated name rather than a
       // code-owned key, so only the count is comparable across locales.
       expect(getDocsSandbox(locale).platforms, `${locale} sandbox platforms`).toHaveLength(4);
+      expect(getDocsEnterprise(locale).facts, `${locale} enterprise facts`).toHaveLength(4);
+      expect(getDocsEnterprise(locale).controls, `${locale} enterprise controls`).toHaveLength(4);
       // Role names are identifiers the page owns, so the keys are comparable
       // across locales rather than only the count.
       expect(

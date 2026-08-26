@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added an enterprise operator packet (`docs/ENTERPRISE.md`) and a first-party
+  docs page for security review: local runtime, BYOK, first-party telemetry
+  kill switches, local crash dumps, sandbox, and air-gap controls.
+
+### Fixed
+
+- Process panic dumps and fatal-signal markers now write only under
+  `$CODEWHALE_HOME/crashes` (otherwise `~/.codewhale/crashes`). The process
+  panic hook no longer creates `~/.deepseek/crashes`.
+
 - Added the managed Chat relay: account-owned Chat commands now execute on the
   native runtime thread engine through a new `runtime_chat_relay` module
   instead of a second execution path. Each Chat thread is a dedicated,

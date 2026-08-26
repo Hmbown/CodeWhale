@@ -1608,9 +1608,9 @@ fn run_with_args(args: Vec<String>) -> Result<()> {
     crate::tui::ui::fatal_signal_guard::install_fatal_signal_guard();
 
     // Set up process panic hook before anything else — writes crash dumps
-    // to ~/.deepseek/crashes/ even if the panic happens before tokio is up,
-    // and restores the terminal so a panicked TUI doesn't leave the user's
-    // shell stuck in alt-screen mode.
+    // to $CODEWHALE_HOME/crashes (else ~/.codewhale/crashes) even if the
+    // panic happens before tokio is up, and restores the terminal so a
+    // panicked TUI doesn't leave the user's shell stuck in alt-screen mode.
     let orig_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         // Restore the terminal first so the panic message itself, plus the
@@ -1650,17 +1650,8 @@ fn run_with_args(args: Vec<String>) -> Result<()> {
         {
             codewhale_telemetry::record_blocking(codewhale_telemetry::Event::Panic { site });
         }
-        // Write crash dump best-effort
-        if let Some(home) = crate::config::effective_home_dir() {
-            let crash_dir = home.join(".deepseek").join("crashes");
-            let _ = std::fs::create_dir_all(&crash_dir);
-            use chrono::Utc;
-            let ts = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
-            let path = crash_dir.join(format!("{ts}-process-panic.log"));
-            let contents =
-                format!("Process panicked\nLocation: {location}\nTimestamp: {ts}\nPanic: {msg}\n",);
-            let _ = std::fs::write(&path, contents);
-        }
+        // Write crash dump best-effort to the canonical Codewhale directory.
+        let _ = crate::utils::write_process_panic_dump(&location, &msg);
         // Invoke the original hook (prints to stderr, etc.)
         orig_hook(panic_info);
     }));

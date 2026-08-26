@@ -259,6 +259,18 @@ export const DOC_TOPICS: DocTopic[] = [
     category: "operations",
   },
   {
+    id: "enterprise",
+    slug: "enterprise",
+    label: { en: "Enterprise review", zh: "企业审阅" },
+    description: {
+      en: "Operator packet: local runtime, BYOK, first-party telemetry, crash dumps, sandbox, and air-gap controls.",
+      zh: "运营审阅材料：本地运行时、自带密钥、第一方遥测、崩溃转储、沙箱与隔离网络控制。",
+    },
+    repoSource: "docs/ENTERPRISE.md",
+    hasPage: true,
+    category: "operations",
+  },
+  {
     id: "troubleshooting",
     slug: "troubleshooting",
     label: { en: "Troubleshooting", zh: "排障" },

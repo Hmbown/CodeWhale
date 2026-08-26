@@ -88,7 +88,7 @@ describe("sitemap and hreflang preservation", () => {
   });
 
   it("keeps sitemap and hreflang output aligned with real translation coverage", () => {
-    expect(sitemapEntries).toHaveLength(78);
+    expect(sitemapEntries).toHaveLength(80);
     for (const [path, expectedLocales] of [
       ["/", locales],
       ["/docs/guide", contentLocalesForPath("/docs/guide")],

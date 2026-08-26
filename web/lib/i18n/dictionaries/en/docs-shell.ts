@@ -9,11 +9,11 @@ import type { DocsShellDict } from "../types";
 export const docsShell: DocsShellDict = {
   metaTitle: "Docs · Codewhale",
   metaDescription:
-    "Codewhale documentation: install, user guide, configuration, providers, core concepts, tools, MCP, skills, sandbox, runtime API, troubleshooting.",
+    "Codewhale documentation: install, user guide, configuration, providers, core concepts, tools, MCP, skills, sandbox, runtime API, enterprise review, troubleshooting.",
   portalMark: "Codewhale documentation",
   heroTitle: "Find the guidance you need.",
   heroLead:
-    "Start with the guide and install pages, or go straight to vocabulary, modes, permissions, tools, providers, Fleet, hooks, MCP, and the Runtime API. Each page links to its source document in the repository.",
+    "Start with the guide and install pages, or go straight to vocabulary, modes, permissions, tools, providers, Fleet, hooks, MCP, the Runtime API, and the enterprise review. Each page links to its source document in the repository.",
   installCta: "Install Codewhale",
   sourceDocsCta: "Browse source docs ↗",
 };

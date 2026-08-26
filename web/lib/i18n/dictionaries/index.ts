@@ -27,6 +27,7 @@ import type {
   DocsSubagentsDict,
   DocsTroubleshootingDict,
   DocsWebDict,
+  DocsEnterpriseDict,
   HomeDict,
 } from "./types";
 import { chrome as enChrome } from "./en/chrome";
@@ -57,6 +58,8 @@ import { docsSubagents as enDocsSubagents } from "./en/docs-subagents";
 import { docsSubagents as zhDocsSubagents } from "./zh/docs-subagents";
 import { docsWeb as enDocsWeb } from "./en/docs-web";
 import { docsWeb as zhDocsWeb } from "./zh/docs-web";
+import { docsEnterprise as enDocsEnterprise } from "./en/docs-enterprise";
+import { docsEnterprise as zhDocsEnterprise } from "./zh/docs-enterprise";
 import { chrome as zhChrome } from "./zh/chrome";
 import { home as zhHome } from "./zh/home";
 import { chrome as jaChrome } from "./ja/chrome";
@@ -210,6 +213,10 @@ const DOCS_WEB: Record<string, DocsWebDict> = {
   zh: zhDocsWeb,
 };
 
+const DOCS_ENTERPRISE: Record<string, DocsEnterpriseDict> = {
+  zh: zhDocsEnterprise,
+};
+
 export function getChrome(locale: string): ChromeDict {
   return CHROME[locale] ?? enChrome;
 }
@@ -270,6 +277,10 @@ export function getDocsWeb(locale: string): DocsWebDict {
   return DOCS_WEB[locale] ?? enDocsWeb;
 }
 
+export function getDocsEnterprise(locale: string): DocsEnterpriseDict {
+  return DOCS_ENTERPRISE[locale] ?? enDocsEnterprise;
+}
+
 /**
  * Select one side of a legacy `{ en, zh }` content pair by locale. This is
  * the transitional bridge for `web/lib/content/` modules that still carry
@@ -297,6 +308,7 @@ export const EN_DOCS_RUNTIME_API = enDocsRuntimeApi;
 export const EN_DOCS_SANDBOX = enDocsSandbox;
 export const EN_DOCS_SUBAGENTS = enDocsSubagents;
 export const EN_DOCS_WEB = enDocsWeb;
+export const EN_DOCS_ENTERPRISE = enDocsEnterprise;
 
 /** Interpolate `{name}` tokens in a dictionary template. Unknown tokens are
  * left intact so a template/variable drift is visible in review, not silent. */

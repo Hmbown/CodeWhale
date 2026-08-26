@@ -527,6 +527,31 @@ export interface DocsSubagentsDict {
   sourceNote: string;
 }
 
+/** `app/[locale]/docs/enterprise/page.tsx`. */
+export interface DocsEnterpriseDict {
+  metaTitle: string;
+  metaDescription: string;
+  bodyClassName: string;
+  overviewTitle: string;
+  overviewLead: string;
+  /** Four `[name, detail]` reviewer facts. */
+  facts: [string, string][];
+  telemetryTitle: string;
+  telemetryLead: string;
+  controlsTitle: string;
+  /** Four `[control, effect]` rows. */
+  controls: [string, string][];
+  credentialsTitle: string;
+  credentialsLead: string;
+  policyTitle: string;
+  policyLead: string;
+  airgapTitle: string;
+  airgapLead: string;
+  claimsTitle: string;
+  claimsLead: string;
+  sourceNote: string;
+}
+
 export interface DocsWebDict {
   metaTitle: string;
   metaDescription: string;

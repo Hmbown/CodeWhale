@@ -2,6 +2,11 @@
 
 codewhale is a coding agent with direct access to file operations, shell execution, and the network. Security disclosures are taken seriously.
 
+Operators evaluating Codewhale for a company should start with
+[docs/ENTERPRISE.md](docs/ENTERPRISE.md): local runtime, BYOK, first-party
+telemetry kill switches, local crash dumps, sandbox, and air-gap controls.
+That page does not claim a compliance certification.
+
 ## Supported Versions
 
 Only the latest stable release receives security patches. No backports to older versions.
