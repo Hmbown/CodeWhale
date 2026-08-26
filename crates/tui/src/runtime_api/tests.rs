@@ -996,6 +996,7 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
         bind_port: addr.port(),
         mobile_enabled,
         web: overrides.web,
+        web_public_origins: Vec::new(),
         fleet_codewhale_binary: overrides
             .fleet_codewhale_binary
             .unwrap_or_else(configured_codewhale_binary),

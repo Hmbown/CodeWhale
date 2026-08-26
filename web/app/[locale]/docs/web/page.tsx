@@ -13,6 +13,8 @@ const CODE_SPANS: Record<string, string> = {
   defaultUrl: "http://127.0.0.1:7878",
   portExample: "codewhale web --port 8788",
   portFlag: "--port",
+  tailscaleFlag: "--tailscale",
+  tailscaleCommand: "codewhale web --tailscale",
   hostFlag: "--host",
   mobileCommand: "codewhale app-server --mobile",
   httpFlag: "--http",
@@ -61,6 +63,11 @@ export default async function WebClientPage({ params }: { params: Promise<{ loca
       <section id="local" className="scroll-mt-32">
         <h2 className="font-display text-2xl mb-1">{t.localTitle}</h2>
         <p className={`${t.bodyClassName} mt-3`}>{withCodeSpans(t.localLead)}</p>
+      </section>
+
+      <section id="tailscale" className="scroll-mt-32">
+        <h2 className="font-display text-2xl mb-1">{t.tailscaleTitle}</h2>
+        <p className={`${t.bodyClassName} mt-3`}>{withCodeSpans(t.tailscaleLead)}</p>
       </section>
 
       <section id="troubleshooting" className="scroll-mt-32">

@@ -170,6 +170,10 @@ CODEWHALE_RUNTIME_DIR=$CODEWHALE_HOME/tasks/runtime-$SESSION_ID codewhale
   browser approval. The terminal remains a readable safety surface;
   interrupt still works. Disconnect keeps local input locked until the
   lease expires so two controllers cannot compete.
+- `codewhale web --tailscale` publishes the loopback browser client onto
+  the current Tailscale tailnet (`https://<machine>.<tailnet>.ts.net`).
+  The HTTP listener stays on `127.0.0.1`. This is Serve, not Funnel. See
+  [WEB.md](WEB.md).
 
 ## What this packet does not claim
 
@@ -193,4 +197,5 @@ issue.
 | Concurrent sessions / runtime store lock | [CONFIGURATION.md](CONFIGURATION.md) (`CODEWHALE_RUNTIME_DIR`), [#5630](https://github.com/Hmbown/CodeWhale/issues/5630) |
 | Install channels | [INSTALL.md](INSTALL.md), [DOCKER.md](DOCKER.md) |
 | Fleet policy | [FLEET.md](FLEET.md) |
+| Loopback web / Tailscale Serve | [WEB.md](WEB.md) |
 | Security disclosure | [SECURITY.md](../SECURITY.md) |

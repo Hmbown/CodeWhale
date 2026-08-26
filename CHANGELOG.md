@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a per-session store root coordinated with the `runtime_threads.rs` split.
   Until then, a second session must set `CODEWHALE_RUNTIME_DIR`. The startup
   error now names that workaround.
+- `codewhale web --tailscale` publishes the loopback browser client on the
+  current Tailscale tailnet via `tailscale serve`. The HTTP listener stays
+  on `127.0.0.1`; peers use `https://<machine>.<tailnet>.ts.net`. Stopping
+  the process turns off only HTTPS:443 (not `serve reset`). Not Funnel.
 
 ### Fixed
 

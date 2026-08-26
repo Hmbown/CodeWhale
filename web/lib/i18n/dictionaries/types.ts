@@ -565,6 +565,8 @@ export interface DocsWebDict {
   authLead: string;
   localTitle: string;
   localLead: string;
+  tailscaleTitle: string;
+  tailscaleLead: string;
   troubleshootingTitle: string;
   troubleshootingLead: string;
   sourceNote: string;

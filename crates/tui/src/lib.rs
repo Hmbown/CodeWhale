@@ -1270,6 +1270,10 @@ struct ServeArgs {
     /// Disable runtime API auth when no token is configured. Only use on a trusted loopback.
     #[arg(long = "insecure")]
     insecure_no_auth: bool,
+    /// Publish `--web` on this machine's Tailscale tailnet via `tailscale serve`.
+    /// The HTTP listener stays on 127.0.0.1. Not Funnel; not a public tunnel.
+    #[arg(long, default_value_t = false, requires = "web")]
+    tailscale: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2329,6 +2333,7 @@ async fn run_async_main_dispatch(
                             mobile: args.mobile,
                             web: args.web,
                             show_qr: args.qr,
+                            tailscale: args.tailscale,
                             config_path: cli.config.clone(),
                             config_profile,
                         },

@@ -89,6 +89,7 @@ use codewhale_protocol::fleet::{
 
 mod auth;
 mod sessions;
+mod tailscale;
 mod web;
 mod workspace;
 #[cfg(test)]
@@ -172,6 +173,9 @@ pub struct RuntimeApiState {
     bind_port: u16,
     mobile_enabled: bool,
     web: Option<web::RuntimeWebState>,
+    /// Extra browser origins allowed for cookie-authenticated web requests.
+    /// Used when `--tailscale` publishes the loopback client on MagicDNS.
+    web_public_origins: Vec<String>,
     /// Executable used by Runtime API-owned Fleet manager loops. Stored on
     /// state so tests and embedded callers can provide a hermetic worker.
     fleet_codewhale_binary: String,
@@ -229,6 +233,9 @@ pub struct RuntimeApiOptions {
     pub web: bool,
     /// Show a QR code for the mobile URL in the terminal.
     pub show_qr: bool,
+    /// After binding loopback `--web`, advertise it on the current Tailscale
+    /// tailnet via `tailscale serve --bg --https=443 localhost:<port>`.
+    pub tailscale: bool,
     /// Original `--config` path used to load the initial config. When
     /// `Some`, GUI-driven config reloads and persistence target this file
     /// instead of the default discovery path.
@@ -249,6 +256,7 @@ impl Default for RuntimeApiOptions {
             mobile: false,
             web: false,
             show_qr: false,
+            tailscale: false,
             config_path: None,
             config_profile: None,
         }
@@ -845,6 +853,11 @@ pub async fn run_http_server(
     if options.web && options.insecure_no_auth {
         bail!("Codewhale web requires Runtime authentication; remove --insecure");
     }
+    if options.tailscale && !options.web {
+        bail!(
+            "--tailscale requires --web; it publishes the loopback browser client, not a LAN bind"
+        );
+    }
 
     let task_default_model = config.default_model();
     let task_cfg = TaskManagerConfig::from_runtime(
@@ -892,6 +905,16 @@ pub async fn run_http_server(
     } else {
         (None, None)
     };
+    let tailscale_front = if options.tailscale {
+        Some(tailscale::discover_web_front()?)
+    } else {
+        None
+    };
+    let web_public_origins = tailscale_front
+        .as_ref()
+        .map(|front| vec![front.public_origin.clone()])
+        .unwrap_or_default();
+    let mut tailscale_guard = None;
     let skill_state = SkillStateStore::load_default()
         .context("load persistent Skill activation state for Runtime API")?;
     let sub_agent_manager = runtime_api_sub_agent_manager(&workspace, options.workers);
@@ -901,7 +924,11 @@ pub async fn run_http_server(
         plugin_discovery,
         task_manager,
         runtime_threads,
-        cors_origins: options.cors_origins.clone(),
+        cors_origins: {
+            let mut origins = options.cors_origins.clone();
+            origins.extend(web_public_origins.iter().cloned());
+            origins
+        },
         sessions_dir,
         config_path: options.config_path.clone(),
         config_profile: options.config_profile.clone(),
@@ -914,6 +941,7 @@ pub async fn run_http_server(
         bind_port: options.port,
         mobile_enabled: options.mobile,
         web,
+        web_public_origins: web_public_origins.clone(),
         fleet_codewhale_binary: configured_codewhale_binary(),
         mcp_pool: Arc::new(Mutex::new(None)),
         #[cfg(test)]
@@ -946,9 +974,26 @@ pub async fn run_http_server(
             options.show_qr,
         );
     }
+    if let Some(front) = tailscale_front.as_ref() {
+        tailscale::publish_loopback_web(bound_addr.port())?;
+        tailscale_guard = Some(tailscale::TailscaleServeGuard::new());
+        println!(
+            "Codewhale web advertised on Tailscale at {} (MagicDNS {})",
+            front.public_origin, front.magic_dns
+        );
+    }
     if let Some(bootstrap) = web_bootstrap {
         println!("Codewhale web enabled at http://{bound_addr}/");
-        let bootstrap_url = web::bootstrap_url(bound_addr, &bootstrap);
+        let bootstrap_url = web_public_origins
+            .first()
+            .map(|origin| web::bootstrap_url_for_origin(origin, &bootstrap))
+            .unwrap_or_else(|| web::bootstrap_url(bound_addr, &bootstrap));
+        if !web_public_origins.is_empty() {
+            println!(
+                "Codewhale web tailnet URL: {}/",
+                web_public_origins[0].trim_end_matches('/')
+            );
+        }
         println!(
             "Codewhale web bootstrap (single-use, expires in {} min): {bootstrap_url}",
             web::BOOTSTRAP_TTL.as_secs() / 60
@@ -985,6 +1030,7 @@ pub async fn run_http_server(
     .map_err(|e| anyhow!("Runtime API server error: {e}"));
     scheduler_cancel.cancel();
     scheduler_handle.abort();
+    drop(tailscale_guard);
     serve_result
 }
 

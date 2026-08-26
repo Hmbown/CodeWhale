@@ -239,8 +239,8 @@ export const DOC_TOPICS: DocTopic[] = [
     slug: "web",
     label: { en: "Browser Client", zh: "浏览器客户端" },
     description: {
-      en: "Run the embedded browser client on loopback, with its one-time bootstrap and session boundaries.",
-      zh: "仅在本机回环地址运行内置浏览器客户端，了解一次性引导与会话边界。",
+      en: "Run the embedded browser client on loopback, with its one-time bootstrap, session boundaries, and optional Tailscale Serve front.",
+      zh: "仅在本机回环地址运行内置浏览器客户端，了解一次性引导、会话边界，以及可选的 Tailscale Serve 入口。",
     },
     repoSource: "docs/WEB.md",
     hasPage: true,

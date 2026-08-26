@@ -59,9 +59,31 @@ API behavior.
 
 ## Local means local
 
-`codewhale web` accepts only `--port`; there is no `--host` or insecure-auth
-option on this command. Do not treat it as a public website or expose its port
-directly through router forwarding, a public reverse proxy, or a tunnel.
+`codewhale web` accepts `--port` and optional `--tailscale`. There is no
+`--host` or insecure-auth option on this command. Do not treat it as a public
+website or expose its port directly through router forwarding, a public reverse
+proxy, or a generic tunnel.
+
+## Tailnet (`--tailscale`)
+
+`codewhale web --tailscale` keeps the HTTP listener on `127.0.0.1` and asks
+the local Tailscale CLI to publish HTTPS:443 to that port:
+
+```bash
+codewhale web --tailscale
+```
+
+Codewhale prints the MagicDNS bootstrap URL
+(`https://<machine>.<tailnet>.ts.net/…`) and opens it. Reachability is
+ACL-gated by your tailnet. This is Tailscale Serve, not Funnel and not ngrok.
+The one-time bootstrap still requires a loopback peer — Serve proxies from
+the tailnet onto localhost — and cookie-authenticated requests must present
+that MagicDNS origin.
+
+Stopping the process turns off only the HTTPS:443 serve mapping
+(`tailscale serve --https=443 off`). It does not run `tailscale serve reset`.
+
+Requires a connected Tailscale node with MagicDNS (`tailscale status`).
 
 The separate `codewhale app-server --mobile` and `--http` modes have different
 deployment and authentication contracts. Read [RUNTIME_API.md](RUNTIME_API.md)

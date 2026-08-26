@@ -368,6 +368,7 @@ Forwarded serve options:
       --http                Start runtime HTTP/SSE API server
       --mobile              Start runtime HTTP/SSE API server with the mobile control page
       --web                 Start the embedded loopback-only browser client
+      --tailscale           Publish --web on this machine's Tailscale tailnet
       --qr                  Show a QR code for the mobile URL (requires --mobile)
       --acp                 Start ACP server over stdio for editor clients
       --host <HOST>         Bind host (default 127.0.0.1; --mobile defaults to 0.0.0.0)
@@ -638,6 +639,11 @@ struct WebArgs {
     /// Loopback port for the local Runtime API and embedded client.
     #[arg(long, default_value_t = 7878)]
     port: u16,
+    /// Publish the loopback web UI on this machine's Tailscale tailnet.
+    /// Uses `tailscale serve`; the HTTP listener stays on 127.0.0.1.
+    /// Not Funnel and not a public tunnel.
+    #[arg(long, default_value_t = false)]
+    tailscale: bool,
 }
 
 #[derive(Debug, Args)]
@@ -4671,12 +4677,16 @@ fn app_server_serve_passthrough(args: &AppServerArgs) -> Vec<String> {
 }
 
 fn web_serve_passthrough(args: &WebArgs) -> Vec<String> {
-    vec![
+    let mut forwarded = vec![
         "serve".to_string(),
         "--web".to_string(),
         "--port".to_string(),
         args.port.to_string(),
-    ]
+    ];
+    if args.tailscale {
+        forwarded.push("--tailscale".to_string());
+    }
+    forwarded
 }
 
 fn app_server_token_from_env() -> Option<String> {
@@ -6169,6 +6179,7 @@ verbosity = "project-imported"
             other => panic!("expected web command, got {other:?}"),
         };
         assert_eq!(args.port, 9091);
+        assert!(!args.tailscale);
         let forwarded = web_serve_passthrough(&args);
         assert_eq!(forwarded, ["serve", "--web", "--port", "9091"]);
         assert!(!forwarded.iter().any(|arg| arg.contains("token")));
@@ -6179,18 +6190,45 @@ verbosity = "project-imported"
         let cli = parse_ok(&["codewhale", "web"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Web(WebArgs { port: 7878 }))
+            Some(Commands::Web(WebArgs {
+                port: 7878,
+                tailscale: false
+            }))
         ));
         let help = help_for(&["codewhale", "web", "--help"]);
         assert!(help.contains("--port"));
+        assert!(help.contains("--tailscale"));
         assert!(help.contains("one-time loopback bootstrap"));
         assert!(!help.contains("--auth-token"));
     }
 
     #[test]
+    fn web_tailscale_forwards_without_exposing_a_host_bind() {
+        let cli = parse_ok(&["codewhale", "web", "--tailscale", "--port", "8788"]);
+        let args = match cli.command {
+            Some(Commands::Web(args)) => args,
+            other => panic!("expected web command, got {other:?}"),
+        };
+        assert!(args.tailscale);
+        let forwarded = web_serve_passthrough(&args);
+        assert_eq!(
+            forwarded,
+            ["serve", "--web", "--port", "8788", "--tailscale"]
+        );
+        assert!(!forwarded.iter().any(|arg| arg == "--host"));
+    }
+
+    #[test]
     fn serve_help_documents_forwarded_runtime_modes() {
         let help = help_for(&["codewhale", "serve", "--help"]);
-        for flag in ["--http", "--mobile", "--web", "--mcp", "--acp"] {
+        for flag in [
+            "--http",
+            "--mobile",
+            "--web",
+            "--tailscale",
+            "--mcp",
+            "--acp",
+        ] {
             assert!(
                 help.contains(flag),
                 "serve help should document forwarded flag {flag}; help was:\n{help}"

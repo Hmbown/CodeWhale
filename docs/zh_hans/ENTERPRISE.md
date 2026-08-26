@@ -109,6 +109,7 @@ CODEWHALE_RUNTIME_DIR=$CODEWHALE_HOME/tasks/runtime-$SESSION_ID codewhale
 - Fleet worker 不发送产品遥测。
 - Fleet 的 `security_policy` 和 worker 的 `trust_level` 是派发运行的权限信封。见 [FLEET.md](../FLEET.md)。
 - `/rc` 可在一次性浏览器批准后，把当前会话租给 `app.codewhale.net`。终端仍是可读的安全面；中断仍然有效。断开连接会保持本地输入锁定，直到租约过期，这样两个控制器不会竞争。
+- `codewhale web --tailscale` 把回环浏览器客户端发布到当前 Tailscale tailnet（`https://<machine>.<tailnet>.ts.net`）。HTTP 监听仍在 `127.0.0.1`。这是 Serve，不是 Funnel。见 [WEB.md](../WEB.md)。
 
 ## 本文不声明的内容
 

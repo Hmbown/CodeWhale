@@ -60,7 +60,7 @@ export const docsEnterprise: DocsEnterpriseDict = {
     "在隔离网络、公司代理或镜像托管的桌面上，持久写入 telemetry = false，并设置 [update] check_for_updates = false。CODEWHALE_HOME 会把崩溃转储、遥测文件和其余产品状态隔离到你选择的路径。",
   sessionsTitle: "并发会话",
   sessionsLead:
-    "运行时线程存储是单所有者。第二个使用默认存储（$CODEWHALE_HOME/tasks/runtime）的 Codewhale 会在启动时失败。在 0.9.12 按会话划分存储（#5630）落地之前，把 CODEWHALE_RUNTIME_DIR 设到每个会话自己的路径。不要跨进程共享同一个存储，也不要去掉所有者锁——该存储不是多写安全的。",
+    "运行时线程存储是单所有者。第二个使用默认存储（$CODEWHALE_HOME/tasks/runtime）的 Codewhale 会在启动时失败。在 0.9.12 按会话划分存储（#5630）落地之前，把 CODEWHALE_RUNTIME_DIR 设到每个会话自己的路径。不要跨进程共享同一个存储，也不要去掉所有者锁——该存储不是多写安全的。codewhale web --tailscale 把回环界面发布到你的 Tailscale tailnet，不会打开局域网绑定或 Funnel。",
   claimsTitle: "本页不声明的内容",
   claimsLead:
     "没有 SOC 2、ISO 27001、FedRAMP 或 HIPAA 认证。这个开源运行时没有企业 SSO / SAML / SCIM 面。不要求使用托管应用。漏洞报告走 SECURITY.md，不要开公开 issue。",

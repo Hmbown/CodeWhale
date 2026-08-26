@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Path, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use uuid::Uuid;
 
@@ -106,10 +106,18 @@ pub(super) fn bootstrap_url(addr: SocketAddr, nonce: &str) -> String {
     format!("http://{addr}/__codewhale/bootstrap/{nonce}")
 }
 
+pub(super) fn bootstrap_url_for_origin(origin: &str, nonce: &str) -> String {
+    format!(
+        "{}/__codewhale/bootstrap/{nonce}",
+        origin.trim_end_matches('/')
+    )
+}
+
 pub(super) async fn exchange_bootstrap(
     State(state): State<RuntimeApiState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(nonce): Path<String>,
+    headers: HeaderMap,
 ) -> Response {
     let Some(web) = state.web.as_ref() else {
         return not_found();
@@ -124,7 +132,12 @@ pub(super) async fn exchange_bootstrap(
         }
     };
 
-    let cookie = web_session_cookie(&session_token);
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let secure = super::auth::host_matches_public_origin(host, &state.web_public_origins);
+    let cookie = web_session_cookie(&session_token, secure);
     let mut response = (StatusCode::SEE_OTHER, "").into_response();
     response
         .headers_mut()
@@ -167,8 +180,13 @@ pub(super) async fn web_icon(State(state): State<RuntimeApiState>) -> Response {
     response
 }
 
-fn web_session_cookie(session_token: &str) -> String {
-    format!("{WEB_SESSION_COOKIE_NAME}={session_token}; HttpOnly; SameSite=Strict; Path=/")
+fn web_session_cookie(session_token: &str, secure: bool) -> String {
+    let mut cookie =
+        format!("{WEB_SESSION_COOKIE_NAME}={session_token}; HttpOnly; SameSite=Strict; Path=/");
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
 }
 
 fn cookie_value<'a>(cookie_header: Option<&'a str>, name: &str) -> Option<&'a str> {
@@ -324,11 +342,12 @@ mod tests {
     fn cookie_has_exact_security_attributes_without_the_runtime_bearer() {
         let session_token = format!("{WEB_SESSION_PREFIX}{}", "01".repeat(16));
         let runtime_bearer = "cwrt_runtime_secret_never_in_browser_storage";
-        let cookie = web_session_cookie(&session_token);
+        let cookie = web_session_cookie(&session_token, false);
         assert_eq!(
             cookie,
             format!("codewhale_web_session={session_token}; HttpOnly; SameSite=Strict; Path=/")
         );
+        assert!(web_session_cookie(&session_token, true).ends_with("; Secure"));
         assert!(!cookie.contains(runtime_bearer));
         assert!(!cookie.contains("Domain="));
     }
@@ -342,6 +361,12 @@ mod tests {
         assert!(!url.contains(token));
         assert!(!url.contains('?'));
         assert!(!url.contains('#'));
+        let tailnet = bootstrap_url_for_origin("https://codewhale.tailnet.ts.net", &nonce);
+        assert_eq!(
+            tailnet,
+            format!("https://codewhale.tailnet.ts.net/__codewhale/bootstrap/{nonce}")
+        );
+        assert!(!tailnet.contains(token));
     }
 
     #[test]
