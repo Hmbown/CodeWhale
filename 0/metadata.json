@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M100ZRHJ4S71WV2VZQ5R4GAV",
+  "session_id": "bc-01a03fea-626b-77ba-bd79-9c4fc8f58ed3",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-26T21:53:03.471377Z",
+  "branch": "cursor/enterprise-launch-readiness-8ed3",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "crates/tui/src/lib.rs",
+    "crates/tui/src/runtime_api.rs",
+    "crates/tui/src/runtime_api/auth.rs",
+    "crates/tui/src/runtime_api/tests.rs",
+    "crates/tui/src/runtime_api/web.rs"
+  ],
+  "agent": "Cursor",
+  "model": "cursor-grok-4.6-high-fast",
+  "turn_id": "fafd51e1e752",
+  "session_metrics": {
+    "context_tokens": 231959,
+    "context_window_size": 256000
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-26T21:53:03.470567Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 377,
+    "human_modified": 13,
+    "human_removed": 0,
+    "total_committed": 377,
+    "total_lines_changed": 399,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
