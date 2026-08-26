@@ -75,7 +75,7 @@ check_for_updates = false
 CODEWHALE_TELEMETRY=0 codewhale
 ```
 
-启动时的更新检查从不阻塞一轮对话，离线时静默失败。在隔离网络、公司代理或镜像托管的桌面上应关闭它。从 [INSTALL.md](../INSTALL.md) 中经过校验的渠道安装——npm、Cargo、Homebrew、Docker，或带校验和的 `install.sh` 二进制。
+启动时的更新检查从不阻塞一轮对话，离线时静默失败。在隔离网络、公司代理或镜像托管的桌面上应关闭它。从 [INSTALL.md](../INSTALL.md) 中经过校验的渠道安装——npm、Cargo、Homebrew，或带校验和的 `install.sh` 二进制；容器镜像见 [DOCKER.md](../DOCKER.md)。
 
 `CODEWHALE_HOME` 会把全部产品状态（包括崩溃转储和遥测文件）隔离到你选择的路径。
 

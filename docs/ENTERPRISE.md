@@ -129,8 +129,8 @@ CODEWHALE_TELEMETRY=0 codewhale
 The startup update check never blocks a turn and fails silently when
 offline. Disabling it is the right setting for air-gapped, corporate-proxy,
 or image-managed desktops. Install from a verified channel in
-[INSTALL.md](INSTALL.md) — npm, Cargo, Homebrew, Docker, or the checksummed
-`install.sh` binaries.
+[INSTALL.md](INSTALL.md) — npm, Cargo, Homebrew, or the checksummed
+`install.sh` binaries — or [DOCKER.md](DOCKER.md) for the container image.
 
 `CODEWHALE_HOME` isolates all product state, including crash dumps and
 telemetry files, onto a path you choose.
@@ -191,6 +191,6 @@ issue.
 | Sandbox threat model | [SANDBOX.md](SANDBOX.md) |
 | Configuration, update checks, account login | [CONFIGURATION.md](CONFIGURATION.md) |
 | Concurrent sessions / runtime store lock | [CONFIGURATION.md](CONFIGURATION.md) (`CODEWHALE_RUNTIME_DIR`), [#5630](https://github.com/Hmbown/CodeWhale/issues/5630) |
-| Install channels | [INSTALL.md](INSTALL.md) |
+| Install channels | [INSTALL.md](INSTALL.md), [DOCKER.md](DOCKER.md) |
 | Fleet policy | [FLEET.md](FLEET.md) |
 | Security disclosure | [SECURITY.md](../SECURITY.md) |
