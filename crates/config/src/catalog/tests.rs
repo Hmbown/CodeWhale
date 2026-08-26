@@ -648,7 +648,7 @@ fn bundled_asset_parses() {
         "bundled asset must carry provider rows"
     );
     // The helper returns the same parsed catalog.
-    assert_eq!(bundled_models_dev_catalog(), catalog);
+    assert_eq!(*bundled_models_dev_catalog(), catalog);
 }
 
 #[test]
