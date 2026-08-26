@@ -1797,16 +1797,19 @@ pub(crate) fn build_runtime(command: Option<&Commands>) -> Result<tokio::runtime
 const DIAGNOSTIC_WORKER_CAP: usize = 2;
 
 fn diagnostic_worker_count(command: Option<&Commands>) -> Option<usize> {
-    if matches!(
-        command,
-        Some(Commands::Doctor(_))
-            // Offline sequential tool-loop harness: no concurrent async work.
-            | Some(Commands::Eval(_))
-    ) {
-        Some(DIAGNOSTIC_WORKER_CAP)
-    } else {
-        None
-    }
+    let capped = match command {
+        // Read-only diagnostic surfaces (doctor family).
+        Some(
+            Commands::Doctor(_)
+            | Commands::Eval(_)
+            | Commands::SessionDiagnostics(_)
+            | Commands::Sessions { .. },
+        ) => true,
+        // Only the read-only status report; mutating setup keeps defaults.
+        Some(Commands::Setup(args)) => args.status,
+        _ => false,
+    };
+    capped.then_some(DIAGNOSTIC_WORKER_CAP)
 }
 
 fn tokio_runtime_builder() -> tokio::runtime::Builder {
