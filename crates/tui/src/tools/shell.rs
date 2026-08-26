@@ -4137,6 +4137,11 @@ async fn execute_foreground_via_background(
     }
 
     let deadline = timeout_ms.map(|timeout| Instant::now() + Duration::from_millis(timeout));
+    // Adaptive poll cadence: fast commands (the common case — grep, wc, echo)
+    // finish in single-digit milliseconds, and a fixed 100ms tick made every
+    // foreground call pay that full quantum before completion was noticed.
+    // Start fine-grained and back off to the 100ms cap for long-running work.
+    let mut poll_tick_ms: u64 = FOREGROUND_POLL_INITIAL_MS;
     loop {
         if context
             .cancel_token
@@ -4192,11 +4197,21 @@ async fn execute_foreground_via_background(
             return Ok(result);
         }
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(poll_tick_ms)).await;
+        poll_tick_ms = (poll_tick_ms * 2).min(FOREGROUND_POLL_MAX_MS);
     }
 }
 
 const BASH_MAX_TIMEOUT_MS: u64 = i32::MAX as u64;
+
+/// Initial cadence for foreground-via-background completion polling. Fast
+/// commands dominate real agent traffic; detection latency on `true`-class
+/// commands drops from ~100ms to ~10ms, while long commands reach the
+/// 100ms cap within one doubling step.
+const FOREGROUND_POLL_INITIAL_MS: u64 = 10;
+/// Poll-cadence ceiling; matches the previous fixed tick so long-running
+/// command overhead is unchanged.
+const FOREGROUND_POLL_MAX_MS: u64 = 100;
 
 /// Default foreground lifetime for a contract-`bash` `action=run` that names
 /// no `timeout_ms`. Matches the value the tool's own input schema advertises;
@@ -5488,6 +5503,7 @@ impl BashTool {
                     .collect()
             };
 
+        let mut poll_tick_ms: u64 = FOREGROUND_POLL_INITIAL_MS;
         let statuses = loop {
             let current = {
                 let mut manager = context
@@ -5521,7 +5537,8 @@ impl BashTool {
                 timed_out = true;
                 break current;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(poll_tick_ms)).await;
+            poll_tick_ms = (poll_tick_ms * 2).min(FOREGROUND_POLL_MAX_MS);
         };
 
         let running_after = statuses
@@ -5934,6 +5951,7 @@ async fn wait_for_shell_delta_cancellable(
     let mut stdout_accum = String::new();
     let mut stderr_accum = String::new();
 
+    let mut poll_tick_ms: u64 = FOREGROUND_POLL_INITIAL_MS;
     let (command, result, stdout_total_len, stderr_total_len) = loop {
         if context
             .cancel_token
@@ -5981,7 +5999,8 @@ async fn wait_for_shell_delta_cancellable(
             break (command, delta.result, stdout_total_len, stderr_total_len);
         }
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(poll_tick_ms)).await;
+        poll_tick_ms = (poll_tick_ms * 2).min(FOREGROUND_POLL_MAX_MS);
     };
 
     Ok((
