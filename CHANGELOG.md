@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Process panic dumps and fatal-signal markers now write only under
   `$CODEWHALE_HOME/crashes` (otherwise `~/.codewhale/crashes`). The process
   panic hook no longer creates `~/.deepseek/crashes`.
+- ConfigToml and TUI ConfigFile parses now run on a dedicated 16 MiB stack
+  thread so guided-setup save (and `/v1/config/reload`) cannot overflow a
+  2 MiB debug worker (#5585).
 
 - Added the managed Chat relay: account-owned Chat commands now execute on the
   native runtime thread engine through a new `runtime_chat_relay` module

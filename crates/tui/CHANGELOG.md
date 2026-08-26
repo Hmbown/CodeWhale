@@ -9,15 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The empty-state whale now surfaces once on launch (~640 ms, one caustic
+  pass) instead of appearing fully formed. `low_motion`, `fancy_animations =
+  false`, and `NO_ANIMATIONS` keep the settled mark. Not a splash; input is
+  not delayed.
 - Added an enterprise operator packet (`docs/ENTERPRISE.md`) and a first-party
   docs page for security review: local runtime, BYOK, first-party telemetry
-  kill switches, local crash dumps, sandbox, and air-gap controls.
+  kill switches, local crash dumps, sandbox, air-gap controls, and the
+  current one-owner runtime-store lock. The page does not invent SOC 2, SSO,
+  or a hosted SLA. The README documentation list (all 18 locales) now points
+  at it.
+- Documented the runtime-store owner lock (#5630): one Codewhale per default
+  store (`$CODEWHALE_HOME/tasks/runtime`). The lock stays; the 0.9.12 fix is
+  a per-session store root coordinated with the `runtime_threads.rs` split.
+  Until then, a second session must set `CODEWHALE_RUNTIME_DIR`. The startup
+  error now names that workaround.
+- `codewhale web --tailscale` publishes the loopback browser client on the
+  current Tailscale tailnet via `tailscale serve`. The HTTP listener stays
+  on `127.0.0.1`; peers use `https://<machine>.<tailnet>.ts.net`. Stopping
+  the process turns off only HTTPS:443 (not `serve reset`). Not Funnel.
 
 ### Fixed
 
 - Process panic dumps and fatal-signal markers now write only under
   `$CODEWHALE_HOME/crashes` (otherwise `~/.codewhale/crashes`). The process
   panic hook no longer creates `~/.deepseek/crashes`.
+- ConfigToml and TUI ConfigFile parses now run on a dedicated 16 MiB stack
+  thread so guided-setup save (and `/v1/config/reload`) cannot overflow a
+  2 MiB debug worker (#5585).
 
 - Added the managed Chat relay: account-owned Chat commands now execute on the
   native runtime thread engine through a new `runtime_chat_relay` module
