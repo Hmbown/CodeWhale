@@ -75,6 +75,7 @@ stack and [configuration](docs/CONFIGURATION.md) for local settings.
 - [Agent teams](docs/FLEET.md)
 - [MCP](docs/MCP.md), [hooks](docs/HOOKS.md), and [configuration](docs/CONFIGURATION.md)
 - [Local web client](docs/WEB.md)
+- [Enterprise review](docs/ENTERPRISE.md)
 - [All documentation](docs)
 
 ## Join the community

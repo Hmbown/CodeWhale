@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   docs page for security review: local runtime, BYOK, first-party telemetry
   kill switches, local crash dumps, sandbox, air-gap controls, and the
   current one-owner runtime-store lock. The page does not invent SOC 2, SSO,
-  or a hosted SLA.
+  or a hosted SLA. The README documentation list (all 18 locales) now points
+  at it.
 - Documented the runtime-store owner lock (#5630): one Codewhale per default
   store (`$CODEWHALE_HOME/tasks/runtime`). The lock stays; the 0.9.12 fix is
   a per-session store root coordinated with the `runtime_threads.rs` split.

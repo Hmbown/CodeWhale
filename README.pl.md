@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:a56bca473dbd -->
+<!-- source: README.md sha256:3b4cb1c74d41 -->
 # Codewhale
 
 Codewhale to agent programistyczny o otwartym kodzie źródłowym do terminala, napisany w Rust i rozwijany publicznie wspólnie z osobami, które go używają.
@@ -60,6 +60,7 @@ Przeczytaj o [kolejności autoryzacji](docs/AUTHORIZATION_ORDER.md), aby poznać
 - [Zespoły agentów](docs/FLEET.md)
 - [MCP](docs/MCP.md), [hooki](docs/HOOKS.md) i [konfiguracja](docs/CONFIGURATION.md)
 - [Lokalny klient webowy](docs/WEB.md)
+- [Przegląd dla przedsiębiorstw](docs/ENTERPRISE.md)
 - [Cała dokumentacja](docs)
 
 ## Dołącz do społeczności

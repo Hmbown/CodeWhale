@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:a56bca473dbd -->
+<!-- source: README.md sha256:3b4cb1c74d41 -->
 # Codewhale
 
 Codewhale là tác nhân lập trình mã nguồn mở dành cho terminal, được xây dựng bằng Rust và được cải thiện công khai cùng những người sử dụng nó.
@@ -60,6 +60,7 @@ Codewhale chạy trên máy của bạn với quyền truy cập do bạn cấp.
 - [Nhóm tác nhân](docs/FLEET.md)
 - [MCP](docs/MCP.md), [hook](docs/HOOKS.md) và [cấu hình](docs/CONFIGURATION.md)
 - [Ứng dụng web cục bộ](docs/WEB.md)
+- [Đánh giá doanh nghiệp](docs/ENTERPRISE.md)
 - [Toàn bộ tài liệu](docs)
 
 ## Tham gia cộng đồng

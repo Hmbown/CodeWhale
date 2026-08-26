@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:a56bca473dbd -->
+<!-- source: README.md sha256:3b4cb1c74d41 -->
 # Codewhale
 
 Codewhale 是一款在終端機中使用的開源程式設計代理，以 Rust 打造，並與使用者一起透過公開協作持續改進。
@@ -60,6 +60,7 @@ Codewhale 在你的電腦上執行，且只擁有你授予的存取權限。核�
 - [代理團隊](docs/FLEET.md)
 - [MCP](docs/MCP.md)、[掛鉤](docs/HOOKS.md)與[設定](docs/CONFIGURATION.md)
 - [本機網頁用戶端](docs/WEB.md)
+- [企業審閱](docs/ENTERPRISE.md)
 - [所有文件](docs)
 
 ## 加入社群
