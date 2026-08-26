@@ -128,11 +128,21 @@ fn bundled_snapshot() -> &'static CatalogSnapshot {
 /// deliberately downstream of every publisher so stale cached rows cannot
 /// bypass the client-side live-fetch filter.
 fn apply_provider_model_cutlines(mut snapshot: CatalogSnapshot) -> CatalogSnapshot {
+    // `ApiProvider::parse` scans every provider and alias list per call; the
+    // distinct provider strings in a catalog are few, so resolve each distinct
+    // string once instead of once per offering (boot-path profiles showed
+    // this loop as the largest post-parse compute block).
+    let mut resolved: std::collections::HashMap<String, Option<ApiProvider>> =
+        std::collections::HashMap::new();
     snapshot.offerings = snapshot
         .offerings
         .into_iter()
         .filter_map(|mut offering| {
-            if ApiProvider::parse(&offering.provider) == Some(ApiProvider::OpencodeGo) {
+            let parsed = resolved
+                .entry(offering.provider.clone())
+                .or_insert_with(|| ApiProvider::parse(&offering.provider))
+                .clone();
+            if parsed == Some(ApiProvider::OpencodeGo) {
                 let canonical = opencode_go_chat_model_id(&offering.wire_model_id)?;
                 offering.provider = ApiProvider::OpencodeGo.as_str().to_string();
                 offering.wire_model_id = canonical.to_string();
