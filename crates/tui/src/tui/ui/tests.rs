@@ -3576,6 +3576,29 @@ fn create_test_app() -> App {
     })
 }
 
+/// Run a guided-setup / provider-switch future on the 16 MiB stack the
+/// product uses. Those paths deserialize `ConfigToml` / `ConfigFile` /
+/// settings on the calling thread; debug serde frames overflow libtest's
+/// 2 MiB default (#5585).
+fn block_on_runtime_stack<F, Fut>(f: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()>,
+{
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime")
+                .block_on(f())
+        })
+        .expect("spawn test thread")
+        .join()
+        .expect("test thread panicked");
+}
+
 #[test]
 fn runtime_chat_short_circuits_inline_voice_and_cache_actions_before_ui_mutation() {
     let mut app = create_test_app();
@@ -7445,32 +7468,34 @@ async fn provider_switch_clears_turn_cache_history() {
     assert!(app.session.turn_cache_history.is_empty());
 }
 
-#[tokio::test]
-async fn provider_switch_to_deepseek_canonicalizes_openrouter_default_model() {
-    let _home = SettingsHomeGuard::new();
-    let mut app = create_test_app();
-    app.api_provider = ApiProvider::Openrouter;
-    app.model = DEFAULT_OPENROUTER_MODEL.to_string();
-    let mut engine = mock_engine_handle();
-    let mut config = Config {
-        provider: Some("openrouter".to_string()),
-        api_key: Some("test-key".to_string()),
-        default_text_model: Some(DEFAULT_OPENROUTER_MODEL.to_string()),
-        ..Default::default()
-    };
+#[test]
+fn provider_switch_to_deepseek_canonicalizes_openrouter_default_model() {
+    block_on_runtime_stack(|| async {
+        let _home = SettingsHomeGuard::new();
+        let mut app = create_test_app();
+        app.api_provider = ApiProvider::Openrouter;
+        app.model = DEFAULT_OPENROUTER_MODEL.to_string();
+        let mut engine = mock_engine_handle();
+        let mut config = Config {
+            provider: Some("openrouter".to_string()),
+            api_key: Some("test-key".to_string()),
+            default_text_model: Some(DEFAULT_OPENROUTER_MODEL.to_string()),
+            ..Default::default()
+        };
 
-    switch_provider(
-        &mut app,
-        &mut engine.handle,
-        &mut config,
-        ApiProvider::Deepseek,
-        None,
-    )
-    .await;
+        switch_provider(
+            &mut app,
+            &mut engine.handle,
+            &mut config,
+            ApiProvider::Deepseek,
+            None,
+        )
+        .await;
 
-    assert_eq!(app.api_provider, ApiProvider::Deepseek);
-    assert!(!app.model_ids_passthrough);
-    assert_eq!(app.model, DEFAULT_TEXT_MODEL);
+        assert_eq!(app.api_provider, ApiProvider::Deepseek);
+        assert!(!app.model_ids_passthrough);
+        assert_eq!(app.model, DEFAULT_TEXT_MODEL);
+    });
 }
 
 #[tokio::test]
@@ -7572,51 +7597,53 @@ async fn provider_switch_from_mimo_to_openrouter_without_key_fails_before_dispat
     assert!(last_system_message.contains("Provider unchanged (xiaomi-mimo)"));
 }
 
-#[tokio::test]
-async fn successful_custom_provider_activation_completes_onboarding() {
-    let config_env = ConfigPathEnvGuard::new();
-    let mut app = create_test_app();
-    app.config_path = Some(config_env.config_path());
-    app.onboarding = OnboardingState::Provider;
-    app.onboarding_needs_api_key = true;
-    app.onboarding_missing_key_recovery = true;
-    app.trust_mode = true;
-    let mut engine = mock_engine_handle();
-    let mut config = Config::default();
+#[test]
+fn successful_custom_provider_activation_completes_onboarding() {
+    block_on_runtime_stack(|| async {
+        let config_env = ConfigPathEnvGuard::new();
+        let mut app = create_test_app();
+        app.config_path = Some(config_env.config_path());
+        app.onboarding = OnboardingState::Provider;
+        app.onboarding_needs_api_key = true;
+        app.onboarding_missing_key_recovery = true;
+        app.trust_mode = true;
+        let mut engine = mock_engine_handle();
+        let mut config = Config::default();
 
-    let switched = apply_provider_picker_custom_provider(
-        &mut app,
-        &mut engine.handle,
-        &mut config,
-        "fixture-local".to_string(),
-        "http://127.0.0.1:19493/v1".to_string(),
-        Some("fixture-model".to_string()),
-        None,
-    )
-    .await;
-    assert!(switched);
-    complete_provider_picker_onboarding_if_switched(&mut app, ApiProvider::Custom, switched);
+        let switched = apply_provider_picker_custom_provider(
+            &mut app,
+            &mut engine.handle,
+            &mut config,
+            "fixture-local".to_string(),
+            "http://127.0.0.1:19493/v1".to_string(),
+            Some("fixture-model".to_string()),
+            None,
+        )
+        .await;
+        assert!(switched);
+        complete_provider_picker_onboarding_if_switched(&mut app, ApiProvider::Custom, switched);
 
-    assert_eq!(app.api_provider, ApiProvider::Custom);
-    assert_ne!(
-        app.onboarding,
-        OnboardingState::Provider,
-        "a successfully activated custom route must complete provider onboarding"
-    );
-    let settings = crate::settings::Settings::load().expect("reload custom startup route");
-    assert_eq!(
-        settings.default_provider.as_deref(),
-        Some("fixture-local"),
-        "named custom onboarding must persist the exact identity, not `custom`",
-    );
-    assert_eq!(
-        settings
-            .provider_models
-            .as_ref()
-            .and_then(|models| models.get("fixture-local"))
-            .map(String::as_str),
-        Some("fixture-model"),
-    );
+        assert_eq!(app.api_provider, ApiProvider::Custom);
+        assert_ne!(
+            app.onboarding,
+            OnboardingState::Provider,
+            "a successfully activated custom route must complete provider onboarding"
+        );
+        let settings = crate::settings::Settings::load().expect("reload custom startup route");
+        assert_eq!(
+            settings.default_provider.as_deref(),
+            Some("fixture-local"),
+            "named custom onboarding must persist the exact identity, not `custom`",
+        );
+        assert_eq!(
+            settings
+                .provider_models
+                .as_ref()
+                .and_then(|models| models.get("fixture-local"))
+                .map(String::as_str),
+            Some("fixture-model"),
+        );
+    });
 }
 
 #[tokio::test]
@@ -7791,62 +7818,50 @@ async fn xai_api_key_confirmation_saves_only_the_selected_xai_slot() {
 /// sized stack instead of crashing.
 #[test]
 fn setup_confirm_toast_names_secret_store_and_global_scope() {
-    std::thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("test runtime")
-                .block_on(async {
-                    // ConfigPathEnvGuard holds the shared env lock for the whole test, so the
-                    // home/backend overrides must be set after it (and never take the lock
-                    // again — it is not reentrant).
-                    let _config = ConfigPathEnvGuard::new();
-                    let home = TempDir::new().expect("isolated toast home");
-                    let _home = crate::test_support::EnvVarGuard::set(
-                        "CODEWHALE_HOME",
-                        home.path().to_string_lossy().as_ref(),
-                    );
-                    let _backend =
-                        crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
-                    let mut app = create_test_app();
-                    let mut engine = mock_engine_handle();
-                    let mut config = Config::default();
-                    let identity = picker_provider_identity(&config, ApiProvider::Openrouter, None)
-                        .expect("OpenRouter identity");
+    block_on_runtime_stack(|| async {
+        // ConfigPathEnvGuard holds the shared env lock for the whole test, so the
+        // home/backend overrides must be set after it (and never take the lock
+        // again — it is not reentrant).
+        let _config = ConfigPathEnvGuard::new();
+        let home = TempDir::new().expect("isolated toast home");
+        let _home = crate::test_support::EnvVarGuard::set(
+            "CODEWHALE_HOME",
+            home.path().to_string_lossy().as_ref(),
+        );
+        let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+        let mut app = create_test_app();
+        let mut engine = mock_engine_handle();
+        let mut config = Config::default();
+        let identity = picker_provider_identity(&config, ApiProvider::Openrouter, None)
+            .expect("OpenRouter identity");
 
-                    let switched = apply_provider_picker_setup_confirmed(
-                        &mut app,
-                        &mut engine.handle,
-                        &mut config,
-                        identity,
-                        "toast-destination-key".to_string(),
-                        "deepseek/deepseek-v4-pro".to_string(),
-                        None,
-                        None,
-                    )
-                    .await;
+        let switched = apply_provider_picker_setup_confirmed(
+            &mut app,
+            &mut engine.handle,
+            &mut config,
+            identity,
+            "toast-destination-key".to_string(),
+            "deepseek/deepseek-v4-pro".to_string(),
+            None,
+            None,
+        )
+        .await;
 
-                    assert!(switched, "setup confirm failed: {:?}", app.status_message);
-                    let toast = app.status_message.as_deref().expect("save toast");
-                    assert!(
-                        toast.contains("secret store"),
-                        "toast must name the secret store, got: {toast}"
-                    );
-                    assert!(
-                        toast.contains("available in all folders"),
-                        "toast must state the user-global scope, got: {toast}"
-                    );
-                    assert!(
-                        !toast.contains("toast-destination-key"),
-                        "toast must never include the key, got: {toast}"
-                    );
-                })
-        })
-        .expect("spawn test thread")
-        .join()
-        .expect("test thread panicked");
+        assert!(switched, "setup confirm failed: {:?}", app.status_message);
+        let toast = app.status_message.as_deref().expect("save toast");
+        assert!(
+            toast.contains("secret store"),
+            "toast must name the secret store, got: {toast}"
+        );
+        assert!(
+            toast.contains("available in all folders"),
+            "toast must state the user-global scope, got: {toast}"
+        );
+        assert!(
+            !toast.contains("toast-destination-key"),
+            "toast must never include the key, got: {toast}"
+        );
+    });
 }
 
 #[tokio::test]
@@ -8319,37 +8334,39 @@ async fn provider_switch_to_openai_codex_normalizes_deepseek_off_effort() {
     assert_eq!(app.reasoning_effort_display_label(), "low");
 }
 
-#[tokio::test]
-async fn provider_switch_to_openrouter_canonicalizes_deepseek_default_model() {
-    let _home = SettingsHomeGuard::new();
-    let mut app = create_test_app();
-    app.api_provider = ApiProvider::Deepseek;
-    app.model = DEFAULT_TEXT_MODEL.to_string();
-    let mut engine = mock_engine_handle();
-    let mut config = Config {
-        provider: Some("deepseek".to_string()),
-        default_text_model: Some(DEFAULT_TEXT_MODEL.to_string()),
-        providers: Some(ProvidersConfig {
-            openrouter: ProviderConfig {
-                api_key: Some("test-key".to_string()),
+#[test]
+fn provider_switch_to_openrouter_canonicalizes_deepseek_default_model() {
+    block_on_runtime_stack(|| async {
+        let _home = SettingsHomeGuard::new();
+        let mut app = create_test_app();
+        app.api_provider = ApiProvider::Deepseek;
+        app.model = DEFAULT_TEXT_MODEL.to_string();
+        let mut engine = mock_engine_handle();
+        let mut config = Config {
+            provider: Some("deepseek".to_string()),
+            default_text_model: Some(DEFAULT_TEXT_MODEL.to_string()),
+            providers: Some(ProvidersConfig {
+                openrouter: ProviderConfig {
+                    api_key: Some("test-key".to_string()),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
+            }),
             ..Default::default()
-        }),
-        ..Default::default()
-    };
+        };
 
-    switch_provider(
-        &mut app,
-        &mut engine.handle,
-        &mut config,
-        ApiProvider::Openrouter,
-        None,
-    )
-    .await;
+        switch_provider(
+            &mut app,
+            &mut engine.handle,
+            &mut config,
+            ApiProvider::Openrouter,
+            None,
+        )
+        .await;
 
-    assert_eq!(app.api_provider, ApiProvider::Openrouter);
-    assert_eq!(app.model, DEFAULT_OPENROUTER_MODEL);
+        assert_eq!(app.api_provider, ApiProvider::Openrouter);
+        assert_eq!(app.model, DEFAULT_OPENROUTER_MODEL);
+    });
 }
 
 #[tokio::test]
