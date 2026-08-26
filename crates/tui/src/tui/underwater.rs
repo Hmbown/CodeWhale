@@ -347,6 +347,11 @@ const IDLE_SHIMMER_CYCLE_MS: u128 = 4_000;
 const IDLE_SHIMMER_SWEEP_FRACTION: f32 = 0.32;
 const IDLE_SHIMMER_BAND_HALF_WIDTH: f32 = 0.38;
 const IDLE_SHIMMER_STRENGTH: f32 = 0.33;
+/// One-shot empty-state surface: the idle whale rises out of the water.
+/// Short enough to feel like arrival, not a splash. After this window the
+/// ordinary idle caustic owns the mark.
+const STARTUP_SURFACE_MS: u128 = 640;
+const STARTUP_WORDMARK_DELAY_MS: u128 = 90;
 
 /// The build-version string the header renders. An unstamped local build uses
 /// the build script's development marker while CI/release carries its source
@@ -1528,6 +1533,52 @@ fn idle_mark_shine_opacity(diagonal: f32, elapsed_ms: u128) -> f32 {
 }
 
 #[must_use]
+/// Raised-cosine rise from 0 → 1 over [`STARTUP_SURFACE_MS`]. `None` after
+/// the window so callers fall back to the settled idle mark.
+#[must_use]
+fn startup_surface_opacity(elapsed_ms: u128) -> Option<f32> {
+    if elapsed_ms >= STARTUP_SURFACE_MS {
+        return None;
+    }
+    let t = elapsed_ms as f32 / STARTUP_SURFACE_MS as f32;
+    Some(0.5 * (1.0 - (std::f32::consts::PI * t).cos()))
+}
+
+#[must_use]
+fn delayed_startup_opacity(elapsed_ms: u128, delay_ms: u128) -> Option<f32> {
+    if elapsed_ms < delay_ms {
+        return Some(0.0);
+    }
+    startup_surface_opacity(elapsed_ms - delay_ms)
+}
+
+/// One caustic pass timed to the surface window. After the rise, shine is 0
+/// so the slower idle cycle can take over without a double-flash.
+#[must_use]
+fn startup_shine_opacity(diagonal: f32, elapsed_ms: u128) -> f32 {
+    if elapsed_ms >= STARTUP_SURFACE_MS {
+        return 0.0;
+    }
+    let sweep_progress = (elapsed_ms as f32 / STARTUP_SURFACE_MS as f32).min(1.0);
+    let band_position =
+        -IDLE_SHIMMER_BAND_HALF_WIDTH + sweep_progress * (1.0 + 2.0 * IDLE_SHIMMER_BAND_HALF_WIDTH);
+    let distance = (diagonal - band_position).abs();
+    if distance >= IDLE_SHIMMER_BAND_HALF_WIDTH {
+        return 0.0;
+    }
+    let raised_cosine =
+        0.5 * (1.0 + (std::f32::consts::PI * distance / IDLE_SHIMMER_BAND_HALF_WIDTH).cos());
+    IDLE_SHIMMER_STRENGTH * raised_cosine
+}
+
+#[must_use]
+fn emerge_from_surface(color: Color, surface: Color, emerge: Option<f32>) -> Color {
+    match emerge {
+        Some(opacity) if opacity < 1.0 => idle_mark_color(surface, color, opacity),
+        _ => color,
+    }
+}
+
 fn idle_mark_color(base: Color, highlight: Color, opacity: f32) -> Color {
     if opacity <= 0.0 {
         return base;
@@ -1576,6 +1627,8 @@ fn idle_whale_row_spans(
     base: Color,
     highlight: Color,
     eye: Color,
+    surface: Color,
+    emerge: Option<f32>,
 ) -> Vec<Span<'static>> {
     let rows = IDLE_WHALE_ROWS.len() as f32;
     let cols = IDLE_WHALE_ROWS
@@ -1586,21 +1639,23 @@ fn idle_whale_row_spans(
     let mut spans = Vec::new();
     let mut run = String::new();
     let mut run_color = None;
+    let rising = emerge.is_some();
 
     for (column, ch) in text.chars().enumerate() {
         let diagonal = (column as f32 + (rows - 1.0 - row as f32)) / (cols + rows);
         let color = if matches!(ch, '·' | '░' | '✦' | '△') {
             // Soft uwu blush/sparkle and the quiet crown-fluke center use the
             // eye/sakura channel; classic otherwise only has the eye dot.
-            eye
+            emerge_from_surface(eye, surface, emerge)
         } else if animated {
-            idle_mark_color(
-                base,
-                highlight,
-                idle_mark_shine_opacity(diagonal, elapsed_ms),
-            )
+            let shine = if rising {
+                startup_shine_opacity(diagonal, elapsed_ms)
+            } else {
+                idle_mark_shine_opacity(diagonal, elapsed_ms.saturating_sub(STARTUP_SURFACE_MS))
+            };
+            idle_mark_color(emerge_from_surface(base, surface, emerge), highlight, shine)
         } else {
-            base
+            emerge_from_surface(base, surface, emerge)
         };
         if run_color != Some(color) {
             if let Some(previous) = run_color {
@@ -1706,10 +1761,17 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
     if empty_state_mark_visible(area) {
         let animated = idle_mark_animation_enabled(app);
         let elapsed_ms = app.ocean_started_at.elapsed().as_millis();
+        let emerge = animated
+            .then(|| startup_surface_opacity(elapsed_ms))
+            .flatten();
         let spout = idle_whale_spout_row(app);
         let rows = idle_whale_rows(app);
         let current = idle_whale_current_color(app);
-        let mut mark = vec![vec![Span::styled(spout, Style::default().fg(current))]];
+        let surface = app.ui_theme.surface_bg;
+        let mut mark = vec![vec![Span::styled(
+            spout,
+            Style::default().fg(emerge_from_surface(current, surface, emerge)),
+        )]];
         // Soft uwu: sakura blush/sparkle glyphs; classic keeps body peach + text eye.
         let highlight = if idle_whale_is_uwu(app) {
             app.ui_theme.accent_primary
@@ -1732,6 +1794,8 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
                 },
                 app.ui_theme.text_body,
                 highlight,
+                surface,
+                emerge,
             )
         }));
         // The spout, head, belly, peduncle, and flukes are one drawing. Give
@@ -1768,19 +1832,32 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
         app.mcp_configured_count,
         width,
     );
+    let elapsed_ms = app.ocean_started_at.elapsed().as_millis();
+    let wordmark_emerge = idle_mark_animation_enabled(app)
+        .then(|| delayed_startup_opacity(elapsed_ms, STARTUP_WORDMARK_DELAY_MS))
+        .flatten();
+    let surface = app.ui_theme.surface_bg;
     let brand = "Codewhale";
     let brand_inset = " ".repeat(width.saturating_sub(brand.width()) / 2);
     lines.push(Line::from(Span::styled(
         format!("{brand_inset}{brand}"),
         Style::default()
-            .fg(app.ui_theme.text_body)
+            .fg(emerge_from_surface(
+                app.ui_theme.text_body,
+                surface,
+                wordmark_emerge,
+            ))
             .add_modifier(Modifier::BOLD),
     )));
     let context = truncate_to_width(&context, width);
     let inset = " ".repeat(width.saturating_sub(context.width()) / 2);
     lines.push(Line::from(Span::styled(
         format!("{inset}{context}"),
-        Style::default().fg(app.ui_theme.text_soft),
+        Style::default().fg(emerge_from_surface(
+            app.ui_theme.text_soft,
+            surface,
+            wordmark_emerge,
+        )),
     )));
     if area.height >= 4 {
         lines.push(Line::from(""));
@@ -1789,10 +1866,60 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
         let inset = " ".repeat(width.saturating_sub(prompt.width()) / 2);
         lines.push(Line::from(Span::styled(
             format!("{inset}{prompt}"),
-            Style::default().fg(app.ui_theme.text_body),
+            Style::default().fg(emerge_from_surface(
+                app.ui_theme.text_body,
+                surface,
+                wordmark_emerge,
+            )),
         )));
     }
     lines
+}
+
+#[cfg(test)]
+mod startup_surface_tests {
+    use super::{
+        STARTUP_SURFACE_MS, delayed_startup_opacity, startup_shine_opacity, startup_surface_opacity,
+    };
+
+    #[test]
+    fn surface_is_a_short_raised_cosine_then_gone() {
+        let start = startup_surface_opacity(0).expect("starts inside the window");
+        let mid = startup_surface_opacity(STARTUP_SURFACE_MS / 2).expect("mid-rise");
+        assert!(
+            start < 0.05,
+            "launch should still be under the water: {start}"
+        );
+        assert!(
+            (mid - 0.5).abs() < 0.04,
+            "mid-rise should be half emerged: {mid}"
+        );
+        assert!(
+            startup_surface_opacity(STARTUP_SURFACE_MS).is_none(),
+            "the idle mark owns the scene the moment the rise ends"
+        );
+        assert!(startup_surface_opacity(STARTUP_SURFACE_MS + 80).is_none());
+    }
+
+    #[test]
+    fn wordmark_waits_a_beat_then_uses_the_same_rise() {
+        assert_eq!(delayed_startup_opacity(0, 90), Some(0.0));
+        assert_eq!(delayed_startup_opacity(89, 90), Some(0.0));
+        let after_delay = delayed_startup_opacity(90, 90).expect("rise starts after the delay");
+        assert!(after_delay < 0.05, "{after_delay}");
+        assert!(delayed_startup_opacity(90 + STARTUP_SURFACE_MS, 90).is_none());
+    }
+
+    #[test]
+    fn shine_is_one_pass_not_a_loop() {
+        assert_eq!(startup_shine_opacity(0.5, STARTUP_SURFACE_MS), 0.0);
+        let mid = startup_shine_opacity(0.5, STARTUP_SURFACE_MS / 2);
+        assert!(
+            mid > 0.0,
+            "the caustic should cross the body during the rise"
+        );
+        assert!(mid <= 0.33);
+    }
 }
 
 #[cfg(test)]

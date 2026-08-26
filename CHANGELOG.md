@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The empty-state whale now surfaces once on launch (~640 ms, one caustic
+  pass) instead of appearing fully formed. `low_motion`, `fancy_animations =
+  false`, and `NO_ANIMATIONS` keep the settled mark. Not a splash; input is
+  not delayed.
 - Added an enterprise operator packet (`docs/ENTERPRISE.md`) and a first-party
   docs page for security review: local runtime, BYOK, first-party telemetry
   kill switches, local crash dumps, sandbox, air-gap controls, and the
