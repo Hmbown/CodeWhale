@@ -66,7 +66,7 @@ use crate::runtime_threads::{
     CompactThreadRequest, CreateThreadRequest, ExternalApprovalDecision,
     MAX_RUNTIME_EVENT_REPLAY_TAIL, RuntimeThreadManager, RuntimeThreadManagerConfig,
     SharedRuntimeThreadManager, StartTurnRequest, SteerTurnRequest, ThreadDetail, ThreadListFilter,
-    ThreadRecord, TurnItemKind, TurnRecord, UpdateThreadRequest, UsageGroupBy,
+    ThreadRecord, TurnItemKind, TurnRecord, UpdateThreadRequest, UsageGroupBy, UsageTotals,
 };
 #[cfg(test)]
 pub(super) use crate::runtime_threads::{RuntimeTurnStatus, TurnItemLifecycleStatus};
@@ -1089,6 +1089,7 @@ pub fn build_router(state: RuntimeApiState) -> Router {
             post(deliver_dynamic_tool_result),
         )
         .route("/v1/threads/{id}/compact", post(compact_thread))
+        .route("/v1/threads/{id}/usage", get(get_thread_usage))
         .route("/v1/threads/{id}/events", get(stream_thread_events))
         .route("/v1/agent-mail", post(send_agent_mail))
         .route("/v1/threads/{id}/agent-mail", get(list_agent_mail))
@@ -3760,6 +3761,34 @@ async fn get_thread(
         .await
         .map_err(map_thread_err)?;
     Ok(Json(detail))
+}
+
+/// Response for `GET /v1/threads/{id}/usage`.
+///
+/// Thin adapter over `RuntimeThreadManager::aggregate_usage_for_thread`: the
+/// GUI's session-cost surface reads provider-aware, recorded-time pricing in
+/// both published currencies from the same accumulation that powers
+/// `/v1/usage`, instead of reimplementing rate tables client-side.
+#[derive(Debug, Serialize)]
+struct ThreadUsageResponse {
+    thread_id: String,
+    totals: UsageTotals,
+}
+
+async fn get_thread_usage(
+    State(state): State<RuntimeApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<ThreadUsageResponse>, ApiError> {
+    let totals = state
+        .runtime_threads
+        .aggregate_usage_for_thread(&id)
+        .await
+        .map_err(map_thread_err)?
+        .combined();
+    Ok(Json(ThreadUsageResponse {
+        thread_id: id,
+        totals,
+    }))
 }
 
 async fn update_thread(

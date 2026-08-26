@@ -2871,6 +2871,128 @@ async fn aggregate_usage_keeps_codex_tokens_without_api_dollar_pricing() -> Resu
     Ok(())
 }
 
+/// `aggregate_usage_for_thread` scopes the same recorded-time pricing the
+/// global `/v1/usage` aggregate applies to exactly one thread, in both
+/// published currencies: DeepSeek's first-party rows carry native CNY, so a
+/// deepseek-priced turn must produce a non-zero `cost_cny` there, while a
+/// different thread's spend stays out of the figure. The parent/child split
+/// keeps routed-child (sub-agent) spend out of the parent figure — the split
+/// session persistence writes into `session_cost_*` vs `subagent_cost_*` —
+/// and CNY coverage counts turns under the provider's own CNY row.
+#[tokio::test]
+async fn aggregate_usage_for_thread_scopes_both_currencies_to_one_thread() -> Result<()> {
+    let manager = test_manager(test_runtime_dir())?;
+
+    let billed = sample_thread("thr_thread_usage_billed");
+    manager.store.save_thread(&billed)?;
+    let mut turn = sample_turn(&billed.id, "turn_billed", RuntimeTurnStatus::Completed);
+    turn.usage = Some(Usage {
+        input_tokens: 10_000,
+        output_tokens: 1_000,
+        ..Usage::default()
+    });
+    set_test_turn_route(
+        &mut turn,
+        ApiProvider::Deepseek,
+        ApiProvider::Deepseek.as_str(),
+        "deepseek-v4-flash",
+        Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE),
+        crate::cost_status::RouteBillingMode::Metered,
+    );
+    turn.routed_usage = vec![crate::cost_status::EffectiveRouteUsage {
+        route: crate::cost_status::EffectiveRouteEnvelope {
+            provider: ApiProvider::Deepseek,
+            provider_identity: ApiProvider::Deepseek.as_str().to_string(),
+            model: "deepseek-v4-flash".to_string(),
+            billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
+            endpoint_fingerprint: None,
+            billing_mode: crate::cost_status::RouteBillingMode::Metered,
+            dispatched_at: turn.created_at,
+        },
+        usage: Usage {
+            input_tokens: 2_000,
+            output_tokens: 200,
+            ..Usage::default()
+        },
+    }];
+    manager.store.save_turn(&turn)?;
+
+    // A second thread with its own priced turn must not leak into the
+    // first thread's figure.
+    let other = sample_thread("thr_thread_usage_other");
+    manager.store.save_thread(&other)?;
+    let mut other_turn = sample_turn(&other.id, "turn_other", RuntimeTurnStatus::Completed);
+    other_turn.usage = Some(Usage {
+        input_tokens: 500_000,
+        output_tokens: 500_000,
+        ..Usage::default()
+    });
+    set_test_turn_route(
+        &mut other_turn,
+        ApiProvider::Deepseek,
+        ApiProvider::Deepseek.as_str(),
+        "deepseek-v4-flash",
+        Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE),
+        crate::cost_status::RouteBillingMode::Metered,
+    );
+    manager.store.save_turn(&other_turn)?;
+
+    let split = manager.aggregate_usage_for_thread(&billed.id).await?;
+    // The split mirrors the persisted session fields: parent spend in
+    // `parent`, routed-child (sub-agent) spend in `routed_children`.
+    assert_eq!(split.parent.input_tokens, 10_000);
+    assert_eq!(split.parent.output_tokens, 1_000);
+    assert_eq!(split.parent.turns, 1);
+    assert!(split.parent.cost_usd > 0.0);
+    assert!(split.parent.cost_cny > 0.0);
+    assert_eq!(split.routed_children.input_tokens, 2_000);
+    assert_eq!(split.routed_children.turns, 1);
+    assert!(split.routed_children.cost_usd > 0.0);
+    assert!(split.routed_children.cost_cny > 0.0);
+
+    // Native CNY row: priced in CNY without any FX projection of the USD
+    // column, and the CNY coverage counters see the same money-metered
+    // turns the USD counters do.
+    assert_eq!(split.parent.priced_turns, 1);
+    assert_eq!(split.parent.unpriced_turns, 0);
+    assert_eq!(split.parent.cny_priced_turns, 1);
+    assert_eq!(split.parent.cny_unpriced_turns, 0);
+
+    let totals = split.combined();
+    assert_eq!(totals.input_tokens, 12_000);
+    assert_eq!(totals.turns, 2);
+    assert_eq!(
+        totals.cost_usd,
+        split.parent.cost_usd + split.routed_children.cost_usd
+    );
+    assert!(totals.cost_cny > 0.0);
+    assert_eq!(totals.priced_turns, 2);
+    assert_eq!(totals.unpriced_turns, 0);
+    assert_eq!(totals.cny_priced_turns, 2);
+    assert!(totals.cost_complete);
+
+    // The scoped figure agrees with the thread bucket of the global
+    // aggregate, so the GUI (per-thread endpoint) and `/v1/usage` can never
+    // disagree about the same thread.
+    let global = manager
+        .aggregate_usage(None, None, UsageGroupBy::Thread)
+        .await?;
+    let bucket = global
+        .buckets
+        .iter()
+        .find(|bucket| bucket.key == billed.id)
+        .expect("billed thread bucket");
+    assert_eq!(bucket.cost_usd, totals.cost_usd);
+    assert_eq!(bucket.cost_cny, totals.cost_cny);
+    assert_eq!(bucket.cny_priced_turns, totals.cny_priced_turns);
+
+    let missing = manager
+        .aggregate_usage_for_thread("thr_does_not_exist")
+        .await;
+    assert!(missing.is_err());
+    Ok(())
+}
+
 /// An aggregate in which nothing could be priced is unavailable, not zero.
 ///
 /// `cost_usd` is a `f64` and an all-unknown run leaves it at `0.0`, so the
@@ -3451,7 +3573,7 @@ async fn aggregate_usage_fails_closed_for_legacy_reconstructed_route() -> Result
 #[test]
 fn runtime_usage_accumulators_saturate_tokens_and_currency() {
     let mut total = f64::MAX;
-    saturating_add_usd(&mut total, f64::MAX);
+    saturating_add_cost_amount(&mut total, f64::MAX);
     assert_eq!(total, f64::MAX);
 
     let thread = sample_thread("thr_saturating");

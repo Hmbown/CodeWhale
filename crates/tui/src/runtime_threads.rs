@@ -2369,10 +2369,20 @@ pub struct UsageTotals {
     pub reasoning_replay_tokens: u64,
     pub cache_write_tokens: u64,
     pub cost_usd: f64,
+    /// Provider-published CNY subtotal, accrued only from turns whose route
+    /// published an authoritative CNY row (e.g. DeepSeek Platform). Never an
+    /// FX projection of `cost_usd`: USD-only routes contribute 0 here rather
+    /// than a fabricated amount, mirroring `SessionCostSnapshot`.
+    pub cost_cny: f64,
     /// Authoritative USD coverage for this aggregate. `cost_usd` is a priced
     /// subtotal whenever `unpriced_turns > 0`.
     pub priced_turns: u64,
     pub unpriced_turns: u64,
+    /// CNY-specific coverage over the same money-metered turns: a USD-only
+    /// route is CNY-unpriced rather than a fabricated complete zero, same
+    /// rule as `SessionCostSnapshot::cny_priced_turns`.
+    pub cny_priced_turns: u64,
+    pub cny_unpriced_turns: u64,
     pub nonmetered_turns: u64,
     pub cost_complete: bool,
     pub unpriced_reasons: std::collections::BTreeSet<String>,
@@ -2399,8 +2409,14 @@ pub struct UsageBucket {
     pub reasoning_replay_tokens: u64,
     pub cache_write_tokens: u64,
     pub cost_usd: f64,
+    /// Provider-published CNY subtotal; same coverage rule as the totals
+    /// field of the same name.
+    pub cost_cny: f64,
     pub priced_turns: u64,
     pub unpriced_turns: u64,
+    /// CNY-specific coverage; same rule as the totals field of the same name.
+    pub cny_priced_turns: u64,
+    pub cny_unpriced_turns: u64,
     pub nonmetered_turns: u64,
     pub cost_complete: bool,
     pub unpriced_reasons: std::collections::BTreeSet<String>,
@@ -2423,16 +2439,90 @@ pub struct UsageAggregation {
     pub buckets: Vec<UsageBucket>,
 }
 
+/// Thread-scoped usage split by spend owner, for session persistence.
+///
+/// The split mirrors `SessionCostSnapshot`'s field semantics
+/// (`session_cost_*` carries parent-turn spend, `subagent_cost_*` routed
+/// child spend) so a writer can persist each side into the field readers
+/// already project into one display total.
+#[derive(Debug, Clone, Default)]
+pub struct ThreadUsageSplit {
+    /// Parent-turn usage: the session's own provider calls.
+    pub parent: UsageTotals,
+    /// Routed child (sub-agent/background) usage recorded on those turns,
+    /// including dropped-record incompleteness markers.
+    pub routed_children: UsageTotals,
+}
+
+impl ThreadUsageSplit {
+    /// Whole-history combined totals — the figure the global `/v1/usage`
+    /// thread bucket reports and the per-thread endpoint returns.
+    #[must_use]
+    pub fn combined(&self) -> UsageTotals {
+        let mut combined = self.parent.clone();
+        merge_usage_totals(&mut combined, &self.routed_children);
+        finalize_usage_totals(&mut combined);
+        combined
+    }
+}
+
+/// Recompute the derived completeness flag after accumulation.
+fn finalize_usage_totals(totals: &mut UsageTotals) {
+    // Dropped fallback receipts also bump `unpriced_turns`, so one check
+    // covers both incompleteness markers.
+    totals.cost_complete = totals.unpriced_turns == 0;
+}
+
+/// Component-wise saturating merge of usage totals; used to rebuild the
+/// combined thread figure from the parent/child split.
+fn merge_usage_totals(into: &mut UsageTotals, from: &UsageTotals) {
+    into.input_tokens = into.input_tokens.saturating_add(from.input_tokens);
+    into.output_tokens = into.output_tokens.saturating_add(from.output_tokens);
+    into.cached_tokens = into.cached_tokens.saturating_add(from.cached_tokens);
+    into.reasoning_tokens = into.reasoning_tokens.saturating_add(from.reasoning_tokens);
+    into.reasoning_replay_tokens = into
+        .reasoning_replay_tokens
+        .saturating_add(from.reasoning_replay_tokens);
+    into.cache_write_tokens = into
+        .cache_write_tokens
+        .saturating_add(from.cache_write_tokens);
+    saturating_add_cost_amount(&mut into.cost_usd, from.cost_usd);
+    saturating_add_cost_amount(&mut into.cost_cny, from.cost_cny);
+    into.priced_turns = into.priced_turns.saturating_add(from.priced_turns);
+    into.unpriced_turns = into.unpriced_turns.saturating_add(from.unpriced_turns);
+    into.cny_priced_turns = into.cny_priced_turns.saturating_add(from.cny_priced_turns);
+    into.cny_unpriced_turns = into
+        .cny_unpriced_turns
+        .saturating_add(from.cny_unpriced_turns);
+    into.nonmetered_turns = into.nonmetered_turns.saturating_add(from.nonmetered_turns);
+    into.unpriced_reasons.extend(from.unpriced_reasons.clone());
+    into.unpriced_classes.extend(from.unpriced_classes.clone());
+    into.pricing_provenances
+        .extend(from.pricing_provenances.clone());
+    into.live_pricing_defects
+        .extend(from.live_pricing_defects.clone());
+    into.live_pricing_unusable_defects
+        .extend(from.live_pricing_unusable_defects.clone());
+    into.route_receipts.extend(from.route_receipts.clone());
+    into.dropped_usage_records = into
+        .dropped_usage_records
+        .saturating_add(from.dropped_usage_records);
+    into.turns = into.turns.saturating_add(from.turns);
+}
+
 fn accumulate_runtime_cost_coverage(
     audit: Option<&crate::pricing::TurnCostAudit>,
     priced_turns: &mut u64,
     unpriced_turns: &mut u64,
+    cny_priced_turns: &mut u64,
+    cny_unpriced_turns: &mut u64,
     nonmetered_turns: &mut u64,
     reasons: &mut std::collections::BTreeSet<String>,
     provenances: &mut std::collections::BTreeSet<String>,
 ) {
     let Some(audit) = audit else {
         *unpriced_turns = (*unpriced_turns).saturating_add(1);
+        *cny_unpriced_turns = (*cny_unpriced_turns).saturating_add(1);
         reasons.insert("unknown_provider_route".to_string());
         return;
     };
@@ -2450,6 +2540,14 @@ fn accumulate_runtime_cost_coverage(
         if let Some(reason) = audit.unpriced_reason {
             reasons.insert(reason.label().to_string());
         }
+    }
+    // CNY coverage counts the same money-metered turns under the provider's
+    // own CNY row: a USD-only route stays CNY-unpriced instead of reading as
+    // a complete zero (mirrors `cost_status`'s session-side accounting).
+    if audit.cny_priced {
+        *cny_priced_turns = (*cny_priced_turns).saturating_add(1);
+    } else {
+        *cny_unpriced_turns = (*cny_unpriced_turns).saturating_add(1);
     }
 }
 
@@ -2477,10 +2575,26 @@ fn accumulate_runtime_cost_details(
     }
 }
 
-fn saturating_add_usd(total: &mut f64, delta: f64) {
-    *total = crate::pricing::CostEstimate::usd_only(*total)
-        .saturating_add(crate::pricing::CostEstimate::usd_only(delta))
-        .usd;
+/// Add one priced amount to a running total without ever producing NaN,
+/// infinity, or a negative sum. Mirrors the component rule of
+/// `CostEstimate::saturating_add` so USD and CNY subtotals saturate
+/// identically.
+fn saturating_add_cost_amount(total: &mut f64, delta: f64) {
+    fn component(left: f64, right: f64) -> f64 {
+        let left = if left.is_finite() && left >= 0.0 {
+            left
+        } else {
+            0.0
+        };
+        let right = if right.is_finite() && right >= 0.0 {
+            right
+        } else {
+            0.0
+        };
+        let sum = left + right;
+        if sum.is_finite() { sum } else { f64::MAX }
+    }
+    *total = component(*total, delta);
 }
 
 fn runtime_usage_bucket_key(
@@ -2538,6 +2652,15 @@ fn accumulate_runtime_usage_record(
         .filter(|audit| audit.usd_priced)
         .and_then(|audit| audit.estimate)
         .map_or(0.0, |estimate| estimate.usd);
+    // CNY accrues only from provider-published CNY rows, never projected
+    // from the USD column, so routes without an authoritative CNY price
+    // contribute 0 rather than a fabricated amount (mirrors the session
+    // cost model in `tui/app.rs`).
+    let cost_cny = audit
+        .as_ref()
+        .filter(|audit| audit.cny_priced)
+        .and_then(|audit| audit.estimate)
+        .map_or(0.0, |estimate| estimate.cny);
     let receipt = route.zip(audit.as_ref()).map(|(route, audit)| {
         crate::cost_status::effective_route_usage_receipt(route, audit, usage)
     });
@@ -2552,11 +2675,14 @@ fn accumulate_runtime_usage_record(
     totals.cache_write_tokens = totals
         .cache_write_tokens
         .saturating_add(classes.cache_write);
-    saturating_add_usd(&mut totals.cost_usd, cost);
+    saturating_add_cost_amount(&mut totals.cost_usd, cost);
+    saturating_add_cost_amount(&mut totals.cost_cny, cost_cny);
     accumulate_runtime_cost_coverage(
         audit.as_ref(),
         &mut totals.priced_turns,
         &mut totals.unpriced_turns,
+        &mut totals.cny_priced_turns,
+        &mut totals.cny_unpriced_turns,
         &mut totals.nonmetered_turns,
         &mut totals.unpriced_reasons,
         &mut totals.pricing_provenances,
@@ -2587,11 +2713,14 @@ fn accumulate_runtime_usage_record(
     bucket.cache_write_tokens = bucket
         .cache_write_tokens
         .saturating_add(classes.cache_write);
-    saturating_add_usd(&mut bucket.cost_usd, cost);
+    saturating_add_cost_amount(&mut bucket.cost_usd, cost);
+    saturating_add_cost_amount(&mut bucket.cost_cny, cost_cny);
     accumulate_runtime_cost_coverage(
         audit.as_ref(),
         &mut bucket.priced_turns,
         &mut bucket.unpriced_turns,
+        &mut bucket.cny_priced_turns,
+        &mut bucket.cny_unpriced_turns,
         &mut bucket.nonmetered_turns,
         &mut bucket.unpriced_reasons,
         &mut bucket.pricing_provenances,
@@ -5091,6 +5220,75 @@ impl RuntimeThreadManager {
             totals,
             buckets: buckets.into_values().collect(),
         })
+    }
+
+    /// Thread-scoped token + cost totals for one thread's whole history,
+    /// split by spend owner.
+    ///
+    /// Reuses the exact per-record accumulation of [`Self::aggregate_usage`]
+    /// (parent usage, routed child usage, dropped-record markers) so the
+    /// per-thread figure and the global `/v1/usage` figure can never disagree
+    /// about how a turn is priced — including the CNY coverage rule. The
+    /// parent/child split mirrors the session-persistence field semantics
+    /// (`session_cost_*` vs `subagent_cost_*`), so a session resumed across
+    /// the TUI and runtime writers never double-counts child spend. A
+    /// missing thread is an error, matching [`Self::get_thread`].
+    pub async fn aggregate_usage_for_thread(&self, id: &str) -> Result<ThreadUsageSplit> {
+        let store = self.store.clone();
+        let thread_id = id.to_string();
+        let (thread, turns) = tokio::task::spawn_blocking(move || {
+            let thread = store
+                .load_thread(&thread_id)
+                .with_context(|| format!("Thread not found: {thread_id}"))?;
+            let turns = store.list_turns_for_thread(&thread_id)?;
+            Ok::<_, anyhow::Error>((thread, turns))
+        })
+        .await
+        .context("Runtime thread usage aggregation task failed")??;
+
+        let mut split = ThreadUsageSplit::default();
+        // Buckets are a discarded byproduct: the shared accumulator writes
+        // both totals and buckets, and this surface reports totals only.
+        let mut buckets: std::collections::BTreeMap<String, UsageBucket> =
+            std::collections::BTreeMap::new();
+        for turn in &turns {
+            let parent_route = turn.effective_route_envelope();
+            if let Some(usage) = turn.usage.as_ref() {
+                accumulate_runtime_usage_record(
+                    &mut split.parent,
+                    &mut buckets,
+                    UsageGroupBy::Thread,
+                    parent_route.as_ref(),
+                    usage,
+                    turn,
+                    &thread,
+                );
+            }
+            for child in &turn.routed_usage {
+                accumulate_runtime_usage_record(
+                    &mut split.routed_children,
+                    &mut buckets,
+                    UsageGroupBy::Thread,
+                    Some(&child.route),
+                    &child.usage,
+                    turn,
+                    &thread,
+                );
+            }
+            // Dropped fallback receipts are routed-child records, so the
+            // incompleteness marker lands on the child side.
+            accumulate_truncated_runtime_usage(
+                &mut split.routed_children,
+                &mut buckets,
+                UsageGroupBy::Thread,
+                turn.routed_usage_dropped_records,
+                turn,
+                &thread,
+            );
+        }
+        finalize_usage_totals(&mut split.parent);
+        finalize_usage_totals(&mut split.routed_children);
+        Ok(split)
     }
 
     pub async fn get_thread(&self, id: &str) -> Result<ThreadRecord> {
