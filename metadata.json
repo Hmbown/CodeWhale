@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M0ZZ6RKMMT2GPTQBX6T5875G",
+  "strategy": "manual-commit",
+  "branch": "cursor/enterprise-launch-readiness-8ed3",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "web/app/sitemap.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 284,
+    "cache_creation_tokens": 1665424,
+    "cache_read_tokens": 36401730,
+    "output_tokens": 161819,
+    "api_call_count": 142
+  }
+}
