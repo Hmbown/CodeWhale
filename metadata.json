@@ -1,0 +1,17 @@
+{
+  "cli_version": "0.10.0",
+  "checkpoint_id": "01M100E85G93N7SX121CDEW4W4",
+  "strategy": "manual-commit",
+  "branch": "cursor/enterprise-launch-readiness-8ed3",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/tui/src/runtime_threads.rs",
+    "crates/tui/src/runtime_threads/tests.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "prompt": ""
+    }
+  ]
+}
