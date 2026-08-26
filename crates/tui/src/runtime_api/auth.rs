@@ -249,19 +249,19 @@ mod tests {
             "http://127.0.0.1:7878",
             "127.0.0.1",
             7878,
-            &[tailnet.clone()],
+            std::slice::from_ref(&tailnet),
         ));
         assert!(web_cookie_origin_is_allowed(
             &tailnet,
             "127.0.0.1",
             7878,
-            &[tailnet.clone()],
+            std::slice::from_ref(&tailnet),
         ));
         assert!(!web_cookie_origin_is_allowed(
             "https://evil.example",
             "127.0.0.1",
             7878,
-            &[tailnet],
+            std::slice::from_ref(&tailnet),
         ));
     }
 

@@ -262,7 +262,10 @@ fn change_summary(workspace: &Path) -> Option<ChangeSummary> {
 }
 
 fn run_git(workspace: &Path, args: &[&str]) -> std::io::Result<String> {
-    let output = Git::output(args, workspace)?;
+    let mut argv = Vec::with_capacity(args.len() + 1);
+    argv.push("--no-optional-locks");
+    argv.extend_from_slice(args);
+    let output = Git::output(&argv, workspace)?;
     if !output.status.success() {
         return Err(std::io::Error::other("git command failed"));
     }

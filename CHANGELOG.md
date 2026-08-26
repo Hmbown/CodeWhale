@@ -10,9 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The empty-state whale now surfaces once on launch (~640 ms, one caustic
-  pass) instead of appearing fully formed. `low_motion`, `fancy_animations =
-  false`, and `NO_ANIMATIONS` keep the settled mark. Not a splash; input is
-  not delayed.
+  pass). The wordmark writes **Codewhale** left to right in the current
+  cyan, then settles. `low_motion`, `fancy_animations = false`, and
+  `NO_ANIMATIONS` keep the settled mark. Not a splash; input is not delayed.
 - Added an enterprise operator packet (`docs/ENTERPRISE.md`) and a first-party
   docs page for security review: local runtime, BYOK, first-party telemetry
   kill switches, local crash dumps, sandbox, air-gap controls, and the
@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ConfigToml and TUI ConfigFile parses now run on a dedicated 16 MiB stack
   thread so guided-setup save (and `/v1/config/reload`) cannot overflow a
   2 MiB debug worker (#5585).
+- Background git chrome probes now pass `--no-optional-locks` and refresh
+  at most every 10s, so an idle TUI no longer holds `.git/index.lock`
+  against a user's `git commit` (#5617).
 
 - Added the managed Chat relay: account-owned Chat commands now execute on the
   native runtime thread engine through a new `runtime_chat_relay` module

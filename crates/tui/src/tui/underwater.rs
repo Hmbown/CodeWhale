@@ -351,7 +351,13 @@ const IDLE_SHIMMER_STRENGTH: f32 = 0.33;
 /// Short enough to feel like arrival, not a splash. After this window the
 /// ordinary idle caustic owns the mark.
 const STARTUP_SURFACE_MS: u128 = 640;
-const STARTUP_WORDMARK_DELAY_MS: u128 = 90;
+/// The name is the second beat. It writes left to right in the same cyan
+/// current as the whale's belly, then settles to body ink. Unrevealed
+/// letters keep the word's width so the block does not walk as it writes.
+const STARTUP_WORDMARK: &str = "Codewhale";
+const STARTUP_WORDMARK_START_MS: u128 = 120;
+const STARTUP_LETTER_STAGGER_MS: u128 = 48;
+const STARTUP_LETTER_SETTLE_MS: u128 = 200;
 
 /// The build-version string the header renders. An unstamped local build uses
 /// the build script's development marker while CI/release carries its source
@@ -1543,12 +1549,45 @@ fn startup_surface_opacity(elapsed_ms: u128) -> Option<f32> {
     Some(0.5 * (1.0 - (std::f32::consts::PI * t).cos()))
 }
 
+/// None until the letter's beat. `Some(0)` is current cyan; `Some(1)` is
+/// settled body ink. The character stays in the line the whole time so
+/// tests and centering see "Codewhale"; unrevealed letters just share the
+/// surface color.
 #[must_use]
-fn delayed_startup_opacity(elapsed_ms: u128, delay_ms: u128) -> Option<f32> {
-    if elapsed_ms < delay_ms {
-        return Some(0.0);
+fn wordmark_letter_settle(elapsed_ms: u128, index: usize) -> Option<f32> {
+    let start = STARTUP_WORDMARK_START_MS + index as u128 * STARTUP_LETTER_STAGGER_MS;
+    if elapsed_ms < start {
+        return None;
     }
-    startup_surface_opacity(elapsed_ms - delay_ms)
+    let t = (elapsed_ms - start) as f32 / STARTUP_LETTER_SETTLE_MS as f32;
+    Some(t.min(1.0))
+}
+
+fn startup_wordmark_spans(
+    elapsed_ms: u128,
+    animated: bool,
+    body: Color,
+    current: Color,
+    surface: Color,
+) -> Vec<Span<'static>> {
+    STARTUP_WORDMARK
+        .chars()
+        .enumerate()
+        .map(|(index, ch)| {
+            let color = if !animated {
+                body
+            } else {
+                match wordmark_letter_settle(elapsed_ms, index) {
+                    None => surface,
+                    Some(settle) => idle_mark_color(current, body, settle),
+                }
+            };
+            Span::styled(
+                String::from(ch),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )
+        })
+        .collect()
 }
 
 /// One caustic pass timed to the surface window. After the rise, shine is 0
@@ -1832,31 +1871,26 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
         width,
     );
     let elapsed_ms = app.ocean_started_at.elapsed().as_millis();
-    let wordmark_emerge = idle_mark_animation_enabled(app)
-        .then(|| delayed_startup_opacity(elapsed_ms, STARTUP_WORDMARK_DELAY_MS))
-        .flatten();
+    let animated = idle_mark_animation_enabled(app);
     let surface = app.ui_theme.surface_bg;
-    let brand = "Codewhale";
-    let brand_inset = " ".repeat(width.saturating_sub(brand.width()) / 2);
-    lines.push(Line::from(Span::styled(
-        format!("{brand_inset}{brand}"),
-        Style::default()
-            .fg(emerge_from_surface(
-                app.ui_theme.text_body,
-                surface,
-                wordmark_emerge,
-            ))
-            .add_modifier(Modifier::BOLD),
-    )));
+    let current = idle_whale_current_color(app);
+    let brand_inset = " ".repeat(width.saturating_sub(STARTUP_WORDMARK.width()) / 2);
+    let mut brand = vec![Span::raw(brand_inset)];
+    brand.extend(startup_wordmark_spans(
+        elapsed_ms,
+        animated,
+        app.ui_theme.text_body,
+        current,
+        surface,
+    ));
+    lines.push(Line::from(brand));
+    // Caption and prompt are facts, not brand. They stay readable for the
+    // whole arrival instead of fading in from the water.
     let context = truncate_to_width(&context, width);
     let inset = " ".repeat(width.saturating_sub(context.width()) / 2);
     lines.push(Line::from(Span::styled(
         format!("{inset}{context}"),
-        Style::default().fg(emerge_from_surface(
-            app.ui_theme.text_soft,
-            surface,
-            wordmark_emerge,
-        )),
+        Style::default().fg(app.ui_theme.text_soft),
     )));
     if area.height >= 4 {
         lines.push(Line::from(""));
@@ -1865,11 +1899,7 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
         let inset = " ".repeat(width.saturating_sub(prompt.width()) / 2);
         lines.push(Line::from(Span::styled(
             format!("{inset}{prompt}"),
-            Style::default().fg(emerge_from_surface(
-                app.ui_theme.text_body,
-                surface,
-                wordmark_emerge,
-            )),
+            Style::default().fg(app.ui_theme.text_body),
         )));
     }
     lines
@@ -1878,7 +1908,9 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod startup_surface_tests {
     use super::{
-        STARTUP_SURFACE_MS, delayed_startup_opacity, startup_shine_opacity, startup_surface_opacity,
+        STARTUP_LETTER_SETTLE_MS, STARTUP_LETTER_STAGGER_MS, STARTUP_SURFACE_MS, STARTUP_WORDMARK,
+        STARTUP_WORDMARK_START_MS, startup_shine_opacity, startup_surface_opacity,
+        wordmark_letter_settle,
     };
 
     #[test]
@@ -1901,12 +1933,20 @@ mod startup_surface_tests {
     }
 
     #[test]
-    fn wordmark_waits_a_beat_then_uses_the_same_rise() {
-        assert_eq!(delayed_startup_opacity(0, 90), Some(0.0));
-        assert_eq!(delayed_startup_opacity(89, 90), Some(0.0));
-        let after_delay = delayed_startup_opacity(90, 90).expect("rise starts after the delay");
-        assert!(after_delay < 0.05, "{after_delay}");
-        assert!(delayed_startup_opacity(90 + STARTUP_SURFACE_MS, 90).is_none());
+    fn wordmark_writes_codewhale_one_letter_at_a_time() {
+        assert_eq!(STARTUP_WORDMARK, "Codewhale");
+        assert!(wordmark_letter_settle(0, 0).is_none());
+        assert!(wordmark_letter_settle(STARTUP_WORDMARK_START_MS.saturating_sub(1), 0).is_none());
+        let first = wordmark_letter_settle(STARTUP_WORDMARK_START_MS, 0).expect("C lands");
+        assert!(first < 0.05, "{first}");
+        assert!(wordmark_letter_settle(STARTUP_WORDMARK_START_MS, 1).is_none());
+        let last = STARTUP_WORDMARK.chars().count() - 1;
+        let last_start = STARTUP_WORDMARK_START_MS + last as u128 * STARTUP_LETTER_STAGGER_MS;
+        assert!(wordmark_letter_settle(last_start.saturating_sub(1), last).is_none());
+        assert_eq!(
+            wordmark_letter_settle(last_start + STARTUP_LETTER_SETTLE_MS, last),
+            Some(1.0)
+        );
     }
 
     #[test]

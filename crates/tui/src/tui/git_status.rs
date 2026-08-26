@@ -36,7 +36,11 @@ pub struct WorktreeEntry {
     pub locked: bool,
 }
 
-const CACHE_TTL: Duration = Duration::from_secs(2);
+/// Chrome is a glance, not a live index. Two seconds was enough to collide
+/// with a user's `git commit` (`#5617`): six read-only probes per cycle still
+/// refresh the index unless we refuse optional locks.
+pub const CHROME_PROBE_TTL: Duration = Duration::from_secs(10);
+const CACHE_TTL: Duration = CHROME_PROBE_TTL;
 
 static CACHE: OnceLock<Mutex<GitStatusSnapshot>> = OnceLock::new();
 
@@ -156,8 +160,13 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
 }
 
 fn git_output(cwd: &Path, args: &[&str]) -> Result<String, String> {
+    // `--no-optional-locks` + GIT_OPTIONAL_LOCKS=0 keep status/diff from
+    // taking `.git/index.lock` just to refresh the index. A user commit in
+    // the same tree must not fail because chrome asked what branch we are on.
     let output = Command::new("git")
+        .arg("--no-optional-locks")
         .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .current_dir(cwd)
         .output()
         .map_err(|e| e.to_string())?;
@@ -352,6 +361,14 @@ locked
         assert_eq!(
             chrome_ink().family(),
             crate::palette::SemanticFamily::Metadata
+        );
+    }
+
+    #[test]
+    fn chrome_probe_is_slow_enough_not_to_fight_a_commit() {
+        assert!(
+            CHROME_PROBE_TTL >= Duration::from_secs(10),
+            "a 2s cadence was enough to hold index.lock during git commit (#5617)"
         );
     }
 

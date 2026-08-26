@@ -3385,7 +3385,8 @@ pub(crate) async fn run_event_loop(
             let should_probe = slot
                 .lock()
                 .map(|mut last| {
-                    let due = last.is_none_or(|t| t.elapsed() >= Duration::from_secs(2));
+                    let due = last
+                        .is_none_or(|t| t.elapsed() >= crate::tui::git_status::CHROME_PROBE_TTL);
                     if due {
                         *last = Some(Instant::now());
                     }

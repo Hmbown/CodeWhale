@@ -216,7 +216,10 @@ fn is_git_repository(cwd: &Path) -> bool {
 /// Run git and return stdout, or `None` when the binary is missing or the
 /// command exits non-zero.
 fn git_output(args: &[&str], cwd: &Path) -> Option<String> {
-    let output = Git::output(args, cwd).ok()?;
+    let mut argv = Vec::with_capacity(args.len() + 1);
+    argv.push("--no-optional-locks");
+    argv.extend_from_slice(args);
+    let output = Git::output(&argv, cwd).ok()?;
     if !output.status.success() {
         return None;
     }
