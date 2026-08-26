@@ -738,3 +738,454 @@ fn envelope_rejects_duplicate_memory_slot_deterministically() {
     }));
     assert!(result.is_err(), "duplicate memory slot must assert");
 }
+
+// ---------------------------------------------------------------------------
+// FEAT-020: plugin capability, portable DTOs, and envelope slot (D1-D11)
+// ---------------------------------------------------------------------------
+
+/// Deterministic fake plugin facet over portable values only.
+struct FakePlugin {
+    summaries: Vec<PluginSummary>,
+    detail: Option<PluginDetail>,
+    installed: bool,
+    managed_candidates: Vec<PluginManagedCandidate>,
+}
+
+impl FakePlugin {
+    fn new() -> Self {
+        Self {
+            summaries: vec![PluginSummary {
+                name: "demo".to_string(),
+                id: "demo@1.0.0".to_string(),
+                state_label: "active".to_string(),
+                scope: "user".to_string(),
+                trust_status: "trusted".to_string(),
+                compatibility: "full".to_string(),
+                inventory: "skills=1 mcp=0".to_string(),
+                active: true,
+                trusted: true,
+                enabled: true,
+            }],
+            detail: Some(PluginDetail {
+                name: "demo".to_string(),
+                id: "demo@1.0.0".to_string(),
+                version: "1.0.0".to_string(),
+                origin: "local".to_string(),
+                scope: "user".to_string(),
+                state_label: "active".to_string(),
+                trust_status: "trusted".to_string(),
+                compatibility: "full".to_string(),
+                content_hash: "abc".to_string(),
+                capability_hash: "def".to_string(),
+                canonical_root: PathBuf::from("/plugins/demo"),
+                active: true,
+                trusted: true,
+                enabled: true,
+                unsupported_labels: Vec::new(),
+                supported_labels: vec!["skills".to_string()],
+                skills: vec!["demo:demo-skill".to_string()],
+                filesystem_roots: Vec::new(),
+                network_hosts: Vec::new(),
+                stdio_mcp_servers: 0,
+                lifecycle_mutation: false,
+                mcp_servers: Vec::new(),
+                diagnostics: Vec::new(),
+            }),
+            installed: false,
+            managed_candidates: Vec::new(),
+        }
+    }
+}
+
+impl CommandPluginContext for FakePlugin {
+    fn summaries(&self) -> Result<Vec<PluginSummary>, String> {
+        Ok(self.summaries.clone())
+    }
+
+    fn detail(&self, selector: &str) -> Result<PluginDetail, String> {
+        if selector == "demo" {
+            self.detail
+                .clone()
+                .ok_or_else(|| "missing detail".to_string())
+        } else {
+            Err(format!("no plugin named {selector}"))
+        }
+    }
+
+    fn registry_diagnostics(&self) -> Vec<PluginDiagnostic> {
+        Vec::new()
+    }
+
+    fn validation_is_clean(&self) -> bool {
+        true
+    }
+
+    fn len(&self) -> usize {
+        self.summaries.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.summaries.is_empty()
+    }
+
+    fn state_path(&self) -> Option<PathBuf> {
+        Some(PathBuf::from("/plugins/state.json"))
+    }
+
+    fn suggest(&self, task: &str) -> Result<Vec<PluginSuggestion>, String> {
+        if task.len() < 3 {
+            return Err("task too short".to_string());
+        }
+        Ok(vec![PluginSuggestion {
+            name: "demo".to_string(),
+            description: "Demo bundle".to_string(),
+            why: vec![task.to_string()],
+            next_step: "Already active: /plugin show demo".to_string(),
+        }])
+    }
+
+    fn trust(&mut self, _selector: &str, token: &str) -> Result<PluginMutationReceipt, String> {
+        if token == "abc.def" {
+            Ok(PluginMutationReceipt {
+                name: "demo".to_string(),
+                path: None,
+                content_hash: None,
+                installed_content_hash: None,
+                outcome: PluginMutationOutcome::NoChange,
+            })
+        } else {
+            Err("Review token does not match this bundle content and capability set".to_string())
+        }
+    }
+
+    fn enable(&mut self, _selector: &str) -> Result<PluginMutationReceipt, String> {
+        Ok(PluginMutationReceipt {
+            name: "demo".to_string(),
+            path: None,
+            content_hash: None,
+            installed_content_hash: None,
+            outcome: PluginMutationOutcome::NoChange,
+        })
+    }
+
+    fn disable(&mut self, _selector: &str) -> Result<PluginMutationReceipt, String> {
+        Ok(PluginMutationReceipt {
+            name: "demo".to_string(),
+            path: None,
+            content_hash: None,
+            installed_content_hash: None,
+            outcome: PluginMutationOutcome::NoChange,
+        })
+    }
+
+    fn revoke_trust(&mut self, _selector: &str) -> Result<PluginMutationReceipt, String> {
+        Ok(PluginMutationReceipt {
+            name: "demo".to_string(),
+            path: None,
+            content_hash: None,
+            installed_content_hash: None,
+            outcome: PluginMutationOutcome::NoChange,
+        })
+    }
+
+    fn install(
+        &mut self,
+        _source: &str,
+        expected_content_hash: Option<&str>,
+    ) -> Result<PluginMutationReceipt, String> {
+        if let Some(expected) = expected_content_hash {
+            if expected != "abc" {
+                return Err("content hash mismatch".to_string());
+            }
+        }
+        self.installed = true;
+        Ok(PluginMutationReceipt {
+            name: "demo".to_string(),
+            path: Some(PathBuf::from("/plugins/demo")),
+            content_hash: Some("abc".to_string()),
+            installed_content_hash: Some("abc".to_string()),
+            outcome: PluginMutationOutcome::Installed,
+        })
+    }
+
+    fn update(&mut self, _selector: &str) -> Result<PluginMutationReceipt, String> {
+        Ok(PluginMutationReceipt {
+            name: "demo".to_string(),
+            path: None,
+            content_hash: None,
+            installed_content_hash: None,
+            outcome: PluginMutationOutcome::NoChange,
+        })
+    }
+
+    fn uninstall(&mut self, _selector: &str) -> Result<PluginMutationReceipt, String> {
+        Ok(PluginMutationReceipt {
+            name: "demo".to_string(),
+            path: None,
+            content_hash: None,
+            installed_content_hash: None,
+            outcome: PluginMutationOutcome::Uninstalled,
+        })
+    }
+
+    fn export(&self, _selector: &str, target: &Path) -> Result<PluginExportReceipt, String> {
+        Ok(PluginExportReceipt {
+            exported_name: "demo".to_string(),
+            target: target.to_path_buf(),
+            display_name: Some("Demo Bundle".to_string()),
+            wrote_mcp_json: false,
+            files_copied: 2,
+            skills_normalized: false,
+        })
+    }
+
+    fn legacy_scan(&self) -> Result<Option<PluginLegacyScan>, String> {
+        Ok(None)
+    }
+
+    fn managed_scan(&self, _home_override: Option<&Path>) -> Result<PluginManagedScan, String> {
+        Ok(PluginManagedScan {
+            root: PathBuf::from("/kimi/managed"),
+            candidates: self.managed_candidates.clone(),
+            rejected: Vec::new(),
+        })
+    }
+
+    fn managed_install(
+        &mut self,
+        canonical_path: &Path,
+        expected_content_hash: &str,
+    ) -> Result<PluginMutationReceipt, String> {
+        if expected_content_hash != "abc" {
+            return Err("Kimi candidate changed".to_string());
+        }
+        Ok(PluginMutationReceipt {
+            name: "kimi-demo".to_string(),
+            path: Some(canonical_path.to_path_buf()),
+            content_hash: Some("abc".to_string()),
+            installed_content_hash: Some("abc".to_string()),
+            outcome: PluginMutationOutcome::Installed,
+        })
+    }
+
+    fn marketplace_state(&self) -> Result<PluginMarketplaceState, String> {
+        Ok(PluginMarketplaceState {
+            official: PluginMarketplaceCatalog {
+                id: "official".to_string(),
+                display_name: None,
+                description: Some("Built into this release".to_string()),
+                format: "codewhale".to_string(),
+                tier: "official".to_string(),
+                publisher: Some("Codewhale".to_string()),
+                total_candidates: 1,
+                warning_count: 0,
+                candidates: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+            stored: Vec::new(),
+        })
+    }
+
+    fn marketplace_add(
+        &mut self,
+        name: &str,
+        _path: &Path,
+    ) -> Result<PluginMarketplaceAddReceipt, String> {
+        if name == "official" {
+            return Err(
+                "`official` is the catalog built into Codewhale; pick another name.".to_string(),
+            );
+        }
+        Ok(PluginMarketplaceAddReceipt {
+            name: name.to_string(),
+            candidate_count: 0,
+            warning_count: 0,
+            catalog: PluginMarketplaceCatalog {
+                id: name.to_string(),
+                display_name: None,
+                description: None,
+                format: "kimi".to_string(),
+                tier: "community".to_string(),
+                publisher: None,
+                total_candidates: 0,
+                warning_count: 0,
+                candidates: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+        })
+    }
+
+    fn marketplace_remove(&mut self, _name: &str) -> Result<bool, String> {
+        Ok(true)
+    }
+
+    fn marketplace_install(
+        &mut self,
+        _catalog: &str,
+        _candidate: &str,
+    ) -> Result<PluginMutationReceipt, String> {
+        Ok(PluginMutationReceipt {
+            name: "market-demo".to_string(),
+            path: None,
+            content_hash: None,
+            installed_content_hash: None,
+            outcome: PluginMutationOutcome::Installed,
+        })
+    }
+}
+
+#[test]
+fn plugin_facet_is_object_safe_and_typed() {
+    fn plugin(_: &dyn CommandPluginContext) {}
+    plugin(&FakePlugin::new());
+
+    let plugin = FakePlugin::new();
+    assert_eq!(plugin.len(), 1);
+    assert!(!plugin.is_empty());
+    assert!(plugin.validation_is_clean());
+    let summaries = plugin.summaries().unwrap();
+    assert_eq!(summaries[0].name, "demo");
+    assert_eq!(summaries[0].state_label, "active");
+}
+
+#[test]
+fn plugin_detail_preserves_semantic_values() {
+    let plugin = FakePlugin::new();
+    let detail = plugin.detail("demo").unwrap();
+    assert_eq!(detail.content_hash, "abc");
+    assert_eq!(detail.capability_hash, "def");
+    assert_eq!(detail.compatibility, "full");
+    assert!(detail.active);
+    assert_eq!(detail.skills, vec!["demo:demo-skill"]);
+    // Unknown selector fails safely.
+    assert!(plugin.detail("nope").is_err());
+}
+
+#[test]
+fn plugin_mutation_receipts_distinguish_outcomes() {
+    let mut plugin = FakePlugin::new();
+    let installed = plugin.install("path:/demo", Some("abc")).unwrap();
+    assert_eq!(installed.outcome, PluginMutationOutcome::Installed);
+    assert_eq!(installed.installed_content_hash.as_deref(), Some("abc"));
+
+    // Exact-hash mismatch fails before any install side effect.
+    let err = plugin.install("path:/demo", Some("wrong")).unwrap_err();
+    assert!(err.contains("content hash mismatch"));
+
+    let uninstalled = plugin.uninstall("demo").unwrap();
+    assert_eq!(uninstalled.outcome, PluginMutationOutcome::Uninstalled);
+
+    let trust_err = plugin.trust("demo", "bad.token").unwrap_err();
+    assert!(trust_err.contains("Review token does not match"));
+}
+
+#[test]
+fn plugin_managed_and_marketplace_values_are_portable() {
+    let mut plugin = FakePlugin::new();
+    let scan = plugin.managed_scan(None).unwrap();
+    assert_eq!(scan.root, PathBuf::from("/kimi/managed"));
+    assert!(scan.candidates.is_empty());
+
+    plugin.managed_candidates.push(PluginManagedCandidate {
+        name: "kimi-demo".to_string(),
+        version: "1.0.0".to_string(),
+        license: Some("MIT".to_string()),
+        canonical_path: PathBuf::from("/kimi/managed/kimi-demo"),
+        content_hash: "abc".to_string(),
+        capability_hash: "def".to_string(),
+        inventory: "skills=1".to_string(),
+        applicable: true,
+    });
+    let scan = plugin.managed_scan(None).unwrap();
+    assert_eq!(scan.candidates[0].name, "kimi-demo");
+    assert_eq!(scan.candidates[0].license.as_deref(), Some("MIT"));
+
+    let state = plugin.marketplace_state().unwrap();
+    assert_eq!(state.official.id, "official");
+    assert_eq!(state.official.tier, "official");
+    assert!(state.stored.is_empty());
+
+    let add = plugin
+        .marketplace_add("custom", Path::new("/catalog.json"))
+        .unwrap();
+    assert_eq!(add.name, "custom");
+    assert_eq!(add.catalog.format, "kimi");
+
+    let err = plugin
+        .marketplace_add("official", Path::new("/x.json"))
+        .unwrap_err();
+    assert!(err.contains("built into Codewhale"));
+}
+
+#[test]
+fn plugin_suggest_is_read_only_and_safe() {
+    let plugin = FakePlugin::new();
+    let err = plugin.suggest("ab").unwrap_err();
+    assert!(err.contains("too short"));
+    let suggestions = plugin.suggest("translate").unwrap();
+    assert_eq!(suggestions[0].name, "demo");
+    assert_eq!(
+        suggestions[0].next_step,
+        "Already active: /plugin show demo"
+    );
+}
+
+#[test]
+fn plugin_facet_transports_through_envelope_when_declared() {
+    let mut plugin = FakePlugin::new();
+    let parts = CommandContexts::empty()
+        .with_plugin(&mut plugin)
+        .into_parts();
+    assert!(parts.plugin.is_some());
+    assert!(parts.session.is_none());
+    assert!(parts.memory.is_none());
+
+    // Undeclared slots stay absent when the plugin facet is carried alone.
+    let mut workspace = Workspace;
+    let parts = CommandContexts::empty()
+        .with_plugin(&mut plugin)
+        .with_workspace(&mut workspace)
+        .into_parts();
+    assert!(parts.plugin.is_some());
+    assert!(parts.workspace.is_some());
+    assert!(parts.presentation.is_none());
+}
+
+#[test]
+fn envelope_rejects_duplicate_plugin_slot_deterministically() {
+    let mut a = FakePlugin::new();
+    let mut b = FakePlugin::new();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CommandContexts::empty()
+            .with_plugin(&mut a)
+            .with_plugin(&mut b);
+    }));
+    assert!(result.is_err(), "duplicate plugin slot must assert");
+}
+
+#[test]
+fn plugin_capability_bit_is_stable_and_distinct() {
+    let plugin = CommandCapabilities::PLUGIN;
+    assert_eq!(plugin, CommandCapabilities::PLUGIN);
+    assert!(plugin.contains(CommandCapabilities::PLUGIN));
+    assert!(!plugin.contains(CommandCapabilities::MEMORY));
+    assert!(!plugin.contains(CommandCapabilities::WORKSPACE));
+    // Existing bits are unchanged by the plugin extension.
+    assert_eq!(CommandCapabilities::MEMORY, CommandCapabilities::MEMORY);
+    assert_eq!(CommandCapabilities::SESSION, CommandCapabilities::SESSION);
+
+    let plugin_workspace = CommandCapabilities::PLUGIN.union(CommandCapabilities::WORKSPACE);
+    assert!(plugin_workspace.contains(CommandCapabilities::PLUGIN));
+    assert!(plugin_workspace.contains(CommandCapabilities::WORKSPACE));
+    assert!(!plugin_workspace.contains(CommandCapabilities::MEMORY));
+
+    // The plugin group declares exactly WORKSPACE | PRESENTATION | PLUGIN.
+    let exact = CommandCapabilities::WORKSPACE
+        .union(CommandCapabilities::PRESENTATION)
+        .union(CommandCapabilities::PLUGIN);
+    assert!(exact.contains(CommandCapabilities::PLUGIN));
+    assert!(exact.contains(CommandCapabilities::PRESENTATION));
+    assert!(!exact.contains(CommandCapabilities::MEDIA));
+    assert!(!exact.contains(CommandCapabilities::MEMORY));
+    assert!(!exact.contains(CommandCapabilities::SKILLS));
+}

@@ -233,3 +233,319 @@ pub trait CommandMemoryContext {
     /// Delete the given workspace scope; workspace path is the first argument.
     fn delete_workspace(&self, workspace: &Path) -> Result<MemoryDelete, String>;
 }
+
+// ---------------------------------------------------------------------------
+// Plugin (FEAT-020 D1/D2/D10/D11)
+// ---------------------------------------------------------------------------
+
+/// Portable plugin diagnostic level (FEAT-020 D2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginDiagnosticLevel {
+    Warning,
+    Error,
+}
+
+/// Portable plugin diagnostic entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginDiagnostic {
+    pub level: PluginDiagnosticLevel,
+    pub code: String,
+    pub message: String,
+    pub path: Option<PathBuf>,
+}
+
+/// Portable MCP transport classification for the capability review body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginMcpTransport {
+    Stdio,
+    Http,
+    Invalid,
+}
+
+/// Portable MCP server detail for the capability review body (FEAT-020 D2).
+///
+/// Carries only the semantic fields `render_mcp_inventory` consumes:
+/// transport, command/url, argv, cwd, env provenance, timeouts, required,
+/// enabled/disabled tool lists, and the enabled flag. Host `McpServerConfig`
+/// never crosses the boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginMcpServerDetail {
+    pub name: String,
+    pub transport: PluginMcpTransport,
+    pub command: Option<String>,
+    pub argv: Vec<String>,
+    pub cwd: Option<PathBuf>,
+    pub env: Vec<(String, String)>,
+    pub url: Option<String>,
+    pub env_headers: Vec<(String, String)>,
+    pub bearer_token_env_var: Option<String>,
+    pub connect_timeout_secs: Option<u64>,
+    pub execute_timeout_secs: Option<u64>,
+    pub read_timeout_secs: Option<u64>,
+    pub required: bool,
+    pub enabled_tools: Vec<String>,
+    pub disabled_tools: Vec<String>,
+    pub enabled: bool,
+}
+
+/// Portable summary of one loaded plugin bundle (list output, FEAT-020 D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginSummary {
+    pub name: String,
+    pub id: String,
+    pub state_label: String,
+    pub scope: String,
+    pub trust_status: String,
+    pub compatibility: String,
+    pub inventory: String,
+    pub active: bool,
+    pub trusted: bool,
+    pub enabled: bool,
+}
+
+/// Portable full bundle detail for show/review/validate rendering (FEAT-020 D2).
+///
+/// Carries every semantic value the render helpers consume. The complete
+/// `LoadedPlugin` never crosses the boundary; only branch-consumed fields are
+/// projected here (D10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginDetail {
+    pub name: String,
+    pub id: String,
+    pub version: String,
+    pub origin: String,
+    pub scope: String,
+    pub state_label: String,
+    pub trust_status: String,
+    pub compatibility: String,
+    pub content_hash: String,
+    pub capability_hash: String,
+    pub canonical_root: PathBuf,
+    pub active: bool,
+    pub trusted: bool,
+    pub enabled: bool,
+    pub unsupported_labels: Vec<String>,
+    pub supported_labels: Vec<String>,
+    pub skills: Vec<String>,
+    pub filesystem_roots: Vec<String>,
+    pub network_hosts: Vec<String>,
+    pub stdio_mcp_servers: usize,
+    pub lifecycle_mutation: bool,
+    pub mcp_servers: Vec<PluginMcpServerDetail>,
+    pub diagnostics: Vec<PluginDiagnostic>,
+}
+
+/// Portable outcome of a plugin mutation (FEAT-020 D2/D11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginMutationOutcome {
+    Installed,
+    Updated,
+    NoChange,
+    Uninstalled,
+    NeedsApproval(String),
+    NetworkDenied(String),
+}
+
+/// Portable mutation receipt returned synchronously by the facet (FEAT-020 D11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginMutationReceipt {
+    pub name: String,
+    pub path: Option<PathBuf>,
+    pub content_hash: Option<String>,
+    pub installed_content_hash: Option<String>,
+    pub outcome: PluginMutationOutcome,
+}
+
+/// Portable bundle export receipt (FEAT-020 D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginExportReceipt {
+    pub exported_name: String,
+    pub target: PathBuf,
+    pub display_name: Option<String>,
+    pub wrote_mcp_json: bool,
+    pub files_copied: u64,
+    pub skills_normalized: bool,
+}
+
+/// Portable legacy executable-tool detail (FEAT-020 D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginLegacyTool {
+    pub name: String,
+    pub description: String,
+    pub approval: String,
+    pub input_schema: Option<String>,
+    pub path: PathBuf,
+}
+
+/// Portable legacy-tool scan result: directory and discovered tools.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginLegacyScan {
+    pub dir: PathBuf,
+    pub tools: Vec<PluginLegacyTool>,
+}
+
+/// Portable Kimi managed-plugin candidate (FEAT-020 D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginManagedCandidate {
+    pub name: String,
+    pub version: String,
+    pub license: Option<String>,
+    pub canonical_path: PathBuf,
+    pub content_hash: String,
+    pub capability_hash: String,
+    pub inventory: String,
+    pub applicable: bool,
+}
+
+/// Portable Kimi managed-scan result (FEAT-020 D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginManagedScan {
+    pub root: PathBuf,
+    pub candidates: Vec<PluginManagedCandidate>,
+    pub rejected: Vec<String>,
+}
+
+/// Portable marketplace candidate install plan (FEAT-020 D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginMarketplaceInstallPlan {
+    Supported { spec: String, source_kind: String },
+    Unsupported { reason: String },
+}
+
+/// Portable marketplace candidate (FEAT-020 D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginMarketplaceCandidate {
+    pub name: String,
+    pub display_name: Option<String>,
+    pub version: Option<String>,
+    pub tier: String,
+    pub compatibility: Option<String>,
+    pub install_plan: PluginMarketplaceInstallPlan,
+    pub description: Option<String>,
+    pub homepage: Option<String>,
+    pub repository: Option<String>,
+    pub author: Option<String>,
+    pub license: Option<String>,
+    pub keywords: Vec<String>,
+    pub when: Option<String>,
+    pub diagnostics: Vec<PluginDiagnostic>,
+    pub has_errors: bool,
+}
+
+/// Portable marketplace catalog (FEAT-020 D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginMarketplaceCatalog {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+    pub format: String,
+    pub tier: String,
+    pub publisher: Option<String>,
+    pub total_candidates: usize,
+    pub warning_count: usize,
+    pub candidates: Vec<PluginMarketplaceCandidate>,
+    pub diagnostics: Vec<PluginDiagnostic>,
+}
+
+/// Portable marketplace add receipt (FEAT-020 D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginMarketplaceAddReceipt {
+    pub name: String,
+    pub candidate_count: usize,
+    pub warning_count: usize,
+    pub catalog: PluginMarketplaceCatalog,
+}
+
+/// Portable marketplace state: stored catalogs plus the builtin `official` one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginMarketplaceState {
+    pub official: PluginMarketplaceCatalog,
+    pub stored: Vec<PluginMarketplaceCatalog>,
+}
+
+/// Portable suggestion for the `/plugin suggest` recommendation output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginSuggestion {
+    pub name: String,
+    pub description: String,
+    pub why: Vec<String>,
+    pub next_step: String,
+}
+
+/// Host plugin data for the plugin command group (FEAT-020 D1).
+///
+/// One object-safe, synchronous facet exposing the exact-minimum typed
+/// operations the live `/plugin` branch closure consumes. Registry reads and
+/// mutations, async-bridged install/update/uninstall (returning synchronous
+/// portable receipts), export, legacy executable-tool scan, Kimi managed
+/// import, and marketplace operations are all represented. The handler never
+/// names `crate::plugins`, `PluginRegistry`, `LoadedPlugin`, `Config`, or
+/// another concrete host service; implementation errors cross as safe text.
+///
+/// Post-mutation side effects (rediscovery, skill-cache refresh, active-skill
+/// reset) happen host-side inside the facet implementation; the handler only
+/// renders the returned receipt (D11).
+pub trait CommandPluginContext {
+    /// Read-only: registry summaries for list output.
+    fn summaries(&self) -> Result<Vec<PluginSummary>, String>;
+    /// Read-only: full portable detail for show/review/validate.
+    fn detail(&self, selector: &str) -> Result<PluginDetail, String>;
+    /// Read-only: registry-level diagnostics.
+    fn registry_diagnostics(&self) -> Vec<PluginDiagnostic>;
+    /// Read-only: whether validation reports no errors.
+    fn validation_is_clean(&self) -> bool;
+    /// Read-only: registry length (used by list/reload empty branches).
+    fn len(&self) -> usize;
+    /// Read-only: whether the registry is empty.
+    fn is_empty(&self) -> bool;
+    /// Read-only: persistence store path for marketplace state.
+    fn state_path(&self) -> Option<PathBuf>;
+    /// Read-only: recommend installed bundles for a task without side effects.
+    fn suggest(&self, task: &str) -> Result<Vec<PluginSuggestion>, String>;
+    /// Mutation: trust a bundle by exact review token; returns a portable receipt.
+    fn trust(&mut self, selector: &str, token: &str) -> Result<PluginMutationReceipt, String>;
+    /// Mutation: enable a bundle; returns a portable receipt.
+    fn enable(&mut self, selector: &str) -> Result<PluginMutationReceipt, String>;
+    /// Mutation: disable a bundle; returns a portable receipt.
+    fn disable(&mut self, selector: &str) -> Result<PluginMutationReceipt, String>;
+    /// Mutation: revoke trust; returns a portable receipt.
+    fn revoke_trust(&mut self, selector: &str) -> Result<PluginMutationReceipt, String>;
+    /// Async-bridged install; returns a synchronous portable receipt (D11).
+    fn install(
+        &mut self,
+        source: &str,
+        expected_content_hash: Option<&str>,
+    ) -> Result<PluginMutationReceipt, String>;
+    /// Async-bridged update; returns a synchronous portable receipt (D11).
+    fn update(&mut self, selector: &str) -> Result<PluginMutationReceipt, String>;
+    /// Async-bridged uninstall; returns a synchronous portable receipt (D11).
+    fn uninstall(&mut self, selector: &str) -> Result<PluginMutationReceipt, String>;
+    /// Read-only: export a loaded bundle to a target directory.
+    fn export(&self, selector: &str, target: &Path) -> Result<PluginExportReceipt, String>;
+    /// Read-only: scan legacy executable plugin tools.
+    fn legacy_scan(&self) -> Result<Option<PluginLegacyScan>, String>;
+    /// Read-only: Kimi managed-plugin directory scan.
+    fn managed_scan(&self, home_override: Option<&Path>) -> Result<PluginManagedScan, String>;
+    /// Mutation: install a Kimi managed candidate by exact content hash.
+    fn managed_install(
+        &mut self,
+        canonical_path: &Path,
+        expected_content_hash: &str,
+    ) -> Result<PluginMutationReceipt, String>;
+    /// Read-only: marketplace state (builtin official + stored catalogs).
+    fn marketplace_state(&self) -> Result<PluginMarketplaceState, String>;
+    /// Mutation: add a local catalog document to the marketplace store.
+    fn marketplace_add(
+        &mut self,
+        name: &str,
+        path: &Path,
+    ) -> Result<PluginMarketplaceAddReceipt, String>;
+    /// Mutation: remove a stored marketplace catalog.
+    fn marketplace_remove(&mut self, name: &str) -> Result<bool, String>;
+    /// Mutation: install a marketplace candidate through the reviewed installer.
+    fn marketplace_install(
+        &mut self,
+        catalog: &str,
+        candidate: &str,
+    ) -> Result<PluginMutationReceipt, String>;
+}
