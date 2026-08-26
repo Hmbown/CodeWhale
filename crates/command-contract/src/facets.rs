@@ -502,14 +502,17 @@ pub trait CommandPluginContext {
     fn state_path(&self) -> Option<PathBuf>;
     /// Read-only: recommend installed bundles for a task without side effects.
     fn suggest(&self, task: &str) -> Result<Vec<PluginSuggestion>, String>;
-    /// Mutation: trust a bundle by exact review token; returns a portable receipt.
-    fn trust(&mut self, selector: &str, token: &str) -> Result<PluginMutationReceipt, String>;
-    /// Mutation: enable a bundle; returns a portable receipt.
-    fn enable(&mut self, selector: &str) -> Result<PluginMutationReceipt, String>;
-    /// Mutation: disable a bundle; returns a portable receipt.
-    fn disable(&mut self, selector: &str) -> Result<PluginMutationReceipt, String>;
-    /// Mutation: revoke trust; returns a portable receipt.
-    fn revoke_trust(&mut self, selector: &str) -> Result<PluginMutationReceipt, String>;
+    /// Mutation: trust a bundle by exact review token. Success means the
+    /// mutation was applied; the handler renders the action word from its own
+    /// dispatch arm and may re-read `detail` for post-mutation state.
+    fn trust(&mut self, selector: &str, token: &str) -> Result<(), String>;
+    /// Mutation: enable a bundle. Success means enabled; re-read `detail` for
+    /// the post-mutation compatibility note.
+    fn enable(&mut self, selector: &str) -> Result<(), String>;
+    /// Mutation: disable a bundle.
+    fn disable(&mut self, selector: &str) -> Result<(), String>;
+    /// Mutation: revoke trust.
+    fn revoke_trust(&mut self, selector: &str) -> Result<(), String>;
     /// Async-bridged install; returns a synchronous portable receipt (D11).
     fn install(
         &mut self,

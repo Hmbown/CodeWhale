@@ -844,48 +844,24 @@ impl CommandPluginContext for FakePlugin {
         }])
     }
 
-    fn trust(&mut self, _selector: &str, token: &str) -> Result<PluginMutationReceipt, String> {
+    fn trust(&mut self, _selector: &str, token: &str) -> Result<(), String> {
         if token == "abc.def" {
-            Ok(PluginMutationReceipt {
-                name: "demo".to_string(),
-                path: None,
-                content_hash: None,
-                installed_content_hash: None,
-                outcome: PluginMutationOutcome::NoChange,
-            })
+            Ok(())
         } else {
             Err("Review token does not match this bundle content and capability set".to_string())
         }
     }
 
-    fn enable(&mut self, _selector: &str) -> Result<PluginMutationReceipt, String> {
-        Ok(PluginMutationReceipt {
-            name: "demo".to_string(),
-            path: None,
-            content_hash: None,
-            installed_content_hash: None,
-            outcome: PluginMutationOutcome::NoChange,
-        })
+    fn enable(&mut self, _selector: &str) -> Result<(), String> {
+        Ok(())
     }
 
-    fn disable(&mut self, _selector: &str) -> Result<PluginMutationReceipt, String> {
-        Ok(PluginMutationReceipt {
-            name: "demo".to_string(),
-            path: None,
-            content_hash: None,
-            installed_content_hash: None,
-            outcome: PluginMutationOutcome::NoChange,
-        })
+    fn disable(&mut self, _selector: &str) -> Result<(), String> {
+        Ok(())
     }
 
-    fn revoke_trust(&mut self, _selector: &str) -> Result<PluginMutationReceipt, String> {
-        Ok(PluginMutationReceipt {
-            name: "demo".to_string(),
-            path: None,
-            content_hash: None,
-            installed_content_hash: None,
-            outcome: PluginMutationOutcome::NoChange,
-        })
+    fn revoke_trust(&mut self, _selector: &str) -> Result<(), String> {
+        Ok(())
     }
 
     fn install(
@@ -1075,6 +1051,7 @@ fn plugin_mutation_receipts_distinguish_outcomes() {
     let uninstalled = plugin.uninstall("demo").unwrap();
     assert_eq!(uninstalled.outcome, PluginMutationOutcome::Uninstalled);
 
+    plugin.trust("demo", "abc.def").unwrap();
     let trust_err = plugin.trust("demo", "bad.token").unwrap_err();
     assert!(trust_err.contains("Review token does not match"));
 }
