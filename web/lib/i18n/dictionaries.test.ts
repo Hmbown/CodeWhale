@@ -424,10 +424,12 @@ describe("website dictionaries", () => {
       expect(tokensOf(web.localLead), `${locale} localLead`).toEqual([
         "webCommand",
         "portFlag",
+        "tailscaleFlag",
         "hostFlag",
         "mobileCommand",
         "httpFlag",
       ]);
+      expect(tokensOf(web.tailscaleLead), `${locale} tailscaleLead`).toEqual(["tailscaleCommand"]);
     }
   });
 
