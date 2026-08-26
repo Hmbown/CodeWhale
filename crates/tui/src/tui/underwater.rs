@@ -1532,7 +1532,6 @@ fn idle_mark_shine_opacity(diagonal: f32, elapsed_ms: u128) -> f32 {
     IDLE_SHIMMER_STRENGTH * raised_cosine
 }
 
-#[must_use]
 /// Raised-cosine rise from 0 → 1 over [`STARTUP_SURFACE_MS`]. `None` after
 /// the window so callers fall back to the settled idle mark.
 #[must_use]
