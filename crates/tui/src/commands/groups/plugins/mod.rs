@@ -29,12 +29,12 @@ use crate::localization::{MessageId, tr};
 use crate::plugins::types::{LoadedPlugin, PluginDiagnosticLevel};
 use crate::tui::app::{App, AppAction};
 
-mod kimi_import;
-mod legacy;
-mod marketplace;
+pub(crate) mod kimi_import;
+pub(crate) mod legacy;
+pub(crate) mod marketplace;
 #[cfg(test)]
 mod marketplace_tests;
-mod render;
+pub(crate) mod render;
 
 #[cfg(test)]
 mod tests;
@@ -705,7 +705,7 @@ fn uninstall_bundle(app: &mut App, selector: &str) -> CommandResult {
 /// installer's on-demand `Config::load` (`App` carries no `Config` field);
 /// a parse failure falls back to the prompt-default policy so the download
 /// stays gated rather than crashing.
-fn plugin_network_policy() -> crate::network_policy::NetworkPolicy {
+pub(crate) fn plugin_network_policy() -> crate::network_policy::NetworkPolicy {
     crate::config::Config::load(None, None)
         .unwrap_or_default()
         .network
@@ -713,7 +713,7 @@ fn plugin_network_policy() -> crate::network_policy::NetworkPolicy {
         .unwrap_or_default()
 }
 
-fn run_async<F, T>(future: F) -> T
+pub(crate) fn run_async<F, T>(future: F) -> T
 where
     F: std::future::Future<Output = T>,
 {

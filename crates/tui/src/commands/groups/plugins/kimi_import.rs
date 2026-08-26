@@ -384,3 +384,35 @@ fn inspect_candidate(locale: Locale, canonical_path: &Path) -> Result<Candidate,
         applicable: validated.applicable,
     })
 }
+
+/// Portable wrapper over [`scan_managed_plugins`] for the FEAT-020 adapter.
+///
+/// Runs the same host scan and converts every candidate to the contract-owned
+/// portable value. Locale is fixed to the default English catalog for
+/// rejection messages because the adapter has no handler locale; the portable
+/// scan carries semantic fields only and rendering happens handler-side.
+pub(crate) fn scan_managed_plugins_portable(
+    home_override: Option<&Path>,
+) -> Result<codewhale_command_contract::facets::PluginManagedScan, String> {
+    let scan = scan_managed_plugins(crate::localization::Locale::En, home_override)?;
+    Ok(codewhale_command_contract::facets::PluginManagedScan {
+        root: scan.root,
+        candidates: scan
+            .candidates
+            .into_iter()
+            .map(
+                |candidate| codewhale_command_contract::facets::PluginManagedCandidate {
+                    name: candidate.name,
+                    version: candidate.version,
+                    license: candidate.license,
+                    canonical_path: candidate.canonical_path,
+                    content_hash: candidate.content_hash,
+                    capability_hash: candidate.capability_hash,
+                    inventory: candidate.inventory,
+                    applicable: candidate.applicable,
+                },
+            )
+            .collect(),
+        rejected: scan.rejected,
+    })
+}
