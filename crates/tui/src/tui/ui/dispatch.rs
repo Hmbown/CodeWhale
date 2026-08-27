@@ -258,36 +258,32 @@ pub(crate) async fn send_taken_queued_message_now(
 ) -> Result<()> {
     if app.offline_mode {
         restore_queued_or_draft_message(app, recovery, message);
-        app.status_message = Some(format!(
-            "Offline: {} queued follow-up(s) — /queue send <n>, /queue clear",
-            app.queued_message_count()
-        ));
+        app.status_message = Some(
+            app.tr(MessageId::ToastOfflineQueuedCount)
+                .replace("{count}", &app.queued_message_count().to_string()),
+        );
         return Ok(());
     }
 
-    let display = message.display.clone();
     if app.dispatch_in_flight {
         // A spawned dispatch is still resolving route/sending its op (#4605):
         // there is no turn to steer into yet. Re-queue; the completion/turn
         // lifecycle will drive the next drain.
         restore_queued_or_draft_message(app, recovery, message);
-        app.status_message = Some(format!(
-            "{} queued follow-up(s) — sends after current dispatch starts",
-            app.queued_message_count()
-        ));
+        app.status_message = Some(queued_follow_up_toast(app));
         return Ok(());
     }
     if app.is_loading {
         match steer_user_message(app, config, engine_handle, message.clone()).await {
             Ok(true) => app.push_status_toast(
-                "Sent queued follow-up into current turn",
+                app.tr(MessageId::ToastSentIntoTurn).into_owned(),
                 StatusToastLevel::Info,
                 Some(1_500),
             ),
             Ok(false) => {
                 restore_queued_or_draft_message(app, recovery, message);
                 app.push_status_toast(
-                    "message_submit hook blocked the follow-up; original queue/draft restored",
+                    app.tr(MessageId::ToastHookBlockedFollowUp).into_owned(),
                     StatusToastLevel::Warning,
                     Some(4_000),
                 );
@@ -295,8 +291,8 @@ pub(crate) async fn send_taken_queued_message_now(
             Err(err) => {
                 restore_queued_or_draft_message(app, recovery, message);
                 app.status_message = Some(format!(
-                    "Steer failed ({err}); {} queued follow-up(s) — /queue send <n>, /queue clear",
-                    app.queued_message_count()
+                    "{} ({err})",
+                    app.tr(MessageId::ToastCouldNotSendIntoTurn)
                 ));
             }
         }
@@ -305,7 +301,7 @@ pub(crate) async fn send_taken_queued_message_now(
     {
         // The completion closure re-queued the message and set the status.
     } else {
-        app.status_message = Some(format!("Sent queued follow-up: {display}"));
+        app.status_message = Some(app.tr(MessageId::ToastSentIntoTurn).into_owned());
     }
     Ok(())
 }
@@ -1117,7 +1113,7 @@ pub(crate) async fn attempt_steer_with_queue_fallback(
     match steer_user_message(app, config, engine_handle, message.clone()).await {
         Ok(true) => {
             app.push_status_toast(
-                "Steering into current turn",
+                app.tr(MessageId::ToastSentIntoTurn).into_owned(),
                 StatusToastLevel::Info,
                 Some(1_500),
             );
@@ -1125,17 +1121,14 @@ pub(crate) async fn attempt_steer_with_queue_fallback(
         Ok(false) => {
             restore_queued_or_draft_message(app, recovery, message);
             app.push_status_toast(
-                "message_submit hook blocked the steer; original queue/draft restored",
+                app.tr(MessageId::ToastHookBlockedFollowUp).into_owned(),
                 StatusToastLevel::Warning,
                 Some(4_000),
             );
         }
         Err(err) => {
             restore_queued_or_draft_message(app, recovery, message);
-            let status = format!(
-                "Steer failed ({err}); {} queued follow-up(s) — /queue send <n>",
-                app.queued_message_count()
-            );
+            let status = format!("{} ({err})", app.tr(MessageId::ToastCouldNotSendIntoTurn));
             app.status_message = Some(status.clone());
             app.push_status_toast(status, StatusToastLevel::Warning, Some(4_000));
         }
@@ -1146,22 +1139,24 @@ pub(crate) async fn attempt_steer_with_queue_fallback(
 /// Unlike a steer, the message is NOT forwarded immediately — it waits for
 /// the current turn to finish, then dispatches as a normal user message.
 pub(crate) async fn queue_follow_up(app: &mut App, message: QueuedMessage) -> Result<()> {
-    let display = message.display.clone();
     enqueue_offline_message(app, message);
-    let toast = if app.mode == AppMode::Operate {
-        format!(
-            "Queued task: {display} ({} total) — dispatches next while workers continue; ↑ to edit",
-            app.queued_message_count()
-        )
-    } else {
-        format!(
-            "Queued: {display} ({} total) — sends after current output; ↑ to edit",
-            app.queued_message_count()
-        )
-    };
+    let toast = queued_follow_up_toast(app);
     app.status_message = Some(toast.clone());
     app.push_status_toast(toast, StatusToastLevel::Info, Some(3_000));
     Ok(())
+}
+
+fn queued_follow_up_toast(app: &App) -> String {
+    if app.offline_mode {
+        return app.tr(MessageId::ToastQueuedOffline).into_owned();
+    }
+    let count = app.queued_message_count();
+    if count <= 1 {
+        app.tr(MessageId::ToastQueuedFollowUp).into_owned()
+    } else {
+        app.tr(MessageId::ToastQueuedFollowUpCount)
+            .replace("{count}", &count.to_string())
+    }
 }
 
 pub(crate) async fn dispatch_composer_message(
@@ -1237,29 +1232,9 @@ pub(crate) async fn dispatch_composer_message(
             Ok(())
         }
         SubmitDisposition::Queue => {
-            let count = app.queued_message_count().saturating_add(1);
             enqueue_offline_message(app, message);
-            let (status, toast) = if app.offline_mode {
-                (
-                    format!("Offline: {count} queued follow-up(s) — ↑ edit last, /queue send <n>"),
-                    format!("Offline: queued follow-up ({count} total)"),
-                )
-            } else if app.mode == AppMode::Operate {
-                (
-                    format!(
-                        "{count} queued task(s) — dispatches next while workers continue; ↑ edit last, /queue send <n>"
-                    ),
-                    format!("Queued task ({count} total) — dispatches next"),
-                )
-            } else {
-                (
-                    format!(
-                        "{count} queued follow-up(s) — sends after current output; ↑ edit last, /queue send <n>"
-                    ),
-                    format!("Queued follow-up ({count} total) — sends after current output"),
-                )
-            };
-            app.status_message = Some(status);
+            let toast = queued_follow_up_toast(app);
+            app.status_message = Some(toast.clone());
             app.push_status_toast(toast, StatusToastLevel::Info, Some(3_000));
             Ok(())
         }

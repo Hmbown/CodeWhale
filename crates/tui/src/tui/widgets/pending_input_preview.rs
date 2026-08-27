@@ -1,10 +1,9 @@
 //! Pending-input preview widget for the composer area.
 //!
-//! Port of `codex-rs/tui/src/bottom_pane/pending_input_preview.rs` for
-//! issue #85. Renders queued/steered messages above the composer when a
-//! turn is in flight, so user input typed during a running turn doesn't
-//! disappear silently. The backing state still distinguishes queue/steer
-//! origins, but the UI renders one coherent pending-input list.
+//! Renders queued and in-turn follow-ups above the composer when a turn is
+//! in flight, so typed input doesn't disappear silently. The backing state
+//! still distinguishes queue vs send-now origins, but the UI renders one
+//! coherent pending-input list.
 //!
 //! Empty state renders zero rows so the composer doesn't gain wasted height
 //! when there's nothing to show.
@@ -18,15 +17,13 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tui::menu_style;
 use crate::tui::widgets::Renderable;
 
 /// Per-item line cap before we collapse the rest into a `…` overflow row.
 const PREVIEW_LINE_LIMIT: usize = 3;
-const PENDING_STEER_PREFIX: &str = "  ↳ Live steer pending: ";
-const REJECTED_STEER_PREFIX: &str = "  ↳ Rejected live steer: ";
-const EDITING_QUEUED_PREFIX: &str = "  ↳ Editing queued follow-up: ";
 
 /// Description of the keybinding the hint line at the bottom should advertise
 /// for the "edit last queued message" action.
@@ -42,6 +39,7 @@ impl EditBinding {
 /// Widget showing pending input while a turn is in progress.
 #[derive(Debug, Clone)]
 pub struct PendingInputPreview {
+    pub locale: Locale,
     pub context_items: Vec<ContextPreviewItem>,
     pub pending_steers: Vec<String>,
     pub rejected_steers: Vec<String>,
@@ -66,6 +64,7 @@ pub struct ContextPreviewItem {
 impl PendingInputPreview {
     pub fn new() -> Self {
         Self {
+            locale: Locale::En,
             context_items: Vec::new(),
             pending_steers: Vec::new(),
             rejected_steers: Vec::new(),
@@ -111,9 +110,10 @@ impl PendingInputPreview {
         if self.is_queued_only() {
             let count = self.queued_messages.len();
             let prefix = if count == 1 {
-                "Queued #1: ".to_string()
+                tr(self.locale, MessageId::PendingQueuedOnePrefix).into_owned()
             } else {
-                format!("Queued {count} · next: ")
+                tr(self.locale, MessageId::PendingQueuedManyPrefix)
+                    .replace("{count}", &count.to_string())
             };
             let next = self.queued_messages[0].replace('\n', " ");
             let summary = crate::localization::truncate_to_width(
@@ -121,10 +121,8 @@ impl PendingInputPreview {
                 usize::from(width),
             );
             let controls = crate::localization::truncate_to_width(
-                &format!(
-                    "Enter send now · {} edit · /queue drop 1",
-                    self.edit_binding.label
-                ),
+                &tr(self.locale, MessageId::PendingSendNowDropControls)
+                    .replace("{key}", self.edit_binding.label),
                 usize::from(width),
             );
             lines.push(Line::from(Span::styled(summary, dim_italic)));
@@ -135,7 +133,10 @@ impl PendingInputPreview {
         if !self.context_items.is_empty() {
             push_section_header(
                 &mut lines,
-                Line::from(vec![Span::raw("• "), Span::raw("Context for next send")]),
+                Line::from(vec![
+                    Span::raw("• "),
+                    Span::raw(tr(self.locale, MessageId::PendingContextHeader).into_owned()),
+                ]),
             );
             for item in &self.context_items {
                 push_context_item(&mut lines, item, width);
@@ -148,48 +149,58 @@ impl PendingInputPreview {
             }
             push_section_header(
                 &mut lines,
-                Line::from(vec![Span::raw("• "), Span::raw("Pending inputs")]),
+                Line::from(vec![
+                    Span::raw("• "),
+                    Span::raw(tr(self.locale, MessageId::PendingInputsHeader).into_owned()),
+                ]),
             );
-            let pending_steer_indent = continuation_indent(PENDING_STEER_PREFIX);
+            let sending_prefix =
+                tr(self.locale, MessageId::PendingSendingIntoTurnPrefix).into_owned();
+            let sending_indent = continuation_indent(&sending_prefix);
             for steer in &self.pending_steers {
                 push_truncated_item(
                     &mut lines,
                     steer,
                     width,
                     dim,
-                    PENDING_STEER_PREFIX,
-                    &pending_steer_indent,
+                    &sending_prefix,
+                    &sending_indent,
                 );
             }
-            let rejected_steer_indent = continuation_indent(REJECTED_STEER_PREFIX);
+            let rejected_prefix =
+                tr(self.locale, MessageId::PendingCouldNotSendIntoTurnPrefix).into_owned();
+            let rejected_indent = continuation_indent(&rejected_prefix);
             for steer in &self.rejected_steers {
                 push_truncated_item(
                     &mut lines,
                     steer,
                     width,
                     dim,
-                    REJECTED_STEER_PREFIX,
-                    &rejected_steer_indent,
+                    &rejected_prefix,
+                    &rejected_indent,
                 );
             }
             if let Some(draft) = self.editing_queued_message.as_deref() {
-                let editing_indent = continuation_indent(EDITING_QUEUED_PREFIX);
+                let editing_prefix =
+                    tr(self.locale, MessageId::PendingEditingFollowUpPrefix).into_owned();
+                let editing_indent = continuation_indent(&editing_prefix);
                 push_truncated_item(
                     &mut lines,
                     draft,
                     width,
                     dim_italic,
-                    EDITING_QUEUED_PREFIX,
+                    &editing_prefix,
                     &editing_indent,
                 );
                 lines.push(Line::from(vec![Span::styled(
-                    "    Esc restores queued follow-up".to_string(),
+                    tr(self.locale, MessageId::PendingEscRestore).into_owned(),
                     dim,
                 )]));
             }
             for (idx, message) in self.queued_messages.iter().enumerate() {
                 let row_number = idx + 1;
-                let queued_prefix = format!("  ↳ Queued follow-up #{row_number}: ");
+                let queued_prefix = tr(self.locale, MessageId::PendingQueuedFollowUpPrefix)
+                    .replace("{number}", &row_number.to_string());
                 let queued_message_indent = continuation_indent(&queued_prefix);
                 push_truncated_item(
                     &mut lines,
@@ -199,17 +210,11 @@ impl PendingInputPreview {
                     &queued_prefix,
                     &queued_message_indent,
                 );
-                lines.push(Line::from(vec![Span::styled(
-                    format!("    /queue send {row_number} · drop {row_number} · clear"),
-                    dim,
-                )]));
             }
             if !self.queued_messages.is_empty() {
                 lines.push(Line::from(vec![Span::styled(
-                    format!(
-                        "    Enter send now · {} edit last queued",
-                        self.edit_binding.label
-                    ),
+                    tr(self.locale, MessageId::PendingSendNowControls)
+                        .replace("{key}", self.edit_binding.label),
                     dim,
                 )]));
             }
@@ -475,12 +480,12 @@ mod tests {
         assert!(rows[0].contains("Pending inputs"));
         assert!(
             rows.iter()
-                .any(|row| row.contains("Editing queued follow-up: revise before sending")),
+                .any(|row| row.contains("Editing follow-up: revise before sending")),
             "missing editing label: {rows:?}"
         );
         assert!(
             rows.iter()
-                .any(|row| row.contains("Esc restores queued follow-up")),
+                .any(|row| row.contains("Esc restores the queued follow-up")),
             "missing restore hint: {rows:?}"
         );
         assert!(
@@ -574,6 +579,23 @@ mod tests {
     }
 
     #[test]
+    fn pending_input_copy_does_not_teach_steer() {
+        let mut preview = PendingInputPreview::new();
+        preview.pending_steers.push("please continue".to_string());
+        preview.rejected_steers.push("too late".to_string());
+        preview.queued_messages.push("next".to_string());
+        let joined = render_to_string(&preview, 80)
+            .join("\n")
+            .to_ascii_lowercase();
+        assert!(
+            !joined.contains("steer"),
+            "pending-input copy leaked internal vocabulary: {joined}"
+        );
+        assert!(joined.contains("sending into this turn"));
+        assert!(joined.contains("could not send into this turn"));
+    }
+
+    #[test]
     fn pending_input_rows_label_each_delivery_mode() {
         let mut preview = PendingInputPreview::new();
         preview.pending_steers.push("steer".to_string());
@@ -585,13 +607,13 @@ mod tests {
 
         assert!(
             rows.iter()
-                .any(|row| row.contains("Live steer pending: steer")),
-            "missing pending-steer label: {rows:?}"
+                .any(|row| row.contains("Sending into this turn: steer")),
+            "missing pending send-now label: {rows:?}"
         );
         assert!(
             rows.iter()
-                .any(|row| row.contains("Rejected live steer: rejected")),
-            "missing rejected-steer label: {rows:?}"
+                .any(|row| row.contains("Could not send into this turn: rejected")),
+            "missing rejected send-now label: {rows:?}"
         );
         assert!(
             rows.iter()
@@ -600,7 +622,7 @@ mod tests {
         );
         assert!(
             rows.iter()
-                .any(|row| row.contains("Editing queued follow-up: editing")),
+                .any(|row| row.contains("Editing follow-up: editing")),
             "missing queued-edit label: {rows:?}"
         );
     }

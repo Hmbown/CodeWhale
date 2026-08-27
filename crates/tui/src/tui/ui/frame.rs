@@ -645,6 +645,7 @@ pub(crate) fn live_tool_content_is_receipt(content: &str) -> bool {
 ///   the foreground operator dispatches these as additional background tasks.
 pub(crate) fn build_pending_input_preview(app: &App) -> PendingInputPreview {
     let mut preview = PendingInputPreview::new();
+    preview.locale = app.ui_locale;
     let selected_attachment = app.selected_composer_attachment_index();
     let mut attachment_index = 0usize;
     preview.context_items = crate::tui::file_mention::pending_context_previews(&app.input)

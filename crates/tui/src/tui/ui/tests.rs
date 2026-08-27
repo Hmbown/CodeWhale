@@ -14505,7 +14505,7 @@ async fn steer_failure_queues_message_and_surfaces_toast() {
     assert_eq!(app.queued_message_count(), 1);
     let toast = app.status_toasts.back().expect("steer failure toast");
     assert_eq!(toast.level, StatusToastLevel::Warning);
-    assert!(toast.text.contains("Steer failed"));
+    assert!(toast.text.contains("Could not send into this turn"));
 }
 
 #[tokio::test]
@@ -14530,7 +14530,7 @@ async fn streaming_enter_queue_pushes_visible_toast() {
     assert_eq!(app.queued_message_count(), 1);
     let toast = app.status_toasts.back().expect("queue toast");
     assert_eq!(toast.level, StatusToastLevel::Info);
-    assert!(toast.text.contains("Queued follow-up"));
+    assert!(toast.text.contains("Queued. Sends after this turn."));
 }
 
 #[test]
@@ -14629,13 +14629,10 @@ async fn operate_streaming_enter_queues_another_parallel_task() {
     .expect("Operate streaming submit queues another task");
 
     assert_eq!(app.queued_message_count(), 1);
-    assert!(app.status_message.as_deref().is_some_and(
-        |status| status.contains("queued task(s)") && status.contains("workers continue")
-    ));
     let toast = app.status_toasts.back().expect("Operate queue toast");
     assert_eq!(toast.level, StatusToastLevel::Info);
-    assert!(toast.text.contains("Queued task"));
-    assert!(toast.text.contains("dispatches next"));
+    assert_eq!(toast.text, "Queued. Sends after this turn.");
+    assert_eq!(app.status_message.as_deref(), Some(toast.text.as_str()));
 }
 
 #[tokio::test]

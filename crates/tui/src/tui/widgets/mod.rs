@@ -1341,78 +1341,10 @@ impl Renderable for ComposerWidget<'_> {
                     Style::default().fg(self.app.ui_theme.text_hint),
                 )))
             } else if !input_text.trim().is_empty() {
-                // Live disambiguation for #345: when there's content in the
-                // composer, show what portable bare Enter will do RIGHT NOW.
-                use crate::tui::app::{
-                    ComposerSubmitAction, ComposerSubmitChord, SubmitDisposition,
-                };
-                let queue_count = self.app.queued_message_count();
-                let (label, color) =
-                    match self.app.decide_composer_submit(ComposerSubmitChord::Enter) {
-                        ComposerSubmitAction::Submit(SubmitDisposition::Immediate) => {
-                            if queue_count > 0 {
-                                (
-                                    Some(format!("↵ send ({queue_count} queued)")),
-                                    palette::WHALE_INFO,
-                                )
-                            } else {
-                                (None, palette::TEXT_MUTED)
-                            }
-                        }
-                        ComposerSubmitAction::Submit(SubmitDisposition::Queue) => {
-                            if self.app.offline_mode {
-                                // #3927: an explicitly chosen offline session keeps
-                                // naming its one recovery command, not just its
-                                // queue behavior.
-                                let label = if self.app.onboarding_explore_offline {
-                                    "↵ offline queue · /provider connects".to_string()
-                                } else {
-                                    "↵ offline queue".to_string()
-                                };
-                                (Some(label), palette::STATUS_WARNING)
-                            } else if self.app.mode == crate::tui::app::AppMode::Operate {
-                                let label = if queue_count > 0 {
-                                    format!(
-                                        "↵ queue task ({} waiting) · then ↵ steer",
-                                        queue_count.saturating_add(1)
-                                    )
-                                } else {
-                                    "↵ queue task · then ↵ steer".to_string()
-                                };
-                                (Some(label), palette::WHALE_INFO)
-                            } else {
-                                let label = if queue_count > 0 {
-                                    format!(
-                                        "↵ queue ({} waiting) · then ↵ steer",
-                                        queue_count.saturating_add(1)
-                                    )
-                                } else {
-                                    "↵ queue · then ↵ steer".to_string()
-                                };
-                                (Some(label), palette::TEXT_MUTED)
-                            }
-                        }
-                        ComposerSubmitAction::Submit(SubmitDisposition::Steer) => {
-                            (Some("↵ steering".to_string()), palette::WHALE_INFO)
-                        }
-                        ComposerSubmitAction::Submit(SubmitDisposition::QueueFollowUp) => (
-                            Some(if self.app.mode == crate::tui::app::AppMode::Operate {
-                                "↵ queued task · then ↵ steer".to_string()
-                            } else {
-                                "↵ queued · then ↵ steer".to_string()
-                            }),
-                            palette::TEXT_MUTED,
-                        ),
-                        ComposerSubmitAction::SendQueuedNow => (
-                            Some("↵ steer queued message".to_string()),
-                            palette::WHALE_INFO,
-                        ),
-                        ComposerSubmitAction::Noop => (None, palette::TEXT_MUTED),
-                    };
-                label.map(|text| {
+                composer_submit_hint(self.app).map(|hint| {
                     Line::from(vec![Span::styled(
-                        format!(" {text} "),
-                        Style::default().fg(color),
+                        format!(" {} ", hint.text),
+                        Style::default().fg(hint.color),
                     )])
                 })
             } else {
@@ -1466,6 +1398,14 @@ impl Renderable for ComposerWidget<'_> {
                 .borders(Borders::TOP)
                 .border_style(Style::default().fg(self.app.ui_theme.border))
                 .style(background);
+            if !input_text.trim().is_empty()
+                && let Some(hint) = composer_submit_hint(self.app)
+            {
+                block = block.title(Line::from(Span::styled(
+                    format!(" {} ", hint.text),
+                    Style::default().fg(hint.color),
+                )));
+            }
             if let Some(chip) = crate::tui::agent_focus::composer_chip_text(self.app) {
                 block = block.title_top(
                     Line::from(Span::styled(
@@ -3389,10 +3329,78 @@ pub(crate) fn composer_empty_hint_text(app: &App) -> Cow<'static, str> {
     if let Some(placeholder) = crate::tui::agent_focus::composer_placeholder(app) {
         Cow::Owned(placeholder)
     } else if app.is_history_search_active() {
-        app.tr(crate::localization::MessageId::HistorySearchPlaceholder)
+        app.tr(MessageId::HistorySearchPlaceholder)
+    } else if app.is_loading
+        && !app.offline_mode
+        && app.queued_draft.is_none()
+        && !app.queued_messages.is_empty()
+    {
+        app.tr(MessageId::ComposerPlaceholderSendNow)
+    } else if app.is_loading {
+        app.tr(MessageId::ComposerPlaceholderFollowUp)
     } else {
-        app.tr(crate::localization::MessageId::ComposerPlaceholder)
+        app.tr(MessageId::ComposerPlaceholder)
     }
+}
+
+/// Live label for what portable bare Enter will do with the current draft.
+///
+/// The quiet composer and the enclosed panel share this so the action is
+/// visible before submit (#4703) without teaching internal "steer" vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ComposerSubmitHint {
+    pub text: String,
+    pub color: Color,
+}
+
+pub(crate) fn composer_submit_hint(app: &App) -> Option<ComposerSubmitHint> {
+    use crate::tui::app::{ComposerSubmitAction, ComposerSubmitChord, SubmitDisposition};
+
+    let queue_count = app.queued_message_count();
+    let (text, color) = match app.decide_composer_submit(ComposerSubmitChord::Enter) {
+        ComposerSubmitAction::Submit(SubmitDisposition::Immediate) => {
+            if queue_count == 0 {
+                return None;
+            }
+            (
+                app.tr(MessageId::ComposerHintSendWithQueue)
+                    .replace("{count}", &queue_count.to_string()),
+                palette::WHALE_INFO,
+            )
+        }
+        ComposerSubmitAction::Submit(SubmitDisposition::Queue)
+        | ComposerSubmitAction::Submit(SubmitDisposition::QueueFollowUp) => {
+            if app.offline_mode {
+                let id = if app.onboarding_explore_offline {
+                    MessageId::ComposerHintOfflineConnect
+                } else {
+                    MessageId::ComposerHintOfflineQueue
+                };
+                (app.tr(id).into_owned(), palette::STATUS_WARNING)
+            } else if queue_count > 0 {
+                (
+                    app.tr(MessageId::ComposerHintQueueWithCount)
+                        .replace("{count}", &queue_count.saturating_add(1).to_string()),
+                    palette::WHALE_INFO,
+                )
+            } else {
+                (
+                    app.tr(MessageId::ComposerHintQueue).into_owned(),
+                    palette::WHALE_INFO,
+                )
+            }
+        }
+        ComposerSubmitAction::Submit(SubmitDisposition::Steer) => (
+            app.tr(MessageId::ComposerHintSendIntoTurn).into_owned(),
+            palette::WHALE_INFO,
+        ),
+        ComposerSubmitAction::SendQueuedNow => (
+            app.tr(MessageId::ComposerHintSendNow).into_owned(),
+            palette::WHALE_INFO,
+        ),
+        ComposerSubmitAction::Noop => return None,
+    };
+    Some(ComposerSubmitHint { text, color })
 }
 
 pub(crate) fn empty_composer_visual_rows(
@@ -4308,9 +4316,9 @@ mod tests {
         SlashMenuEntry, active_entry_revision, apply_detail_target_highlight,
         apply_selection_to_line, apply_send_flash, approval_palette, approval_truncation_hint,
         build_empty_state_lines, composer_content_geometry, composer_empty_hint_text,
-        composer_height, composer_max_height, composer_top_padding, cursor_row_col,
-        empty_composer_visual_rows, enclosed_composer_panel_fits, fish_flee_offset, fish_heading,
-        fish_mark, history_entry_revision, layout_input, layout_input_with_scroll,
+        composer_height, composer_max_height, composer_submit_hint, composer_top_padding,
+        cursor_row_col, empty_composer_visual_rows, enclosed_composer_panel_fits, fish_flee_offset,
+        fish_heading, fish_mark, history_entry_revision, layout_input, layout_input_with_scroll,
         placeholder_visual_lines, push_command_entry, receipt_is_settling, revision_in_domain,
         should_render_empty_state, slash_completion_hints, tool_run_summary_revision,
         wrap_input_lines, wrap_input_lines_for_mouse, wrap_text,
@@ -4320,8 +4328,8 @@ mod tests {
     use crate::palette;
     use crate::tui::active_cell::ActiveCell;
     use crate::tui::app::{
-        App, AppMode, ComposerDensity, TaskPanelEntry, TaskPanelEntryKind, ToolCollapseMode,
-        TranscriptSpacing, TuiOptions,
+        App, AppMode, ComposerDensity, QueuedMessage, TaskPanelEntry, TaskPanelEntryKind,
+        ToolCollapseMode, TranscriptSpacing, TuiOptions,
     };
     use crate::tui::history::{
         ExecCell, ExecSource, GenericToolCell, HistoryCell, ToolCell, ToolRun, ToolStatus,
@@ -6095,6 +6103,87 @@ mod tests {
         assert_eq!(buf[(0, cursor_y)].symbol(), "❯");
         assert_eq!(buf[(2, cursor_y)].symbol(), "h");
         assert_eq!(cursor_x, 7, "cursor keeps the prompt gutter reserved");
+    }
+
+    fn render_composer(app: &App, width: u16, height: u16) -> String {
+        let slash_menu_entries = Vec::<SlashMenuEntry>::new();
+        let mention_menu_entries = Vec::<String>::new();
+        let widget = ComposerWidget::new(app, height, &slash_menu_entries, &mention_menu_entries);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        buffer_text(&buf, area)
+    }
+
+    #[test]
+    fn composer_empty_hint_names_a_follow_up_while_a_turn_is_running() {
+        let mut app = create_test_app();
+        assert_eq!(composer_empty_hint_text(&app).as_ref(), "Type a message…");
+
+        app.is_loading = true;
+        assert_eq!(composer_empty_hint_text(&app).as_ref(), "Type a follow-up…");
+
+        app.queue_message(QueuedMessage::new("later".to_string(), None));
+        assert_eq!(
+            composer_empty_hint_text(&app).as_ref(),
+            "Enter send now · type another"
+        );
+    }
+
+    #[test]
+    fn composer_submit_hint_names_send_after_this_turn_without_steer() {
+        let mut app = create_test_app();
+        app.input = "keep going".to_string();
+        app.cursor_position = app.input.chars().count();
+        assert!(composer_submit_hint(&app).is_none());
+
+        app.is_loading = true;
+        let hint = composer_submit_hint(&app).expect("busy draft should name Enter");
+        assert_eq!(hint.text, "↵ send after this turn");
+        assert!(
+            !hint.text.to_ascii_lowercase().contains("steer"),
+            "composer hint leaked internal vocabulary: {}",
+            hint.text
+        );
+
+        app.queue_message(QueuedMessage::new("first".to_string(), None));
+        let hint = composer_submit_hint(&app).expect("queued count should stay visible");
+        assert_eq!(hint.text, "↵ send after this turn (2 waiting)");
+    }
+
+    #[test]
+    fn composer_submit_hint_renders_at_release_floor_widths() {
+        let mut app = create_test_app();
+        app.composer_border = true;
+        app.is_loading = true;
+        app.input = "keep going".to_string();
+        app.cursor_position = app.input.chars().count();
+
+        for (width, height) in [(40_u16, 12), (60, 16), (80, 24), (100, 32), (140, 40)] {
+            let rendered = render_composer(&app, width, height);
+            assert!(
+                rendered.contains("send after this turn"),
+                "missing queue hint at {width}x{height}:\n{rendered}"
+            );
+            assert!(
+                !rendered.to_ascii_lowercase().contains("steer"),
+                "steer vocabulary at {width}x{height}:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn quiet_composer_still_shows_the_submit_hint() {
+        let mut app = create_test_app();
+        app.composer_border = false;
+        app.is_loading = true;
+        app.input = "keep going".to_string();
+        app.cursor_position = app.input.chars().count();
+        let rendered = render_composer(&app, 80, 4);
+        assert!(
+            rendered.contains("send after this turn"),
+            "quiet composer hid the Enter action:\n{rendered}"
+        );
     }
 
     #[test]

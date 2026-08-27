@@ -43,7 +43,7 @@
 |------|------|
 | `Enter` | 空闲时发送；忙碌时排队;composer 为空时，立即发送下一条已排队的后续消息 |
 | `Shift-Enter` / `Alt-Enter` / `Ctrl-J` | 插入换行而不发送（空闲或忙碌均可） |
-| `Ctrl-Enter` / `Cmd-Enter` | 引导当前回合；空闲时正常发送（在终端支持时） |
+| `Ctrl-Enter` / `Cmd-Enter` | 把内容发进当前回合；空闲时正常发送（终端能区分时） |
 | `Ctrl-U` | 清空整个草稿（可恢复——参见 `Ctrl-Z`） |
 | `Ctrl-Z` | 恢复已清空的草稿（仅当 composer 为空时） |
 | `Ctrl-W` / `Ctrl-Backspace` / `Alt-Backspace` | 删除前一个单词 |
@@ -64,7 +64,7 @@
 | `↑` / `↓` | 循环 composer 历史（也用于选择弹窗/附件条目） |
 | `Shift-↑` / `Shift-↓` | 浏览对话历史 |
 | `Ctrl-P` / `Ctrl-N` | 在斜杠命令菜单条目间导航；菜单为空时 `Ctrl-P` 打开文件选择器 |
-| `Ctrl-G` / `Ctrl-S` | 暂存当前草稿（`/stash pop` 恢复它）；从不发送或引导 |
+| `Ctrl-G` / `Ctrl-S` | 暂存当前草稿（`/stash pop` 恢复它）；从不发送或排队 |
 | `Alt-R` | 搜索提示历史（Alt-R 退出） |
 | `Tab` | 斜杠命令 / `@` 提及补全（感知弹窗） |
 | `Ctrl-Shift-O` / `F4` | 在 `$VISUAL` / `$EDITOR` 中打开 composer 草稿；当终端无法区分 Ctrl-Shift-O 与 Ctrl-O 时，F4 可用 |

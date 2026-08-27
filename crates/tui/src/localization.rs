@@ -1883,6 +1883,33 @@ pub enum MessageId {
     ProviderTemplateOpened,
     ProviderTemplateOpenedEnvOnly,
     ProviderTemplateUnknown,
+    ComposerPlaceholderFollowUp,
+    ComposerPlaceholderSendNow,
+    ComposerHintSendWithQueue,
+    ComposerHintQueue,
+    ComposerHintQueueWithCount,
+    ComposerHintOfflineQueue,
+    ComposerHintOfflineConnect,
+    ComposerHintSendNow,
+    ComposerHintSendIntoTurn,
+    PendingSendingIntoTurnPrefix,
+    PendingCouldNotSendIntoTurnPrefix,
+    PendingEditingFollowUpPrefix,
+    PendingQueuedOnePrefix,
+    PendingQueuedManyPrefix,
+    PendingSendNowControls,
+    PendingSendNowDropControls,
+    PendingEscRestore,
+    PendingQueuedFollowUpPrefix,
+    PendingInputsHeader,
+    PendingContextHeader,
+    ToastQueuedFollowUp,
+    ToastQueuedFollowUpCount,
+    ToastQueuedOffline,
+    ToastSentIntoTurn,
+    ToastCouldNotSendIntoTurn,
+    ToastHookBlockedFollowUp,
+    ToastOfflineQueuedCount,
 }
 
 #[allow(dead_code)]
@@ -3573,6 +3600,33 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ProviderTemplateOpened,
     MessageId::ProviderTemplateOpenedEnvOnly,
     MessageId::ProviderTemplateUnknown,
+    MessageId::ComposerPlaceholderFollowUp,
+    MessageId::ComposerPlaceholderSendNow,
+    MessageId::ComposerHintSendWithQueue,
+    MessageId::ComposerHintQueue,
+    MessageId::ComposerHintQueueWithCount,
+    MessageId::ComposerHintOfflineQueue,
+    MessageId::ComposerHintOfflineConnect,
+    MessageId::ComposerHintSendNow,
+    MessageId::ComposerHintSendIntoTurn,
+    MessageId::PendingSendingIntoTurnPrefix,
+    MessageId::PendingCouldNotSendIntoTurnPrefix,
+    MessageId::PendingEditingFollowUpPrefix,
+    MessageId::PendingQueuedOnePrefix,
+    MessageId::PendingQueuedManyPrefix,
+    MessageId::PendingSendNowControls,
+    MessageId::PendingSendNowDropControls,
+    MessageId::PendingEscRestore,
+    MessageId::PendingQueuedFollowUpPrefix,
+    MessageId::PendingInputsHeader,
+    MessageId::PendingContextHeader,
+    MessageId::ToastQueuedFollowUp,
+    MessageId::ToastQueuedFollowUpCount,
+    MessageId::ToastQueuedOffline,
+    MessageId::ToastSentIntoTurn,
+    MessageId::ToastCouldNotSendIntoTurn,
+    MessageId::ToastHookBlockedFollowUp,
+    MessageId::ToastOfflineQueuedCount,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> Cow<'static, str> {
@@ -4699,7 +4753,13 @@ mod tests {
 
     #[test]
     fn launch_copy_is_translated_in_complete_locales() {
-        let ids = [MessageId::ComposerPlaceholder, MessageId::EmptyStatePrompt];
+        let ids = [
+            MessageId::ComposerPlaceholder,
+            MessageId::ComposerPlaceholderFollowUp,
+            MessageId::ComposerPlaceholderSendNow,
+            MessageId::ComposerHintQueue,
+            MessageId::EmptyStatePrompt,
+        ];
         for locale in Locale::shipped_complete() {
             if *locale == Locale::En {
                 continue;
