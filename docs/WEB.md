@@ -59,9 +59,52 @@ API behavior.
 
 ## Local means local
 
-`codewhale web` accepts only `--port`; there is no `--host` or insecure-auth
-option on this command. Do not treat it as a public website or expose its port
-directly through router forwarding, a public reverse proxy, or a tunnel.
+`codewhale web` accepts `--port` and optional `--tailscale`. There is no
+`--host` or insecure-auth option on this command. Do not treat it as a public
+website or expose its port directly through router forwarding, a public reverse
+proxy, or a generic tunnel.
+
+## Tailnet (`--tailscale`)
+
+`codewhale web --tailscale` keeps the HTTP listener on `127.0.0.1` and
+publishes the same client onto the current Tailscale tailnet. Reachability is
+ACL-gated. This is not Funnel and not ngrok.
+
+This is **not** account remote control. `/rc` pairs a Cloud/account session to
+this runtime through your Codewhale identity. `--tailscale` only puts the
+loopback web UI on machines already in your tailnet. Offer both: they answer
+different trust questions. Opening the tailnet URL in the browser shows a QR
+code for the same MagicDNS origin so a phone on that tailnet can scan in.
+
+Preferred path (opt-in Cargo feature `tailscale` on `codewhale-tui` /
+`codewhale-cli`): an embedded tsnet node from the official
+[`tailscale`](https://docs.rs/tailscale/0.5.0/tailscale/) 0.5.0 crate. The crate
+exposes `Device::tcp_listen` and `tailscale::axum::Listener`, and
+`Config.requested_hostname` is set to `codewhale`, so MagicDNS is
+`codewhale.<tailnet>.ts.net` (`NodeInfo::fqdn`). Auth is
+`CODEWHALE_TSNET_AUTHKEY` or `TS_AUTHKEY`. Official 0.5.0 does **not** implement
+HTTPS certificates (listed as unsupported in the crate README), so the embedded
+listener is HTTP on port 80 over the WireGuard overlay
+(`http://codewhale.<tailnet>.ts.net`). The crate also requires
+`TS_RS_EXPERIMENT=this_is_unstable_software` (set automatically for this path)
+and currently supports Linux (x86_64/ARM64) and macOS ARM64.
+
+Fallback (always compiled; precursor design from PR #5628): if embed is not
+compiled, is disabled with `CODEWHALE_TSNET_DISABLE`, or cannot auth, Codewhale
+asks the local Tailscale CLI to publish HTTPS:443 to the loopback port:
+
+```bash
+codewhale web --tailscale
+```
+
+CLI serve uses the **machine** MagicDNS name (`https://<machine>.<tailnet>.ts.net`),
+not `codewhale.<tailnet>.ts.net`. Stopping the process turns off only the
+HTTPS:443 serve mapping (`tailscale serve --https=443 off`). It does not run
+`tailscale serve reset`.
+
+Cookie-authenticated requests must present the advertised tailnet origin
+(`*.ts.net`). Bootstrap from a tailnet Host is allowed when that origin was
+published; default `codewhale web` without `--tailscale` remains loopback-only.
 
 The separate `codewhale app-server --mobile` and `--http` modes have different
 deployment and authentication contracts. Read [RUNTIME_API.md](RUNTIME_API.md)

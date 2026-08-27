@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   become an unapplied portable bundle for `codewhale config import`, and
   permissions/hooks map to manual follow-ups; secret-shaped values are named
   but never echoed or imported.
+- `codewhale web --tailscale` publishes the loopback browser client on the
+  current Tailscale tailnet. Default `codewhale web` stays loopback-only.
+  The embedded client uses the C-whale marks, a 288px thread rail, and a QR
+  for the MagicDNS origin. Account `/rc` remains a separate pairing path.
+  Embedded tsnet when built with `--features tailscale`; otherwise
+  `tailscale serve`. Not Funnel. Account `/rc` remains a separate pairing path.
 - Added the managed Chat relay: account-owned Chat commands now execute on the
   native runtime thread engine through a new `runtime_chat_relay` module
   instead of a second execution path. Each Chat thread is a dedicated,

@@ -68,8 +68,12 @@
   --space-6: 32px;
   --dur-fast: 120ms;
   --dur-med: 200ms;
+  --dur-arrive: 200ms;
+  --dur-exit: 140ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --rail: 256px;
+  --ease-arrive: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-exit: linear;
+  --rail: 288px;
   --content: 760px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   font-synthesis: none;
@@ -133,12 +137,12 @@ summary:focus-visible {
   position: relative;
   z-index: 20;
   display: grid;
-  grid-template-rows: 52px auto auto minmax(144px, 1fr) minmax(0, 34%) auto;
-  gap: var(--space-2);
+  grid-template-rows: auto auto auto minmax(160px, 1fr) minmax(0, 30%) auto;
+  gap: var(--space-3);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: 10px 10px 12px;
+  padding: 14px 12px 14px;
   border-right: 1px solid var(--line);
   background: var(--sidebar);
 }
@@ -148,7 +152,7 @@ summary:focus-visible {
 .header-actions,
 .composer-bar,
 .composer-actions,
-.rail-footer,
+.connection-status,
 .fact-chip,
 .thread-title-row,
 .attention-actions,
@@ -159,16 +163,18 @@ summary:focus-visible {
 
 .rail-brand {
   min-width: 0;
-  gap: 10px;
-  padding: 0 8px;
+  gap: 12px;
+  padding: 2px 4px 4px;
 }
 
 .brand-mark {
   display: block;
-  flex: 0 0 34px;
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: #020711;
+  object-fit: contain;
 }
 
 .eyebrow {
@@ -333,9 +339,9 @@ textarea::placeholder {
 .thread-row {
   display: block;
   width: 100%;
-  min-height: 62px;
+  min-height: 48px;
   margin: 2px 0;
-  padding: 10px 11px;
+  padding: 8px 10px;
   overflow: hidden;
   border: 1px solid transparent;
   border-radius: var(--radius-control);
@@ -396,9 +402,9 @@ textarea::placeholder {
   overflow: hidden;
   color: var(--text-dim);
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.4;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 
 .thread-meta {
@@ -522,13 +528,21 @@ textarea::placeholder {
 }
 
 .rail-footer {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 10px;
-  padding: 11px 8px 0;
+  padding: 10px 4px 0;
   border-top: 1px solid var(--line);
   color: var(--text-dim);
   font-size: 12px;
+}
+
+.connection-status {
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
 }
 
 .connection-dot {
@@ -555,6 +569,52 @@ textarea::placeholder {
   white-space: nowrap;
 }
 
+.access-card {
+  display: none;
+  min-width: 0;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--well);
+}
+
+.access-card[data-kind="tailnet"] {
+  display: grid;
+  gap: 8px;
+}
+
+.access-card h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.access-card p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.access-card img {
+  width: 132px;
+  height: 132px;
+  padding: 6px;
+  border-radius: 8px;
+  background: #f6f2e8;
+}
+
+.access-url {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
 .connection-dot.ready {
   background: var(--ok);
 }
@@ -571,7 +631,7 @@ textarea::placeholder {
     "transcript"
     "attention"
     "composer";
-  grid-template-rows: 64px auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   min-width: 0;
   min-height: 0;
   background: var(--stage-surface);
@@ -580,13 +640,16 @@ textarea::placeholder {
 .session-header {
   display: grid;
   grid-area: header;
-  grid-template-areas: "heading facts actions";
-  grid-template-columns: minmax(180px, 1fr) minmax(0, auto) auto;
+  grid-template-areas:
+    "heading actions"
+    "facts facts";
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 16px;
+  gap: 8px 16px;
   min-width: 0;
+  min-height: 86px;
   overflow: hidden;
-  padding: 0 20px;
+  padding: 10px 20px 12px;
   border-bottom: 1px solid var(--line);
   background: rgba(14, 26, 48, 0.95);
   box-shadow: inset 0 -1px 0 var(--edge);
@@ -622,9 +685,10 @@ textarea::placeholder {
 
 .session-facts {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   grid-area: facts;
   min-width: 0;
+  width: 100%;
   gap: 6px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -1176,7 +1240,7 @@ noscript {
     height: var(--visual-viewport-height);
     transform: translateX(-102%);
     box-shadow: 24px 0 70px var(--shadow-color);
-    transition: transform var(--dur-med) var(--ease-out);
+    transition: transform var(--dur-arrive) var(--ease-arrive);
   }
 
   .rail-open,
@@ -1203,7 +1267,7 @@ noscript {
     border: 0;
     opacity: 0;
     background: var(--scrim);
-    transition: opacity var(--dur-med) ease-out, visibility var(--dur-med) step-end;
+    transition: opacity var(--dur-arrive) var(--ease-arrive), visibility var(--dur-arrive) step-end;
   }
 
   .rail-visible .rail {
@@ -1213,7 +1277,7 @@ noscript {
   .rail-visible .rail-scrim {
     visibility: visible;
     opacity: 1;
-    transition: opacity var(--dur-med) ease-out;
+    transition: opacity var(--dur-arrive) var(--ease-arrive);
   }
 
 .session-header {

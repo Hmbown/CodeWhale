@@ -12,6 +12,7 @@ import {
   claimInFlight,
   createThreadState,
   eventStreamUrl,
+  accessKind,
   formatRuntimeProvenance,
   imageInputPresentation,
   isComposerSubmitKey,
@@ -96,7 +97,7 @@ test("embedded web client uses the Ocean Blue Stage semantic palette", async () 
     "--radius-control: 6px",
     "--radius-card: 12px",
     "--radius-composer: 16px",
-    "--rail: 256px",
+    "--rail: 288px",
   ]) {
     assert.match(styles, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
@@ -265,14 +266,19 @@ test("degraded workflow receipts surface rejected dispatches as attention", () =
 });
 
 test("rail New thread cannot paint over the session fact chips", async () => {
-  const styles = await readFile(
-    new URL("../src/runtime_web/styles.css", import.meta.url),
-    "utf8",
-  );
+  const [styles, html] = await Promise.all([
+    readFile(new URL("../src/runtime_web/styles.css", import.meta.url), "utf8"),
+    readFile(new URL("../src/runtime_web/index.html", import.meta.url), "utf8"),
+  ]);
   assert.match(cssDeclarations(styles, "\\.rail"), /overflow:\s*hidden/);
   assert.match(cssDeclarations(styles, "\\.new-thread"), /max-width:\s*100%/);
   assert.match(cssDeclarations(styles, "\\.session-header"), /overflow:\s*hidden/);
-  assert.match(cssDeclarations(styles, "\\.session-facts"), /flex-wrap:\s*nowrap/);
+  assert.match(cssDeclarations(styles, "\\.session-facts"), /flex-wrap:\s*wrap/);
+  assert.match(cssDeclarations(styles, "\\.rail"), /padding:\s*14px 12px 14px/);
+  assert.match(cssDeclarations(styles, "\\.rail-footer"), /flex-direction:\s*column/);
+  assert.match(styles, /--rail:\s*288px/);
+  assert.match(styles, /--ease-arrive:\s*cubic-bezier\(0\.23, 1, 0\.32, 1\)/);
+  assert.match(html, /class="connection-status"/);
 });
 
 test("production shell keeps readable type, controls, focus, and motion contracts", async () => {
@@ -281,7 +287,7 @@ test("production shell keeps readable type, controls, focus, and motion contract
     readFile(new URL("../src/runtime_web/index.html", import.meta.url), "utf8"),
   ]);
 
-  assert.match(cssDeclarations(styles, "\\.thread-row"), /min-height:\s*62px/);
+  assert.match(cssDeclarations(styles, "\\.thread-row"), /min-height:\s*48px/);
   assert.match(cssDeclarations(styles, "\\.thread-title"), /font-size:\s*14px/);
   assert.match(cssDeclarations(styles, "\\.message-body"), /font-size:\s*15\.5px/);
   assert.match(cssDeclarations(styles, "\\.composer textarea"), /font-size:\s*15\.5px/);
@@ -299,6 +305,13 @@ test("production shell keeps readable type, controls, focus, and motion contract
     /@media \(prefers-reduced-motion: reduce\)[\s\S]*scroll-behavior: auto !important/,
   );
   assert.match(html, /Enter send · Shift\+Enter newline/);
+});
+
+test("tailnet hostnames expose share UI; loopback stays local", () => {
+  assert.equal(accessKind("127.0.0.1"), "local");
+  assert.equal(accessKind("localhost"), "local");
+  assert.equal(accessKind("codewhale.tail123.ts.net"), "tailnet");
+  assert.equal(accessKind("example.com"), "other");
 });
 
 test("composer Enter sends without interrupting newlines or IME composition", () => {

@@ -656,6 +656,10 @@ function startBrowserClient() {
     connectionDot: document.querySelector("#connection-dot"),
     connectionLabel: document.querySelector("#connection-label"),
     runtimeProvenance: document.querySelector("#runtime-provenance"),
+    accessCard: document.querySelector("#access-card"),
+    accessQr: document.querySelector("#access-qr"),
+    accessUrl: document.querySelector("#access-url"),
+    accessCopy: document.querySelector("#access-copy"),
     kicker: document.querySelector("#session-kicker"),
     title: document.querySelector("#session-title"),
     facts: document.querySelector("#session-facts"),
@@ -1399,7 +1403,7 @@ function startBrowserClient() {
     const empty = element("div", "empty-state");
     const mark = document.createElement("img");
     mark.className = "empty-mark";
-    mark.src = "/assets/codewhale-192.png";
+    mark.src = "/assets/codewhale-mark-dark.png";
     mark.alt = "";
     empty.append(mark);
     empty.append(element("h2", "", title));
@@ -2193,6 +2197,7 @@ function startBrowserClient() {
         api("/v1/workspace/status"),
       ]);
       renderRuntimeProvenance(dom.runtimeProvenance, app.runtimeInfo);
+      renderAccessCard(dom);
       setConnection("ready", "Local runtime connected");
       await loadThreads();
       await loadSessions();
@@ -2241,6 +2246,43 @@ export function formatRuntimeProvenance(runtimeInfo) {
 
 export function renderRuntimeProvenance(element, runtimeInfo) {
   return setSafeText(element, formatRuntimeProvenance(runtimeInfo));
+}
+
+export function accessKind(hostname = globalThis.location?.hostname || "") {
+  const host = String(hostname).replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "127.0.0.1" || host === "localhost" || host === "::1") return "local";
+  if (host.endsWith(".ts.net")) return "tailnet";
+  return "other";
+}
+
+export function renderAccessCard(dom, hostname, origin) {
+  const card = dom?.accessCard;
+  if (!card) return "local";
+  const kind = accessKind(hostname);
+  card.dataset.kind = kind;
+  if (kind !== "tailnet") {
+    card.hidden = true;
+    return kind;
+  }
+  const href = String(origin || globalThis.location?.origin || "").replace(/\/$/, "");
+  card.hidden = false;
+  if (dom.accessUrl) setSafeText(dom.accessUrl, href);
+  if (dom.accessQr) {
+    dom.accessQr.src = "/assets/access-qr.svg";
+    dom.accessQr.alt = `QR code for ${href}`;
+  }
+  if (dom.accessCopy && !dom.accessCopy.dataset.bound) {
+    dom.accessCopy.dataset.bound = "1";
+    dom.accessCopy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(`${href}/`);
+        dom.accessCopy.textContent = "Copied";
+      } catch {
+        dom.accessCopy.textContent = "Copy failed";
+      }
+    });
+  }
+  return kind;
 }
 
 function permissionLabel(thread) {

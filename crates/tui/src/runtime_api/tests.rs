@@ -872,6 +872,7 @@ struct TestServerOverrides {
     config_path: Option<PathBuf>,
     config_profile: Option<String>,
     web: Option<web::RuntimeWebState>,
+    web_public_origins: Vec<String>,
     compat_stream_test_hook: Option<mpsc::UnboundedSender<CompatStreamTestPoint>>,
     plugin_discovery: Option<Arc<crate::plugins::PluginDiscoveryContext>>,
 }
@@ -996,6 +997,7 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
         bind_port: addr.port(),
         mobile_enabled,
         web: overrides.web,
+        web_public_origins: overrides.web_public_origins,
         fleet_codewhale_binary: overrides
             .fleet_codewhale_binary
             .unwrap_or_else(configured_codewhale_binary),
@@ -1598,6 +1600,41 @@ async fn web_bootstrap_sets_strict_cookie_once_and_preserves_v1_auth() -> Result
     );
     assert!(icon.bytes().await?.starts_with(b"\x89PNG\r\n\x1a\n"));
 
+    for mark in [
+        "/assets/codewhale-mark-dark.png",
+        "/assets/codewhale-mark-light.png",
+    ] {
+        let response = client.get(format!("http://{addr}{mark}")).send().await?;
+        assert_eq!(response.status(), StatusCode::OK, "path={mark}");
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("image/png")
+        );
+        assert!(response.bytes().await?.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    let qr = client
+        .get(format!("http://{addr}/assets/access-qr.svg"))
+        .send()
+        .await?;
+    assert_eq!(
+        qr.status(),
+        StatusCode::NOT_FOUND,
+        "loopback-only sessions must not mint a tailnet QR"
+    );
+
+    assert!(
+        page_body.contains("/assets/codewhale-mark-dark.png"),
+        "web shell should use the dark C-whale mark"
+    );
+    assert!(
+        page_body.contains("access-card"),
+        "web shell should keep the tailnet access card in the rail footer"
+    );
+
     let wrong = client
         .get(format!(
             "http://{addr}/__codewhale/bootstrap/cwwb_00000000000000000000000000000000"
@@ -1706,10 +1743,54 @@ async fn web_assets_are_absent_outside_web_mode() -> Result<()> {
         "/assets/codewhale-web.css",
         "/assets/codewhale-web.js",
         "/assets/codewhale-192.png",
+        "/assets/codewhale-mark-dark.png",
+        "/assets/codewhale-mark-light.png",
+        "/assets/access-qr.svg",
     ] {
         let response = client.get(format!("http://{addr}{path}")).send().await?;
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "path={path}");
     }
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn web_access_qr_renders_svg_for_tailnet_origin() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("codewhale-web-qr-{}", Uuid::new_v4()));
+    let sessions_dir = root.join("sessions");
+    let workspace = root.join("workspace");
+    let (web, _nonce) = web::RuntimeWebState::new();
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root_token_mobile_workspace_and_overrides(
+            root,
+            sessions_dir,
+            None,
+            false,
+            workspace,
+            TestServerOverrides {
+                web: Some(web),
+                web_public_origins: vec!["https://codewhale.tail123.ts.net".to_string()],
+                ..TestServerOverrides::default()
+            },
+        )
+        .await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+    let qr = client
+        .get(format!("http://{addr}/assets/access-qr.svg"))
+        .send()
+        .await?;
+    assert_eq!(qr.status(), StatusCode::OK);
+    assert_eq!(
+        qr.headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("image/svg+xml; charset=utf-8")
+    );
+    let body = qr.text().await?;
+    assert!(body.contains("<svg"), "QR must be SVG");
     handle.abort();
     Ok(())
 }

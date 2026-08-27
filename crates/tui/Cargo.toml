@@ -18,6 +18,9 @@ web = ["dep:schemaui", "schemaui/web", "json", "toml"]
 json = ["schemaui/json"]
 toml = ["schemaui/toml"]
 long-running-tests = []
+# Official tailscale-rs tsnet. Off by default so ordinary builds stay lean.
+# `codewhale web --tailscale` still works without it via the CLI serve fallback.
+tailscale = ["dep:tailscale"]
 
 [lib]
 name = "codewhale_tui"
@@ -71,7 +74,7 @@ reqwest = { workspace = true, features = ["blocking", "stream", "form", "http2"]
 rusqlite.workspace = true
 rmcp = { version = "2.2.0", default-features = false, features = ["auth", "client"] }
 rustls.workspace = true
-qrcode = { version = "0.14", default-features = false }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 similar = "3"
 syntect = { version = "5.2", default-features = false, features = ["default-fancy"] }
 serde.workspace = true
@@ -133,6 +136,10 @@ arboard = "3.4"
 
 [target.'cfg(not(target_env = "ohos"))'.dependencies]
 portable-pty = "0.9"
+
+# Official tsnet (0.5.0): Linux x86_64/ARM64 and macOS ARM64 only.
+[target.'cfg(any(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")), all(target_os = "macos", target_arch = "aarch64")))'.dependencies]
+tailscale = { version = "0.5.0", optional = true, default-features = false, features = ["axum"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.3"

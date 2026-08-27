@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="dark">
     <meta name="theme-color" content="#020711">
     <title>Codewhale</title>
-    <link rel="icon" href="data:,">
+    <link rel="icon" href="/assets/codewhale-mark-dark.png" type="image/png">
     <link rel="stylesheet" href="/assets/codewhale-web.css">
     <script type="module" src="/assets/codewhale-web.js"></script>
   </head>
@@ -14,7 +14,7 @@
     <div class="shell" id="app-shell">
       <aside class="rail" id="thread-rail" aria-label="Threads" tabindex="-1">
         <div class="rail-brand">
-          <img class="brand-mark" src="/assets/codewhale-192.png" alt="">
+          <img class="brand-mark" src="/assets/codewhale-mark-dark.png" alt="">
           <div>
             <p class="brand-name">Codewhale</p>
             <p class="brand-context">Local runtime</p>
@@ -48,11 +48,20 @@
         </section>
 
         <div class="rail-footer">
-          <span class="connection-dot" id="connection-dot" aria-hidden="true"></span>
-          <span class="connection-copy">
-            <span id="connection-label">Connecting to local runtime…</span>
-            <span class="runtime-provenance" id="runtime-provenance">version unknown · source unknown</span>
-          </span>
+          <div class="connection-status">
+            <span class="connection-dot" id="connection-dot" aria-hidden="true"></span>
+            <span class="connection-copy">
+              <span id="connection-label">Connecting to local runtime…</span>
+              <span class="runtime-provenance" id="runtime-provenance">version unknown · source unknown</span>
+            </span>
+          </div>
+          <div class="access-card" id="access-card" data-kind="local" hidden>
+            <h3>On your tailnet</h3>
+            <p>Phones and laptops already on this Tailscale network can open this Runtime. Account remote control (<code>/rc</code>) is a different pairing path through your Codewhale account.</p>
+            <img id="access-qr" alt="QR code for this tailnet URL" width="132" height="132">
+            <p class="access-url" id="access-url"></p>
+            <button class="quiet-button" id="access-copy" type="button">Copy link</button>
+          </div>
         </div>
       </aside>
 
@@ -80,7 +89,7 @@
 
         <section class="transcript" id="transcript" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions" aria-atomic="false">
           <div class="empty-state">
-            <img class="empty-mark" src="/assets/codewhale-192.png" alt="">
+            <img class="empty-mark" src="/assets/codewhale-mark-dark.png" alt="">
             <h2>Your local agent, in the browser.</h2>
             <p>Create a thread or choose one from the rail. This client uses the same Runtime as the terminal.</p>
           </div>
