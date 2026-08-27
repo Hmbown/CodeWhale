@@ -293,9 +293,7 @@ mod tests {
             "codewhale.tailnet.ts.net",
             &["http://codewhale.tailnet.ts.net".to_string()]
         ));
-        let session_token = state
-            .consume(&nonce)
-            .expect("valid loopback bootstrap");
+        let session_token = state.consume(&nonce).expect("valid loopback bootstrap");
         assert!(session_token.starts_with(WEB_SESSION_PREFIX));
         assert!(state.matches_session_cookie(Some(&format!(
             "theme=dark; {WEB_SESSION_COOKIE_NAME}={session_token}"
@@ -314,9 +312,7 @@ mod tests {
     fn web_session_survives_reload_then_expires_and_rejects_wrong_tokens() {
         let (state, nonce) =
             RuntimeWebState::new_with_ttls(Duration::from_secs(60), Duration::from_secs(60));
-        let session_token = state
-            .consume(&nonce)
-            .expect("valid loopback bootstrap");
+        let session_token = state.consume(&nonce).expect("valid loopback bootstrap");
         let cookie = format!("{WEB_SESSION_COOKIE_NAME}={session_token}");
         assert!(state.matches_session_cookie(Some(&cookie)));
         assert!(
@@ -340,20 +336,14 @@ mod tests {
     fn bootstrap_rejects_malformed_or_wrong_capabilities_without_consuming() {
         let (state, nonce) = RuntimeWebState::new();
         for invalid in ["", "cwwb_short", "cwwb_gggggggggggggggggggggggggggggggg"] {
-            assert_eq!(
-                state.consume(invalid),
-                Err(BootstrapError::Invalid)
-            );
+            assert_eq!(state.consume(invalid), Err(BootstrapError::Invalid));
         }
         let mut wrong = nonce.clone();
         wrong.replace_range(wrong.len() - 1.., "0");
         if wrong == nonce {
             wrong.replace_range(wrong.len() - 1.., "1");
         }
-        assert_eq!(
-            state.consume(&wrong),
-            Err(BootstrapError::Invalid)
-        );
+        assert_eq!(state.consume(&wrong), Err(BootstrapError::Invalid));
         assert!(
             state
                 .consume(&nonce)

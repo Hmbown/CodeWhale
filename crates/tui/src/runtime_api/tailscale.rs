@@ -197,7 +197,9 @@ enum TailscaleGuardInner {
     Inactive,
     CliServe,
     #[allow(dead_code)]
-    Embedded { serve: tokio::task::JoinHandle<()> },
+    Embedded {
+        serve: tokio::task::JoinHandle<()>,
+    },
 }
 
 impl TailscaleGuard {
@@ -362,9 +364,9 @@ fn run_tailscale_output(args: &[impl AsRef<std::ffi::OsStr>]) -> Result<std::pro
 ))]
 mod embed {
     use super::*;
+    use ::tailscale::{AuthState, Config, Device};
     use anyhow::Context;
     use std::sync::Arc;
-    use ::tailscale::{AuthState, Config, Device};
 
     const EXPERIMENT_ENV: &str = "TS_RS_EXPERIMENT";
     const EXPERIMENT_VALUE: &str = "this_is_unstable_software";
@@ -403,9 +405,10 @@ mod embed {
             .self_node()
             .await
             .context("read embedded tsnet self node")?;
-        let magic_dns = node.fqdn_opt(false).filter(|dns| dns.contains('.')).unwrap_or_else(|| {
-            node.fqdn(false)
-        });
+        let magic_dns = node
+            .fqdn_opt(false)
+            .filter(|dns| dns.contains('.'))
+            .unwrap_or_else(|| node.fqdn(false));
         let magic_dns = magic_dns.trim_end_matches('.').to_string();
         if !magic_dns.contains('.') {
             bail!("embedded tsnet FQDN looks incomplete: {magic_dns}");
