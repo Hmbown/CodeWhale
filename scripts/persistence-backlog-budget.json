@@ -1,5 +1,5 @@
 {
-  "_comment": "Frozen paused-consumer workload plus one-way ceilings for the actual persistence request channel. All 128 sends must remain accepted and the final sent version must be the one production PendingState would apply; retained count and bytes may decrease. Latency and macOS RSS ceilings include measurement noise headroom and can be tightened after a bounded implementation.",
+  "_comment": "Frozen paused-consumer workload plus one-way ceilings for the actual persistence request channel. All 128 sends must remain accepted and the final sent version must be the one production PendingState would apply; retained count and bytes may decrease. Latency and macOS RSS ceilings include measurement noise headroom and can be tightened after a bounded implementation. enqueue_elapsed_ns is 50ms because a clean macos-latest GitHub runner produced 43684497ns after relinking the libtest binary; 25ms was noise headroom around the 456170ns baseline, not a product bound, and still rejects fsync or disk I/O on the enqueue path.",
   "_rebaseline_2026_08_08": "v0.9.5 journal compatibility repair: queued snapshots now retain one canonical journal and materialize legacy messages only at the disk boundary. Retained payload fell from the broken candidate's 16924032 bytes to an observed 8527991-8528000 bytes across repeated clean samples. The 8529280-byte ceiling is 40448 bytes (0.48%) above the pre-journal 8488832-byte baseline and includes 1280 bytes (0.015%) of serialization-noise headroom above the largest observed sample; it does not permit duplicate history.",
   "document_kind": "codewhale.persistence_backlog_budget",
   "schema_version": 2,
@@ -35,7 +35,7 @@
   "ceilings": {
     "retained_queued_requests": 128,
     "estimated_retained_payload_bytes": 8529280,
-    "enqueue_elapsed_ns": 25000000,
+    "enqueue_elapsed_ns": 50000000,
     "rss_during_delta_bytes": 33554432,
     "rss_after_delta_bytes": 33554432
   }

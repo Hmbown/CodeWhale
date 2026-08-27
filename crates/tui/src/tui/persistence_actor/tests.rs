@@ -176,6 +176,14 @@ fn measure_paused_persistence_backlog() -> PersistenceBacklogObservation {
 
     let (tx, mut receiver) = persistence_request_channel();
     let handle = PersistActorHandle { tx };
+    // Page in try_send/compact before the timed sample so enqueue_elapsed_ns
+    // does not include first-touch instruction paging after this binary is
+    // linked. Drain the warmup request so it is not retained or billed to RSS.
+    let _ = handle.try_send(PersistRequest::SessionSnapshot(backlog_session(
+        tmp.path(),
+        0,
+    )));
+    while receiver.try_recv().is_ok() {}
     let rss_before_bytes = current_process_rss_bytes();
     let mut accepted_requests = 0;
     let mut enqueue_elapsed_ns = 0;

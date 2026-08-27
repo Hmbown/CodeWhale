@@ -33,15 +33,15 @@ def measurement_command() -> list[str]:
         "cargo",
         "test",
         "--locked",
-        # Match the feature set CI's `cargo nextest run --workspace
-        # --all-features` already built. Default features are a *different*
-        # unification (this crate's `--all-features` adds `web` and
-        # `long-running-tests`), so asking for them here rebuilt the crate and
-        # its dependents from scratch — ten minutes of the macOS leg spent
-        # recompiling artifacts the previous step had already produced.
+        # Match CI's `cargo nextest run --workspace --all-features` feature
+        # unification. `-p codewhale-tui --all-features` is not the same:
+        # sibling crates can enable extra features on shared deps, so this
+        # step relinked codewhale-tui (and telemetry/build-support) for ~13
+        # minutes on macos-latest and then timed enqueue on a just-linked
+        # binary. That sample was enqueue_elapsed_ns=43684497 against a
+        # 25ms ceiling after the suite itself had already passed.
+        "--workspace",
         "--all-features",
-        "-p",
-        "codewhale-tui",
         "--lib",
         TEST_NAME,
         "--",
@@ -66,7 +66,15 @@ def run_measurement(receipt_path: Path, env: dict[str, str]) -> dict:
         result.check_returncode()
 
     combined = "\n".join(result.stdout.splitlines() + result.stderr.splitlines())
-    if re.search(r"\brunning\s+0\s+tests?\b", combined):
+    combined = re.sub(r"\x1b\[[0-9;]*m", "", combined)
+    # `--workspace --lib` runs every crate's library tests. Packages that
+    # do not contain TEST_NAME print "running 0 tests"; that is expected
+    # and must not be treated as a missed measurement.
+    test_status = re.search(
+        rf"test {re.escape(TEST_NAME)} \.\.\. (ok|FAILED|ignored)\b",
+        combined,
+    )
+    if test_status is None or test_status.group(1) != "ok":
         sys.stdout.write(result.stdout)
         raise PersistenceBacklogMeasurementError(
             f"exact library measurement test {TEST_NAME} ran zero tests"

@@ -54,9 +54,8 @@ class PersistenceBacklogMeasurementTests(unittest.TestCase):
                 "cargo",
                 "test",
                 "--locked",
+                "--workspace",
                 "--all-features",
-                "-p",
-                "codewhale-tui",
                 "--lib",
                 mod.TEST_NAME,
                 "--",
@@ -66,6 +65,31 @@ class PersistenceBacklogMeasurementTests(unittest.TestCase):
             ],
         )
         self.assertEqual(run.call_args.kwargs["cwd"], mod.ROOT)
+
+    def test_workspace_zero_test_packages_do_not_hide_the_exact_test(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                "running 0 tests\n\n"
+                "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; "
+                "3 filtered out\n\n"
+                "running 1 test\n"
+                f"test {mod.TEST_NAME} ... ok\n\n"
+                "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
+                "12 filtered out\n"
+            ),
+            stderr="",
+        )
+        receipt = {"document_kind": "workspace-fixture"}
+
+        with tempfile.TemporaryDirectory() as root:
+            receipt_path = Path(root) / "receipt.json"
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            with mock.patch.object(mod.subprocess, "run", return_value=completed):
+                measured = mod.run_measurement(receipt_path, {})
+
+        self.assertEqual(measured, receipt)
 
     def test_successful_zero_test_run_is_rejected(self) -> None:
         completed = subprocess.CompletedProcess(
