@@ -1467,7 +1467,9 @@ pub struct App {
     pub calm_mode: bool,
     pub low_motion: bool,
     pub constrained_frame_rate: bool,
-    pub ocean_started_at: Instant,
+    /// Start of the idle-welcome caustic. `None` until that mark is actually
+    /// on screen, so launch and onboarding cannot consume the first sweep.
+    pub ocean_started_at: Option<Instant>,
     /// The ambient animation clock, in clamped milliseconds. Creature and
     /// water positions are pure functions of this value; advancing it by at
     /// most [`App::AMBIENT_MAX_STEP_MS`] per sampled frame keeps motion

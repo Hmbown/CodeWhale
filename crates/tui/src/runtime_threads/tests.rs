@@ -3687,6 +3687,26 @@ fn runtime_event_sequences_serialize_across_real_processes() -> Result<()> {
 }
 
 #[test]
+fn runtime_process_owner_lock_copy_helps_the_user_recover() {
+    assert!(
+        RUNTIME_PROCESS_OWNER_LOCK_HELD.contains("already active in another process"),
+        "{RUNTIME_PROCESS_OWNER_LOCK_HELD}"
+    );
+    assert!(
+        RUNTIME_PROCESS_OWNER_LOCK_HELD.contains("Close the other Codewhale session"),
+        "{RUNTIME_PROCESS_OWNER_LOCK_HELD}"
+    );
+    assert!(
+        RUNTIME_PROCESS_OWNER_LOCK_HELD.contains("CODEWHALE_RUNTIME_DIR"),
+        "{RUNTIME_PROCESS_OWNER_LOCK_HELD}"
+    );
+    assert!(
+        !RUNTIME_PROCESS_OWNER_LOCK_HELD.contains("thread store"),
+        "{RUNTIME_PROCESS_OWNER_LOCK_HELD}"
+    );
+}
+
+#[test]
 fn runtime_manager_store_has_one_lifetime_process_owner() -> Result<()> {
     let dir = test_runtime_dir();
     let signal = dir.join("manager-owner.ready");
@@ -3706,6 +3726,14 @@ fn runtime_manager_store_has_one_lifetime_process_owner() -> Result<()> {
     assert!(
         message.contains("CODEWHALE_RUNTIME_DIR"),
         "owner-lock error should name the override for a shared root: {error:#}"
+    );
+    assert!(
+        message.contains("Close the other Codewhale session"),
+        "owner-lock error should name the recovery action: {error:#}"
+    );
+    assert!(
+        !message.contains("thread store"),
+        "owner-lock error should not leak the store implementation: {error:#}"
     );
 
     let distinct_dir = test_runtime_dir();

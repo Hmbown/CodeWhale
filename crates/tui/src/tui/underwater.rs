@@ -7,6 +7,7 @@
 //! sidebar + dashboard + footer composition with four owners for one fact.
 
 use std::borrow::Cow;
+use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -1509,6 +1510,18 @@ fn idle_mark_animation_enabled(app: &App) -> bool {
     decorative_shell_motion_enabled(app) && matches!(ShellPhase::from_app(app), ShellPhase::Idle)
 }
 
+/// Start the idle-welcome caustic the first time that mark is actually on
+/// screen. Launch and onboarding sit in front of the empty ocean; starting at
+/// `App` construction lets the first sweep finish behind those surfaces.
+pub(crate) fn ensure_idle_welcome_started(app: &mut App, area: Rect) {
+    if idle_mark_animation_enabled(app)
+        && empty_state_mark_visible(area)
+        && app.ocean_started_at.is_none()
+    {
+        app.ocean_started_at = Some(Instant::now());
+    }
+}
+
 /// Raised-cosine caustic band for the idle whale. The 4s cycle spends roughly
 /// 1.3s crossing the mark and parks off-screen for the remainder, so the brand
 /// has a clear moment of life without becoming looping chrome.
@@ -1705,7 +1718,10 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(""); usize::from(area.height / 4)];
     if empty_state_mark_visible(area) {
         let animated = idle_mark_animation_enabled(app);
-        let elapsed_ms = app.ocean_started_at.elapsed().as_millis();
+        let elapsed_ms = app
+            .ocean_started_at
+            .map(|started| started.elapsed().as_millis())
+            .unwrap_or(0);
         let spout = idle_whale_spout_row(app);
         let rows = idle_whale_rows(app);
         let current = idle_whale_current_color(app);
@@ -1793,6 +1809,63 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
         )));
     }
     lines
+}
+
+#[cfg(test)]
+mod idle_welcome_shine_tests {
+    use super::{
+        IDLE_SHIMMER_CYCLE_MS, empty_state_mark_visible, ensure_idle_welcome_started,
+        idle_mark_shine_opacity,
+    };
+    use crate::tui::app::OnboardingState;
+    use ratatui::layout::Rect;
+
+    fn idle_app() -> crate::tui::app::App {
+        let mut app = crate::test_support::test_app_with_options(
+            crate::test_support::test_tui_options(std::env::temp_dir()),
+        );
+        app.low_motion = false;
+        app.fancy_animations = true;
+        app.onboarding = OnboardingState::None;
+        app.launch.visible = false;
+        app
+    }
+
+    #[test]
+    fn shine_is_parked_late_in_the_cycle() {
+        // A clock that starts at App construction can sit in this parked
+        // window after the launch menu, so the first visible idle frame
+        // has no caustic at all.
+        assert_eq!(IDLE_SHIMMER_CYCLE_MS, 4_000);
+        let parked = idle_mark_shine_opacity(0.5, 2_500);
+        assert_eq!(parked, 0.0);
+        let crossing = idle_mark_shine_opacity(0.5, 800);
+        assert!(
+            crossing > 0.0,
+            "the first sweep should still be crossing the mark at 800ms, got {crossing}"
+        );
+    }
+
+    #[test]
+    fn welcome_clock_stays_stopped_until_the_mark_can_draw() {
+        let mut app = idle_app();
+        assert!(app.ocean_started_at.is_none());
+
+        let too_small = Rect::new(0, 0, 40, 12);
+        assert!(!empty_state_mark_visible(too_small));
+        ensure_idle_welcome_started(&mut app, too_small);
+        assert!(app.ocean_started_at.is_none());
+
+        app.launch.visible = true;
+        let roomy = Rect::new(0, 0, 80, 24);
+        assert!(empty_state_mark_visible(roomy));
+        ensure_idle_welcome_started(&mut app, roomy);
+        assert!(app.ocean_started_at.is_none());
+
+        app.launch.visible = false;
+        ensure_idle_welcome_started(&mut app, roomy);
+        assert!(app.ocean_started_at.is_some());
+    }
 }
 
 #[cfg(test)]

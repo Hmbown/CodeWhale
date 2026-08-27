@@ -214,6 +214,7 @@ impl ChatWidget {
         render_options.reasoning_preview_viewport_lines = Some(visible_lines);
 
         if render_empty_state {
+            crate::tui::underwater::ensure_idle_welcome_started(app, content_area);
             let lines = build_empty_state_lines(app, content_area);
             app.viewport.last_transcript_area = Some(content_area);
             app.viewport.last_transcript_top = 0;
@@ -4328,8 +4329,8 @@ mod tests {
     use crate::palette;
     use crate::tui::active_cell::ActiveCell;
     use crate::tui::app::{
-        App, AppMode, ComposerDensity, QueuedMessage, TaskPanelEntry, TaskPanelEntryKind,
-        ToolCollapseMode, TranscriptSpacing, TuiOptions,
+        App, AppMode, ComposerDensity, OnboardingState, QueuedMessage, TaskPanelEntry,
+        TaskPanelEntryKind, ToolCollapseMode, TranscriptSpacing, TuiOptions,
     };
     use crate::tui::history::{
         ExecCell, ExecSource, GenericToolCell, HistoryCell, ToolCell, ToolRun, ToolStatus,
@@ -4342,7 +4343,10 @@ mod tests {
         style::{Color, Modifier, Style},
         text::{Line, Span},
     };
-    use std::{path::PathBuf, time::Instant};
+    use std::{
+        path::PathBuf,
+        time::{Duration, Instant},
+    };
     use unicode_width::UnicodeWidthStr;
 
     fn create_test_app() -> App {
@@ -6586,6 +6590,59 @@ mod tests {
         assert!(
             full.last_send_at.is_some(),
             "full motion should retain the active send-flash window"
+        );
+    }
+
+    #[test]
+    fn idle_welcome_caustic_starts_when_the_empty_ocean_is_shown() {
+        let mut app = create_test_app();
+        app.low_motion = false;
+        app.fancy_animations = true;
+        app.onboarding = OnboardingState::None;
+        app.launch.visible = true;
+        let area = Rect::new(0, 0, 80, 24);
+
+        let _ = ChatWidget::new(&mut app, area);
+        assert!(
+            app.ocean_started_at.is_none(),
+            "launch sits in front of the idle whale, so the shine must wait"
+        );
+
+        app.launch.visible = false;
+        let _ = ChatWidget::new(&mut app, area);
+        let started = app
+            .ocean_started_at
+            .expect("the idle welcome shine starts once the empty ocean is on screen");
+
+        std::thread::sleep(Duration::from_millis(20));
+        let _ = ChatWidget::new(&mut app, area);
+        assert_eq!(
+            app.ocean_started_at,
+            Some(started),
+            "later idle frames keep the same welcome clock"
+        );
+    }
+
+    #[test]
+    fn idle_welcome_caustic_waits_behind_onboarding() {
+        let mut app = create_test_app();
+        app.low_motion = false;
+        app.fancy_animations = true;
+        app.onboarding = OnboardingState::Welcome;
+        app.launch.visible = false;
+        let area = Rect::new(0, 0, 80, 24);
+
+        let _ = ChatWidget::new(&mut app, area);
+        assert!(
+            app.ocean_started_at.is_none(),
+            "onboarding sits in front of the idle whale, so the shine must wait"
+        );
+
+        app.onboarding = OnboardingState::None;
+        let _ = ChatWidget::new(&mut app, area);
+        assert!(
+            app.ocean_started_at.is_some(),
+            "the idle welcome shine starts once onboarding hands off the ocean"
         );
     }
 

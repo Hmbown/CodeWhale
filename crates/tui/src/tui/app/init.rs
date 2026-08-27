@@ -821,7 +821,7 @@ impl App {
             calm_mode,
             low_motion,
             constrained_frame_rate,
-            ocean_started_at: Instant::now(),
+            ocean_started_at: None,
             ambient_clock_ms: 0,
             ambient_clock_sampled_at: None,
             ambient_idle_since: None,

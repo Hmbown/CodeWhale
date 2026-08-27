@@ -101,17 +101,14 @@ impl StreamableHttpTransport {
                         }
                         Err(refresh_error) => {
                             return Err(StreamableSendError::Other(anyhow::anyhow!(
-                                "MCP server {} rejected the request with {status} and refreshing the OAuth session failed: {refresh_error:#}. Re-authorize this server (/mcp auth <name>) or configure a fresh bearer token.",
+                                "MCP server {} rejected the request with {status} and refreshing the OAuth session failed: {refresh_error:#}. {hint}",
                                 mask_url_secrets(&self.url),
+                                hint = oauth_refresh_failed_hint(),
                             )));
                         }
                     }
                 }
-                let hint = if self.auth.oauth.is_some() {
-                    "Re-authorize this server (/mcp auth <name>) to continue."
-                } else {
-                    "Check the configured bearer token (or its environment variable)."
-                };
+                let hint = unauthorized_session_hint(self.auth.oauth.is_some());
                 return Err(StreamableSendError::Other(anyhow::anyhow!(
                     "MCP server {} rejected the request with {status}; the session is no longer accepted. {hint}",
                     mask_url_secrets(&self.url),
@@ -219,6 +216,20 @@ pub(super) async fn read_body_capped(
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
+/// TUI recovery for a rejected OAuth session. The implemented command is
+/// `/mcp login <name>` (`codewhale mcp login`); `/mcp auth` is not a command.
+fn oauth_refresh_failed_hint() -> &'static str {
+    "Re-authorize this server (/mcp login <name>) or configure a fresh bearer token."
+}
+
+fn unauthorized_session_hint(oauth_configured: bool) -> &'static str {
+    if oauth_configured {
+        "Re-authorize this server (/mcp login <name>) to continue."
+    } else {
+        "Check the configured bearer token (or its environment variable)."
+    }
+}
+
 fn is_streamable_http_incompatible_status(status: StatusCode) -> bool {
     matches!(
         status,
@@ -239,4 +250,27 @@ fn is_streamable_http_stale_session_status(status: StatusCode, body_excerpt: &st
     }
     let body = body_excerpt.to_ascii_lowercase();
     body.contains("session") && (body.contains("expired") || body.contains("invalid"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{oauth_refresh_failed_hint, unauthorized_session_hint};
+
+    #[test]
+    fn unauthorized_oauth_hints_name_the_login_command() {
+        for hint in [oauth_refresh_failed_hint(), unauthorized_session_hint(true)] {
+            assert!(
+                hint.contains("/mcp login <name>"),
+                "OAuth recovery must name the implemented command: {hint}"
+            );
+            assert!(
+                !hint.contains("/mcp auth"),
+                "OAuth recovery must not advertise a missing /mcp auth command: {hint}"
+            );
+        }
+        assert!(
+            !unauthorized_session_hint(false).contains("/mcp"),
+            "bearer-token recovery should not send the user to OAuth login"
+        );
+    }
 }
