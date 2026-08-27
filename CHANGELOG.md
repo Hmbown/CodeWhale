@@ -104,6 +104,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Account sessions no longer read the macOS Keychain. Unsigned or rebuilt
+  `codewhale` binaries were a new Keychain ACL principal every time, so
+  `codewhale web` and the TUI popped a password dialog on start. Sessions
+  now use `~/.codewhale/secrets/secrets.json` (mode 0600), the same store
+  as provider keys. Extracted from the Keychain-retirement half of #5632.
 - Hardened the dispatcher-side config parse the same way: `ConfigStore`
   loads and project-config parsing now deserialize `ConfigToml` on a
   dedicated 16 MiB-stack thread (the guided-setup save path could overflow
