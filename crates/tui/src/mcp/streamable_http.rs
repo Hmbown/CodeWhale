@@ -261,11 +261,11 @@ mod tests {
         for hint in [oauth_refresh_failed_hint(), unauthorized_session_hint(true)] {
             assert!(
                 hint.contains("/mcp login <name>"),
-                "OAuth recovery must name the implemented command: {hint}"
+                "OAuth recovery must name the implemented command"
             );
             assert!(
                 !hint.contains("/mcp auth"),
-                "OAuth recovery must not advertise a missing /mcp auth command: {hint}"
+                "OAuth recovery must not advertise a missing /mcp auth command"
             );
         }
         assert!(
