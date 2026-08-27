@@ -575,7 +575,14 @@ impl Default for ModelRegistry {
             ModelInfo {
                 id: "tencent/hy3-preview".to_string(),
                 provider: ProviderKind::Openrouter,
-                aliases: vec!["hy3-preview".to_string(), "tencent-hy3-preview".to_string()],
+                aliases: vec![
+                    "hy3-preview".to_string(),
+                    "tencent-hy3-preview".to_string(),
+                    "hy3".to_string(),
+                    "hunyuan".to_string(),
+                    "tencent-hunyuan".to_string(),
+                    "hunyuan-hy3".to_string(),
+                ],
                 supports_tools: true,
                 supports_reasoning: true,
             },

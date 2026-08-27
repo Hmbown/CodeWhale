@@ -6180,6 +6180,29 @@ fn retired_deepseek_aliases_do_not_escape_provider_owned_namespaces() {
 }
 
 #[test]
+fn openrouter_hunyuan_aliases_resolve_to_hy3_preview() {
+    for alias in [
+        "tencent/hy3-preview",
+        "hy3-preview",
+        "hy3",
+        "hunyuan",
+        "tencent-hunyuan",
+        "hunyuan-hy3",
+    ] {
+        assert_eq!(
+            canonical_model_id_for_provider(ApiProvider::Openrouter, alias).as_deref(),
+            Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL),
+            "{alias} should select the public Hy3 preview id"
+        );
+    }
+    assert_ne!(
+        canonical_model_id_for_provider(ApiProvider::Openrouter, "hy4").as_deref(),
+        Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL),
+        "hy4 is not a released public model id"
+    );
+}
+
+#[test]
 fn deepseek_default_model_canonicalizes_provider_prefixed_ids() {
     let _lock = lock_test_env();
     let temp_root = tempfile::tempdir().unwrap();

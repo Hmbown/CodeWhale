@@ -1386,7 +1386,13 @@ impl SettingsRegistry {
             SettingKind::ReadOnly
         } else if matches!(
             row.key.as_str(),
-            "provider" | "model" | "provider_templates"
+            "provider"
+                | "model"
+                | "provider_templates"
+                | "mcp_open"
+                | "mcp_reconnect"
+                | "mcp_diagnose"
+                | "plugins_open"
         ) {
             SettingKind::Action
         } else if config_boolean_key(&row.key) {
@@ -1570,6 +1576,7 @@ pub struct ConfigView {
     last_render_scroll: Cell<usize>,
     last_row_hitboxes: RefCell<Vec<(u16, usize)>>,
     last_choice_hitboxes: RefCell<Vec<(u16, usize)>>,
+    last_tab_hitboxes: RefCell<Vec<(u16, u16, u16, ConfigTab)>>,
     last_mouse_selected: Option<usize>,
     api_provider: ApiProvider,
     route_base_url: String,
@@ -2099,6 +2106,34 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Mcp,
+                key: "mcp_open".to_string(),
+                value: "/mcp".to_string(),
+                editable: true,
+                scope: ConfigScope::Session,
+            },
+            ConfigRow {
+                section: ConfigSection::Mcp,
+                key: "mcp_reconnect".to_string(),
+                value: "/mcp reload".to_string(),
+                editable: true,
+                scope: ConfigScope::Session,
+            },
+            ConfigRow {
+                section: ConfigSection::Mcp,
+                key: "mcp_diagnose".to_string(),
+                value: "/mcp validate".to_string(),
+                editable: true,
+                scope: ConfigScope::Session,
+            },
+            ConfigRow {
+                section: ConfigSection::Mcp,
+                key: "plugins_open".to_string(),
+                value: "/plugin".to_string(),
+                editable: true,
+                scope: ConfigScope::Session,
+            },
+            ConfigRow {
+                section: ConfigSection::Mcp,
                 key: "mcp_config_path".to_string(),
                 value: app.mcp_config_path.display().to_string(),
                 editable: true,
@@ -2215,6 +2250,7 @@ impl ConfigView {
             last_render_scroll: Cell::new(0),
             last_row_hitboxes: RefCell::new(Vec::new()),
             last_choice_hitboxes: RefCell::new(Vec::new()),
+            last_tab_hitboxes: RefCell::new(Vec::new()),
             last_mouse_selected: None,
             api_provider: app.api_provider,
             route_base_url: app.active_route_base_url.clone(),
@@ -2356,6 +2392,12 @@ impl ConfigView {
             "locale" => "UI language. Scope: saved settings.",
             "reasoning_effort" => "Default reasoning effort for capable models.",
             "default_mode" => "Startup mode (agent / plan / operate).",
+            "mcp_open" => {
+                "Open the MCP manager. Connect, reconnect, re-auth, or diagnose from there."
+            }
+            "mcp_reconnect" => "Reconnect configured MCP servers (/mcp reload).",
+            "mcp_diagnose" => "Diagnose MCP servers (/mcp validate).",
+            "plugins_open" => "Open plugins. Trust, enable, or diagnose invalid manifests.",
             _ => "Enter change · R reset · Esc close. Scope shown on the row badge.",
         }
     }
@@ -2494,6 +2536,10 @@ impl ConfigView {
             "provider" if row.editable => "/provider",
             "provider_templates" if row.editable => "/provider templates",
             "model" if row.editable => "/model",
+            "mcp_open" if row.editable => "/mcp",
+            "mcp_reconnect" if row.editable => "/mcp reload",
+            "mcp_diagnose" if row.editable => "/mcp validate",
+            "plugins_open" if row.editable => "/plugin",
             _ => return None,
         };
         Some(ViewAction::Emit(ViewEvent::CommandPaletteSelected {
@@ -2832,6 +2878,14 @@ impl ConfigView {
             MessageId::ConfigActionOpenProviderTemplates
         } else if row.key == "model" {
             MessageId::ConfigActionOpenModel
+        } else if row.key == "mcp_open" {
+            MessageId::ConfigActionOpenMcp
+        } else if row.key == "mcp_reconnect" {
+            MessageId::ConfigActionMcpReconnect
+        } else if row.key == "mcp_diagnose" {
+            MessageId::ConfigActionMcpDiagnose
+        } else if row.key == "plugins_open" {
+            MessageId::ConfigActionOpenPlugins
         } else if meta.kind == SettingKind::Boolean {
             MessageId::ConfigActionToggle
         } else if meta.kind == SettingKind::Choice {
@@ -3013,6 +3067,10 @@ fn config_label_message(key: &str) -> Option<MessageId> {
         "auto_compact" => MessageId::ConfigLabelAutoCompact,
         "auto_compact_threshold_percent" => MessageId::ConfigLabelAutoCompactThreshold,
         "max_history" => MessageId::ConfigLabelMaxHistory,
+        "mcp_open" => MessageId::ConfigLabelMcpOpen,
+        "mcp_reconnect" => MessageId::ConfigLabelMcpReconnect,
+        "mcp_diagnose" => MessageId::ConfigLabelMcpDiagnose,
+        "plugins_open" => MessageId::ConfigLabelPluginsOpen,
         "mcp_config_path" => MessageId::ConfigLabelMcpConfigPath,
         "fleet.exec.max_spawn_depth" => MessageId::ConfigLabelFleetSpawnDepth,
         "goal_command" => MessageId::ConfigLabelGoalCommand,
@@ -3165,6 +3223,10 @@ fn config_literal_hint_for_key(key: &str) -> &'static str {
         "reasoning_effort" => {
             "Per-model thinking ladder from the active route. default clears the saved value and uses that model's official default. Always-thinking models omit off."
         }
+        "mcp_open" => "open the MCP manager · Connect / Reconnect / Re-auth / Diagnose",
+        "mcp_reconnect" => "reconnect MCP · /mcp reload",
+        "mcp_diagnose" => "diagnose MCP · /mcp validate",
+        "plugins_open" => "open plugins · trust, enable, or diagnose",
         "mcp_config_path" => "path to mcp.json",
         "fleet.exec.max_spawn_depth" => {
             "0 blocks child agents; 3 default (same axis as sub-agents); capped at 8"
@@ -3651,6 +3713,22 @@ impl ModalView for ConfigView {
             return ViewAction::None;
         }
 
+        let clicked_tab = self
+            .last_tab_hitboxes
+            .borrow()
+            .iter()
+            .find_map(|(x0, x1, y, tab)| {
+                (*y == mouse.row && mouse.column >= *x0 && mouse.column < *x1).then_some(*tab)
+            });
+        if let Some(tab) = clicked_tab {
+            if self.active_tab != tab {
+                self.active_tab = tab;
+                self.select_first_visible_row();
+            }
+            self.last_mouse_selected = None;
+            return ViewAction::None;
+        }
+
         let selected = self
             .last_row_hitboxes
             .borrow()
@@ -3686,6 +3764,7 @@ impl ModalView for ConfigView {
             render_underwater_surface(area, buf, self.tr(MessageId::ConfigModalTitle).to_string());
         let (lines, footer) = if let Some(edit) = self.editing.as_ref() {
             *self.last_choice_hitboxes.borrow_mut() = Vec::new();
+            *self.last_tab_hitboxes.borrow_mut() = Vec::new();
             let footer_text = if edit.choices.is_some() {
                 if inner.width < 56 || inner.height <= 8 {
                     " ↑/↓ choose · Enter apply · Esc ".to_string()
@@ -3907,13 +3986,20 @@ impl ModalView for ConfigView {
             ]);
             // Category tabs — app-style shell, not ASCII table headers.
             let mut tab_spans = Vec::new();
+            let tab_y = inner.y.saturating_add(u16::from(!compact));
+            let mut tab_x = inner.x;
+            let mut tab_hitboxes = Vec::new();
             for (i, tab) in ConfigTab::ALL.iter().enumerate() {
                 if i > 0 {
                     tab_spans.push(Span::styled("  ", Style::default()));
+                    tab_x = tab_x.saturating_add(2);
                 }
+                let label = format!(" {} ", tab.label());
+                let width = UnicodeWidthStr::width(label.as_str()) as u16;
+                tab_hitboxes.push((tab_x, tab_x.saturating_add(width), tab_y, *tab));
                 let active = *tab == self.active_tab;
                 tab_spans.push(Span::styled(
-                    format!(" {} ", tab.label()),
+                    label,
                     if active {
                         Style::default()
                             .fg(palette::SELECTION_TEXT)
@@ -3923,7 +4009,9 @@ impl ModalView for ConfigView {
                         Style::default().fg(palette::TEXT_MUTED)
                     },
                 ));
+                tab_x = tab_x.saturating_add(width);
             }
+            *self.last_tab_hitboxes.borrow_mut() = tab_hitboxes;
             let tab_line = Line::from(tab_spans);
             let mut lines: Vec<Line> = if compact {
                 vec![tab_line, search_line]
@@ -4879,7 +4967,7 @@ fn fit_config_column(text: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActionHint, ConfigListItem, ConfigScope, ConfigTab, ConfigView, EmptyState,
+        ActionHint, ConfigListItem, ConfigScope, ConfigSection, ConfigTab, ConfigView, EmptyState,
         FocusTextureMode, HelpView, ListDetailLayout, ModalKind, ModalView, SettingKind,
         SettingsRegistry, ViewAction, ViewEvent, ViewStack, action_footer_lines,
         canonical_config_choice, centered_modal_area, config_choice_detail, config_choice_label,
@@ -5682,6 +5770,10 @@ mod tests {
         assert!(keys.contains(&"bracketed_paste"));
         assert!(keys.contains(&"context_panel"));
         assert!(keys.contains(&"cost_currency"));
+        assert!(keys.contains(&"mcp_open"));
+        assert!(keys.contains(&"mcp_reconnect"));
+        assert!(keys.contains(&"mcp_diagnose"));
+        assert!(keys.contains(&"plugins_open"));
         assert!(keys.contains(&"mcp_config_path"));
         assert!(keys.contains(&"fleet.exec.max_spawn_depth"));
         assert!(keys.contains(&"features.vision_model"));
@@ -7002,6 +7094,10 @@ context_window = 262144
         assert_eq!(kind_for("low_motion"), SettingKind::Boolean);
         assert_eq!(kind_for("default_mode"), SettingKind::Choice);
         assert_eq!(kind_for("mention_menu_limit"), SettingKind::Integer);
+        assert_eq!(kind_for("mcp_open"), SettingKind::Action);
+        assert_eq!(kind_for("mcp_reconnect"), SettingKind::Action);
+        assert_eq!(kind_for("mcp_diagnose"), SettingKind::Action);
+        assert_eq!(kind_for("plugins_open"), SettingKind::Action);
         assert_eq!(kind_for("mcp_config_path"), SettingKind::Text);
         assert_eq!(kind_for("fast_model"), SettingKind::ReadOnly);
 
@@ -7128,6 +7224,67 @@ context_window = 262144
             other => panic!("second click should open the model picker, got {other:?}"),
         }
         assert!(view.editing.is_none());
+    }
+
+    #[test]
+    fn config_view_tabs_are_clickable() {
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        assert_eq!(view.active_tab, ConfigTab::General);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let hitboxes = view.last_tab_hitboxes.borrow().clone();
+        let (x0, _x1, y, tab) = hitboxes
+            .iter()
+            .copied()
+            .find(|(_, _, _, tab)| *tab == ConfigTab::Advanced)
+            .expect("Advanced tab should have a hitbox");
+
+        let action = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: x0.saturating_add(1),
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(tab, ConfigTab::Advanced);
+        assert_eq!(view.active_tab, ConfigTab::Advanced);
+        assert!(
+            view.rows
+                .get(view.selected)
+                .is_some_and(|row| row.section == ConfigSection::Mcp
+                    || row.section == ConfigSection::Fleet
+                    || row.section == ConfigSection::Workflow
+                    || row.section == ConfigSection::Session
+                    || row.section == ConfigSection::Legacy
+                    || row.section == ConfigSection::Experimental)
+        );
+    }
+
+    #[test]
+    fn config_view_mcp_action_rows_run_existing_commands() {
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        for (key, command) in [
+            ("mcp_open", "/mcp"),
+            ("mcp_reconnect", "/mcp reload"),
+            ("mcp_diagnose", "/mcp validate"),
+            ("plugins_open", "/plugin"),
+        ] {
+            view.focus_key(key);
+            let action = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            match action {
+                ViewAction::Emit(ViewEvent::CommandPaletteSelected {
+                    action: CommandPaletteAction::ExecuteCommand { command: emitted },
+                }) => {
+                    assert_eq!(emitted, command, "{key}");
+                    assert!(!emitted.contains("/mcp auth"), "{key}");
+                }
+                other => panic!("{key} should run {command}, got {other:?}"),
+            }
+        }
     }
 
     #[test]

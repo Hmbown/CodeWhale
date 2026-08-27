@@ -1086,9 +1086,13 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
         OPENROUTER_QWEN_3_8_FLASH_MODEL | "qwen3.8-flash" | "qwen-3.8-flash" => {
             Some(OPENROUTER_QWEN_3_8_FLASH_MODEL)
         }
-        OPENROUTER_TENCENT_HY3_PREVIEW_MODEL | "hy3-preview" | "tencent-hy3-preview" => {
-            Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL)
-        }
+        OPENROUTER_TENCENT_HY3_PREVIEW_MODEL
+        | "hy3-preview"
+        | "tencent-hy3-preview"
+        | "hy3"
+        | "hunyuan"
+        | "tencent-hunyuan"
+        | "hunyuan-hy3" => Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL),
         OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL
         | "mimo-v2.5-pro"
         | "mimo-v2-5-pro"

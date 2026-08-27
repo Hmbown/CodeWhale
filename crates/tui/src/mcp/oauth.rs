@@ -46,18 +46,35 @@ impl std::fmt::Display for McpAuthStatus {
 }
 
 pub fn error_looks_auth_required(error: &anyhow::Error) -> bool {
-    let text = format!("{error:#}").to_ascii_lowercase();
+    error_text_looks_auth_required(&format!("{error:#}"))
+}
+
+pub fn error_text_looks_auth_required(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
     text.contains("401")
         || text.contains("unauthorized")
         || text.contains("authentication_required")
         || text.contains("not logged in")
         || text.contains("not-logged-in")
+        || text.contains("re-authorize")
+        || text.contains("/mcp login")
+        || text.contains("mcp login")
 }
 
 pub fn auth_required_login_hint(server_name: &str) -> String {
     format!(
         "MCP server '{server_name}' requires OAuth authentication. Run `codewhale mcp login {server_name}` to authenticate."
     )
+}
+
+/// TUI recovery for a stale Streamable HTTP OAuth session. `/mcp auth` is not a
+/// command; login is `/mcp login <name>` (CLI: `codewhale mcp login <name>`).
+pub fn tui_reauth_hint() -> &'static str {
+    "Re-authorize this server (/mcp login <name>) to continue."
+}
+
+pub fn tui_reauth_refresh_failed_hint() -> &'static str {
+    "Re-authorize this server (/mcp login <name>) or configure a fresh bearer token."
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1229,6 +1246,25 @@ mod tests {
         let hint = auth_required_login_hint("nordic-mcp");
         assert!(hint.contains("nordic-mcp"));
         assert!(hint.contains("codewhale mcp login nordic-mcp"));
+        assert!(!hint.contains("/mcp auth"));
+    }
+
+    #[test]
+    fn tui_reauth_hints_name_the_login_command() {
+        for hint in [tui_reauth_hint(), tui_reauth_refresh_failed_hint()] {
+            assert!(
+                hint.contains("/mcp login <name>"),
+                "OAuth recovery must name the implemented command"
+            );
+            assert!(
+                !hint.contains("/mcp auth"),
+                "OAuth recovery must not advertise a missing /mcp auth command"
+            );
+        }
+        assert!(error_text_looks_auth_required(
+            "MCP server rejected the request with 401 Unauthorized"
+        ));
+        assert!(!error_text_looks_auth_required("connection refused"));
     }
 
     #[tokio::test]

@@ -216,15 +216,16 @@ pub(super) async fn read_body_capped(
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// TUI recovery for a rejected OAuth session. The implemented command is
-/// `/mcp login <name>` (`codewhale mcp login`); `/mcp auth` is not a command.
+/// TUI recovery for a rejected OAuth session. Settings recovery and the
+/// Streamable HTTP path share the oauth helpers so `/mcp login <name>` stays
+/// the only advertised command; `/mcp auth` is not a command.
 fn oauth_refresh_failed_hint() -> &'static str {
-    "Re-authorize this server (/mcp login <name>) or configure a fresh bearer token."
+    super::oauth::tui_reauth_refresh_failed_hint()
 }
 
 fn unauthorized_session_hint(oauth_configured: bool) -> &'static str {
     if oauth_configured {
-        "Re-authorize this server (/mcp login <name>) to continue."
+        super::oauth::tui_reauth_hint()
     } else {
         "Check the configured bearer token (or its environment variable)."
     }

@@ -34,10 +34,7 @@ pub(super) fn format_mcp_manager(snapshot: &McpManagerSnapshot, locale: Locale) 
     }
 
     lines.push(String::new());
-    lines.push(
-        "Actions: /mcp init, /mcp add stdio <name> <command> [args...], /mcp add http <name> <url>, /mcp enable <name>, /mcp disable <name>, /mcp remove <name>, /mcp validate, /mcp reload."
-            .to_string(),
-    );
+    lines.push("Next: Connect /mcp reload · Diagnose /mcp validate".to_string());
     lines.join("\n")
 }
 
@@ -65,6 +62,32 @@ fn push_server(lines: &mut Vec<String>, server: &McpServerSnapshot, locale: Loca
     if let Some(error) = server.error.as_ref() {
         lines.push(format!("  error: {error}"));
     }
+    let recovery = crate::mcp::mcp_recovery_kind(
+        server.enabled,
+        true,
+        server.connected,
+        server.error.as_deref(),
+        false,
+    );
+    let command = if crate::mcp::mcp_name_is_command_safe(&server.name)
+        || matches!(
+            recovery,
+            crate::mcp::McpRecoveryKind::Connect
+                | crate::mcp::McpRecoveryKind::Reconnect
+                | crate::mcp::McpRecoveryKind::Diagnose
+        ) {
+        recovery.slash_command(&server.name)
+    } else {
+        "/mcp validate".to_string()
+    };
+    let verb = match recovery {
+        crate::mcp::McpRecoveryKind::Enable => "Enable",
+        crate::mcp::McpRecoveryKind::Connect => "Connect",
+        crate::mcp::McpRecoveryKind::Reconnect => "Reconnect",
+        crate::mcp::McpRecoveryKind::Reauth => "Re-auth",
+        crate::mcp::McpRecoveryKind::Diagnose => "Diagnose",
+    };
+    lines.push(format!("  next: {verb} {command}"));
     lines.push(format!(
         "  discovered: {} tools, {} resources, {} prompts",
         server.tools.len(),
@@ -205,6 +228,37 @@ mod tests {
         assert!(text.contains("boom"));
         assert!(text.contains("Advertised capabilities: tools"));
         assert!(text.contains("not observed because the server is not connected"));
+        assert!(text.contains("next: Diagnose /mcp validate"));
+        assert!(text.contains("Next: Connect /mcp reload · Diagnose /mcp validate"));
+        assert!(!text.contains("/mcp auth"));
+    }
+
+    #[test]
+    fn manager_text_names_login_for_stale_oauth() {
+        let snapshot = McpManagerSnapshot {
+            config_path: PathBuf::from("/tmp/mcp.json"),
+            config_exists: true,
+            reload_required: false,
+            servers: vec![McpServerSnapshot {
+                name: "github".to_string(),
+                enabled: true,
+                required: false,
+                transport: "http".to_string(),
+                command_or_url: "https://api.githubcopilot.com/mcp/".to_string(),
+                connect_timeout: 10,
+                execute_timeout: 60,
+                read_timeout: 120,
+                connected: false,
+                error: Some("401 Unauthorized".to_string()),
+                capability_metadata: McpServerCapabilityMetadata::NotObserved,
+                tools: Vec::new(),
+                resources: Vec::new(),
+                prompts: Vec::new(),
+            }],
+        };
+        let text = format_mcp_manager(&snapshot, Locale::En);
+        assert!(text.contains("next: Re-auth /mcp login github"), "{text}");
+        assert!(!text.contains("/mcp auth"));
     }
 
     #[test]
