@@ -283,7 +283,7 @@ pub(crate) fn is_compaction_checkpoint_message(message: &Message) -> bool {
     user_text_of(message).is_some_and(|text| is_compaction_summary_text(&text))
 }
 
-fn estimate_tokens_for_message(message: &Message, include_thinking: bool) -> usize {
+pub(crate) fn estimate_tokens_for_message(message: &Message, include_thinking: bool) -> usize {
     message
         .content
         .iter()
@@ -340,14 +340,14 @@ pub fn estimate_tokens(messages: &[Message]) -> usize {
         .sum()
 }
 
-fn message_has_tool_use(message: &Message) -> bool {
+pub(crate) fn message_has_tool_use(message: &Message) -> bool {
     message
         .content
         .iter()
         .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
 }
 
-pub fn estimate_text_tokens_conservative(text: &str) -> usize {
+pub(crate) fn estimate_text_tokens_conservative(text: &str) -> usize {
     text.chars().count().div_ceil(3)
 }
 
@@ -455,10 +455,18 @@ pub fn compaction_pressure_reached_with_billed(
     if !config.enabled {
         return false;
     }
-    let estimated = estimate_input_tokens_for_pressure(messages, system_prompt);
     let billed = billed_input_tokens
         .and_then(|tokens| usize::try_from(tokens).ok())
         .unwrap_or(0);
+    // Billing alone proving pressure short-circuits the walk (#perf-r5):
+    // `estimated.max(billed) >= threshold` is unconditionally true when
+    // `billed >= threshold`, so estimating cannot change the answer and the
+    // O(transcript) pass is skipped. Over-pressure sessions pay this check
+    // multiple times per step (pressure gate + decision re-check).
+    if billed >= config.token_threshold {
+        return true;
+    }
+    let estimated = estimate_input_tokens_for_pressure(messages, system_prompt);
     estimated.max(billed) >= config.token_threshold
 }
 
@@ -525,14 +533,26 @@ pub fn compaction_decision_with_billed(
     if !config.enabled {
         return CompactionDecision::NotNeeded;
     }
-    if !compaction_pressure_reached_with_billed(
-        messages,
-        system_prompt,
-        config,
-        billed_input_tokens,
-    ) {
-        return CompactionDecision::NotNeeded;
-    }
+    // Pressure gate + prune projection share one estimate (#perf-r5): both
+    // consume `estimate_input_tokens_for_pressure` over the same
+    // `(messages, system_prompt)`, a pure function, so it is computed at
+    // most once. `billed >= threshold` proves pressure without estimating
+    // (max is unconditionally >= threshold then); the estimate is deferred
+    // until something actually needs it — the prune projection below — so
+    // the billed-corner still reaches the TooFew and RetainedFloor guards
+    // unchanged, and skips the walk entirely when no prune candidates exist.
+    let billed = billed_input_tokens
+        .and_then(|tokens| usize::try_from(tokens).ok())
+        .unwrap_or(0);
+    let estimated: Option<usize> = if billed < config.token_threshold {
+        let estimate = estimate_input_tokens_for_pressure(messages, system_prompt);
+        if estimate.max(billed) < config.token_threshold {
+            return CompactionDecision::NotNeeded;
+        }
+        Some(estimate)
+    } else {
+        None
+    };
 
     // The execution path mechanically prunes old verbose tool results before
     // asking the model for a summary. Local pruning alone may be enough to
@@ -542,9 +562,12 @@ pub fn compaction_decision_with_billed(
     // without cloning a multi-megabyte transcript on every step.
     let prune_plan = plan_tool_result_prunes(messages, KEEP_RECENT_MESSAGES);
     if !prune_plan.is_empty() {
+        let estimate = match estimated {
+            Some(value) => value,
+            None => estimate_input_tokens_for_pressure(messages, system_prompt),
+        };
         let reclaimed_tokens: usize = prune_plan.iter().map(PlannedPrune::tokens_reclaimed).sum();
-        let projected = estimate_input_tokens_for_pressure(messages, system_prompt)
-            .saturating_sub(reclaimed_tokens);
+        let projected = estimate.saturating_sub(reclaimed_tokens);
         if projected < config.token_threshold {
             return CompactionDecision::Compact;
         }

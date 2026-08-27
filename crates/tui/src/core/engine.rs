@@ -2837,6 +2837,14 @@ impl Engine {
                                 .push(crate::compaction::compaction_checkpoint_message(checkpoint));
                         }
                         self.session.messages = restored_messages.into();
+                        // Direct field assignment bypasses `add_message` /
+                        // `replace_messages`, which own the messages-revision
+                        // bump the token-estimate cache keys on (#perf-r5).
+                        // Without this bump the first estimate after a
+                        // session restore is computed against whatever
+                        // history revision was current before the sync — a
+                        // stale number can flow into capacity checkpoints.
+                        self.session.bump_messages_revision();
                         self.session.compaction_summary_prompt = compaction_checkpoint;
                         self.session.system_prompt =
                             crate::compaction::strip_compaction_summaries(system_prompt.as_ref());
@@ -3112,17 +3120,37 @@ impl Engine {
         current_text: &str,
         system_prompt: Option<&SystemPrompt>,
     ) -> usize {
-        let mut messages: Vec<Message> = self.session.messages.clone().into();
-        if !current_text.trim().is_empty() {
-            messages.push(Message {
-                role: Role::User,
-                content: vec![ContentBlock::Text {
-                    text: current_text.to_string(),
-                    cache_control: None,
-                }],
-            });
+        // Estimate the installed history IN PLACE — no full-transcript clone
+        // per `<turn_meta>` build (#perf-r5). `&AppendLog` deref-coerces to
+        // `&[Message]` exactly like the cache call site.
+        let base = estimate_input_tokens_conservative(&self.session.messages, system_prompt);
+        if current_text.trim().is_empty() {
+            return base;
         }
-        estimate_input_tokens_conservative(&messages, system_prompt)
+        // Arithmetic equivalent of pushing one more user message: `own`
+        // un-inflated tokens (Text block rule, `len()/4` — same as the
+        // estimator's per-message byte sum S) plus one framing increment.
+        // The estimator inflates S by ceil(3/2) as a WHOLE, so
+        // ceil((S+own)*3/2) − ceil(S*3/2) = floor(own*3/2) + 1 exactly when
+        // S is even and own is odd; pinned exhaustively (80k pairs) and per
+        // case by `context_pressure_delta_matches_clone_and_push_reference`.
+        let sum: usize = self
+            .session
+            .messages
+            .iter()
+            .map(|m| {
+                crate::compaction::estimate_tokens_for_message(
+                    m,
+                    crate::compaction::message_has_tool_use(m),
+                )
+            })
+            .sum();
+        let own = current_text.len() / 4;
+        let mut inflated_delta = own * 3 / 2;
+        if sum % 2 == 0 && own % 2 == 1 {
+            inflated_delta += 1;
+        }
+        base.saturating_add(inflated_delta).saturating_add(12)
     }
 
     fn append_resource_metadata_lines(
