@@ -5356,6 +5356,8 @@ async fn thread_usage_endpoint_scopes_totals_to_one_thread() -> Result<()> {
     assert_eq!(usage["totals"]["turns"], 0);
     assert_eq!(usage["totals"]["priced_turns"], 0);
     assert_eq!(usage["totals"]["cny_priced_turns"], 0);
+    assert_eq!(usage["totals"]["cny_unpriced_turns"], 0);
+    assert_eq!(usage["totals"]["cny_unpriced_reasons"], json!([]));
     assert_eq!(usage["totals"]["cost_complete"], true);
 
     let missing = client
@@ -5529,6 +5531,11 @@ async fn session_save_merges_thread_cost_split_and_records_coverage() -> Result<
     assert_eq!(cost.unpriced_turns, 0);
     assert_eq!(cost.cny_priced_turns, 1);
     assert_eq!(cost.cny_unpriced_turns, 0);
+    assert!(cost.unpriced_reasons.is_empty());
+    assert!(
+        cost.cny_unpriced_reasons.is_empty(),
+        "DeepSeek first-party parent is CNY-priced; reasons must not invent a gap"
+    );
 
     // Re-saving is idempotent: max-merge never re-adds the same spend.
     client
@@ -5549,6 +5556,135 @@ async fn session_save_merges_thread_cost_split_and_records_coverage() -> Result<
         resaved.metadata.cost.subagent_cost_usd,
         cost.subagent_cost_usd
     );
+
+    handle.abort();
+    Ok(())
+}
+
+/// USD-unpriced parent + DeepSeek-priced child: coverage reasons persist
+/// with the parent columns (#4318) while routed spend still lands only in
+/// `subagent_cost_*` (no double-count on reload).
+#[tokio::test]
+async fn session_save_persists_parent_cny_unpriced_reasons_without_double_count() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("deepseek-session-cny-{}", Uuid::new_v4()));
+    let sessions_dir = root.join("sessions");
+    let Some((addr, runtime_threads, handle)) =
+        spawn_test_server_with_root(root.clone(), sessions_dir.clone()).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let created: serde_json::Value = client
+        .post(format!("http://{addr}/v1/threads"))
+        .json(&json!({
+            "model": "gpt-5.5",
+            "workspace": root.join("workspace")
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let thread_id = created["id"]
+        .as_str()
+        .context("missing thread id")?
+        .to_string();
+
+    let store = runtime_threads.test_store();
+    let now = Utc::now();
+    let mut turn = TurnRecord {
+        schema_version: 2,
+        id: "turn_cny_reasons".to_string(),
+        thread_id: thread_id.clone(),
+        status: RuntimeTurnStatus::Completed,
+        input_summary: "cny reasons".to_string(),
+        created_at: now,
+        started_at: Some(now),
+        ended_at: Some(now),
+        duration_ms: Some(0),
+        usage: Some(Usage {
+            input_tokens: 10_000,
+            output_tokens: 1_000,
+            ..Usage::default()
+        }),
+        permission_posture: None,
+        effective_provider: None,
+        effective_provider_id: None,
+        effective_billing_surface: None,
+        effective_endpoint_fingerprint: None,
+        effective_billing_mode: None,
+        effective_dispatched_at: None,
+        effective_model: None,
+        routed_usage: vec![crate::cost_status::EffectiveRouteUsage {
+            route: crate::cost_status::EffectiveRouteEnvelope {
+                provider: ApiProvider::Deepseek,
+                provider_identity: ApiProvider::Deepseek.as_str().to_string(),
+                model: "deepseek-v4-flash".to_string(),
+                billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
+                endpoint_fingerprint: None,
+                billing_mode: crate::cost_status::RouteBillingMode::Metered,
+                dispatched_at: now,
+            },
+            usage: Usage {
+                input_tokens: 20_000,
+                output_tokens: 2_000,
+                ..Usage::default()
+            },
+        }],
+        routed_usage_source_ids: Vec::new(),
+        routed_usage_dropped_records: 0,
+        error: None,
+        item_ids: Vec::new(),
+        steer_count: 0,
+        agent_mail_message_id: None,
+    };
+    turn.effective_provider = Some(ApiProvider::Openai.as_str().to_string());
+    turn.effective_provider_id = Some(ApiProvider::Openai.as_str().to_string());
+    turn.effective_billing_surface = Some(crate::pricing::UNCLASSIFIED_BILLING_SURFACE.to_string());
+    turn.effective_endpoint_fingerprint = None;
+    turn.effective_billing_mode = Some(crate::cost_status::RouteBillingMode::Metered);
+    turn.effective_dispatched_at = Some(now);
+    turn.effective_model = Some("gpt-5.5".to_string());
+    store.save_turn(&turn)?;
+    let mut thread = store.load_thread(&thread_id)?;
+    thread.latest_turn_id = Some(turn.id.clone());
+    store.save_thread(&thread)?;
+
+    client
+        .put(format!("http://{addr}/v1/sessions"))
+        .json(&json!({
+            "thread_id": thread_id,
+            "session_id": "sess_cny_reasons"
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let session_manager = crate::session_manager::SessionManager::new(sessions_dir)?;
+    let saved = session_manager.load_session_by_prefix("sess_cny_reasons")?;
+    let cost = &saved.metadata.cost;
+    assert_eq!(
+        cost.session_cost_usd, 0.0,
+        "unpriced parent must not invent USD"
+    );
+    assert!(
+        cost.subagent_cost_usd > 0.0,
+        "routed DeepSeek child is priced"
+    );
+    assert_eq!(
+        cost.priced_turns, 0,
+        "parent coverage columns stay parent-only"
+    );
+    assert_eq!(cost.unpriced_turns, 1);
+    assert_eq!(cost.cny_unpriced_turns, 1);
+    assert!(!cost.unpriced_reasons.is_empty());
+    assert!(
+        !cost.cny_unpriced_reasons.is_empty(),
+        "CNY reasons must persist with the parent coverage counts (#4318)"
+    );
+    assert!(cost.coverage_recorded);
+    assert!(!cost.coverage_is_legacy_unknown());
 
     handle.abort();
     Ok(())

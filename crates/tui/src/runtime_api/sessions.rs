@@ -688,6 +688,24 @@ async fn persist_thread_cost(
     cost.cny_unpriced_turns = cost
         .cny_unpriced_turns
         .max(u32::try_from(usage.parent.cny_unpriced_turns).unwrap_or(u32::MAX));
+    // Coverage travels with the money (#4318): reasons and classes are the
+    // qualifiers a reload needs to treat these totals as known, not a
+    // legacy-unknown complete zero. Parent-turn coverage only — the same
+    // field the TUI writer uses; routed-child spend lives in subagent_cost_*.
+    cost.unpriced_reasons
+        .extend(usage.parent.unpriced_reasons.iter().cloned());
+    cost.cny_unpriced_reasons
+        .extend(usage.parent.cny_unpriced_reasons.iter().cloned());
+    cost.unpriced_classes
+        .extend(usage.parent.unpriced_classes.iter().cloned());
+    cost.pricing_provenances
+        .extend(usage.parent.pricing_provenances.iter().cloned());
+    cost.live_pricing_defects
+        .extend(usage.parent.live_pricing_defects.iter().cloned());
+    cost.live_pricing_unusable_defects
+        .extend(usage.parent.live_pricing_unusable_defects.iter().cloned());
+    cost.route_receipts
+        .extend(usage.parent.route_receipts.iter().cloned());
     cost.coverage_recorded = true;
     Ok(())
 }

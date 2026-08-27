@@ -2957,6 +2957,9 @@ async fn aggregate_usage_for_thread_scopes_both_currencies_to_one_thread() -> Re
     assert_eq!(split.parent.unpriced_turns, 0);
     assert_eq!(split.parent.cny_priced_turns, 1);
     assert_eq!(split.parent.cny_unpriced_turns, 0);
+    assert!(split.parent.cny_unpriced_reasons.is_empty());
+    assert_eq!(split.routed_children.cny_priced_turns, 1);
+    assert!(split.routed_children.cny_unpriced_reasons.is_empty());
 
     let totals = split.combined();
     assert_eq!(totals.input_tokens, 12_000);
@@ -3060,6 +3063,11 @@ async fn aggregate_usage_reports_an_all_unknown_run_as_unavailable_not_zero() ->
     assert!(
         !report.totals.unpriced_reasons.is_empty(),
         "an unpriced aggregate must say why"
+    );
+    assert_eq!(report.totals.cny_unpriced_turns, 2);
+    assert!(
+        !report.totals.cny_unpriced_reasons.is_empty(),
+        "CNY coverage must travel with the money (#4318)"
     );
     for bucket in &report.buckets {
         assert_eq!(bucket.priced_turns, 0);

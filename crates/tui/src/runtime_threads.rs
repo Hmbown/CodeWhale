@@ -2383,6 +2383,9 @@ pub struct UsageTotals {
     /// rule as `SessionCostSnapshot::cny_priced_turns`.
     pub cny_priced_turns: u64,
     pub cny_unpriced_turns: u64,
+    /// Why CNY is missing on money-metered turns. USD-only routes record
+    /// `currency_not_published` rather than a fabricated complete zero.
+    pub cny_unpriced_reasons: std::collections::BTreeSet<String>,
     pub nonmetered_turns: u64,
     pub cost_complete: bool,
     pub unpriced_reasons: std::collections::BTreeSet<String>,
@@ -2417,6 +2420,8 @@ pub struct UsageBucket {
     /// CNY-specific coverage; same rule as the totals field of the same name.
     pub cny_priced_turns: u64,
     pub cny_unpriced_turns: u64,
+    /// Why CNY is missing; same rule as the totals field of the same name.
+    pub cny_unpriced_reasons: std::collections::BTreeSet<String>,
     pub nonmetered_turns: u64,
     pub cost_complete: bool,
     pub unpriced_reasons: std::collections::BTreeSet<String>,
@@ -2494,6 +2499,8 @@ fn merge_usage_totals(into: &mut UsageTotals, from: &UsageTotals) {
     into.cny_unpriced_turns = into
         .cny_unpriced_turns
         .saturating_add(from.cny_unpriced_turns);
+    into.cny_unpriced_reasons
+        .extend(from.cny_unpriced_reasons.clone());
     into.nonmetered_turns = into.nonmetered_turns.saturating_add(from.nonmetered_turns);
     into.unpriced_reasons.extend(from.unpriced_reasons.clone());
     into.unpriced_classes.extend(from.unpriced_classes.clone());
@@ -2518,12 +2525,14 @@ fn accumulate_runtime_cost_coverage(
     cny_unpriced_turns: &mut u64,
     nonmetered_turns: &mut u64,
     reasons: &mut std::collections::BTreeSet<String>,
+    cny_reasons: &mut std::collections::BTreeSet<String>,
     provenances: &mut std::collections::BTreeSet<String>,
 ) {
     let Some(audit) = audit else {
         *unpriced_turns = (*unpriced_turns).saturating_add(1);
         *cny_unpriced_turns = (*cny_unpriced_turns).saturating_add(1);
         reasons.insert("unknown_provider_route".to_string());
+        cny_reasons.insert("unknown_provider_route".to_string());
         return;
     };
     if let Some(provenance) = audit.provenance.as_ref() {
@@ -2548,6 +2557,12 @@ fn accumulate_runtime_cost_coverage(
         *cny_priced_turns = (*cny_priced_turns).saturating_add(1);
     } else {
         *cny_unpriced_turns = (*cny_unpriced_turns).saturating_add(1);
+        cny_reasons.insert(
+            audit
+                .unpriced_reason
+                .map_or("currency_not_published", |reason| reason.label())
+                .to_string(),
+        );
     }
 }
 
@@ -2685,6 +2700,7 @@ fn accumulate_runtime_usage_record(
         &mut totals.cny_unpriced_turns,
         &mut totals.nonmetered_turns,
         &mut totals.unpriced_reasons,
+        &mut totals.cny_unpriced_reasons,
         &mut totals.pricing_provenances,
     );
     accumulate_runtime_cost_details(
@@ -2723,6 +2739,7 @@ fn accumulate_runtime_usage_record(
         &mut bucket.cny_unpriced_turns,
         &mut bucket.nonmetered_turns,
         &mut bucket.unpriced_reasons,
+        &mut bucket.cny_unpriced_reasons,
         &mut bucket.pricing_provenances,
     );
     accumulate_runtime_cost_details(
@@ -2758,9 +2775,13 @@ fn accumulate_truncated_runtime_usage(
     }
     totals.dropped_usage_records = totals.dropped_usage_records.saturating_add(dropped);
     totals.unpriced_turns = totals.unpriced_turns.saturating_add(dropped);
+    totals.cny_unpriced_turns = totals.cny_unpriced_turns.saturating_add(dropped);
     totals.turns = totals.turns.saturating_add(dropped);
     totals
         .unpriced_reasons
+        .insert("runtime_usage_journal_truncated".to_string());
+    totals
+        .cny_unpriced_reasons
         .insert("runtime_usage_journal_truncated".to_string());
 
     let key = match group_by {
@@ -2774,9 +2795,13 @@ fn accumulate_truncated_runtime_usage(
     });
     bucket.dropped_usage_records = bucket.dropped_usage_records.saturating_add(dropped);
     bucket.unpriced_turns = bucket.unpriced_turns.saturating_add(dropped);
+    bucket.cny_unpriced_turns = bucket.cny_unpriced_turns.saturating_add(dropped);
     bucket.turns = bucket.turns.saturating_add(dropped);
     bucket
         .unpriced_reasons
+        .insert("runtime_usage_journal_truncated".to_string());
+    bucket
+        .cny_unpriced_reasons
         .insert("runtime_usage_journal_truncated".to_string());
 }
 
