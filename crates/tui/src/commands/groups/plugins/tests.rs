@@ -97,7 +97,7 @@ fn bare_plugin_command_opens_unified_extensions_modal() {
     let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", root.path().join("home"));
     let (mut app, _temp) = create_test_app(root.path());
 
-    let result = plugins(&mut app, None);
+    let result = plugins_with_kimi_home_override(&mut app, None, None);
 
     assert!(matches!(
         result.action,
@@ -132,11 +132,13 @@ fn list_show_validate_are_read_only_and_label_legacy_tools() {
     let state_path = codewhale_home.join("plugins/state.json");
 
     for arg in [Some("list"), Some("show demo"), Some("validate")] {
-        let result = plugins(&mut app, arg);
+        let result = plugins_with_kimi_home_override(&mut app, arg, None);
         assert!(!result.is_error, "{:?}", result.message);
         assert!(!state_path.exists(), "read-only command wrote plugin state");
     }
-    let list = plugins(&mut app, Some("list")).message.unwrap();
+    let list = plugins_with_kimi_home_override(&mut app, Some("list"), None)
+        .message
+        .unwrap();
     assert!(list.contains("Plugin bundles (1)"));
     assert!(list.contains("disabled"));
     assert!(list.contains("Legacy executable plugin tools (1)"));
@@ -152,14 +154,15 @@ fn suggest_ranks_installed_plugins_without_trusting_or_enabling_them() {
     let (mut app, _temp) = create_test_app(root.path());
 
     for arg in ["suggest", "suggest go"] {
-        let result = plugins(&mut app, Some(arg));
+        let result = plugins_with_kimi_home_override(&mut app, Some(arg), None);
         assert!(
             result.is_error,
             "expected usage error for {arg}: {result:?}"
         );
     }
 
-    let result = plugins(&mut app, Some("suggest spreadsheet import"));
+    let result =
+        plugins_with_kimi_home_override(&mut app, Some("suggest spreadsheet import"), None);
     assert!(!result.is_error, "{result:?}");
     let message = result.message.expect("suggestion message");
     assert!(message.contains("Suggested installed plugins"), "{message}");
@@ -179,7 +182,7 @@ fn trust_requires_content_and_capability_bound_review_token() {
     let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", root.path().join("home"));
     write_bundle(root.path());
     let (mut app, _temp) = create_test_app(root.path());
-    let enable_review = plugins(&mut app, Some("enable demo"));
+    let enable_review = plugins_with_kimi_home_override(&mut app, Some("enable demo"), None);
     assert!(!enable_review.is_error);
     assert!(
         enable_review
@@ -189,7 +192,9 @@ fn trust_requires_content_and_capability_bound_review_token() {
     );
     assert!(!app.plugin_registry.get("demo").unwrap().trusted());
 
-    let review = plugins(&mut app, Some("trust demo")).message.unwrap();
+    let review = plugins_with_kimi_home_override(&mut app, Some("trust demo"), None)
+        .message
+        .unwrap();
     let confirmation = review
         .lines()
         .find(|line| line.starts_with("/plugin trust demo "))
@@ -211,21 +216,21 @@ fn trust_requires_content_and_capability_bound_review_token() {
     );
     assert!(!app.plugin_registry.get("demo").unwrap().trusted());
 
-    assert!(plugins(&mut app, Some("trust demo wrong")).is_error);
+    assert!(plugins_with_kimi_home_override(&mut app, Some("trust demo wrong"), None).is_error);
     let shortened = format!(
         "trust demo {}.{}",
         &content_digest[..12],
         &capability_digest[..12]
     );
     assert!(
-        plugins(&mut app, Some(&shortened)).is_error,
+        plugins_with_kimi_home_override(&mut app, Some(&shortened), None).is_error,
         "the legacy 48-bit content prefix must not authorize trust"
     );
     let arg = confirmation.trim_start_matches("/plugin ");
-    assert!(!plugins(&mut app, Some(arg)).is_error);
-    assert!(!plugins(&mut app, Some("enable demo")).is_error);
+    assert!(!plugins_with_kimi_home_override(&mut app, Some(arg), None).is_error);
+    assert!(!plugins_with_kimi_home_override(&mut app, Some("enable demo"), None).is_error);
     assert!(app.plugin_registry.is_active("demo"));
-    assert!(!plugins(&mut app, Some("disable demo")).is_error);
+    assert!(!plugins_with_kimi_home_override(&mut app, Some("disable demo"), None).is_error);
     assert!(!app.plugin_registry.is_active("demo"));
 }
 
@@ -255,24 +260,30 @@ fn mixed_bundle_review_and_enable_keep_supported_components_active() {
     write_mixed_bundle(root.path());
     let (mut app, _temp) = create_test_app(root.path());
 
-    let list = plugins(&mut app, Some("list")).message.unwrap();
+    let list = plugins_with_kimi_home_override(&mut app, Some("list"), None)
+        .message
+        .unwrap();
     assert!(list.contains("compatibility=partial"), "{list}");
     assert!(list.contains("commands=1"), "{list}");
     assert!(list.contains("hooks=1"), "{list}");
 
-    let show = plugins(&mut app, Some("show mixed")).message.unwrap();
+    let show = plugins_with_kimi_home_override(&mut app, Some("show mixed"), None)
+        .message
+        .unwrap();
     assert!(show.contains("Compatibility: partial"), "{show}");
     assert!(show.contains("Inactive components: [lsp]"), "{show}");
     assert!(show.contains("Active components: [none]"), "{show}");
 
-    let review = plugins(&mut app, Some("trust mixed")).message.unwrap();
+    let review = plugins_with_kimi_home_override(&mut app, Some("trust mixed"), None)
+        .message
+        .unwrap();
     let confirmation = review
         .lines()
         .find(|line| line.starts_with("/plugin trust mixed "))
         .unwrap();
     let arg = confirmation.trim_start_matches("/plugin ");
-    assert!(!plugins(&mut app, Some(arg)).is_error);
-    let enabled = plugins(&mut app, Some("enable mixed"));
+    assert!(!plugins_with_kimi_home_override(&mut app, Some(arg), None).is_error);
+    let enabled = plugins_with_kimi_home_override(&mut app, Some("enable mixed"), None);
     assert!(!enabled.is_error, "{:?}", enabled.message);
     let message = enabled.message.unwrap();
     assert!(message.contains("Compatibility: partial"), "{message}");
@@ -287,7 +298,9 @@ fn mixed_bundle_review_and_enable_keep_supported_components_active() {
         "partial"
     );
 
-    let show = plugins(&mut app, Some("show mixed")).message.unwrap();
+    let show = plugins_with_kimi_home_override(&mut app, Some("show mixed"), None)
+        .message
+        .unwrap();
     assert!(show.contains("State: active"), "{show}");
     assert!(show.contains("Inactive components: [lsp]"), "{show}");
     assert!(
@@ -304,7 +317,7 @@ fn mcp_review_discloses_host_authority_and_names_without_secret_values() {
     let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", root.path().join("home"));
     write_mcp_review_bundle(root.path());
     let (mut app, _temp) = create_test_app(root.path());
-    let review = plugins(&mut app, Some("trust review-mcp"))
+    let review = plugins_with_kimi_home_override(&mut app, Some("trust review-mcp"), None)
         .message
         .expect("review output");
     assert!(review.contains("mcp=2 (stdio=1 remote=1)"));
@@ -331,7 +344,7 @@ fn legacy_tool_detail_remains_available_under_tools_namespace() {
         "# name: greet\n# description: Say hello\n# approval: required\n",
     )
     .unwrap();
-    let result = plugins(&mut app, Some("tools greet"));
+    let result = plugins_with_kimi_home_override(&mut app, Some("tools greet"), None);
     assert!(!result.is_error);
     let message = result.message.unwrap();
     assert!(message.contains("Say hello"));
@@ -345,10 +358,10 @@ fn install_update_uninstall_verbs_validate_arguments() {
     let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", root.path().join("home"));
     let (mut app, _temp) = create_test_app(root.path());
     for arg in ["install", "update", "uninstall"] {
-        let result = plugins(&mut app, Some(arg));
+        let result = plugins_with_kimi_home_override(&mut app, Some(arg), None);
         assert!(result.is_error, "bare `{arg}` must print usage");
     }
-    let invalid = plugins(&mut app, Some("install github:"));
+    let invalid = plugins_with_kimi_home_override(&mut app, Some("install github:"), None);
     assert!(invalid.is_error);
     assert!(
         invalid
@@ -381,7 +394,11 @@ fn install_update_uninstall_verbs_drive_the_guided_trust_flow() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let installed = plugins(&mut app, Some(&format!("install {}", source.display())));
+        let installed = plugins_with_kimi_home_override(
+            &mut app,
+            Some(&format!("install {}", source.display())),
+            None,
+        );
         assert!(!installed.is_error, "{:?}", installed.message);
         let message = installed.message.unwrap();
         assert!(message.contains("disabled and untrusted"), "{message}");
@@ -399,21 +416,29 @@ fn install_update_uninstall_verbs_drive_the_guided_trust_flow() {
         );
 
         // Local-path installs cannot be updated from the network.
-        let update = plugins(&mut app, Some("update installed-demo"));
+        let update = plugins_with_kimi_home_override(&mut app, Some("update installed-demo"), None);
         assert!(update.is_error);
         assert!(update.message.unwrap().contains("local path"));
 
         let arg = confirmation.trim_start_matches("/plugin ").to_string();
-        assert!(!plugins(&mut app, Some(&arg)).is_error);
-        assert!(!plugins(&mut app, Some("enable installed-demo")).is_error);
+        assert!(!plugins_with_kimi_home_override(&mut app, Some(&arg), None).is_error);
+        assert!(
+            !plugins_with_kimi_home_override(&mut app, Some("enable installed-demo"), None)
+                .is_error
+        );
         assert!(app.plugin_registry.is_active("installed-demo"));
 
         // Uninstall requires disabled, then removes bits and prunes state.
-        let refused = plugins(&mut app, Some("uninstall installed-demo"));
+        let refused =
+            plugins_with_kimi_home_override(&mut app, Some("uninstall installed-demo"), None);
         assert!(refused.is_error);
         assert!(codewhale_home.join("plugins/installed-demo").exists());
-        assert!(!plugins(&mut app, Some("disable installed-demo")).is_error);
-        let removed = plugins(&mut app, Some("uninstall installed-demo"));
+        assert!(
+            !plugins_with_kimi_home_override(&mut app, Some("disable installed-demo"), None)
+                .is_error
+        );
+        let removed =
+            plugins_with_kimi_home_override(&mut app, Some("uninstall installed-demo"), None);
         assert!(!removed.is_error, "{:?}", removed.message);
         assert!(!codewhale_home.join("plugins/installed-demo").exists());
         assert!(app.plugin_registry.get("installed-demo").is_none());
@@ -456,7 +481,9 @@ fn kimi_managed_import_is_read_only_until_hash_bound_approval() {
     .unwrap();
 
     let (mut app, _temp) = create_test_app(root.path());
-    let help = plugins(&mut app, Some("help")).message.unwrap();
+    let help = plugins_with_kimi_home_override(&mut app, Some("help"), None)
+        .message
+        .unwrap();
     assert!(help.contains("/plugin import kimi [list]"), "{help}");
     let listed = plugins_with_kimi_home(&mut app, Some("import kimi"), root.path());
     assert!(!listed.is_error, "{:?}", listed.message);
@@ -573,12 +600,12 @@ fn export_verb_writes_agent_plugins_bundle() {
     write_bundle(root.path());
     let (mut app, _temp) = create_test_app(root.path());
 
-    let usage = plugins(&mut app, Some("export"));
+    let usage = plugins_with_kimi_home_override(&mut app, Some("export"), None);
     assert!(usage.is_error, "export without arguments is a usage error");
-    let missing = plugins(&mut app, Some("export nope out"));
+    let missing = plugins_with_kimi_home_override(&mut app, Some("export nope out"), None);
     assert!(missing.is_error, "exporting an unknown plugin fails");
 
-    let result = plugins(&mut app, Some("export demo exported/demo"));
+    let result = plugins_with_kimi_home_override(&mut app, Some("export demo exported/demo"), None);
     assert!(!result.is_error, "{result:?}");
     let message = result.message.expect("export message");
     assert!(message.contains("Exported `demo`"), "{message}");

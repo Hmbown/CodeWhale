@@ -93,13 +93,17 @@ fn marketplace_add_list_show_remove_roundtrip() {
     let catalog_path = write_kimi_catalog(&catalogs);
 
     // Usage errors are honest before anything is touched.
-    assert!(!plugins(&mut app, Some("marketplace")).is_error); // list, empty
-    assert!(plugins(&mut app, Some("marketplace add")).is_error);
-    assert!(plugins(&mut app, Some("marketplace add 'bad name' x")).is_error);
+    assert!(!plugins_with_kimi_home_override(&mut app, Some("marketplace"), None).is_error); // list, empty
+    assert!(plugins_with_kimi_home_override(&mut app, Some("marketplace add"), None).is_error);
+    assert!(
+        plugins_with_kimi_home_override(&mut app, Some("marketplace add 'bad name' x"), None)
+            .is_error
+    );
 
-    let added = plugins(
+    let added = plugins_with_kimi_home_override(
         &mut app,
         Some(&format!("marketplace add kimi {}", catalog_path.display())),
+        None,
     );
     assert!(!added.is_error, "{:?}", added.message);
     let message = added.message.unwrap();
@@ -108,7 +112,10 @@ fn marketplace_add_list_show_remove_roundtrip() {
     assert!(message.contains("display-only"), "{message}");
     assert!(marketplace_state_path(&codewhale_home).exists());
 
-    let list = plugins(&mut app, Some("marketplace list")).message.unwrap();
+    let list = plugins_with_kimi_home_override(&mut app, Some("marketplace list"), None)
+        .message
+        .unwrap();
+    eprintln!("LIST2 >>>{list}<<<");
     assert!(list.contains("`kimi`"), "{list}");
     assert!(list.contains(r"demo\-bundle"), "{list}");
     assert!(list.contains(r"remote\-thing"), "{list}");
@@ -117,7 +124,9 @@ fn marketplace_add_list_show_remove_roundtrip() {
 
     // Stored plans keep stable codes; rendering resolves the current locale.
     app.ui_locale = Locale::Es419;
-    let localized = plugins(&mut app, Some("marketplace list")).message.unwrap();
+    let localized = plugins_with_kimi_home_override(&mut app, Some("marketplace list"), None)
+        .message
+        .unwrap();
     assert!(localized.contains("no admite paquetes ZIP"), "{localized}");
     assert!(!localized.contains("kimi_zip_unsupported"), "{localized}");
     assert!(
@@ -126,7 +135,7 @@ fn marketplace_add_list_show_remove_roundtrip() {
     );
     app.ui_locale = Locale::En;
 
-    let show = plugins(&mut app, Some("marketplace show kimi"))
+    let show = plugins_with_kimi_home_override(&mut app, Some("marketplace show kimi"), None)
         .message
         .unwrap();
     assert!(show.contains("Demo Bundle"), "{show}");
@@ -135,8 +144,8 @@ fn marketplace_add_list_show_remove_roundtrip() {
 
     // read-only verbs never rewrite the store
     let before = fs::read_to_string(marketplace_state_path(&codewhale_home)).unwrap();
-    plugins(&mut app, Some("marketplace list"));
-    plugins(&mut app, Some("marketplace show kimi"));
+    plugins_with_kimi_home_override(&mut app, Some("marketplace list"), None);
+    plugins_with_kimi_home_override(&mut app, Some("marketplace show kimi"), None);
     let after = fs::read_to_string(marketplace_state_path(&codewhale_home)).unwrap();
     assert_eq!(
         before, after,
@@ -144,13 +153,14 @@ fn marketplace_add_list_show_remove_roundtrip() {
     );
 
     // duplicate name is refused
-    let dup = plugins(
+    let dup = plugins_with_kimi_home_override(
         &mut app,
         Some(&format!("marketplace add kimi {}", catalog_path.display())),
+        None,
     );
     assert!(dup.is_error);
 
-    let removed = plugins(&mut app, Some("marketplace remove kimi"));
+    let removed = plugins_with_kimi_home_override(&mut app, Some("marketplace remove kimi"), None);
     assert!(!removed.is_error, "{:?}", removed.message);
     assert!(
         removed
@@ -158,8 +168,12 @@ fn marketplace_add_list_show_remove_roundtrip() {
             .unwrap()
             .contains("Installed plugins and their trust state are unaffected")
     );
-    assert!(plugins(&mut app, Some("marketplace show kimi")).is_error);
-    let empty = plugins(&mut app, Some("marketplace list")).message.unwrap();
+    assert!(
+        plugins_with_kimi_home_override(&mut app, Some("marketplace show kimi"), None).is_error
+    );
+    let empty = plugins_with_kimi_home_override(&mut app, Some("marketplace list"), None)
+        .message
+        .unwrap();
     assert!(empty.contains("No other catalogs"), "{empty}");
 }
 
@@ -175,7 +189,11 @@ fn marketplace_add_rejects_symlinks_and_bad_documents() {
     let catalog_path = write_kimi_catalog(&catalogs);
 
     // missing file
-    let missing = plugins(&mut app, Some("marketplace add nope /nonexistent/x.json"));
+    let missing = plugins_with_kimi_home_override(
+        &mut app,
+        Some("marketplace add nope /nonexistent/x.json"),
+        None,
+    );
     assert!(missing.is_error);
 
     // symlink to a real catalog is refused, not followed
@@ -186,9 +204,10 @@ fn marketplace_add_rejects_symlinks_and_bad_documents() {
     fs::copy(&catalog_path, &link).unwrap();
     #[cfg(unix)]
     {
-        let symlinked = plugins(
+        let symlinked = plugins_with_kimi_home_override(
             &mut app,
             Some(&format!("marketplace add evil {}", link.display())),
+            None,
         );
         assert!(symlinked.is_error);
         assert!(symlinked.message.unwrap().contains("symlink"));
@@ -197,14 +216,15 @@ fn marketplace_add_rejects_symlinks_and_bad_documents() {
     // a document with no documented markers fails honestly and is not stored
     let junk = catalogs.join("junk.json");
     fs::write(&junk, "{\"hello\": \"world\"}").unwrap();
-    let bad = plugins(
+    let bad = plugins_with_kimi_home_override(
         &mut app,
         Some(&format!("marketplace add junk {}", junk.display())),
+        None,
     );
     assert!(bad.is_error);
     assert!(bad.message.unwrap().contains("could not be parsed"));
     assert!(
-        plugins(&mut app, Some("marketplace list"))
+        plugins_with_kimi_home_override(&mut app, Some("marketplace list"), None)
             .message
             .unwrap()
             .contains("No other catalogs")
@@ -214,7 +234,7 @@ fn marketplace_add_rejects_symlinks_and_bad_documents() {
     let store_path = marketplace_state_path(&codewhale_home);
     fs::create_dir_all(store_path.parent().unwrap()).unwrap();
     fs::write(&store_path, "{ not json").unwrap();
-    let corrupt = plugins(&mut app, Some("marketplace list"));
+    let corrupt = plugins_with_kimi_home_override(&mut app, Some("marketplace list"), None);
     assert!(corrupt.is_error);
     assert!(corrupt.message.unwrap().contains("fail-closed"));
     assert_eq!(fs::read_to_string(&store_path).unwrap(), "{ not json");
@@ -232,15 +252,20 @@ fn marketplace_install_routes_through_reviewed_installer() {
     write_kimi_catalog(&catalogs);
     write_demo_bundle(&catalogs);
     assert!(
-        !plugins(
+        !plugins_with_kimi_home_override(
             &mut app,
-            Some("marketplace add kimi catalogs/kimi-marketplace.json")
+            Some("marketplace add kimi catalogs/kimi-marketplace.json"),
+            None
         )
         .is_error
     );
 
     // The unsupported plan is refused before any runtime or network work.
-    let remote = plugins(&mut app, Some("marketplace install kimi remote-thing"));
+    let remote = plugins_with_kimi_home_override(
+        &mut app,
+        Some("marketplace install kimi remote-thing"),
+        None,
+    );
     assert!(remote.is_error);
     assert!(remote.message.unwrap().contains("cannot be installed"));
 
@@ -250,7 +275,11 @@ fn marketplace_install_routes_through_reviewed_installer() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let installed = plugins(&mut app, Some("marketplace install kimi demo-bundle"));
+        let installed = plugins_with_kimi_home_override(
+            &mut app,
+            Some("marketplace install kimi demo-bundle"),
+            None,
+        );
         assert!(!installed.is_error, "{:?}", installed.message);
         let message = installed.message.unwrap();
         assert!(message.contains("disabled and untrusted"), "{message}");
@@ -298,13 +327,16 @@ fn marketplace_codex_installed_by_default_never_auto_installs() {
     let path = catalogs.join("codex-marketplace.json");
     fs::write(&path, serde_json::to_string_pretty(&codex).unwrap()).unwrap();
 
-    let added = plugins(
+    let added = plugins_with_kimi_home_override(
         &mut app,
         Some(&format!("marketplace add codex {}", path.display())),
+        None,
     );
     assert!(!added.is_error, "{:?}", added.message);
 
-    let list = plugins(&mut app, Some("marketplace list")).message.unwrap();
+    let list = plugins_with_kimi_home_override(&mut app, Some("marketplace list"), None)
+        .message
+        .unwrap();
     assert!(list.contains(r"defaulted\-thing"), "{list}");
     assert!(list.contains("not installable"), "{list}");
     assert!(list.contains("npm"), "{list}");
@@ -325,7 +357,9 @@ fn official_catalog_installs_the_builtin_computer_use_bundle() {
     let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &codewhale_home);
     let (mut app, _temp) = create_test_app(root.path());
 
-    let list = plugins(&mut app, Some("marketplace list")).message.unwrap();
+    let list = plugins_with_kimi_home_override(&mut app, Some("marketplace list"), None)
+        .message
+        .unwrap();
     assert!(list.contains("`official`"), "{list}");
     assert!(list.contains(r"computer\-use"), "{list}");
     assert!(list.contains("built into this Codewhale"), "{list}");
@@ -335,17 +369,21 @@ fn official_catalog_installs_the_builtin_computer_use_bundle() {
         "listing never writes state"
     );
 
-    let show = plugins(&mut app, Some("marketplace show official"))
+    let show = plugins_with_kimi_home_override(&mut app, Some("marketplace show official"), None)
         .message
         .unwrap();
     assert!(show.contains(r"computer\-use"), "{show}");
 
-    assert!(plugins(&mut app, Some("marketplace remove official")).is_error);
+    assert!(
+        plugins_with_kimi_home_override(&mut app, Some("marketplace remove official"), None)
+            .is_error
+    );
     let bogus = root.path().join("nope.json");
     fs::write(&bogus, "{}").unwrap();
-    let shadow = plugins(
+    let shadow = plugins_with_kimi_home_override(
         &mut app,
         Some(&format!("marketplace add official {}", bogus.display())),
+        None,
     );
     assert!(shadow.is_error);
     assert!(shadow.message.unwrap().contains("built into Codewhale"));
@@ -356,7 +394,11 @@ fn official_catalog_installs_the_builtin_computer_use_bundle() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let installed = plugins(&mut app, Some("marketplace install official computer-use"));
+        let installed = plugins_with_kimi_home_override(
+            &mut app,
+            Some("marketplace install official computer-use"),
+            None,
+        );
         assert!(!installed.is_error, "{:?}", installed.message);
         let message = installed.message.unwrap();
         assert!(message.contains("disabled and untrusted"), "{message}");
@@ -376,14 +418,15 @@ fn official_catalog_installs_the_builtin_computer_use_bundle() {
         assert!(marker.contains("\"builtin:computer-use\""), "{marker}");
 
         // Same bytes in the binary → nothing to update; never a network error.
-        let update = plugins(&mut app, Some("update computer-use"));
+        let update = plugins_with_kimi_home_override(&mut app, Some("update computer-use"), None);
         assert!(!update.is_error, "{:?}", update.message);
 
         // Installing again is refused like any other duplicate.
-        let again = plugins(&mut app, Some("install builtin:computer-use"));
+        let again =
+            plugins_with_kimi_home_override(&mut app, Some("install builtin:computer-use"), None);
         assert!(again.is_error, "{:?}", again.message);
         // Unknown built-ins name the available ones.
-        let unknown = plugins(&mut app, Some("install builtin:nope"));
+        let unknown = plugins_with_kimi_home_override(&mut app, Some("install builtin:nope"), None);
         assert!(unknown.is_error);
         assert!(unknown.message.unwrap().contains("computer-use"));
     });

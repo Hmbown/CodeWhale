@@ -310,6 +310,8 @@ pub struct PluginSummary {
 /// projected here (D10).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginDetail {
+    /// Inventory summary string (host-computed, e.g. `skills=1 mcp=0`).
+    pub inventory_summary: String,
     pub name: String,
     pub id: String,
     pub version: String,
@@ -436,6 +438,8 @@ pub struct PluginMarketplaceCandidate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginMarketplaceCatalog {
     pub id: String,
+    /// Source document path (for the `show` provenance line).
+    pub source_path: Option<String>,
     pub display_name: Option<String>,
     pub description: Option<String>,
     pub format: String,
@@ -467,8 +471,11 @@ pub struct PluginMarketplaceState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginSuggestion {
     pub name: String,
+    /// State label rendered beside the plugin name (active/not-reviewed/…).
+    pub state_label: String,
     pub description: String,
     pub why: Vec<String>,
+    /// The actionable next step rendered under the suggestion.
     pub next_step: String,
 }
 
@@ -496,6 +503,9 @@ pub trait CommandPluginContext {
     fn validation_is_clean(&self) -> bool;
     /// Read-only: registry length (used by list/reload empty branches).
     fn len(&self) -> usize;
+    /// Mutation: rediscover the workspace registry and refresh the skill
+    /// cache; returns the new registry length for the reload message.
+    fn reload(&mut self) -> Result<usize, String>;
     /// Read-only: whether the registry is empty.
     fn is_empty(&self) -> bool;
     /// Read-only: persistence store path for marketplace state.

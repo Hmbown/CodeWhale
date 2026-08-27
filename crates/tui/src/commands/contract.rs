@@ -38,10 +38,11 @@ use codewhale_command_contract::facets::{
     MediaAttachmentReceipt, MemoryDelete, MemoryDeleteScope, MemoryExport, MemoryGetOutcome,
     MemoryHit, MemoryImportOutcome, MemoryReindex, MemoryRememberTarget, MemoryRemembered,
     MemoryStatus, PluginDetail, PluginDiagnostic, PluginDiagnosticLevel, PluginExportReceipt,
-    PluginLegacyScan, PluginLegacyTool, PluginManagedScan, PluginMarketplaceAddReceipt,
-    PluginMarketplaceCandidate, PluginMarketplaceCatalog, PluginMarketplaceInstallPlan,
-    PluginMarketplaceState, PluginMcpServerDetail, PluginMcpTransport, PluginMutationOutcome,
-    PluginMutationReceipt, PluginSuggestion, PluginSummary,
+    PluginLegacyScan, PluginLegacyTool, PluginManagedCandidate, PluginManagedScan,
+    PluginMarketplaceAddReceipt, PluginMarketplaceCandidate, PluginMarketplaceCatalog,
+    PluginMarketplaceInstallPlan, PluginMarketplaceState, PluginMcpServerDetail,
+    PluginMcpTransport, PluginMutationOutcome, PluginMutationReceipt, PluginSuggestion,
+    PluginSummary,
 };
 #[cfg(test)]
 use codewhale_command_contract::handler::ContextParts;
@@ -528,14 +529,83 @@ pub(crate) struct PresentationAdapter<'a> {
 
 impl CommandPresentationContext for PresentationAdapter<'_> {
     fn translate(&self, key: &str, replacements: &[(&str, &str)]) -> Result<String, String> {
-        let Some(message_id) = key_to_utility_message_id(key) else {
-            return Err("unknown translation key".to_string());
-        };
+        let message_id = key_to_utility_message_id(key)
+            .or_else(|| key_to_plugin_message_id(key))
+            .ok_or_else(|| "unknown translation key".to_string())?;
         let locale = self.host.app.borrow().ui_locale;
         let template = tr(locale, message_id);
         apply_named_replacements(&template, replacements)
             .ok_or_else(|| "invalid translation replacement contract".to_string())
     }
+}
+
+/// Resolve a stable plugin message key to the current catalog id (FEAT-020 D5).
+///
+/// Every plugin-group catalog message uses a stable snake_case key; the TUI
+/// adapter maps it to the current `MessageId` value and preserves the
+/// authoritative English fallback. Unknown keys fail safely.
+pub(crate) fn key_to_plugin_message_id(key: &str) -> Option<MessageId> {
+    Some(match key {
+        "cmd_plugin_action_failed" => MessageId::CmdPluginActionFailed,
+        "cmd_plugin_bundle_detail" => MessageId::CmdPluginBundleDetail,
+        "cmd_plugin_bundle_diagnostics_header" => MessageId::CmdPluginBundleDiagnosticsHeader,
+        "cmd_plugin_bundle_list_header" => MessageId::CmdPluginBundleListHeader,
+        "cmd_plugin_bundle_mutation_success" => MessageId::CmdPluginBundleMutationSuccess,
+        "cmd_plugin_bundle_none_found" => MessageId::CmdPluginBundleNoneFound,
+        "cmd_plugin_bundle_not_found" => MessageId::CmdPluginBundleNotFound,
+        "cmd_plugin_bundle_reloaded" => MessageId::CmdPluginBundleReloaded,
+        "cmd_plugin_bundle_usage" => MessageId::CmdPluginBundleUsage,
+        "cmd_plugin_detail_description" => MessageId::CmdPluginDetailDescription,
+        "cmd_plugin_detail_approval" => MessageId::CmdPluginDetailApproval,
+        "cmd_plugin_detail_path" => MessageId::CmdPluginDetailPath,
+        "cmd_plugin_detail_schema" => MessageId::CmdPluginDetailSchema,
+        "cmd_plugin_legacy_list_header" => MessageId::CmdPluginLegacyListHeader,
+        "cmd_plugin_none_found" => MessageId::CmdPluginNoneFound,
+        "cmd_plugin_not_found" => MessageId::CmdPluginNotFound,
+        "plugin_kimi_applicable" => MessageId::PluginKimiApplicable,
+        "plugin_kimi_candidate_changed" => MessageId::PluginKimiCandidateChanged,
+        "plugin_kimi_candidate_details" => MessageId::PluginKimiCandidateDetails,
+        "plugin_kimi_candidate_missing" => MessageId::PluginKimiCandidateMissing,
+        "plugin_kimi_candidate_summary" => MessageId::PluginKimiCandidateSummary,
+        "plugin_kimi_directory_name_mismatch" => MessageId::PluginKimiDirectoryNameMismatch,
+        "plugin_kimi_entry_canonicalize_failed" => MessageId::PluginKimiEntryCanonicalizeFailed,
+        "plugin_kimi_entry_inspect_failed" => MessageId::PluginKimiEntryInspectFailed,
+        "plugin_kimi_entry_limit" => MessageId::PluginKimiEntryLimit,
+        "plugin_kimi_entry_links_refused" => MessageId::PluginKimiEntryLinksRefused,
+        "plugin_kimi_entry_outside_root" => MessageId::PluginKimiEntryOutsideRoot,
+        "plugin_kimi_entry_read_failed" => MessageId::PluginKimiEntryReadFailed,
+        "plugin_kimi_hash_unavailable" => MessageId::PluginKimiHashUnavailable,
+        "plugin_kimi_home_missing" => MessageId::PluginKimiHomeMissing,
+        "plugin_kimi_inspection_footer" => MessageId::PluginKimiInspectionFooter,
+        "plugin_kimi_license_unspecified" => MessageId::PluginKimiLicenseUnspecified,
+        "plugin_kimi_managed_root_heading" => MessageId::PluginKimiManagedRootHeading,
+        "plugin_kimi_manifest_invalid" => MessageId::PluginKimiManifestInvalid,
+        "plugin_kimi_manifest_must_be_file" => MessageId::PluginKimiManifestMustBeFile,
+        "plugin_kimi_manifest_unreadable" => MessageId::PluginKimiManifestUnreadable,
+        "plugin_kimi_marketplace_gzip_tarball" => MessageId::PluginKimiMarketplaceGzipTarball,
+        "kimi_zip_unsupported" => MessageId::PluginKimiMarketplaceZipUnsupported,
+        "kimi_remote_archive_unsupported" => MessageId::PluginKimiMarketplaceRemoteUnsupported,
+        "kimi_gzip_tarball_url" => MessageId::PluginKimiMarketplaceGzipTarball,
+        "plugin_kimi_marketplace_remote_unsupported" => {
+            MessageId::PluginKimiMarketplaceRemoteUnsupported
+        }
+        "plugin_kimi_marketplace_zip_unsupported" => MessageId::PluginKimiMarketplaceZipUnsupported,
+        "plugin_kimi_mismatch_removed" => MessageId::PluginKimiMismatchRemoved,
+        "plugin_kimi_mismatch_rollback_failed" => MessageId::PluginKimiMismatchRollbackFailed,
+        "plugin_kimi_none_found" => MessageId::PluginKimiNoneFound,
+        "plugin_kimi_not_applicable" => MessageId::PluginKimiNotApplicable,
+        "plugin_kimi_rejected_heading" => MessageId::PluginKimiRejectedHeading,
+        "plugin_kimi_rollback_destination_missing" => {
+            MessageId::PluginKimiRollbackDestinationMissing
+        }
+        "plugin_kimi_root_canonicalize_failed" => MessageId::PluginKimiRootCanonicalizeFailed,
+        "plugin_kimi_root_inspect_failed" => MessageId::PluginKimiRootInspectFailed,
+        "plugin_kimi_root_list_failed" => MessageId::PluginKimiRootListFailed,
+        "plugin_kimi_root_must_be_directory" => MessageId::PluginKimiRootMustBeDirectory,
+        "plugin_kimi_usage" => MessageId::PluginKimiUsage,
+        "plugin_kimi_user_plugin_directory" => MessageId::PluginKimiUserPluginDirectory,
+        _ => return None,
+    })
 }
 
 /// Resolve a stable utility message key to the current catalog id.
@@ -940,6 +1010,7 @@ fn portable_detail(plugin: &crate::plugins::types::LoadedPlugin) -> PluginDetail
     PluginDetail {
         name: plugin.name().to_string(),
         id: plugin.id.as_str().to_string(),
+        inventory_summary: plugin.inventory.summary(),
         version: plugin.manifest.plugin.version.clone(),
         origin: plugin.origin.as_str().to_string(),
         scope: plugin.scope.as_str().to_string(),
@@ -1096,8 +1167,17 @@ fn portable_marketplace_candidate(
 fn portable_marketplace_catalog(
     catalog: &crate::plugins::marketplace::types::MarketplaceCatalog,
 ) -> PluginMarketplaceCatalog {
+    portable_marketplace_catalog_with_source(catalog, None)
+}
+
+/// Convert one stored TUI marketplace catalog (with its source path).
+fn portable_marketplace_catalog_with_source(
+    catalog: &crate::plugins::marketplace::types::MarketplaceCatalog,
+    source_path: Option<&str>,
+) -> PluginMarketplaceCatalog {
     PluginMarketplaceCatalog {
         id: catalog.id.as_str().to_string(),
+        source_path: source_path.map(str::to_string),
         display_name: catalog.display_name.clone(),
         description: catalog.description.clone(),
         format: catalog.format.as_str().to_string(),
@@ -1115,6 +1195,293 @@ fn portable_marketplace_catalog(
             .iter()
             .map(portable_marketplace_diagnostic)
             .collect(),
+    }
+}
+
+/// Kimi managed-plugin scan (host-side, FEAT-020 D1). Mirrors the legacy
+/// `/plugin import kimi` scan exactly: only immediate canonical children of
+/// `~/.kimi-code/plugins/managed`, rejecting symlinks/reparse points,
+/// non-directories, and children that escape the root. Returns portable
+/// candidate values; rejection reasons cross as safe text.
+fn scan_managed_plugins_portable(
+    home_override: Option<&Path>,
+) -> Result<PluginManagedScan, String> {
+    use std::fs;
+    use std::path::PathBuf;
+
+    const MAX_MANAGED_CHILDREN: usize = 128;
+    const KIMI_PLUGIN_JSON_NAME: &str = crate::plugins::agent_plugin::KIMI_PLUGIN_JSON_NAME;
+
+    struct Candidate {
+        name: String,
+        version: String,
+        license: Option<String>,
+        canonical_path: PathBuf,
+        content_hash: String,
+        capability_hash: String,
+        inventory: String,
+        applicable: bool,
+    }
+
+    fn inspect_candidate(canonical_path: &Path) -> Result<Candidate, String> {
+        let manifest_path = canonical_path.join(KIMI_PLUGIN_JSON_NAME);
+        let metadata = fs::symlink_metadata(&manifest_path).map_err(|error| {
+            format!(
+                "Kimi manifest unreadable at {}: {}",
+                canonical_path.display(),
+                error
+            )
+        })?;
+        if crate::plugins::metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+            return Err(format!(
+                "Kimi manifest must be a regular file at {}",
+                canonical_path.display()
+            ));
+        }
+        let validated = crate::plugins::manifest::PluginManifest::validate_from_path(
+            &manifest_path,
+        )
+        .map_err(|error| {
+            format!(
+                "Kimi manifest invalid at {}: {error}",
+                canonical_path.display()
+            )
+        })?;
+        let name = validated.manifest.plugin.name.clone();
+        if canonical_path.file_name().and_then(|part| part.to_str()) != Some(name.as_str()) {
+            return Err(format!(
+                "Kimi directory name `{}` does not match manifest name `{}`",
+                canonical_path.display(),
+                name
+            ));
+        }
+        Ok(Candidate {
+            name,
+            version: validated.manifest.plugin.version.clone(),
+            license: validated.manifest.plugin.license.clone(),
+            canonical_path: validated.canonical_root,
+            content_hash: validated.content_hash,
+            capability_hash: validated.capability_hash,
+            inventory: validated.inventory.summary(),
+            applicable: validated.applicable,
+        })
+    }
+
+    let home = match home_override {
+        Some(home) => home.to_path_buf(),
+        None => crate::config::effective_home_dir().ok_or_else(|| {
+            tr(
+                crate::localization::Locale::En,
+                crate::localization::MessageId::PluginKimiHomeMissing,
+            )
+            .into_owned()
+            .to_string()
+        })?,
+    };
+    let configured_root = home.join(".kimi-code/plugins/managed");
+    let metadata = match fs::symlink_metadata(&configured_root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PluginManagedScan {
+                root: configured_root,
+                candidates: Vec::new(),
+                rejected: Vec::new(),
+            });
+        }
+        Err(error) => {
+            let root_text = escape_review_text(&configured_root.display().to_string());
+            let error_text = escape_review_text(&error.to_string());
+            return Err(tr(
+                crate::localization::Locale::En,
+                crate::localization::MessageId::PluginKimiRootInspectFailed,
+            )
+            .replace("{root}", &root_text)
+            .replace("{error}", &error_text));
+        }
+    };
+    if crate::plugins::metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+        let root_text = escape_review_text(&configured_root.display().to_string());
+        return Err(tr(
+            crate::localization::Locale::En,
+            crate::localization::MessageId::PluginKimiRootMustBeDirectory,
+        )
+        .replace("{root}", &root_text));
+    }
+    let canonical_root = configured_root.canonicalize().map_err(|error| {
+        let root_text = escape_review_text(&configured_root.display().to_string());
+        let error_text = escape_review_text(&error.to_string());
+        tr(
+            crate::localization::Locale::En,
+            crate::localization::MessageId::PluginKimiRootCanonicalizeFailed,
+        )
+        .replace("{root}", &root_text)
+        .replace("{error}", &error_text)
+    })?;
+    let mut entries = fs::read_dir(&canonical_root)
+        .map_err(|error| {
+            let root_text = escape_review_text(&canonical_root.display().to_string());
+            let error_text = escape_review_text(&error.to_string());
+            tr(
+                crate::localization::Locale::En,
+                crate::localization::MessageId::PluginKimiRootListFailed,
+            )
+            .replace("{root}", &root_text)
+            .replace("{error}", &error_text)
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            let error_text = escape_review_text(&error.to_string());
+            tr(
+                crate::localization::Locale::En,
+                crate::localization::MessageId::PluginKimiEntryReadFailed,
+            )
+            .replace("{error}", &error_text)
+        })?;
+    if entries.len() > MAX_MANAGED_CHILDREN {
+        return Err(tr(
+            crate::localization::Locale::En,
+            crate::localization::MessageId::PluginKimiEntryLimit,
+        )
+        .replace("{count}", &entries.len().to_string())
+        .replace("{max}", &MAX_MANAGED_CHILDREN.to_string()));
+    }
+    entries.sort_by_key(fs::DirEntry::file_name);
+
+    let mut candidates = Vec::new();
+    let mut rejected = Vec::new();
+    for entry in entries {
+        let path = entry.path();
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                let path_text = escape_review_text(&path.display().to_string());
+                let error_text = escape_review_text(&error.to_string());
+                rejected.push(
+                    tr(
+                        crate::localization::Locale::En,
+                        crate::localization::MessageId::PluginKimiEntryInspectFailed,
+                    )
+                    .replace("{path}", &path_text)
+                    .replace("{error}", &error_text),
+                );
+                continue;
+            }
+        };
+        if crate::plugins::metadata_is_link_or_reparse(&metadata) {
+            let path_text = escape_review_path(&path);
+            rejected.push(
+                tr(
+                    crate::localization::Locale::En,
+                    crate::localization::MessageId::PluginKimiEntryLinksRefused,
+                )
+                .replace("{path}", &path_text),
+            );
+            continue;
+        }
+        if !metadata.is_dir() {
+            continue;
+        }
+        let canonical_path = match path.canonicalize() {
+            Ok(path) if path.parent() == Some(canonical_root.as_path()) => path,
+            Ok(canonical_path) => {
+                let path_text = escape_review_text(&path.display().to_string());
+                let canonical_text = escape_review_text(&canonical_path.display().to_string());
+                rejected.push(
+                    tr(
+                        crate::localization::Locale::En,
+                        crate::localization::MessageId::PluginKimiEntryOutsideRoot,
+                    )
+                    .replace("{path}", &path_text)
+                    .replace("{canonical_path}", &canonical_text),
+                );
+                continue;
+            }
+            Err(error) => {
+                let path_text = escape_review_text(&path.display().to_string());
+                let error_text = escape_review_text(&error.to_string());
+                rejected.push(
+                    tr(
+                        crate::localization::Locale::En,
+                        crate::localization::MessageId::PluginKimiEntryCanonicalizeFailed,
+                    )
+                    .replace("{path}", &path_text)
+                    .replace("{error}", &error_text),
+                );
+                continue;
+            }
+        };
+        match inspect_candidate(&canonical_path) {
+            Ok(candidate) => candidates.push(candidate),
+            Err(error) => rejected.push(error),
+        }
+    }
+    candidates.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(PluginManagedScan {
+        root: canonical_root,
+        candidates: candidates
+            .into_iter()
+            .map(|candidate| PluginManagedCandidate {
+                name: candidate.name,
+                version: candidate.version,
+                license: candidate.license,
+                canonical_path: candidate.canonical_path,
+                content_hash: candidate.content_hash,
+                capability_hash: candidate.capability_hash,
+                inventory: candidate.inventory,
+                applicable: candidate.applicable,
+            })
+            .collect(),
+        rejected,
+    })
+}
+
+/// Escape review text exactly like the plugin render helpers (FEAT-020 D2).
+fn escape_review_text(value: &str) -> String {
+    crate::commands::groups::plugins::render::escape_review_text(value)
+}
+
+/// Escape a review path exactly like the plugin render helpers (FEAT-020 D2).
+fn escape_review_path(path: &Path) -> String {
+    crate::commands::groups::plugins::render::escape_review_path(path)
+}
+
+/// The catalog built into every Codewhale release. It lists bundles that
+/// ship inside the binary (`builtin:<name>` install specs), so there is
+/// nothing to fetch; installing still goes through the reviewed installer
+/// and lands disabled and untrusted like everything else.
+fn builtin_official_catalog() -> crate::plugins::marketplace::store::StoredMarketplaceCatalog {
+    fn official_catalog_document() -> serde_json::Value {
+        serde_json::json!({
+            "name": "official",
+            "description": "Plugins built into this Codewhale release",
+            "version": crate::plugins::install::BUILTIN_BUNDLE_NAMES.len().to_string(),
+            "plugins": [
+                {
+                    "name": codewhale_computer_use::bundle::BUNDLE_NAME,
+                    "source": format!("builtin:{}", codewhale_computer_use::bundle::BUNDLE_NAME),
+                    "version": codewhale_computer_use::bundle::version(),
+                    "description": "See and operate this desktop or an attached Android / HarmonyOS device with a vision model (deepseek-v4-flash-vision-exp): screenshots, clicks, typing, scrolling, app launch. Also: `codewhale computer-use setup`.",
+                    "homepage": "https://github.com/Hmbown/CodeWhale/blob/main/docs/COMPUTER_USE.md"
+                }
+            ]
+        })
+    }
+    use crate::plugins::marketplace::parsers::{MarketplaceDocument, parse_catalog};
+    use crate::plugins::marketplace::types::{
+        CatalogTier, MarketplaceCatalogId, MarketplaceFormat,
+    };
+    let mut catalog = parse_catalog(MarketplaceDocument {
+        catalog_id: MarketplaceCatalogId::new("official"),
+        format: MarketplaceFormat::Codewhale,
+        root: official_catalog_document(),
+        base: None,
+    });
+    catalog.provenance.tier = CatalogTier::Official;
+    catalog.provenance.publisher = Some("Codewhale".to_string());
+    crate::plugins::marketplace::store::StoredMarketplaceCatalog {
+        added_at: "builtin".to_string(),
+        source_path: "builtin:official".to_string(),
+        catalog,
     }
 }
 
@@ -1159,6 +1526,14 @@ impl CommandPluginContext for PluginAdapter<'_> {
 
     fn is_empty(&self) -> bool {
         self.host.app.borrow().plugin_registry.is_empty()
+    }
+
+    fn reload(&mut self) -> Result<usize, String> {
+        let mut app = self.host.app.borrow_mut();
+        let workspace = app.workspace.clone();
+        app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&workspace);
+        app.refresh_skill_cache();
+        Ok(app.plugin_registry.len())
     }
 
     fn state_path(&self) -> Option<PathBuf> {
@@ -1232,6 +1607,7 @@ impl CommandPluginContext for PluginAdapter<'_> {
             };
             suggestions.push(PluginSuggestion {
                 name: plugin.name().to_string(),
+                state_label: plugin.state_label().to_string(),
                 description,
                 why: recommendation.matched_terms.clone(),
                 next_step,
@@ -1245,7 +1621,7 @@ impl CommandPluginContext for PluginAdapter<'_> {
             let app = self.host.app.borrow();
             app.plugin_registry
                 .get(selector)
-                .map(crate::commands::groups::plugins::render::review_token)
+                .map(|plugin| format!("{}.{}", plugin.content_hash, plugin.capability_hash))
                 .ok_or_else(|| format!("no plugin named {selector}"))?
         };
         if token != expected {
@@ -1469,7 +1845,7 @@ impl CommandPluginContext for PluginAdapter<'_> {
     }
 
     fn managed_scan(&self, home_override: Option<&Path>) -> Result<PluginManagedScan, String> {
-        crate::commands::groups::plugins::kimi_import::scan_managed_plugins_portable(home_override)
+        scan_managed_plugins_portable(home_override)
     }
 
     fn managed_install(
@@ -1517,7 +1893,7 @@ impl CommandPluginContext for PluginAdapter<'_> {
 
     fn marketplace_state(&self) -> Result<PluginMarketplaceState, String> {
         let app = self.host.app.borrow();
-        let official = crate::commands::groups::plugins::marketplace::builtin_official_catalog();
+        let official = builtin_official_catalog();
         let official = portable_marketplace_catalog(&official.catalog);
         let store = crate::plugins::marketplace::store::MarketplaceStore::open(
             app.plugin_registry.state_path(),
@@ -1530,7 +1906,12 @@ impl CommandPluginContext for PluginAdapter<'_> {
         let stored = state
             .catalogs()
             .values()
-            .map(|entry| portable_marketplace_catalog(&entry.catalog))
+            .map(|entry| {
+                portable_marketplace_catalog_with_source(
+                    &entry.catalog,
+                    Some(entry.source_path.as_str()),
+                )
+            })
             .collect();
         Ok(PluginMarketplaceState { official, stored })
     }
@@ -1540,7 +1921,6 @@ impl CommandPluginContext for PluginAdapter<'_> {
         name: &str,
         path: &Path,
     ) -> Result<PluginMarketplaceAddReceipt, String> {
-        use crate::commands::groups::plugins::marketplace::OFFICIAL_CATALOG_NAME;
         let name_valid = !name.is_empty()
             && name.len() <= 64
             && name
@@ -1552,10 +1932,10 @@ impl CommandPluginContext for PluginAdapter<'_> {
                     .to_string(),
             );
         }
-        if name == OFFICIAL_CATALOG_NAME {
-            return Err(format!(
-                "`{OFFICIAL_CATALOG_NAME}` is the catalog built into Codewhale; pick another name."
-            ));
+        if name == "official" {
+            return Err(
+                "`official` is the catalog built into Codewhale; pick another name.".to_string(),
+            );
         }
         let app = self.host.app.borrow();
         let store = crate::plugins::marketplace::store::MarketplaceStore::open(
@@ -1612,11 +1992,8 @@ impl CommandPluginContext for PluginAdapter<'_> {
     }
 
     fn marketplace_remove(&mut self, name: &str) -> Result<bool, String> {
-        use crate::commands::groups::plugins::marketplace::OFFICIAL_CATALOG_NAME;
-        if name == OFFICIAL_CATALOG_NAME {
-            return Err(format!(
-                "`{OFFICIAL_CATALOG_NAME}` is built into Codewhale and cannot be removed."
-            ));
+        if name == "official" {
+            return Err("`official` is built into Codewhale and cannot be removed.".to_string());
         }
         let app = self.host.app.borrow();
         let store = crate::plugins::marketplace::store::MarketplaceStore::open(
@@ -1634,7 +2011,6 @@ impl CommandPluginContext for PluginAdapter<'_> {
         catalog: &str,
         candidate: &str,
     ) -> Result<PluginMutationReceipt, String> {
-        use crate::commands::groups::plugins::marketplace::OFFICIAL_CATALOG_NAME;
         let app = self.host.app.borrow();
         let store = crate::plugins::marketplace::store::MarketplaceStore::open(
             app.plugin_registry.state_path(),
@@ -1644,8 +2020,8 @@ impl CommandPluginContext for PluginAdapter<'_> {
                 .to_string()
         })?;
         let state = store.load()?;
-        let entry = if catalog == OFFICIAL_CATALOG_NAME {
-            Some(crate::commands::groups::plugins::marketplace::builtin_official_catalog())
+        let entry = if catalog == "official" {
+            Some(builtin_official_catalog())
         } else {
             state.get(catalog).cloned()
         };
@@ -2709,9 +3085,8 @@ mod tests {
         let discovery = crate::plugins::PluginDiscoveryContext::capture_pre_dotenv();
         app.plugin_registry = discovery.registry_for_workspace(tmp.path());
         // Capture the review token before borrowing the mutable facet.
-        let token = crate::commands::groups::plugins::render::review_token(
-            app.plugin_registry.get("demo").unwrap(),
-        );
+        let demo = app.plugin_registry.get("demo").unwrap();
+        let token = format!("{}.{}", demo.content_hash, demo.capability_hash);
 
         let mut bundle = app.command_contexts();
         let mut parts = bundle.contexts(CommandCapabilities::PLUGIN).into_parts();
