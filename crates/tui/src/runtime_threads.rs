@@ -79,6 +79,7 @@ const EVENT_TRANSACTION_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const EVENT_TRANSACTION_LOCK_POLL: Duration = Duration::from_millis(5);
 const EVENT_TRANSACTION_LOCK_FILE: &str = "events.lock";
 const RUNTIME_PROCESS_OWNER_LOCK_FILE: &str = "runtime-process.owner.lock";
+const RUNTIME_PROCESS_OWNER_LOCK_HELD: &str = "This Runtime thread store is already active in another process; close the other Runtime before retrying, or set CODEWHALE_RUNTIME_DIR to a distinct store root";
 const AGENT_MAIL_OWNER_FILE: &str = "owner.json";
 const TURN_OPERATION_BINDING_SCHEMA_VERSION: u32 = 1;
 const REQUEST_USER_INPUT_TOOL_NAME: &str = "request_user_input";
@@ -2027,17 +2028,58 @@ pub struct RuntimeThreadManagerConfig {
 impl RuntimeThreadManagerConfig {
     #[must_use]
     pub fn from_task_data_dir(task_data_dir: PathBuf) -> Self {
-        let data_dir = std::env::var("CODEWHALE_RUNTIME_DIR")
-            .or_else(|_| std::env::var("DEEPSEEK_RUNTIME_DIR"))
-            .ok()
-            .filter(|override_dir| !override_dir.trim().is_empty())
-            .map_or_else(|| task_data_dir.join("runtime"), PathBuf::from);
+        Self::resolved(task_data_dir, None)
+    }
+
+    /// Scope the Runtime thread store to one interactive session.
+    ///
+    /// The process-owner lock stays exclusive; isolation comes from the path,
+    /// not from weakening the lock (#5630).
+    #[must_use]
+    pub fn for_session(task_data_dir: PathBuf, session_id: &str) -> Self {
+        Self::resolved(task_data_dir, Some(session_id))
+    }
+
+    fn resolved(task_data_dir: PathBuf, session_id: Option<&str>) -> Self {
+        let data_dir = runtime_dir_override()
+            .unwrap_or_else(|| default_runtime_store_root(&task_data_dir, session_id));
         Self {
             data_dir,
             task_data_dir,
             max_active_threads: MAX_ACTIVE_THREADS_DEFAULT,
         }
     }
+}
+
+fn runtime_dir_override() -> Option<PathBuf> {
+    std::env::var("CODEWHALE_RUNTIME_DIR")
+        .or_else(|_| std::env::var("DEEPSEEK_RUNTIME_DIR"))
+        .ok()
+        .filter(|override_dir| !override_dir.trim().is_empty())
+        .map(PathBuf::from)
+}
+
+fn default_runtime_store_root(task_data_dir: &Path, session_id: Option<&str>) -> PathBuf {
+    match session_id
+        .map(str::trim)
+        .filter(|id| is_runtime_session_scope(id))
+    {
+        Some(id) => match crate::session_manager::default_sessions_dir() {
+            Ok(sessions_dir) => sessions_dir.join(id).join("runtime"),
+            Err(_) => task_data_dir.join("runtime").join(id),
+        },
+        None => task_data_dir.join("runtime"),
+    }
+}
+
+fn is_runtime_session_scope(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && id != "checkpoints"
+        && id != "session_boot_owners"
 }
 
 /// Visibility filter for `list_threads`. Default is `ActiveOnly`. The runtime
@@ -2827,9 +2869,7 @@ impl RuntimeProcessOwnerLock {
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
                 let error = std::io::Error::last_os_error();
                 if error.kind() == std::io::ErrorKind::WouldBlock {
-                    bail!(
-                        "This Runtime thread store is already active in another process; close the other Runtime before retrying"
-                    );
+                    bail!("{RUNTIME_PROCESS_OWNER_LOCK_HELD}");
                 }
                 return Err(error).context("Failed to acquire Runtime process owner lock");
             }
@@ -2842,9 +2882,7 @@ impl RuntimeProcessOwnerLock {
             if unsafe { LockFile(file.as_raw_handle() as _, 0, 0, u32::MAX, u32::MAX) } == 0 {
                 let error = std::io::Error::last_os_error();
                 if matches!(error.raw_os_error(), Some(32 | 33)) {
-                    bail!(
-                        "This Runtime thread store is already active in another process; close the other Runtime before retrying"
-                    );
+                    bail!("{RUNTIME_PROCESS_OWNER_LOCK_HELD}");
                 }
                 return Err(error).context("Failed to acquire Runtime process owner lock");
             }

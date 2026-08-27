@@ -20,6 +20,24 @@ pub(super) fn event_owner_is_active(
     !owner_session_id.is_empty() && current_session_id == Some(owner_session_id)
 }
 
+/// Bind the Runtime thread store to a session before the process-owner lock
+/// is taken, so a second Codewhale on the same machine does not collide on
+/// the default root (#5630). Resume reuses the loaded id; a fresh session
+/// claims one here so first persist keeps it.
+fn ensure_runtime_session_id(app: &mut App) -> String {
+    if let Some(existing) = app
+        .current_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        return existing.to_string();
+    }
+    let session_id = uuid::Uuid::new_v4().to_string();
+    app.current_session_id = Some(session_id.clone());
+    session_id
+}
+
 fn persist_current_session_goal(app: &App) -> Result<(), String> {
     let session_id = app
         .current_session_id
@@ -409,6 +427,7 @@ pub async fn run_tui(
         }
     }
 
+    let session_id = ensure_runtime_session_id(&mut app);
     let task_manager = TaskManager::start(
         TaskManagerConfig::from_runtime(
             config,
@@ -418,6 +437,7 @@ pub async fn run_tui(
         ),
         config.clone(),
         std::sync::Arc::clone(&app.plugin_registry),
+        &session_id,
     )
     .await?;
     let automations = std::sync::Arc::new(tokio::sync::Mutex::new(

@@ -68,6 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Context-pressure warnings and critical alerts now remain visible in sticky UI
   status until compaction or explicit dismissal, instead of disappearing into
   scrolling turn metadata (#5620).
+- The Runtime thread store defaults to a per-session root
+  (`$CODEWHALE_HOME/sessions/<id>/runtime`) so multiple Codewhale processes on
+  one machine no longer share one owner lock (#5630). The exclusive lock is
+  unchanged; `CODEWHALE_RUNTIME_DIR` still selects a shared root when that is
+  intended.
 - Session token totals now include display-only per-model-call deltas while a
   turn is running, including input/output and cache-class counters; the
   authoritative `TurnComplete` totals still reconcile exactly once (#5581).

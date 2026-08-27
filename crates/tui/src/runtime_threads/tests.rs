@@ -3703,6 +3703,10 @@ fn runtime_manager_store_has_one_lifetime_process_owner() -> Result<()> {
         message.contains("already active in another process"),
         "unexpected owner-lock error: {error:#}"
     );
+    assert!(
+        message.contains("CODEWHALE_RUNTIME_DIR"),
+        "owner-lock error should name the override for a shared root: {error:#}"
+    );
 
     let distinct_dir = test_runtime_dir();
     let distinct = test_manager(distinct_dir)?;
@@ -3712,6 +3716,61 @@ fn runtime_manager_store_has_one_lifetime_process_owner() -> Result<()> {
     child.wait_success("Runtime manager owner holder");
     let reopened = test_manager(dir)?;
     drop(reopened);
+    Ok(())
+}
+
+#[test]
+fn session_scoped_runtime_default_lives_under_the_session_directory() {
+    let _lock = crate::test_support::lock_test_env();
+    let temp = tempfile::tempdir().expect("temp home");
+    let home = temp.path().join("cw-home");
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &home);
+    let _runtime = crate::test_support::EnvVarGuard::remove("CODEWHALE_RUNTIME_DIR");
+    let _legacy = crate::test_support::EnvVarGuard::remove("DEEPSEEK_RUNTIME_DIR");
+
+    let cfg = RuntimeThreadManagerConfig::for_session(home.join("tasks"), "sess-1");
+    assert_eq!(
+        cfg.data_dir,
+        home.join("sessions").join("sess-1").join("runtime")
+    );
+}
+
+#[test]
+fn explicit_runtime_dir_override_beats_session_scope() {
+    let _lock = crate::test_support::lock_test_env();
+    let temp = tempfile::tempdir().expect("temp home");
+    let home = temp.path().join("cw-home");
+    let override_dir = temp.path().join("shared-runtime");
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &home);
+    let _runtime = crate::test_support::EnvVarGuard::set("CODEWHALE_RUNTIME_DIR", &override_dir);
+    let _legacy = crate::test_support::EnvVarGuard::remove("DEEPSEEK_RUNTIME_DIR");
+
+    let cfg = RuntimeThreadManagerConfig::for_session(home.join("tasks"), "sess-1");
+    assert_eq!(cfg.data_dir, override_dir);
+}
+
+#[test]
+fn session_scoped_runtime_roots_do_not_share_the_process_owner_lock() -> Result<()> {
+    let _lock = crate::test_support::lock_test_env();
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("cw-home");
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &home);
+    let _runtime = crate::test_support::EnvVarGuard::remove("CODEWHALE_RUNTIME_DIR");
+    let _legacy = crate::test_support::EnvVarGuard::remove("DEEPSEEK_RUNTIME_DIR");
+    let tasks = home.join("tasks");
+
+    let first = RuntimeThreadManager::open(
+        Config::default(),
+        PathBuf::from("."),
+        RuntimeThreadManagerConfig::for_session(tasks.clone(), "session-a"),
+    )?;
+    let second = RuntimeThreadManager::open(
+        Config::default(),
+        PathBuf::from("."),
+        RuntimeThreadManagerConfig::for_session(tasks, "session-b"),
+    )?;
+    drop(first);
+    drop(second);
     Ok(())
 }
 
