@@ -9583,7 +9583,7 @@ async fn denied_steer_restores_queued_draft_and_keeps_active_turn() {
     assert_eq!(app.queued_draft, Some(message));
     assert_eq!(app.queued_message_count(), 0);
     assert!(app.status_toasts.back().is_some_and(|toast| {
-        toast.level == StatusToastLevel::Warning && toast.text.contains("blocked the steer")
+        toast.level == StatusToastLevel::Warning && toast.text.contains("blocked the follow-up")
     }));
 }
 
