@@ -128,7 +128,29 @@ fn render_math_segment(text: &str) -> String {
 }
 
 /// Replace math delimiters with plain Unicode while preserving Markdown code.
-pub fn render_latex_in_text(text: &str) -> String {
+///
+/// Fast path (#perf-r5): the overwhelming majority of streamed content
+/// contains no math delimiters at all. A single byte scan for the three
+/// opening delimiters (`$`, `\(`, `\[`) decides between borrowing the input
+/// untouched and running the full transform, so the per-chunk streaming
+/// render avoids allocating a full-content copy on every update when no
+/// math is present.
+pub fn render_latex_in_text(text: &str) -> std::borrow::Cow<'_, str> {
+    // Math can only start at '$' (incl. '$$') or the two-byte '\(' and '\['.
+    // Scanning bytes directly avoids a regex; any hit falls back to the
+    // full transform below, which re-verifies delimiters precisely.
+    let has_delim = text
+        .as_bytes()
+        .iter()
+        .enumerate()
+        .any(|(idx, &byte)| match byte {
+            b'$' => true,
+            b'\\' => matches!(text.as_bytes().get(idx + 1), Some(b'(') | Some(b'[')),
+            _ => false,
+        });
+    if !has_delim {
+        return std::borrow::Cow::Borrowed(text);
+    }
     let mut result = String::with_capacity(text.len());
     let mut cursor = 0;
 
@@ -156,7 +178,7 @@ pub fn render_latex_in_text(text: &str) -> String {
         }
     }
 
-    result
+    std::borrow::Cow::Owned(result)
 }
 
 // --- Environment rendering ---
@@ -1653,11 +1675,22 @@ mod tests {
     fn test_inline_dollar() {
         let r = render_latex_in_text(r"text $x^2$ more");
         assert_eq!(r, "text x\u{00b2} more");
+        assert!(matches!(r, std::borrow::Cow::Owned(_)));
     }
     #[test]
     fn test_display_bracket() {
         let r = render_latex_in_text(r"text \[x^2\] more");
         assert_eq!(r, "text x\u{00b2} more");
+    }
+    #[test]
+    fn no_math_is_borrowed_without_copy() {
+        let r = render_latex_in_text("plain prose with `code` but no math at all");
+        assert!(matches!(r, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(&*r, "plain prose with `code` but no math at all");
+        // The '$' fast path must not miss \(
+        let p = render_latex_in_text("parens \\(x^2\\) inline");
+        assert!(matches!(p, std::borrow::Cow::Owned(_)));
+        assert_eq!(&*p, "parens x\u{00b2} inline");
     }
     #[test]
     fn preserves_currency() {
