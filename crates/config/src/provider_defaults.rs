@@ -62,6 +62,7 @@ pub(crate) const OPENROUTER_QWEN_3_6_27B_MODEL: &str = "qwen/qwen3.6-27b";
 pub(crate) const OPENROUTER_QWEN_3_6_PLUS_MODEL: &str = "qwen/qwen3.6-plus";
 pub(crate) const OPENROUTER_QWEN_3_7_PLUS_MODEL: &str = "qwen/qwen3.7-plus";
 pub(crate) const OPENROUTER_QWEN_3_7_MAX_MODEL: &str = "qwen/qwen3.7-max";
+pub(crate) const OPENROUTER_QWEN_3_8_FLASH_MODEL: &str = "qwen/qwen3.8-flash";
 pub(crate) const OPENROUTER_TENCENT_HY3_PREVIEW_MODEL: &str = "tencent/hy3-preview";
 pub(crate) const OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL: &str = "xiaomi/mimo-v2.5-pro";
 pub(crate) const OPENROUTER_XIAOMI_MIMO_V2_5_MODEL: &str = "xiaomi/mimo-v2.5";

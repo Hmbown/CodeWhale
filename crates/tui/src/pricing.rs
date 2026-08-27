@@ -707,6 +707,9 @@ fn known_pricing_for_model(model_lower: &str) -> Option<ModelPricing> {
         // Cache-write is 0.40 upstream (#4318).
         "qwen/qwen3.7-plus" => Some(usd_pricing_with_write(0.064, 0.32, 1.28, 0.40)),
         "qwen/qwen3.7-max" => Some(usd_only_pricing(0.25, 1.25, 3.75)),
+        // OpenRouter durable list prices (models.dev 2026-08-26, no promo):
+        // input 0.16 / output 0.47 / cache_read 0.016 / cache_write 0.20 per 1M.
+        "qwen/qwen3.8-flash" => Some(usd_pricing_with_write(0.016, 0.16, 0.47, 0.20)),
 
         "google/gemma-4-31b-it" => Some(usd_only_pricing(0.09, 0.12, 0.35)),
         "google/gemma-4-26b-a4b-it" => Some(usd_only_pricing(0.06, 0.06, 0.33)),

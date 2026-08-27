@@ -259,14 +259,20 @@ fn known_context_window_for_model(model_lower: &str) -> Option<u32> {
         // GLM-5.3 limits are inherited from GLM-5.2 pending official Z.ai
         // release metadata (see `INHERITED FROM glm-5.2` in config/models.rs).
         "z-ai/glm-5.2" | "glm-5.2" | "z-ai/glm-5.3" | "glm-5.3" => Some(1_000_000),
-        "minimax/minimax-m3" | "minimax-m3" | "qwen/qwen3.6-flash" | "qwen/qwen3.6-plus" => {
-            Some(1_000_000)
-        }
+        "minimax/minimax-m3"
+        | "minimax-m3"
+        | "qwen/qwen3.8-flash"
+        | "qwen/qwen3.6-flash"
+        | "qwen/qwen3.6-plus" => Some(1_000_000),
         // Alibaba Cloud Model Studio (Token Plan console + curated catalog,
         // verified 2026-08-03): ~1M context. Never fall through to the 128K
         // legacy default — that number is the generation ceiling, not the window.
+        // Bare `qwen3.8-flash` is the OpenRouter short id (verified 2026-08-26
+        // against models.dev: 1M context / 131K output); Alibaba first-party
+        // does not list a flash row, so this is not a Model Studio default.
         "qwen3.8-max"
         | "qwen3.8-max-preview"
+        | "qwen3.8-flash"
         | "qwen3.7-plus"
         | "qwen3.7-max"
         | "qwen3.6-flash" => Some(1_000_000),
@@ -390,7 +396,11 @@ pub fn max_output_tokens_for_model(model: &str) -> Option<u32> {
         | "qwen/qwen3.6-max-preview"
         | "qwen/qwen3.6-plus" => Some(65_536),
         // Model Studio: 128K is the generation ceiling, not the context window.
-        "qwen3.8-max" | "qwen3.8-max-preview" => Some(131_072),
+        // OpenRouter qwen3.8-flash shares the 131,072 output cap (models.dev
+        // 2026-08-26); do not inherit qwen3.6-flash's 65,536 ceiling.
+        "qwen3.8-max" | "qwen3.8-max-preview" | "qwen/qwen3.8-flash" | "qwen3.8-flash" => {
+            Some(131_072)
+        }
         "qwen3.7-plus" | "qwen3.7-max" | "qwen3.6-flash" => Some(65_536),
         "z-ai/glm-5.1" | "z-ai/glm-5.2" | "z-ai/glm-5.3" | "z-ai/glm-5-turbo" | "glm-5.1"
         | "glm-5.2" | "glm-5.3" | "glm-5-turbo" => Some(131_072),
@@ -482,6 +492,7 @@ pub fn model_supports_reasoning(model: &str) -> bool {
             | "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
             | "nvidia/nemotron-3-ultra-550b-a55b"
             | "nvidia/nemotron-3-ultra-550b-a55b:free"
+            | "qwen/qwen3.8-flash"
             | "qwen/qwen3.6-flash"
             | "qwen/qwen3.6-35b-a3b"
             | "qwen/qwen3.6-max-preview"
@@ -493,9 +504,12 @@ pub fn model_supports_reasoning(model: &str) -> bool {
             // deep-thinking docs these are hybrid-thinking models that stream
             // `reasoning_content` (OpenAI dialect) or thinking blocks
             // (Anthropic dialect); qwen3.7/3.6/3.5 families default thinking
-            // ON server-side.
+            // ON server-side. Bare `qwen3.8-flash` is the OpenRouter short
+            // id (reasoning: true on models.dev 2026-08-26), not a Model
+            // Studio family default.
             | "qwen3.8-max"
             | "qwen3.8-max-preview"
+            | "qwen3.8-flash"
             | "qwen3.7-max"
             | "qwen3.7-plus"
             | "qwen3.6-plus"
@@ -884,6 +898,7 @@ mod tests {
         for (model, expected_window) in [
             ("arcee-ai/trinity-large-thinking", 262_144),
             ("trinity-large-thinking", 262_144),
+            (concat!("qwen/", "qwen3.8-flash"), 1_000_000),
             (concat!("qwen/", "qwen3.6-flash"), 1_000_000),
             (concat!("qwen/", "qwen3.6-35b-a3b"), 262_144),
             (concat!("qwen/", "qwen3.6-max-preview"), 262_144),
@@ -1073,6 +1088,17 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_qwen38_flash_is_1m_context_with_128k_output() {
+        // models.dev OpenRouter listing 2026-08-26: 1,000,000 / 131,072.
+        // Both the namespaced wire id and the bare short id must resolve.
+        for model in ["qwen/qwen3.8-flash", "qwen3.8-flash"] {
+            assert_eq!(context_window_for_model(model), Some(1_000_000), "{model}");
+            assert_eq!(max_output_tokens_for_model(model), Some(131_072), "{model}");
+            assert!(model_supports_reasoning(model), "{model}");
+        }
+    }
+
+    #[test]
     fn modelstudio_bare_qwen_models_support_reasoning() {
         // Model Studio's deep-thinking docs: every qwen3.x family the Token /
         // Coding Plan catalogs carry is hybrid-thinking (reasoning_content on
@@ -1187,6 +1213,10 @@ mod tests {
         assert_eq!(
             max_output_tokens_for_model("trinity-large-thinking"),
             Some(262_144)
+        );
+        assert_eq!(
+            max_output_tokens_for_model(concat!("qwen/", "qwen3.8-flash")),
+            Some(131_072)
         );
         assert_eq!(
             max_output_tokens_for_model(concat!("qwen/", "qwen3.6-flash")),

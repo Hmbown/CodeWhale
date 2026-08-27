@@ -863,6 +863,31 @@ fn bundled_asset_pricing_is_honest() {
         }
     }
 
+    // OpenRouter qwen3.8-flash lists durable (non-promo) rates on models.dev
+    // as of 2026-08-26. Unlike GLM-5.3-Flash's explicit 50% promo, this row
+    // must ship priced. It is not a family default.
+    let qwen38_flash = find(&rows, "openrouter", "qwen/qwen3.8-flash");
+    assert!(
+        !qwen38_flash.default_for_provider,
+        "qwen3.8-flash is a suffix variant and must not be the OpenRouter default"
+    );
+    let cost = qwen38_flash
+        .cost
+        .as_ref()
+        .expect("qwen/qwen3.8-flash must ship priced (durable list rates, no promo)");
+    assert_eq!(cost.input, Some(0.16));
+    assert_eq!(cost.output, Some(0.47));
+    assert_eq!(cost.cache_read, Some(0.016));
+    assert_eq!(cost.cache_write, Some(0.20));
+    assert_eq!(
+        qwen38_flash.limit.as_ref().and_then(|l| l.context),
+        Some(1_000_000)
+    );
+    assert_eq!(
+        qwen38_flash.limit.as_ref().and_then(|l| l.output),
+        Some(131_072)
+    );
+
     // M3 has input-length and service tiers that the flat catalog cost shape
     // cannot represent, so the bundled route row stays honestly unpriced.
     let minimax_m3 = find(&rows, "minimax-anthropic", "MiniMax-M3");
