@@ -73,7 +73,7 @@
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-arrive: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-exit: linear;
-  --rail: 288px;
+  --rail: 304px;
   --content: 760px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   font-synthesis: none;
@@ -169,11 +169,11 @@ summary:focus-visible {
 
 .brand-mark {
   display: block;
-  flex: 0 0 40px;
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  background: #020711;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  border-radius: 0;
+  background: transparent;
   object-fit: contain;
 }
 
@@ -339,9 +339,9 @@ textarea::placeholder {
 .thread-row {
   display: block;
   width: 100%;
-  min-height: 48px;
-  margin: 2px 0;
-  padding: 8px 10px;
+  min-height: 0;
+  margin: 1px 0;
+  padding: 8px 10px 9px;
   overflow: hidden;
   border: 1px solid transparent;
   border-radius: var(--radius-control);
@@ -364,6 +364,7 @@ textarea::placeholder {
 
 .thread-title-row {
   min-width: 0;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
 }
@@ -389,11 +390,17 @@ textarea::placeholder {
 }
 
 .thread-title {
+  display: -webkit-box;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .thread-preview {
@@ -774,10 +781,12 @@ textarea::placeholder {
 
 .empty-mark {
   display: block;
-  width: 52px;
-  height: 52px;
-  border-radius: var(--radius-card);
-  opacity: 0.9;
+  width: 56px;
+  height: 56px;
+  border-radius: 0;
+  background: transparent;
+  object-fit: contain;
+  opacity: 1;
 }
 
 .message,
@@ -1236,7 +1245,7 @@ noscript {
     top: var(--visual-viewport-offset-top);
     bottom: auto;
     left: 0;
-    width: min(88vw, 288px);
+    width: min(88vw, 304px);
     height: var(--visual-viewport-height);
     transform: translateX(-102%);
     box-shadow: 24px 0 70px var(--shadow-color);

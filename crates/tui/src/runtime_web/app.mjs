@@ -937,7 +937,8 @@ function startBrowserClient() {
       indicators.append(status);
       titleRow.append(indicators);
       row.append(titleRow);
-      row.append(element("span", "thread-preview", summary.preview || "No messages yet"));
+      const preview = distinctPreview(summary.title, summary.preview);
+      if (preview) row.append(element("span", "thread-preview", preview));
       const branch = summary.branch || basename(summary.workspace) || "local";
       row.append(element("span", "thread-meta", `${branch} · ${relativeTime(summary.updated_at)}`));
       row.addEventListener("click", () => selectThread(summary.id));
@@ -973,7 +974,8 @@ function startBrowserClient() {
       const titleRow = element("span", "thread-title-row");
       titleRow.append(element("span", "thread-title", summary.title || "Untitled session"));
       row.append(titleRow);
-      row.append(element("span", "thread-preview", summary.preview || summary.title));
+      const preview = distinctPreview(summary.title, summary.preview);
+      if (preview) row.append(element("span", "thread-preview", preview));
       const scope = basename(summary.workspace) || "local";
       row.append(
         element(
@@ -1403,7 +1405,7 @@ function startBrowserClient() {
     const empty = element("div", "empty-state");
     const mark = document.createElement("img");
     mark.className = "empty-mark";
-    mark.src = "/assets/codewhale-mark-dark.png";
+    mark.src = "/assets/codewhale-mark-light.png";
     mark.alt = "";
     empty.append(mark);
     empty.append(element("h2", "", title));
@@ -2246,6 +2248,19 @@ export function formatRuntimeProvenance(runtimeInfo) {
 
 export function renderRuntimeProvenance(element, runtimeInfo) {
   return setSafeText(element, formatRuntimeProvenance(runtimeInfo));
+}
+
+export function distinctPreview(title, preview) {
+  const heading = String(title || "").replace(/\s+/g, " ").trim();
+  const next = String(preview || "").replace(/\s+/g, " ").trim();
+  if (!next) return "";
+  if (!heading) return next;
+  const compactHeading = heading.toLowerCase();
+  const compactNext = next.toLowerCase();
+  if (compactNext === compactHeading) return "";
+  if (compactNext.startsWith(compactHeading)) return "";
+  if (compactHeading.startsWith(compactNext)) return "";
+  return next;
 }
 
 export function accessKind(hostname = globalThis.location?.hostname || "") {

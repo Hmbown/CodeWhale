@@ -13,6 +13,7 @@ import {
   createThreadState,
   eventStreamUrl,
   accessKind,
+  distinctPreview,
   formatRuntimeProvenance,
   imageInputPresentation,
   isComposerSubmitKey,
@@ -97,7 +98,7 @@ test("embedded web client uses the Ocean Blue Stage semantic palette", async () 
     "--radius-control: 6px",
     "--radius-card: 12px",
     "--radius-composer: 16px",
-    "--rail: 288px",
+    "--rail: 304px",
   ]) {
     assert.match(styles, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
@@ -276,9 +277,11 @@ test("rail New thread cannot paint over the session fact chips", async () => {
   assert.match(cssDeclarations(styles, "\\.session-facts"), /flex-wrap:\s*wrap/);
   assert.match(cssDeclarations(styles, "\\.rail"), /padding:\s*14px 12px 14px/);
   assert.match(cssDeclarations(styles, "\\.rail-footer"), /flex-direction:\s*column/);
-  assert.match(styles, /--rail:\s*288px/);
+  assert.match(styles, /--rail:\s*304px/);
   assert.match(styles, /--ease-arrive:\s*cubic-bezier\(0\.23, 1, 0\.32, 1\)/);
+  assert.match(cssDeclarations(styles, "\\.thread-title"), /-webkit-line-clamp:\s*2/);
   assert.match(html, /class="connection-status"/);
+  assert.match(html, /codewhale-mark-light\.png/);
 });
 
 test("production shell keeps readable type, controls, focus, and motion contracts", async () => {
@@ -287,8 +290,8 @@ test("production shell keeps readable type, controls, focus, and motion contract
     readFile(new URL("../src/runtime_web/index.html", import.meta.url), "utf8"),
   ]);
 
-  assert.match(cssDeclarations(styles, "\\.thread-row"), /min-height:\s*48px/);
-  assert.match(cssDeclarations(styles, "\\.thread-title"), /font-size:\s*14px/);
+  assert.match(cssDeclarations(styles, "\\.thread-row"), /min-height:\s*0/);
+  assert.match(cssDeclarations(styles, "\\.thread-title"), /font-size:\s*13\.5px/);
   assert.match(cssDeclarations(styles, "\\.message-body"), /font-size:\s*15\.5px/);
   assert.match(cssDeclarations(styles, "\\.composer textarea"), /font-size:\s*15\.5px/);
   assert.match(cssDeclarations(styles, "\\.composer textarea"), /max-height:\s*220px/);
@@ -312,6 +315,15 @@ test("tailnet hostnames expose share UI; loopback stays local", () => {
   assert.equal(accessKind("localhost"), "local");
   assert.equal(accessKind("codewhale.tail123.ts.net"), "tailnet");
   assert.equal(accessKind("example.com"), "other");
+});
+
+test("rail preview is omitted when it repeats the title", () => {
+  assert.equal(distinctPreview("hello shannonnet", "hello shannonnet"), "");
+  assert.equal(
+    distinctPreview("You are the daily automated QA pass", "You are the daily automated QA pass for CWC"),
+    "",
+  );
+  assert.equal(distinctPreview("Patrol", "Stripe MCP is already mounted"), "Stripe MCP is already mounted");
 });
 
 test("composer Enter sends without interrupting newlines or IME composition", () => {

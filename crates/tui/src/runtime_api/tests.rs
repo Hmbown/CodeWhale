@@ -1627,8 +1627,8 @@ async fn web_bootstrap_sets_strict_cookie_once_and_preserves_v1_auth() -> Result
     );
 
     assert!(
-        page_body.contains("/assets/codewhale-mark-dark.png"),
-        "web shell should use the dark C-whale mark"
+        page_body.contains("/assets/codewhale-mark-light.png"),
+        "web shell should use the light C-whale mark on the Ocean rail"
     );
     assert!(
         page_body.contains("access-card"),
