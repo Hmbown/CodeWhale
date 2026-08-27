@@ -6055,6 +6055,10 @@ impl Engine {
         } else {
             Vec::new()
         };
+        // Zero servers and nothing connecting is not a session-boot surface.
+        if snapshot.servers.is_empty() && connecting.is_empty() {
+            return;
+        }
         let _ = self.tx_event.try_send(Event::McpSessionBoot {
             snapshot,
             connecting,

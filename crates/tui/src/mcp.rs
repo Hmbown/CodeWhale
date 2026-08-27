@@ -2802,22 +2802,23 @@ impl McpPool {
     /// while bounding peak memory.
     const CONNECT_CONCURRENCY: usize = 8;
 
-    /// Decide which enabled servers still need a handshake. Plugin-authority
-    /// gates stay here because they read live pool state.
+    /// Decide which enabled configured servers still need a handshake.
+    /// Dynamic runtime servers stay registered and connect via
+    /// [`Self::get_or_connect`]; `connect_all` has never spawned them.
     pub(crate) fn collect_pending_connects(
         &mut self,
     ) -> (Vec<McpPendingConnect>, Vec<McpConnectError>) {
-        let names = self.enabled_server_names();
+        let names: Vec<String> = self
+            .config
+            .servers
+            .iter()
+            .filter(|(_, server)| server.is_enabled())
+            .map(|(name, _)| name.clone())
+            .collect();
         let mut pending = Vec::new();
         let mut errors = Vec::new();
         for name in names {
-            let Some(server_config) = self
-                .config
-                .servers
-                .get(&name)
-                .cloned()
-                .or_else(|| self.dynamic_servers.read().get(&name).cloned())
-            else {
+            let Some(server_config) = self.config.servers.get(&name).cloned() else {
                 continue;
             };
 
@@ -2931,13 +2932,15 @@ impl McpPool {
     /// configured connect timeout; one wedged server can no longer serialize
     /// the rest.
     ///
-    /// Semantics preserved from the sequential loop: the config is reloaded
-    /// before the name snapshot (so a server added mid-session connects on
-    /// this call, not the next), plugin-authority revocation drops the
-    /// connection instead of silently reconnecting, and the required-server
-    /// sweep reports at most one error per name. Config edits that land while
-    /// the batch is in flight are reconciled by one retry pass: a content
-    /// change drops every connection the previous pass inserted.
+    /// Semantics preserved from the sequential loop: only configured servers
+    /// are connected (dynamic runtime entries stay registered), the config is
+    /// reloaded before the name snapshot (so a server added mid-session
+    /// connects on this call, not the next), plugin-authority revocation
+    /// drops the connection instead of silently reconnecting, and the
+    /// required-server sweep reports at most one error per name. Config edits
+    /// that land while the batch is in flight are reconciled by one retry
+    /// pass: a content change drops every connection the previous pass
+    /// inserted.
     pub async fn connect_all(&mut self) -> Vec<(String, anyhow::Error)> {
         let mut errors = Vec::new();
         // Reload before taking the configured-name snapshot. Previously the
