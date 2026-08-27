@@ -2259,11 +2259,13 @@ impl DeepSeekClient {
         stream: crate::llm_client::StreamEventBox,
         provider: String,
         omitted_tool_names: Vec<String>,
+        omitted_tool_count: usize,
     ) -> crate::llm_client::StreamEventBox {
         Box::pin(async_stream::stream! {
             yield Ok(crate::models::StreamEvent::ToolProjectionWarning {
                 provider,
                 omitted_tool_names,
+                omitted_tool_count,
             });
             let mut stream = stream;
             while let Some(event) = stream.next().await {
@@ -3093,9 +3095,13 @@ impl LlmClient for DeepSeekClient {
             ));
         }
         let projection_warning = (!prepared.omitted_tool_names.is_empty()).then(|| {
+            let omitted_tool_count = prepared.omitted_tool_names.len();
             (
                 prepared.endpoint.provider_display.clone(),
-                prepared.omitted_tool_names.clone(),
+                crate::core::events::bounded_tool_projection_warning_names(
+                    &prepared.omitted_tool_names,
+                ),
+                omitted_tool_count,
             )
         });
         let stream = match prepared.dialect {
@@ -3107,8 +3113,13 @@ impl LlmClient for DeepSeekClient {
             }
         };
         let stream = match projection_warning {
-            Some((provider, omitted_tool_names)) => {
-                Self::prepend_tool_projection_warning(stream, provider, omitted_tool_names)
+            Some((provider, omitted_tool_names, omitted_tool_count)) => {
+                Self::prepend_tool_projection_warning(
+                    stream,
+                    provider,
+                    omitted_tool_names,
+                    omitted_tool_count,
+                )
             }
             None => stream,
         };
@@ -6209,15 +6220,17 @@ mod tests {
             .await
             .expect("projection warning precedes provider SSE")
             .expect("projection warning is not a stream error");
-        let (provider, omitted_tool_names) = match first {
+        let (provider, omitted_tool_names, omitted_tool_count) = match first {
             crate::models::StreamEvent::ToolProjectionWarning {
                 provider,
                 omitted_tool_names,
-            } => (provider, omitted_tool_names),
+                omitted_tool_count,
+            } => (provider, omitted_tool_names, omitted_tool_count),
             other => panic!("first event must be the projection warning, got {other:?}"),
         };
         assert!(provider.contains("Moonshot"), "{provider}");
         assert_eq!(omitted_tool_names, vec!["mcp_pattern_tool"]);
+        assert_eq!(omitted_tool_count, 1);
 
         let mut additional_warnings = 0;
         while let Some(event) = stream.next().await {

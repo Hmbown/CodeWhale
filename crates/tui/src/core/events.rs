@@ -169,6 +169,7 @@ pub enum Event {
     ToolProjectionWarning {
         provider: String,
         omitted_tool_names: Vec<String>,
+        omitted_tool_count: usize,
     },
     // === Streaming Events ===
     /// A new message block has started
@@ -602,11 +603,73 @@ pub enum Event {
     },
 }
 
+const TOOL_PROJECTION_WARNING_MAX_NAMES: usize = 8;
+const TOOL_PROJECTION_WARNING_MAX_NAME_CHARS: usize = 64;
+
+/// Return a privacy-safe, display-bounded sample of omitted wire tool names.
+///
+/// MCP catalogs may contain thousands of tools and their names are supplied by
+/// external servers. Keep the exact count separately, but never let one route
+/// diagnostic flood a transcript, toast, or runtime record.
 #[must_use]
-pub fn tool_projection_warning_message(provider: &str, omitted_tool_names: &[String]) -> String {
+pub fn bounded_tool_projection_warning_names(omitted_tool_names: &[String]) -> Vec<String> {
+    omitted_tool_names
+        .iter()
+        .take(TOOL_PROJECTION_WARNING_MAX_NAMES)
+        .map(|name| {
+            let cleaned: String = name
+                .chars()
+                .filter(|c| !c.is_control() && !is_bidi_format_control(*c))
+                .collect();
+            let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+            let collapsed = if collapsed.is_empty() {
+                "<unnamed>".to_string()
+            } else {
+                collapsed
+            };
+            if collapsed.chars().count() <= TOOL_PROJECTION_WARNING_MAX_NAME_CHARS {
+                return collapsed;
+            }
+            let mut out: String = collapsed
+                .chars()
+                .take(TOOL_PROJECTION_WARNING_MAX_NAME_CHARS - 1)
+                .collect();
+            out.push('…');
+            out
+        })
+        .collect()
+}
+
+/// Render the already-bounded name sample, marking an incomplete sample with
+/// a language-neutral ellipsis. The exact total remains available in typed
+/// runtime metadata.
+#[must_use]
+pub fn tool_projection_warning_tool_list(
+    omitted_tool_names: &[String],
+    omitted_tool_count: usize,
+) -> String {
+    let mut rendered = omitted_tool_names.join(", ");
+    if omitted_tool_count > omitted_tool_names.len() {
+        if !rendered.is_empty() {
+            rendered.push_str(", ");
+        }
+        rendered.push('…');
+    }
+    if rendered.is_empty() {
+        rendered.push_str("<unnamed>");
+    }
+    rendered
+}
+
+#[must_use]
+pub fn tool_projection_warning_message(
+    provider: &str,
+    omitted_tool_names: &[String],
+    omitted_tool_count: usize,
+) -> String {
     format!(
         "Warning: {provider} omitted incompatible tools for this request: {}",
-        omitted_tool_names.join(", ")
+        tool_projection_warning_tool_list(omitted_tool_names, omitted_tool_count)
     )
 }
 
@@ -696,4 +759,27 @@ fn is_bidi_format_control(c: char) -> bool {
         c,
         '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
     )
+}
+
+#[cfg(test)]
+mod tool_projection_warning_tests {
+    use super::*;
+
+    #[test]
+    fn projection_warning_names_are_count_and_length_bounded() {
+        let names: Vec<String> = (0..12)
+            .map(|index| format!("tool-{index}-{}\nspoof", "x".repeat(100)))
+            .collect();
+
+        let bounded = bounded_tool_projection_warning_names(&names);
+
+        assert_eq!(bounded.len(), TOOL_PROJECTION_WARNING_MAX_NAMES);
+        assert!(
+            bounded
+                .iter()
+                .all(|name| name.chars().count() <= TOOL_PROJECTION_WARNING_MAX_NAME_CHARS)
+        );
+        assert!(bounded.iter().all(|name| !name.contains('\n')));
+        assert!(tool_projection_warning_tool_list(&bounded, names.len()).ends_with(", …"));
+    }
 }

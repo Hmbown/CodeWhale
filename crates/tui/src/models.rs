@@ -680,6 +680,7 @@ pub enum StreamEvent {
     ToolProjectionWarning {
         provider: String,
         omitted_tool_names: Vec<String>,
+        omitted_tool_count: usize,
     },
     #[serde(rename = "message_start")]
     MessageStart { message: MessageResponse },

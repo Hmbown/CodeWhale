@@ -8789,10 +8789,12 @@ impl RuntimeThreadManager {
                 EngineEvent::ToolProjectionWarning {
                     provider,
                     omitted_tool_names,
+                    omitted_tool_count,
                 } => {
                     let message = crate::core::events::tool_projection_warning_message(
                         &provider,
                         &omitted_tool_names,
+                        omitted_tool_count,
                     );
                     let item = TurnItemRecord {
                         schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
@@ -8806,6 +8808,7 @@ impl RuntimeThreadManager {
                             "code": "provider_tool_projection_warning",
                             "provider": provider,
                             "omitted_tool_names": omitted_tool_names,
+                            "omitted_tool_count": omitted_tool_count,
                         })),
                         artifact_refs: Vec::new(),
                         started_at: Some(Utc::now()),

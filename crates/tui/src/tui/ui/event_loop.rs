@@ -2093,11 +2093,16 @@ pub(crate) async fn run_event_loop(
                     EngineEvent::ToolProjectionWarning {
                         provider,
                         omitted_tool_names,
+                        omitted_tool_count,
                     } => {
+                        let tools = crate::core::events::tool_projection_warning_tool_list(
+                            &omitted_tool_names,
+                            omitted_tool_count,
+                        );
                         let message = app
                             .tr(MessageId::ToolProjectionWarning)
                             .replace("{provider}", &provider)
-                            .replace("{tools}", &omitted_tool_names.join(", "));
+                            .replace("{tools}", &tools);
                         app.push_status_toast(message, StatusToastLevel::Warning, Some(12_000));
                     }
                     EngineEvent::RequestManifestReady { rendered } => {

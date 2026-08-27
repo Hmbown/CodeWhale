@@ -12009,12 +12009,14 @@ async fn run_exec_agent(
             Event::ToolProjectionWarning {
                 provider,
                 omitted_tool_names,
+                omitted_tool_count,
             } if !json_output => {
                 eprintln!(
                     "{}",
                     crate::core::events::tool_projection_warning_message(
                         &provider,
                         &omitted_tool_names,
+                        omitted_tool_count,
                     )
                 );
             }

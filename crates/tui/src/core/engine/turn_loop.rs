@@ -4372,12 +4372,14 @@ impl Engine {
                 StreamEvent::ToolProjectionWarning {
                     provider,
                     omitted_tool_names,
+                    omitted_tool_count,
                 } => {
                     let _ = self
                         .tx_event
                         .send(Event::ToolProjectionWarning {
                             provider,
                             omitted_tool_names,
+                            omitted_tool_count,
                         })
                         .await;
                 }
