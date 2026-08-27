@@ -101,14 +101,14 @@ impl StreamableHttpTransport {
                         }
                         Err(refresh_error) => {
                             return Err(StreamableSendError::Other(anyhow::anyhow!(
-                                "MCP server {} rejected the request with {status} and refreshing the OAuth session failed: {refresh_error:#}. Re-authorize this server (/mcp auth <name>) or configure a fresh bearer token.",
+                                "MCP server {} rejected the request with {status} and refreshing the OAuth session failed: {refresh_error:#}. Re-authorize this server (/mcp login <name>) or configure a fresh bearer token.",
                                 mask_url_secrets(&self.url),
                             )));
                         }
                     }
                 }
                 let hint = if self.auth.oauth.is_some() {
-                    "Re-authorize this server (/mcp auth <name>) to continue."
+                    "Re-authorize this server (/mcp login <name>) to continue."
                 } else {
                     "Check the configured bearer token (or its environment variable)."
                 };

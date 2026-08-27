@@ -20183,6 +20183,75 @@ async fn reload_mcp_op_recovers_from_invalid_initial_config_in_process() {
 }
 
 #[tokio::test]
+async fn bootstrap_and_retry_mcp_use_the_engine_owned_pool() {
+    let tmp = tempdir().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let config_path = tmp.path().join("mcp.json");
+    std::fs::write(
+        &config_path,
+        r#"{"servers":{"disabled":{"command":"node","disabled":true},"alpha":{"command":"codewhale-mcp-missing-alpha-9f8e7d6c"},"beta":{"command":"codewhale-mcp-missing-beta-9f8e7d6c"}}}"#,
+    )
+    .expect("MCP config");
+    let engine_config = EngineConfig {
+        workspace,
+        mcp_config_path: config_path.clone(),
+        ..Default::default()
+    };
+    let (engine, handle) = Engine::new(engine_config, &Config::default());
+    let task = tokio::spawn(async move { engine.run().await });
+
+    let boot = handle
+        .bootstrap_mcp()
+        .await
+        .expect("boot snapshots the engine pool");
+    assert_eq!(boot.config_path, config_path);
+    assert_eq!(boot.servers.len(), 3);
+    let disabled = boot
+        .servers
+        .iter()
+        .find(|server| server.name == "disabled")
+        .expect("disabled row");
+    assert!(!disabled.enabled);
+    assert!(!disabled.connected);
+    let sibling_error = boot
+        .servers
+        .iter()
+        .find(|server| server.name == "beta")
+        .and_then(|server| server.error.clone())
+        .expect("boot preserves the sibling connection diagnosis");
+
+    let retry = handle
+        .retry_mcp_server("alpha")
+        .await
+        .expect("a failed per-server retry still returns the live snapshot");
+    assert_eq!(retry.servers.len(), 3);
+    assert!(
+        retry
+            .servers
+            .iter()
+            .find(|server| server.name == "alpha")
+            .expect("retried row")
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("alpha")),
+        "the named retry error must stay attached to its row"
+    );
+    assert_eq!(
+        retry
+            .servers
+            .iter()
+            .find(|server| server.name == "beta")
+            .and_then(|server| server.error.as_ref()),
+        Some(&sibling_error),
+        "retrying one server must not erase a sibling diagnosis"
+    );
+
+    handle.send(Op::Shutdown).await.expect("shutdown");
+    task.await.expect("engine task");
+}
+
+#[tokio::test]
 async fn list_subagents_event_try_send_does_not_block_when_event_channel_full() {
     use tokio::sync::mpsc;
 

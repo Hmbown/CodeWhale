@@ -1196,6 +1196,10 @@ pub enum McpUiAction {
     Logout {
         name: String,
     },
+    /// Retry one failed/timed-out server through the engine-owned live pool.
+    Retry {
+        name: String,
+    },
     /// List consent-gated external MCP import candidates with provenance.
     ImportList,
     /// Approve importing one discovered external server into user mcp.json.

@@ -44,6 +44,13 @@ pub struct ProviderRuntimeStatus {
 /// Result of rebuilding the engine-owned MCP pool in process.
 pub type McpReloadResult = Result<crate::mcp::McpManagerSnapshot, String>;
 
+/// Result of the one-shot boot connection pass for the engine-owned MCP pool.
+///
+/// This shares the reload result shape while remaining a separate operation:
+/// boot may fill an empty live pool, but it must not force a config reload or
+/// invalidate already-ready connections.
+pub type McpBootstrapResult = Result<crate::mcp::McpManagerSnapshot, String>;
+
 /// Origin of text being introduced as a user-role turn.
 ///
 /// Chat providers force several runtime/control-plane signals through
@@ -291,6 +298,25 @@ pub enum Op {
     GetProviderRuntimeStatus {
         tx: std::sync::Arc<
             std::sync::Mutex<Option<tokio::sync::oneshot::Sender<ProviderRuntimeStatus>>>,
+        >,
+    },
+
+    /// Populate the engine-owned MCP pool once at UI boot and return a
+    /// snapshot from that exact pool. This is not a config reload and never
+    /// constructs a UI-owned discovery pool. Optional servers never block
+    /// the first model turn: that turn snapshots currently-ready tools.
+    BootstrapMcp {
+        tx: std::sync::Arc<
+            std::sync::Mutex<Option<tokio::sync::oneshot::Sender<McpBootstrapResult>>>,
+        >,
+    },
+
+    /// Retry one failed MCP server on the existing engine pool and return a
+    /// full snapshot. Ready siblings are never invalidated or reconnected.
+    RetryMcpServer {
+        name: String,
+        tx: std::sync::Arc<
+            std::sync::Mutex<Option<tokio::sync::oneshot::Sender<McpBootstrapResult>>>,
         >,
     },
 

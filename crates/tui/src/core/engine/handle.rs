@@ -258,6 +258,39 @@ impl EngineHandle {
             .map_err(|_| anyhow::anyhow!("Engine dropped provider runtime status oneshot"))
     }
 
+    /// Run the bounded initial connection pass on the engine-owned MCP pool.
+    ///
+    /// The returned manager snapshot and every later tool call therefore see
+    /// the same connections and catalog generation. Unlike `reload_mcp`, this
+    /// does not force a config re-read or drop ready transports. Optional
+    /// servers are connected in the background at engine spawn; this waits
+    /// only if the caller explicitly asked for the settled receipt.
+    pub async fn bootstrap_mcp(&self) -> Result<crate::mcp::McpManagerSnapshot> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let tx = std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
+        self.send(Op::BootstrapMcp { tx }).await?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("Engine dropped MCP bootstrap oneshot"))?
+            .map_err(anyhow::Error::msg)
+    }
+
+    /// Retry one failed server through the existing engine-owned pool.
+    pub async fn retry_mcp_server(
+        &self,
+        name: impl Into<String>,
+    ) -> Result<crate::mcp::McpManagerSnapshot> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let tx = std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
+        self.send(Op::RetryMcpServer {
+            name: name.into(),
+            tx,
+        })
+        .await?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("Engine dropped MCP retry oneshot"))?
+            .map_err(anyhow::Error::msg)
+    }
+
     /// Force the engine-owned MCP pool to reload and reconnect, returning a
     /// snapshot from the exact live pool that supplies the next model turn.
     pub async fn reload_mcp(

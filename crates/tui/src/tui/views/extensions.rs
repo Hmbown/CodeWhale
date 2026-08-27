@@ -5,6 +5,7 @@
 //! database, installer, or network fetch of its own. Future actions emitted by
 //! this view must delegate to the existing command/mutation controllers.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -894,8 +895,13 @@ fn mcp_model(app: &App, locale: Locale) -> ExtensionsTabModel {
                 .map(|server| server.enabled)
                 .or_else(|| config.map(crate::mcp::McpServerConfig::is_enabled))
                 .unwrap_or(true);
+            let initializing = app.mcp_initializing
+                && enabled
+                && observed.is_none_or(|server| !server.connected && server.error.is_none());
             let state = if !enabled {
                 tr(locale, MessageId::HotbarSetupStatusDisabled)
+            } else if initializing {
+                Cow::Borrowed("connecting")
             } else if observed.is_some_and(|server| server.connected) {
                 tr(locale, MessageId::ExtensionsStateConnected)
             } else if observed.is_some_and(|server| server.error.is_some()) {
@@ -906,14 +912,37 @@ fn mcp_model(app: &App, locale: Locale) -> ExtensionsTabModel {
                 tr(locale, MessageId::PickerActionConfigured)
             }
             .into_owned();
-            let action = if !enabled
-                && name
-                    .chars()
-                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
-            {
+            let valid_name = name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'));
+            let action = if !enabled && valid_name {
                 ExtensionAction::Command {
                     label: tr(locale, MessageId::ExtensionsActionEnable).into_owned(),
                     command: format!("/mcp enable {name}"),
+                }
+            } else if initializing {
+                ExtensionAction::Status {
+                    label: state.clone(),
+                }
+            } else if observed
+                .and_then(|server| server.error.as_deref())
+                .is_some_and(crate::tui::session_boot::mcp_error_requires_login)
+                && valid_name
+            {
+                ExtensionAction::Command {
+                    label: "log in".to_string(),
+                    command: format!("/mcp login {name}"),
+                }
+            } else if observed
+                .and_then(|server| server.error.as_deref())
+                .is_some_and(|error| {
+                    crate::tui::session_boot::mcp_error_is_timeout(error) || !error.is_empty()
+                })
+                && valid_name
+            {
+                ExtensionAction::Command {
+                    label: tr(locale, MessageId::SetupActionRetry).into_owned(),
+                    command: format!("/mcp retry {name}"),
                 }
             } else if enabled && observed.is_none() {
                 ExtensionAction::Command {

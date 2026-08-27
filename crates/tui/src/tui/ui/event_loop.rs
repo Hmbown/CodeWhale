@@ -2218,6 +2218,13 @@ pub(crate) async fn run_event_loop(
                             .replace("{tools}", &tools);
                         app.push_status_toast(message, StatusToastLevel::Warning, Some(12_000));
                     }
+                    EngineEvent::McpSessionBoot {
+                        snapshot,
+                        connecting,
+                        finished,
+                    } => {
+                        apply_mcp_session_boot_event(app, snapshot, connecting, finished);
+                    }
                     EngineEvent::RequestManifestReady { rendered } => {
                         // Typed manifest text, or the explicitly requested
                         // base-prompt-only disclosure. Rendered as a system cell.
@@ -5789,6 +5796,22 @@ pub(crate) async fn run_event_loop(
             }
         }
     }
+}
+
+/// Apply one MCP session-boot event. Failures stay on the snapshot (and
+/// therefore the session page) rather than as toast-only Status copy.
+pub(crate) fn apply_mcp_session_boot_event(
+    app: &mut App,
+    snapshot: crate::mcp::McpManagerSnapshot,
+    connecting: Vec<String>,
+    finished: bool,
+) {
+    app.mcp_configured_count = snapshot.servers.len();
+    app.hotbar_actions.replace_mcp_tools(Some(&snapshot));
+    app.mcp_snapshot = Some(snapshot);
+    app.mcp_connecting = connecting;
+    app.mcp_initializing = !finished;
+    app.needs_redraw = true;
 }
 
 pub(crate) async fn run_cache_warmup(app: &App, config: &Config) -> Result<CacheWarmupOutcome> {

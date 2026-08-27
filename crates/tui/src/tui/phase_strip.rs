@@ -365,6 +365,31 @@ pub fn render_activity(area: Rect, buf: &mut Buffer, app: &mut App) {
         used += span_width(&detail);
         left.extend(detail);
     }
+    // MCP + plugin boot is a session-owned set. Surface it on the activity
+    // strip so a slow optional server cannot look like a hung turn.
+    if let Some(chip) = crate::tui::session_boot::activity_chip(
+        app,
+        available.saturating_sub(used + GROUP_GAP_WIDTH),
+    ) {
+        left.push(Span::raw(GROUP_GAP));
+        used += GROUP_GAP_WIDTH + chip.width();
+        let boot = crate::tui::session_boot::SessionBootSurface::from_app(app);
+        let ink = if boot.servers.iter().any(|row| {
+            matches!(
+                row.state,
+                crate::tui::session_boot::McpServerBootState::Failed
+                    | crate::tui::session_boot::McpServerBootState::NeedsLogin
+            )
+        }) {
+            ChromeInk::Failure
+        } else {
+            ChromeInk::Active
+        };
+        left.push(Span::styled(
+            chip,
+            Style::default().fg(ink.color(&app.ui_theme)),
+        ));
+    }
     if let Some((text, ink)) = notice {
         left.push(Span::raw(GROUP_GAP));
         left.push(Span::styled(

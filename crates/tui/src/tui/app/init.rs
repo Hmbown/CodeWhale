@@ -958,6 +958,10 @@ impl App {
             },
             coordination_detail: None,
             mcp_snapshot: None,
+            mcp_initializing: mcp_configured_count > 0
+                && config.features().enabled(crate::features::Feature::Mcp),
+            mcp_snapshot_generation: 0,
+            mcp_connecting: Vec::new(),
             // Read the MCP config once at boot to know how many servers
             // the user has declared. The footer chip uses this even when
             // no live snapshot is available (#502). Cheap (just reads
