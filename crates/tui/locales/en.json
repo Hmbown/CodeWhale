@@ -1298,6 +1298,7 @@
   "ProviderExternalDormant": "dormant",
   "ProviderExternalOwnerPath": "Owner/path: {owner} | {path}",
   "ProviderExternalPinnedPathWarning": "Warning: ambient {owner} credential path changed; consent remains pinned to {path}.",
+  "ToolProjectionWarning": "Warning: {provider} omitted incompatible tools for this request: {tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | revoke: {revoke}",
   "ProviderExternalRevoke": "revoke: {revoke}",
   "ProviderExternalChoiceTitle": " External credential access · {provider} ",

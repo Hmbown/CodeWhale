@@ -1298,6 +1298,7 @@
   "ProviderExternalDormant": "休止中",
   "ProviderExternalOwnerPath": "所有者/パス: {owner} | {path}",
   "ProviderExternalPinnedPathWarning": "警告: {owner} の現在の認証情報パスが変更されました。同意は引き続き {path} に固定されています。",
+  "ToolProjectionWarning": "警告: {provider} はこのリクエストで互換性のないツールを除外しました: {tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | 取消: {revoke}",
   "ProviderExternalRevoke": "取消: {revoke}",
   "ProviderExternalChoiceTitle": " 外部認証情報へのアクセス · {provider} ",

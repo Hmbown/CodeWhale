@@ -1275,6 +1275,7 @@
   "ProviderExternalDormant": "निष्क्रिय",
   "ProviderExternalOwnerPath": "स्वामी/पथ: {owner} | {path}",
   "ProviderExternalPinnedPathWarning": "चेतावनी: एम्बिएंट {owner} क्रेडेंशल पथ बदला; सहमति {path} पर पिन रहती है।",
+  "ToolProjectionWarning": "चेतावनी: {provider} ने इस अनुरोध में असंगत टूल हटा दिए: {tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | रद्द: {revoke}",
   "ProviderExternalRevoke": "रद्द: {revoke}",
   "ProviderExternalChoiceTitle": " बाहरी क्रेडेंशल एक्सेस · {provider} ",

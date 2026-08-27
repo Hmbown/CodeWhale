@@ -8786,6 +8786,42 @@ impl RuntimeThreadManager {
                     )
                     .await?;
                 }
+                EngineEvent::ToolProjectionWarning {
+                    provider,
+                    omitted_tool_names,
+                } => {
+                    let message = crate::core::events::tool_projection_warning_message(
+                        &provider,
+                        &omitted_tool_names,
+                    );
+                    let item = TurnItemRecord {
+                        schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+                        id: format!("item_{}", &Uuid::new_v4().to_string()[..8]),
+                        turn_id: turn_id.clone(),
+                        kind: TurnItemKind::Status,
+                        status: TurnItemLifecycleStatus::Completed,
+                        summary: summarize_text(&message, SUMMARY_LIMIT),
+                        detail: Some(message),
+                        metadata: Some(json!({
+                            "code": "provider_tool_projection_warning",
+                            "provider": provider,
+                            "omitted_tool_names": omitted_tool_names,
+                        })),
+                        artifact_refs: Vec::new(),
+                        started_at: Some(Utc::now()),
+                        ended_at: Some(Utc::now()),
+                    };
+                    self.store.save_item(&item)?;
+                    self.attach_item_to_turn(&turn_id, &item.id)?;
+                    self.emit_event(
+                        &thread_id,
+                        Some(&turn_id),
+                        Some(&item.id),
+                        "item.completed",
+                        json!({ "item": item }),
+                    )
+                    .await?;
+                }
                 EngineEvent::Error { envelope, .. } => {
                     turn_status = Some(RuntimeTurnStatus::Failed);
                     turn_error = Some(envelope.message.clone());

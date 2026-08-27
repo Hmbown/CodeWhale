@@ -1275,6 +1275,7 @@
   "ProviderExternalDormant": "неактивний",
   "ProviderExternalOwnerPath": "Власник/шлях: {owner} | {path}",
   "ProviderExternalPinnedPathWarning": "Попередження: шлях облікових даних {owner} у середовищі змінився; згода залишається закріпленою за {path}.",
+  "ToolProjectionWarning": "Попередження: {provider} вилучив несумісні інструменти для цього запиту: {tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | відкликання: {revoke}",
   "ProviderExternalRevoke": "відкликання: {revoke}",
   "ProviderExternalChoiceTitle": " Доступ до зовнішніх облікових даних · {provider} ",

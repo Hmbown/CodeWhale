@@ -1275,6 +1275,7 @@
   "ProviderExternalDormant": "ruhend",
   "ProviderExternalOwnerPath": "Eigentümer/Pfad: {owner} | {path}",
   "ProviderExternalPinnedPathWarning": "Warnung: Umgebungs-{owner}-Zugangsdatenpfad geändert; Einwilligung bleibt an {path} gebunden.",
+  "ToolProjectionWarning": "Warnung: {provider} hat für diese Anfrage inkompatible Werkzeuge ausgelassen: {tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | Widerruf: {revoke}",
   "ProviderExternalRevoke": "Widerruf: {revoke}",
   "ProviderExternalChoiceTitle": " Externer Zugangsdaten-Zugriff · {provider} ",

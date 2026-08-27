@@ -1275,6 +1275,7 @@
   "ProviderExternalDormant": "dormant",
   "ProviderExternalOwnerPath": "Propriétaire/chemin : {owner} | {path}",
   "ProviderExternalPinnedPathWarning": "Avertissement : le chemin d'identifiants ambiant de {owner} a changé ; le consentement reste épinglé à {path}.",
+  "ToolProjectionWarning": "Avertissement : {provider} a omis les outils incompatibles pour cette requête : {tools}",
   "ProviderExternalSemanticsRevoke": "{semantics} | révocation : {revoke}",
   "ProviderExternalRevoke": "révocation : {revoke}",
   "ProviderExternalChoiceTitle": " Accès à des identifiants externes · {provider} ",
