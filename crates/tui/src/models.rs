@@ -259,10 +259,7 @@ fn known_context_window_for_model(model_lower: &str) -> Option<u32> {
         // GLM-5.3 limits are inherited from GLM-5.2 pending official Z.ai
         // release metadata (see `INHERITED FROM glm-5.2` in config/models.rs).
         "z-ai/glm-5.2" | "glm-5.2" | "z-ai/glm-5.3" | "glm-5.3" => Some(1_000_000),
-        "minimax/minimax-m3"
-        | "minimax-m3"
-        | "qwen/qwen3.8-flash"
-        | "qwen/qwen3.6-flash"
+        "minimax/minimax-m3" | "minimax-m3" | "qwen/qwen3.8-flash" | "qwen/qwen3.6-flash"
         | "qwen/qwen3.6-plus" => Some(1_000_000),
         // Alibaba Cloud Model Studio (Token Plan console + curated catalog,
         // verified 2026-08-03): ~1M context. Never fall through to the 128K
