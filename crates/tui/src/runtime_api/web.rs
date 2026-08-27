@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
-use axum::extract::{ConnectInfo, Path, State};
+use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use uuid::Uuid;
@@ -42,7 +42,6 @@ struct BootstrapCapability {
 enum BootstrapError {
     Invalid,
     Expired,
-    NonLoopback,
 }
 
 impl RuntimeWebState {
@@ -68,10 +67,7 @@ impl RuntimeWebState {
         (state, nonce)
     }
 
-    fn consume(&self, nonce: &str, peer_ip: IpAddr) -> Result<String, BootstrapError> {
-        if !peer_ip.is_loopback() {
-            return Err(BootstrapError::NonLoopback);
-        }
+    fn consume(&self, nonce: &str) -> Result<String, BootstrapError> {
         if !valid_bootstrap_nonce(nonce) {
             return Err(BootstrapError::Invalid);
         }
@@ -106,25 +102,52 @@ pub(super) fn bootstrap_url(addr: SocketAddr, nonce: &str) -> String {
     format!("http://{addr}/__codewhale/bootstrap/{nonce}")
 }
 
+pub(super) fn bootstrap_url_for_origin(origin: &str, nonce: &str) -> String {
+    format!(
+        "{}/__codewhale/bootstrap/{nonce}",
+        origin.trim_end_matches('/')
+    )
+}
+
+pub(super) fn bootstrap_peer_is_trusted(
+    peer_ip: Option<IpAddr>,
+    host: &str,
+    public_origins: &[String],
+) -> bool {
+    peer_ip.is_some_and(|ip| ip.is_loopback())
+        || super::auth::host_matches_public_origin(host, public_origins)
+}
+
 pub(super) async fn exchange_bootstrap(
     State(state): State<RuntimeApiState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(nonce): Path<String>,
+    request: Request,
 ) -> Response {
     let Some(web) = state.web.as_ref() else {
         return not_found();
     };
-    let session_token = match web.consume(&nonce, peer.ip()) {
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let peer_ip = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip());
+    if !bootstrap_peer_is_trusted(peer_ip, host, &state.web_public_origins) {
+        return secured_text(StatusCode::FORBIDDEN, "bootstrap unavailable");
+    }
+    let session_token = match web.consume(&nonce) {
         Ok(token) => token,
-        Err(BootstrapError::NonLoopback) => {
-            return secured_text(StatusCode::FORBIDDEN, "bootstrap unavailable");
-        }
         Err(BootstrapError::Invalid | BootstrapError::Expired) => {
             return secured_text(StatusCode::UNAUTHORIZED, "bootstrap unavailable");
         }
     };
 
-    let cookie = web_session_cookie(&session_token);
+    let secure = super::auth::host_matches_public_origin(host, &state.web_public_origins)
+        && host_origin_is_https(&state.web_public_origins);
+    let cookie = web_session_cookie(&session_token, secure);
     let mut response = (StatusCode::SEE_OTHER, "").into_response();
     response
         .headers_mut()
@@ -167,8 +190,19 @@ pub(super) async fn web_icon(State(state): State<RuntimeApiState>) -> Response {
     response
 }
 
-fn web_session_cookie(session_token: &str) -> String {
-    format!("{WEB_SESSION_COOKIE_NAME}={session_token}; HttpOnly; SameSite=Strict; Path=/")
+fn web_session_cookie(session_token: &str, secure: bool) -> String {
+    let mut cookie =
+        format!("{WEB_SESSION_COOKIE_NAME}={session_token}; HttpOnly; SameSite=Strict; Path=/");
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+fn host_origin_is_https(public_origins: &[String]) -> bool {
+    public_origins
+        .iter()
+        .any(|origin| origin.starts_with("https://"))
 }
 
 fn cookie_value<'a>(cookie_header: Option<&'a str>, name: &str) -> Option<&'a str> {
@@ -244,26 +278,34 @@ mod tests {
     fn bootstrap_is_loopback_only_one_time_and_expires() {
         let (state, nonce) =
             RuntimeWebState::new_with_ttls(Duration::from_secs(60), Duration::from_secs(60));
-        assert_eq!(
-            state.consume(&nonce, "192.0.2.4".parse().unwrap()),
-            Err(BootstrapError::NonLoopback)
-        );
+        assert!(!bootstrap_peer_is_trusted(
+            Some("192.0.2.4".parse().unwrap()),
+            "127.0.0.1:7878",
+            &[]
+        ));
+        assert!(bootstrap_peer_is_trusted(
+            Some("127.0.0.1".parse().unwrap()),
+            "127.0.0.1:7878",
+            &[]
+        ));
+        assert!(bootstrap_peer_is_trusted(
+            Some("100.64.1.2".parse().unwrap()),
+            "codewhale.tailnet.ts.net",
+            &["http://codewhale.tailnet.ts.net".to_string()]
+        ));
         let session_token = state
-            .consume(&nonce, "127.0.0.1".parse().unwrap())
+            .consume(&nonce)
             .expect("valid loopback bootstrap");
         assert!(session_token.starts_with(WEB_SESSION_PREFIX));
         assert!(state.matches_session_cookie(Some(&format!(
             "theme=dark; {WEB_SESSION_COOKIE_NAME}={session_token}"
         ))));
-        assert_eq!(
-            state.consume(&nonce, "127.0.0.1".parse().unwrap()),
-            Err(BootstrapError::Invalid)
-        );
+        assert_eq!(state.consume(&nonce), Err(BootstrapError::Invalid));
 
         let (expired, expired_nonce) =
             RuntimeWebState::new_with_ttls(Duration::ZERO, Duration::from_secs(60));
         assert_eq!(
-            expired.consume(&expired_nonce, "::1".parse().unwrap()),
+            expired.consume(&expired_nonce),
             Err(BootstrapError::Expired)
         );
     }
@@ -273,7 +315,7 @@ mod tests {
         let (state, nonce) =
             RuntimeWebState::new_with_ttls(Duration::from_secs(60), Duration::from_secs(60));
         let session_token = state
-            .consume(&nonce, "127.0.0.1".parse().unwrap())
+            .consume(&nonce)
             .expect("valid loopback bootstrap");
         let cookie = format!("{WEB_SESSION_COOKIE_NAME}={session_token}");
         assert!(state.matches_session_cookie(Some(&cookie)));
@@ -299,7 +341,7 @@ mod tests {
         let (state, nonce) = RuntimeWebState::new();
         for invalid in ["", "cwwb_short", "cwwb_gggggggggggggggggggggggggggggggg"] {
             assert_eq!(
-                state.consume(invalid, "127.0.0.1".parse().unwrap()),
+                state.consume(invalid),
                 Err(BootstrapError::Invalid)
             );
         }
@@ -309,12 +351,12 @@ mod tests {
             wrong.replace_range(wrong.len() - 1.., "1");
         }
         assert_eq!(
-            state.consume(&wrong, "127.0.0.1".parse().unwrap()),
+            state.consume(&wrong),
             Err(BootstrapError::Invalid)
         );
         assert!(
             state
-                .consume(&nonce, "127.0.0.1".parse().unwrap())
+                .consume(&nonce)
                 .expect("valid bootstrap remains available")
                 .starts_with(WEB_SESSION_PREFIX)
         );
@@ -324,11 +366,12 @@ mod tests {
     fn cookie_has_exact_security_attributes_without_the_runtime_bearer() {
         let session_token = format!("{WEB_SESSION_PREFIX}{}", "01".repeat(16));
         let runtime_bearer = "cwrt_runtime_secret_never_in_browser_storage";
-        let cookie = web_session_cookie(&session_token);
+        let cookie = web_session_cookie(&session_token, false);
         assert_eq!(
             cookie,
             format!("codewhale_web_session={session_token}; HttpOnly; SameSite=Strict; Path=/")
         );
+        assert!(web_session_cookie(&session_token, true).ends_with("; Secure"));
         assert!(!cookie.contains(runtime_bearer));
         assert!(!cookie.contains("Domain="));
     }
@@ -341,6 +384,12 @@ mod tests {
         assert!(url.ends_with(&nonce));
         assert!(!url.contains(token));
         assert!(!url.contains('?'));
+        let tailnet = bootstrap_url_for_origin("https://codewhale.tailnet.ts.net", &nonce);
+        assert_eq!(
+            tailnet,
+            format!("https://codewhale.tailnet.ts.net/__codewhale/bootstrap/{nonce}")
+        );
+        assert!(!tailnet.contains(token));
         assert!(!url.contains('#'));
     }
 

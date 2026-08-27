@@ -1270,6 +1270,12 @@ struct ServeArgs {
     /// Disable runtime API auth when no token is configured. Only use on a trusted loopback.
     #[arg(long = "insecure")]
     insecure_no_auth: bool,
+    /// Publish `--web` on this machine's Tailscale tailnet.
+    /// Prefers an embedded tsnet node when built with `--features tailscale`;
+    /// otherwise uses `tailscale serve`. Loopback stays on 127.0.0.1.
+    /// Not Funnel; not a public tunnel.
+    #[arg(long, default_value_t = false, requires = "web")]
+    tailscale: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2338,6 +2344,7 @@ async fn run_async_main_dispatch(
                             mobile: args.mobile,
                             web: args.web,
                             show_qr: args.qr,
+                            tailscale: args.tailscale,
                             config_path: cli.config.clone(),
                             config_profile,
                         },
@@ -12599,6 +12606,34 @@ mod serve_bind_host_tests {
                 mobile_rebound_to_lan: false,
             }
         );
+    }
+
+    #[test]
+    fn tailscale_requires_web_on_serve() {
+        use clap::Parser;
+        let err = Cli::try_parse_from(["codewhale", "serve", "--tailscale"])
+            .expect_err("--tailscale without --web must fail");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("--web") || rendered.contains("tailscale"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn tailscale_with_web_parses_on_serve() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from(["codewhale", "serve", "--web", "--tailscale"])
+            .expect("serve --web --tailscale should parse");
+        match cli.command {
+            Some(Commands::Serve(args)) => {
+                assert!(args.web);
+                assert!(args.tailscale);
+                assert!(!args.http);
+                assert!(!args.mobile);
+            }
+            other => panic!("expected serve, got {other:?}"),
+        }
     }
 }
 

@@ -10,6 +10,12 @@ description = "Agentic terminal facade for open-source and open-weight coding mo
 [lints]
 workspace = true
 
+[features]
+default = []
+# Embed a Tailscale node via official tailscale-rs. Off by default; without it
+# `codewhale web --tailscale` still publishes via the Tailscale CLI.
+tailscale = ["codewhale-tui/tailscale"]
+
 [[bin]]
 name = "codewhale"
 path = "src/main.rs"

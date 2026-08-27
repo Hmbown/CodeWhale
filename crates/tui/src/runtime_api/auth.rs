@@ -141,20 +141,49 @@ fn web_cookie_request_is_same_origin(req: &Request, state: &RuntimeApiState) -> 
         return false;
     }
 
-    let expected_origin = if state.bind_port == 80 {
-        format!("http://{}", state.bind_host)
-    } else {
-        format!("http://{}:{}", state.bind_host, state.bind_port)
-    };
     if let Some(origin) = req
         .headers()
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok())
     {
-        return origin == expected_origin;
+        return web_cookie_origin_is_allowed(
+            origin,
+            &state.bind_host,
+            state.bind_port,
+            &state.web_public_origins,
+        );
     }
 
     matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
+}
+
+pub(super) fn web_loopback_origin(bind_host: &str, bind_port: u16) -> String {
+    if bind_port == 80 {
+        format!("http://{bind_host}")
+    } else {
+        format!("http://{bind_host}:{bind_port}")
+    }
+}
+
+pub(super) fn web_cookie_origin_is_allowed(
+    origin: &str,
+    bind_host: &str,
+    bind_port: u16,
+    public_origins: &[String],
+) -> bool {
+    origin == web_loopback_origin(bind_host, bind_port)
+        || public_origins.iter().any(|allowed| allowed == origin)
+}
+
+pub(super) fn host_matches_public_origin(host: &str, public_origins: &[String]) -> bool {
+    let request_host = host.split(':').next().unwrap_or(host);
+    public_origins.iter().any(|origin| {
+        origin
+            .split_once("://")
+            .map(|(_, rest)| rest.split('/').next().unwrap_or(rest))
+            .map(|origin_host| origin_host.split(':').next().unwrap_or(origin_host))
+            .is_some_and(|origin_host| origin_host.eq_ignore_ascii_case(request_host))
+    })
 }
 
 fn runtime_token_required_response() -> Response {
@@ -207,4 +236,53 @@ fn percent_decode_query_component(value: &str) -> Option<String> {
         }
     }
     String::from_utf8(decoded).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cookie_origin_allows_loopback_and_explicit_tailnet() {
+        let tailnet = "https://codewhale.tailnet.ts.net".to_string();
+        assert!(web_cookie_origin_is_allowed(
+            "http://127.0.0.1:7878",
+            "127.0.0.1",
+            7878,
+            std::slice::from_ref(&tailnet),
+        ));
+        assert!(web_cookie_origin_is_allowed(
+            &tailnet,
+            "127.0.0.1",
+            7878,
+            std::slice::from_ref(&tailnet),
+        ));
+        assert!(web_cookie_origin_is_allowed(
+            "http://codewhale.tailnet.ts.net",
+            "127.0.0.1",
+            7878,
+            &["http://codewhale.tailnet.ts.net".to_string()],
+        ));
+        assert!(!web_cookie_origin_is_allowed(
+            "https://evil.example",
+            "127.0.0.1",
+            7878,
+            std::slice::from_ref(&tailnet),
+        ));
+    }
+
+    #[test]
+    fn public_origin_host_match_is_host_only() {
+        let origins = ["https://codewhale.tailnet.ts.net".to_string()];
+        assert!(host_matches_public_origin(
+            "codewhale.tailnet.ts.net",
+            &origins
+        ));
+        assert!(host_matches_public_origin(
+            "codewhale.tailnet.ts.net:443",
+            &origins
+        ));
+        assert!(!host_matches_public_origin("127.0.0.1:7878", &origins));
+        assert!(!host_matches_public_origin("evil.example", &origins));
+    }
 }
