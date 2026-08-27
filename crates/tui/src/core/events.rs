@@ -564,6 +564,13 @@ pub enum Event {
         tool_call_count: u32,
     },
 
+    /// Fire-and-forget cheap title after the first user prompt of a new
+    /// thread. The TUI applies it only when the user has not renamed.
+    SessionTitleGenerated {
+        session_id: String,
+        title: String,
+    },
+
     // === Prefix-Cache Stability Events ===
     /// The prefix (system prompt + tool specs) changed between turns,
     /// which invalidates DeepSeek's KV prefix cache. Carries diagnostics

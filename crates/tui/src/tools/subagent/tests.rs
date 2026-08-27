@@ -6243,65 +6243,34 @@ fn test_custom_agent_requires_allowed_tools() {
 }
 
 #[test]
-fn role_posture_blocks_writes_and_shell_for_read_only_roles() {
-    // #3217: read-only roles may never run write/edit/patch tools, regardless
-    // of parent auto-approval, but can always read.
+fn roles_are_labels_and_do_not_form_a_write_matrix() {
+    // Roles name stance. They are not a permission package. Write/shell
+    // come from inherit-parent (or an explicit read_only narrowing, or the
+    // Plan user-mode ceiling). Custom still passes the role-only check;
+    // its allowlist and envelope remain authoritative.
     for role in [
         FleetRole::Scout,
         FleetRole::Reviewer,
         FleetRole::Planner,
         FleetRole::Verifier,
-    ] {
-        assert!(
-            !role_posture_permits(&role, ApprovalRequirement::Suggest),
-            "{role:?} must not run write/edit/patch tools"
-        );
-        assert!(
-            role_posture_permits(&role, ApprovalRequirement::Auto),
-            "{role:?} can still read"
-        );
-    }
-
-    // Write-capable roles keep write access.
-    for role in [FleetRole::Builder, FleetRole::Worker] {
-        assert!(
-            role_posture_permits(&role, ApprovalRequirement::Suggest),
-            "{role:?} writes"
-        );
-    }
-
-    // Only Full-shell roles may run shell (Required) tools. Scout/reviewer
-    // now carry the read-only inspection posture (full shell authority, bounded verification
-    // surface; raw shell still requires write and stays denied by the clamp),
-    // so they join verifier/builder/worker. Planner's declared posture is
-    // read-only probes (Auto-classified bash), not Required/raw shell.
-    for role in [
-        FleetRole::Verifier,
         FleetRole::Builder,
         FleetRole::Worker,
-        FleetRole::Scout,
-        FleetRole::Reviewer,
+        FleetRole::Consultant,
+        FleetRole::Custom,
     ] {
         assert!(
+            role_posture_permits(&role, ApprovalRequirement::Auto),
+            "{role:?} can read"
+        );
+        assert!(
+            role_posture_permits(&role, ApprovalRequirement::Suggest),
+            "{role:?} is not a weaker write package"
+        );
+        assert!(
             role_posture_permits(&role, ApprovalRequirement::Required),
-            "{role:?} has full shell"
+            "{role:?} is not a weaker shell package"
         );
     }
-    assert!(
-        !role_posture_permits(&FleetRole::Planner, ApprovalRequirement::Required),
-        "Planner must not run raw/Required shell; read-only probes are Auto"
-    );
-
-    // Custom passes the role-only check; its explicit allowlist, bounded write
-    // authority, and parent-intersected runtime profile are enforced together.
-    assert!(role_posture_permits(
-        &FleetRole::Custom,
-        ApprovalRequirement::Suggest
-    ));
-    assert!(role_posture_permits(
-        &FleetRole::Custom,
-        ApprovalRequirement::Required
-    ));
 }
 
 #[test]
@@ -7543,67 +7512,58 @@ async fn read_only_inspection_roles_execute_pwd_and_absolute_git_log() {
     }
 }
 
-/// Read-only text filters may transform stdout, but they must not reach their
-/// file-output or helper-program forms through the same bounded bash carve-out.
+/// Plan-mode children inherit the parent's read-only contract. A text
+/// filter must not write a file through bash.
 #[tokio::test]
-async fn read_only_inspection_roles_cannot_write_through_text_filters() {
-    for role in [FleetRole::Scout, FleetRole::Reviewer, FleetRole::Planner] {
-        let tmp = tempdir().expect("tempdir");
-        let input_path = tmp.path().join("input.txt");
-        std::fs::write(&input_path, "b\na\n").expect("input fixture");
-        let output_path = tmp.path().join("filter-output.txt");
-        let mut runtime =
-            stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
-        runtime.context = ToolContext::new(tmp.path().to_path_buf());
-        runtime.worker_profile = WorkerRuntimeProfile::for_role(role.clone());
-        seed_read_only_role_deny_list(&mut runtime);
-        let registry = SubAgentToolRegistry::new(
-            runtime,
-            role.clone(),
-            None,
-            crate::tools::todo::new_shared_todo_list(),
-            crate::tools::plan::new_shared_plan_state(),
-        );
+async fn plan_mode_child_cannot_write_through_text_filters() {
+    let tmp = tempdir().expect("tempdir");
+    let input_path = tmp.path().join("input.txt");
+    std::fs::write(&input_path, "b\na\n").expect("input fixture");
+    let output_path = tmp.path().join("filter-output.txt");
+    let mut runtime =
+        stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    runtime.parent_mode = crate::tui::app::AppMode::Plan;
+    apply_session_spawn_defaults(&mut runtime);
+    let mut request = parse_spawn_request(&json!({"prompt": "inspect"}))
+        .expect("prompt-only spawn still parses");
+    apply_parent_mode_ceiling(&runtime, &mut request);
+    assert_eq!(
+        request.write_authority,
+        Some(SpawnWriteAuthority::ReadOnly)
+    );
+    apply_spawn_write_authority(&mut runtime, &request);
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        FleetRole::Worker,
+        None,
+        crate::tools::todo::new_shared_todo_list(),
+        crate::tools::plan::new_shared_plan_state(),
+    );
 
-        let call = json!({"command": "sort -o filter-output.txt input.txt"});
-        let envelope_refusal = registry
-            .envelope_refusal("bash", &call)
-            .expect("the envelope must independently refuse the write-capable filter");
-        assert!(
-            envelope_refusal.contains("[execution_envelope.executes.write_denied]"),
-            "{role:?} envelope refusal did not identify its failed rule: {envelope_refusal}"
-        );
-
-        let posture_refusal = registry
-            .execute("agent_read_only_filter", "bash", call)
-            .await
-            .expect_err("a read-only inspection role must not write through sort")
-            .to_string();
-        assert!(
-            posture_refusal.contains("[shell.readonly.command]"),
-            "{role:?} posture refusal did not identify its failed rule: {posture_refusal}"
-        );
-        assert!(
-            !output_path.exists(),
-            "{role:?} read-only filter created {} from {}",
-            output_path.display(),
-            input_path.display()
-        );
-    }
+    let call = json!({"command": "sort -o filter-output.txt input.txt"});
+    registry
+        .execute("agent_plan_readonly_filter", "bash", call)
+        .await
+        .expect_err("a Plan-mode child must not write through sort");
+    assert!(
+        !output_path.exists(),
+        "Plan-mode child created {} from {}",
+        output_path.display(),
+        input_path.display()
+    );
 }
 
 #[test]
-fn explore_catalog_inherits_web_but_hides_write_shell_and_fim_tools() {
+fn scout_label_inherits_parent_surface_including_web() {
     let tmp = tempdir().expect("tempdir");
     let mut runtime =
         stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
     runtime.context = ToolContext::new(tmp.path().to_path_buf());
     runtime.context.auto_approve = true;
+    runtime.parent_mode = crate::tui::app::AppMode::Agent;
+    apply_session_spawn_defaults(&mut runtime);
     runtime.worker_profile = WorkerRuntimeProfile::for_role(FleetRole::Scout);
-    // The real spawn threads the clamp's deny list into the child profile
-    // (write:false => raw shell + mutating surface denied); model it so the
-    // catalog assertion matches what a real scout lane sees.
-    seed_read_only_role_deny_list(&mut runtime);
     let registry = SubAgentToolRegistry::new(
         runtime,
         FleetRole::Scout,
@@ -7614,28 +7574,12 @@ fn explore_catalog_inherits_web_but_hides_write_shell_and_fim_tools() {
 
     let tools = registry.tools_for_model(&FleetRole::Scout);
     let names = tool_names(tools.clone());
-    for name in ["read", "Web", "web.run", "bash", "todo_write"] {
-        assert!(names.contains(name), "Explore should inherit {name}");
+    for name in ["read", "Web", "web.run", "bash", "todo_write", "write", "edit"] {
+        assert!(
+            names.contains(name),
+            "scout is a label and inherits {name}"
+        );
     }
-    for name in [
-        "write",
-        "edit",
-        "write_file",
-        "edit_file",
-        "apply_patch",
-        "fim_edit",
-        "exec_shell",
-        "task_shell_start",
-        "Git",
-        "review",
-        "Run",
-    ] {
-        assert!(!names.contains(name), "Explore must hide {name}");
-    }
-    // Read-only inspection keeps the canonical lowercase read primitive and bash only for
-    // classifier-proven read commands; every mutation primitive,
-    // background/terminal alias, build/test runner, and process surface
-    // stays hidden.
     let file = tools.iter().find(|tool| tool.name == "read").unwrap();
     assert!(
         file.input_schema["properties"]["path"].is_object(),
@@ -7671,40 +7615,12 @@ async fn read_only_roles_expose_and_dispatch_lowercase_bash_only() {
 
         let tools = registry.tools_for_model(&role);
         let names = tool_names(tools.clone());
-        let mut expected = [
-            "Web",
-            "agent",
-            "bash",
-            "diagnostics",
-            "file_search",
-            "finance",
-            "get_goal",
-            "grep_files",
-            "handle_read",
-            "list_dir",
-            "load_skill",
-            "lsp",
-            "memory_get",
-            "memory_search",
-            "notify",
-            "project_map",
-            "read",
-            "read_media",
-            "request_user_input",
-            "retrieve_tool_result",
-            "todo_write",
-            "tui_help",
-            "validate_data",
-            "verify",
-            "web.run",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect::<std::collections::HashSet<_>>();
-        if crate::tools::image_ocr::ocr_available() {
-            expected.insert("image_ocr".to_string());
+        for name in ["read", "bash", "Web", "web.run", "todo_write"] {
+            assert!(
+                names.contains(name),
+                "{role:?} label still inherits {name}"
+            );
         }
-        assert_eq!(names, expected, "{role:?} complete visible surface drifted");
 
         let bash = tools.iter().find(|tool| tool.name == "bash").unwrap();
         assert!(
@@ -7722,11 +7638,6 @@ async fn read_only_roles_expose_and_dispatch_lowercase_bash_only() {
         assert_eq!(
             web.input_schema["properties"]["action"]["enum"],
             json!(["search", "fetch"])
-        );
-        assert_eq!(
-            registry.registry.context().shell_policy,
-            ShellPolicy::ReadOnly,
-            "the concrete executor must keep the same read-only contract"
         );
 
         // Classifier-bounded reads pass; mutation and arbitrary shell do not.
@@ -7783,24 +7694,6 @@ async fn read_only_roles_expose_and_dispatch_lowercase_bash_only() {
             "{role:?} legacy Bash refusal: {error}"
         );
 
-        // Repository-configured and process-running helpers stay outside the
-        // boundary even when their friendly name sounds observational.
-        for (name, input) in [
-            ("Git", json!({"action": "status"})),
-            ("Run", json!({"action": "tests"})),
-            ("review", json!({})),
-        ] {
-            let error = registry
-                .execute("agent_read_only", name, input)
-                .await
-                .expect_err("non-evidence process surface must stay outside inspection")
-                .to_string();
-            assert!(
-                error.contains("hardened evidence boundary"),
-                "{role:?} {name}: {error}"
-            );
-        }
-
         // Ordinary statically read-only tools use the same capability flag at
         // catalog and dispatch boundaries; Scout is not a bash-only role.
         for name in [
@@ -7846,15 +7739,6 @@ async fn read_only_roles_expose_and_dispatch_lowercase_bash_only() {
             vec!["inspect issue evidence"],
             "the bounded notes write lands only in this child's todo list"
         );
-        assert!(
-            registry
-                .envelope_refusal(
-                    "File",
-                    &json!({"action": "write", "path": "src/lib.rs", "content": "nope"})
-                )
-                .is_some(),
-            "agent-owned notes must not widen workspace writes"
-        );
     }
 }
 
@@ -7864,8 +7748,8 @@ async fn planner_exposes_and_dispatches_read_only_bash_probes() {
     let mut runtime =
         stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
     runtime.context = ToolContext::new(tmp.path().to_path_buf());
-    runtime.worker_profile = WorkerRuntimeProfile::for_role(FleetRole::Planner);
-    seed_read_only_role_deny_list(&mut runtime);
+    runtime.parent_mode = crate::tui::app::AppMode::Plan;
+    apply_session_spawn_defaults(&mut runtime);
     let registry = SubAgentToolRegistry::new(
         runtime,
         FleetRole::Planner,
@@ -7874,42 +7758,25 @@ async fn planner_exposes_and_dispatches_read_only_bash_probes() {
         crate::tools::plan::new_shared_plan_state(),
     );
     let names = tool_names(registry.tools_for_model(&FleetRole::Planner));
-    assert!(
-        names.contains("bash"),
-        "planner keeps read-only bash probes"
-    );
-    assert!(names.contains("Git"), "planner keeps the Git family");
-    assert!(
-        !names.contains("Run"),
-        "planner must not gain the verification surface"
-    );
-    for command in ["pwd", "git status --short", "rg needle crates"] {
-        assert!(
-            registry
-                .envelope_refusal("bash", &json!({"command": command}))
-                .is_none(),
-            "planner should admit {command}"
-        );
-    }
-    for command in ["rm -rf crates", "git push origin main", "bash -lc 'id'"] {
-        assert!(
-            registry
-                .envelope_refusal("bash", &json!({"command": command}))
-                .is_some(),
-            "planner must refuse {command}"
-        );
-    }
-    let sentinel = "PLANNER_PROBE_SENTINEL";
-    std::fs::write(tmp.path().join("sentinel.txt"), sentinel).expect("sentinel");
+    assert!(names.contains("read"), "Plan children keep read");
+    std::fs::write(tmp.path().join("sentinel.txt"), "PLANNER_PROBE_SENTINEL").expect("sentinel");
     let output = registry
         .execute(
             "agent_planner",
-            "bash",
-            json!({"command": "cat sentinel.txt"}),
+            "File",
+            json!({"action": "read", "path": "sentinel.txt"}),
         )
         .await
-        .expect("planner must dispatch a bounded read");
-    assert_eq!(output, sentinel);
+        .expect("Plan children may read");
+    assert!(output.contains("PLANNER_PROBE_SENTINEL"));
+    registry
+        .execute(
+            "agent_planner",
+            "File",
+            json!({"action": "write", "path": "nope.txt", "content": "denied"}),
+        )
+        .await
+        .expect_err("Plan children must not write");
 }
 
 #[tokio::test]
@@ -8027,8 +7894,8 @@ fn implementer_catalog_inherits_patch_and_fim_when_enabled() {
 #[test]
 fn every_fleet_role_catalog_advertises_one_executable_load_skill() {
     // load_skill contract (#4651): the parent Agent surface and every
-    // default Fleet role child keep first-class skill listing/loading, and
-    // read-only roles get it without gaining write or shell authority.
+    // default Fleet role child keep first-class skill listing/loading.
+    // Roles are labels, not a write/shell matrix.
     let tmp = tempdir().expect("tempdir");
     let mut runtime =
         stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
@@ -8068,14 +7935,6 @@ fn every_fleet_role_catalog_advertises_one_executable_load_skill() {
     ] {
         let mut role_runtime = runtime.clone();
         role_runtime.worker_profile = WorkerRuntimeProfile::for_role(role.clone());
-        if matches!(
-            &role,
-            FleetRole::Scout | FleetRole::Reviewer | FleetRole::Planner
-        ) {
-            // Model the clamp deny list for read-only roles, as the real
-            // spawn does (write:false => raw shell + mutating surface denied).
-            seed_read_only_role_deny_list(&mut role_runtime);
-        }
         let registry = SubAgentToolRegistry::new(
             role_runtime,
             role.clone(),
@@ -8096,46 +7955,6 @@ fn every_fleet_role_catalog_advertises_one_executable_load_skill() {
             registry.is_tool_allowed("load_skill"),
             "Fleet role {role:?} must be able to execute the advertised load_skill"
         );
-
-        if matches!(
-            role,
-            FleetRole::Scout | FleetRole::Planner | FleetRole::Reviewer | FleetRole::Verifier
-        ) {
-            let names = tool_names(tools);
-            // All read-only roles keep load_skill without write authority.
-            for denied in ["write_file", "edit_file", "apply_patch", "fim_edit"] {
-                assert!(
-                    !names.contains(denied),
-                    "read-only role {role:?} keeps load_skill without gaining {denied}"
-                );
-            }
-            // Scout/reviewer/planner expose only canonical lowercase bash,
-            // whose concrete calls are reclassified. Verifier keeps its
-            // bounded Run surface but not raw bash.
-            if matches!(
-                &role,
-                FleetRole::Scout | FleetRole::Reviewer | FleetRole::Planner
-            ) {
-                assert!(names.contains("bash"), "{role:?} keeps read-only bash");
-                for denied in ["exec_shell", "task_shell_start"] {
-                    assert!(
-                        !names.contains(denied),
-                        "read-only role {role:?} keeps load_skill without gaining {denied}"
-                    );
-                }
-            } else {
-                assert!(
-                    !names.contains("bash"),
-                    "read-only role {role:?} must not gain bash"
-                );
-            }
-            if matches!(&role, FleetRole::Planner) {
-                assert!(
-                    !names.contains("Run"),
-                    "planner must not gain the verification surface"
-                );
-            }
-        }
     }
 }
 
@@ -8189,8 +8008,8 @@ async fn plan_parent_profile_narrows_even_implementer_child_to_read_only() {
         stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
     runtime.context = ToolContext::new(workspace.clone());
     runtime.context.auto_approve = true;
-    runtime.allow_shell = false;
-    runtime.worker_profile = WorkerRuntimeProfile::for_role(FleetRole::Planner);
+    runtime.parent_mode = crate::tui::app::AppMode::Plan;
+    apply_session_spawn_defaults(&mut runtime);
     runtime.agent_tool_surface_options.shell_policy = ShellPolicy::None;
 
     let registry = SubAgentToolRegistry::new(
@@ -11157,21 +10976,15 @@ async fn subagent_registry_blocks_approval_tools_without_parent_auto_approve() {
 }
 
 #[tokio::test]
-async fn prompt_only_general_cannot_mutate_under_parent_auto_approve() {
+async fn prompt_only_general_can_mutate_without_extra_flags() {
     let tmp = tempdir().expect("tempdir");
-    let request = parse_spawn_request(&json!({"prompt": "inspect only"})).unwrap();
+    let request = parse_spawn_request(&json!({"prompt": "do this slice"})).unwrap();
     let mut runtime = stub_runtime();
     runtime.context = ToolContext::new(tmp.path().to_path_buf());
-    runtime.context.auto_approve = true;
+    runtime.context.auto_approve = false;
+    runtime.parent_mode = crate::tui::app::AppMode::Agent;
+    apply_session_spawn_defaults(&mut runtime);
     apply_spawn_write_authority(&mut runtime, &request);
-    runtime.worker_profile = worker_profile_for_spawn(
-        &runtime,
-        &request.agent_type,
-        &AgentWorkerToolProfile::Inherited,
-        "deepseek-v4-pro",
-        None,
-        false,
-    );
     let registry = SubAgentToolRegistry::new(
         runtime,
         request.agent_type,
@@ -11180,26 +10993,18 @@ async fn prompt_only_general_cannot_mutate_under_parent_auto_approve() {
         Arc::new(Mutex::new(PlanState::default())),
     );
 
-    let write_error = registry
+    registry
         .execute(
             "agent_test",
             "File",
-            json!({"action": "write", "path": "forbidden.txt", "content": "no"}),
+            json!({"action": "write", "path": "slice.txt", "content": "ok"}),
         )
         .await
-        .expect_err("read-only General must not write under auto approval");
-    assert!(write_error.to_string().contains("not permitted"));
-    let shell_error = registry
-        .execute(
-            "agent_test",
-            "Bash",
-            json!({"action": "run", "command": "touch shell.txt"}),
-        )
-        .await
-        .expect_err("read-only General must not receive mutating shell");
-    assert!(shell_error.to_string().contains("not registered"));
-    assert!(!tmp.path().join("forbidden.txt").exists());
-    assert!(!tmp.path().join("shell.txt").exists());
+        .expect("spawn(prompt) can write a file without extra flags");
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("slice.txt")).expect("child write"),
+        "ok"
+    );
 }
 
 const MCP_ACTION_TOOL: &str = "mcp_github_create_pull_request";
@@ -11673,14 +11478,15 @@ async fn general_delegation_still_blocks_suggest_write_without_parent_auto_appro
 }
 
 #[tokio::test]
-async fn explore_role_still_blocks_suggest_writes_without_parent_auto_approve() {
-    // Read-only stances (explore, plan, review, verifier) must not gain
-    // write capabilities via delegation — otherwise a parent that asked
-    // for "just look at the code" could find files mutated behind its back.
+async fn plan_mode_child_blocks_suggest_writes_without_parent_auto_approve() {
+    // Plan is a user mode. A child started from Plan inherits that
+    // read-only contract regardless of role label.
     let tmp = tempdir().expect("tempdir");
     let mut runtime = stub_runtime();
     runtime.context = ToolContext::new(tmp.path().to_path_buf());
     runtime.context.auto_approve = false;
+    runtime.parent_mode = crate::tui::app::AppMode::Plan;
+    apply_session_spawn_defaults(&mut runtime);
     let registry = SubAgentToolRegistry::new(
         runtime,
         FleetRole::Scout,
@@ -11700,11 +11506,11 @@ async fn explore_role_still_blocks_suggest_writes_without_parent_auto_approve() 
             }),
         )
         .await
-        .expect_err("explore agents must not write");
+        .expect_err("Plan-mode children must not write");
     let msg = err.to_string();
     assert!(
-        msg.contains("scout") && msg.contains("not permitted"),
-        "explore writes should be rejected with a role-aware message: {msg}"
+        msg.contains("not permitted") || msg.contains("requires approval") || msg.contains("read-only"),
+        "Plan writes should be rejected: {msg}"
     );
     assert!(
         !tmp.path().join("should_not_appear.txt").exists(),
@@ -11713,14 +11519,15 @@ async fn explore_role_still_blocks_suggest_writes_without_parent_auto_approve() 
 }
 
 #[tokio::test]
-async fn explore_role_blocks_writes_even_under_parent_auto_approve() {
-    // #3217: the authoritative per-role posture closes the auto-approve bypass —
-    // a read-only role cannot mutate the workspace even when the parent session
-    // is auto-approved.
+async fn plan_mode_child_blocks_writes_even_under_parent_auto_approve() {
+    // Plan is a user mode. Auto-approve on the parent does not widen a
+    // Plan-mode child past read-only.
     let tmp = tempdir().expect("tempdir");
     let mut runtime = stub_runtime();
     runtime.context = ToolContext::new(tmp.path().to_path_buf());
     runtime.context.auto_approve = true;
+    runtime.parent_mode = crate::tui::app::AppMode::Plan;
+    apply_session_spawn_defaults(&mut runtime);
     let registry = SubAgentToolRegistry::new(
         runtime,
         FleetRole::Scout,
@@ -12763,6 +12570,50 @@ fn root_spawn_inherits_parent_without_disabling_safety() {
     );
 }
 
+#[test]
+fn plan_mode_root_spawn_stays_readonly() {
+    let mut runtime = stub_runtime();
+    runtime.parent_mode = crate::tui::app::AppMode::Plan;
+    runtime.accept_edits = true;
+    runtime.allow_shell = true;
+    runtime.worker_profile.permissions = crate::worker_profile::PermissionSet::full();
+    runtime.worker_profile.shell = crate::worker_profile::ShellPolicy::Full;
+
+    apply_session_spawn_defaults(&mut runtime);
+
+    assert!(
+        !runtime.accept_edits,
+        "Plan children must not auto-accept edits"
+    );
+    assert!(!runtime.allow_shell, "Plan children must not gain shell");
+    assert!(
+        !runtime.worker_profile.permissions.write,
+        "Plan children must not gain write"
+    );
+    assert!(
+        matches!(
+            runtime.worker_profile.shell,
+            crate::worker_profile::ShellPolicy::None
+        ),
+        "Plan children inherit Plan's no-shell contract"
+    );
+
+    let mut request = parse_spawn_request(&json!({
+        "prompt": "do this slice",
+        "write_authority": "workspace_write",
+        "write_roots": ["src"]
+    }))
+    .expect("explicit write request still parses");
+    assert!(spawn_request_is_write_capable(&request));
+    apply_parent_mode_ceiling(&runtime, &mut request);
+    assert_eq!(
+        request.write_authority,
+        Some(SpawnWriteAuthority::ReadOnly)
+    );
+    assert!(!spawn_request_is_write_capable(&request));
+    assert!(request.write_roots.is_empty());
+}
+
 #[tokio::test]
 async fn root_operate_dispatch_delegates_builtin_verification_but_not_shell() {
     let tmp = tempdir().expect("tempdir");
@@ -12861,6 +12712,64 @@ async fn root_operate_dispatch_delegates_builtin_verification_but_not_shell() {
     assert!(
         !grandchild.accept_verification,
         "Operate verification delegation must not propagate past the direct worker"
+    );
+}
+
+#[tokio::test]
+async fn plan_mode_root_spawn_cannot_write_or_run_mutating_shell() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("notes.txt"), "plan\n").expect("notes");
+
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    runtime.context.auto_approve = false;
+    runtime.parent_mode = crate::tui::app::AppMode::Plan;
+    apply_session_spawn_defaults(&mut runtime);
+    let mut request = parse_spawn_request(&json!({"prompt": "inspect the notes"}))
+        .expect("spawn(prompt) parses in Plan");
+    apply_parent_mode_ceiling(&runtime, &mut request);
+    apply_spawn_write_authority(&mut runtime, &request);
+    assert!(!spawn_request_is_write_capable(&request));
+    assert!(!runtime.accept_edits);
+    assert!(!runtime.allow_shell);
+    assert!(!runtime.worker_profile.permissions.write);
+
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        FleetRole::Worker,
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    registry
+        .execute(
+            "agent_plan",
+            "File",
+            json!({
+                "action": "write",
+                "path": "slice.txt",
+                "content": "from plan child"
+            }),
+        )
+        .await
+        .expect_err("Plan-mode spawn must not write a file");
+    assert!(
+        !tmp.path().join("slice.txt").exists(),
+        "Plan child wrote slice.txt"
+    );
+
+    registry
+        .execute(
+            "agent_plan",
+            "Bash",
+            json!({"action": "run", "command": "echo slice-ok > leaked.txt"}),
+        )
+        .await
+        .expect_err("Plan-mode spawn must not run mutating shell");
+    assert!(
+        !tmp.path().join("leaked.txt").exists(),
+        "Plan child leaked a shell write"
     );
 }
 

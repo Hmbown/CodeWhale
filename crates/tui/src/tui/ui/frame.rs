@@ -417,8 +417,16 @@ pub(crate) fn build_session_snapshot(
         && cached.id == session.metadata.id
     {
         session.metadata.title.clone_from(&cached.title);
+        session.metadata.title_source = cached.title_source;
     }
-    if session.metadata.title == crate::session_manager::DEFAULT_SESSION_TITLE
+    if matches!(
+        session.metadata.title_source,
+        crate::session_manager::SessionTitleSource::Generated
+            | crate::session_manager::SessionTitleSource::User
+    ) {
+        // A live namer or user rename already owns the title. Autosave
+        // must not replace it with the first-prompt truncation.
+    } else if session.metadata.title == crate::session_manager::DEFAULT_SESSION_TITLE
         && computed_title != crate::session_manager::DEFAULT_SESSION_TITLE
     {
         // The placeholder survived from an earlier snapshot; the conversation
@@ -427,24 +435,7 @@ pub(crate) fn build_session_snapshot(
         // placeholder title is treated the same way and yields to the
         // computed title on the next snapshot.
         session.metadata.title = computed_title;
-        if session.metadata.title_source != crate::session_manager::SessionTitleSource::User {
-            session.metadata.title_source = crate::session_manager::SessionTitleSource::Truncation;
-            if crate::session_namer::should_auto_name(
-                session.metadata.title_source,
-                &session.metadata.title,
-                false,
-            ) {
-                // Snapshot path must not block. The cheap namer job is
-                // fire-and-forget; failure keeps this truncation title.
-                let spec = crate::session_namer::namer_completion_spec(&session.metadata.title);
-                tracing::debug!(
-                    target: "session_namer",
-                    tokens = spec.max_output_tokens,
-                    timeout = spec.timeout_secs,
-                    "first-prompt namer job ready"
-                );
-            }
-        }
+        session.metadata.title_source = crate::session_manager::SessionTitleSource::Truncation;
     }
     if let Some(cached) = app.current_session_metadata.as_mut()
         && cached.id == session.metadata.id

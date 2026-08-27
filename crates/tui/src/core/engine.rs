@@ -3084,6 +3084,42 @@ impl Engine {
         self.config.runtime_services.active_thread_id.is_some()
     }
 
+    fn maybe_start_session_namer(&self, first_prompt: &str) {
+        let user_turns = self
+            .session
+            .messages
+            .iter()
+            .filter(|message| message.role.as_str() == "user")
+            .count();
+        if user_turns != 1 {
+            return;
+        }
+        if !crate::session_namer::should_auto_name(
+            crate::session_manager::SessionTitleSource::Truncation,
+            first_prompt,
+            false,
+        ) {
+            return;
+        }
+        let Some(client) = self.deepseek_client.clone() else {
+            return;
+        };
+        let spec = crate::session_namer::namer_completion_spec(first_prompt);
+        let model = crate::session_namer::naming_model_hint(None, &self.session.model);
+        let session_id = self.session.id.clone();
+        let tx_event = self.tx_event.clone();
+        crate::utils::spawn_supervised(
+            "session-namer",
+            std::panic::Location::caller(),
+            async move {
+                crate::session_namer::run_namer_for_session(
+                    session_id, spec, client, model, tx_event,
+                )
+                .await;
+            },
+        );
+    }
+
     async fn emit_session_updated(&self) {
         let _ = self
             .tx_event
@@ -4785,6 +4821,7 @@ impl Engine {
         // Add the user message through the same explicit snapshot constructor
         // preview uses. Route limits and mode in resource metadata therefore
         // belong to this turn even when the previous route was different.
+        let namer_prompt = content.clone();
         let user_msg = self.user_text_message_from_snapshot(
             content,
             &model,
@@ -4801,6 +4838,7 @@ impl Engine {
             },
         );
         self.session.add_message(user_msg);
+        self.maybe_start_session_namer(&namer_prompt);
 
         self.emit_session_updated().await;
 

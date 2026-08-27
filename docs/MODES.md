@@ -30,7 +30,7 @@ Press `Ctrl+T` to cycle reasoning effort.
 Run `/mode` to open the mode picker, or switch directly with `/mode work`,
 `/mode plan`, or `/mode operate`.
 
-- **Plan**: design-first prompting. The stable primitive names remain familiar, but the runtime centrally refuses file mutation and shell execution. Read-only inspection and policy-allowed research, including deferred Web search/fetch, remain available.
+- **Plan**: design-first prompting. The stable primitive names remain familiar, but the runtime centrally refuses file mutation and shell execution. Read-only inspection and policy-allowed research, including deferred Web search/fetch, remain available. Plan is a **user mode**, not a child permission package. A spawn from Plan inherits that same read-only contract — no write, no mutating shell. Spawning a worker is not a backdoor to Work/Operate authority.
 - **Work** (internally `agent`): ordinary multi-step execution. The small first-turn toolbox is `read`, `write`, `edit`, `bash`, `agent`, and `todo_write`; approval, sandbox, repository law, and managed policy still decide what may execute.
 - **Operate**: multitask conductor posture. Same tools and authority as Work. The parent starts worker(s) with `agent` + a prompt — one worker system, no permission package — then **ends the turn**. Workers inherit the parent (minus payments/top-ups, customer-data delete, and clobbering an occupied checkout). Synthesize when they complete. Use Workflow when order, phases, gates, or deterministic fan-in matter. **Dispatch is not completion.**
 
@@ -44,7 +44,7 @@ still normalize to the internal value `agent`.
 | `read` and policy-allowed deferred research tools | yes | yes | yes |
 | `write` and `edit` | visible names; execution denied | approval- and policy-gated | same as Work |
 | `bash` | visible name; execution denied | approval- and policy-gated | same as Work; delegation is preferred when parallelism or isolation helps |
-| `agent` | yes, subject to child-depth authority | yes, subject to child-depth authority | yes, subject to child-depth authority |
+| `agent` | yes; children inherit Plan's read-only contract | yes, subject to child-depth authority | yes, subject to child-depth authority |
 | Deferred native, MCP, and plugin tools | discoverable through `tool_search` when policy permits | same | same |
 | Paid or external-service tools | follows permission posture | follows permission posture | follows permission posture |
 | Access outside the workspace root | explicit trusted paths only | only through trusted paths or trust mode | same trusted-path/trust policy as Work; Fleet profiles never widen it |

@@ -9384,6 +9384,7 @@ async fn spawn_subagent_from_input(
     // manager/builder profile can never acquire an implicit repository-wide
     // write claim.
     validate_spawn_write_contract(&mut spawn_request, false)?;
+    apply_parent_mode_ceiling(&runtime, &mut spawn_request);
     if spawn_request.worktree.is_none() {
         let parallel = manager.read().await.running_count() > 0;
         if crate::simple_worker::should_isolate_worktree(false, parallel) {
@@ -9803,14 +9804,43 @@ fn spawn_request_is_write_capable(request: &SpawnRequest) -> bool {
 /// A root `agent` start is `spawn(prompt)`: the child inherits the parent
 /// and can do the assigned slice. Role names stay prompt labels. Hard
 /// carve-outs and the Auto-Review safety floor remain the only subtractions.
+///
+/// Plan is a **user mode**, not a child permission package. While the user
+/// is in Plan, the parent is read-only; a spawn is not a backdoor to
+/// write+shell. Those children inherit Plan's contract instead.
 fn apply_session_spawn_defaults(runtime: &mut SubAgentRuntime) {
-    if crate::simple_worker::root_child_inherits_parent(runtime.spawn_depth) {
-        runtime.accept_edits = true;
-        runtime.accept_verification = true;
-        runtime.allow_shell = true;
-        runtime.worker_profile.permissions = crate::worker_profile::PermissionSet::full();
-        runtime.worker_profile.shell = crate::worker_profile::ShellPolicy::Full;
+    if !crate::simple_worker::root_child_inherits_parent(runtime.spawn_depth) {
+        return;
     }
+    if matches!(runtime.parent_mode, AppMode::Plan) {
+        apply_plan_readonly_child_contract(runtime);
+        return;
+    }
+    runtime.accept_edits = true;
+    runtime.accept_verification = true;
+    runtime.allow_shell = true;
+    runtime.worker_profile.permissions = crate::worker_profile::PermissionSet::full();
+    runtime.worker_profile.shell = crate::worker_profile::ShellPolicy::Full;
+}
+
+/// Plan children stay on the parent's read-only ceiling: no writes, no
+/// mutating shell. This is inherit-parent, not a preset enum.
+fn apply_plan_readonly_child_contract(runtime: &mut SubAgentRuntime) {
+    runtime.accept_edits = false;
+    runtime.allow_shell = false;
+    runtime.worker_profile.permissions.write = false;
+    runtime.worker_profile.shell = crate::worker_profile::ShellPolicy::None;
+}
+
+/// Plan cannot mint a write-capable request the parent itself lacks.
+fn apply_parent_mode_ceiling(runtime: &SubAgentRuntime, request: &mut SpawnRequest) {
+    if !matches!(runtime.parent_mode, AppMode::Plan) {
+        return;
+    }
+    request.write_authority = Some(SpawnWriteAuthority::ReadOnly);
+    request.write_roots.clear();
+    request.exact_files.clear();
+    request.coordination_contracts.clear();
 }
 
 /// Spawn one Workflow `task(...)` through the same path as the public `agent`
@@ -14394,9 +14424,15 @@ impl SubAgentToolRegistry {
             ApprovalRequirement::Required => {
                 // A spawned child inherits the parent. Launching it is the
                 // approval for ordinary work. Payments, customer-data
-                // deletes, and the Auto-Review safety floor still hold.
+                // deletes, unbounded verification argv, and the Auto-Review
+                // safety floor still hold.
                 if Self::is_delegated_builtin_verification(name, input) {
                     return None;
+                }
+                if Self::is_unbounded_verification(name, input) {
+                    return Some(format!(
+                        "Tool {name} requires approval and cannot run inside this sub-agent without a session decision"
+                    ));
                 }
                 if self.accept_edits
                     && self.runtime_profile.shell.allows_shell()
@@ -14767,6 +14803,15 @@ impl SubAgentToolRegistry {
         matches!(
             classify_verification(canonical_action_alias(name, input), input),
             Some(VerificationBound::Default | VerificationBound::Filter)
+        )
+    }
+
+    fn is_unbounded_verification(name: &str, input: &Value) -> bool {
+        use crate::tools::execution_envelope::{VerificationBound, classify_verification};
+
+        matches!(
+            classify_verification(canonical_action_alias(name, input), input),
+            Some(VerificationBound::Unbounded)
         )
     }
 

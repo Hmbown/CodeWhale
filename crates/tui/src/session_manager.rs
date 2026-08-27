@@ -1615,6 +1615,7 @@ impl SessionManager {
             return false;
         };
         metadata.title = persisted.title;
+        metadata.title_source = persisted.title_source;
         metadata.archived = persisted.archived;
         metadata.created_at = persisted.created_at;
         metadata.parent_session_id = persisted.parent_session_id;

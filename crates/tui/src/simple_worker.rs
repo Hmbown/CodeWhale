@@ -61,6 +61,8 @@ pub fn should_isolate_worktree(checkout_occupied: bool, parallel_writers: bool) 
 
 /// Root children inherit the parent's session. Launching the child is the
 /// approval for ordinary work in that slice. Safety-floor holds remain.
+/// Plan is a user mode: when the parent is Plan, inherit that read-only
+/// contract instead of granting write+shell.
 #[must_use]
 pub fn root_child_inherits_parent(spawn_depth: u32) -> bool {
     spawn_depth == 0
@@ -77,9 +79,9 @@ mod tests {
         // matrix. Roles are prompt labels; authority is inherit-parent.
         let src = include_str!("simple_worker.rs");
         assert!(
-            !src.contains("ChildPermissionPreset")
-                && !src.contains("OperateWorker")
-                && !src.contains("WriteWorktree"),
+            !src.contains(concat!("ChildPermission", "Preset"))
+                && !src.contains(concat!("Operate", "Worker"))
+                && !src.contains(concat!("Write", "Worktree")),
             "do not add a permission-preset catalog"
         );
     }

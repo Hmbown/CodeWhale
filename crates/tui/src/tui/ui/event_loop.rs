@@ -32,6 +32,50 @@ fn persist_current_session_goal(app: &App) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+fn apply_generated_session_title(app: &mut App, session_id: &str, generated: &str) {
+    if !event_owner_is_active(app.current_session_id.as_deref(), session_id) {
+        return;
+    }
+    let source = app
+        .current_session_metadata
+        .as_ref()
+        .filter(|metadata| metadata.id == session_id)
+        .map(|metadata| metadata.title_source)
+        .unwrap_or(crate::session_manager::SessionTitleSource::Truncation);
+    let current = app
+        .session_title
+        .clone()
+        .or_else(|| {
+            app.current_session_metadata
+                .as_ref()
+                .filter(|metadata| metadata.id == session_id)
+                .map(|metadata| metadata.title.clone())
+        })
+        .unwrap_or_else(|| crate::session_manager::DEFAULT_SESSION_TITLE.to_string());
+    let Some(title) =
+        crate::session_namer::apply_generated_title(&current, source, generated)
+    else {
+        return;
+    };
+    if let Some(metadata) = app
+        .current_session_metadata
+        .as_mut()
+        .filter(|metadata| metadata.id == session_id)
+    {
+        metadata.title.clone_from(&title);
+        metadata.title_source = crate::session_manager::SessionTitleSource::Generated;
+    }
+    app.session_title = Some(title.clone());
+    if let Ok(manager) = SessionManager::default_location()
+        && let Ok(mut session) = manager.load_session(session_id)
+        && session.metadata.title_source != crate::session_manager::SessionTitleSource::User
+    {
+        session.metadata.title = title;
+        session.metadata.title_source = crate::session_manager::SessionTitleSource::Generated;
+        let _ = manager.save_session(&session);
+    }
+}
+
 pub(crate) fn surface_goal_persistence_failure(app: &mut App, error: &str) {
     app.push_status_toast(
         format!("Goal progress is not durable yet: {error}"),
@@ -3013,6 +3057,9 @@ pub(crate) async fn run_event_loop(
                                 content: format!("⚑ Advisor: {note}"),
                             });
                         }
+                    }
+                    EngineEvent::SessionTitleGenerated { session_id, title } => {
+                        apply_generated_session_title(app, &session_id, &title);
                     }
                     EngineEvent::ToolGateDecision {
                         agent_id,

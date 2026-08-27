@@ -69,10 +69,17 @@ Parent ceiling still applies: a child cannot gain what the parent lacks.
 The Auto-Review safety floor (publish-like, destructive detached work,
 secrets, auth) stays authoritative. `auto_approve` stays off.
 
+**Plan is a user mode.** While the user is in Plan, the root agent is
+read-only (no write, no mutating shell). A child started from Plan
+inherits that contract. `agent({ action: "start", prompt })` is not a
+backdoor to full write+shell. Work and Operate keep the simple
+inherit-parent spawn. There is no permission-preset matrix.
+
 `type` is a **prompt label** (`worker`, `scout`, `planner`, `reviewer`,
 `builder`, `verifier`, `consultant`) so the child knows the stance. It is
 not a permission matrix. Explicit `write_authority=read_only` is the only
-way to start a spectator; that is an opt-in narrowing, not a role default.
+way to start a spectator from Work/Operate; that is an opt-in narrowing,
+not a role default.
 
 ## Role taxonomy
 
@@ -188,11 +195,11 @@ session projection and worker record. By default the branch is
 `codex/agent-<name>-<id>` and the checkout lives beside the parent repo under
 `.codewhale-worktrees/`, so the parent checkout stays clean.
 
-Isolation is not write authority. A prompt-only worker starts read-only.
-A writer also declares `write_authority: "workspace_write"` or
-`"worktree_write"` and at least one normalized repo-relative `write_roots`,
-`exact_files`, or `coordination_contracts` value. Active overlapping shared
-claims fail before mutation; a real isolated worktree may proceed in parallel.
+Isolation is not write authority. In Work/Operate, `spawn(prompt)` inherits
+the parent workspace. In Plan, the same call stays read-only because the
+user mode is read-only. Explicit `write_authority=read_only` still starts
+a spectator from Work/Operate. Active overlapping shared claims fail
+before mutation; a real isolated worktree may proceed in parallel.
 
 Optional fields:
 

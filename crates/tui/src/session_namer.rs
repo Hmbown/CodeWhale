@@ -4,6 +4,15 @@
 //! replace the truncation title. The main turn never waits. A user rename
 //! always wins. Later turns do not re-name. Failure leaves the default title.
 
+use std::time::Duration;
+
+use tokio::sync::mpsc;
+use tracing::debug;
+
+use crate::client::DeepSeekClient;
+use crate::core::events::Event;
+use crate::llm_client::LlmClient;
+use crate::models::{ContentBlock, Message, MessageRequest, Role, SystemPrompt};
 use crate::session_manager::{
     DEFAULT_SESSION_TITLE, SessionTitleSource, normalize_session_title, sanitize_session_title,
 };
@@ -91,6 +100,82 @@ pub fn apply_generated_title(
         return None;
     }
     Some(title)
+}
+
+/// Fire-and-forget namer job. Failure is logged and swallowed.
+pub async fn run_namer_for_session(
+    session_id: String,
+    spec: NamerCompletionSpec,
+    client: DeepSeekClient,
+    model: String,
+    tx_event: mpsc::Sender<Event>,
+) {
+    let request = MessageRequest {
+        model,
+        messages: vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: spec.user,
+                cache_control: None,
+            }],
+        }],
+        max_tokens: spec.max_output_tokens,
+        system: Some(SystemPrompt::Text(spec.system.to_string())),
+        tools: None,
+        tool_choice: None,
+        metadata: None,
+        thinking: None,
+        reasoning_effort: Some("off".to_string()),
+        stream: Some(false),
+        temperature: None,
+        top_p: None,
+    };
+
+    let response = match tokio::time::timeout(
+        Duration::from_secs(spec.timeout_secs),
+        client.create_message(request),
+    )
+    .await
+    {
+        Ok(Ok(response)) => response,
+        Ok(Err(err)) => {
+            tracing::warn!(target: "session_namer", "namer LLM call failed for {session_id}: {err}");
+            return;
+        }
+        Err(_) => {
+            tracing::warn!(target: "session_namer", "namer timed out for {session_id}");
+            return;
+        }
+    };
+
+    if crate::models::is_incomplete_stop_reason(response.stop_reason.as_deref()) {
+        debug!(target: "session_namer", "incomplete namer response for {session_id}; keeping truncation title");
+        return;
+    }
+
+    let raw: String = response
+        .content
+        .iter()
+        .filter_map(|block| {
+            if let ContentBlock::Text { text, .. } = block {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string();
+
+    let Some(title) = sanitize_generated_title(&raw) else {
+        debug!(target: "session_namer", "namer produced no usable title for {session_id}");
+        return;
+    };
+
+    let _ = tx_event
+        .send(Event::SessionTitleGenerated { session_id, title })
+        .await;
 }
 
 /// Fire-and-forget namer budget + prompt. The turn never waits on this.
