@@ -417,6 +417,7 @@ pub(crate) async fn handle_mcp_ui_action(
         crate::tui::app::McpUiAction::Retry { name } => Some(name.clone()),
         _ => None,
     };
+    let snapshot_live_pool = matches!(&action, crate::tui::app::McpUiAction::Show);
     let discover = mcp_ui_action_refreshes_discovery(&action);
 
     let action_result = match action {
@@ -577,6 +578,8 @@ pub(crate) async fn handle_mcp_ui_action(
     let rebuild_live_pool = is_reload || changed;
     let snapshot_result = if let Some(name) = retry_name.as_deref() {
         engine_handle.retry_mcp_server(name).await
+    } else if snapshot_live_pool {
+        engine_handle.bootstrap_mcp().await
     } else if rebuild_live_pool {
         match engine_handle.reload_mcp(path.clone()).await {
             Ok(snapshot) => {

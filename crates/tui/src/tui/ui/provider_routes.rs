@@ -690,8 +690,7 @@ pub(crate) fn mcp_reload_summary(snapshot: &crate::mcp::McpManagerSnapshot) -> S
 pub(crate) fn mcp_ui_action_refreshes_discovery(action: &crate::tui::app::McpUiAction) -> bool {
     matches!(
         action,
-        crate::tui::app::McpUiAction::Show
-            | crate::tui::app::McpUiAction::Validate
+        crate::tui::app::McpUiAction::Validate
             | crate::tui::app::McpUiAction::Login { .. }
             | crate::tui::app::McpUiAction::Logout { .. }
             | crate::tui::app::McpUiAction::ImportList

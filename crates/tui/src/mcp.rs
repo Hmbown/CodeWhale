@@ -2409,6 +2409,9 @@ pub struct McpPool {
     pub(crate) dynamic_servers: Arc<RwLock<HashMap<String, McpServerConfig>>>,
 }
 
+type McpPendingConnect = (String, McpServerConfig);
+type McpConnectError = (String, anyhow::Error);
+
 impl McpPool {
     /// Create a new pool with the given configuration
     pub fn new(config: McpConfig) -> Self {
@@ -2803,7 +2806,7 @@ impl McpPool {
     /// gates stay here because they read live pool state.
     pub(crate) fn collect_pending_connects(
         &mut self,
-    ) -> (Vec<(String, McpServerConfig)>, Vec<(String, anyhow::Error)>) {
+    ) -> (Vec<McpPendingConnect>, Vec<McpConnectError>) {
         let names = self.enabled_server_names();
         let mut pending = Vec::new();
         let mut errors = Vec::new();
@@ -2844,7 +2847,7 @@ impl McpPool {
         (pending, errors)
     }
 
-    pub(crate) fn push_required_server_errors(&self, errors: &mut Vec<(String, anyhow::Error)>) {
+    pub(crate) fn push_required_server_errors(&self, errors: &mut Vec<McpConnectError>) {
         for (name, server_cfg) in &self.config.servers {
             // Only stand in for a missing diagnosis. When the connect attempt
             // above already reported why this server failed, appending a
@@ -2871,7 +2874,7 @@ impl McpPool {
     /// lock. Callers insert results under a short lock so a live turn can
     /// snapshot ready tools while optional servers are still connecting.
     pub(crate) async fn connect_pending_concurrently(
-        pending: Vec<(String, McpServerConfig)>,
+        pending: Vec<McpPendingConnect>,
         timeouts: McpTimeouts,
         network_policy: Option<NetworkPolicyDecider>,
         catalog_generation: u64,

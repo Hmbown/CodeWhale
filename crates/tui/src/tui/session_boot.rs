@@ -366,11 +366,7 @@ fn row_from_snapshot(
         return McpServerBootRow {
             name: server.name.clone(),
             state: McpServerBootState::Disabled,
-            action: if valid_name {
-                McpServerAction::None
-            } else {
-                McpServerAction::None
-            },
+            action: McpServerAction::None,
         };
     }
     if server.connected {

@@ -1704,7 +1704,10 @@ fn resume_hint_omits_missing_session_id() {
 fn plain_mcp_show_refreshes_discovery_counts() {
     use crate::tui::app::McpUiAction;
 
-    assert!(mcp_ui_action_refreshes_discovery(&McpUiAction::Show));
+    assert!(
+        !mcp_ui_action_refreshes_discovery(&McpUiAction::Show),
+        "plain /mcp snapshots the engine-owned live pool, not a UI discovery pool"
+    );
     assert!(mcp_ui_action_refreshes_discovery(&McpUiAction::Validate));
     assert!(
         !mcp_ui_action_refreshes_discovery(&McpUiAction::Reload),
