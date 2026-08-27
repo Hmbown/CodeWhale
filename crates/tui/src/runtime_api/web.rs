@@ -374,7 +374,9 @@ mod tests {
     #[test]
     fn bootstrap_rejects_malformed_or_wrong_capabilities_without_consuming() {
         let (state, nonce) = RuntimeWebState::new();
-        for invalid in ["", "cwwb_short", "cwwb_gggggggggggggggggggggggggggggggg"] {
+        let too_short = format!("{BOOTSTRAP_PREFIX}short");
+        let non_hex = format!("{BOOTSTRAP_PREFIX}{}", "g".repeat(32));
+        for invalid in ["", too_short.as_str(), non_hex.as_str()] {
             assert_eq!(state.consume(invalid), Err(BootstrapError::Invalid));
         }
         let mut wrong = nonce.clone();
