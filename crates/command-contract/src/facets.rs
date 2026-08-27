@@ -533,6 +533,11 @@ pub trait CommandPluginContext {
     fn update(&mut self, selector: &str) -> Result<PluginMutationReceipt, String>;
     /// Async-bridged uninstall; returns a synchronous portable receipt (D11).
     fn uninstall(&mut self, selector: &str) -> Result<PluginMutationReceipt, String>;
+    /// File-level removal of a just-installed bundle whose content hash
+    /// mismatched (rollback). Unlike [`Self::uninstall`] it does not resolve a
+    /// registry selector and triggers no rediscovery or skill-cache side
+    /// effects; the host adapter owns the `crate::plugins` call (D1).
+    fn uninstall_path(&mut self, name: &str, plugins_dir: &Path) -> Result<(), String>;
     /// Read-only: export a loaded bundle to a target directory.
     fn export(&self, selector: &str, target: &Path) -> Result<PluginExportReceipt, String>;
     /// Read-only: scan legacy executable plugin tools.

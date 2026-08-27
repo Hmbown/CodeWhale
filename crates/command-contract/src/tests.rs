@@ -910,6 +910,10 @@ impl CommandPluginContext for FakePlugin {
         })
     }
 
+    fn uninstall_path(&mut self, _name: &str, _plugins_dir: &Path) -> Result<(), String> {
+        Ok(())
+    }
+
     fn export(&self, _selector: &str, target: &Path) -> Result<PluginExportReceipt, String> {
         Ok(PluginExportReceipt {
             exported_name: "demo".to_string(),

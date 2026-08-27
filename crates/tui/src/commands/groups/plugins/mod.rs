@@ -546,6 +546,7 @@ fn render_install_receipt(
             {
                 return rollback_hash_mismatch(
                     presentation,
+                    plugin,
                     &name,
                     installed_path.as_deref(),
                     expected,
@@ -574,16 +575,24 @@ fn render_install_receipt(
 
 fn rollback_hash_mismatch(
     presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
     name: &str,
     installed_path: Option<&Path>,
     expected: &str,
     actual: Option<&str>,
 ) -> CommandResult {
     let missing_destination = translate(presentation, "plugin_kimi_rollback_destination_missing");
+    // File-level rollback removal crosses the boundary through the plugin
+    // facet (D1); the host adapter owns the `crate::plugins::install::uninstall`
+    // call.
     let rollback = installed_path
         .and_then(Path::parent)
         .ok_or_else(|| anyhow::anyhow!(missing_destination))
-        .and_then(|plugins_dir| crate::plugins::install::uninstall(name, plugins_dir));
+        .and_then(|plugins_dir| {
+            plugin
+                .uninstall_path(name, plugins_dir)
+                .map_err(anyhow::Error::msg)
+        });
     let actual = actual
         .map(escape_review_text)
         .unwrap_or_else(|| translate(presentation, "plugin_kimi_hash_unavailable"));

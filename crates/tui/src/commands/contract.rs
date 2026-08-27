@@ -1796,6 +1796,13 @@ impl CommandPluginContext for PluginAdapter<'_> {
         }
     }
 
+    fn uninstall_path(&mut self, name: &str, plugins_dir: &Path) -> Result<(), String> {
+        // File-level rollback removal for a bundle whose content hash
+        // mismatched; no registry resolution, rediscovery, or skill side
+        // effects (FEAT-020 D1 — the `crate::plugins` call stays host-side).
+        crate::plugins::install::uninstall(name, plugins_dir).map_err(|error| format!("{error:#}"))
+    }
+
     fn export(&self, selector: &str, target: &Path) -> Result<PluginExportReceipt, String> {
         let app = self.host.app.borrow();
         let plugin = app
