@@ -75,6 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Context-pressure warnings and critical alerts now remain visible in sticky UI
   status until compaction or explicit dismissal, instead of disappearing into
   scrolling turn metadata (#5620).
+- Context-pressure turn metadata is now an explicit agent directive: tell the
+  user immediately, recommend `/compact`, and reduce scope. The constitution
+  names that standing reaction; the live line stays byte-stable within each
+  pressure band so ordinary turns do not bust the prefix cache (#5620).
 - The Runtime thread store defaults to a per-session root
   (`$CODEWHALE_HOME/sessions/<id>/runtime`) so multiple Codewhale processes on
   one machine no longer share one owner lock (#5630). The exclusive lock is

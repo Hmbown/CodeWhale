@@ -16126,8 +16126,8 @@ fn turn_metadata_surfaces_goal_budget_only_while_goal_active() {
 
 #[test]
 fn context_pressure_message_emits_only_at_warning_and_critical_thresholds() {
-    const WARNING: &str = "Context pressure: warning — ESCALATED: prefer /compact, narrow scope, or finish the current task";
-    const CRITICAL: &str = "Context pressure: critical — CRITICAL: stop expanding scope; run /compact immediately or finish the current task";
+    const WARNING: &str = "Context pressure: warning — ACTIONABLE: tell the user now; recommend /compact; then narrow scope or finish the current task";
+    const CRITICAL: &str = "Context pressure: critical — ACTIONABLE: tell the user now; run /compact immediately or finish the current task; stop expanding scope";
 
     assert_eq!(context_pressure_message(84.99), None);
     assert_eq!(context_pressure_message(85.0), Some(WARNING));
@@ -16138,6 +16138,8 @@ fn context_pressure_message_emits_only_at_warning_and_critical_thresholds() {
     // Threshold labels steer a decision without exposing a continuously
     // changing percentage, token count, or headroom value.
     for line in [WARNING, CRITICAL] {
+        assert!(line.contains("tell the user now"), "{line}");
+        assert!(line.contains("/compact"), "{line}");
         assert!(!line.contains('%'), "{line}");
         assert!(!line.contains("tokens"), "{line}");
         assert!(!line.contains("headroom"), "{line}");

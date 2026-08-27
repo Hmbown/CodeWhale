@@ -89,13 +89,16 @@ const GOAL_CONTINUATION_FAILURE_DETAIL_MAX_BYTES: usize = 512;
 const PLAN_SHELL_NETWORK_DENIED_HINT: &str = "Shell command blocked: Plan mode runs shell commands in a read-only sandbox — no writes, no network. Use Act mode (`/mode act`) for any command that creates or modifies files, or that needs network access.";
 
 fn context_pressure_message(usage_percent: f64) -> Option<&'static str> {
+    // Byte-stable within each pressure band so ordinary turns do not bust the
+    // prefix cache. The constitution names the standing reaction; this line is
+    // the live, append-only signal that the band is active (#5620).
     if usage_percent >= crate::tui::context_inspector::CONTEXT_CRITICAL_THRESHOLD_PERCENT {
         Some(
-            "Context pressure: critical — CRITICAL: stop expanding scope; run /compact immediately or finish the current task",
+            "Context pressure: critical — ACTIONABLE: tell the user now; run /compact immediately or finish the current task; stop expanding scope",
         )
     } else if usage_percent >= crate::tui::context_inspector::CONTEXT_WARNING_THRESHOLD_PERCENT {
         Some(
-            "Context pressure: warning — ESCALATED: prefer /compact, narrow scope, or finish the current task",
+            "Context pressure: warning — ACTIONABLE: tell the user now; recommend /compact; then narrow scope or finish the current task",
         )
     } else {
         None

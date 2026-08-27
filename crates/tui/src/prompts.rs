@@ -1610,6 +1610,9 @@ mod tests {
             "### Truthful completion",
             "### Put guarantees in mechanism",
             "### Whose word wins",
+            "When turn metadata includes a Context pressure warning or critical line",
+            "tell the user immediately, recommend",
+            "`/compact`",
         ] {
             assert!(
                 BASE_PROMPT.contains(phrase),
