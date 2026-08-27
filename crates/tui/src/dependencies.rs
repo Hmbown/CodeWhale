@@ -84,6 +84,32 @@ pub fn probe_executable_with_flag(spec: &str, version_flag: &str) -> bool {
     matches!(cmd.status(), Ok(status) if status.success())
 }
 
+/// Probe a single executable and capture its version banner in one spawn.
+///
+/// Same contract as [`probe_executable`] (success = exit 0), but returns the
+/// trimmed stdout so callers that want the banner don't need a second process
+/// launch. Returns `None` when the probe fails or stdout is not valid UTF-8.
+pub fn probe_executable_capturing(spec: &str, version_flag: &str) -> Option<String> {
+    let mut parts = spec.split_whitespace();
+    let program = parts.next()?;
+    let mut cmd = Command::new(program);
+    crate::utils::suppress_console_window(&mut cmd);
+    for arg in parts {
+        cmd.arg(arg);
+    }
+    cmd.arg(version_flag);
+    cmd.stderr(std::process::Stdio::null());
+
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 fn executable_path_candidates(program: &str) -> Vec<PathBuf> {
     let program_path = Path::new(program);
     if program_path.components().count() > 1 {
@@ -428,9 +454,14 @@ impl ExternalTool for RustC {
         static CACHE: OnceLock<Option<String>> = OnceLock::new();
         CACHE
             .get_or_init(|| {
+                // Probe with capture so the `--version` banner observed during
+                // resolution is reused by [`rustc_version_banner`] instead of
+                // paying a second rustc process launch (each launch loads
+                // libLLVM, which dominated diagnostic-command init profiles).
                 for candidate in Self::candidates() {
-                    if probe_executable(candidate) {
+                    if let Some(banner) = probe_executable_capturing(candidate, "--version") {
                         tracing::info!(target: "tool_dependencies", "Resolved rustc binary");
+                        let _ = RUSTC_VERSION_BANNER.set(Some(banner));
                         return Some((*candidate).to_string());
                     }
                 }
@@ -438,6 +469,23 @@ impl ExternalTool for RustC {
             })
             .clone()
     }
+}
+
+/// Captured `--version` banner from the [`RustC`] resolution probe.
+///
+/// `None` until `RustC::resolve()`/`available()`/`command()` first runs, or
+/// when rustc is absent/failing. Reading this after an `available()` check
+/// yields the same string the tool would print, without a second process.
+static RUSTC_VERSION_BANNER: OnceLock<Option<String>> = OnceLock::new();
+
+/// The rustc `--version` banner, if rustc resolved successfully.
+///
+/// Populated as a side effect of resolving [`RustC`]; this reads no fresh
+/// process state. Callers wanting the value should touch `RustC::available()`
+/// first (as the diagnostics path does).
+#[must_use]
+pub fn rustc_version_banner() -> Option<String> {
+    RUSTC_VERSION_BANNER.get().cloned().flatten()
 }
 
 /// Rust build tool — used by the `run_tests` tool.

@@ -7679,15 +7679,13 @@ async fn test_api_connectivity(config: &Config) -> Result<()> {
 }
 
 fn rustc_version() -> String {
-    let Some(mut cmd) = crate::dependencies::RustC::command() else {
+    // `RustC::available()` resolves the tool once, capturing the `--version`
+    // banner as a side effect of the probe; reuse it instead of launching a
+    // second rustc process (each launch loads libLLVM).
+    if !crate::dependencies::RustC::available() {
         return "unknown".to_string();
-    };
-    let Ok(output) = cmd.arg("--version").output() else {
-        return "unknown".to_string();
-    };
-    String::from_utf8(output.stdout)
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|_| "unknown".to_string())
+    }
+    crate::dependencies::rustc_version_banner().unwrap_or_else(|| "unknown".to_string())
 }
 
 /// List saved sessions
