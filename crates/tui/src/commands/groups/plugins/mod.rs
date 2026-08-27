@@ -234,10 +234,7 @@ fn suggest_bundles(
     if task.chars().count() < 3 {
         return CommandResult::error("Usage: /plugin suggest <task of at least 3 characters>");
     }
-    let suggestions = match plugin.suggest(task) {
-        Ok(suggestions) => suggestions,
-        Err(_) => Vec::new(),
-    };
+    let suggestions = plugin.suggest(task).unwrap_or_default();
     if suggestions.is_empty() {
         return CommandResult::message(format!(
             "No installed plugin bundles matched `{}`.\n\nInstall a reviewed bundle with /plugin install <source>. Nothing was installed, trusted, or enabled.",

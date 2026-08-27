@@ -291,8 +291,7 @@ fn render_candidates(
         let _ = writeln!(out);
         let compatibility = candidate
             .compatibility
-            .as_ref()
-            .map(|c| c.clone())
+            .clone()
             .unwrap_or_else(|| "decided at install review".to_string());
         let _ = writeln!(out, "    compatibility: {compatibility}");
         match &candidate.install_plan {

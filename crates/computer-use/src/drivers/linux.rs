@@ -6,7 +6,7 @@
 //! `spectacle` for capture. Wayland: `grim` (or `spectacle`/`gnome-screenshot`)
 //! for capture, `ydotool` for input (`wtype` for text when present).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::config::LinuxConfig;
@@ -159,7 +159,7 @@ impl LinuxDriver {
             .collect()
     }
 
-    fn run(&self, program: &PathBuf, args: &[&str]) -> Result<process::Output, DriverError> {
+    fn run(&self, program: &Path, args: &[&str]) -> Result<process::Output, DriverError> {
         let out = process::run_with_env(program, args, &self.env_refs(), Duration::from_secs(30))?;
         if out.success() {
             Ok(out)

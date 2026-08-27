@@ -875,10 +875,10 @@ impl CommandPluginContext for FakePlugin {
         _source: &str,
         expected_content_hash: Option<&str>,
     ) -> Result<PluginMutationReceipt, String> {
-        if let Some(expected) = expected_content_hash {
-            if expected != "abc" {
-                return Err("content hash mismatch".to_string());
-            }
+        if let Some(expected) = expected_content_hash
+            && expected != "abc"
+        {
+            return Err("content hash mismatch".to_string());
         }
         self.installed = true;
         Ok(PluginMutationReceipt {

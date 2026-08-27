@@ -1126,15 +1126,11 @@ fn portable_marketplace_candidate(
             spec: spec.clone(),
             source_kind: source_kind.clone(),
         },
-        crate::plugins::marketplace::types::MarketplaceInstallPlan::Unsupported { reason, raw } => {
-            PluginMarketplaceInstallPlan::Unsupported {
-                reason: if raw.is_empty() {
-                    reason.clone()
-                } else {
-                    reason.clone()
-                },
-            }
-        }
+        crate::plugins::marketplace::types::MarketplaceInstallPlan::Unsupported {
+            reason, ..
+        } => PluginMarketplaceInstallPlan::Unsupported {
+            reason: reason.clone(),
+        },
     };
     PluginMarketplaceCandidate {
         name: candidate.name.clone(),

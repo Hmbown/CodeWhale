@@ -835,9 +835,7 @@ fn ga_family_minor(prefix: &str, wire: &str, extra_allowed_suffixes: &[&str]) ->
         None => (rest, None),
     };
     if let Some(suffix) = suffix
-        && !extra_allowed_suffixes
-            .iter()
-            .any(|allowed| suffix == *allowed)
+        && !extra_allowed_suffixes.contains(&suffix)
     {
         return None;
     }
@@ -1098,6 +1096,7 @@ fn bundled_tui_catalog_asset_output_never_exceeds_context() {
 }
 
 #[test]
+#[allow(clippy::type_complexity)]
 fn bundled_assets_do_not_split_limit_facts_for_the_same_model_id() {
     use std::collections::{BTreeMap, BTreeSet};
 

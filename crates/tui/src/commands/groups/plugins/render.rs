@@ -72,7 +72,7 @@ pub(super) fn render_bundle_detail(
     let skills = detail
         .skills
         .iter()
-        .map(|skill| escape_review_text(&format!("{skill}")))
+        .map(|skill| escape_review_text(skill))
         .collect::<Vec<_>>();
     let _ = write!(
         output,
@@ -130,7 +130,7 @@ fn render_mcp_inventory(detail: &PluginDetail) -> String {
     detail
         .mcp_servers
         .iter()
-        .map(|server| render_mcp_server(server))
+        .map(render_mcp_server)
         .collect::<Vec<_>>()
         .join("; ")
 }
