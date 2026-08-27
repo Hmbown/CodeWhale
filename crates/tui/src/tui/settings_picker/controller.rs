@@ -38,6 +38,7 @@ pub struct SettingsPickerController {
     /// Snapshot of the selection id when the picker opened (for rollback).
     original_id: String,
     /// One-shot pop-in clock. Spatial memory stays put: no slide, no bounce.
+    #[allow(dead_code)] // picker DIM host API; live redraw driver is a follow-up
     opened_at: Instant,
 }
 
@@ -311,6 +312,7 @@ impl SettingsPickerController {
 
     /// Snappy pop from ~87% → 1.0. Reduced/Still land immediately.
     #[must_use]
+    #[allow(dead_code)] // picker DIM host API; live redraw driver is a follow-up
     pub fn settle_pop(&self, now: Instant, policy: MotionPolicy) -> f32 {
         ethos::surface_pop(
             now.saturating_duration_since(self.opened_at).as_millis(),
@@ -322,6 +324,7 @@ impl SettingsPickerController {
     /// redraw on a timer can DIM until this returns false; Reduced/Still
     /// are never settling.
     #[must_use]
+    #[allow(dead_code)] // picker DIM host API; live redraw driver is a follow-up
     pub fn is_settling(&self, now: Instant, policy: MotionPolicy) -> bool {
         policy.allows_decorative()
             && now.saturating_duration_since(self.opened_at).as_millis() < ethos::SURFACE_POP_MS

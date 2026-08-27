@@ -19,18 +19,21 @@ pub fn ease_out_quint(t: f32) -> f32 {
 
 /// Exits are faster than entries and closer to linear — get out of the way.
 #[must_use]
+#[allow(dead_code)] // chef's-choice exit curve; picker dismiss waits on a redraw driver
 pub fn ease_out_exit(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     1.0 - (1.0 - t) * (1.0 - t)
 }
 
 /// Almost-linear fade window. No 400 ms theatrical dissolves.
+#[allow(dead_code)] // chef's-choice fade window; hosts should ask here rather than invent
 pub const FADE_MS: u128 = 160;
 
 /// Picker/menu surface pop-in. Snappy settle, not cinematic.
 pub const SURFACE_POP_MS: u128 = 180;
 
 /// Exits complete sooner than entries.
+#[allow(dead_code)] // chef's-choice exit window; picker dismiss waits on a redraw driver
 pub const SURFACE_EXIT_MS: u128 = 120;
 
 /// Surfaces pop from this scale, never from 0.
@@ -48,6 +51,7 @@ pub const FISH_FLEE_MS: u128 = 800;
 
 /// Mix of linear and a whisper of ease-out so short fades do not look robotic.
 #[must_use]
+#[allow(dead_code)] // chef's-choice fade; hosts should ask here rather than invent
 pub fn fade_opacity(elapsed_ms: u128, policy: MotionPolicy) -> f32 {
     if !policy.allows_decorative() {
         return 1.0;
@@ -56,6 +60,7 @@ pub fn fade_opacity(elapsed_ms: u128, policy: MotionPolicy) -> f32 {
 }
 
 #[must_use]
+#[allow(dead_code)] // used by fade_opacity; kept as the shared almost-linear mix
 fn almost_linear(elapsed_ms: u128, duration_ms: u128) -> f32 {
     if duration_ms == 0 {
         return 1.0;
@@ -67,6 +72,7 @@ fn almost_linear(elapsed_ms: u128, duration_ms: u128) -> f32 {
 /// 0.87 → 1.0 over [`SURFACE_POP_MS`] with ease-out-quint. Reduced/Still land
 /// at 1.0 immediately so the picker never grows from a vanishing point.
 #[must_use]
+#[allow(dead_code)] // picker DIM host API; live redraw driver is a follow-up
 pub fn surface_pop(elapsed_ms: u128, policy: MotionPolicy) -> f32 {
     if !policy.allows_decorative() || elapsed_ms >= SURFACE_POP_MS {
         return 1.0;
@@ -77,6 +83,7 @@ pub fn surface_pop(elapsed_ms: u128, policy: MotionPolicy) -> f32 {
 
 /// 1.0 → 0.0 over [`SURFACE_EXIT_MS`]. Faster than the matching pop-in.
 #[must_use]
+#[allow(dead_code)] // picker DIM host API; live redraw driver is a follow-up
 pub fn surface_exit(elapsed_ms: u128, policy: MotionPolicy) -> f32 {
     if !policy.allows_decorative() || elapsed_ms >= SURFACE_EXIT_MS {
         return 0.0;
@@ -119,7 +126,7 @@ mod tests {
 
     #[test]
     fn exits_are_faster_than_entries_and_closer_to_linear() {
-        assert!(SURFACE_EXIT_MS < SURFACE_POP_MS);
+        const { assert!(SURFACE_EXIT_MS < SURFACE_POP_MS) };
         let t = 0.4;
         let entry = ease_out_quint(t);
         let exit = ease_out_exit(t);
