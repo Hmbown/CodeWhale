@@ -72,6 +72,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The first #5587 dead-code sweep converts audited test-only helpers to
+  `#[cfg(test)]`, keeping production builds free of test-only APIs without
+  changing runtime behavior.
 - `/plugin reload` is now discoverable when on-disk plugin bundles change: the
   next send and `/plugin list` nudge once with `Run /plugin reload to apply`
   instead of silently keeping the stale catalog (#5579). Trust is unchanged;

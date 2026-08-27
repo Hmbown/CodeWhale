@@ -1167,7 +1167,7 @@ pub struct ExploringCell {
 
 impl ExploringCell {
     /// Render the exploring cell into lines.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn lines_with_motion(&self, width: u16, low_motion: bool) -> Vec<Line<'static>> {
         self.lines_with_motion_and_locale(width, low_motion, Locale::En)
     }
@@ -1691,7 +1691,7 @@ impl GenericToolCell {
     /// `mode` controls multi-line output handling: `Live` caps at
     /// `TOOL_OUTPUT_LINE_LIMIT` rows with a "+N more" affordance;
     /// `Transcript` emits the full output.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn lines_with_mode(
         &self,
         width: u16,

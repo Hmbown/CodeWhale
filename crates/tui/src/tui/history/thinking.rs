@@ -30,7 +30,7 @@ enum ThinkingVisualState {
     Idle,
 }
 
-#[allow(dead_code)] // Kept for compatibility/tests; live view uses explicit summaries only.
+#[cfg(test)]
 #[must_use]
 pub fn extract_reasoning_summary(text: &str) -> Option<String> {
     extract_explicit_reasoning_summary(text).or_else(|| {

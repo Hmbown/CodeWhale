@@ -191,7 +191,7 @@ pub struct AmbientFrameStats {
 /// [`AmbientFrameStats::marks_built`], not a runtime clamp: the population is
 /// bounded by construction, and this constant is what fails the build if a
 /// future change makes it unbounded.
-#[allow(dead_code)]
+#[cfg(test)]
 pub const MAX_FRAME_MARKS: u32 = 24;
 
 /// Optional pointer reaction for fish dart / bubble rise.

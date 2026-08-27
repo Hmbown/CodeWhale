@@ -73,7 +73,7 @@ pub enum WhaleSpecies {
 
 impl WhaleSpecies {
     /// Every species, for exhaustive checks and the test gallery.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub const ALL: [WhaleSpecies; 7] = [
         Self::Scout,
         Self::Patch,
@@ -190,7 +190,7 @@ pub enum WhaleState {
 
 impl WhaleState {
     /// Every state, for exhaustive checks and the test gallery.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub const ALL: [WhaleState; 6] = [
         Self::Resting,
         Self::Thinking,
@@ -202,7 +202,7 @@ impl WhaleState {
 
     /// CWC state priority; higher wins when several facts apply. Public
     /// contract for surfaces that fold several children into one whale.
-    #[allow(dead_code)]
+    #[cfg(test)]
     #[must_use]
     pub const fn priority(self) -> u8 {
         match self {
@@ -633,7 +633,7 @@ pub fn portrait(
 /// The portrait narrowed through the glyph charter's ASCII fallback — what an
 /// `CODEWHALE_ASCII_SAFE=1` terminal draws. Pure text, for tests and
 /// text-only surfaces.
-#[allow(dead_code)] // test/text-surface API; the draw path narrows per cell
+#[cfg(test)]
 #[must_use]
 pub fn portrait_ascii(
     species: WhaleSpecies,
@@ -656,7 +656,7 @@ pub fn portrait_ascii(
 }
 
 /// The portrait as plain Unicode rows (no color), for tests and snapshots.
-#[allow(dead_code)] // test/snapshot API
+#[cfg(test)]
 #[must_use]
 pub fn portrait_text(
     species: WhaleSpecies,
@@ -695,7 +695,7 @@ pub fn badge(species: WhaleSpecies, theme: &UiTheme) -> Vec<Span<'static>> {
 
 /// Badge followed by the state word (glyph + word: never color alone). The
 /// word takes the state's tone; when `state` is `None` only the badge renders.
-#[allow(dead_code)] // frame-less convenience for static surfaces
+#[cfg(test)]
 #[must_use]
 pub fn badge_with_state(
     species: WhaleSpecies,
@@ -753,7 +753,7 @@ fn state_cue(
 }
 
 /// The badge as ASCII text (`<#`, `#]`, ...), for tests and text surfaces.
-#[allow(dead_code)] // test/text-surface API
+#[cfg(test)]
 #[must_use]
 pub fn badge_ascii(species: WhaleSpecies) -> String {
     let (feature, body, feature_first) = species.badge_glyphs();
@@ -857,6 +857,14 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn state_priority_orders_attention_before_work() {
+        assert!(
+            WhaleState::Waiting.priority() > WhaleState::Working.priority()
+                && WhaleState::Working.priority() > WhaleState::Resting.priority()
+        );
     }
 
     #[test]
