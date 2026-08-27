@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added `/import-claude` (#5557): reads `~/.claude.json` and
+- Added `/import-claude` (#5557, #5648): reads `~/.claude.json` and
   `~/.claude/settings.json` read-only and renders an explicit, reviewable
   migration plan plus a written report. MCP servers route through the
   existing `/mcp import <name> --approve` consent flow, allowlisted env keys
@@ -17,11 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   permissions/hooks map to manual follow-ups; secret-shaped values are named
   but never echoed or imported.
 - `codewhale web --tailscale` publishes the loopback browser client on the
-  current Tailscale tailnet. Default `codewhale web` stays loopback-only.
-  The embedded client uses the C-whale marks, a 288px thread rail, and a QR
-  for the MagicDNS origin. Account `/rc` remains a separate pairing path.
-  Embedded tsnet when built with `--features tailscale`; otherwise
-  `tailscale serve`. Not Funnel. Account `/rc` remains a separate pairing path.
+  current Tailscale tailnet (#5635). Default `codewhale web` stays loopback-only. The
+  preferred path is an embedded tsnet node from the official `tailscale` 0.5.0
+  crate (`Device::tcp_listen` + `axum::Listener`, hostname `codewhale`) when
+  built with `--features tailscale` and `CODEWHALE_TSNET_AUTHKEY`/`TS_AUTHKEY`.
+  Official 0.5.0 cannot mint HTTPS certificates, so the embedded listener is
+  HTTP :80 over WireGuard (`http://codewhale.<tailnet>.ts.net`). When embed
+  cannot auth or is not compiled, the process falls back to
+  `tailscale serve --bg --https=443 localhost:<port>` (browser-trusted
+  TLS on the machine MagicDNS name). Not Funnel. Stopping the process turns
+  off only HTTPS:443 for the CLI fallback (not `serve reset`). Account `/rc`
+  remote control stays a separate pairing path. The embedded client uses the
+  sky-blue C-whale mark, a 304px thread rail with two-line titles, and a QR
+  for the MagicDNS origin.
 - Added the managed Chat relay: account-owned Chat commands now execute on the
   native runtime thread engine through a new `runtime_chat_relay` module
   instead of a second execution path. Each Chat thread is a dedicated,
