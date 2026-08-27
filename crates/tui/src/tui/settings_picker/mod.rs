@@ -357,4 +357,36 @@ mod tests {
             Some("swatch")
         );
     }
+
+    #[test]
+    fn picker_settle_pops_from_nearly_full_and_skips_when_still() {
+        use std::time::{Duration, Instant};
+
+        use crate::tui::motion::MotionPolicy;
+        use crate::tui::motion::ethos::{SURFACE_POP_FROM, SURFACE_POP_MS};
+
+        let controller = SettingsPickerController::new(sample_options(), "system");
+        let opened = Instant::now();
+        let full = MotionPolicy::from_settings(false, true, false);
+        let pop = controller.settle_pop(opened, full);
+        assert!(
+            (pop - SURFACE_POP_FROM).abs() < 0.02,
+            "picker must pop from ~87%, not grow from 0: {pop}"
+        );
+        assert!(controller.is_settling(opened, full));
+        assert_eq!(
+            controller.settle_pop(opened + Duration::from_millis(SURFACE_POP_MS as u64), full),
+            1.0
+        );
+        assert!(
+            !controller.is_settling(opened + Duration::from_millis(SURFACE_POP_MS as u64), full)
+        );
+
+        let still = MotionPolicy::from_settings(false, false, false);
+        assert_eq!(controller.settle_pop(opened, still), 1.0);
+        assert!(!controller.is_settling(opened, still));
+        let reduced = MotionPolicy::from_settings(true, true, false);
+        assert_eq!(controller.settle_pop(opened, reduced), 1.0);
+        assert!(!controller.is_settling(opened, reduced));
+    }
 }

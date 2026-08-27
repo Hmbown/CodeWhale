@@ -727,6 +727,8 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         // Launch is a distinct full-canvas choice state, not a reading column.
         // Keep it edge-to-edge so opening Codewhale never recreates black side
         // banks before the responsive session ocean takes over.
+        // This surface occludes the idle whale: the 640 ms welcome + shine
+        // wait until launch dismisses (no workspace-slide theater).
         crate::tui::underwater::render_launch_screen(size, f.buffer_mut(), app);
         crate::tui::underwater::record_launch_row_areas(size, &mut app.launch);
         if !app.view_stack.is_empty() {

@@ -1467,7 +1467,18 @@ pub struct App {
     pub calm_mode: bool,
     pub low_motion: bool,
     pub constrained_frame_rate: bool,
+    /// Process-start ambient epoch. The 640 ms whale surface uses
+    /// [`Self::welcome_visible_since`] so launch/onboarding cannot consume it.
+    /// Kept as `Instant` (not `Option`) so this lane does not fork PR #5643.
+    #[allow(dead_code)] // process-start epoch; welcome surface owns the shine clock
     pub ocean_started_at: Instant,
+    /// Start of the one-shot idle-whale surface / wordmark / shine.
+    /// `None` until that mark is actually on screen so the full-canvas launch
+    /// menu and onboarding cannot consume the 640 ms window off-canvas.
+    /// Distinct from [`Self::ocean_started_at`], which remains the
+    /// process-start ambient clock (PR #5643 reuses that field; this clock is
+    /// the occlusion-aware welcome surface).
+    pub welcome_visible_since: Option<Instant>,
     /// The ambient animation clock, in clamped milliseconds. Creature and
     /// water positions are pure functions of this value; advancing it by at
     /// most [`App::AMBIENT_MAX_STEP_MS`] per sampled frame keeps motion

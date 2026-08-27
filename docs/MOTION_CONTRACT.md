@@ -40,6 +40,23 @@ coalesces decorative frame wakes. The main `ui` poll loop remains the only
 - These treatments never add/remove transcript rows, change hitboxes, or use
   provider delta timing as an animation clock.
 
+## Ethos (Omarchy timing, Codewhale look)
+
+Timing lives in `crates/tui/src/tui/motion/ethos.rs`. Infuse, do not clone
+Hyprland: Codewhale keeps Blue Stage water, the whale, gold current, and
+ombre depth. `rounding=0` is Omarchy's look, not ours.
+
+- Arrivals use ease-out-quint. Things land; they do not ease-in from a crawl.
+- Exits are faster than entries and closer to linear.
+- Surfaces pop from ~87% scale, never from 0. No workspace/page slide.
+- Fade is almost-linear and short (150–180 ms). No 400 ms theatrical dissolves.
+- One-shot state motion, not looping decoration on every chrome.
+- Chef's choice: one good default. Reduced/Still skip decorative treatments
+  (`MotionPolicy::allows_decorative`).
+- The 640 ms idle-whale surface and wordmark wait until the mark is actually
+  on screen. Full-canvas launch/onboarding occlude that clock so the shine
+  cannot finish behind a menu.
+
 ## Honesty note: catch-up is staged, not wired
 
 `note_delta_with_backlog` and the catch-up thresholds exist and are tested,

@@ -203,7 +203,7 @@ impl ChatWidget {
             .then_some(())
             .and(app.turn_started_at)
             .map(|started| started.elapsed().as_millis())
-            .filter(|elapsed| *elapsed < 800)
+            .filter(|elapsed| *elapsed < crate::tui::motion::ethos::FISH_FLEE_MS)
             .filter(|_| matches!(phase, ShellPhase::Working | ShellPhase::Verifying));
         let scroll_track = app.ui_theme.border;
         let scroll_thumb = app.ui_theme.status_working;
@@ -214,6 +214,7 @@ impl ChatWidget {
         render_options.reasoning_preview_viewport_lines = Some(visible_lines);
 
         if render_empty_state {
+            crate::tui::underwater::ensure_welcome_surface_started(app, content_area);
             let lines = build_empty_state_lines(app, content_area);
             app.viewport.last_transcript_area = Some(content_area);
             app.viewport.last_transcript_top = 0;
@@ -697,7 +698,8 @@ fn apply_receipt_settle_cascade(
 
 #[must_use]
 fn receipt_is_settling(receipt_order: usize, elapsed_ms: u128) -> bool {
-    let delay = u128::try_from(receipt_order.min(6)).unwrap_or(6) * 70;
+    let delay = u128::try_from(receipt_order.min(6)).unwrap_or(6)
+        * crate::tui::motion::ethos::RECEIPT_STAGGER_MS;
     elapsed_ms < delay + 140
 }
 
@@ -4320,8 +4322,8 @@ mod tests {
     use crate::palette;
     use crate::tui::active_cell::ActiveCell;
     use crate::tui::app::{
-        App, AppMode, ComposerDensity, TaskPanelEntry, TaskPanelEntryKind, ToolCollapseMode,
-        TranscriptSpacing, TuiOptions,
+        App, AppMode, ComposerDensity, OnboardingState, TaskPanelEntry, TaskPanelEntryKind,
+        ToolCollapseMode, TranscriptSpacing, TuiOptions,
     };
     use crate::tui::history::{
         ExecCell, ExecSource, GenericToolCell, HistoryCell, ToolCell, ToolRun, ToolStatus,
@@ -4334,7 +4336,10 @@ mod tests {
         style::{Color, Modifier, Style},
         text::{Line, Span},
     };
-    use std::{path::PathBuf, time::Instant};
+    use std::{
+        path::PathBuf,
+        time::{Duration, Instant},
+    };
     use unicode_width::UnicodeWidthStr;
 
     fn create_test_app() -> App {
@@ -6501,6 +6506,59 @@ mod tests {
     }
 
     #[test]
+    fn idle_welcome_waits_behind_launch_then_starts_on_the_empty_ocean() {
+        let mut app = create_test_app();
+        app.low_motion = false;
+        app.fancy_animations = true;
+        app.onboarding = OnboardingState::None;
+        app.launch.visible = true;
+        let area = Rect::new(0, 0, 80, 24);
+
+        let _ = ChatWidget::new(&mut app, area);
+        assert!(
+            app.welcome_visible_since.is_none(),
+            "launch sits in front of the idle whale, so the 640ms surface must wait"
+        );
+
+        app.launch.visible = false;
+        let _ = ChatWidget::new(&mut app, area);
+        let started = app
+            .welcome_visible_since
+            .expect("the welcome shine starts once the empty ocean is on screen");
+
+        std::thread::sleep(Duration::from_millis(20));
+        let _ = ChatWidget::new(&mut app, area);
+        assert_eq!(
+            app.welcome_visible_since,
+            Some(started),
+            "later idle frames keep the same welcome clock"
+        );
+    }
+
+    #[test]
+    fn idle_welcome_waits_behind_onboarding() {
+        let mut app = create_test_app();
+        app.low_motion = false;
+        app.fancy_animations = true;
+        app.onboarding = OnboardingState::Welcome;
+        app.launch.visible = false;
+        let area = Rect::new(0, 0, 80, 24);
+
+        let _ = ChatWidget::new(&mut app, area);
+        assert!(
+            app.welcome_visible_since.is_none(),
+            "onboarding sits in front of the idle whale, so the shine must wait"
+        );
+
+        app.onboarding = OnboardingState::None;
+        let _ = ChatWidget::new(&mut app, area);
+        assert!(
+            app.welcome_visible_since.is_some(),
+            "the welcome shine starts once onboarding hands off the ocean"
+        );
+    }
+
+    #[test]
     fn empty_state_shows_startup_context() {
         let mut app = create_test_app();
         app.onboarding_needs_api_key = false;
@@ -8232,9 +8290,18 @@ diff --git a/src/b.rs b/src/b.rs\n\
 
     #[test]
     fn fish_flee_is_one_shot_and_returns_to_ambient_origin() {
+        assert_eq!(crate::tui::motion::ethos::FISH_FLEE_MS, 800);
         assert_eq!(fish_flee_offset(0), 0);
         assert!(fish_flee_offset(400) >= 8);
         assert_eq!(fish_flee_offset(800), 0);
         assert_eq!(fish_flee_offset(8_000), 0);
+    }
+
+    #[test]
+    fn receipt_stagger_stays_seventy_milliseconds() {
+        assert_eq!(crate::tui::motion::ethos::RECEIPT_STAGGER_MS, 70);
+        assert!(receipt_is_settling(0, 0));
+        assert!(!receipt_is_settling(0, 140));
+        assert!(receipt_is_settling(1, 70));
     }
 }

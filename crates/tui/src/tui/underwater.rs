@@ -7,6 +7,7 @@
 //! sidebar + dashboard + footer composition with four owners for one fact.
 
 use std::borrow::Cow;
+use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -347,6 +348,17 @@ const IDLE_SHIMMER_CYCLE_MS: u128 = 4_000;
 const IDLE_SHIMMER_SWEEP_FRACTION: f32 = 0.32;
 const IDLE_SHIMMER_BAND_HALF_WIDTH: f32 = 0.38;
 const IDLE_SHIMMER_STRENGTH: f32 = 0.33;
+/// One-shot empty-state surface: the idle whale lands out of the water.
+/// Ease-out-quint over this window; after it the ordinary idle caustic owns
+/// the mark. Not a splash; input is not delayed.
+const STARTUP_SURFACE_MS: u128 = crate::tui::motion::ethos::WELCOME_SURFACE_MS;
+/// The name is the second beat. It writes left to right in the same cyan
+/// current as the whale's belly, then settles to body ink. Unrevealed
+/// letters keep the word's width so the block does not walk as it writes.
+const STARTUP_WORDMARK: &str = "Codewhale";
+const STARTUP_WORDMARK_START_MS: u128 = 120;
+const STARTUP_LETTER_STAGGER_MS: u128 = 48;
+const STARTUP_LETTER_SETTLE_MS: u128 = crate::tui::motion::ethos::SURFACE_POP_MS;
 
 /// The build-version string the header renders. An unstamped local build uses
 /// the build script's development marker while CI/release carries its source
@@ -842,9 +854,11 @@ fn launch_workspace_name(app: &App) -> String {
         )
 }
 
-/// Render the distinct pre-session choice state. This screen contains no
-/// transcript, composer, dashboard, or post-launch whale: each row dispatches
-/// to real session/worktree machinery before the idle ocean is entered.
+/// Render the distinct pre-session choice state. This screen is full-canvas
+/// and occludes the idle whale: the 640 ms surface + wordmark wait until
+/// launch dismisses so they cannot finish behind this menu. Each row
+/// dispatches to real session/worktree machinery before the idle ocean is
+/// entered. No workspace-slide theater — the session replaces this surface.
 pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -1509,6 +1523,37 @@ fn idle_mark_animation_enabled(app: &App) -> bool {
     decorative_shell_motion_enabled(app) && matches!(ShellPhase::from_app(app), ShellPhase::Idle)
 }
 
+/// Full-canvas overlays that cover the idle whale. The 640 ms surface must
+/// not run here — launch is a choice list, not a travel animation.
+#[must_use]
+pub(crate) fn welcome_surface_occluded(app: &App) -> bool {
+    app.launch.visible || app.onboarding != OnboardingState::None
+}
+
+/// Start the idle-whale surface the first time that mark is actually on
+/// screen. Launch and onboarding sit in front of the empty ocean; starting
+/// at `App` construction lets the 640 ms rise and shine finish behind those
+/// surfaces.
+pub(crate) fn ensure_welcome_surface_started(app: &mut App, area: Rect) {
+    if welcome_surface_occluded(app)
+        || !idle_mark_animation_enabled(app)
+        || !empty_state_mark_visible(area)
+        || app.welcome_visible_since.is_some()
+    {
+        return;
+    }
+    app.welcome_visible_since = Some(Instant::now());
+}
+
+/// Elapsed ms for the one-shot whale surface / wordmark / shine. Zero while
+/// occluded or before the first visible empty-ocean frame.
+#[must_use]
+pub(crate) fn welcome_elapsed_ms(app: &App) -> u128 {
+    app.welcome_visible_since
+        .map(|started| started.elapsed().as_millis())
+        .unwrap_or(0)
+}
+
 /// Raised-cosine caustic band for the idle whale. The 4s cycle spends roughly
 /// 1.3s crossing the mark and parks off-screen for the remainder, so the brand
 /// has a clear moment of life without becoming looping chrome.
@@ -1525,6 +1570,92 @@ fn idle_mark_shine_opacity(diagonal: f32, elapsed_ms: u128) -> f32 {
     let raised_cosine =
         0.5 * (1.0 + (std::f32::consts::PI * distance / IDLE_SHIMMER_BAND_HALF_WIDTH).cos());
     IDLE_SHIMMER_STRENGTH * raised_cosine
+}
+
+/// Ease-out-quint land from ~87% presence → settled over [`STARTUP_SURFACE_MS`].
+/// `None` after the window so callers fall back to the idle mark. Surfaces
+/// never grow from a vanishing point.
+#[must_use]
+fn startup_surface_opacity(elapsed_ms: u128) -> Option<f32> {
+    if elapsed_ms >= STARTUP_SURFACE_MS {
+        return None;
+    }
+    let t = elapsed_ms as f32 / STARTUP_SURFACE_MS as f32;
+    let landed = crate::tui::motion::ethos::ease_out_quint(t);
+    Some(
+        crate::tui::motion::ethos::SURFACE_POP_FROM
+            + (1.0 - crate::tui::motion::ethos::SURFACE_POP_FROM) * landed,
+    )
+}
+
+/// None until the letter's beat. `Some(0)` is current cyan; `Some(1)` is
+/// settled body ink. The character stays in the line the whole time so
+/// tests and centering see "Codewhale"; unrevealed letters just share the
+/// surface color.
+#[must_use]
+fn wordmark_letter_settle(elapsed_ms: u128, index: usize) -> Option<f32> {
+    let start = STARTUP_WORDMARK_START_MS + index as u128 * STARTUP_LETTER_STAGGER_MS;
+    if elapsed_ms < start {
+        return None;
+    }
+    let t = (elapsed_ms - start) as f32 / STARTUP_LETTER_SETTLE_MS as f32;
+    Some(crate::tui::motion::ethos::ease_out_quint(t.min(1.0)))
+}
+
+fn startup_wordmark_spans(
+    elapsed_ms: u128,
+    animated: bool,
+    body: Color,
+    current: Color,
+    surface: Color,
+) -> Vec<Span<'static>> {
+    STARTUP_WORDMARK
+        .chars()
+        .enumerate()
+        .map(|(index, ch)| {
+            let color = if !animated {
+                body
+            } else {
+                match wordmark_letter_settle(elapsed_ms, index) {
+                    None => surface,
+                    Some(settle) => idle_mark_color(current, body, settle),
+                }
+            };
+            Span::styled(
+                String::from(ch),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )
+        })
+        .collect()
+}
+
+/// One caustic pass timed to the surface window. After the rise, shine is 0
+/// so the slower idle cycle can take over without a double-flash.
+#[must_use]
+fn startup_shine_opacity(diagonal: f32, elapsed_ms: u128) -> f32 {
+    if elapsed_ms >= STARTUP_SURFACE_MS {
+        return 0.0;
+    }
+    // Almost-linear pass: a caustic is light travel, not a surface landing.
+    // Ease-out-quint would park the band off the mark before the window ends.
+    let sweep_progress = (elapsed_ms as f32 / STARTUP_SURFACE_MS as f32).min(1.0);
+    let band_position =
+        -IDLE_SHIMMER_BAND_HALF_WIDTH + sweep_progress * (1.0 + 2.0 * IDLE_SHIMMER_BAND_HALF_WIDTH);
+    let distance = (diagonal - band_position).abs();
+    if distance >= IDLE_SHIMMER_BAND_HALF_WIDTH {
+        return 0.0;
+    }
+    let raised_cosine =
+        0.5 * (1.0 + (std::f32::consts::PI * distance / IDLE_SHIMMER_BAND_HALF_WIDTH).cos());
+    IDLE_SHIMMER_STRENGTH * raised_cosine
+}
+
+#[must_use]
+fn emerge_from_surface(color: Color, surface: Color, emerge: Option<f32>) -> Color {
+    match emerge {
+        Some(opacity) if opacity < 1.0 => idle_mark_color(surface, color, opacity),
+        _ => color,
+    }
 }
 
 #[must_use]
@@ -1576,6 +1707,8 @@ fn idle_whale_row_spans(
     base: Color,
     highlight: Color,
     eye: Color,
+    surface: Color,
+    emerge: Option<f32>,
 ) -> Vec<Span<'static>> {
     let rows = IDLE_WHALE_ROWS.len() as f32;
     let cols = IDLE_WHALE_ROWS
@@ -1586,21 +1719,23 @@ fn idle_whale_row_spans(
     let mut spans = Vec::new();
     let mut run = String::new();
     let mut run_color = None;
+    let rising = emerge.is_some();
 
     for (column, ch) in text.chars().enumerate() {
         let diagonal = (column as f32 + (rows - 1.0 - row as f32)) / (cols + rows);
         let color = if matches!(ch, '·' | '░' | '✦' | '△') {
             // Soft uwu blush/sparkle and the quiet crown-fluke center use the
             // eye/sakura channel; classic otherwise only has the eye dot.
-            eye
+            emerge_from_surface(eye, surface, emerge)
         } else if animated {
-            idle_mark_color(
-                base,
-                highlight,
-                idle_mark_shine_opacity(diagonal, elapsed_ms),
-            )
+            let shine = if rising {
+                startup_shine_opacity(diagonal, elapsed_ms)
+            } else {
+                idle_mark_shine_opacity(diagonal, elapsed_ms.saturating_sub(STARTUP_SURFACE_MS))
+            };
+            idle_mark_color(emerge_from_surface(base, surface, emerge), highlight, shine)
         } else {
-            base
+            emerge_from_surface(base, surface, emerge)
         };
         if run_color != Some(color) {
             if let Some(previous) = run_color {
@@ -1705,11 +1840,18 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(""); usize::from(area.height / 4)];
     if empty_state_mark_visible(area) {
         let animated = idle_mark_animation_enabled(app);
-        let elapsed_ms = app.ocean_started_at.elapsed().as_millis();
+        let elapsed_ms = welcome_elapsed_ms(app);
+        let emerge = animated
+            .then(|| startup_surface_opacity(elapsed_ms))
+            .flatten();
         let spout = idle_whale_spout_row(app);
         let rows = idle_whale_rows(app);
         let current = idle_whale_current_color(app);
-        let mut mark = vec![vec![Span::styled(spout, Style::default().fg(current))]];
+        let surface = app.ui_theme.surface_bg;
+        let mut mark = vec![vec![Span::styled(
+            spout,
+            Style::default().fg(emerge_from_surface(current, surface, emerge)),
+        )]];
         // Soft uwu: sakura blush/sparkle glyphs; classic keeps body peach + text eye.
         let highlight = if idle_whale_is_uwu(app) {
             app.ui_theme.accent_primary
@@ -1732,6 +1874,8 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
                 },
                 app.ui_theme.text_body,
                 highlight,
+                surface,
+                emerge,
             )
         }));
         // The spout, head, belly, peduncle, and flukes are one drawing. Give
@@ -1768,14 +1912,22 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
         app.mcp_configured_count,
         width,
     );
-    let brand = "Codewhale";
-    let brand_inset = " ".repeat(width.saturating_sub(brand.width()) / 2);
-    lines.push(Line::from(Span::styled(
-        format!("{brand_inset}{brand}"),
-        Style::default()
-            .fg(app.ui_theme.text_body)
-            .add_modifier(Modifier::BOLD),
-    )));
+    let elapsed_ms = welcome_elapsed_ms(app);
+    let animated = idle_mark_animation_enabled(app);
+    let surface = app.ui_theme.surface_bg;
+    let current = idle_whale_current_color(app);
+    let brand_inset = " ".repeat(width.saturating_sub(STARTUP_WORDMARK.width()) / 2);
+    let mut brand = vec![Span::raw(brand_inset)];
+    brand.extend(startup_wordmark_spans(
+        elapsed_ms,
+        animated,
+        app.ui_theme.text_body,
+        current,
+        surface,
+    ));
+    lines.push(Line::from(brand));
+    // Caption and prompt are facts, not brand. They stay readable for the
+    // whole arrival instead of fading in from the water.
     let context = truncate_to_width(&context, width);
     let inset = " ".repeat(width.saturating_sub(context.width()) / 2);
     lines.push(Line::from(Span::styled(
@@ -1793,6 +1945,136 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
         )));
     }
     lines
+}
+
+#[cfg(test)]
+mod startup_surface_tests {
+    use super::{
+        STARTUP_LETTER_SETTLE_MS, STARTUP_LETTER_STAGGER_MS, STARTUP_SURFACE_MS, STARTUP_WORDMARK,
+        STARTUP_WORDMARK_START_MS, empty_state_mark_visible, ensure_welcome_surface_started,
+        startup_shine_opacity, startup_surface_opacity, welcome_elapsed_ms,
+        welcome_surface_occluded, wordmark_letter_settle,
+    };
+    use crate::tui::app::OnboardingState;
+    use crate::tui::motion::ethos;
+    use ratatui::layout::Rect;
+
+    fn idle_app() -> crate::tui::app::App {
+        let mut app = crate::test_support::test_app_with_options(
+            crate::test_support::test_tui_options(std::env::temp_dir()),
+        );
+        app.low_motion = false;
+        app.fancy_animations = true;
+        app.onboarding = OnboardingState::None;
+        app.launch.visible = false;
+        app
+    }
+
+    #[test]
+    fn surface_lands_from_nearly_full_presence_then_hands_off() {
+        let start = startup_surface_opacity(0).expect("starts inside the window");
+        assert!(
+            (start - ethos::SURFACE_POP_FROM).abs() < 0.02,
+            "first frame must already occupy most of the mark, not rise from 0: {start}"
+        );
+        let mid = startup_surface_opacity(STARTUP_SURFACE_MS / 2).expect("mid-rise");
+        assert!(
+            mid > 0.98,
+            "ease-out-quint should have landed by halfway: {mid}"
+        );
+        assert!(
+            startup_surface_opacity(STARTUP_SURFACE_MS).is_none(),
+            "the idle mark owns the scene the moment the rise ends"
+        );
+        assert!(startup_surface_opacity(STARTUP_SURFACE_MS + 80).is_none());
+    }
+
+    #[test]
+    fn wordmark_writes_codewhale_one_letter_at_a_time() {
+        assert_eq!(STARTUP_WORDMARK, "Codewhale");
+        assert!(wordmark_letter_settle(0, 0).is_none());
+        assert!(wordmark_letter_settle(STARTUP_WORDMARK_START_MS.saturating_sub(1), 0).is_none());
+        let first = wordmark_letter_settle(STARTUP_WORDMARK_START_MS, 0).expect("C lands");
+        assert!(first < 0.05, "{first}");
+        assert!(wordmark_letter_settle(STARTUP_WORDMARK_START_MS, 1).is_none());
+        let last = STARTUP_WORDMARK.chars().count() - 1;
+        let last_start = STARTUP_WORDMARK_START_MS + last as u128 * STARTUP_LETTER_STAGGER_MS;
+        assert!(wordmark_letter_settle(last_start.saturating_sub(1), last).is_none());
+        assert_eq!(
+            wordmark_letter_settle(last_start + STARTUP_LETTER_SETTLE_MS, last),
+            Some(1.0)
+        );
+    }
+
+    #[test]
+    fn shine_is_one_pass_not_a_loop() {
+        assert_eq!(startup_shine_opacity(0.5, STARTUP_SURFACE_MS), 0.0);
+        let mid = startup_shine_opacity(0.5, STARTUP_SURFACE_MS / 2);
+        assert!(
+            mid > 0.0,
+            "the caustic should cross the body during the rise"
+        );
+        assert!(mid <= 0.33);
+    }
+
+    #[test]
+    fn welcome_clock_stays_stopped_until_the_mark_can_draw() {
+        let mut app = idle_app();
+        assert!(app.welcome_visible_since.is_none());
+        assert_eq!(welcome_elapsed_ms(&app), 0);
+        assert!(!welcome_surface_occluded(&app));
+
+        let too_small = Rect::new(0, 0, 40, 12);
+        assert!(!empty_state_mark_visible(too_small));
+        ensure_welcome_surface_started(&mut app, too_small);
+        assert!(app.welcome_visible_since.is_none());
+
+        app.launch.visible = true;
+        let roomy = Rect::new(0, 0, 80, 24);
+        assert!(empty_state_mark_visible(roomy));
+        assert!(welcome_surface_occluded(&app));
+        ensure_welcome_surface_started(&mut app, roomy);
+        assert!(
+            app.welcome_visible_since.is_none(),
+            "launch is full-canvas; the 640ms surface must not run behind it"
+        );
+
+        app.launch.visible = false;
+        app.onboarding = OnboardingState::Welcome;
+        assert!(welcome_surface_occluded(&app));
+        ensure_welcome_surface_started(&mut app, roomy);
+        assert!(
+            app.welcome_visible_since.is_none(),
+            "onboarding occludes the idle whale"
+        );
+
+        app.onboarding = OnboardingState::None;
+        ensure_welcome_surface_started(&mut app, roomy);
+        assert!(app.welcome_visible_since.is_some());
+        assert!(welcome_elapsed_ms(&app) < STARTUP_SURFACE_MS);
+    }
+
+    #[test]
+    fn reduced_and_still_never_start_the_welcome_clock() {
+        let roomy = Rect::new(0, 0, 80, 24);
+        let mut reduced = idle_app();
+        reduced.low_motion = true;
+        ensure_welcome_surface_started(&mut reduced, roomy);
+        assert!(reduced.welcome_visible_since.is_none());
+
+        let mut still = idle_app();
+        still.fancy_animations = false;
+        ensure_welcome_surface_started(&mut still, roomy);
+        assert!(still.welcome_visible_since.is_none());
+    }
+
+    #[test]
+    fn authored_one_shots_stay_on_the_ethos_clock() {
+        assert_eq!(STARTUP_SURFACE_MS, ethos::WELCOME_SURFACE_MS);
+        assert_eq!(STARTUP_LETTER_SETTLE_MS, ethos::SURFACE_POP_MS);
+        assert_eq!(ethos::RECEIPT_STAGGER_MS, 70);
+        assert_eq!(ethos::FISH_FLEE_MS, 800);
+    }
 }
 
 #[cfg(test)]

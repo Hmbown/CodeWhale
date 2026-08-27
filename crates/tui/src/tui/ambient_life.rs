@@ -1132,7 +1132,8 @@ fn sine_bob(elapsed_ms: u128, period_ms: u128, amplitude: u16) -> u16 {
 /// One-shot flee arc keyed to Working transition / pointer motion.
 #[must_use]
 pub fn fish_flee_offset(elapsed_ms: u128) -> u16 {
-    let progress = elapsed_ms.min(800) as f32 / 800.0;
+    let window = crate::tui::motion::ethos::FISH_FLEE_MS;
+    let progress = elapsed_ms.min(window) as f32 / window as f32;
     let excursion = (progress * std::f32::consts::PI).sin() * 9.0;
     excursion.round().clamp(0.0, 9.0) as u16
 }

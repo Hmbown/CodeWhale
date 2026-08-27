@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The empty-state whale now surfaces once when it is actually on screen
+  (~640 ms ease-out-quint land from ~87% presence, one caustic pass). The
+  wordmark writes **Codewhale** left to right in the current cyan, then
+  settles. Full-canvas launch and onboarding occlude that clock so the shine
+  cannot finish behind a menu. `low_motion`, `fancy_animations = false`, and
+  `NO_ANIMATIONS` keep the settled mark. Not a splash; input is not delayed.
+  Picker/menu pop uses the same 180 ms snappy settle; 70 ms receipt stagger
+  and 800 ms fish flee stay one-shot.
 - Added `/import-claude` (#5557): reads `~/.claude.json` and
   `~/.claude/settings.json` read-only and renders an explicit, reviewable
   migration plan plus a written report. MCP servers route through the

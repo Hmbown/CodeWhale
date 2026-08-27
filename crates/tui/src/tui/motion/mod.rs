@@ -15,6 +15,7 @@
 //! Provider SSE deltas are **input**, never animation timing. The display
 //! clock ([`crate::tui::streaming::StreamDisplayClock`]) coalesces them.
 
+pub mod ethos;
 pub mod frame_requester;
 pub mod mode;
 

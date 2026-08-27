@@ -4,7 +4,10 @@
 //! mapping from visible row → source index. Callers never re-filter ad hoc
 //! during render; they read [`SettingsPickerController::visible`] instead.
 
+use std::time::Instant;
+
 use super::option::{SettingAvailability, SettingOption};
+use crate::tui::motion::{MotionPolicy, ethos};
 
 /// Outcome of a navigation or commit attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +37,8 @@ pub struct SettingsPickerController {
     selected_visible: usize,
     /// Snapshot of the selection id when the picker opened (for rollback).
     original_id: String,
+    /// One-shot pop-in clock. Spatial memory stays put: no slide, no bounce.
+    opened_at: Instant,
 }
 
 impl SettingsPickerController {
@@ -54,6 +59,7 @@ impl SettingsPickerController {
             filtered: Vec::new(),
             selected_visible: 0,
             original_id: original_id.into(),
+            opened_at: Instant::now(),
         };
         controller.recompute_filter(None);
         // Prefer landing on the original id when it exists.
@@ -301,6 +307,24 @@ impl SettingsPickerController {
             }
             _ => PickerNavResult::None,
         }
+    }
+
+    /// Snappy pop from ~87% → 1.0. Reduced/Still land immediately.
+    #[must_use]
+    pub fn settle_pop(&self, now: Instant, policy: MotionPolicy) -> f32 {
+        ethos::surface_pop(
+            now.saturating_duration_since(self.opened_at).as_millis(),
+            policy,
+        )
+    }
+
+    /// True while the one-shot pop is still landing. Hosts that already
+    /// redraw on a timer can DIM until this returns false; Reduced/Still
+    /// are never settling.
+    #[must_use]
+    pub fn is_settling(&self, now: Instant, policy: MotionPolicy) -> bool {
+        policy.allows_decorative()
+            && now.saturating_duration_since(self.opened_at).as_millis() < ethos::SURFACE_POP_MS
     }
 
     fn preview_if_available(&self) -> PickerNavResult {
