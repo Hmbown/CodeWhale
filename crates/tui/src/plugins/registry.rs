@@ -68,6 +68,7 @@ pub struct PluginRegistry {
     state_error: Option<String>,
     workspace: PathBuf,
     discovery_context: Option<std::sync::Arc<super::context::PluginDiscoveryContext>>,
+    catalog_stamp: super::discovery::PluginCatalogStamp,
 }
 
 impl PluginRegistry {
@@ -104,6 +105,10 @@ impl PluginRegistry {
                 (PluginStateFile::default(), Some(error))
             }
         };
+        let catalog_stamp = discovery_context
+            .as_ref()
+            .map(|context| context.catalog_stamp_for_workspace(&workspace))
+            .unwrap_or_default();
         let mut registry = Self {
             plugins: BTreeMap::new(),
             names: BTreeMap::new(),
@@ -113,6 +118,7 @@ impl PluginRegistry {
             state_error,
             workspace,
             discovery_context,
+            catalog_stamp,
         };
         for plugin in plugins {
             registry.register_loaded(plugin);
@@ -181,6 +187,27 @@ impl PluginRegistry {
     /// Re-discover for a new workspace using the immutable pre-dotenv roots
     /// and environment. Registries without a context are test/ad-hoc values
     /// and remain fail-closed instead of consulting ambient process state.
+    #[must_use]
+    pub fn catalog_stamp(&self) -> &super::discovery::PluginCatalogStamp {
+        &self.catalog_stamp
+    }
+
+    #[must_use]
+    pub fn live_catalog_stamp(&self) -> super::discovery::PluginCatalogStamp {
+        self.discovery_context
+            .as_ref()
+            .map_or_else(super::discovery::PluginCatalogStamp::default, |context| {
+                context.catalog_stamp_for_workspace(&self.workspace)
+            })
+    }
+
+    /// True when a plugin bundle directory has appeared, vanished, or been
+    /// rewritten since this registry was last discovered. Does not auto-reload.
+    #[must_use]
+    pub fn on_disk_catalog_changed(&self) -> bool {
+        self.discovery_context.is_some() && self.live_catalog_stamp() != self.catalog_stamp
+    }
+
     #[must_use]
     pub fn rediscover_for_workspace(&self, workspace: &Path) -> std::sync::Arc<Self> {
         self.discovery_context.as_ref().map_or_else(

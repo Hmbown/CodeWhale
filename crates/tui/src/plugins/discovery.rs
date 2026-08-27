@@ -1,6 +1,7 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use sha2::{Digest, Sha256};
 
@@ -20,6 +21,40 @@ pub struct DiscoveryConfig {
     pub workspace_plugins_dir: PathBuf,
     pub builtin_plugin_dirs: Vec<PathBuf>,
     pub state_path: PathBuf,
+}
+
+/// Cheap on-disk catalog fingerprint: plugin-bundle directories only.
+///
+/// Used to nudge `/plugin reload` when a bundle appears, disappears, or is
+/// rewritten without consulting process environment or auto-applying trust.
+/// `state.json` writes are ignored so enable/trust does not look like a
+/// catalog change.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PluginCatalogStamp {
+    entries: BTreeMap<PathBuf, Option<SystemTime>>,
+}
+
+impl PluginCatalogStamp {
+    #[must_use]
+    pub fn capture(roots: impl IntoIterator<Item = PathBuf>) -> Self {
+        let mut entries = BTreeMap::new();
+        for root in roots {
+            let Ok(read) = fs::read_dir(&root) else {
+                continue;
+            };
+            for entry in read.flatten() {
+                let path = entry.path();
+                let Ok(metadata) = fs::symlink_metadata(&path) else {
+                    continue;
+                };
+                if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+                    continue;
+                }
+                entries.insert(path, metadata.modified().ok());
+            }
+        }
+        Self { entries }
+    }
 }
 
 #[must_use]

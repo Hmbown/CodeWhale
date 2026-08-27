@@ -243,7 +243,7 @@ fn suggest_bundles(app: &App, task: &str) -> CommandResult {
     CommandResult::message(output)
 }
 
-fn list_bundles_and_legacy_tools(app: &App) -> CommandResult {
+fn list_bundles_and_legacy_tools(app: &mut App) -> CommandResult {
     let mut output = {
         let registry = app.plugin_registry.as_ref();
         let plugins = registry.list();
@@ -289,6 +289,14 @@ fn list_bundles_and_legacy_tools(app: &App) -> CommandResult {
                 escape_review_path(&path)
             );
         }
+    }
+
+    if let Some(nudge) = crate::plugins::plugin_reload_nudge(
+        app.plugin_registry.as_ref(),
+        &mut app.plugin_reload_nudge_stamp,
+    ) {
+        output.push('\n');
+        output.push_str(nudge);
     }
 
     CommandResult::message(output)

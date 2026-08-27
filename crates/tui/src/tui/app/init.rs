@@ -754,6 +754,7 @@ impl App {
             sticky_status: None,
             last_status_message_seen: None,
             context_pressure_warning_dismissed: None,
+            plugin_reload_nudge_stamp: None,
             model,
             provider_models,
             enabled_provider_models,

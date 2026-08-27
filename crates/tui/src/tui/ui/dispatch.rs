@@ -848,6 +848,12 @@ pub(crate) fn build_dispatch_success_closure(
             ));
 
             maybe_warn_context_pressure_for_config(app, &outcome.turn_compaction);
+            if let Some(message) = crate::plugins::plugin_reload_nudge(
+                app.plugin_registry.as_ref(),
+                &mut app.plugin_reload_nudge_stamp,
+            ) {
+                app.push_status_toast(message, StatusToastLevel::Warning, Some(8_000));
+            }
             app.session.last_prompt_tokens = None;
             app.session.last_completion_tokens = None;
             app.session.last_output_throughput = None;

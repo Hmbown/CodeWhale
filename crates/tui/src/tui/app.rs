@@ -1290,6 +1290,8 @@ pub struct App {
     /// the operator explicitly dismisses its sticky warning. Reset when the
     /// pressure falls below the warning threshold or compaction starts.
     pub context_pressure_warning_dismissed: Option<crate::context_budget::PressureLevel>,
+    /// Last on-disk plugin catalog stamp we already nudged `/plugin reload` for.
+    pub plugin_reload_nudge_stamp: Option<crate::plugins::PluginCatalogStamp>,
     pub model: String,
     /// Persisted model selections by provider name. Loaded from settings so
     /// `/model` and the picker can surface saved provider-specific choices.

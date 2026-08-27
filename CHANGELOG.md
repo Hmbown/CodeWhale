@@ -72,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `/plugin reload` is now discoverable when on-disk plugin bundles change: the
+  next send and `/plugin list` nudge once with `Run /plugin reload to apply`
+  instead of silently keeping the stale catalog (#5579). Trust is unchanged;
+  this does not auto-reload.
 - Context-pressure warnings and critical alerts now remain visible in sticky UI
   status until compaction or explicit dismissal, instead of disappearing into
   scrolling turn metadata (#5620).
