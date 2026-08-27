@@ -331,6 +331,7 @@ mod tests {
         SessionMetadata {
             id: id.to_string(),
             title: title.to_string(),
+            title_source: crate::session_manager::SessionTitleSource::Truncation,
             created_at: ts,
             updated_at: ts,
             message_count: title.len(),

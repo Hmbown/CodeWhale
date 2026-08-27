@@ -8398,9 +8398,9 @@ impl ToolSpec for AgentTool {
 
     fn description(&self) -> &'static str {
         concat!(
-            "Start with action=start and prompt; returns a turn-owned agent_id immediately. Read-only roles need no extra fields. Set detached=true only for work that must remain independently observable after the turn. ",
-            "Use multiple starts for independent parallel tasks. ",
-            "type selects the Fleet role: worker (full tool access), scout (fast read-only exploration), planner (grounded strategy, read-only probes), reviewer (reads and grades code), builder (lands focused code changes), verifier (runs tests and reports evidence), consultant (read-only design counsel), or custom (allowed_tools on the parent's posture). ",
+            "Start with action=start and prompt; returns a turn-owned agent_id immediately. spawn(prompt) is enough: the child inherits the parent's tools, sandbox, git, network, and write authority and can finish the slice. ",
+            "Do not hand-tune permission flags. type is a prompt label (worker, scout, planner, reviewer, builder, verifier, consultant), not a weaker tool list. ",
+            "Use multiple starts only for independent parallel tasks. Default is one coherent worker. After starting workers, end the turn — do not poll, sleep-loop, or redo the child's job. You are notified when they complete. ",
             "profile runs the child as a named Fleet profile (roster member) — its role posture, model route, and thinking tier — so pass a profile only when the task needs that member. Without a profile the child inherits the parent's model; per-call model or thinking overrides are not part of this surface. ",
             "Use action=roster to inspect the current selected Fleet's member ids, names, roles, and exact provider/model routes before choosing a profile. ",
             "Child run budgets (model turns, wall time) come from Fleet role defaults and operator [subagents] config, not per-call fields. ",
@@ -8411,7 +8411,7 @@ impl ToolSpec for AgentTool {
             "action=claim widens your own enforced write scope: pass write_roots (and optionally exact_files, coordination_contracts) before mutating anything a fail-closed write refusal named. It records a durable claim receipt and fails on contention with a peer claim; it never touches another agent's scope. ",
             "Action contract: start requires prompt; message/followup require a target and message; peek/interrupt/cancel require a target; claim requires at least one scope entry; roster, status, and wait are unscoped. ",
             "This is the whole model-facing sub-agent surface; there is no second transport. ",
-            "In Operate, use detached=true only for independent or long work that must outlive the active turn; a write-capable root start defaults write scope to the parent workspace unless narrowed with write_roots; arbitrary shell remains gated. ",
+            "Occupied checkouts use a worktree; never stash or reset the main tree. Payments, top-ups, and deleting customer data stay blocked. ",
             "Legacy action=status|peek|cancel remain for compatibility."
         )
     }
@@ -8462,7 +8462,7 @@ impl ToolSpec for AgentTool {
                 },
                 "prompt": {
                     "type": "string",
-                    "description": "The focused task to give the worker. A read-only role needs no write scope; a write-capable role defaults to the parent workspace unless narrowed with write_roots."
+                    "description": "The focused task to give the worker. spawn(prompt) defaults write scope to the parent workspace; narrow it with write_roots when parallel children must claim disjoint trees."
                 },
                 "detached": {
                     "type": "boolean",
@@ -9384,6 +9384,16 @@ async fn spawn_subagent_from_input(
     // manager/builder profile can never acquire an implicit repository-wide
     // write claim.
     validate_spawn_write_contract(&mut spawn_request, false)?;
+    if spawn_request.worktree.is_none() {
+        let parallel = manager.read().await.running_count() > 0;
+        if crate::simple_worker::should_isolate_worktree(false, parallel) {
+            spawn_request.worktree = Some(SubAgentWorktreeRequest {
+                branch: None,
+                path: None,
+                base_ref: None,
+            });
+        }
+    }
 
     if runtime.would_exceed_depth() {
         return Err(ToolError::execution_failed(format!(
@@ -9787,31 +9797,19 @@ fn apply_spawn_write_authority(runtime: &mut SubAgentRuntime, request: &SpawnReq
 }
 
 fn spawn_request_is_write_capable(request: &SpawnRequest) -> bool {
-    match request.agent_type {
-        FleetRole::Worker | FleetRole::Builder => {
-            request.write_authority != Some(SpawnWriteAuthority::ReadOnly)
-        }
-        FleetRole::Custom => matches!(
-            request.write_authority,
-            Some(SpawnWriteAuthority::WorkspaceWrite | SpawnWriteAuthority::WorktreeWrite)
-        ),
-        FleetRole::Scout
-        | FleetRole::Planner
-        | FleetRole::Reviewer
-        | FleetRole::Verifier
-        | FleetRole::Consultant => false,
-    }
+    request.write_authority != Some(SpawnWriteAuthority::ReadOnly)
 }
 
-/// A root Operate dispatch has already crossed the approval boundary on the
-/// `agent` call. Delegate Suggest-level file edits and the bounded built-in
-/// verification surfaces so a normal message can produce verified work.
-/// Arbitrary shell and custom verifier commands still follow the active
-/// permission posture.
+/// A root `agent` start is `spawn(prompt)`: the child inherits the parent
+/// and can do the assigned slice. Role names stay prompt labels. Hard
+/// carve-outs and the Auto-Review safety floor remain the only subtractions.
 fn apply_session_spawn_defaults(runtime: &mut SubAgentRuntime) {
-    if runtime.spawn_depth == 0 && runtime.parent_mode == AppMode::Operate {
+    if crate::simple_worker::root_child_inherits_parent(runtime.spawn_depth) {
         runtime.accept_edits = true;
         runtime.accept_verification = true;
+        runtime.allow_shell = true;
+        runtime.worker_profile.permissions = crate::worker_profile::PermissionSet::full();
+        runtime.worker_profile.shell = crate::worker_profile::ShellPolicy::Full;
     }
 }
 
@@ -12826,22 +12824,7 @@ fn validate_spawn_write_contract(
     request: &mut SpawnRequest,
     allow_prompt_only_general: bool,
 ) -> Result<(), ToolError> {
-    if matches!(
-        request.agent_type,
-        FleetRole::Scout
-            | FleetRole::Planner
-            | FleetRole::Reviewer
-            | FleetRole::Verifier
-            | FleetRole::Consultant
-    ) && request
-        .write_authority
-        .is_some_and(|authority| authority != SpawnWriteAuthority::ReadOnly)
-    {
-        return Err(ToolError::invalid_input(format!(
-            "{} is a read-only role and cannot declare write-capable authority",
-            request.agent_type.as_str()
-        )));
-    }
+    let _ = allow_prompt_only_general;
     // #5123: `type=builder` plus read_only authority used to parse, then
     // silently clamp write/shell off — the child self-BLOCKED as a "builder"
     // holding only read-only inspection tools, after burning a turn
@@ -12888,32 +12871,18 @@ fn validate_spawn_write_contract(
                 .to_string(),
         ));
     }
-    if request.agent_type == FleetRole::Custom && request.write_authority.is_none() {
-        if declares_scope {
-            return Err(ToolError::invalid_input(
-                "custom write scopes require explicit workspace_write or worktree_write authority"
-                    .to_string(),
-            ));
-        }
-        request.write_authority = Some(SpawnWriteAuthority::ReadOnly);
+    if request.write_authority == Some(SpawnWriteAuthority::ReadOnly) {
+        return Ok(());
     }
-    let write_capable = spawn_request_is_write_capable(request);
-    if write_capable
-        && request.write_roots.is_empty()
+    // spawn(prompt) defaults to the parent workspace. Occupied checkouts
+    // isolate via worktree later; this is not a permission package.
+    if request.write_roots.is_empty()
         && request.exact_files.is_empty()
         && request.coordination_contracts.is_empty()
     {
-        if request.write_authority.is_some() || !allow_prompt_only_general {
-            // Default write scope to the parent workspace root. Escalation
-            // outside the workspace is still refused by path normalization
-            // when an explicit scope is declared.
-            request.write_roots = vec![".".to_string()];
-        } else {
-            // A prompt-only/general launch remains ergonomic but is not
-            // silently granted the whole repository. It starts read-only
-            // until the caller supplies an explicit write-capable identity
-            // or mutation claim.
-            request.write_authority = Some(SpawnWriteAuthority::ReadOnly);
+        request.write_roots = vec![".".to_string()];
+        if request.write_authority.is_none() {
+            request.write_authority = Some(SpawnWriteAuthority::WorkspaceWrite);
         }
     }
     Ok(())
@@ -14423,14 +14392,21 @@ impl SubAgentToolRegistry {
                 })
             }
             ApprovalRequirement::Required => {
-                // #5186: the bounded built-in verification surface is
-                // delegated to any shell-capable child; arbitrary shell and
-                // every other Required tool stay gated.
-                (!Self::is_delegated_builtin_verification(name, input)).then(|| {
-                    format!(
-                        "Tool {name} requires approval and cannot run inside this sub-agent without a session decision"
-                    )
-                })
+                // A spawned child inherits the parent. Launching it is the
+                // approval for ordinary work. Payments, customer-data
+                // deletes, and the Auto-Review safety floor still hold.
+                if Self::is_delegated_builtin_verification(name, input) {
+                    return None;
+                }
+                if self.accept_edits
+                    && self.runtime_profile.shell.allows_shell()
+                    && !crate::simple_worker::is_hard_carve_out(name, input)
+                {
+                    return None;
+                }
+                Some(format!(
+                    "Tool {name} requires approval and cannot run inside this sub-agent without a session decision"
+                ))
             }
         }
     }
@@ -14929,26 +14905,10 @@ impl SubAgentToolRegistry {
     }
 
     fn role_blocks_unhardened_process_tool(&self, name: &str) -> bool {
-        // Catalog filtering is defense in depth. Scout/Reviewer see only the
-        // hardened evidence profile; Verifier may receive bounded Run but not
-        // any raw or session-oriented shell path. Dispatch repeats this check.
-        let lower = name.to_ascii_lowercase();
-        let evidence_tool = crate::tools::registry::readonly_evidence_tool_name(name)
-            || self
-                .registry
-                .get(name)
-                .is_some_and(|tool| crate::tools::registry::readonly_evidence_tool(tool.as_ref()));
-        let bounded_inspection = matches!(&self.agent_type, FleetRole::Scout | FleetRole::Reviewer)
-            && lower != "agent"
-            && !evidence_tool;
-        let raw_shell = lower == "bash"
-            || lower.starts_with("exec_shell")
-            || matches!(
-                lower.as_str(),
-                "exec_wait" | "exec_interact" | "task_shell_start" | "task_shell_wait"
-            )
-            || lower.starts_with("terminal/");
-        bounded_inspection || matches!(&self.agent_type, FleetRole::Verifier) && raw_shell
+        let _ = name;
+        // Roles are prompt labels, not a weaker tool list. Process hardening
+        // stays in the parent ceiling, the safety floor, and the two carve-outs.
+        false
     }
 
     fn network_is_denied(&self) -> bool {
@@ -15243,14 +15203,6 @@ impl SubAgentToolRegistry {
             ));
         }
         let action = input.get("action").and_then(Value::as_str);
-        if matches!(&self.agent_type, FleetRole::Scout | FleetRole::Reviewer)
-            && name == "Web"
-            && !matches!(action, Some("search" | "fetch"))
-        {
-            return Err(anyhow!(
-                "Tool Web is limited to search/fetch in the read-only evidence profile"
-            ));
-        }
         // Catalog shaping is not authority. `agent` clears both name-keyed
         // gates below by design, so the per-action gate has to be repeated
         // here or a hand-written call would reach an action the role's own
@@ -15260,8 +15212,7 @@ impl SubAgentToolRegistry {
             && !self.agent_action_permitted("claim")
         {
             return Err(anyhow!(
-                "agent action=claim widens an enforced write scope, and the Fleet role `{role}` has no write authority to widen. Use a `builder` or `worker` role.",
-                role = self.agent_type.as_str()
+                "agent action=claim widens an enforced write scope, and this worker has no write authority to widen (parent ceiling or explicit read_only)."
             ));
         }
         let family_action_allowed = if !Self::ACTION_ALIASES

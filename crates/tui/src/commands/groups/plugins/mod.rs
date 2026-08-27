@@ -189,10 +189,15 @@ fn suggest_bundles(app: &App, task: &str) -> CommandResult {
     let index = crate::skills::RegistryDocument { skills };
     let recommendations = crate::skills::recommend::recommend_remote_skills(task, &index, 3);
     if recommendations.is_empty() {
-        return CommandResult::message(format!(
+        let mut message = format!(
             "No installed plugin bundles matched `{}`.\n\nInstall a reviewed bundle with /plugin install <source>. Nothing was installed, trusted, or enabled.",
             escape_review_text(task)
-        ));
+        );
+        if let Some(hint) = missing_reviewed_connector_hint(app, task) {
+            message.push_str("\n\n");
+            message.push_str(&hint);
+        }
+        return CommandResult::message(message);
     }
 
     let mut output = format!(
@@ -240,7 +245,53 @@ fn suggest_bundles(app: &App, task: &str) -> CommandResult {
         let _ = writeln!(output, "    {next_step}");
     }
     output.push_str("\nNothing was installed, trusted, or enabled.");
+    if let Some(hint) = missing_reviewed_connector_hint(app, task) {
+        output.push_str("\n\n");
+        output.push_str(&hint);
+    }
     CommandResult::message(output)
+}
+
+/// Specific install+auth commands for reviewed connectors the task needs.
+/// Planned catalog rows (Notion, Stripe, Vercel, …) are omitted.
+fn missing_reviewed_connector_hint(app: &App, task: &str) -> Option<String> {
+    let task = task.to_ascii_lowercase();
+    let mut hints = Vec::new();
+    if task_mentions_github(&task) && !reviewed_connector_is_ready(app, "github") {
+        hints.push(
+            "GitHub is not connected. Run `/mcp connect github` (adds the official GitHub MCP and starts `/mcp login github`). Not a generic plugin credential."
+                .to_string(),
+        );
+    }
+    if hints.is_empty() {
+        None
+    } else {
+        Some(hints.join("\n"))
+    }
+}
+
+fn task_mentions_github(task: &str) -> bool {
+    ["github", "gh pr", "pull request", "pull-request", "repo issue"]
+        .iter()
+        .any(|needle| task.contains(needle))
+        || (task.contains("pr ") || task.contains(" pr") || task.ends_with(" pr"))
+            && (task.contains("review")
+                || task.contains("open")
+                || task.contains("merge")
+                || task.contains("check"))
+}
+
+fn reviewed_connector_is_ready(app: &App, name: &str) -> bool {
+    if app.plugin_registry.get(name).is_some() {
+        return true;
+    }
+    crate::mcp::load_config_with_workspace_and_plugins(
+        &app.mcp_config_path,
+        &app.workspace,
+        app.plugin_registry.as_ref(),
+    )
+    .ok()
+    .is_some_and(|cfg| cfg.servers.contains_key(name))
 }
 
 fn list_bundles_and_legacy_tools(app: &App) -> CommandResult {

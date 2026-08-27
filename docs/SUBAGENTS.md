@@ -45,11 +45,39 @@ orchestration surface is `agent`; see the sub-agent guidance in
 `crates/tui/src/prompts/text.rs` (`AGENT_MODE`) and the in-line
 tool description.
 
+## One worker system
+
+There is one way a sub-agent works. `agent` with a prompt is enough:
+
+```text
+agent({ "action": "start", "prompt": "do this slice" })
+```
+
+The child inherits the parent's tools, sandbox, network, git, and write
+authority. It can edit, run commands, fetch, test, and open a PR when the
+slice is a PR. The parent and the user do not pick a permission package,
+preset, operate flag set, or weaker tool list.
+
+The only subtractions from the parent:
+
+- no payments / top-ups
+- no deleting customer data
+- occupied checkout or a live parallel writer → isolated git worktree
+  (never stash or reset the main tree)
+
+Parent ceiling still applies: a child cannot gain what the parent lacks.
+The Auto-Review safety floor (publish-like, destructive detached work,
+secrets, auth) stays authoritative. `auto_approve` stays off.
+
+`type` is a **prompt label** (`worker`, `scout`, `planner`, `reviewer`,
+`builder`, `verifier`, `consultant`) so the child knows the stance. It is
+not a permission matrix. Explicit `write_authority=read_only` is the only
+way to start a spectator; that is an opt-in narrowing, not a role default.
+
 ## Role taxonomy
 
-The `type` field on `agent` selects a Fleet posture for the child
-(`agent_type` is accepted as a compatibility alias). Each role is a distinct
-stance toward the work — not just a different label.
+The `type` field on `agent` is a prompt label (`agent_type` remains a
+compatibility alias). Roles describe stance, not a weaker tool list.
 
 ## Maintainer posture
 
@@ -64,43 +92,22 @@ diff, linked issues, tests, and CI before merging, harvesting, closing, or
 deferring it. A sub-agent's result is a working set, not a substitute for
 stewardship.
 
-| Role          | Stance                                 | Writes? | Network? | Shell posture | Typical use                                  |
-|---------------|----------------------------------------|---------|----------|---------------|----------------------------------------------|
-| `worker`      | flexible; do whatever the parent says  | yes     | yes      | yes           | the default; multi-step tasks                |
-| `scout`       | read-only; map the relevant code fast  | no      | yes      | read-only (net + bounded verify) | "find every call site of `Foo`; check the PR with gh" |
-| `planner`     | analyse and produce a strategy         | no      | yes      | read-only probes | "design the migration; don't execute"        |
-| `reviewer`    | read-and-grade with severity scores    | no      | yes      | read-only (net + bounded verify) | "audit this PR for bugs"                     |
-| `builder`     | land a specific change with min edit   | yes     | yes      | yes           | "rewrite `bar.rs::Foo::bar` to do X"         |
-| `verifier`    | run tests / validation, report outcome | no      | yes      | bounded verification (no writes) | "verify the diff with the bounded test checks; report PASS/FAIL" |
-| `consultant`  | short-lived, high-reasoning counsel     | no      | yes      | none          | "what are we missing in this design?"        |
-| `custom`      | explicit narrow tool allowlist         | inherits | inherits | inherits     | hand-picked tools on the parent's posture    |
+| Role          | Stance                                 | Typical use                                  |
+|---------------|----------------------------------------|----------------------------------------------|
+| `worker`      | flexible; do whatever the parent says  | the default; multi-step tasks                |
+| `scout`       | map the relevant code fast             | "find every call site of `Foo`; check the PR with gh" |
+| `planner`     | analyse and produce a strategy         | "design the migration"                       |
+| `reviewer`    | read-and-grade with severity scores    | "audit this PR for bugs"                     |
+| `builder`     | land a specific change with min edit   | "rewrite `bar.rs::Foo::bar` to do X"         |
+| `verifier`    | run tests / validation, report outcome | "verify the diff; report PASS/FAIL"          |
+| `consultant`  | short-lived, high-reasoning counsel    | "what are we missing in this design?"        |
+| `custom`      | explicit narrow tool allowlist         | hand-picked tools on the parent's posture    |
 
-A role's default is what the role *intends*, and the parent's effective
+Every role can use the tools the slice needs. The parent's effective
 posture is always the ceiling (a child never widens beyond its parent).
-Read-only roles withhold **workspace writes** by intent; nothing else is
-taken away by default — every role keeps network reads, and `custom`
-inherits the parent's write/network/shell posture and is narrowed only by
-its explicit tool list or the spawning call. The focused worker's header
-states the effective posture (`scout · read-only · network · read-only
-shell`) from the runtime's own permission snapshot.
-
-**Delegation moves work, never authority** (the containment answer for
-#5426). A read-only role delegating to a write-capable role (scout →
-builder) is a supported escape hatch for *work capacity* — the child brings
-its own model, route, and step budget — but the child's authority is clamped
-against the delegating parent's live posture, not the operator's: a scout's
-builder child lands read-only with raw shell and mutating tools denied, and
-canonical `Bash` is denied to it too (only bounded-inspection roles keep the
-classified read-only shell). Delegating to obtain shell is therefore
-mechanically useless — the scout's own bounded shell (`git -C … log`,
-`find … | head`, `npm view …`, classifier-gated) is the only shell path a
-read-only parent has. Read-only is transitive through any delegation chain:
-the clamp (`ChildAuthority::clamp` in `fleet/exact.rs`) intersects every
-field with the narrower side, the deny-list union means a descendant can
-never drop an ancestor's restriction, and `inherit_disallowed_tools: false`
-cannot drop a posture denial (`is_posture_denial`). This is pinned by
-`a_read_only_parents_delegation_never_widens_authority` in
-`crates/tui/src/fleet/exact.rs` tests.
+`ChildAuthority::clamp` in `fleet/exact.rs` still intersects every field
+with the narrower side so a read-only **parent** cannot mint a write-capable
+child. That is parent-ceiling safety, not a role matrix.
 
 The session's **permission posture** applies inside every child exactly as
 it applies to the parent turn: under Auto-Review the same deterministic

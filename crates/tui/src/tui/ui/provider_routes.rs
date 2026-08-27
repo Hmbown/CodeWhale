@@ -693,6 +693,7 @@ pub(crate) fn mcp_ui_action_refreshes_discovery(action: &crate::tui::app::McpUiA
         crate::tui::app::McpUiAction::Show
             | crate::tui::app::McpUiAction::Validate
             | crate::tui::app::McpUiAction::Login { .. }
+            | crate::tui::app::McpUiAction::Connect { .. }
             | crate::tui::app::McpUiAction::Logout { .. }
             | crate::tui::app::McpUiAction::ImportList
             | crate::tui::app::McpUiAction::ImportApprove { .. }

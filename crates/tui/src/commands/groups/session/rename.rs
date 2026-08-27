@@ -118,6 +118,7 @@ pub(crate) fn rename_with_manager(
     session.metadata.mode = Some(app.mode.as_setting().to_string());
     app.sync_cost_to_metadata(&mut session.metadata);
     session.metadata.title = new_title.to_string();
+    session.metadata.title_source = crate::session_manager::SessionTitleSource::User;
 
     match manager.save_session(&session) {
         Ok(_) => {

@@ -50,9 +50,8 @@ pub struct PromptSessionContext<'a> {
     /// Immutable plugin snapshot owned by this App/Engine workspace context.
     /// Never sourced from process-global mutable state.
     pub plugin_registry: Option<&'a crate::plugins::PluginRegistry>,
-    /// Active runtime mode. Retained in the session contract for embedders;
-    /// bundled prompt text deliberately ignores it because policy and the live
-    /// tool catalog already express the mode.
+    /// Active runtime mode. Constitution stays cache-stable. Operate adds a
+    /// short volatile coordinator note in WorldState — not a permission package.
     pub mode: crate::tui::app::AppMode,
 }
 
@@ -88,6 +87,17 @@ const LEGACY_HANDOFF_RELATIVE_PATH: &str = ".deepseek/handoff.md";
 /// its own. Files larger than this are truncated with an explicit `[…truncated: N bytes omitted]`
 /// marker rather than skipped entirely so the model still sees the head.
 const INSTRUCTIONS_FILE_MAX_BYTES: usize = 100 * 1024;
+
+/// Volatile Operate coordinator note. Not a Cursor dump and not a permission
+/// matrix — one worker system, spawn(prompt), then end the turn.
+const OPERATE_COORDINATOR_BLOCK: &str = "\
+## Operate\n\
+\n\
+You are the coordinator. Start worker(s) with `agent` and a prompt; that is the whole spawn API. \
+A worker inherits your tools and can finish its slice — do not pick a permission package. \
+After you start them, end the turn. Do not poll, sleep-loop, or redo their job. \
+Synthesize when they complete. Occupied checkouts use worktrees. \
+Payments, top-ups, and deleting customer data stay blocked.";
 
 /// System prompt block appended when `translation_enabled` is true.
 /// Instructs the model to respond in the resolved session locale for all
@@ -1225,6 +1235,9 @@ pub(crate) fn system_prompt_for_mode_with_context_skills_session_and_approval_fo
             goal_objective.trim()
         ));
     }
+    if session_context.mode == crate::tui::app::AppMode::Operate {
+        workspace_parts.push(OPERATE_COORDINATOR_BLOCK.to_string());
+    }
     let workspace_body = workspace_parts.join("\n\n");
 
     // Permissions fragment: configured `instructions = [...]` files (#454).
@@ -1587,9 +1600,18 @@ mod tests {
                 )
             });
             assert_eq!(prompts[0], prompts[1]);
-            assert_eq!(prompts[1], prompts[2]);
             assert!(prompts[0].contains("Preserve the blue-ocean marker"));
             assert!(!prompts[0].contains("##### Mode:"));
+            assert!(
+                prompts[2].contains("You are the coordinator"),
+                "Operate adds a volatile coordinator note, not a permission matrix"
+            );
+            assert!(!prompts[2].contains("ChildPermissionPreset"));
+            assert!(!prompts[2].contains("operate_preset"));
+            assert!(
+                prompts[0].split("## Operate").next() == prompts[2].split("## Operate").next(),
+                "Operate must not rewrite the cache-stable constitution"
+            );
             if host == PromptHost::Headless {
                 assert!(prompts[0].contains("You already have an A"));
                 assert!(!prompts[0].contains("## Core Execution"));

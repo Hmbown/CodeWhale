@@ -423,6 +423,7 @@ pub(super) async fn create_session_from_thread(
         session_title_override(req.title.as_deref(), detail.thread.title.as_deref())
     {
         session.metadata.title = title;
+        session.metadata.title_source = crate::session_manager::SessionTitleSource::User;
     }
     let title = session.metadata.title.clone();
     let message_count = session.metadata.message_count;

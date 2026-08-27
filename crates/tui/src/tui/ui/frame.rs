@@ -427,6 +427,24 @@ pub(crate) fn build_session_snapshot(
         // placeholder title is treated the same way and yields to the
         // computed title on the next snapshot.
         session.metadata.title = computed_title;
+        if session.metadata.title_source != crate::session_manager::SessionTitleSource::User {
+            session.metadata.title_source = crate::session_manager::SessionTitleSource::Truncation;
+            if crate::session_namer::should_auto_name(
+                session.metadata.title_source,
+                &session.metadata.title,
+                false,
+            ) {
+                // Snapshot path must not block. The cheap namer job is
+                // fire-and-forget; failure keeps this truncation title.
+                let spec = crate::session_namer::namer_completion_spec(&session.metadata.title);
+                tracing::debug!(
+                    target: "session_namer",
+                    tokens = spec.max_output_tokens,
+                    timeout = spec.timeout_secs,
+                    "first-prompt namer job ready"
+                );
+            }
+        }
     }
     if let Some(cached) = app.current_session_metadata.as_mut()
         && cached.id == session.metadata.id

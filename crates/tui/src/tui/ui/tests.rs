@@ -6110,6 +6110,7 @@ fn saved_session_with_messages(messages: Vec<Message>) -> SavedSession {
         metadata: crate::session_manager::SessionMetadata {
             id: "resume-recovery-session".to_string(),
             title: "resume recovery".to_string(),
+            title_source: crate::session_manager::SessionTitleSource::Truncation,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             message_count: messages.len(),

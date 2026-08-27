@@ -5,7 +5,7 @@ use crate::{
 };
 
 #[test]
-fn system_backend_diagnostic_is_literal_unknown_and_not_probed() {
+fn retired_keychain_env_diagnoses_the_file_store() {
     let _lock = env_lock();
     clear_known_envs();
     let tmp = tempfile::tempdir().unwrap();
@@ -14,11 +14,10 @@ fn system_backend_diagnostic_is_literal_unknown_and_not_probed() {
 
     let diagnostic = diagnose_secret_backend();
 
-    assert_eq!(diagnostic.backend, SecretBackendDiagnosticKind::System);
-    assert_eq!(diagnostic.inspection, SecretBackendInspection::NotProbed);
-    assert_eq!(diagnostic.presence, SecretBackendPresence::Unknown);
-    assert_eq!(diagnostic.path, None);
-    assert_eq!(diagnostic.legacy_path, None);
+    assert_eq!(diagnostic.backend, SecretBackendDiagnosticKind::File);
+    assert_eq!(diagnostic.inspection, SecretBackendInspection::MetadataOnly);
+    assert_ne!(diagnostic.path, None);
+    assert!(!format!("{diagnostic:?}").contains("Keychain"));
 }
 
 #[test]

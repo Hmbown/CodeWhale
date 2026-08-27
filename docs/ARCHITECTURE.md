@@ -108,7 +108,7 @@ boundary has held since v0.9.1):
 - **`crates/hooks`** - Lifecycle hooks (stdout, jsonl, webhook) for pre/post tool events.
 - **`crates/mcp`** - MCP client + stdio server for Model Context Protocol tool servers.
 - **`crates/protocol`** - Request/response framing and protocol types.
-- **`crates/secrets`** - OS keyring integration for API key storage.
+- **`crates/secrets`** - file-backed API key storage (`~/.codewhale/secrets/`, mode 0600). No Keychain product path.
 - **`crates/state`** - SQLite thread/session persistence layer.
 - **`crates/workflow`** / **`crates/workflow-js`** - Workflow engine and its
   QuickJS scripting layer (renamed from the whaleflow crates).

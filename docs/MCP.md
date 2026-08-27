@@ -108,6 +108,7 @@ Supported in-TUI actions:
 /mcp init --force
 /mcp import
 /mcp recommendations
+/mcp connect <id>
 /mcp add recommended <id>
 /mcp add stdio <name> <command> [args...]
 /mcp add http <name> <url>
@@ -136,6 +137,7 @@ diagnostic surfaces:
 
 | Plugin | Component | Pinned definition | Provenance and maturity | Installation boundary |
 | --- | --- | --- | --- | --- |
+| GitHub | MCP server (HTTP) | `https://api.githubcopilot.com/mcp/` | Official GitHub remote MCP; same App-bound OAuth as the Codewhale app | `/mcp connect github` adds the server and runs `/mcp login github`. Not a generic plugin credential. |
 | Chrome DevTools | MCP server (stdio) | `npx -y chrome-devtools-mcp@1.7.0` (`npx.cmd` on Windows) | [Official ChromeDevTools project](https://github.com/ChromeDevTools/chrome-devtools-mcp) | npm may download the pinned package when the user restarts MCP. |
 | Playwright | MCP server (stdio) | `npx -y @playwright/mcp@0.0.79 --isolated` (`npx.cmd` on Windows) | [Official Microsoft project](https://github.com/microsoft/playwright-mcp) | `--isolated` starts a fresh browser profile; npm may download the pinned package only after an explicit restart. |
 | Cua Computer Use | MCP server (stdio) | `cua-driver mcp`; Driver `0.20.0` reviewed for this release | [Official Cua project](https://github.com/trycua/cua); preview integration | The signed driver and OS permissions are separate, explicit installs. `/mcp add recommended cua` only writes config and never installs or grants either. |

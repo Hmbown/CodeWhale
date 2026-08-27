@@ -32,7 +32,7 @@ Run `/mode` to open the mode picker, or switch directly with `/mode work`,
 
 - **Plan**: design-first prompting. The stable primitive names remain familiar, but the runtime centrally refuses file mutation and shell execution. Read-only inspection and policy-allowed research, including deferred Web search/fetch, remain available.
 - **Work** (internally `agent`): ordinary multi-step execution. The small first-turn toolbox is `read`, `write`, `edit`, `bash`, `agent`, and `todo_write`; approval, sandbox, repository law, and managed policy still decide what may execute.
-- **Operate**: multitask conductor posture. It has the same primitive identities and execution authority as Work. The parent session is the **operator**: dispatching background workers is the default for independent or parallel work. Handle small or tightly coupled tasks in the parent; use background `agent` workers for separable streams, and use Workflow when order, phases, gates, shared budgets, or deterministic fan-in matter. **Dispatch is not completion** — write-capable children must return real verification evidence.
+- **Operate**: multitask conductor posture. Same tools and authority as Work. The parent starts worker(s) with `agent` + a prompt — one worker system, no permission package — then **ends the turn**. Workers inherit the parent (minus payments/top-ups, customer-data delete, and clobbering an occupied checkout). Synthesize when they complete. Use Workflow when order, phases, gates, or deterministic fan-in matter. **Dispatch is not completion.**
 
 `Act` and `/mode act` remain compatibility aliases for Work. Saved settings
 still normalize to the internal value `agent`.

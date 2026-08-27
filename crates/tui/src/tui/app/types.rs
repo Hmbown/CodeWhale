@@ -1180,6 +1180,13 @@ pub enum McpUiAction {
         url: String,
         transport: Option<String>,
     },
+    /// Add the reviewed server if missing, then run the existing login path.
+    /// No second MCP pool — same config file and OAuth helper as `/mcp add` + `/mcp login`.
+    Connect {
+        name: String,
+        url: String,
+        login: bool,
+    },
     Enable {
         name: String,
     },

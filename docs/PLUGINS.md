@@ -9,10 +9,13 @@ the first place.
 
 `/plugin suggest <task>` is a local, read-only companion: it ranks already
 installed bundles by their validated name, description, bundled skill names,
-and declared hosts. It explains the match and gives the next review/enable
-step, but never installs, trusts, or enables a bundle. Codewhale deliberately
-does not treat arbitrary remote archives as a plugin marketplace; a remote
-catalog needs publisher and provenance policy before it can make suggestions.
+and declared hosts. When the task needs a reviewed connector that is not
+installed (today: GitHub), it also prints the exact connect command
+(`/mcp connect github`) instead of a generic "install something" hint.
+Planned catalog rows are omitted. It never installs, trusts, or enables a
+bundle. Codewhale deliberately does not treat arbitrary remote archives as a
+plugin marketplace; a remote catalog needs publisher and provenance policy
+before it can make suggestions.
 
 ## Sources
 

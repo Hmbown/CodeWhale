@@ -1,9 +1,11 @@
 //! Secret storage for CodeWhale API keys.
 //!
 //! Provides a small abstraction (`KeyringStore`) plus a default
-//! file-based implementation (`FileKeyringStore`), an opt-in OS keyring
-//! implementation (`DefaultKeyringStore`), and an in-memory store for tests
-//! (`InMemoryKeyringStore`).
+//! file-based implementation (`FileKeyringStore`), a retired OS-keyring
+//! implementation kept only so old items are not rewritten in product code,
+//! and an in-memory store for tests (`InMemoryKeyringStore`). The product
+//! path is the file store (`~/.codewhale/secrets/`, mode 0600). There is
+//! no Keychain settings surface.
 //!
 //! Higher-level lookup through [`Secrets::resolve`] checks the secret store first
 //! and falls back to environment variables. Config-file precedence lives in the
@@ -27,8 +29,9 @@ use thiserror::Error;
 /// with credentials saved before the CodeWhale rename. macOS users can verify
 /// entries with `security find-generic-password -s deepseek -a <provider>`.
 pub const DEFAULT_SERVICE: &str = "deepseek";
-/// Select the secret storage backend. Supported values are `file` (default)
-/// and `system`/`keyring` for the OS credential store.
+/// Select the secret storage backend. The product store is `file`.
+/// `system`/`keyring` are accepted as no-ops so old env files do not
+/// revive the Keychain UI.
 pub const SECRET_BACKEND_ENV: &str = "CODEWHALE_SECRET_BACKEND";
 /// Legacy alias for [`SECRET_BACKEND_ENV`].
 pub const LEGACY_SECRET_BACKEND_ENV: &str = "DEEPSEEK_SECRET_BACKEND";
@@ -101,11 +104,9 @@ pub trait KeyringStore: Send + Sync {
 /// - **Windows**: Credential Manager
 /// - **Linux**: Secret Service (GNOME Keyring / kwallet via dbus), excluding OHOS
 ///
-/// This backend is opt-in -- set the [`SECRET_BACKEND_ENV`] environment
-/// variable to `system` or `keyring` to activate it. On platforms without
-/// a configured native keyring dependency, [`probe`](DefaultKeyringStore::probe)
-/// returns an unsupported error so [`Secrets::auto_detect`] can transparently
-/// fall back to [`FileKeyringStore`].
+/// Retired product path. [`Secrets::auto_detect`] never selects this store.
+/// Tests may still construct it. On platforms without a native keyring
+/// dependency, [`probe`](DefaultKeyringStore::probe) returns unsupported.
 #[derive(Debug, Clone)]
 pub struct DefaultKeyringStore {
     /// Keyring service name used to namespace stored credentials.
@@ -683,7 +684,6 @@ fn home_resolution_error() -> SecretsError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SecretBackendSelection {
     File,
-    System,
     Unknown,
 }
 
@@ -768,14 +768,6 @@ pub fn diagnose_secret_backend() -> SecretBackendDiagnostic {
                 legacy_path,
             }
         }
-        SecretBackendSelection::System => SecretBackendDiagnostic {
-            backend: SecretBackendDiagnosticKind::System,
-            inspection: SecretBackendInspection::NotProbed,
-            path: None,
-            presence: SecretBackendPresence::Unknown,
-            legacy_path: None,
-            legacy_presence: SecretBackendPresence::Unknown,
-        },
         SecretBackendSelection::Unknown => SecretBackendDiagnostic {
             backend: SecretBackendDiagnosticKind::Unknown,
             inspection: SecretBackendInspection::NotProbed,
@@ -822,8 +814,9 @@ fn secret_backend_selection(value: Option<&str>) -> SecretBackendSelection {
     match value.map(str::trim).filter(|value| !value.is_empty()) {
         None => SecretBackendSelection::File,
         Some(value) => match value.to_ascii_lowercase().as_str() {
-            "file" | "local" | "json" => SecretBackendSelection::File,
-            "system" | "keyring" | "os" | "os-keyring" => SecretBackendSelection::System,
+            "file" | "local" | "json" | "system" | "keyring" | "os" | "os-keyring" => {
+                SecretBackendSelection::File
+            }
             _ => SecretBackendSelection::Unknown,
         },
     }
@@ -896,16 +889,9 @@ impl Secrets {
         }
     }
 
-    /// Auto-detect the best available backend based on the environment.
-    ///
-    /// Selection logic:
-    /// 1. If [`SECRET_BACKEND_ENV`] is set to `system`/`keyring`/`os`/`os-keyring`,
-    ///    probe the OS keyring. If the probe succeeds, use it; otherwise
-    ///    fall back to the file-based store with a warning.
-    /// 2. If the env var is unset, empty, or `file`/`local`/`json`, use
-    ///    the file-based store directly.
-    /// 3. If the env var is set to an unrecognised value, log a warning
-    ///    and use the file-based store.
+    /// Use the product secret store: `~/.codewhale/secrets/` (mode 0600).
+    /// Legacy `system`/`keyring` env values are ignored so they cannot
+    /// surface a Keychain prompt.
     pub fn auto_detect() -> Self {
         match secret_backend_selection(configured_secret_backend().as_deref()) {
             SecretBackendSelection::File => Self::file_backed_default(),
@@ -914,18 +900,6 @@ impl Secrets {
                     "{SECRET_BACKEND_ENV}/{LEGACY_SECRET_BACKEND_ENV} has an unsupported value; using file-backed secret store"
                 );
                 Self::file_backed_default()
-            }
-            SecretBackendSelection::System => {
-                let default_store = DefaultKeyringStore::default();
-                match default_store.probe() {
-                    Ok(()) => Self::new(Arc::new(default_store)),
-                    Err(err) => {
-                        tracing::warn!(
-                            "OS keyring unavailable ({err}); falling back to file-backed secret store"
-                        );
-                        Self::file_backed_default()
-                    }
-                }
             }
         }
     }
@@ -947,20 +921,6 @@ impl Secrets {
                     "{SECRET_BACKEND_ENV}/{LEGACY_SECRET_BACKEND_ENV} has an unsupported value; using file-backed secret store"
                 );
                 Self::file_backed_read_only()
-            }
-            SecretBackendSelection::System => {
-                let default_store = DefaultKeyringStore::default();
-                match default_store.probe() {
-                    Ok(()) => {
-                        Self::new(Arc::new(ReadOnlyKeyringStore::new(Arc::new(default_store))))
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            "OS keyring unavailable ({err}); falling back to file-backed secret store"
-                        );
-                        Self::file_backed_read_only()
-                    }
-                }
             }
         }
     }
@@ -1037,20 +997,11 @@ impl Secrets {
         Self::file_backed_default()
     }
 
-    /// Construct the opt-in OS credential backend, falling back to the
-    /// file-backed store when the platform backend is unavailable.
+    /// Retired constructor. Always the file store so leftover callers cannot
+    /// surface a Keychain prompt.
     #[must_use]
     pub fn system_keyring() -> Self {
-        let default_store = DefaultKeyringStore::default();
-        match default_store.probe() {
-            Ok(()) => Self::new(Arc::new(default_store)),
-            Err(err) => {
-                tracing::warn!(
-                    "OS keyring unavailable ({err}); falling back to file-backed secret store"
-                );
-                Self::file_backed_default()
-            }
-        }
+        Self::file_backed_default()
     }
 
     /// Backend label, suitable for `doctor` output.
@@ -1354,19 +1305,14 @@ mod tests {
     }
 
     #[test]
-    fn backend_selection_accepts_explicit_system_keyring() {
-        assert_eq!(
-            secret_backend_selection(Some("system")),
-            SecretBackendSelection::System
-        );
-        assert_eq!(
-            secret_backend_selection(Some("keyring")),
-            SecretBackendSelection::System
-        );
-        assert_eq!(
-            secret_backend_selection(Some("os-keyring")),
-            SecretBackendSelection::System
-        );
+    fn backend_selection_ignores_retired_keychain_aliases() {
+        for alias in ["system", "keyring", "os", "os-keyring"] {
+            assert_eq!(
+                secret_backend_selection(Some(alias)),
+                SecretBackendSelection::File,
+                "{alias} must not revive the Keychain product path"
+            );
+        }
     }
 
     #[test]

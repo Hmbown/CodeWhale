@@ -457,6 +457,56 @@ pub(crate) async fn handle_mcp_ui_action(
             mcp::add_server_config(&path, name.clone(), None, Some(url), Vec::new(), transport)
                 .map(|()| message = Some(format!("Added MCP HTTP/SSE server '{name}'")))
         }
+        crate::tui::app::McpUiAction::Connect { name, url, login } => {
+            let already = mcp::load_config(&path)
+                .ok()
+                .is_some_and(|cfg| cfg.servers.contains_key(&name));
+            let add_result = if already {
+                Ok(())
+            } else {
+                changed = true;
+                mcp::add_server_config(&path, name.clone(), None, Some(url), Vec::new(), None)
+            };
+            match add_result {
+                Ok(()) if login => {
+                    let result = async {
+                        let cfg = mcp::load_config_with_workspace_and_plugins(
+                            &path,
+                            &app.workspace,
+                            app.plugin_registry.as_ref(),
+                        )?;
+                        let server = cfg
+                            .servers
+                            .get(&name)
+                            .ok_or_else(|| anyhow::anyhow!("MCP server '{name}' not found"))?;
+                        mcp::oauth::perform_oauth_login_for_server(
+                            &name,
+                            server,
+                            None,
+                            config.mcp_oauth_callback_port,
+                            config.mcp_oauth_callback_url.as_deref(),
+                        )
+                        .await
+                    }
+                    .await;
+                    result.map(|()| {
+                        changed = true;
+                        message = Some(format!(
+                            "Connected MCP server '{name}'. Stored OAuth credentials. Run /mcp reload to reconnect it."
+                        ));
+                    })
+                }
+                Ok(()) => {
+                    message = Some(if already {
+                        format!("MCP server '{name}' is already configured. Run /mcp reload if it is not connected.")
+                    } else {
+                        format!("Added MCP server '{name}'. Run /mcp reload to connect it.")
+                    });
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            }
+        }
         crate::tui::app::McpUiAction::Enable { name } => {
             changed = true;
             mcp::set_server_enabled(&path, &name, true)

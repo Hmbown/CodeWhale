@@ -192,54 +192,17 @@ impl WorkerRuntimeProfile {
         }
     }
 
-    /// The default profile for a role — the per-role posture. Mirrors the role
-    /// stances documented in `docs/SUBAGENTS.md` (explore/plan/review are
-    /// read-only; verifier runs tests; implementer/general write).
+    /// The default profile for a role. Roles are prompt labels, not permission
+    /// packages: every child starts able to do a slice of work. The parent's
+    /// effective posture is the ceiling (`derive_child` intersects, never
+    /// widens). Hard carve-outs (payments, customer-data delete) and the
+    /// Auto-Review safety floor stay outside this profile.
     #[must_use]
     pub fn for_role(role: FleetRole) -> Self {
-        // A role's default is what the role *intends*, expressed as the widest
-        // posture the role can be given; the parent's effective posture is the
-        // ceiling (`derive_child` intersects, never widens). Read-only roles
-        // stay read-only on the workspace by intent. Nothing else is taken
-        // away by default: network reach is a read, and a worker cut off from
-        // the network or from shell for no role reason cannot do its job.
-        let (permissions, shell) = match role {
-            // Read-only investigators: no workspace writes, but network reach
-            // and the bounded verification surface so a scout/reviewer lane
-            // can run git/gh/web inspection. Raw shell stays denied by the
-            // registry clamp (read-only classifier), so this widens capability
-            // without widening mutation authority.
-            FleetRole::Scout | FleetRole::Reviewer => {
-                (PermissionSet::read_only_with_network(), ShellPolicy::Full)
-            }
-            // Planner: analysis only. Reads the workspace and the web and may
-            // run read-only shell probes (`git log`, `rg`) under the read-only
-            // classifier; never mutates.
-            FleetRole::Planner => (
-                PermissionSet::read_only_with_network(),
-                ShellPolicy::ReadOnly,
-            ),
-            // Consultant: counsel only. Reads (workspace and web) to ground
-            // its advice; never acts on the workspace, so no shell (#4752).
-            FleetRole::Consultant => (PermissionSet::read_only_with_network(), ShellPolicy::None),
-            // Verifier: doesn't modify code, but runs the bounded built-in
-            // verification surface (test/check selections) under a full shell
-            // ceiling clamped by ChildAuthority: writes are denied and
-            // unbounded shell forms are refused (#5186). The old wording
-            // promised "runs the test suite" without saying the surface is
-            // bounded. See the roster description and VERIFIER_AGENT_INTRO.
-            FleetRole::Verifier => (PermissionSet::read_only_with_network(), ShellPolicy::Full),
-            // Doers, and Custom: inherit the parent's effective posture. A
-            // custom worker is narrowed by its explicit tool list and by the
-            // spawning call, not by a silent locked-down default.
-            FleetRole::Builder | FleetRole::Worker | FleetRole::Custom => {
-                (PermissionSet::full(), ShellPolicy::Full)
-            }
-        };
         Self {
             role: role.clone(),
-            permissions,
-            shell,
+            permissions: PermissionSet::full(),
+            shell: ShellPolicy::Full,
             tools: ToolScope::Inherit,
             model: ModelRoute::Inherit,
             provider: None,
@@ -398,38 +361,25 @@ mod tests {
     }
 
     #[test]
-    fn for_role_postures_match_role_stances() {
-        let explore = WorkerRuntimeProfile::for_role(FleetRole::Scout);
-        assert!(!explore.permissions.write, "explore must not write");
-        assert!(
-            explore.permissions.network,
-            "explore/read-only inspection lanes keep network reach"
-        );
-        assert_eq!(
-            explore.shell,
-            ShellPolicy::Full,
-            "explore/read-only inspection lanes hold shell authority so the bounded              verification surface survives the clamp (raw shell still              requires write)"
-        );
-        assert_eq!(
-            explore.model,
-            ModelRoute::Inherit,
-            "explore should not silently downgrade the child model"
-        );
-
-        let implementer = WorkerRuntimeProfile::for_role(FleetRole::Builder);
-        assert!(implementer.permissions.write, "implementer writes");
-        assert_eq!(implementer.shell, ShellPolicy::Full);
-
-        let verifier = WorkerRuntimeProfile::for_role(FleetRole::Verifier);
-        assert!(
-            !verifier.permissions.write,
-            "verifier reports, does not patch"
-        );
-        assert_eq!(
-            verifier.shell,
-            ShellPolicy::Full,
-            "verifier holds shell authority for the bounded verification surface (unbounded forms are refused by the policy seam)"
-        );
+    fn for_role_is_one_worker_system() {
+        for role in [
+            FleetRole::Scout,
+            FleetRole::Reviewer,
+            FleetRole::Planner,
+            FleetRole::Verifier,
+            FleetRole::Consultant,
+            FleetRole::Builder,
+            FleetRole::Worker,
+            FleetRole::Custom,
+        ] {
+            let profile = WorkerRuntimeProfile::for_role(role);
+            assert!(
+                profile.permissions.write && profile.permissions.network,
+                "roles are labels; a child inherits parent-ceiling write+network"
+            );
+            assert_eq!(profile.shell, ShellPolicy::Full);
+            assert_eq!(profile.model, ModelRoute::Inherit);
+        }
     }
 
     #[test]
@@ -451,22 +401,14 @@ mod tests {
         }
     }
 
-    /// #4752: Consultant is counsel, not labour. Its posture has to be read-only
-    /// and shell-less by construction, not by the caller remembering to pass
-    /// `write_authority: read-only`.
+    /// Consultant stays a high-reasoning *label*. It is not a weaker
+    /// permission package — the child can still do the assigned slice.
     #[test]
-    fn consultant_is_read_only_shell_less_and_high_reasoning_by_default() {
+    fn consultant_keeps_high_reasoning_without_a_weaker_tool_list() {
         let consultant = WorkerRuntimeProfile::for_role(FleetRole::Consultant);
 
-        assert!(
-            !consultant.permissions.write,
-            "a consultant advises, it never writes"
-        );
-        assert_eq!(
-            consultant.shell,
-            ShellPolicy::None,
-            "a consultant has no reason to run commands"
-        );
+        assert!(consultant.permissions.write);
+        assert_eq!(consultant.shell, ShellPolicy::Full);
         assert_eq!(
             consultant.reasoning_effort.as_deref(),
             Some("high"),

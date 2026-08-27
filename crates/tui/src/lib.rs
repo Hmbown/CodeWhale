@@ -154,6 +154,8 @@ mod turn_route_plan;
 mod utils;
 mod vision;
 mod work_graph;
+mod session_namer;
+mod simple_worker;
 mod worker_profile;
 mod working_set;
 mod workspace_discovery;

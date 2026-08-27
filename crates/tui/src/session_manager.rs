@@ -132,6 +132,17 @@ pub struct SessionContextReference {
     pub reference: ContextReference,
 }
 
+/// How the persisted session title was chosen. A user rename always wins
+/// over truncation and over the cheap first-prompt namer.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionTitleSource {
+    #[default]
+    Truncation,
+    Generated,
+    User,
+}
+
 /// Session metadata stored with each saved session
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetadata {
@@ -139,6 +150,10 @@ pub struct SessionMetadata {
     pub id: String,
     /// Human-readable title (derived from first message)
     pub title: String,
+    /// Who last set [`Self::title`]. Additive; older sessions load as
+    /// truncation so a later namer may still replace them.
+    #[serde(default, skip_serializing_if = "session_title_source_is_truncation")]
+    pub title_source: SessionTitleSource,
     /// When the session was created
     pub created_at: DateTime<Utc>,
     /// When the session was last updated
@@ -195,6 +210,10 @@ pub struct SessionMetadata {
 
 fn is_not_archived(archived: &bool) -> bool {
     !*archived
+}
+
+fn session_title_source_is_truncation(source: &SessionTitleSource) -> bool {
+    matches!(source, SessionTitleSource::Truncation)
 }
 
 /// Sessions currently owned by an in-process interactive surface (the TUI).
@@ -819,6 +838,7 @@ impl SavedSession {
         let metadata = SessionMetadata {
             id: Uuid::new_v4().to_string(),
             title,
+            title_source: SessionTitleSource::Truncation,
             created_at: now,
             updated_at: now,
             message_count: messages.len(),
@@ -1622,6 +1642,7 @@ impl SessionManager {
             return Ok(session.metadata);
         }
         session.metadata.title = title;
+        session.metadata.title_source = SessionTitleSource::User;
         self.save_session(&session)?;
         Ok(session.metadata)
     }
@@ -2144,6 +2165,7 @@ pub fn create_saved_session_with_id_and_mode(
         metadata: SessionMetadata {
             id,
             title,
+            title_source: SessionTitleSource::Truncation,
             created_at: now,
             updated_at: now,
             message_count: messages.len(),
@@ -2776,6 +2798,7 @@ mod tests {
             metadata: SessionMetadata {
                 id: id.to_string(),
                 title: format!("session-{id}"),
+                title_source: SessionTitleSource::Truncation,
                 created_at: updated_at,
                 updated_at,
                 message_count: 1,
@@ -2817,6 +2840,7 @@ mod tests {
             metadata: SessionMetadata {
                 id: id.to_string(),
                 title: DEFAULT_SESSION_TITLE.to_string(),
+                title_source: SessionTitleSource::Truncation,
                 created_at: updated_at,
                 updated_at,
                 message_count: 0,

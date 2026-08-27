@@ -278,6 +278,7 @@ impl ExtensionsSnapshot {
 
         for item in &mut group.items {
             let recommendation = match item.id.as_str() {
+                "github" => Some(("github", "github")),
                 "playwright-browser" => Some(("playwright", "playwright")),
                 "chrome-devtools" => Some(("chrome-devtools", "chrome-devtools")),
                 "cua-computer-use" => Some(("cua-driver", "cua")),
@@ -291,9 +292,14 @@ impl ExtensionsSnapshot {
                     None => {
                         item.state =
                             tr(app.ui_locale, MessageId::ExtensionsStateAvailable).into_owned();
+                        let command = if recommendation_id == "github" {
+                            "/mcp connect github".to_string()
+                        } else {
+                            format!("/mcp add recommended {recommendation_id}")
+                        };
                         item.action = Some(ExtensionAction::Command {
                             label: tr(app.ui_locale, MessageId::ExtensionsActionAdd).into_owned(),
-                            command: format!("/mcp add recommended {recommendation_id}"),
+                            command,
                         });
                     }
                     Some(server) if !server.is_enabled() => {
@@ -333,6 +339,18 @@ impl ExtensionsSnapshot {
 /// manifests produced by the packaging lane remain the installation authority.
 fn reviewed_product_catalog(locale: Locale) -> Vec<PluginProduct> {
     vec![
+        PluginProduct {
+            id: "github".into(),
+            name: "GitHub".into(),
+            description: "Repositories, issues, pull requests, and checks. Uses the official GitHub MCP plus `/mcp login github` — the same App-bound connection the Codewhale app uses, not a generic plugin credential.".into(),
+            publisher: "GitHub".into(),
+            source_reference: "https://api.githubcopilot.com/mcp/".into(),
+            components: vec![PluginProductComponent {
+                kind: PluginProductComponentKind::Mcp,
+                name: "GitHub MCP".into(),
+            }],
+            maturity: tr(locale, MessageId::ExtensionsStateReviewedCandidate).into_owned(),
+        },
         PluginProduct {
             id: "playwright-browser".into(),
             name: "Playwright Browser".into(),

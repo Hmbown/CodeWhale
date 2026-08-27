@@ -173,6 +173,22 @@ fn suggest_ranks_installed_plugins_without_trusting_or_enabling_them() {
 }
 
 #[test]
+fn suggest_names_github_connect_when_the_task_needs_it() {
+    let _lock = crate::test_support::lock_test_env();
+    let root = TempDir::new().unwrap();
+    let codewhale_home = root.path().join("home");
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &codewhale_home);
+    write_bundle(root.path());
+    let (mut app, _temp) = create_test_app(root.path());
+
+    let result = plugins(&mut app, Some("suggest review this github pull request"));
+    assert!(!result.is_error, "{result:?}");
+    let message = result.message.expect("suggestion message");
+    assert!(message.contains("/mcp connect github"), "{message}");
+    assert!(!codewhale_home.join("plugins/state.json").exists());
+}
+
+#[test]
 fn trust_requires_content_and_capability_bound_review_token() {
     let _lock = crate::test_support::lock_test_env();
     let root = TempDir::new().unwrap();

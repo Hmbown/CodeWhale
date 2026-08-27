@@ -17,7 +17,7 @@ const CONTAINER_USE_SOURCE: &str = "https://github.com/dagger/container-use";
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "mcp",
     aliases: &[],
-    usage: "/mcp [init|import|import approve <name>|import decline <name>|recommendations|add recommended <id>|add stdio <name> <command> [args...]|add http <name> <url>|enable <name>|disable <name>|remove <name>|doctor|validate|restart|reload]",
+    usage: "/mcp [init|import|import approve <name>|import decline <name>|recommendations|connect <id>|add recommended <id>|add stdio <name> <command> [args...]|add http <name> <url>|enable <name>|disable <name>|remove <name>|login <name>|logout <name>|doctor|validate|restart|reload]",
     description_key: "cmd_mcp_description",
 };
 
@@ -57,6 +57,7 @@ fn mcp(presentation: &mut dyn CommandPresentationContext, args: Option<&str>) ->
         "recommend" | "recommended" | "recommendations" => {
             CommandResult::message(recommended_mcp_text(presentation))
         }
+        "connect" => parse_connect(presentation, parts.next()),
         "add" => parse_add(presentation, parts.collect()),
         "enable" => match parse_name(parts.next(), "Usage: /mcp enable <name>") {
             Ok(name) => CommandResult::action(AppAction::Mcp(McpUiAction::Enable { name })),
@@ -117,7 +118,7 @@ fn mcp(presentation: &mut dyn CommandPresentationContext, args: Option<&str>) ->
             CommandResult::action(AppAction::Mcp(McpUiAction::Reload))
         }
         _ => CommandResult::error(
-            "Usage: /mcp [init|import|recommendations|add recommended <id>|add stdio <name> <command> [args...]|add http <name> <url>|enable <name>|disable <name>|remove <name>|login <name>|logout <name>|doctor|validate|restart|reload]",
+            "Usage: /mcp [init|import|recommendations|connect <id>|add recommended <id>|add stdio <name> <command> [args...]|add http <name> <url>|enable <name>|disable <name>|remove <name>|login <name>|logout <name>|doctor|validate|restart|reload]",
         ),
     }
 }
@@ -126,6 +127,28 @@ fn parse_name(name: Option<&str>, usage: &str) -> Result<String, String> {
     match name {
         Some(name) if !name.trim().is_empty() => Ok(name.to_string()),
         _ => Err(usage.to_string()),
+    }
+}
+
+fn parse_connect(
+    presentation: &mut dyn CommandPresentationContext,
+    id: Option<&str>,
+) -> CommandResult {
+    let Some(id) = id.filter(|id| !id.trim().is_empty()) else {
+        return CommandResult::error("Usage: /mcp connect <id>");
+    };
+    match id.to_ascii_lowercase().as_str() {
+        "github" | "gh" => CommandResult::action(AppAction::Mcp(McpUiAction::Connect {
+            name: "github".to_string(),
+            url: GITHUB_MCP_URL.to_string(),
+            login: true,
+        })),
+        "hugging-face" | "hf" => CommandResult::action(AppAction::Mcp(McpUiAction::Connect {
+            name: "hugging-face".to_string(),
+            url: "https://huggingface.co/mcp".to_string(),
+            login: false,
+        })),
+        other => parse_add(presentation, vec!["recommended", other]),
     }
 }
 
@@ -482,6 +505,13 @@ mod tests {
         assert!(matches!(
             add_github.action,
             Some(AppAction::Mcp(McpUiAction::AddHttp { name, url, transport: None }))
+                if name == "github" && url == GITHUB_MCP_URL
+        ));
+
+        let connect_github = mcp(&mut FakePresentation, Some("connect github"));
+        assert!(matches!(
+            connect_github.action,
+            Some(AppAction::Mcp(McpUiAction::Connect { name, url, login: true }))
                 if name == "github" && url == GITHUB_MCP_URL
         ));
 

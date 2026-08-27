@@ -133,8 +133,8 @@ pub(crate) fn secret_backend_human_lines(
             format!("presence: {} ({inspection})", presence(diagnostic.presence)),
         ],
         SecretBackendDiagnosticKind::System => vec![
-            "backend: system".to_string(),
-            "status: unknown (not_probed)".to_string(),
+            "backend: file".to_string(),
+            "status: using the Codewhale secret store".to_string(),
         ],
         SecretBackendDiagnosticKind::Unknown => vec![
             "backend: unknown".to_string(),

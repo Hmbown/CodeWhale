@@ -391,8 +391,8 @@ For the active provider, the runtime resolves the API key in this exact order
    the named environment variable. For custom providers an unset or empty
    binding is a loud error, not a silent fallback (#5104).
 5. **Secret store.** The durable per-provider slot written by
-   `codewhale auth set` (file-backed under `~/.codewhale/secrets/` by
-   default; the OS keyring only when explicitly selected). Skipped for named
+   `codewhale auth set` (file-backed under `~/.codewhale/secrets/`, mode
+   0600). There is no Keychain / OS-keyring product path. Skipped for named
    custom routes, self-hosted providers, custom endpoints other than an
    explicitly authenticated loopback, and routes whose `auth_mode` needs no
    key.
@@ -410,9 +410,9 @@ variables remain accepted aliases for the `CODEWHALE_*` forms, and
 `DEEPSEEK_SECRET_BACKEND` is the legacy alias for `CODEWHALE_SECRET_BACKEND`.
 
 Run `codewhale auth status` to inspect the active provider's config
-file, OS keyring backend, environment variable, winning source, and last-four
-label without printing the key itself. The command only probes the active
-provider's keyring entry.
+file, secret-store backend, environment variable, winning source, and last-four
+label without printing the key itself. The command only labels the active
+provider's secret-store slot.
 
 For hosted, generic OpenAI-compatible, self-hosted, OpenAI Responses, or native
 Anthropic providers, set `provider = "<id>"` or pass

@@ -499,6 +499,7 @@ impl SessionPickerView {
             }
         };
         saved.metadata.title = new_title.to_string();
+        saved.metadata.title_source = crate::session_manager::SessionTitleSource::User;
         if let Err(e) = manager.save_session(&saved) {
             self.status = Some(
                 tr(self.locale, MessageId::SessionsRenameFailed).replace("{error}", &e.to_string()),
@@ -1255,6 +1256,7 @@ mod tests {
         SessionMetadata {
             id: format!("session-{idx:02}"),
             title: title.to_string(),
+            title_source: crate::session_manager::SessionTitleSource::Truncation,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             message_count: idx + 1,

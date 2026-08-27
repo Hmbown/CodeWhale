@@ -3049,9 +3049,10 @@ fn declared_write_authority_parses_and_worktree_write_requires_isolation() {
     let custom_read_only = parse_spawn_request(&json!({
         "prompt": "run a narrow reader",
         "type": "custom",
-        "allowed_tools": ["read_file"]
+        "allowed_tools": ["read_file"],
+        "write_authority": "read_only"
     }))
-    .expect("custom without explicit write authority stays read-only");
+    .expect("custom stays read-only only when asked");
     assert_eq!(
         custom_read_only.write_authority,
         Some(SpawnWriteAuthority::ReadOnly)
@@ -3063,12 +3064,8 @@ fn declared_write_authority_parses_and_worktree_write_requires_isolation() {
         "allowed_tools": ["write_file"],
         "write_roots": ["src"]
     }))
-    .expect_err("custom scopes require deliberate write authority")
-    .to_string();
-    assert!(
-        custom_implicit_write.contains("explicit"),
-        "{custom_implicit_write}"
-    );
+    .expect("custom write scopes inherit workspace write; no extra authority flag");
+    assert!(spawn_request_is_write_capable(&custom_implicit_write));
 
     let custom_writer = parse_spawn_request(&json!({
         "prompt": "bounded custom writer",
@@ -3082,13 +3079,17 @@ fn declared_write_authority_parses_and_worktree_write_requires_isolation() {
 }
 
 #[test]
-fn prompt_only_general_children_default_read_only_instead_of_claiming_the_repo() {
+fn prompt_only_spawn_inherits_workspace_write_without_extra_flags() {
     let request = parse_spawn_request(&json!({
         "prompt": "inspect the subsystem",
     }))
-    .expect("prompt-only child remains ergonomic");
-    assert_eq!(request.write_authority, Some(SpawnWriteAuthority::ReadOnly));
-    assert!(request.write_roots.is_empty());
+    .expect("spawn(prompt) is enough");
+    assert_eq!(
+        request.write_authority,
+        Some(SpawnWriteAuthority::WorkspaceWrite)
+    );
+    assert_eq!(request.write_roots, vec![".".to_string()]);
+    assert!(spawn_request_is_write_capable(&request));
 
     // Explicit write-capable starts without a scope default to the parent
     // workspace root rather than refusing.
@@ -3126,16 +3127,15 @@ fn prompt_only_general_children_default_read_only_instead_of_claiming_the_repo()
 }
 
 #[test]
-fn read_only_roles_reject_write_authority_but_implementers_can_be_narrowed() {
+fn roles_are_labels_and_can_write_unless_explicitly_read_only() {
     let reviewer = parse_spawn_request(&json!({
         "prompt": "review while writing",
         "type": "review",
         "write_authority": "workspace_write",
         "write_roots": ["src"]
     }))
-    .expect_err("read-only role cannot request writes")
-    .to_string();
-    assert!(reviewer.contains("read-only role"), "{reviewer}");
+    .expect("roles are not a weaker permission package");
+    assert!(spawn_request_is_write_capable(&reviewer));
 
     // Narrowing a write-capable identity to read-only work stays legal, but
     // it travels through `role` (identity) rather than `type` (a claim about
@@ -3158,13 +3158,14 @@ fn read_only_roles_reject_write_authority_but_implementers_can_be_narrowed() {
 /// travel the same spawn/schema machinery as every other role, and be refused
 /// write authority by the same guard that refuses reviewer.
 #[test]
-fn consultant_spawns_as_a_first_class_read_only_role() {
+fn consultant_spawns_as_a_first_class_role_not_a_weaker_package() {
     let consultant = parse_spawn_request(&json!({
         "prompt": "is this design sound?",
         "type": "consultant"
     }))
     .expect("consultant parses through the normal spawn path");
     assert_eq!(consultant.agent_type, FleetRole::Consultant);
+    assert!(spawn_request_is_write_capable(&consultant));
 
     let escalation = parse_spawn_request(&json!({
         "prompt": "advise, and also patch it",
@@ -3172,9 +3173,8 @@ fn consultant_spawns_as_a_first_class_read_only_role() {
         "write_authority": "workspace_write",
         "write_roots": ["src"]
     }))
-    .expect_err("a consultant must not be able to request writes")
-    .to_string();
-    assert!(escalation.contains("read-only role"), "{escalation}");
+    .expect("consultant can do a slice of work");
+    assert!(spawn_request_is_write_capable(&escalation));
 }
 
 #[test]
@@ -5426,8 +5426,9 @@ fn agent_tool_prompt_schema_keeps_ordinary_starts_message_first() {
     let agent_schema = AgentTool::new(manager, stub_runtime()).input_schema();
     let prompt = schema_property_description(&agent_schema, "prompt");
     assert!(prompt.contains("focused task"));
-    assert!(prompt.contains("read-only role needs no write scope"));
-    assert!(prompt.contains("write-capable role defaults to the parent workspace"));
+    assert!(prompt.contains("spawn(prompt) defaults write scope to the parent workspace"));
+    assert!(!prompt.contains("ChildPermissionPreset"));
+    assert!(!prompt.contains("operate_preset"));
     for ceremony in [
         "Subagent Brief",
         "QUESTION",
@@ -11612,17 +11613,27 @@ async fn workflow_accept_edits_allows_general_file_write_without_parent_auto_app
     assert_eq!(written, "from workflow");
     assert!(!result.contains("requires approval"), "{result}");
 
-    let err = registry
+    registry
         .execute(
             "agent_test",
             "Bash",
             json!({"action": "run", "command": "echo hi"}),
         )
         .await
-        .expect_err("shell must still require parent auto-approve");
+        .expect("a spawned child inherits parent shell for ordinary commands");
+
+    let payment_err = registry
+        .execute(
+            "agent_test",
+            "Bash",
+            json!({"action": "run", "command": "stripe charges create --amount 500"}),
+        )
+        .await
+        .expect_err("payments stay carved out");
     assert!(
-        err.to_string().contains("requires approval"),
-        "unexpected: {err}"
+        payment_err.to_string().contains("requires approval")
+            || payment_err.to_string().contains("carve"),
+        "unexpected: {payment_err}"
     );
 }
 
@@ -12734,20 +12745,21 @@ pub(crate) fn stub_runtime() -> SubAgentRuntime {
 }
 
 #[test]
-fn root_operate_dispatch_delegates_file_edits_without_bypassing_required_tools() {
+fn root_spawn_inherits_parent_without_disabling_safety() {
     let mut runtime = stub_runtime();
-    runtime.parent_mode = crate::tui::app::AppMode::Operate;
+    runtime.parent_mode = crate::tui::app::AppMode::Agent;
     assert!(!runtime.accept_edits);
-    assert!(!runtime.accept_verification);
     assert!(!runtime.context.auto_approve);
 
     apply_session_spawn_defaults(&mut runtime);
 
     assert!(runtime.accept_edits);
     assert!(runtime.accept_verification);
+    assert!(runtime.allow_shell);
+    assert!(runtime.worker_profile.permissions.write);
     assert!(
         !runtime.context.auto_approve,
-        "Operate dispatch must not silently grant Required tools such as shell"
+        "inherit-parent must not disable the Auto-Review safety floor"
     );
 }
 
@@ -12769,7 +12781,7 @@ async fn root_operate_dispatch_delegates_builtin_verification_but_not_shell() {
     let mut runtime = stub_runtime();
     runtime.context = ToolContext::new(tmp.path().to_path_buf());
     runtime.context.auto_approve = false;
-    runtime.parent_mode = crate::tui::app::AppMode::Operate;
+    runtime.parent_mode = crate::tui::app::AppMode::Agent;
     apply_session_spawn_defaults(&mut runtime);
     let registry = SubAgentToolRegistry::new(
         runtime.clone(),
@@ -12782,7 +12794,24 @@ async fn root_operate_dispatch_delegates_builtin_verification_but_not_shell() {
     registry
         .execute("agent_test", "Run", json!({"action": "tests"}))
         .await
-        .expect("parent-approved Operate worker should run built-in tests");
+        .expect("a spawned child should run built-in tests");
+
+    registry
+        .execute(
+            "agent_test",
+            "File",
+            json!({
+                "action": "write",
+                "path": "slice.txt",
+                "content": "from child"
+            }),
+        )
+        .await
+        .expect("spawn(prompt) can write a file without extra flags");
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("slice.txt")).expect("child write"),
+        "from child"
+    );
 
     let targeted_err = registry
         .execute(
@@ -12794,31 +12823,37 @@ async fn root_operate_dispatch_delegates_builtin_verification_but_not_shell() {
             }),
         )
         .await
-        .expect_err("raw Cargo argv must stay approval-gated");
+        .expect_err("writes outside the workspace stay gated");
     assert!(targeted_err.to_string().contains("requires approval"));
 
-    let shell_err = registry
+    registry
         .execute(
             "agent_test",
             "Bash",
-            json!({"action": "run", "command": "echo nope"}),
+            json!({"action": "run", "command": "echo slice-ok"}),
         )
         .await
-        .expect_err("Operate verification delegation must not grant raw shell");
-    assert!(shell_err.to_string().contains("requires approval"));
+        .expect("spawn(prompt) can run a command without extra flags");
 
-    let custom_err = registry
+    let payment_err = registry
         .execute(
             "agent_test",
-            "Run",
-            json!({
-                "action": "verifiers",
-                "commands": [{"name": "custom", "program": "echo", "args": ["nope"]}]
-            }),
+            "Bash",
+            json!({"action": "run", "command": "stripe charges create --amount 500"}),
         )
         .await
-        .expect_err("Operate verification delegation must not grant custom commands");
-    assert!(custom_err.to_string().contains("requires approval"));
+        .expect_err("payments stay carved out");
+    assert!(payment_err.to_string().contains("requires approval"));
+
+    let delete_err = registry
+        .execute(
+            "agent_test",
+            "Bash",
+            json!({"action": "run", "command": "psql -c 'delete from users'"}),
+        )
+        .await
+        .expect_err("customer-data deletes stay carved out");
+    assert!(delete_err.to_string().contains("requires approval"));
 
     let direct_child = runtime.child_runtime();
     assert!(direct_child.accept_verification);
@@ -20863,31 +20898,29 @@ async fn agent_claim_is_withheld_from_a_role_with_no_write_authority() {
             .collect::<Vec<_>>()
     };
 
-    for read_only in [FleetRole::Scout, FleetRole::Reviewer, FleetRole::Planner] {
-        let actions = agent_actions(read_only.clone());
+    for role in [
+        FleetRole::Scout,
+        FleetRole::Reviewer,
+        FleetRole::Planner,
+        FleetRole::Builder,
+        FleetRole::Worker,
+    ] {
+        let actions = agent_actions(role.clone());
         assert!(
-            !actions.iter().any(|action| action == "claim"),
-            "{read_only:?} has no write scope to widen: {actions:?}"
+            actions.iter().any(|action| action == "claim"),
+            "{role:?} inherits write scope: {actions:?}"
         );
         assert!(
             actions.iter().any(|action| action == "start"),
-            "{read_only:?} keeps the rest of the surface: {actions:?}"
-        );
-    }
-    for writer in [FleetRole::Builder, FleetRole::Worker] {
-        assert!(
-            agent_actions(writer.clone())
-                .iter()
-                .any(|action| action == "claim"),
-            "{writer:?} must keep write-claim coordination"
+            "{role:?} keeps the rest of the surface: {actions:?}"
         );
     }
 
-    // Catalog shaping is not the boundary: a hand-written call is refused too.
     let mut runtime = stub_runtime();
     runtime.context = ToolContext::new(tmp.path().to_path_buf());
     runtime.context.auto_approve = true;
     runtime.worker_profile = WorkerRuntimeProfile::for_role(FleetRole::Scout);
+    runtime.worker_profile.permissions.write = false;
     let registry = SubAgentToolRegistry::new(
         runtime,
         FleetRole::Scout,
@@ -20902,7 +20935,7 @@ async fn agent_claim_is_withheld_from_a_role_with_no_write_authority() {
             json!({"action": "claim", "write_roots": ["src"]}),
         )
         .await
-        .expect_err("a read-only role cannot widen a write scope")
+        .expect_err("an explicit parent-ceiling read-only worker cannot widen write scope")
         .to_string();
     assert!(refusal.contains("no write authority to widen"), "{refusal}");
 }
