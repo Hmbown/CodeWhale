@@ -113,6 +113,9 @@ pub struct SessionBootSurface {
     pub phase: SessionBootPhase,
     pub servers: Vec<McpServerBootRow>,
     pub plugins: PluginBootSummary,
+    /// Enabled-server count used when names have not arrived yet, so the
+    /// first frame can still say `MCP · N connecting` instead of hiding.
+    unnamed_connecting: usize,
 }
 
 impl SessionBootSurface {
@@ -141,11 +144,13 @@ impl SessionBootSurface {
                 .iter()
                 .map(|server| row_from_snapshot(server, initializing, connecting))
                 .collect()
-        } else if initializing && configured_count > 0 {
-            connecting
-                .iter()
+        } else if initializing {
+            let mut names = connecting.to_vec();
+            names.sort();
+            names
+                .into_iter()
                 .map(|name| McpServerBootRow {
-                    name: name.clone(),
+                    name,
                     state: McpServerBootState::Connecting,
                     action: McpServerAction::None,
                 })
@@ -158,9 +163,14 @@ impl SessionBootSurface {
             .iter()
             .filter(|row| row.state == McpServerBootState::Connecting)
             .count();
-        let phase = if servers.is_empty() && plugins.is_quiet() {
+        let unnamed_connecting = if connecting_count == 0 && initializing {
+            configured_count
+        } else {
+            0
+        };
+        let phase = if servers.is_empty() && plugins.is_quiet() && unnamed_connecting == 0 {
             SessionBootPhase::Hidden
-        } else if initializing || connecting_count > 0 {
+        } else if initializing || connecting_count > 0 || unnamed_connecting > 0 {
             SessionBootPhase::Booting
         } else {
             SessionBootPhase::Settled
@@ -170,6 +180,7 @@ impl SessionBootSurface {
             phase,
             servers,
             plugins,
+            unnamed_connecting,
         }
     }
 
@@ -219,7 +230,7 @@ impl SessionBootSurface {
             ));
             candidates.push(format!("MCP{ITEM_SEPARATOR}{failed} failed"));
         } else if self.phase == SessionBootPhase::Booting {
-            let count = self.servers.len();
+            let count = self.servers.len().max(self.unnamed_connecting);
             if count > 0 {
                 candidates.push(format!("MCP{ITEM_SEPARATOR}{count} connecting"));
             }
@@ -248,7 +259,12 @@ impl SessionBootSurface {
                     .map(|row| row.name.as_str())
                     .collect();
                 if connecting.is_empty() && self.servers.is_empty() {
-                    // Plugin-only boot; the plugin line is enough.
+                    if self.unnamed_connecting > 0 {
+                        lines.push(format!(
+                            "MCP{ITEM_SEPARATOR}{} connecting",
+                            self.unnamed_connecting
+                        ));
+                    }
                 } else {
                     let count = if connecting.is_empty() {
                         self.servers.len()
@@ -306,10 +322,12 @@ impl SessionBootSurface {
                             ));
                             remaining = remaining.saturating_sub(1);
                         }
-                        let show = notable
-                            .len()
-                            .min(remaining.saturating_sub(usize::from(notable.len() > remaining)));
-                        let show = show.max(1).min(notable.len()).min(remaining);
+                        let overflow = notable.len() > remaining;
+                        let show = if overflow {
+                            remaining.saturating_sub(1)
+                        } else {
+                            notable.len()
+                        };
                         for row in notable.iter().take(show) {
                             lines.push(truncate_to_width(&server_row_text(row, locale), width));
                         }
@@ -710,5 +728,158 @@ mod tests {
         );
         let chip = surface.activity_chip(Locale::En, 22).expect("chip");
         assert_eq!(chip, "MCP · 3 connecting");
+    }
+
+    #[test]
+    fn first_frame_names_enabled_servers_before_a_snapshot_arrives() {
+        let connecting = ["gamma", "alpha", "docs"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let surface = SessionBootSurface::from_parts(
+            None,
+            true,
+            &connecting,
+            3,
+            PluginBootSummary::default(),
+        );
+        assert_eq!(surface.phase, SessionBootPhase::Booting);
+        assert_eq!(
+            surface
+                .servers
+                .iter()
+                .map(|row| row.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "docs", "gamma"]
+        );
+        let chip = surface.activity_chip(Locale::En, 80).expect("chip");
+        assert!(chip.contains("3 connecting"), "{chip}");
+        assert!(chip.contains("alpha"), "{chip}");
+        assert!(chip.contains("gamma"), "{chip}");
+        assert!(!chip.to_ascii_lowercase().contains("slack"), "{chip}");
+        let receipt = surface.receipt_lines(Locale::En, 80);
+        assert_eq!(receipt.len(), 1, "{receipt:?}");
+        assert!(receipt[0].contains("alpha"), "{receipt:?}");
+        assert!(receipt[0].contains("docs"), "{receipt:?}");
+    }
+
+    #[test]
+    fn initializing_without_names_still_shows_the_count() {
+        let surface =
+            SessionBootSurface::from_parts(None, true, &[], 4, PluginBootSummary::default());
+        assert_eq!(surface.phase, SessionBootPhase::Booting);
+        assert!(surface.servers.is_empty());
+        assert_eq!(
+            surface.activity_chip(Locale::En, 80).as_deref(),
+            Some("MCP · 4 connecting")
+        );
+        assert_eq!(
+            surface.receipt_lines(Locale::En, 80),
+            vec!["MCP · 4 connecting".to_string()]
+        );
+    }
+
+    #[test]
+    fn settled_single_server_keeps_the_name_and_next_action() {
+        let snap = snapshot(vec![server(
+            "alpha",
+            true,
+            false,
+            Some("protocol negotiation timed out"),
+        )]);
+        let surface = SessionBootSurface::from_parts(
+            Some(&snap),
+            false,
+            &[],
+            1,
+            PluginBootSummary::default(),
+        );
+        assert_eq!(surface.phase, SessionBootPhase::Settled);
+        assert_eq!(
+            surface.receipt_lines(Locale::En, 80),
+            vec!["alpha · failed · /mcp retry alpha".to_string()]
+        );
+    }
+
+    #[test]
+    fn settled_all_connected_collapses_to_the_count() {
+        let snap = snapshot(vec![
+            server("alpha", true, true, None),
+            server("beta", true, true, None),
+        ]);
+        let surface = SessionBootSurface::from_parts(
+            Some(&snap),
+            false,
+            &[],
+            2,
+            PluginBootSummary::default(),
+        );
+        assert_eq!(surface.phase, SessionBootPhase::Settled);
+        assert_eq!(
+            surface.receipt_lines(Locale::En, 80),
+            vec!["MCP · 2 connected".to_string()]
+        );
+        assert!(surface.activity_chip(Locale::En, 80).is_none());
+    }
+
+    #[test]
+    fn overflow_receipt_keeps_a_plus_more_row() {
+        let snap = snapshot(
+            (0..8)
+                .map(|i| {
+                    server(
+                        &format!("s{i}"),
+                        true,
+                        false,
+                        Some("protocol negotiation timed out"),
+                    )
+                })
+                .collect(),
+        );
+        let surface = SessionBootSurface::from_parts(
+            Some(&snap),
+            false,
+            &[],
+            8,
+            PluginBootSummary::default(),
+        );
+        let receipt = surface.receipt_lines(Locale::En, 80);
+        assert_eq!(receipt.len(), 6, "{receipt:?}");
+        assert!(
+            receipt.last().is_some_and(|line| line.contains("+3 more")),
+            "{receipt:?}"
+        );
+        assert!(
+            receipt.iter().any(|line| line.contains("/mcp retry s0")),
+            "{receipt:?}"
+        );
+        assert!(!receipt.join("\n").contains("/mcp auth"), "{receipt:?}");
+    }
+
+    #[test]
+    fn plugin_line_sits_beside_connecting_mcp_names() {
+        let connecting = ["alpha", "beta"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let surface = SessionBootSurface::from_parts(
+            None,
+            true,
+            &connecting,
+            2,
+            PluginBootSummary {
+                loaded: 12,
+                invalid: 1,
+                duplicate: 2,
+                needs_setup: 0,
+            },
+        );
+        let receipt = surface.receipt_lines(Locale::En, 100);
+        let joined = receipt.join("\n");
+        assert!(joined.contains("Plugins"), "{joined}");
+        assert!(joined.contains("12 loaded"), "{joined}");
+        assert!(joined.contains("alpha"), "{joined}");
+        assert!(joined.contains("beta"), "{joined}");
+        assert!(!joined.to_ascii_lowercase().contains("slack"), "{joined}");
     }
 }

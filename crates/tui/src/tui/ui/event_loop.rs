@@ -5800,12 +5800,17 @@ pub(crate) async fn run_event_loop(
 
 /// Apply one MCP session-boot event. Failures stay on the snapshot (and
 /// therefore the session page) rather than as toast-only Status copy.
+/// Explicit `/mcp` mutations bump `mcp_snapshot_generation` so a late
+/// spawn-time boot result cannot overwrite a newer user action.
 pub(crate) fn apply_mcp_session_boot_event(
     app: &mut App,
     snapshot: crate::mcp::McpManagerSnapshot,
     connecting: Vec<String>,
     finished: bool,
 ) {
+    if app.mcp_snapshot_generation > 0 {
+        return;
+    }
     app.mcp_configured_count = snapshot.servers.len();
     app.hotbar_actions.replace_mcp_tools(Some(&snapshot));
     app.mcp_snapshot = Some(snapshot);
@@ -5940,4 +5945,81 @@ async fn open_agents_register(app: &mut App, engine_handle: &EngineHandle) {
     }
     let _ = engine_handle.send(Op::ListSubAgents).await;
     app.needs_redraw = true;
+}
+
+#[cfg(test)]
+mod session_boot_event_tests {
+    use super::*;
+    use crate::mcp::{McpManagerSnapshot, McpServerCapabilityMetadata, McpServerSnapshot};
+    use std::path::PathBuf;
+
+    fn server(name: &str, connected: bool) -> McpServerSnapshot {
+        McpServerSnapshot {
+            name: name.to_string(),
+            enabled: true,
+            required: false,
+            transport: "stdio".to_string(),
+            command_or_url: format!("cmd-{name}"),
+            connect_timeout: 5,
+            execute_timeout: 5,
+            read_timeout: 5,
+            connected,
+            error: None,
+            capability_metadata: McpServerCapabilityMetadata::NotObserved,
+            tools: Vec::new(),
+            resources: Vec::new(),
+            prompts: Vec::new(),
+        }
+    }
+
+    fn snapshot(servers: Vec<McpServerSnapshot>) -> McpManagerSnapshot {
+        McpManagerSnapshot {
+            config_path: PathBuf::from("mcp.json"),
+            config_exists: true,
+            reload_required: false,
+            servers,
+        }
+    }
+
+    fn test_app() -> App {
+        crate::test_support::test_app_with_options(crate::test_support::test_tui_options(
+            PathBuf::from("."),
+        ))
+    }
+
+    #[test]
+    fn boot_event_names_every_connecting_server_on_the_app() {
+        let mut app = test_app();
+        apply_mcp_session_boot_event(
+            &mut app,
+            snapshot(vec![server("alpha", false), server("beta", false)]),
+            vec!["alpha".into(), "beta".into()],
+            false,
+        );
+        assert!(app.mcp_initializing);
+        assert_eq!(app.mcp_connecting, vec!["alpha", "beta"]);
+        assert_eq!(app.mcp_configured_count, 2);
+        let surface = crate::tui::session_boot::SessionBootSurface::from_app(&app);
+        let chip = surface
+            .activity_chip(crate::localization::Locale::En, 80)
+            .expect("chip");
+        assert!(chip.contains("alpha"), "{chip}");
+        assert!(chip.contains("beta"), "{chip}");
+        assert!(!chip.to_ascii_lowercase().contains("slack"), "{chip}");
+    }
+
+    #[test]
+    fn later_user_mcp_mutation_wins_over_a_late_boot_event() {
+        let mut app = test_app();
+        app.mcp_snapshot_generation = 1;
+        app.mcp_connecting = vec!["alpha".into()];
+        apply_mcp_session_boot_event(
+            &mut app,
+            snapshot(vec![server("stale", true)]),
+            vec!["stale".into()],
+            true,
+        );
+        assert_eq!(app.mcp_connecting, vec!["alpha"]);
+        assert!(app.mcp_snapshot.is_none());
+    }
 }

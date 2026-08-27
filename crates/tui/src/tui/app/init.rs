@@ -661,13 +661,23 @@ impl App {
                 Some(InitialInput::RemoteControl) => (String::new(), 0, false),
                 _ => (String::new(), 0, false),
             };
-        let mcp_configured_count = crate::mcp::load_config_with_workspace_and_plugins(
-            &mcp_config_path,
-            &workspace,
-            plugin_registry.as_ref(),
-        )
-        .map(|cfg| cfg.servers.len())
-        .unwrap_or(0);
+        let (mcp_configured_count, mcp_connecting) =
+            crate::mcp::load_config_with_workspace_and_plugins(
+                &mcp_config_path,
+                &workspace,
+                plugin_registry.as_ref(),
+            )
+            .map(|cfg| {
+                let mut connecting = cfg
+                    .servers
+                    .iter()
+                    .filter(|(_, server)| server.is_enabled())
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>();
+                connecting.sort();
+                (cfg.servers.len(), connecting)
+            })
+            .unwrap_or((0, Vec::new()));
         let mut hotbar_actions = HotbarActionRegistry::with_configured_routes(
             config,
             provider,
@@ -958,10 +968,10 @@ impl App {
             },
             coordination_detail: None,
             mcp_snapshot: None,
-            mcp_initializing: mcp_configured_count > 0
+            mcp_initializing: !mcp_connecting.is_empty()
                 && config.features().enabled(crate::features::Feature::Mcp),
             mcp_snapshot_generation: 0,
-            mcp_connecting: Vec::new(),
+            mcp_connecting,
             // Read the MCP config once at boot to know how many servers
             // the user has declared. The footer chip uses this even when
             // no live snapshot is available (#502). Cheap (just reads

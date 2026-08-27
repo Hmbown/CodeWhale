@@ -8091,6 +8091,7 @@ impl RuntimeThreadManager {
                 && matches!(
                     &event,
                     EngineEvent::Status { .. }
+                        | EngineEvent::McpSessionBoot { .. }
                         | EngineEvent::SessionUpdated { .. }
                         | EngineEvent::AgentList { .. }
                         | EngineEvent::AgentSpawned { .. }

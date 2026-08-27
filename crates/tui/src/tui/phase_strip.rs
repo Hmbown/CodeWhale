@@ -1368,4 +1368,25 @@ mod tests {
             Some(crate::config::StatusItem::SessionMetrics)
         );
     }
+
+    #[test]
+    fn activity_band_names_connecting_mcp_servers() {
+        let mut app = test_app();
+        app.ui_locale = crate::localization::Locale::En;
+        app.mcp_initializing = true;
+        app.mcp_configured_count = 4;
+        app.mcp_connecting = ["alpha", "beta", "gamma", "docs"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let text = activity_text(&mut app, 120);
+        assert!(text.contains("MCP"), "{text}");
+        assert!(text.contains("4 connecting"), "{text}");
+        assert!(text.contains("alpha"), "{text}");
+        assert!(text.contains("docs"), "{text}");
+        assert!(
+            !text.to_ascii_lowercase().contains("slack"),
+            "Slack is one server, not the chip: {text}"
+        );
+    }
 }
