@@ -32,13 +32,14 @@ use codewhale_command_contract::facets::{
     CommandPluginContext, CommandPresentationContext, PluginDetail, PluginDiagnosticLevel,
     PluginMutationOutcome, PluginMutationReceipt,
 };
-use codewhale_command_contract::handler::CommandCapabilities;
+use codewhale_command_contract::handler::{CommandCapabilities, CommandContexts, CommandHandler};
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::commands::CommandResult;
-use crate::commands::traits::{
-    Command, CommandGroup, CommandInfo, FunctionCommand, RegisterCommand,
-};
-use crate::tui::app::{App, AppAction};
+use crate::commands::traits::{CommandGroup, ContextualCommand};
+#[cfg(test)]
+use crate::tui::app::App;
+use crate::tui::app::AppAction;
 
 pub(crate) mod kimi_import;
 pub(crate) mod legacy;
@@ -55,11 +56,10 @@ use legacy::legacy_tools;
 pub struct PluginsCommands;
 
 impl CommandGroup for PluginsCommands {
-    fn commands(&self) -> &'static [Box<dyn Command>] {
-        cached_command_list!(vec![Box::new(FunctionCommand::new(
-            PluginsCmd::info(),
-            PluginsCmd::execute,
-        ))])
+    fn commands(&self) -> &'static [Box<dyn crate::commands::traits::Command>] {
+        cached_command_list!(vec![Box::new(
+            ContextualCommand::from_contract::<PluginsCmd>().expect("plugin registration"),
+        )])
     }
 }
 
@@ -67,21 +67,38 @@ pub(in crate::commands) const PLUGINS_INFO: CommandInfo = CommandInfo {
     name: "plugin",
     aliases: &["plugins", "extensions"],
     usage: "/plugin [list|show|suggest|validate|export|install|import|update|uninstall|trust|enable|disable|revoke|reload|tools|marketplace]",
-    description_id: crate::localization::MessageId::CmdPluginDescription,
+    description_key: "cmd_plugin_description",
 };
 
 pub(in crate::commands) struct PluginsCmd;
 
-impl RegisterCommand for PluginsCmd {
+impl RegisterCommand<CommandResult> for PluginsCmd {
     fn info() -> &'static CommandInfo {
         &PLUGINS_INFO
     }
 
-    fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
-        // Transitional shell: build the capability bundle and delegate to the
-        // portable dispatch. Phase 6 replaces this with the contract bridge.
-        plugins_with_kimi_home_override(app, arg, None)
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Contextual {
+            capabilities: CommandCapabilities::WORKSPACE
+                .union(CommandCapabilities::PRESENTATION)
+                .union(CommandCapabilities::PLUGIN),
+            handler: plugins_contextual,
+        }
     }
+}
+
+fn plugins_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
+    let mut parts = contexts.into_parts();
+    let Some(workspace) = parts.workspace.as_deref() else {
+        return CommandResult::error("Command capability unavailable: workspace");
+    };
+    let Some(presentation) = parts.presentation.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: presentation");
+    };
+    let Some(plugin) = parts.plugin.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: plugin");
+    };
+    plugins(&workspace.workspace(), presentation, plugin, arg, None)
 }
 
 #[cfg(test)]
@@ -89,6 +106,7 @@ fn plugins_with_kimi_home(app: &mut App, arg: Option<&str>, home: &Path) -> Comm
     plugins_with_kimi_home_override(app, arg, Some(home))
 }
 
+#[cfg(test)]
 fn plugins_with_kimi_home_override(
     app: &mut App,
     arg: Option<&str>,
