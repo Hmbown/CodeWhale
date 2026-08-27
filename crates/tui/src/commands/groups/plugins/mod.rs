@@ -16,42 +16,50 @@
 //!   manifest-controlled text from forging review output.
 //! * [`legacy`] — the separate `[tools].plugin_dir` executable inventory,
 //!   which shares no trust state with declarative bundles.
+//!
+//! FEAT-020 converts this group to the portable command contract: every
+//! production handler consumes workspace, presentation, and plugin facets —
+//! never concrete `App`, `PluginRegistry`, or `Config`. The legacy
+//! `RegisterCommand` shell below builds the capability bundle from `App` and
+//! delegates to the portable dispatch; Phase 6 replaces it with
+//! `ContextualCommand::from_contract`. `CommandResult` and `AppAction` remain
+//! temporary TUI-owned references until FEAT-037.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use crate::commands::CommandResult;
-use crate::commands::traits::{
-    Command, CommandGroup, CommandInfo, FunctionCommand, RegisterCommand,
+use codewhale_command_contract::facets::{
+    CommandPluginContext, CommandPresentationContext, PluginDetail, PluginDiagnosticLevel,
+    PluginMutationOutcome, PluginMutationReceipt,
 };
-use crate::localization::{MessageId, tr};
-use crate::plugins::types::{LoadedPlugin, PluginDiagnosticLevel};
-use crate::tui::app::{App, AppAction};
+use codewhale_command_contract::handler::{CommandCapabilities, CommandContexts, CommandHandler};
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
-mod kimi_import;
-mod legacy;
-mod marketplace;
+use crate::commands::CommandResult;
+use crate::commands::traits::{CommandGroup, ContextualCommand};
+#[cfg(test)]
+use crate::tui::app::App;
+use crate::tui::app::AppAction;
+
+pub(crate) mod kimi_import;
+pub(crate) mod legacy;
+pub(crate) mod marketplace;
 #[cfg(test)]
 mod marketplace_tests;
-mod render;
+pub(crate) mod render;
 
 #[cfg(test)]
 mod tests;
 
-use legacy::{legacy_tools, scan_legacy_tools};
-use render::{
-    append_diagnostics, escape_review_path, escape_review_text, render_bundle_detail, review_token,
-};
+use legacy::legacy_tools;
 
 pub struct PluginsCommands;
 
 impl CommandGroup for PluginsCommands {
-    fn commands(&self) -> &'static [Box<dyn Command>] {
-        cached_command_list!(vec![Box::new(FunctionCommand::new(
-            PluginsCmd::info(),
-            PluginsCmd::execute,
-        ))])
+    fn commands(&self) -> &'static [Box<dyn crate::commands::traits::Command>] {
+        cached_command_list!(vec![Box::new(
+            ContextualCommand::from_contract::<PluginsCmd>().expect("plugin registration"),
+        )])
     }
 }
 
@@ -59,23 +67,38 @@ pub(in crate::commands) const PLUGINS_INFO: CommandInfo = CommandInfo {
     name: "plugin",
     aliases: &["plugins", "extensions"],
     usage: "/plugin [list|show|suggest|validate|export|install|import|update|uninstall|trust|enable|disable|revoke|reload|tools|marketplace]",
-    description_id: MessageId::CmdPluginDescription,
+    description_key: "cmd_plugin_description",
 };
 
 pub(in crate::commands) struct PluginsCmd;
 
-impl RegisterCommand for PluginsCmd {
+impl RegisterCommand<CommandResult> for PluginsCmd {
     fn info() -> &'static CommandInfo {
         &PLUGINS_INFO
     }
 
-    fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
-        plugins(app, arg)
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Contextual {
+            capabilities: CommandCapabilities::WORKSPACE
+                .union(CommandCapabilities::PRESENTATION)
+                .union(CommandCapabilities::PLUGIN),
+            handler: plugins_contextual,
+        }
     }
 }
 
-fn plugins(app: &mut App, arg: Option<&str>) -> CommandResult {
-    plugins_with_kimi_home_override(app, arg, None)
+fn plugins_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
+    let mut parts = contexts.into_parts();
+    let Some(workspace) = parts.workspace.as_deref() else {
+        return CommandResult::error("Command capability unavailable: workspace");
+    };
+    let Some(presentation) = parts.presentation.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: presentation");
+    };
+    let Some(plugin) = parts.plugin.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: plugin");
+    };
+    plugins(&workspace.workspace(), presentation, plugin, arg, None)
 }
 
 #[cfg(test)]
@@ -83,8 +106,38 @@ fn plugins_with_kimi_home(app: &mut App, arg: Option<&str>, home: &Path) -> Comm
     plugins_with_kimi_home_override(app, arg, Some(home))
 }
 
+#[cfg(test)]
 fn plugins_with_kimi_home_override(
     app: &mut App,
+    arg: Option<&str>,
+    kimi_home: Option<&Path>,
+) -> CommandResult {
+    let mut bundle = app.command_contexts();
+    let capabilities = CommandCapabilities::WORKSPACE
+        .union(CommandCapabilities::PRESENTATION)
+        .union(CommandCapabilities::PLUGIN);
+    let mut contexts = bundle.contexts(capabilities).into_parts();
+    let Some(workspace) = contexts.workspace.as_deref() else {
+        return CommandResult::error("Command capability unavailable: workspace");
+    };
+    let Some(presentation) = contexts.presentation.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: presentation");
+    };
+    let Some(plugin) = contexts.plugin.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: plugin");
+    };
+    plugins(&workspace.workspace(), presentation, plugin, arg, kimi_home)
+}
+
+/// Portable `/plugin` dispatch (FEAT-020 Phase 4).
+///
+/// The handler consumes only portable facets; all concrete host access lives
+/// in the TUI adapter. `kimi_home` is a test-only home override for the Kimi
+/// managed-import scan.
+pub(super) fn plugins(
+    workspace: &Path,
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
     arg: Option<&str>,
     kimi_home: Option<&Path>,
 ) -> CommandResult {
@@ -96,197 +149,177 @@ fn plugins_with_kimi_home_override(
         [] => CommandResult::action(AppAction::OpenExtensions {
             tab: crate::tui::views::extensions::ExtensionsTab::Plugins,
         }),
-        ["list"] => list_bundles_and_legacy_tools(app),
+        ["list"] => list_bundles_and_legacy_tools(presentation, plugin),
         ["help"] => CommandResult::message(format!(
             "{}\n\n/plugin import kimi [list]\n/plugin import kimi approve <name> <content-hash>",
-            tr(app.ui_locale, MessageId::CmdPluginBundleUsage)
+            translate(presentation, "cmd_plugin_bundle_usage")
         )),
-        ["marketplace", rest @ ..] => marketplace::dispatch(app, rest),
-        ["import", "kimi", rest @ ..] => kimi_import::dispatch(app, rest, kimi_home),
-        ["import", ..] => CommandResult::error(kimi_import::usage(app.ui_locale)),
-        ["show", selector] => show_bundle(app, selector),
+        ["marketplace", rest @ ..] => marketplace::dispatch(presentation, plugin, rest),
+        ["import", "kimi", rest @ ..] => {
+            kimi_import::dispatch(presentation, plugin, rest, kimi_home)
+        }
+        ["import", ..] => CommandResult::error(kimi_import::usage(presentation)),
+        ["show", selector] => show_bundle(presentation, plugin, selector),
         ["suggest"] | ["recommend"] => CommandResult::error("Usage: /plugin suggest <task>"),
-        ["suggest", task @ ..] | ["recommend", task @ ..] => suggest_bundles(app, &task.join(" ")),
-        ["validate"] => validate_bundles(app, None),
-        ["validate", selector] => validate_bundles(app, Some(selector)),
+        ["suggest", task @ ..] | ["recommend", task @ ..] => {
+            suggest_bundles(presentation, plugin, &task.join(" "))
+        }
+        ["validate"] => validate_bundles(presentation, plugin, None),
+        ["validate", selector] => validate_bundles(presentation, plugin, Some(selector)),
         ["export"] => CommandResult::error("Usage: /plugin export <name> <target-dir>"),
-        ["export", selector, target @ ..] => export_bundle(app, selector, &target.join(" ")),
-        ["install"] => CommandResult::error(tr(app.ui_locale, MessageId::CmdPluginBundleUsage)),
-        ["install", rest @ ..] => install_bundle(app, &rest.join(" ")),
+        ["export", selector, target @ ..] => {
+            export_bundle(workspace, presentation, plugin, selector, &target.join(" "))
+        }
+        ["install"] => CommandResult::error(translate(presentation, "cmd_plugin_bundle_usage")),
+        ["install", rest @ ..] => install_bundle(presentation, plugin, &rest.join(" ")),
         ["update"] | ["uninstall"] => {
-            CommandResult::error(tr(app.ui_locale, MessageId::CmdPluginBundleUsage))
+            CommandResult::error(translate(presentation, "cmd_plugin_bundle_usage"))
         }
-        ["update", selector] => update_bundle(app, selector),
-        ["uninstall", selector] => uninstall_bundle(app, selector),
-        ["trust", selector] => review_bundle(app, selector),
-        ["trust", selector, token] => mutate_bundle(app, selector, Mutation::Trust(token)),
-        ["enable", selector] => mutate_bundle(app, selector, Mutation::Enable),
-        ["disable", selector] => mutate_bundle(app, selector, Mutation::Disable),
-        ["revoke", selector] => mutate_bundle(app, selector, Mutation::Revoke),
-        ["reload"] => {
-            app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
-            app.refresh_skill_cache();
-            let count = app.plugin_registry.len();
-            CommandResult::with_message_and_action(
-                tr(app.ui_locale, MessageId::CmdPluginBundleReloaded)
-                    .replace("{count}", &count.to_string())
-                    .replace("{workspace}", &app.workspace.display().to_string()),
-                AppAction::PluginRegistryChanged,
-            )
+        ["update", selector] => update_bundle(presentation, plugin, selector),
+        ["uninstall", selector] => uninstall_bundle(presentation, plugin, selector),
+        ["trust", selector] => review_bundle(presentation, plugin, selector),
+        ["trust", selector, token] => {
+            mutate_bundle(presentation, plugin, selector, Mutation::Trust(token))
         }
-        ["tools"] => legacy_tools(app, None),
-        ["tools", name] => legacy_tools(app, Some(name)),
+        ["enable", selector] => mutate_bundle(presentation, plugin, selector, Mutation::Enable),
+        ["disable", selector] => mutate_bundle(presentation, plugin, selector, Mutation::Disable),
+        ["revoke", selector] => mutate_bundle(presentation, plugin, selector, Mutation::Revoke),
+        ["reload"] => reload(presentation, plugin),
+        ["tools"] => legacy_tools(presentation, plugin, None),
+        ["tools", name] => legacy_tools(presentation, plugin, Some(name)),
         [selector] => {
-            if app.plugin_registry.get(selector).is_some() {
-                show_bundle(app, selector)
+            if plugin.detail(selector).is_ok() {
+                show_bundle(presentation, plugin, selector)
             } else {
                 // Preserve `/plugin <script-tool>` compatibility while making
                 // its distinct execution model explicit in the output.
-                legacy_tools(app, Some(selector))
+                legacy_tools(presentation, plugin, Some(selector))
             }
         }
-        _ => CommandResult::error(tr(app.ui_locale, MessageId::CmdPluginBundleUsage)),
+        _ => CommandResult::error(translate(presentation, "cmd_plugin_bundle_usage")),
+    }
+}
+
+/// Translate one stable plugin key through the presentation facet.
+fn translate(presentation: &mut dyn CommandPresentationContext, key: &str) -> String {
+    presentation.translate(key, &[]).unwrap_or_default()
+}
+
+fn reload(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
+) -> CommandResult {
+    match plugin.reload() {
+        Ok(count) => {
+            let message = presentation
+                .translate(
+                    "cmd_plugin_bundle_reloaded",
+                    &[("count", &count.to_string())],
+                )
+                .unwrap_or_default();
+            CommandResult::with_message_and_action(message, AppAction::PluginRegistryChanged)
+        }
+        Err(error) => action_error(presentation, &format!("Plugin reload failed: {error}")),
     }
 }
 
 /// Rank already installed bundle metadata for a task without changing trust,
-/// enablement, disk state, or network state. A full remote plugin marketplace
-/// needs separately curated publisher/provenance policy; the existing plugin
-/// registry is intentionally local-only for this release.
-fn suggest_bundles(app: &App, task: &str) -> CommandResult {
+/// enablement, disk state, or network state.
+fn suggest_bundles(
+    _presentation: &mut dyn CommandPresentationContext,
+    plugin: &dyn CommandPluginContext,
+    task: &str,
+) -> CommandResult {
     let task = task.trim();
     if task.chars().count() < 3 {
         return CommandResult::error("Usage: /plugin suggest <task of at least 3 characters>");
     }
-
-    let mut skills = BTreeMap::new();
-    for plugin in app.plugin_registry.list() {
-        let mut description_parts = plugin
-            .manifest
-            .plugin
-            .description
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut keywords = Vec::new();
-        for skill in &plugin.skill_snapshots {
-            description_parts.push(skill.name.clone());
-            description_parts.push(skill.description.clone());
-            keywords.push(skill.name.clone());
-            keywords.extend(skill.aliases.iter().cloned());
-        }
-        skills.insert(
-            plugin.name().to_string(),
-            crate::skills::RegistryEntry {
-                source: plugin.id.as_str().to_string(),
-                description: (!description_parts.is_empty()).then(|| description_parts.join(" ")),
-                keywords,
-                domains: plugin.inventory.network_hosts.clone(),
-            },
-        );
-    }
-
-    let index = crate::skills::RegistryDocument { skills };
-    let recommendations = crate::skills::recommend::recommend_remote_skills(task, &index, 3);
-    if recommendations.is_empty() {
+    let suggestions = plugin.suggest(task).unwrap_or_default();
+    if suggestions.is_empty() {
         return CommandResult::message(format!(
             "No installed plugin bundles matched `{}`.\n\nInstall a reviewed bundle with /plugin install <source>. Nothing was installed, trusted, or enabled.",
             escape_review_text(task)
         ));
     }
-
     let mut output = format!(
         "Suggested installed plugins for `{}`:\n",
         escape_review_text(task)
     );
     output.push_str("─────────────────────────────\n");
-    for recommendation in recommendations {
-        let Some(plugin) = app.plugin_registry.get(&recommendation.entry.source) else {
-            continue;
-        };
-        let description = plugin
-            .manifest
-            .plugin
-            .description
-            .as_deref()
-            .filter(|description| !description.trim().is_empty())
-            .unwrap_or("No description provided.");
-        let why = recommendation
-            .matched_terms
+    for suggestion in suggestions {
+        let why = suggestion
+            .why
             .iter()
             .map(|term| escape_review_text(term))
             .collect::<Vec<_>>()
             .join(", ");
-        let next_step = if plugin.active() {
-            format!("Already active: /plugin show {}", plugin.name())
-        } else if !plugin.trusted() {
-            format!("Review before enabling: /plugin trust {}", plugin.name())
-        } else if !plugin.enabled {
-            format!(
-                "Enable if that review still applies: /plugin enable {}",
-                plugin.name()
-            )
-        } else {
-            format!("Inspect its inactive state: /plugin show {}", plugin.name())
-        };
         let _ = writeln!(
             output,
             "  {} — {} · {}",
-            escape_review_text(plugin.name()),
-            plugin.state_label(),
-            escape_review_text(description)
+            escape_review_text(&suggestion.name),
+            suggestion.state_label,
+            escape_review_text(&suggestion.description)
         );
         let _ = writeln!(output, "    Why: {why}");
-        let _ = writeln!(output, "    {next_step}");
+        let _ = writeln!(output, "    {}", escape_review_text(&suggestion.next_step));
     }
     output.push_str("\nNothing was installed, trusted, or enabled.");
     CommandResult::message(output)
 }
 
-fn list_bundles_and_legacy_tools(app: &App) -> CommandResult {
-    let mut output = {
-        let registry = app.plugin_registry.as_ref();
-        let plugins = registry.list();
-        let mut output = if plugins.is_empty() {
-            tr(app.ui_locale, MessageId::CmdPluginBundleNoneFound).into_owned()
-        } else {
-            let mut output = tr(app.ui_locale, MessageId::CmdPluginBundleListHeader)
-                .replace("{count}", &plugins.len().to_string());
-            output.push('\n');
-            for plugin in plugins {
-                let _ = writeln!(
-                    output,
-                    "• {} — {}\n  {} · {} · compatibility={} · {}\n  {}",
-                    escape_review_text(plugin.name()),
-                    plugin.state_label(),
-                    plugin.scope,
-                    plugin.trust_status.as_str(),
-                    plugin.compatibility().as_str(),
-                    plugin.inventory.summary(),
-                    escape_review_text(plugin.id.as_str())
-                );
-            }
-            output
-        };
-        append_diagnostics(app, &mut output, registry.diagnostics());
+fn list_bundles_and_legacy_tools(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &dyn CommandPluginContext,
+) -> CommandResult {
+    let summaries = plugin.summaries().unwrap_or_default();
+    let mut output = if summaries.is_empty() {
+        translate(presentation, "cmd_plugin_bundle_none_found")
+    } else {
+        let mut output = presentation
+            .translate(
+                "cmd_plugin_bundle_list_header",
+                &[("count", &summaries.len().to_string())],
+            )
+            .unwrap_or_default();
+        output.push('\n');
+        for summary in &summaries {
+            let _ = writeln!(
+                output,
+                "• {} — {}\n  {} · {} · compatibility={} · {}\n  {}",
+                escape_review_text(&summary.name),
+                summary.state_label,
+                summary.scope,
+                summary.trust_status,
+                summary.compatibility,
+                summary.inventory,
+                escape_review_text(&summary.id)
+            );
+        }
         output
     };
+    append_diagnostics(presentation, &mut output, &plugin.registry_diagnostics());
 
-    if let Some((dir, tools)) = scan_legacy_tools(app) {
+    if let Ok(Some(scan)) = plugin.legacy_scan() {
         output.push('\n');
         output.push_str(
-            &tr(app.ui_locale, MessageId::CmdPluginLegacyListHeader)
-                .replace("{count}", &tools.len().to_string())
-                .replace("{dir}", &dir.display().to_string()),
+            &presentation
+                .translate(
+                    "cmd_plugin_legacy_list_header",
+                    &[
+                        ("count", &scan.tools.len().to_string()),
+                        ("dir", &scan.dir.display().to_string()),
+                    ],
+                )
+                .unwrap_or_default(),
         );
         output.push('\n');
-        for (path, metadata) in tools {
+        for tool in &scan.tools {
             let _ = writeln!(
                 output,
                 "• {} — {}\n  {}",
-                escape_review_text(&metadata.name),
-                escape_review_text(&metadata.description),
-                escape_review_path(&path)
+                escape_review_text(&tool.name),
+                escape_review_text(&tool.description),
+                escape_review_path(&tool.path)
             );
         }
     }
@@ -294,25 +327,40 @@ fn list_bundles_and_legacy_tools(app: &App) -> CommandResult {
     CommandResult::message(output)
 }
 
-fn show_bundle(app: &App, selector: &str) -> CommandResult {
-    let Some(plugin) = app.plugin_registry.get(selector).cloned() else {
-        return CommandResult::error(
-            tr(app.ui_locale, MessageId::CmdPluginBundleNotFound).replace("{name}", selector),
-        );
+fn show_bundle(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &dyn CommandPluginContext,
+    selector: &str,
+) -> CommandResult {
+    let detail = match plugin.detail(selector) {
+        Ok(detail) => detail,
+        Err(_) => {
+            return CommandResult::error(
+                presentation
+                    .translate("cmd_plugin_bundle_not_found", &[("name", selector)])
+                    .unwrap_or_default(),
+            );
+        }
     };
-    CommandResult::message(render_bundle_detail(app, &plugin, true))
+    CommandResult::message(render::render_bundle_detail(presentation, &detail, true))
 }
 
 /// `/plugin export <name> <target-dir>` — publish a loaded bundle as a
-/// spec-valid Agent Plugins v1.0.0 directory (`plugin.json`, `mcp.json` when
-/// servers exist, and the `skills/` tree). The installed bundle is never
-/// modified; a relative target resolves against the workspace.
-fn export_bundle(app: &App, selector: &str, target: &str) -> CommandResult {
-    let Some(plugin) = app.plugin_registry.get(selector).cloned() else {
+/// spec-valid Agent Plugins v1.0.0 directory.
+fn export_bundle(
+    workspace: &Path,
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &dyn CommandPluginContext,
+    selector: &str,
+    target: &str,
+) -> CommandResult {
+    if plugin.detail(selector).is_err() {
         return CommandResult::error(
-            tr(app.ui_locale, MessageId::CmdPluginBundleNotFound).replace("{name}", selector),
+            presentation
+                .translate("cmd_plugin_bundle_not_found", &[("name", selector)])
+                .unwrap_or_default(),
         );
-    };
+    }
     let target = target.trim();
     if target.is_empty() {
         return CommandResult::error("Usage: /plugin export <name> <target-dir>");
@@ -321,16 +369,9 @@ fn export_bundle(app: &App, selector: &str, target: &str) -> CommandResult {
     let target = if target.is_absolute() {
         target
     } else {
-        app.workspace.join(target)
+        workspace.join(target)
     };
-    let existing_names: BTreeSet<String> = app
-        .plugin_registry
-        .list()
-        .iter()
-        .map(|other| other.name().to_string())
-        .filter(|name| name != plugin.name())
-        .collect();
-    match crate::plugins::export::export_plugin_bundle(&plugin, &target, &existing_names) {
+    match plugin.export(selector, &target) {
         Ok(receipt) => {
             let mut output = format!(
                 "Exported `{}` as an Agent Plugins v1.0.0 bundle:\n  {}\n",
@@ -364,281 +405,253 @@ fn export_bundle(app: &App, selector: &str, target: &str) -> CommandResult {
         }
         Err(error) => CommandResult::error(format!(
             "Export of `{}` failed: {}",
-            escape_review_text(plugin.name()),
+            escape_review_text(selector),
             escape_review_text(&error)
         )),
     }
 }
 
-fn review_bundle(app: &App, selector: &str) -> CommandResult {
-    let Some(plugin) = app.plugin_registry.get(selector).cloned() else {
-        return CommandResult::error(
-            tr(app.ui_locale, MessageId::CmdPluginBundleNotFound).replace("{name}", selector),
-        );
+fn review_bundle(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &dyn CommandPluginContext,
+    selector: &str,
+) -> CommandResult {
+    let detail = match plugin.detail(selector) {
+        Ok(detail) => detail,
+        Err(_) => {
+            return CommandResult::error(
+                presentation
+                    .translate("cmd_plugin_bundle_not_found", &[("name", selector)])
+                    .unwrap_or_default(),
+            );
+        }
     };
-    let mut output = render_bundle_detail(app, &plugin, true);
+    let mut output = render::render_bundle_detail(presentation, &detail, true);
     let _ = writeln!(
         output,
         "\n/plugin trust {} {}",
-        plugin.name(),
-        review_token(&plugin)
+        detail.name,
+        review_token(&detail)
     );
     CommandResult::message(output)
 }
 
-fn validate_bundles(app: &App, selector: Option<&str>) -> CommandResult {
-    let (plugins, diagnostics, clean) = {
-        let registry = app.plugin_registry.as_ref();
-        let plugins: Vec<LoadedPlugin> = match selector {
-            Some(selector) => registry.get(selector).cloned().into_iter().collect(),
-            None => registry.list().into_iter().cloned().collect(),
-        };
-        (
-            plugins,
-            registry.diagnostics().to_vec(),
-            registry.validation_is_clean(),
-        )
-    };
-    if app.plugin_registry.is_empty() && selector.is_none() {
-        return CommandResult::error(tr(app.ui_locale, MessageId::CmdPluginBundleNoneFound));
-    };
-    if selector.is_some() && plugins.is_empty() {
-        return CommandResult::error(
-            tr(app.ui_locale, MessageId::CmdPluginBundleNotFound)
-                .replace("{name}", selector.unwrap_or_default()),
-        );
+pub(crate) fn review_token(detail: &PluginDetail) -> String {
+    // This is an explicit user confirmation, not cosmetic display text. Bind
+    // the command to both complete SHA-256 receipts so a same-inventory bundle
+    // cannot collide through the former 48-bit content prefix.
+    format!("{}.{}", detail.content_hash, detail.capability_hash)
+}
+
+fn validate_bundles(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &dyn CommandPluginContext,
+    selector: Option<&str>,
+) -> CommandResult {
+    if plugin.is_empty() && selector.is_none() {
+        return CommandResult::error(translate(presentation, "cmd_plugin_bundle_none_found"));
     }
 
     let mut output = String::new();
-    for plugin in &plugins {
-        let _ = writeln!(
-            output,
-            "{} — {} — {}",
-            plugin.name(),
-            if plugin
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.level == PluginDiagnosticLevel::Error)
-            {
-                "invalid"
-            } else {
-                "valid"
-            },
-            plugin.inventory.summary()
-        );
-        append_diagnostics(app, &mut output, &plugin.diagnostics);
+    if let Some(selector) = selector {
+        match plugin.detail(selector) {
+            Ok(detail) => {
+                let invalid = detail
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.level == PluginDiagnosticLevel::Error);
+                let _ = writeln!(
+                    output,
+                    "{} — {} — {}",
+                    detail.name,
+                    if invalid { "invalid" } else { "valid" },
+                    detail.inventory_summary
+                );
+                append_diagnostics(presentation, &mut output, &detail.diagnostics);
+            }
+            Err(_) => {
+                return CommandResult::error(
+                    presentation
+                        .translate("cmd_plugin_bundle_not_found", &[("name", selector)])
+                        .unwrap_or_default(),
+                );
+            }
+        }
+    } else {
+        for summary in plugin.summaries().unwrap_or_default() {
+            let _ = writeln!(
+                output,
+                "{} — {} — {}",
+                summary.name, summary.state_label, summary.inventory
+            );
+        }
+        append_diagnostics(presentation, &mut output, &plugin.registry_diagnostics());
     }
-    append_diagnostics(app, &mut output, &diagnostics);
     if output.is_empty() {
-        output.push_str(if clean { "valid" } else { "invalid" });
+        output.push_str(if plugin.validation_is_clean() {
+            "valid"
+        } else {
+            "invalid"
+        });
     }
     CommandResult::message(output)
 }
 
 // ─── /plugin install | update | uninstall (#5182) ──────────────────────────
-//
-// The fetch/place on-ramp. All writes go through `plugins::mutation`; after a
-// successful install or update the command rediscovers and drops the user
-// into the existing trust review (`review_bundle`) — installed or replaced
-// bits are always disabled and untrusted until the hash-bound trust flow runs.
 
-fn install_bundle(app: &mut App, spec: &str) -> CommandResult {
-    let source = match crate::plugins::install::PluginInstallSource::parse(spec) {
-        Ok(source) => source,
-        Err(error) => {
-            return CommandResult::error(format!(
-                "Invalid plugin install source `{spec}`: {error:#}\n\
-                 Expected a local path, github:owner/repo, an HTTPS tarball URL, or builtin:<name>."
-            ));
-        }
-    };
-    install_bundle_source(app, source, None)
+fn install_bundle(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
+    spec: &str,
+) -> CommandResult {
+    match plugin.install(spec, None) {
+        Ok(receipt) => render_install_receipt(presentation, plugin, receipt, None),
+        Err(error) => action_error(presentation, &format!("Plugin install failed: {error}")),
+    }
 }
 
 fn install_bundle_with_expected_hash(
-    app: &mut App,
-    path: &std::path::Path,
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
+    path: &Path,
     expected_content_hash: &str,
 ) -> CommandResult {
-    install_bundle_source(
-        app,
-        crate::plugins::install::PluginInstallSource::LocalPath(path.to_path_buf()),
+    match plugin.install(
+        path.to_str().unwrap_or_default(),
         Some(expected_content_hash),
-    )
+    ) {
+        Ok(receipt) => {
+            render_install_receipt(presentation, plugin, receipt, Some(expected_content_hash))
+        }
+        Err(error) => action_error(presentation, &format!("Plugin install failed: {error}")),
+    }
 }
 
-fn install_bundle_source(
-    app: &mut App,
-    source: crate::plugins::install::PluginInstallSource,
+fn render_install_receipt(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
+    receipt: PluginMutationReceipt,
     expected_content_hash: Option<&str>,
 ) -> CommandResult {
-    use crate::plugins::mutation::{
-        PluginMutationContext, PluginMutationOutcome, PluginMutationRequest,
-    };
-
-    let network = plugin_network_policy();
-    let expected_content_hash = expected_content_hash.map(str::to_string);
-    let expected_for_request = expected_content_hash.clone();
-    let registry = std::sync::Arc::make_mut(&mut app.plugin_registry);
-    let outcome = run_async(async move {
-        let ctx = PluginMutationContext {
-            network: &network,
-            max_size: crate::plugins::install::DEFAULT_MAX_SIZE_BYTES,
-        };
-        let request = match expected_for_request {
-            Some(expected_content_hash) => PluginMutationRequest::InstallExact {
-                source,
-                expected_content_hash,
-            },
-            None => PluginMutationRequest::Install { source },
-        };
-        crate::plugins::mutation::execute(request, &ctx, registry).await
-    });
-
-    match outcome {
-        Ok(receipt) => match receipt.outcome {
-            PluginMutationOutcome::Installed => {
-                let name = receipt.name.clone();
-                let installed_path = receipt.path.clone();
-                let installed_content_hash = receipt.installed_content_hash.clone();
-                let path = installed_path
-                    .as_deref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_default();
-                if let Some(expected) = expected_content_hash.as_deref()
-                    && receipt.content_hash.as_deref() != Some(expected)
-                {
-                    return rollback_hash_mismatch(
-                        app,
-                        &name,
-                        installed_path.as_deref(),
-                        expected,
-                        receipt.content_hash.as_deref(),
-                    );
-                }
-                app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
-                app.refresh_skill_cache();
-                if expected_content_hash.is_some() {
-                    let post_copy_hash = app
-                        .plugin_registry
-                        .get(&name)
-                        .map(|plugin| plugin.content_hash.clone());
-                    if installed_content_hash.is_none()
-                        || post_copy_hash.as_deref() != installed_content_hash.as_deref()
-                    {
-                        return rollback_hash_mismatch(
-                            app,
-                            &name,
-                            installed_path.as_deref(),
-                            installed_content_hash.as_deref().unwrap_or("unavailable"),
-                            post_copy_hash.as_deref(),
-                        );
-                    }
-                }
-                let mut output = format!(
-                    "Installed plugin '{name}' to {path}.\n\
-                     It is disabled and untrusted. Review its requested authority below, then trust and enable it.\n"
+    match receipt.outcome {
+        PluginMutationOutcome::Installed => {
+            let name = receipt.name.clone();
+            let installed_path = receipt.path.clone();
+            let path = installed_path
+                .as_deref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default();
+            if let Some(expected) = expected_content_hash
+                && receipt.content_hash.as_deref() != Some(expected)
+            {
+                return rollback_hash_mismatch(
+                    presentation,
+                    plugin,
+                    &name,
+                    installed_path.as_deref(),
+                    expected,
+                    receipt.content_hash.as_deref(),
                 );
-                if let Some(review) = review_bundle(app, &name).message {
-                    output.push('\n');
-                    output.push_str(&review);
-                }
-                CommandResult::with_message_and_action(output, AppAction::PluginRegistryChanged)
             }
-            PluginMutationOutcome::NeedsApproval(host) => {
-                CommandResult::error(needs_approval_message(&host))
+            let mut output = format!(
+                "Installed plugin '{name}' to {path}.\n\
+                 It is disabled and untrusted. Review its requested authority below, then trust and enable it.\n"
+            );
+            if let Some(review) = review_bundle(presentation, plugin, &name).message {
+                output.push('\n');
+                output.push_str(&review);
             }
-            PluginMutationOutcome::NetworkDenied(host) => {
-                CommandResult::error(network_denied_message(&host))
-            }
-            other => CommandResult::error(format!("Unexpected install outcome: {other:?}")),
-        },
-        Err(error) => action_error(app, &format!("Plugin install failed: {error:#}")),
+            CommandResult::with_message_and_action(output, AppAction::PluginRegistryChanged)
+        }
+        PluginMutationOutcome::NeedsApproval(host) => {
+            CommandResult::error(needs_approval_message(&host))
+        }
+        PluginMutationOutcome::NetworkDenied(host) => {
+            CommandResult::error(network_denied_message(&host))
+        }
+        other => CommandResult::error(format!("Unexpected install outcome: {other:?}")),
     }
 }
 
 fn rollback_hash_mismatch(
-    app: &mut App,
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
     name: &str,
-    installed_path: Option<&std::path::Path>,
+    installed_path: Option<&Path>,
     expected: &str,
     actual: Option<&str>,
 ) -> CommandResult {
-    let locale = app.ui_locale;
-    let missing_destination =
-        tr(locale, MessageId::PluginKimiRollbackDestinationMissing).into_owned();
+    let missing_destination = translate(presentation, "plugin_kimi_rollback_destination_missing");
+    // File-level rollback removal crosses the boundary through the plugin
+    // facet (D1); the host adapter owns the `crate::plugins::install::uninstall`
+    // call.
     let rollback = installed_path
-        .and_then(std::path::Path::parent)
+        .and_then(Path::parent)
         .ok_or_else(|| anyhow::anyhow!(missing_destination))
-        .and_then(|plugins_dir| crate::plugins::install::uninstall(name, plugins_dir));
-    app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
-    app.refresh_skill_cache();
+        .and_then(|plugins_dir| {
+            plugin
+                .uninstall_path(name, plugins_dir)
+                .map_err(anyhow::Error::msg)
+        });
     let actual = actual
         .map(escape_review_text)
-        .unwrap_or_else(|| tr(locale, MessageId::PluginKimiHashUnavailable).into_owned());
+        .unwrap_or_else(|| translate(presentation, "plugin_kimi_hash_unavailable"));
     let name = escape_review_text(name);
     let expected = escape_review_text(expected);
     match rollback {
         Ok(()) => CommandResult::error(
-            tr(locale, MessageId::PluginKimiMismatchRemoved)
-                .replace("{name}", &name)
-                .replace("{expected}", &expected)
-                .replace("{actual}", &actual),
+            presentation
+                .translate(
+                    "plugin_kimi_mismatch_removed",
+                    &[
+                        ("name", &name),
+                        ("expected", &expected),
+                        ("actual", &actual),
+                    ],
+                )
+                .unwrap_or_default(),
         ),
-        Err(error) => CommandResult {
-            message: Some(
-                tr(locale, MessageId::PluginKimiMismatchRollbackFailed)
-                    .replace("{name}", &name)
-                    .replace("{expected}", &expected)
-                    .replace("{actual}", &actual)
-                    .replace("{error}", &escape_review_text(&format!("{error:#}")))
-                    .replace(
-                        "{path}",
-                        &installed_path.map(escape_review_path).unwrap_or_else(|| {
-                            tr(locale, MessageId::PluginKimiUserPluginDirectory).into_owned()
-                        }),
-                    ),
-            ),
-            action: Some(AppAction::PluginRegistryChanged),
-            is_error: true,
-        },
+        Err(error) => {
+            let error_text = escape_review_text(&format!("{error:#}"));
+            let path_text = installed_path
+                .map(escape_review_path)
+                .unwrap_or_else(|| translate(presentation, "plugin_kimi_user_plugin_directory"));
+            CommandResult {
+                message: Some(
+                    presentation
+                        .translate(
+                            "plugin_kimi_mismatch_rollback_failed",
+                            &[
+                                ("name", &name),
+                                ("expected", &expected),
+                                ("actual", &actual),
+                                ("error", &error_text),
+                                ("path", &path_text),
+                            ],
+                        )
+                        .unwrap_or_default(),
+                ),
+                action: Some(AppAction::PluginRegistryChanged),
+                is_error: true,
+            }
+        }
     }
 }
 
-fn update_bundle(app: &mut App, selector: &str) -> CommandResult {
-    use crate::plugins::mutation::{
-        PluginMutationContext, PluginMutationOutcome, PluginMutationRequest,
-    };
-
-    let network = plugin_network_policy();
-    let selector_owned = selector.to_string();
-    let registry = std::sync::Arc::make_mut(&mut app.plugin_registry);
-    let outcome = run_async(async move {
-        let ctx = PluginMutationContext {
-            network: &network,
-            max_size: crate::plugins::install::DEFAULT_MAX_SIZE_BYTES,
-        };
-        crate::plugins::mutation::execute(
-            PluginMutationRequest::Update {
-                selector: selector_owned,
-            },
-            &ctx,
-            registry,
-        )
-        .await
-    });
-
-    match outcome {
+fn update_bundle(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
+    selector: &str,
+) -> CommandResult {
+    match plugin.update(selector) {
         Ok(receipt) => match receipt.outcome {
             PluginMutationOutcome::Updated => {
                 let name = receipt.name.clone();
-                app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
-                app.refresh_skill_cache();
                 let mut output = format!(
                     "Updated plugin '{name}'. Its content changed, so the previous trust receipt no \
                      longer matches — review and trust it again before enabling.\n"
                 );
-                if let Some(review) = review_bundle(app, &name).message {
+                if let Some(review) = review_bundle(presentation, plugin, &name).message {
                     output.push('\n');
                     output.push_str(&review);
                 }
@@ -655,57 +668,26 @@ fn update_bundle(app: &mut App, selector: &str) -> CommandResult {
             }
             other => CommandResult::error(format!("Unexpected update outcome: {other:?}")),
         },
-        Err(error) => action_error(app, &format!("Plugin update failed: {error:#}")),
+        Err(error) => action_error(presentation, &format!("Plugin update failed: {error}")),
     }
 }
 
-fn uninstall_bundle(app: &mut App, selector: &str) -> CommandResult {
-    use crate::plugins::mutation::{
-        PluginMutationContext, PluginMutationOutcome, PluginMutationRequest,
-    };
-
-    let network = plugin_network_policy();
-    let selector_owned = selector.to_string();
-    let registry = std::sync::Arc::make_mut(&mut app.plugin_registry);
-    let outcome = run_async(async move {
-        let ctx = PluginMutationContext {
-            network: &network,
-            max_size: crate::plugins::install::DEFAULT_MAX_SIZE_BYTES,
-        };
-        crate::plugins::mutation::execute(
-            PluginMutationRequest::Uninstall {
-                selector: selector_owned,
-            },
-            &ctx,
-            registry,
-        )
-        .await
-    });
-
-    match outcome {
-        Ok(receipt) => {
-            debug_assert!(matches!(
-                receipt.outcome,
-                PluginMutationOutcome::Uninstalled
-            ));
-            app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
-            app.refresh_skill_cache();
-            app.active_skill = None;
-            app.active_skill_provenance = None;
-            CommandResult::with_message_and_action(
-                format!("Uninstalled plugin '{}'.", receipt.name),
-                AppAction::PluginRegistryChanged,
-            )
-        }
-        Err(error) => action_error(app, &format!("Plugin uninstall failed: {error:#}")),
+fn uninstall_bundle(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
+    selector: &str,
+) -> CommandResult {
+    match plugin.uninstall(selector) {
+        Ok(receipt) => CommandResult::with_message_and_action(
+            format!("Uninstalled plugin '{}'.", receipt.name),
+            AppAction::PluginRegistryChanged,
+        ),
+        Err(error) => action_error(presentation, &format!("Plugin uninstall failed: {error}")),
     }
 }
 
-/// Read the active network policy for plugin downloads. Mirrors the skill
-/// installer's on-demand `Config::load` (`App` carries no `Config` field);
-/// a parse failure falls back to the prompt-default policy so the download
-/// stays gated rather than crashing.
-fn plugin_network_policy() -> crate::network_policy::NetworkPolicy {
+/// Read the active network policy for plugin downloads (host-side, D11).
+pub(crate) fn plugin_network_policy() -> crate::network_policy::NetworkPolicy {
     crate::config::Config::load(None, None)
         .unwrap_or_default()
         .network
@@ -713,13 +695,10 @@ fn plugin_network_policy() -> crate::network_policy::NetworkPolicy {
         .unwrap_or_default()
 }
 
-fn run_async<F, T>(future: F) -> T
+pub(crate) fn run_async<F, T>(future: F) -> T
 where
     F: std::future::Future<Output = T>,
 {
-    // Same bridge as the skill commands: the TUI thread is part of the
-    // multi-threaded runtime, so `block_in_place` + `block_on` brings the
-    // sync slash-command handler back into the async ecosystem.
     tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
 }
 
@@ -745,77 +724,108 @@ enum Mutation<'a> {
     Revoke,
 }
 
-fn mutate_bundle(app: &mut App, selector: &str, mutation: Mutation<'_>) -> CommandResult {
+fn mutate_bundle(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
+    selector: &str,
+    mutation: Mutation<'_>,
+) -> CommandResult {
     if matches!(mutation, Mutation::Enable) {
-        let needs_review = app
-            .plugin_registry
-            .get(selector)
-            .is_some_and(|plugin| !plugin.trusted());
+        let needs_review = plugin
+            .detail(selector)
+            .map(|detail| !detail.trusted)
+            .unwrap_or(false);
         if needs_review {
             // Enabling is the natural entry point. Open the exact capability
             // review instead of leaving the user at an opaque denial.
-            return review_bundle(app, selector);
-        }
-    }
-    if let Mutation::Trust(token) = mutation {
-        let Some(expected) = app.plugin_registry.get(selector).map(review_token) else {
-            return CommandResult::error(
-                tr(app.ui_locale, MessageId::CmdPluginBundleNotFound).replace("{name}", selector),
-            );
-        };
-        if token != expected {
-            return action_error(
-                app,
-                "Review token does not match this bundle content and capability set; run `/plugin trust <name>` again",
-            );
+            return review_bundle(presentation, plugin, selector);
         }
     }
 
     let result = match mutation {
-        Mutation::Trust(_) => std::sync::Arc::make_mut(&mut app.plugin_registry)
-            .trust(selector)
-            .map(|()| "trusted"),
-        Mutation::Enable => std::sync::Arc::make_mut(&mut app.plugin_registry)
-            .enable(selector)
-            .map(|()| "enabled"),
-        Mutation::Disable => std::sync::Arc::make_mut(&mut app.plugin_registry)
-            .disable(selector)
-            .map(|()| "disabled"),
-        Mutation::Revoke => std::sync::Arc::make_mut(&mut app.plugin_registry)
-            .revoke_trust(selector)
-            .map(|()| "trust-revoked"),
+        Mutation::Trust(token) => plugin.trust(selector, token).map(|()| "trusted"),
+        Mutation::Enable => plugin.enable(selector).map(|()| "enabled"),
+        Mutation::Disable => plugin.disable(selector).map(|()| "disabled"),
+        Mutation::Revoke => plugin.revoke_trust(selector).map(|()| "trust-revoked"),
     };
     match result {
         Ok(action) => {
-            app.refresh_skill_cache();
-            if matches!(mutation, Mutation::Disable | Mutation::Revoke) {
-                app.active_skill = None;
-                app.active_skill_provenance = None;
-            }
-            let mut message = tr(app.ui_locale, MessageId::CmdPluginBundleMutationSuccess)
-                .replace("{name}", selector)
-                .replace("{action}", action);
+            let mut message = presentation
+                .translate(
+                    "cmd_plugin_bundle_mutation_success",
+                    &[("name", selector), ("action", action)],
+                )
+                .unwrap_or_default();
             if matches!(mutation, Mutation::Enable)
-                && let Some(plugin) = app.plugin_registry.get(selector)
+                && let Ok(detail) = plugin.detail(selector)
             {
-                let inactive = plugin.inventory.unsupported_labels();
+                let inactive = detail.unsupported_labels;
                 if !inactive.is_empty() {
                     message.push(' ');
                     message.push_str(&format!(
                         "Compatibility: {}. Supported declarative components are active; inactive: {}.",
-                        plugin.compatibility().as_str(),
+                        detail.compatibility,
                         inactive.join(", ")
                     ));
                 }
             }
             CommandResult::with_message_and_action(message, AppAction::PluginRegistryChanged)
         }
-        Err(error) => action_error(app, &error),
+        Err(error) => action_error(presentation, &error),
     }
 }
 
-fn action_error(app: &App, error: &str) -> CommandResult {
+fn action_error(presentation: &mut dyn CommandPresentationContext, error: &str) -> CommandResult {
     CommandResult::error(
-        tr(app.ui_locale, MessageId::CmdPluginActionFailed).replace("{error}", error),
+        presentation
+            .translate("cmd_plugin_action_failed", &[("error", error)])
+            .unwrap_or_default(),
     )
+}
+
+pub(super) fn append_diagnostics(
+    presentation: &mut dyn CommandPresentationContext,
+    output: &mut String,
+    diagnostics: &[codewhale_command_contract::facets::PluginDiagnostic],
+) {
+    if diagnostics.is_empty() {
+        return;
+    }
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push_str(
+        &presentation
+            .translate(
+                "cmd_plugin_bundle_diagnostics_header",
+                &[("count", &diagnostics.len().to_string())],
+            )
+            .unwrap_or_default(),
+    );
+    output.push('\n');
+    for diagnostic in diagnostics {
+        let level = match diagnostic.level {
+            PluginDiagnosticLevel::Warning => "warning",
+            PluginDiagnosticLevel::Error => "error",
+        };
+        let path = diagnostic
+            .path
+            .as_deref()
+            .map(|path| format!(" ({})", escape_review_path(path)))
+            .unwrap_or_default();
+        let _ = writeln!(
+            output,
+            "• {level} [{}]: {}{path}",
+            diagnostic.code,
+            escape_review_text(&diagnostic.message)
+        );
+    }
+}
+
+pub(super) fn escape_review_path(path: &Path) -> String {
+    render::escape_review_path(path)
+}
+
+pub(super) fn escape_review_text(value: &str) -> String {
+    render::escape_review_text(value)
 }

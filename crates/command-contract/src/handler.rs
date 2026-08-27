@@ -6,8 +6,8 @@
 
 use crate::facets::{
     CommandCostContext, CommandMediaContext, CommandMemoryContext, CommandModePolicyContext,
-    CommandModelContext, CommandPresentationContext, CommandSessionContext, CommandSkillsContext,
-    CommandSystemPromptContext, CommandWorkspaceContext,
+    CommandModelContext, CommandPluginContext, CommandPresentationContext, CommandSessionContext,
+    CommandSkillsContext, CommandSystemPromptContext, CommandWorkspaceContext,
 };
 
 /// Exact host capabilities exposed to one contextual command handler.
@@ -31,6 +31,8 @@ impl CommandCapabilities {
     pub const MEDIA: Self = Self(1 << 8);
     /// Memory-group host data (FEAT-019 D1).
     pub const MEMORY: Self = Self(1 << 9);
+    /// Plugin-group host data (FEAT-020 D1).
+    pub const PLUGIN: Self = Self(1 << 10);
 
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
@@ -75,6 +77,7 @@ pub struct CommandContexts<'a> {
     presentation: Option<&'a mut dyn CommandPresentationContext>,
     media: Option<&'a mut dyn CommandMediaContext>,
     memory: Option<&'a mut dyn CommandMemoryContext>,
+    plugin: Option<&'a mut dyn CommandPluginContext>,
 }
 
 /// Consumed envelope used when one handler needs several independent facets.
@@ -89,6 +92,7 @@ pub struct ContextParts<'a> {
     pub presentation: Option<&'a mut dyn CommandPresentationContext>,
     pub media: Option<&'a mut dyn CommandMediaContext>,
     pub memory: Option<&'a mut dyn CommandMemoryContext>,
+    pub plugin: Option<&'a mut dyn CommandPluginContext>,
 }
 
 impl<'a> CommandContexts<'a> {
@@ -104,6 +108,7 @@ impl<'a> CommandContexts<'a> {
             presentation: None,
             media: None,
             memory: None,
+            plugin: None,
         }
     }
 
@@ -119,6 +124,7 @@ impl<'a> CommandContexts<'a> {
             presentation: self.presentation,
             media: self.media,
             memory: self.memory,
+            plugin: self.plugin,
         }
     }
 
@@ -195,6 +201,14 @@ impl<'a> CommandContexts<'a> {
         assert!(
             self.memory.replace(value).is_none(),
             "memory facet already set"
+        );
+        self
+    }
+
+    pub fn with_plugin(mut self, value: &'a mut dyn CommandPluginContext) -> Self {
+        assert!(
+            self.plugin.replace(value).is_none(),
+            "plugin facet already set"
         );
         self
     }

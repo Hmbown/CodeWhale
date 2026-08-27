@@ -4,130 +4,124 @@
 //! scanning a directory, they carry their own approval requirement, and
 //! they never share bundle trust state. `/plugin tools` reports them
 //! read-only — nothing here installs, trusts, or executes anything.
+//!
+//! FEAT-020: this module consumes the portable `PluginLegacyScan` from the
+//! plugin facet; no concrete `App` or `PluginMetadata` crosses the boundary.
 
+use codewhale_command_contract::facets::{CommandPluginContext, CommandPresentationContext};
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
 
 use crate::commands::CommandResult;
-use crate::localization::{MessageId, tr};
-use crate::tools::plugin::{PluginMetadata, scan_plugin_dir};
-use crate::tools::spec::ApprovalRequirement;
-use crate::tui::app::App;
 
-use super::action_error;
-
-pub(super) fn legacy_tools(app: &App, name: Option<&str>) -> CommandResult {
-    let Some(plugin_dir) = plugin_dir_for(app) else {
-        return action_error(
-            app,
-            "Could not resolve the legacy executable plugin-tool directory",
-        );
+pub(super) fn legacy_tools(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &dyn CommandPluginContext,
+    name: Option<&str>,
+) -> CommandResult {
+    let scan = match plugin.legacy_scan() {
+        Ok(Some(scan)) => scan,
+        Ok(None) | Err(_) => {
+            return super::action_error(
+                presentation,
+                "Could not resolve the legacy executable plugin-tool directory",
+            );
+        }
     };
-    if !plugin_dir.exists() {
-        return CommandResult::message(
-            tr(app.ui_locale, MessageId::CmdPluginNoneFound)
-                .replace("{dir}", &plugin_dir.display().to_string()),
-        );
-    }
-    let discovered = scan_plugin_dir(&plugin_dir);
     match name {
-        Some(name) => show_legacy_tool_detail(app, name, &discovered),
-        None => list_legacy_tools(app, &plugin_dir, &discovered),
+        Some(name) => show_legacy_tool_detail(presentation, name, &scan),
+        None => list_legacy_tools(presentation, &scan),
     }
 }
 
 fn list_legacy_tools(
-    app: &App,
-    plugin_dir: &Path,
-    discovered: &[(PathBuf, PluginMetadata)],
+    presentation: &mut dyn CommandPresentationContext,
+    scan: &codewhale_command_contract::facets::PluginLegacyScan,
 ) -> CommandResult {
-    if discovered.is_empty() {
+    if scan.tools.is_empty() {
         return CommandResult::message(
-            tr(app.ui_locale, MessageId::CmdPluginNoneFound)
-                .replace("{dir}", &plugin_dir.display().to_string()),
+            presentation
+                .translate(
+                    "cmd_plugin_none_found",
+                    &[("dir", &scan.dir.display().to_string())],
+                )
+                .unwrap_or_default(),
         );
     }
-    let mut output = tr(app.ui_locale, MessageId::CmdPluginLegacyListHeader)
-        .replace("{count}", &discovered.len().to_string())
-        .replace("{dir}", &plugin_dir.display().to_string());
+    let mut output = presentation
+        .translate(
+            "cmd_plugin_legacy_list_header",
+            &[
+                ("count", &scan.tools.len().to_string()),
+                ("dir", &scan.dir.display().to_string()),
+            ],
+        )
+        .unwrap_or_default();
     output.push('\n');
-    for (path, metadata) in discovered {
+    for tool in &scan.tools {
         let _ = writeln!(
             output,
             "• {} — {}\n  {}",
-            metadata.name,
-            metadata.description,
-            path.display()
+            tool.name,
+            tool.description,
+            tool.path.display()
         );
     }
     CommandResult::message(output)
 }
 
 fn show_legacy_tool_detail(
-    app: &App,
+    presentation: &mut dyn CommandPresentationContext,
     name: &str,
-    discovered: &[(PathBuf, PluginMetadata)],
+    scan: &codewhale_command_contract::facets::PluginLegacyScan,
 ) -> CommandResult {
-    let Some((path, metadata)) = discovered
-        .iter()
-        .find(|(_, metadata)| metadata.name == name)
-    else {
+    let Some(tool) = scan.tools.iter().find(|tool| tool.name == name) else {
         return CommandResult::error(
-            tr(app.ui_locale, MessageId::CmdPluginNotFound).replace("{name}", name),
+            presentation
+                .translate("cmd_plugin_not_found", &[("name", name)])
+                .unwrap_or_default(),
         );
     };
-    let schema = serde_json::to_string_pretty(&metadata.input_schema).unwrap_or_default();
-    let mut output = format!("{}\n{:=<40}\n", metadata.name, "");
+    let schema = tool
+        .input_schema
+        .clone()
+        .unwrap_or_else(|| "{}".to_string());
+    let mut output = format!("{}\n{:=<40}\n", tool.name, "");
     let _ = writeln!(
         output,
         "{}",
-        tr(app.ui_locale, MessageId::CmdPluginDetailDescription)
-            .replace("{description}", &metadata.description)
+        presentation
+            .translate(
+                "cmd_plugin_detail_description",
+                &[("description", &tool.description)],
+            )
+            .unwrap_or_default()
     );
     let _ = writeln!(
         output,
         "{}",
-        tr(app.ui_locale, MessageId::CmdPluginDetailSchema).replace("{schema}", &schema)
+        presentation
+            .translate("cmd_plugin_detail_schema", &[("schema", &schema)])
+            .unwrap_or_default()
     );
     let _ = writeln!(
         output,
         "{}",
-        tr(app.ui_locale, MessageId::CmdPluginDetailApproval)
-            .replace("{approval}", approval_label(metadata.approval))
+        presentation
+            .translate(
+                "cmd_plugin_detail_approval",
+                &[("approval", &tool.approval)]
+            )
+            .unwrap_or_default()
     );
     let _ = writeln!(
         output,
         "{}",
-        tr(app.ui_locale, MessageId::CmdPluginDetailPath)
-            .replace("{path}", &path.display().to_string())
+        presentation
+            .translate(
+                "cmd_plugin_detail_path",
+                &[("path", &tool.path.display().to_string())]
+            )
+            .unwrap_or_default()
     );
     CommandResult::message(output)
-}
-
-pub(super) fn scan_legacy_tools(app: &App) -> Option<(PathBuf, Vec<(PathBuf, PluginMetadata)>)> {
-    let dir = plugin_dir_for(app)?;
-    dir.exists().then(|| {
-        let tools = scan_plugin_dir(&dir);
-        (dir, tools)
-    })
-}
-
-fn approval_label(approval: ApprovalRequirement) -> &'static str {
-    match approval {
-        ApprovalRequirement::Auto => "auto",
-        ApprovalRequirement::Suggest => "suggest",
-        ApprovalRequirement::Required => "required",
-    }
-}
-
-fn plugin_dir_for(app: &App) -> Option<PathBuf> {
-    app.legacy_plugin_tools_dir
-        .clone()
-        .or_else(default_codewhale_tools_dir)
-}
-
-fn default_codewhale_tools_dir() -> Option<PathBuf> {
-    codewhale_config::codewhale_home()
-        .ok()
-        .map(|home| home.join("tools"))
 }

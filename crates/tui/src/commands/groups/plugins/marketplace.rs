@@ -10,83 +10,20 @@
 //! Catalog-declared tiers and provenance are display-only: nothing in this
 //! module grants trust, enables anything, or auto-installs (Codex
 //! `INSTALLED_BY_DEFAULT` is visibly ignored).
+//!
+//! FEAT-020: the marketplace store/parse/install machinery runs host-side in
+//! the TUI adapter; the handler consumes portable marketplace values and
+//! renders them.
 
 use std::fmt::Write as _;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use super::render::{escape_review_path, escape_review_text};
+use codewhale_command_contract::facets::{
+    CommandPluginContext, CommandPresentationContext, PluginMarketplaceCatalog,
+    PluginMarketplaceInstallPlan,
+};
+
 use crate::commands::CommandResult;
-use crate::localization::{Locale, MessageId, tr};
-use crate::plugins::marketplace::parsers::kimi::{
-    KIMI_GZIP_TARBALL_SOURCE_KIND, KIMI_REMOTE_UNSUPPORTED_REASON, KIMI_ZIP_UNSUPPORTED_REASON,
-};
-use crate::plugins::marketplace::parsers::{MarketplaceDocument, parse_catalog};
-use crate::plugins::marketplace::store::{
-    MarketplaceState, MarketplaceStore, StoredMarketplaceCatalog,
-};
-use crate::plugins::marketplace::types::{
-    CatalogTier, MarketplaceCatalog, MarketplaceCatalogId, MarketplaceFormat,
-    MarketplaceInstallPlan, MarketplaceSourceSpec,
-};
-use crate::plugins::types::PluginDiagnosticLevel;
-use crate::tui::app::App;
-
-/// Catalog documents are JSON text; four megabytes is far beyond any real
-/// published catalog and caps the parse cost of a user-supplied file.
-const MAX_CATALOG_BYTES: u64 = 4 * 1024 * 1024;
-
-/// The catalog built into every Codewhale release. It lists bundles that
-/// ship inside the binary (`builtin:<name>` install specs), so there is
-/// nothing to fetch; installing still goes through the reviewed installer
-/// and lands disabled and untrusted like everything else.
-pub(crate) const OFFICIAL_CATALOG_NAME: &str = "official";
-
-fn official_catalog_document() -> serde_json::Value {
-    serde_json::json!({
-        "name": OFFICIAL_CATALOG_NAME,
-        "description": "Plugins built into this Codewhale release",
-        "version": crate::plugins::install::BUILTIN_BUNDLE_NAMES.len().to_string(),
-        "plugins": [
-            {
-                "name": codewhale_computer_use::bundle::BUNDLE_NAME,
-                "source": format!("builtin:{}", codewhale_computer_use::bundle::BUNDLE_NAME),
-                "version": codewhale_computer_use::bundle::version(),
-                "description": "See and operate this desktop or an attached Android / HarmonyOS device with a vision model (deepseek-v4-flash-vision-exp): screenshots, clicks, typing, scrolling, app launch. Also: `codewhale computer-use setup`.",
-                "homepage": "https://github.com/Hmbown/CodeWhale/blob/main/docs/COMPUTER_USE.md"
-            }
-        ]
-    })
-}
-
-pub(crate) fn builtin_official_catalog() -> StoredMarketplaceCatalog {
-    let mut catalog = parse_catalog(MarketplaceDocument {
-        catalog_id: MarketplaceCatalogId::new(OFFICIAL_CATALOG_NAME),
-        format: MarketplaceFormat::Codewhale,
-        root: official_catalog_document(),
-        base: None,
-    });
-    catalog.provenance.tier = CatalogTier::Official;
-    catalog.provenance.publisher = Some("Codewhale".to_string());
-    for candidate in &mut catalog.candidates {
-        candidate.provenance.tier = CatalogTier::Official;
-        candidate.provenance.publisher = Some("Codewhale".to_string());
-    }
-    StoredMarketplaceCatalog {
-        added_at: "built-in".to_string(),
-        source_path: "(built into this Codewhale)".to_string(),
-        catalog,
-    }
-}
-
-/// Stored catalogs plus the built-in `official` one. A stored catalog can
-/// never shadow the built-in name because `add` refuses it.
-fn lookup_catalog(state: &MarketplaceState, name: &str) -> Option<StoredMarketplaceCatalog> {
-    if name == OFFICIAL_CATALOG_NAME {
-        return Some(builtin_official_catalog());
-    }
-    state.get(name).cloned()
-}
 
 const USAGE: &str = "Usage: /plugin marketplace add|list|show|remove|install\n\
      \x20 add <name> <path>    read a local catalog file (kimi/claude/codex/codewhale)\n\
@@ -95,119 +32,53 @@ const USAGE: &str = "Usage: /plugin marketplace add|list|show|remove|install\n\
      \x20 remove <name>        forget a catalog (installed plugins unaffected)\n\
      \x20 install <catalog> <candidate>  install via the reviewed installer";
 
-pub(super) fn dispatch(app: &mut App, words: &[&str]) -> CommandResult {
+pub(super) fn dispatch(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
+    words: &[&str],
+) -> CommandResult {
     match words {
-        [] | ["list"] => list(app),
-        ["add", name, path] => add(app, name, path),
-        ["show", name] => show(app, name),
-        ["remove", name] => remove(app, name),
-        ["install", catalog, candidate] => install(app, catalog, candidate),
+        [] | ["list"] => list(presentation, plugin),
+        ["add", name, path] => add(presentation, plugin, name, path),
+        ["show", name] => show(presentation, plugin, name),
+        ["remove", name] => remove(presentation, plugin, name),
+        ["install", catalog, candidate] => install(presentation, plugin, catalog, candidate),
         _ => CommandResult::error(USAGE),
     }
 }
 
-fn open_store(app: &App) -> Result<MarketplaceStore, Box<CommandResult>> {
-    MarketplaceStore::open(app.plugin_registry.state_path()).ok_or_else(|| {
-        Box::new(CommandResult::error(
-            "This plugin registry has no persistence store, so marketplace catalogs cannot be saved.",
-        ))
-    })
-}
-
-/// Conservative catalog name: it becomes a key, appears in candidate IDs,
-/// and is rendered back to the operator.
-fn valid_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 64
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-}
-
-fn add(app: &mut App, name: &str, raw_path: &str) -> CommandResult {
-    if !valid_name(name) {
-        return CommandResult::error(
-            "Marketplace name must be 1-64 characters of letters, digits, `-`, `_`, or `.`",
-        );
-    }
-    if name == OFFICIAL_CATALOG_NAME {
-        return CommandResult::error(format!(
-            "`{OFFICIAL_CATALOG_NAME}` is the catalog built into Codewhale; pick another name."
-        ));
-    }
-    let store = match open_store(app) {
-        Ok(store) => store,
-        Err(result) => return *result,
-    };
+fn add(
+    _presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
+    name: &str,
+    raw_path: &str,
+) -> CommandResult {
     let path = PathBuf::from(raw_path.trim());
     let path = if path.is_absolute() {
         path
     } else {
-        app.workspace.join(path)
+        PathBuf::from(".").join(path)
     };
-    let path = match canonical_document(&path) {
-        Ok(path) => path,
-        Err(error) => return CommandResult::error(error),
-    };
-
-    let body = match read_bounded(&path) {
-        Ok(text) => text,
-        Err(error) => return CommandResult::error(error),
-    };
-    let root = match serde_json::from_str::<serde_json::Value>(&body) {
-        Ok(root) => root,
-        Err(error) => {
-            return CommandResult::error(format!(
-                "Catalog at {} is not valid JSON: {error}",
-                escape_review_path(&path)
-            ));
+    match plugin.marketplace_add(name, &path) {
+        Ok(receipt) => {
+            let summary = render_catalog_summary(name, &receipt.catalog);
+            CommandResult::message(format!(
+                "Added marketplace `{}` ({} candidate(s), {} warning(s)).\n{summary}\n\
+                 Tiers and provenance are display-only. Nothing was installed, trusted, or enabled.",
+                escape_review_text(name),
+                receipt.candidate_count,
+                receipt.warning_count,
+            ))
         }
-    };
-
-    let document = MarketplaceDocument {
-        catalog_id: crate::plugins::marketplace::types::MarketplaceCatalogId::new(name),
-        format: MarketplaceFormat::Auto,
-        root,
-        base: Some(path.display().to_string()),
-    };
-    let catalog = crate::plugins::marketplace::parsers::parse_catalog(document);
-
-    // A document-level error (unknown/ambiguous format, not-an-object) means
-    // nothing useful was parsed; do not persist it.
-    if catalog.candidates.is_empty() && catalog.error_count() > 0 {
-        return CommandResult::error(format!(
-            "Catalog `{}` could not be parsed as any known marketplace format (kimi, claude, codex, codewhale):\n{}",
-            escape_review_text(name),
-            render_diagnostics_inline(&catalog.diagnostics)
-        ));
-    }
-
-    let entry = StoredMarketplaceCatalog {
-        added_at: chrono::Utc::now().to_rfc3339(),
-        source_path: path.display().to_string(),
-        catalog,
-    };
-    let candidate_count = entry.catalog.total_candidates();
-    let warning_count = entry.catalog.warning_count();
-    let summary = render_catalog_summary(name, &entry.catalog);
-    match store.add(&entry.catalog.id.clone(), entry) {
-        Ok(()) => CommandResult::message(format!(
-            "Added marketplace `{}` ({} candidate(s), {} warning(s)).\n{summary}\n\
-             Tiers and provenance are display-only. Nothing was installed, trusted, or enabled.",
-            escape_review_text(name),
-            candidate_count,
-            warning_count,
-        )),
         Err(error) => CommandResult::error(error),
     }
 }
 
-fn list(app: &mut App) -> CommandResult {
-    let store = match open_store(app) {
-        Ok(store) => store,
-        Err(result) => return *result,
-    };
-    let state = match store.load() {
+fn list(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &dyn CommandPluginContext,
+) -> CommandResult {
+    let state = match plugin.marketplace_state() {
         Ok(state) => state,
         Err(error) => {
             return CommandResult::error(format!(
@@ -216,24 +87,20 @@ fn list(app: &mut App) -> CommandResult {
         }
     };
     let mut output = String::from("Marketplace catalogs:\n");
-    let official = builtin_official_catalog();
     output.push('\n');
-    output.push_str(&render_catalog_summary(
-        OFFICIAL_CATALOG_NAME,
-        &official.catalog,
-    ));
+    output.push_str(&render_catalog_summary("official", &state.official));
     output.push_str("  built into this Codewhale release; nothing is downloaded\n");
-    output.push_str(&render_candidates(app.ui_locale, &official.catalog, false));
-    if state.catalogs().is_empty() {
+    output.push_str(&render_candidates(presentation, &state.official, false));
+    if state.stored.is_empty() {
         output.push_str(&format!(
             "\nNo other catalogs are registered.\n{USAGE}\n\
              `add` reads a LOCAL catalog file; nothing is fetched over the network.\n"
         ));
     }
-    for (name, entry) in state.catalogs() {
+    for catalog in &state.stored {
         output.push('\n');
-        output.push_str(&render_catalog_summary(name, &entry.catalog));
-        output.push_str(&render_candidates(app.ui_locale, &entry.catalog, false));
+        output.push_str(&render_catalog_summary(&catalog.id, catalog));
+        output.push_str(&render_candidates(presentation, catalog, false));
     }
     output.push_str(
         "\nTiers and provenance are display-only. Install with /plugin marketplace install <catalog> <candidate>; \
@@ -242,12 +109,12 @@ fn list(app: &mut App) -> CommandResult {
     CommandResult::message(output)
 }
 
-fn show(app: &mut App, name: &str) -> CommandResult {
-    let store = match open_store(app) {
-        Ok(store) => store,
-        Err(result) => return *result,
-    };
-    let state = match store.load() {
+fn show(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &dyn CommandPluginContext,
+    name: &str,
+) -> CommandResult {
+    let state = match plugin.marketplace_state() {
         Ok(state) => state,
         Err(error) => {
             return CommandResult::error(format!(
@@ -255,34 +122,37 @@ fn show(app: &mut App, name: &str) -> CommandResult {
             ));
         }
     };
-    let Some(entry) = lookup_catalog(&state, name) else {
+    let catalog = if name == "official" {
+        Some(&state.official)
+    } else {
+        state.stored.iter().find(|catalog| catalog.id == name)
+    };
+    let Some(catalog) = catalog else {
         return CommandResult::error(format!(
             "No marketplace named `{}`. Use /plugin marketplace list.",
             escape_review_text(name)
         ));
     };
-    let mut output = render_catalog_summary(name, &entry.catalog);
+    let mut output = render_catalog_summary(name, catalog);
     output.push_str("\n  added from: ");
     let _ = writeln!(
         output,
         "{}",
-        escape_review_path(Path::new(&entry.source_path))
+        escape_review_path(Path::new(catalog.source_path.as_deref().unwrap_or(name)))
     );
-    output.push_str(&render_candidates(app.ui_locale, &entry.catalog, true));
+    output.push_str(&render_candidates(presentation, catalog, true));
     CommandResult::message(output)
 }
 
-fn remove(app: &mut App, name: &str) -> CommandResult {
-    if name == OFFICIAL_CATALOG_NAME {
-        return CommandResult::error(format!(
-            "`{OFFICIAL_CATALOG_NAME}` is built into Codewhale and cannot be removed."
-        ));
+fn remove(
+    _presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
+    name: &str,
+) -> CommandResult {
+    if name == "official" {
+        return CommandResult::error("`official` is built into Codewhale and cannot be removed.");
     }
-    let store = match open_store(app) {
-        Ok(store) => store,
-        Err(result) => return *result,
-    };
-    match store.remove(name) {
+    match plugin.marketplace_remove(name) {
         Ok(true) => CommandResult::message(format!(
             "Removed marketplace `{}`. Installed plugins and their trust state are unaffected.",
             escape_review_text(name)
@@ -295,105 +165,68 @@ fn remove(app: &mut App, name: &str) -> CommandResult {
     }
 }
 
-fn install(app: &mut App, catalog_name: &str, candidate_name: &str) -> CommandResult {
-    let store = match open_store(app) {
-        Ok(store) => store,
-        Err(result) => return *result,
-    };
-    let state = match store.load() {
-        Ok(state) => state,
-        Err(error) => {
-            return CommandResult::error(format!(
-                "Marketplace state is fail-closed and will not be rewritten: {error}"
-            ));
+fn install(
+    presentation: &mut dyn CommandPresentationContext,
+    plugin: &mut dyn CommandPluginContext,
+    catalog_name: &str,
+    candidate_name: &str,
+) -> CommandResult {
+    match plugin.marketplace_install(catalog_name, candidate_name) {
+        Ok(receipt) => {
+            use codewhale_command_contract::facets::PluginMutationOutcome;
+            match receipt.outcome {
+                PluginMutationOutcome::Installed => {
+                    // Marketplace installs route through the same reviewed
+                    // installer as `/plugin install`: the result is disabled
+                    // and untrusted and drops into the trust review.
+                    let name = receipt.name;
+                    let mut output = format!(
+                        "Installed plugin '{name}' from marketplace `{}`.\n\
+                         It is disabled and untrusted. Review its requested authority below, then trust and enable it.\n",
+                        escape_review_text(catalog_name)
+                    );
+                    if let Some(review) = super::review_bundle(presentation, plugin, &name).message
+                    {
+                        output.push('\n');
+                        output.push_str(&review);
+                    }
+                    CommandResult::with_message_and_action(
+                        output,
+                        crate::tui::app::AppAction::PluginRegistryChanged,
+                    )
+                }
+                PluginMutationOutcome::NeedsApproval(host) => {
+                    CommandResult::error(needs_approval_message(&host))
+                }
+                PluginMutationOutcome::NetworkDenied(host) => {
+                    CommandResult::error(network_denied_message(&host))
+                }
+                _ => CommandResult::message(format!(
+                    "Installed `{}` from marketplace `{}`.",
+                    escape_review_text(candidate_name),
+                    escape_review_text(catalog_name)
+                )),
+            }
         }
-    };
-    let Some(entry) = lookup_catalog(&state, catalog_name) else {
-        return CommandResult::error(format!(
-            "No marketplace named `{}`. Use /plugin marketplace list.",
-            escape_review_text(catalog_name)
-        ));
-    };
-    let Some(candidate) = entry.catalog.candidate_by_name(candidate_name) else {
-        return CommandResult::error(format!(
-            "No candidate `{}` in marketplace `{}`.",
-            escape_review_text(candidate_name),
-            escape_review_text(catalog_name)
-        ));
-    };
-    if candidate.has_errors() {
-        return CommandResult::error(format!(
-            "Candidate `{}` has parse errors and cannot be installed:\n{}",
-            escape_review_text(candidate_name),
-            render_diagnostics_inline(&candidate.diagnostics)
-        ));
+        Err(error) => CommandResult::error(error),
     }
-    let MarketplaceInstallPlan::Supported { spec, .. } = &candidate.install_plan else {
-        let MarketplaceInstallPlan::Unsupported { reason, .. } = &candidate.install_plan else {
-            unreachable!("is_supported and this match agree");
-        };
-        return CommandResult::error(format!(
-            "Candidate `{}` cannot be installed by Codewhale: {}",
-            escape_review_text(candidate_name),
-            escape_review_text(&localized_marketplace_plan_text(app.ui_locale, reason))
-        ));
-    };
-    let spec = spec.as_str();
-    // Relative local paths resolve against the catalog document's own
-    // directory, not the TUI's working directory.
-    let spec = resolve_spec(&entry.source_path, &candidate.source, spec);
-    super::install_bundle(app, &spec)
 }
 
-fn resolve_spec(source_path: &str, source: &MarketplaceSourceSpec, spec: &str) -> String {
-    if let MarketplaceSourceSpec::LocalPath { path } = source
-        && path.is_relative()
-        && let Some(dir) = Path::new(source_path).parent()
-    {
-        return format!("path:{}", dir.join(path).display());
-    }
-    spec.to_string()
+fn needs_approval_message(host: &str) -> String {
+    format!(
+        "Network policy requires approval for {host}.\n\
+         Add it to your allow list with `/network allow {host}` (or set [network].default = \"allow\" in ~/.codewhale/config.toml), then retry."
+    )
 }
 
-/// Resolve a user-supplied document path to an existing regular file without
-/// following a final symlink (the document is untrusted input).
-fn canonical_document(path: &Path) -> Result<PathBuf, String> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|e| format!("Cannot read catalog at {}: {e}", path.display()))?;
-    if metadata.is_symlink() {
-        return Err(format!(
-            "Catalog path {} is a symlink; marketplace documents must be regular files",
-            path.display()
-        ));
-    }
-    if !metadata.is_file() {
-        return Err(format!(
-            "Catalog path {} is not a regular file",
-            path.display()
-        ));
-    }
-    Ok(path.to_path_buf())
+fn network_denied_message(host: &str) -> String {
+    format!(
+        "Network policy denied access to {host}.\n\
+         Remove the deny entry from ~/.codewhale/config.toml under [network] or contact your administrator."
+    )
 }
 
-fn read_bounded(path: &Path) -> Result<String, String> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| format!("Cannot read catalog at {}: {e}", path.display()))?;
-    if file.metadata().map_err(|e| e.to_string())?.len() > MAX_CATALOG_BYTES {
-        return Err(format!(
-            "Catalog at {} exceeds the {} byte limit",
-            path.display(),
-            MAX_CATALOG_BYTES
-        ));
-    }
-    let mut text = String::new();
-    let mut limited = file.take(MAX_CATALOG_BYTES + 1);
-    limited
-        .read_to_string(&mut text)
-        .map_err(|e| format!("Cannot read catalog at {}: {e}", path.display()))?;
-    Ok(text)
-}
-
-fn render_catalog_summary(name: &str, catalog: &MarketplaceCatalog) -> String {
+fn render_catalog_summary(name: &str, catalog: &PluginMarketplaceCatalog) -> String {
     let mut out = String::new();
     let display = catalog
         .display_name
@@ -404,8 +237,8 @@ fn render_catalog_summary(name: &str, catalog: &MarketplaceCatalog) -> String {
         "`{}` — {} format, {} candidate(s), tier={} (display only)",
         escape_review_text(name),
         catalog.format,
-        catalog.total_candidates(),
-        catalog.provenance.tier
+        catalog.total_candidates,
+        catalog.tier
     );
     if let Some(display) = display {
         let _ = writeln!(out, "  display name: {}", escape_review_text(display));
@@ -427,21 +260,14 @@ fn render_catalog_summary(name: &str, catalog: &MarketplaceCatalog) -> String {
     out
 }
 
-fn localized_marketplace_plan_text(locale: Locale, value: &str) -> std::borrow::Cow<'_, str> {
-    match value {
-        KIMI_ZIP_UNSUPPORTED_REASON => tr(locale, MessageId::PluginKimiMarketplaceZipUnsupported),
-        KIMI_REMOTE_UNSUPPORTED_REASON => {
-            tr(locale, MessageId::PluginKimiMarketplaceRemoteUnsupported)
-        }
-        KIMI_GZIP_TARBALL_SOURCE_KIND => tr(locale, MessageId::PluginKimiMarketplaceGzipTarball),
-        _ => std::borrow::Cow::Borrowed(value),
-    }
-}
-
-fn render_candidates(locale: Locale, catalog: &MarketplaceCatalog, detailed: bool) -> String {
+fn render_candidates(
+    presentation: &mut dyn CommandPresentationContext,
+    catalog: &PluginMarketplaceCatalog,
+    detailed: bool,
+) -> String {
     let mut out = String::new();
     for candidate in &catalog.candidates {
-        let status = if candidate.has_errors() {
+        let status = if candidate.has_errors {
             "unusable"
         } else {
             "candidate"
@@ -461,26 +287,28 @@ fn render_candidates(locale: Locale, catalog: &MarketplaceCatalog, detailed: boo
         if let Some(version) = &candidate.version {
             let _ = write!(out, " · v{}", escape_review_text(version));
         }
-        let _ = write!(out, " · tier={}", candidate.provenance.tier);
+        let _ = write!(out, " · tier={}", candidate.tier);
         let _ = writeln!(out);
         let compatibility = candidate
             .compatibility
-            .as_ref()
-            .map(|c| c.as_str().to_string())
+            .clone()
             .unwrap_or_else(|| "decided at install review".to_string());
         let _ = writeln!(out, "    compatibility: {compatibility}");
         match &candidate.install_plan {
-            MarketplaceInstallPlan::Supported { source_kind, .. } => {
-                let source_kind = localized_marketplace_plan_text(locale, source_kind);
+            PluginMarketplaceInstallPlan::Supported {
+                spec: _,
+                source_kind,
+            } => {
+                let source_kind = localized_plan_text(presentation, source_kind);
                 let _ = writeln!(
                     out,
                     "    installable via {source_kind}: /plugin marketplace install {} {}",
-                    escape_review_text(catalog.id.as_str()),
+                    escape_review_text(&catalog.id),
                     escape_review_text(&candidate.name)
                 );
             }
-            MarketplaceInstallPlan::Unsupported { reason, .. } => {
-                let reason = localized_marketplace_plan_text(locale, reason);
+            PluginMarketplaceInstallPlan::Unsupported { reason } => {
+                let reason = localized_plan_text(presentation, reason);
                 let _ = writeln!(out, "    not installable: {}", escape_review_text(&reason));
             }
         }
@@ -512,7 +340,7 @@ fn render_candidates(locale: Locale, catalog: &MarketplaceCatalog, detailed: boo
                 );
             }
             if let Some(when) = &candidate.when {
-                let _ = writeln!(out, "    when: {when:?}");
+                let _ = writeln!(out, "    when: {when}");
             }
         }
         if !candidate.diagnostics.is_empty() {
@@ -526,8 +354,16 @@ fn render_candidates(locale: Locale, catalog: &MarketplaceCatalog, detailed: boo
     out
 }
 
+/// Resolve a marketplace plan code through the presentation facet, falling
+/// back to the raw code when unknown (mirrors the legacy localized plan text).
+fn localized_plan_text(presentation: &mut dyn CommandPresentationContext, value: &str) -> String {
+    presentation
+        .translate(value, &[])
+        .unwrap_or_else(|_| value.to_string())
+}
+
 fn render_diagnostics_inline(
-    diagnostics: &[crate::plugins::marketplace::types::MarketplaceDiagnostic],
+    diagnostics: &[codewhale_command_contract::facets::PluginDiagnostic],
 ) -> String {
     diagnostics
         .iter()
@@ -535,8 +371,10 @@ fn render_diagnostics_inline(
             format!(
                 "{} {}: {}",
                 match d.level {
-                    PluginDiagnosticLevel::Error => "error",
-                    PluginDiagnosticLevel::Warning => "warning",
+                    codewhale_command_contract::facets::PluginDiagnosticLevel::Error => "error",
+                    codewhale_command_contract::facets::PluginDiagnosticLevel::Warning => {
+                        "warning"
+                    }
                 },
                 d.code,
                 escape_review_text(&d.message)
@@ -546,17 +384,10 @@ fn render_diagnostics_inline(
         .join("; ")
 }
 
-#[cfg(test)]
-mod localized_plan_tests {
-    use super::*;
+pub(super) fn escape_review_text(value: &str) -> String {
+    super::escape_review_text(value)
+}
 
-    #[test]
-    fn kimi_plan_codes_resolve_at_render_time() {
-        let zip = localized_marketplace_plan_text(Locale::Es419, KIMI_ZIP_UNSUPPORTED_REASON);
-        let remote = localized_marketplace_plan_text(Locale::Es419, KIMI_REMOTE_UNSUPPORTED_REASON);
-        let gzip = localized_marketplace_plan_text(Locale::Es419, KIMI_GZIP_TARBALL_SOURCE_KIND);
-        assert!(zip.contains("no admite paquetes ZIP"), "{zip}");
-        assert!(remote.contains("deben terminar en .tar.gz"), "{remote}");
-        assert_eq!(gzip, "URL de tarball gzip");
-    }
+pub(super) fn escape_review_path(path: &Path) -> String {
+    super::escape_review_path(path)
 }
