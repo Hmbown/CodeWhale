@@ -80,6 +80,15 @@ export function footerProjectLinks(locale: string, chrome: ChromeDict): ChromeLi
   ];
 }
 
+/** Footer legal / pricing destinations — reachable, never a 404. */
+export function footerLegalLinks(locale: string): ChromeLink[] {
+  return [
+    { href: `/${locale}/pricing`, label: "Pricing" },
+    { href: `/${locale}/legal/terms`, label: "Terms" },
+    { href: `/${locale}/legal/privacy`, label: "Privacy" },
+  ];
+}
+
 /**
  * The one link in a chrome set that names the page currently being viewed.
  *

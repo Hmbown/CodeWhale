@@ -17,6 +17,7 @@ import { contentLocalesForPath } from "./i18n/content-locales";
 import { getChrome, getHome } from "./i18n/dictionaries";
 import {
   currentNavHref,
+  footerLegalLinks,
   footerProductLinks,
   footerProjectLinks,
   navLinks as buildNavLinks,
@@ -88,7 +89,13 @@ describe("sitemap and hreflang preservation", () => {
   });
 
   it("keeps sitemap and hreflang output aligned with real translation coverage", () => {
-    expect(sitemapEntries).toHaveLength(78);
+    expect(sitemapEntries).toHaveLength(84);
+    for (const path of ["/pricing", "/legal/terms", "/legal/privacy"]) {
+      expect(
+        sitemapEntries.some((entry) => entry.url === `${SITE_URL}/en${path}`),
+        path,
+      ).toBe(true);
+    }
     for (const [path, expectedLocales] of [
       ["/", locales],
       ["/docs/guide", contentLocalesForPath("/docs/guide")],
@@ -199,6 +206,11 @@ describe("navigation parity and accessibility", () => {
         `/${locale}/contribute`,
         "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE",
       ]);
+      expect(footerLegalLinks(locale).map((l) => l.href), `${locale} footer legal`).toEqual([
+        `/${locale}/pricing`,
+        `/${locale}/legal/terms`,
+        `/${locale}/legal/privacy`,
+      ]);
     }
   });
 
@@ -283,6 +295,7 @@ describe("navigation parity and accessibility", () => {
     });
     expect(footer).toContain("footerProductLinks(locale, chrome)");
     expect(footer).toContain("footerProjectLinks(locale, chrome)");
+    expect(footer).toContain("footerLegalLinks(locale)");
   });
 });
 
