@@ -28,6 +28,10 @@ browser session ends with it.
 
 ## What the browser can do
 
+The rail brand is a **temporary C-whale**. Sky-blue on Ocean is a stand-in,
+not final identity. Replace `crates/tui/src/runtime_web/codewhale-mark-*.png`
+when a real mark exists.
+
 The embedded client provides a responsive thread and search rail, Runtime-owned
 session facts, transcript and tool receipts, and a composer. It can create,
 select, rename, and archive threads; start or steer turns; interrupt work;

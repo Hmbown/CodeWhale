@@ -282,6 +282,7 @@ test("rail New thread cannot paint over the session fact chips", async () => {
   assert.match(cssDeclarations(styles, "\\.thread-title"), /-webkit-line-clamp:\s*2/);
   assert.match(html, /class="connection-status"/);
   assert.match(html, /codewhale-mark-light\.png/);
+  assert.match(html, /temp mark/);
 });
 
 test("production shell keeps readable type, controls, focus, and motion contracts", async () => {
