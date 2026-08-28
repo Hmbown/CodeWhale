@@ -6,6 +6,7 @@
 //! first-party wire contracts.
 
 use anyhow::{Context, Result, bail};
+use reqwest::header::{HeaderName, HeaderValue};
 use serde_json::{Value, json};
 
 use crate::config::ApiProvider;
@@ -14,11 +15,13 @@ use super::{DeepSeekClient, api_url, responses_api_url};
 
 mod zai;
 
+mod kimi;
+
 const MAX_NATIVE_ANSWER_CHARS: usize = 4_000;
 
 #[derive(Clone)]
 pub(crate) struct ProviderNativeSearchClient {
-    inner: DeepSeekClient,
+    pub(super) inner: DeepSeekClient,
 }
 
 #[derive(Clone)]
@@ -55,6 +58,7 @@ impl ProviderNativeSearchClient {
                 | ApiProvider::ModelstudioTokenPlan
                 | ApiProvider::Deepseek
                 | ApiProvider::DeepseekCN
+                | ApiProvider::Moonshot
         )
         .then_some(Self { inner })
     }
@@ -111,6 +115,14 @@ impl ProviderNativeSearchClient {
         // retained through response decode so a relay writer cannot start
         // while this result is still able to feed the interactive turn.
         let _inference = self.inner.acquire_remote_control_inference_permit().await;
+        if self.inner.api_provider == ApiProvider::Moonshot {
+            // Kimi/Moonshot runs a bounded multi-round agentic search with its
+            // own request/reply loop, so it cannot share the single-shot body
+            // dispatch below. It still runs under the inference permit above.
+            let mut parsed = kimi::search(self, request).await?;
+            parsed.citations.truncate(usize::from(request.max_results));
+            return Ok(parsed);
+        }
         let body = match self.inner.api_provider {
             ApiProvider::Openai => build_responses_search_body(
                 &self.inner.default_model,
@@ -188,6 +200,54 @@ impl ProviderNativeSearchClient {
         };
         parsed.citations.truncate(usize::from(request.max_results));
         Ok(parsed)
+    }
+
+    pub(super) async fn post_json(
+        &self,
+        url: &str,
+        body: &Value,
+        headers: &[(HeaderName, HeaderValue)],
+    ) -> Result<Value> {
+        let body_bytes = serde_json::to_vec(&body)
+            .context("failed to serialize provider-native web-search request")?;
+        let headers = headers.to_vec();
+        let response = self
+            .inner
+            .send_with_retry(|| {
+                let mut request = self
+                    .inner
+                    .http_client
+                    .post(url)
+                    .header("Accept", "application/json")
+                    .body(body_bytes.clone());
+                for (name, value) in &headers {
+                    request = request.header(name, value);
+                }
+                request
+            })
+            .await
+            .context("provider-native web search request failed")?;
+        response
+            .json::<Value>()
+            .await
+            .context("provider-native web search returned invalid JSON")
+    }
+
+    pub(super) async fn get_json(&self, url: &str) -> Result<Value> {
+        let response = self
+            .inner
+            .send_with_retry(|| {
+                self.inner
+                    .http_client
+                    .get(url)
+                    .header("Accept", "application/json")
+            })
+            .await
+            .context("provider-native web search request failed")?;
+        response
+            .json::<Value>()
+            .await
+            .context("provider-native web search returned invalid JSON")
     }
 }
 

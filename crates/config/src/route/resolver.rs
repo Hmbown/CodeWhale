@@ -31,7 +31,10 @@ use super::candidate::{
     LimitField, PricingSku, ReadyRouteCandidate, ResolvedAuthSource, ResolvedEndpoint,
     SourcedLimitOverride, ValidationReport,
 };
-use super::capabilities::{RouteCapabilities, documented_zai_web_search_for_route};
+use super::capabilities::{
+    RouteCapabilities, documented_moonshot_web_search_for_route,
+    documented_zai_web_search_for_route,
+};
 use super::descriptor::ProviderDescriptor;
 use super::errors::RouteError;
 use super::ids::{LogicalModelRef, ModelId, ProviderId, WireModelId};
@@ -249,6 +252,17 @@ impl RouteResolver {
                 .as_deref()
                 .unwrap_or_else(|| descriptor.default_base_url());
             selected.capabilities.server_side_web_search = documented_zai_web_search_for_route(
+                provider_kind,
+                selected.wire_model_id.as_str(),
+                effective_base_url,
+            );
+        }
+        if provider_kind == ProviderKind::Moonshot {
+            let effective_base_url = req
+                .base_url_override
+                .as_deref()
+                .unwrap_or_else(|| descriptor.default_base_url());
+            selected.capabilities.server_side_web_search = documented_moonshot_web_search_for_route(
                 provider_kind,
                 selected.wire_model_id.as_str(),
                 effective_base_url,
