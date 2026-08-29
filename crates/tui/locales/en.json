@@ -476,6 +476,7 @@
   "CmdThemeDescription": "Switch theme or open the theme picker",
   "CmdProviderDescription": "Switch the active provider and/or model",
   "CmdAuthDescription": "Manage provider authentication flows",
+  "CmdLoginDescription": "Sign in to Codewhale or store provider keys",
   "CmdQueueDescription": "View or edit queued messages",
   "CmdQueueUsage": "Usage: /queue [list|send <n>|edit <n>|drop <n>|clear]",
   "CmdQueueDraftHeader": "Editing queued message:",

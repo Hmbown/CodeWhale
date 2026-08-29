@@ -476,6 +476,7 @@
   "CmdThemeDescription": "切换主题或打开主题选择器",
   "CmdProviderDescription": "切换当前提供商 和/或 模型（deepseek | nvidia-nim | ollama）",
   "CmdAuthDescription": "管理提供商身份验证流程",
+  "CmdLoginDescription": "登录 Codewhale 或保存提供商密钥",
   "CmdQueueDescription": "查看或编辑已排队的消息",
   "CmdQueueUsage": "用法: /queue [list|send <n>|edit <n>|drop <n>|clear]",
   "CmdQueueDraftHeader": "正在编辑已排队的消息:",

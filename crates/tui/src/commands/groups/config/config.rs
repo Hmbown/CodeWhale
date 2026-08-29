@@ -3009,14 +3009,107 @@ pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
     }
 }
 
-/// Logout - clear the active provider's saved API key and return to
-/// onboarding. The on-disk scrub targets the user-global config document
-/// (#5193) and the provider's durable secret-store slot is deleted too, so
-/// the cleared key cannot reappear through the read chain (#5196). Exact
-/// named custom providers clear only their own table (cae14f4b9). For a
-/// full every-provider wipe, use `codewhale auth logout`; for single-provider
-/// key replacement, use `codewhale auth clear --provider <id>` and
-/// `codewhale auth set --provider <id>`.
+/// Unified login status. Account device flow stays on the CLI so this
+/// command never freezes the TUI and never invents a second OAuth broker.
+/// The internal cloud-agent credential is not user surface: membership
+/// (`codewhale login`) is the only door, never a provider key.
+pub fn login(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let raw = arg.map(str::trim).unwrap_or("");
+    let token = raw.split_whitespace().next().unwrap_or("");
+    match token {
+        "" | "status" => CommandResult::message(login_status_text(app)),
+        "key" | "provider" => CommandResult::with_message_and_action(
+            "Open the provider picker to store an API key. Account sign-in is `codewhale login`.",
+            AppAction::OpenProviderPicker,
+        ),
+        "account" => CommandResult::message(
+            "TUI cannot start the browser device flow without freezing the session.\n\
+             Run `codewhale login` (same as `codewhale account login`) in a terminal.\n\
+             Then `/login` to confirm the session landed."
+                .to_string(),
+        ),
+        other => CommandResult::error(format!(
+            "Usage: /login [status|account|key]\nUnknown argument: {other}"
+        )),
+    }
+}
+
+fn login_status_text(app: &App) -> String {
+    use codewhale_secrets::account::{
+        ACCOUNT_API_BASE_ENV, AccountSessionState, AccountSessionStore, DEFAULT_ACCOUNT_API_BASE,
+        secure_account_session_secrets,
+    };
+
+    let api_base = std::env::var(ACCOUNT_API_BASE_ENV)
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_ACCOUNT_API_BASE.to_string());
+    let account = match secure_account_session_secrets() {
+        Ok(secrets) => {
+            match AccountSessionStore::new(secrets, None, &api_base)
+                .runtime_info_at(chrono::Utc::now())
+            {
+                Ok(info) => match info.state {
+                    AccountSessionState::SignedOut => format!("not signed in (api {api_base})"),
+                    AccountSessionState::Authenticated => format!("signed in (api {api_base})"),
+                    AccountSessionState::OfflineCached => {
+                        format!("offline cached (api {api_base})")
+                    }
+                    AccountSessionState::Expired => format!("expired (api {api_base})"),
+                    AccountSessionState::Revoked => format!("revoked (api {api_base})"),
+                },
+                Err(error) => format!("unavailable ({error})"),
+            }
+        }
+        Err(error) => format!("unavailable ({error})"),
+    };
+    let provider = app.provider_identity_for_persistence();
+    format!(
+        "Codewhale login\n\
+         Account: {account}\n\
+         Active provider: {provider}\n\
+         \n\
+         Sign in: `codewhale login`\n\
+         Provider key: `codewhale auth set --provider <id>` or `/login key`\n\
+         Sign out: `/logout` or `codewhale logout`"
+    )
+}
+
+fn clear_local_account_session() -> Result<bool, String> {
+    use codewhale_secrets::account::{
+        ACCOUNT_API_BASE_ENV, AccountSessionStore, DEFAULT_ACCOUNT_API_BASE,
+        secure_account_session_secrets,
+    };
+    let secrets = secure_account_session_secrets().map_err(|error| error.to_string())?;
+    let api_base = std::env::var(ACCOUNT_API_BASE_ENV)
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_ACCOUNT_API_BASE.to_string());
+    let store = AccountSessionStore::new(secrets, None, &api_base);
+    let had = store.load().map_err(|error| error.to_string())?.is_some();
+    store.clear().map_err(|error| error.to_string())?;
+    Ok(had)
+}
+
+fn clear_daytona_slot() -> Result<bool, String> {
+    let secrets = codewhale_secrets::Secrets::auto_detect();
+    let had = secrets
+        .get(codewhale_secrets::DAYTONA_TOKEN_SLOT)
+        .map_err(|error| error.to_string())?
+        .is_some_and(|value| !value.trim().is_empty());
+    if had {
+        secrets
+            .delete(codewhale_secrets::DAYTONA_TOKEN_SLOT)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(had)
+}
+
+/// Logout — clear the active provider key, the Codewhale account session,
+/// and the Daytona slot. Named custom providers still clear only their own
+/// table. For a full every-provider wipe, use `codewhale logout`.
 pub fn logout(app: &mut App) -> CommandResult {
     let provider_name = app.provider_identity_for_persistence().to_string();
     match clear_active_provider_api_key(&provider_name) {
@@ -3026,10 +3119,24 @@ pub fn logout(app: &mut App) -> CommandResult {
             app.onboarding_provider = app.api_provider;
             app.onboarding_missing_key_recovery = true;
             app.api_key_env_only = false;
+            let mut cleared = vec![format!("provider key ({provider_name})")];
+            match clear_local_account_session() {
+                Ok(true) => cleared.push("Codewhale account session".to_string()),
+                Ok(false) => {}
+                Err(error) => cleared.push(format!("account session not cleared ({error})")),
+            }
+            match clear_daytona_slot() {
+                Ok(true) => cleared.push("internal cloud-agent token".to_string()),
+                Ok(false) => {}
+                Err(error) => {
+                    cleared.push(format!("internal cloud-agent token not cleared ({error})"))
+                }
+            }
             CommandResult::with_message_and_action(
                 format!(
-                    "Cleared API key for {provider_name}. \
-                     Use `codewhale auth clear --provider <id>` to clear a different provider."
+                    "Cleared {}. \
+                     Use `codewhale login` to sign in again, or `codewhale auth set --provider <id>` to store a provider key.",
+                    cleared.join(", ")
                 ),
                 AppAction::OpenProviderPicker,
             )
@@ -3063,6 +3170,7 @@ mod tests {
             let vars = vec![
                 EnvVarGuard::set("HOME", home),
                 EnvVarGuard::set("USERPROFILE", home),
+                EnvVarGuard::set("CODEWHALE_HOME", home.join(".codewhale")),
                 EnvVarGuard::remove("CODEWHALE_CONFIG_PATH"),
                 EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", config_path),
                 EnvVarGuard::remove("CODEWHALE_ALLOW_SHELL"),

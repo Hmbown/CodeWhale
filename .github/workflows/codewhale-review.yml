@@ -1,0 +1,84 @@
+name: Codewhale PR Review
+
+# Advisory AI code review by Codewhale itself (`codewhale review --pr --post`)
+# on every non-draft PR: one COMMENT review with a summary body plus inline
+# line comments, anchored to the PR head SHA. CODEOWNERS (@Hmbown) stays the
+# human owner — this review posts alongside it and never approves.
+#
+# Setup:
+#   1. Provider key: Settings -> Secrets and variables -> Actions ->
+#      New repository secret `DEEPSEEK_API_KEY` (or the env var matching a
+#      different provider, see crates/secrets `env_for`).
+#   2. Optional model override: repository variable
+#      `CODEWHALE_REVIEW_MODEL` (e.g. `deepseek-chat`).
+#   3. Optional identity: to post as the Codewhale Agent GitHub App instead
+#      of the workflow's github-token identity, set repository variable
+#      `CODEWHALE_APP_ID` and secret `CODEWHALE_APP_PRIVATE_KEY`; the job
+#      mints an installation token via actions/create-github-app-token.
+# Until DEEPSEEK_API_KEY exists the job no-ops with a notice (stays green),
+# so this workflow is safe to merge before it is configured.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [master, main]
+
+concurrency:
+  group: codewhale-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  codewhale-review:
+    name: Codewhale review
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    env:
+      HAS_PROVIDER_KEY: ${{ secrets.DEEPSEEK_API_KEY != '' }}
+      HAS_APP_KEY: ${{ secrets.CODEWHALE_APP_PRIVATE_KEY != '' }}
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Skip when provider key is unset
+        if: env.HAS_PROVIDER_KEY != 'true'
+        run: echo "::notice::DEEPSEEK_API_KEY is not set — skipping Codewhale review. Add the secret to enable it."
+
+      - name: Checkout repository
+        if: env.HAS_PROVIDER_KEY == 'true'
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Mint Codewhale Agent app token
+        if: env.HAS_PROVIDER_KEY == 'true' && env.HAS_APP_KEY == 'true' && vars.CODEWHALE_APP_ID != ''
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CODEWHALE_APP_ID }}
+          private-key: ${{ secrets.CODEWHALE_APP_PRIVATE_KEY }}
+
+      - name: Install Rust toolchain
+        if: env.HAS_PROVIDER_KEY == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        if: env.HAS_PROVIDER_KEY == 'true'
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build codewhale
+        if: env.HAS_PROVIDER_KEY == 'true'
+        run: cargo build --release -p codewhale-cli
+
+      - name: Run Codewhale PR review
+        if: env.HAS_PROVIDER_KEY == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          CODEWHALE_REVIEW_MODEL: ${{ vars.CODEWHALE_REVIEW_MODEL }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          MODEL_ARGS=()
+          if [ -n "${CODEWHALE_REVIEW_MODEL:-}" ]; then
+            MODEL_ARGS=(--model "$CODEWHALE_REVIEW_MODEL")
+          fi
+          ./target/release/codewhale review --pr "$PR_NUMBER" --post "${MODEL_ARGS[@]}"

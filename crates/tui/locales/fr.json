@@ -473,6 +473,7 @@
   "CmdThemeDescription": "Changer de thème ou ouvrir le sélecteur de thème",
   "CmdProviderDescription": "Changer le fournisseur et/ou le modèle actif",
   "CmdAuthDescription": "Gérer les flux d'authentification des fournisseurs",
+  "CmdLoginDescription": "Se connecter à Codewhale ou enregistrer des clés fournisseur",
   "CmdQueueDescription": "Voir ou modifier les messages en file",
   "CmdQueueUsage": "Usage : /queue [list|send <n>|edit <n>|drop <n>|clear]",
   "CmdQueueDraftHeader": "Modification du message en file :",

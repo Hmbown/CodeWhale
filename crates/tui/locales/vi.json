@@ -476,6 +476,7 @@
   "CmdThemeDescription": "Chuyển đổi giao diện hoặc mở bảng chọn giao diện",
   "CmdProviderDescription": "Chuyển đổi hoặc xem backend LLM đang hoạt động (deepseek | nvidia-nim | ollama)",
   "CmdAuthDescription": "Quản lý quy trình xác thực nhà cung cấp",
+  "CmdLoginDescription": "Đăng nhập Codewhale hoặc lưu khóa nhà cung cấp",
   "CmdQueueDescription": "Xem hoặc chỉnh sửa các tin nhắn đang chờ xử lý",
   "CmdQueueUsage": "Cách dùng: /queue [list|send <n>|edit <n>|drop <n>|clear]",
   "CmdQueueDraftHeader": "Đang chỉnh sửa tin nhắn đang chờ:",

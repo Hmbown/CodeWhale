@@ -473,6 +473,7 @@
   "CmdThemeDescription": "थीम बदलें या थीम चयनकर्ता खोलें",
   "CmdProviderDescription": "सक्रिय प्रोवाइडर और/या मॉडल बदलें",
   "CmdAuthDescription": "प्रोवाइडर प्रमाणीकरण प्रवाह प्रबंधित करें",
+  "CmdLoginDescription": "Codewhale में साइन इन करें या प्रदाता कुंजी सहेजें",
   "CmdQueueDescription": "कतारबद्ध संदेश देखें या संपादित करें",
   "CmdQueueUsage": "उपयोग: /queue [list|send <n>|edit <n>|drop <n>|clear]",
   "CmdQueueDraftHeader": "कतारबद्ध संदेश संपादित हो रहा है:",

@@ -546,33 +546,6 @@ fn resolve_asr_choice(_config: &Config) -> (String, String) {
     }
 }
 
-/// Available ASR providers (for `voice --list` / settings UI).
-#[allow(dead_code)]
-pub fn available_asr_providers() -> Vec<(&'static str, &'static str, &'static str)> {
-    vec![
-        (
-            "local-whisper",
-            "Local Whisper.cpp",
-            "free, offline, mac/win/linux/harmony — brew install whisper-cpp",
-        ),
-        (
-            "groq",
-            "Groq Whisper large-v3-turbo",
-            "free tier, fast, needs GROQ_API_KEY",
-        ),
-        (
-            "xiaomi",
-            "Xiaomi MiMo ASR (mimo-v2.5-asr)",
-            "needs XIAOMI_API_KEY, streaming, high quality",
-        ),
-        (
-            "openai",
-            "OpenAI whisper-1",
-            "needs OPENAI_API_KEY, compatible",
-        ),
-    ]
-}
-
 pub async fn capture_and_transcribe(
     app: &mut App,
     config: &Config,

@@ -476,6 +476,7 @@
   "CmdThemeDescription": "테마를 전환하거나 테마 선택 화면을 엽니다",
   "CmdProviderDescription": "현재 프로바이더 및/또는 모델을 전환합니다",
   "CmdAuthDescription": "프로바이더 인증 흐름을 관리합니다",
+  "CmdLoginDescription": "Codewhale에 로그인하거나 프로바이더 키를 저장합니다",
   "CmdQueueDescription": "대기 중인 메시지를 확인하거나 편집합니다",
   "CmdQueueUsage": "사용법: /queue [list|send <n>|edit <n>|drop <n>|clear]",
   "CmdQueueDraftHeader": "대기 중인 메시지 편집 중:",

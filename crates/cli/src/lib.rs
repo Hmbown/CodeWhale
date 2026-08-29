@@ -2044,7 +2044,7 @@ fn run() -> Result<()> {
                 &store,
             )
         }
-        Some(Commands::Logout) => run_logout_command(&mut store),
+        Some(Commands::Logout) => run_logout_command(&mut store, cli.profile.as_deref()),
         Some(Commands::Auth(args)) => match args.command {
             AuthCommand::XaiDevice => {
                 let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
@@ -2365,19 +2365,24 @@ fn reject_legacy_login_provider_args(args: &LoginArgs) -> Result<()> {
     )
 }
 
-fn run_logout_command(store: &mut ConfigStore) -> Result<()> {
-    run_logout_command_with_secrets(store, &Secrets::auto_detect())
+fn run_logout_command(store: &mut ConfigStore, profile: Option<&str>) -> Result<()> {
+    run_logout_command_with_secrets(store, &Secrets::auto_detect(), profile)
 }
 
-fn run_logout_command_with_secrets(store: &mut ConfigStore, secrets: &Secrets) -> Result<()> {
+fn run_logout_command_with_secrets(
+    store: &mut ConfigStore,
+    secrets: &Secrets,
+    profile: Option<&str>,
+) -> Result<()> {
     codewhale_config::with_xai_oauth_revocation_transaction(|| {
-        run_logout_command_with_secrets_unlocked(store, secrets)
+        run_logout_command_with_secrets_unlocked(store, secrets, profile)
     })
 }
 
 fn run_logout_command_with_secrets_unlocked(
     store: &mut ConfigStore,
     secrets: &Secrets,
+    profile: Option<&str>,
 ) -> Result<()> {
     let original_config = store.config.clone();
     store.config.api_key = None;
@@ -2397,7 +2402,16 @@ fn run_logout_command_with_secrets_unlocked(
         store.config = original_config;
         return Err(error);
     }
-    let keyring_failures = clear_all_provider_api_keys_from_keyring(secrets);
+    let mut keyring_failures = clear_all_provider_api_keys_from_keyring(secrets);
+    if let Err(error) = clear_daytona_slot(secrets) {
+        keyring_failures.push(format!(
+            "{}: {error}",
+            codewhale_secrets::DAYTONA_TOKEN_SLOT
+        ));
+    }
+    if let Err(error) = clear_account_session(profile) {
+        keyring_failures.push(format!("account session: {error}"));
+    }
     if keyring_failures.is_empty() {
         println!("logged out");
     } else {
@@ -2408,6 +2422,32 @@ fn run_logout_command_with_secrets_unlocked(
         println!("logged out (some stored credentials could not be deleted)");
     }
     Ok(())
+}
+
+fn clear_daytona_slot(secrets: &Secrets) -> Result<(), codewhale_secrets::SecretsError> {
+    if secrets
+        .get(codewhale_secrets::DAYTONA_TOKEN_SLOT)?
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        secrets.delete(codewhale_secrets::DAYTONA_TOKEN_SLOT)?;
+    }
+    Ok(())
+}
+
+fn clear_account_session(profile: Option<&str>) -> Result<(), String> {
+    use codewhale_secrets::account::{
+        ACCOUNT_API_BASE_ENV, AccountSessionStore, DEFAULT_ACCOUNT_API_BASE,
+        secure_account_session_secrets,
+    };
+    let secrets = secure_account_session_secrets().map_err(|error| error.to_string())?;
+    let api_base = std::env::var(ACCOUNT_API_BASE_ENV)
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_ACCOUNT_API_BASE.to_string());
+    AccountSessionStore::new(secrets, profile, &api_base)
+        .clear()
+        .map_err(|error| error.to_string())
 }
 
 /// Map [`ProviderKind`] to the canonical provider credential slot.
@@ -3187,6 +3227,8 @@ fn auth_status_all_providers_with_runtime(
 ) -> Vec<String> {
     let active_provider = store.config.provider;
     let mut lines = Vec::new();
+    lines.push(account_status_line());
+    lines.push(String::new());
     lines.push(format!(
         "active provider: {} (set via config or CODEWHALE_PROVIDER)",
         active_provider.as_str()
@@ -3273,7 +3315,40 @@ fn auth_status_all_providers_with_runtime(
     lines.push(String::new());
     lines.push("* = active provider (from config or CODEWHALE_PROVIDER)".to_string());
     lines.push("Run `codewhale auth status --provider <id>` for detailed info.".to_string());
+    lines.push("Account sign-in is `codewhale login`.".to_string());
     lines
+}
+
+fn account_status_line() -> String {
+    use codewhale_secrets::account::{
+        ACCOUNT_API_BASE_ENV, AccountSessionState, AccountSessionStore, DEFAULT_ACCOUNT_API_BASE,
+        secure_account_session_secrets,
+    };
+    let api_base = std::env::var(ACCOUNT_API_BASE_ENV)
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_ACCOUNT_API_BASE.to_string());
+    match secure_account_session_secrets() {
+        Ok(secrets) => {
+            match AccountSessionStore::new(secrets, None, &api_base)
+                .runtime_info_at(chrono::Utc::now())
+            {
+                Ok(info) => {
+                    let state = match info.state {
+                        AccountSessionState::SignedOut => "not signed in",
+                        AccountSessionState::Authenticated => "signed in",
+                        AccountSessionState::OfflineCached => "offline (cached)",
+                        AccountSessionState::Expired => "expired",
+                        AccountSessionState::Revoked => "revoked",
+                    };
+                    format!("account: {state} (api {api_base})")
+                }
+                Err(error) => format!("account: unavailable ({error})"),
+            }
+        }
+        Err(error) => format!("account: unavailable ({error})"),
+    }
 }
 
 fn diagnostic_path_state(path: &Path, directory: bool) -> &'static str {
@@ -6842,6 +6917,29 @@ verbosity = "project-imported"
         );
     }
 
+    #[test]
+    fn auth_parses_daytona_slot_commands_as_unknown() {
+        // The internal cloud-agent slot must not be a user command: parsing
+        // rejects it and `auth --help` never teaches it.
+        for argv in [
+            vec![
+                "codewhale",
+                "auth",
+                "set-slot",
+                "daytona",
+                "--api-key-stdin",
+            ],
+            vec!["codewhale", "auth", "clear-slot", "daytona"],
+        ] {
+            let error = Cli::try_parse_from(argv).expect_err("slot commands must not parse");
+            assert_eq!(error.kind(), ErrorKind::InvalidSubcommand, "{error}");
+        }
+        let help = help_for(&["codewhale", "auth", "--help"]);
+        assert!(!help.contains("set-slot"), "{help}");
+        assert!(!help.contains("clear-slot"), "{help}");
+        assert!(!help.to_lowercase().contains("daytona"), "{help}");
+    }
+
     /// #5198: `auth set` shares the login resolver — provider auth markers go
     /// user-global even when the ambient config is workspace-scoped.
     #[test]
@@ -7608,6 +7706,13 @@ verbosity = "project-imported"
         let secrets = Secrets::new(inner);
 
         let output = auth_status_all_providers(&store, &secrets).join("\n");
+
+        assert!(output.contains("account:"), "{output}");
+        assert!(output.contains("codewhale login"), "{output}");
+        // No-brand invariant: the internal cloud-agent slot is not user
+        // surface, so status never names it or teaches a set-slot command.
+        assert!(!output.to_lowercase().contains("daytona"), "{output}");
+        assert!(!output.contains("set-slot"), "{output}");
 
         // Should list all known providers
         assert!(output.contains("deepseek"));
@@ -8638,7 +8743,7 @@ verbosity = "project-imported"
 
         let secrets = no_keyring_secrets();
 
-        run_logout_command_with_secrets(&mut store, &secrets).expect("logout should succeed");
+        run_logout_command_with_secrets(&mut store, &secrets, None).expect("logout should succeed");
 
         assert!(store.config.api_key.is_none());
         assert!(store.config.providers.deepseek.api_key.is_none());
@@ -8684,7 +8789,7 @@ verbosity = "project-imported"
             .set(provider_slot(ProviderKind::Fireworks), "fw-stale")
             .expect("seed fireworks key");
 
-        run_logout_command_with_secrets(&mut store, &secrets).expect("logout should succeed");
+        run_logout_command_with_secrets(&mut store, &secrets, None).expect("logout should succeed");
 
         for provider in [ProviderKind::Deepseek, ProviderKind::Fireworks] {
             assert!(
@@ -8694,6 +8799,102 @@ verbosity = "project-imported"
         }
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn logout_clears_account_session_and_daytona_slot() {
+        use codewhale_secrets::account::{
+            AccountAuthBundle, AccountSession, AccountSessionStore, AccountUser,
+            DEFAULT_ACCOUNT_API_BASE, secure_account_session_secrets,
+        };
+
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let home = dir
+            .path()
+            .canonicalize()
+            .expect("canonical temp root")
+            .join("codewhale-home");
+        let _home = ScopedEnvVar::set("CODEWHALE_HOME", &home.to_string_lossy());
+        let path = home.join("config.toml");
+        let mut store = ConfigStore::load(Some(path.clone())).expect("store should load");
+
+        let secrets = no_keyring_secrets();
+        secrets
+            .set(codewhale_secrets::DAYTONA_TOKEN_SLOT, "dtn_logout")
+            .expect("seed daytona token");
+
+        let account = secure_account_session_secrets().expect("account store");
+        AccountSessionStore::new(account, None, DEFAULT_ACCOUNT_API_BASE)
+            .save(AccountAuthBundle {
+                token_type: "Bearer".to_string(),
+                access_token: "access-logout".to_string(),
+                refresh_token: "refresh-logout".to_string(),
+                session: Some(AccountSession {
+                    id: "session-logout".to_string(),
+                    ..AccountSession::default()
+                }),
+                user: Some(AccountUser {
+                    id: "acct-logout".to_string(),
+                    ..AccountUser::default()
+                }),
+            })
+            .expect("seed account session");
+
+        run_logout_command_with_secrets(&mut store, &secrets, None).expect("logout should succeed");
+
+        assert!(
+            secrets
+                .get(codewhale_secrets::DAYTONA_TOKEN_SLOT)
+                .expect("read daytona")
+                .is_none(),
+            "daytona slot survived logout"
+        );
+        let account = secure_account_session_secrets().expect("account store after logout");
+        assert!(
+            AccountSessionStore::new(account, None, DEFAULT_ACCOUNT_API_BASE)
+                .load()
+                .expect("load account")
+                .is_none(),
+            "account session survived logout"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn auth_set_slot_daytona_has_no_user_surface() {
+        // The internal cloud-agent credential is managed by Codewhale, not
+        // users: no CLI command may write or clear it, and no help text may
+        // teach it. Membership (`codewhale login`) is the only door.
+        use codewhale_secrets::InMemoryKeyringStore;
+        use std::sync::Arc;
+
+        for argv in [
+            vec![
+                "codewhale",
+                "auth",
+                "set-slot",
+                "daytona",
+                "--api-key",
+                "dtn_saved",
+            ],
+            vec!["codewhale", "auth", "clear-slot", "daytona"],
+        ] {
+            assert!(
+                Cli::try_parse_from(argv).is_err(),
+                "slot commands must not parse"
+            );
+        }
+
+        let inner = Arc::new(InMemoryKeyringStore::new());
+        let secrets = Secrets::new(inner);
+        assert!(
+            secrets
+                .get(codewhale_secrets::DAYTONA_TOKEN_SLOT)
+                .expect("read slot")
+                .is_none()
+        );
     }
 
     #[test]

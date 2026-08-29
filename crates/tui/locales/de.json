@@ -473,6 +473,7 @@
   "CmdThemeDescription": "Theme wechseln oder Theme-Auswahl öffnen",
   "CmdProviderDescription": "Aktiven Provider und/oder Modell wechseln",
   "CmdAuthDescription": "Provider-Authentifizierung verwalten",
+  "CmdLoginDescription": "Bei Codewhale anmelden oder Provider-Schlüssel speichern",
   "CmdQueueDescription": "Nachrichten in der Warteschlange ansehen oder bearbeiten",
   "CmdQueueUsage": "Verwendung: /queue [list|send <n>|edit <n>|drop <n>|clear]",
   "CmdQueueDraftHeader": "Nachricht aus der Warteschlange bearbeiten:",

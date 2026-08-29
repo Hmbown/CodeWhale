@@ -473,6 +473,7 @@
   "CmdThemeDescription": "Ganti tema atau buka pemilih tema",
   "CmdProviderDescription": "Ganti penyedia dan/atau model aktif",
   "CmdAuthDescription": "Kelola alur autentikasi penyedia",
+  "CmdLoginDescription": "Masuk ke Codewhale atau simpan kunci penyedia",
   "CmdQueueDescription": "Lihat atau edit pesan dalam antrean",
   "CmdQueueUsage": "Penggunaan: /queue [list|send <n>|edit <n>|drop <n>|clear]",
   "CmdQueueDraftHeader": "Mengedit pesan dalam antrean:",

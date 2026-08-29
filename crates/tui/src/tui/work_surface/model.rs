@@ -8,7 +8,10 @@ use ratatui::layout::Rect;
 use crate::settings::InlineDiffMode;
 use crate::tools::canonical_action::canonical_action_alias;
 use crate::tools::subagent::{AgentWorkerStatus, SubAgentResult, SubAgentStatus};
-use crate::tui::app::{AgentCurrentActivityStatus, AgentProgressMeta, App, SidebarRowAction};
+use crate::tui::app::{
+    AgentCurrentActivityStatus, AgentProgressMeta, App, SidebarRowAction, TaskPanelEntry,
+    TaskPanelEntryKind,
+};
 use crate::tui::history::{
     FileActivityKind, FileActivitySummary, FileMutationReceipt, HistoryCell, ToolCell,
 };
@@ -495,7 +498,7 @@ pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
 
     update_session_instance_scope(app);
 
-    let rows = match graph {
+    let mut rows = match graph {
         Some(graph) => graph_rows(
             &mut app.work_surface,
             &graph,
@@ -522,6 +525,7 @@ pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
             )]
         }),
     };
+    rows = with_live_shell_rows(app, rows);
     app.work_surface.latest_rows = rows.clone();
     if let Some(opened) = app.work_surface.opened.as_ref()
         && !rows.iter().any(|row| &row.id == opened)
@@ -538,8 +542,8 @@ pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
 
 /// Projection used by the live surface. The full Work catalog remains intact
 /// for explicit inspectors, while persistent chrome stays literal: current
-/// sub-agents, then plan-step to-dos. Tool operations, coordination receipts,
-/// file activity, and generic graph headings never enter this list.
+/// sub-agents, live shells, then plan-step to-dos. Tool operations, coordination
+/// receipts, file activity, and generic graph headings never enter this list.
 ///
 /// On Top, the strip is actionable work only: running / queued / needs-input
 /// agents, plus plan-step to-dos. Quietly completed or cancelled workers
@@ -573,6 +577,7 @@ pub(super) fn project_visible(app: &mut App) -> Vec<WorkRow> {
     let mut todos = Vec::new();
     let mut live_agents = Vec::new();
     let mut settled_agents = 0usize;
+    let mut shells = Vec::new();
     for row in rows {
         if todo_ids.contains(&row.id.0) {
             todos.push(row);
@@ -582,10 +587,12 @@ pub(super) fn project_visible(app: &mut App) -> Vec<WorkRow> {
             } else {
                 live_agents.push(row);
             }
+        } else if row.id.0.starts_with("shell:") {
+            shells.push(row);
         }
     }
 
-    let mut out = Vec::with_capacity(todos.len() + live_agents.len() + 1);
+    let mut out = Vec::with_capacity(todos.len() + live_agents.len() + shells.len() + 2);
     if !live_agents.is_empty() || settled_agents > 0 {
         // Honest live/settled split — failed/interrupted stay as strip rows
         // (needs attention) and are never counted as "running".
@@ -610,6 +617,7 @@ pub(super) fn project_visible(app: &mut App) -> Vec<WorkRow> {
         out.push(agents_section_heading(&header));
         out.extend(live_agents);
     }
+    push_shell_group(&mut out, shells);
     out.extend(todos);
     app.work_surface.latest_rows = out.clone();
     out
@@ -655,8 +663,8 @@ fn plan_step_row_ids(app: &App) -> HashSet<String> {
 ///
 /// - `Tasks` — the full live projection ([`project_visible`]).
 /// - `Agents` — the full sub-agent register under the `▾ Subagents N` header,
-///   followed by the durable to-do checklist: opening the register never hides
-///   the list.
+///   then live shells, then the durable to-do checklist: opening the register
+///   never hides the list.
 /// - `Pinned` — the goal, the sub-agent group, then the plan-step to-dos.
 /// - `Context` — empty: session facts are a line list, not work rows, and
 ///   render outside the row machinery.
@@ -681,14 +689,17 @@ pub(super) fn visible_rows_for_panel(app: &mut App) -> Vec<WorkRow> {
             let todo_ids = plan_step_row_ids(app);
             let mut agents = Vec::new();
             let mut todos = Vec::new();
+            let mut shells = Vec::new();
             for row in rows {
                 if row.id.0.starts_with("worker:") {
                     agents.push(row);
+                } else if row.id.0.starts_with("shell:") {
+                    shells.push(row);
                 } else if todo_ids.contains(&row.id.0) {
                     todos.push(row);
                 }
             }
-            let mut out = Vec::with_capacity(agents.len() + todos.len() + 2);
+            let mut out = Vec::with_capacity(agents.len() + todos.len() + shells.len() + 3);
             if !agents.is_empty() {
                 out.push(agents_section_heading(&format!(
                     "Subagents {}",
@@ -696,6 +707,7 @@ pub(super) fn visible_rows_for_panel(app: &mut App) -> Vec<WorkRow> {
                 )));
                 out.extend(agents);
             }
+            push_shell_group(&mut out, shells);
             if !todos.is_empty() {
                 out.push(section_heading("tasks", "Tasks", "Durable to-do checklist"));
                 out.extend(todos);
@@ -708,14 +720,17 @@ pub(super) fn visible_rows_for_panel(app: &mut App) -> Vec<WorkRow> {
             let todo_ids = plan_step_row_ids(app);
             let mut todos = Vec::new();
             let mut agents = Vec::new();
+            let mut shells = Vec::new();
             for row in rows {
                 if todo_ids.contains(&row.id.0) {
                     todos.push(row);
                 } else if row.id.0.starts_with("worker:") {
                     agents.push(row);
+                } else if row.id.0.starts_with("shell:") {
+                    shells.push(row);
                 }
             }
-            let mut out = Vec::with_capacity(todos.len() + agents.len() + 2);
+            let mut out = Vec::with_capacity(todos.len() + agents.len() + shells.len() + 3);
             // On Top the goal is already the strip title; a side column
             // repeats it as its first row so the durable goal home survives
             // in every placement.
@@ -743,6 +758,7 @@ pub(super) fn visible_rows_for_panel(app: &mut App) -> Vec<WorkRow> {
                 )));
                 out.extend(agents);
             }
+            push_shell_group(&mut out, shells);
             out.extend(todos);
             app.work_surface.latest_rows = out.clone();
             out
@@ -2018,6 +2034,150 @@ fn agents_section_heading(label: &str) -> WorkRow {
     }
 }
 
+fn with_live_shell_rows(app: &App, mut rows: Vec<WorkRow>) -> Vec<WorkRow> {
+    rows.retain(|row| !row.id.0.starts_with("shell:") && row.id.0 != "section:shells");
+    let shells = shell_work_rows(app);
+    if shells.is_empty() {
+        return rows;
+    }
+    let mut out = Vec::with_capacity(rows.len() + shells.len() + 1);
+    push_shell_group(&mut out, shells);
+    out.extend(rows);
+    out
+}
+
+fn push_shell_group(out: &mut Vec<WorkRow>, shells: Vec<WorkRow>) {
+    if shells.is_empty() {
+        return;
+    }
+    out.push(shells_section_heading(&shells));
+    out.extend(shells);
+}
+
+fn is_live_shell_entry(entry: &TaskPanelEntry) -> bool {
+    if entry.kind != TaskPanelEntryKind::Background {
+        return false;
+    }
+    if !matches!(entry.status.as_str(), "running" | "queued") {
+        return false;
+    }
+    entry.prompt_summary.starts_with("shell: ") || entry.id.starts_with("shell_")
+}
+
+fn shell_work_rows(app: &App) -> Vec<WorkRow> {
+    app.task_panel
+        .iter()
+        .filter(|entry| is_live_shell_entry(entry))
+        .map(|entry| {
+            let command = entry
+                .prompt_summary
+                .strip_prefix("shell: ")
+                .unwrap_or(entry.prompt_summary.as_str())
+                .trim();
+            let status = if entry.stale {
+                "stale"
+            } else {
+                entry.status.as_str()
+            };
+            let elapsed_secs = entry.duration_ms.map(|ms| ms / 1_000);
+            let objective = if command.is_empty() {
+                entry.id.clone()
+            } else {
+                command.to_string()
+            };
+            WorkRow {
+                id: WorkRowId(format!("shell:{}", entry.id)),
+                mark: agent_mark(WorkBucket::Active),
+                label: entry.id.clone(),
+                detail: format!("{status} · {}", entry.id),
+                tone: WorkTone::Live,
+                selectable: true,
+                primary_action: Some(SidebarRowAction::InspectWork {
+                    title: format!("Shell {}", entry.id),
+                    body: shell_inspector_body(app, entry, command, status),
+                    stop_action: Some(Box::new(SidebarRowAction::Command(format!(
+                        "/jobs cancel {}",
+                        entry.id
+                    )))),
+                }),
+                agent: Some(AgentRowFacts {
+                    role_label: "shell".to_string(),
+                    status: status.to_string(),
+                    objective,
+                    elapsed_secs,
+                    model: None,
+                    tokens: None,
+                    todos_remaining: None,
+                }),
+            }
+        })
+        .collect()
+}
+
+fn shells_section_heading(shells: &[WorkRow]) -> WorkRow {
+    let ids: Vec<&str> = shells
+        .iter()
+        .filter_map(|row| row.id.0.strip_prefix("shell:"))
+        .collect();
+    let listing = if ids.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "{}\n\n",
+            ids.iter()
+                .map(|id| format!("- {id}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+    WorkRow {
+        id: WorkRowId("section:shells".to_string()),
+        mark: "▾",
+        label: format!("Shells {}", shells.len()),
+        detail: "Watch live output · cancel by the id on the row".to_string(),
+        tone: WorkTone::Heading,
+        selectable: true,
+        primary_action: Some(SidebarRowAction::InspectWork {
+            title: format!("Shells {}", shells.len()),
+            body: format!(
+                "Running shells ({})\n\n{listing}Open a row to watch output. Cancel with /jobs cancel <id> or /jobs cancel all.",
+                shells.len()
+            ),
+            stop_action: Some(Box::new(SidebarRowAction::Command(
+                "/jobs cancel all".to_string(),
+            ))),
+        }),
+        agent: None,
+    }
+}
+
+fn shell_inspector_body(app: &App, entry: &TaskPanelEntry, command: &str, status: &str) -> String {
+    let mut body = format!(
+        "Job: {}\nStatus: {status}\nCommand: {command}\n\nCancel: /jobs cancel {}\n",
+        entry.id, entry.id
+    );
+    let session = app.current_session_id.as_deref().unwrap_or("");
+    if let Some(manager) = app.runtime_services.shell_manager.as_ref()
+        && let Ok(mut manager) = manager.try_lock()
+        && let Ok(detail) = manager.inspect_job_for_session(session, &entry.id)
+    {
+        if !detail.stdout.is_empty() {
+            body.push_str("\nSTDOUT:\n");
+            body.push_str(&detail.stdout);
+        }
+        if !detail.stderr.is_empty() {
+            body.push_str("\nSTDERR:\n");
+            body.push_str(&detail.stderr);
+        }
+        if detail.stdout.is_empty() && detail.stderr.is_empty() {
+            body.push_str("\n(no output yet — reopen this row to watch the shell)");
+        }
+    } else {
+        body.push_str("\nOpen this row to watch live output.");
+    }
+    body
+}
+
 fn graph_node_row(snapshot: &WorkGraphSnapshot, node: &WorkNode) -> WorkRow {
     let (mark, tone) = match node.state {
         NodeState::Ready => (crate::tui::glyphs::READY, WorkTone::Muted),
@@ -3169,6 +3329,110 @@ mod tests {
         assert_eq!(
             rows[0].label,
             "Work · Needs input: operation choose a release target · 1 blocked"
+        );
+    }
+
+    fn running_shell_entry(id: &str, command: &str) -> crate::tui::app::TaskPanelEntry {
+        crate::tui::app::TaskPanelEntry {
+            id: id.to_string(),
+            status: "running".to_string(),
+            prompt_summary: format!("shell: {command}"),
+            duration_ms: Some(42_000),
+            kind: crate::tui::app::TaskPanelEntryKind::Background,
+            stale: false,
+            elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
+            current_tool: None,
+            role: None,
+            files_touched: 0,
+        }
+    }
+
+    #[test]
+    fn live_shells_are_first_class_work_strip_rows() {
+        let mut app = test_app();
+        app.work_surface.placement = WorkSurfacePlacement::Top;
+        app.work_surface.effective_placement = WorkSurfacePlacement::Top;
+        app.task_panel.push(running_shell_entry(
+            "shell_a1b2c3d4",
+            "cd /Volumes/VIXinSSD/ShannonNet",
+        ));
+        app.subagent_cache
+            .push(running_agent("doc-scout-spec-arch"));
+
+        let rows = project_visible(&mut app);
+        assert!(
+            rows.iter()
+                .any(|row| row.id.0 == "section:agents" && row.label.contains("Subagents")),
+            "subagent visibility must not regress: {rows:?}"
+        );
+        let heading = rows
+            .iter()
+            .find(|row| row.id.0 == "section:shells")
+            .expect("Shells group heading");
+        assert_eq!(heading.label, "Shells 1");
+        assert!(heading.selectable);
+        let shell = rows
+            .iter()
+            .find(|row| row.id.0 == "shell:shell_a1b2c3d4")
+            .expect("navigable shell row");
+        assert_eq!(shell.label, "shell_a1b2c3d4");
+        let Some(SidebarRowAction::InspectWork {
+            title,
+            body,
+            stop_action,
+        }) = shell.primary_action.as_ref()
+        else {
+            panic!(
+                "shell row must open live output, got {:?}",
+                shell.primary_action
+            );
+        };
+        assert!(title.contains("shell_a1b2c3d4"), "{title}");
+        assert!(body.contains("Job: shell_a1b2c3d4"), "{body}");
+        assert!(body.contains("/jobs cancel shell_a1b2c3d4"), "{body}");
+        assert!(matches!(
+            stop_action.as_deref(),
+            Some(SidebarRowAction::Command(command)) if command == "/jobs cancel shell_a1b2c3d4"
+        ));
+        let facts = shell
+            .agent
+            .as_ref()
+            .expect("shell uses the same row columns");
+        assert_eq!(facts.role_label, "shell");
+        assert_eq!(facts.status, "running");
+        assert!(
+            facts.objective.contains("ShannonNet"),
+            "{}",
+            facts.objective
+        );
+    }
+
+    #[test]
+    fn durable_tasks_are_not_promoted_as_shell_rows() {
+        let mut app = test_app();
+        app.work_surface.placement = WorkSurfacePlacement::Top;
+        app.work_surface.effective_placement = WorkSurfacePlacement::Top;
+        app.task_panel.push(crate::tui::app::TaskPanelEntry {
+            id: "run".to_string(),
+            status: "running".to_string(),
+            prompt_summary: "background confirmation test".to_string(),
+            duration_ms: Some(99_000),
+            kind: crate::tui::app::TaskPanelEntryKind::Background,
+            stale: false,
+            elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
+            current_tool: None,
+            role: None,
+            files_touched: 0,
+        });
+        let rows = project_visible(&mut app);
+        assert!(
+            rows.iter()
+                .all(|row| !row.id.0.starts_with("shell:") && row.id.0 != "section:shells"),
+            "non-shell task_panel entries must not become Shells rows: {rows:?}"
         );
     }
 }

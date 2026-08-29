@@ -1231,6 +1231,78 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   background: var(--paper-deep);
 }
 
+.legal-doc {
+  width: var(--container);
+  margin-inline: auto;
+  padding-block: clamp(3.25rem, 6vw, 4.75rem);
+  max-width: 42rem;
+}
+
+.legal-doc-kicker {
+  margin: 0 0 0.75rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-muted, color-mix(in srgb, var(--ink) 62%, var(--paper)));
+}
+
+.legal-doc h1 {
+  margin: 0 0 0.5rem;
+  font-family: var(--font-display), serif;
+  font-size: clamp(2rem, 4vw, 3rem);
+  line-height: 1.15;
+}
+
+.legal-doc-updated,
+.legal-doc p,
+.legal-doc section p {
+  margin: 0 0 1.15rem;
+  line-height: 1.6;
+}
+
+.legal-doc section h2 {
+  margin: 1.75rem 0 0.5rem;
+  font-size: 1.15rem;
+}
+
+.legal-doc-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  margin-top: 2rem;
+}
+
+.legal-doc-nav a {
+  text-decoration: underline;
+  text-underline-offset: 0.2rem;
+}
+
+.pricing-page {
+  max-width: 42rem;
+}
+
+.pricing-list {
+  list-style: none;
+  padding: 0;
+  margin: 1.5rem 0;
+}
+
+.pricing-list li {
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.pricing-list li:last-child {
+  border-bottom: 1px solid var(--hairline);
+}
+
+.pricing-note {
+  margin: 0 0 1.5rem;
+  line-height: 1.6;
+}
+
 /* ---------- read-only settings reference ---------- */
 .settings-preview {
   background: color-mix(in srgb, var(--paper-deep) 52%, var(--paper));

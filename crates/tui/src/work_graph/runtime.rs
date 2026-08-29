@@ -720,43 +720,6 @@ impl WorkRuntime {
         }
     }
 
-    /// Reconcile restored Fleet and Lane bindings from their durable owners.
-    /// Missing records fail toward `Stale`; process probes never override the
-    /// replayed ledger/registry state.
-    pub fn reconcile_workspace_owner_bindings(
-        &self,
-        session_id: &str,
-        workspace: &Path,
-    ) -> Result<usize, String> {
-        let (base, revision) = {
-            let active = lock_unpoisoned(&self.graph);
-            if active.session_id.as_deref() != Some(session_id) {
-                return Err(format!(
-                    "workspace owner reconciliation does not match active session {session_id}"
-                ));
-            }
-            let base = active
-                .snapshot
-                .clone()
-                .ok_or_else(|| "workspace owner reconciliation has no active graph".to_string())?;
-            let revision = base.revision;
-            (base, revision)
-        };
-        let (next, changed) = reconcile_workspace_snapshot(base, session_id, workspace)?;
-        if changed == 0 {
-            return Ok(0);
-        }
-        let mut active = lock_unpoisoned(&self.graph);
-        if active.session_id.as_deref() != Some(session_id)
-            || active.snapshot.as_ref().map(|graph| graph.revision) != Some(revision)
-        {
-            return Err("Work Graph changed during workspace owner reconciliation".to_string());
-        }
-        active.snapshot = Some(next);
-        active.pending_publish = true;
-        Ok(changed)
-    }
-
     pub fn clear(&self, session_id: Option<&str>) -> bool {
         let Some(mut todos) = retry_lock(&self.todos, 100) else {
             return false;

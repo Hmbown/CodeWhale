@@ -17,6 +17,7 @@ import { contentLocalesForPath } from "./i18n/content-locales";
 import { getChrome, getHome } from "./i18n/dictionaries";
 import {
   currentNavHref,
+  footerLegalLinks,
   footerProductLinks,
   footerProjectLinks,
   navLinks as buildNavLinks,
@@ -88,7 +89,13 @@ describe("sitemap and hreflang preservation", () => {
   });
 
   it("keeps sitemap and hreflang output aligned with real translation coverage", () => {
-    expect(sitemapEntries).toHaveLength(78);
+    expect(sitemapEntries).toHaveLength(84);
+    for (const path of ["/pricing", "/legal/terms", "/legal/privacy"]) {
+      expect(
+        sitemapEntries.some((entry) => entry.url === `${SITE_URL}/en${path}`),
+        path,
+      ).toBe(true);
+    }
     for (const [path, expectedLocales] of [
       ["/", locales],
       ["/docs/guide", contentLocalesForPath("/docs/guide")],
@@ -199,6 +206,19 @@ describe("navigation parity and accessibility", () => {
         `/${locale}/contribute`,
         "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE",
       ]);
+      const legal = footerLegalLinks(locale, getChrome(locale));
+      expect(legal.map((l) => l.href), `${locale} footer legal`).toEqual([
+        `/${locale}/pricing`,
+        `/${locale}/legal/terms`,
+        `/${locale}/legal/privacy`,
+      ]);
+      // Labels come from the dictionary, not hardcoded English, so every
+      // routed locale renders the footer legal links in its own language.
+      expect(legal.map((l) => l.label), `${locale} footer legal labels`).toEqual([
+        getChrome(locale).footerPricing,
+        getChrome(locale).footerTerms,
+        getChrome(locale).footerPrivacy,
+      ]);
     }
   });
 
@@ -281,8 +301,15 @@ describe("navigation parity and accessibility", () => {
       label: "MIT license",
       href: "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE",
     });
+    // zh gets the footer legal labels from its dictionary, not English.
+    expect(footerLegalLinks("zh", getChrome("zh")).map((l) => l.label)).toEqual([
+      "价格",
+      "服务条款",
+      "隐私政策",
+    ]);
     expect(footer).toContain("footerProductLinks(locale, chrome)");
     expect(footer).toContain("footerProjectLinks(locale, chrome)");
+    expect(footer).toContain("footerLegalLinks(locale, chrome)");
   });
 });
 

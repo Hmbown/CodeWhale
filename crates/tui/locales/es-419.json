@@ -476,6 +476,7 @@
   "CmdThemeDescription": "Alternar entre tema claro y oscuro",
   "CmdProviderDescription": "Cambiar o mostrar el backend LLM activo (deepseek | nvidia-nim | ollama)",
   "CmdAuthDescription": "Gestionar flujos de autenticación de proveedores",
+  "CmdLoginDescription": "Iniciar sesión en Codewhale o guardar claves de proveedor",
   "CmdQueueDescription": "Ver o editar mensajes en cola",
   "CmdQueueUsage": "Uso: /queue [list|send <n>|edit <n>|drop <n>|clear]",
   "CmdQueueDraftHeader": "Editando mensaje en cola:",

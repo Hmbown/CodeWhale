@@ -40,12 +40,6 @@ impl OperationIntent {
             acceptance: Vec::new(),
         }
     }
-
-    #[must_use]
-    pub fn with_acceptance(mut self, acceptance: Vec<AcceptanceRequirement>) -> Self {
-        self.acceptance = acceptance;
-        self
-    }
 }
 
 /// One authoritative owner snapshot. `seq` must be monotonic within the

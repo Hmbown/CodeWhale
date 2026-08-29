@@ -186,6 +186,7 @@
   "CmdAnchorDescription": "釘選關鍵事實，在壓縮後自動注入上下文",
   "CmdAttachDescription": "附加圖片或視頻媒體；文本檔案或目錄請使用 @path",
   "CmdAuthDescription": "管理提供者驗證流程",
+  "CmdLoginDescription": "登入 Codewhale 或儲存供應商金鑰",
   "CmdAutomationDescription": "管理持久化的計劃自動化",
   "AutomationUsage": "用法: /automation [list|show <id>|pause <id>|resume <id>|delete <id> [--confirm <token>]|run <id>]",
   "AutomationManagerUnavailable": "此工作階段無法使用自動化管理器。",

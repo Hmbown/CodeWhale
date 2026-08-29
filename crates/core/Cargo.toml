@@ -15,7 +15,6 @@ anyhow.workspace = true
 chrono.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-tokio-util.workspace = true
 codewhale-agent = { path = "../agent", version = "0.9.11" }
 codewhale-config = { path = "../config", version = "0.9.11" }
 codewhale-execpolicy = { path = "../execpolicy", version = "0.9.11" }

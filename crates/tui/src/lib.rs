@@ -301,10 +301,10 @@ enum Commands {
     },
     /// Create default AGENTS.md in current directory
     Init,
-    /// Save an API key to the shared user config
+    /// Sign in to your Codewhale account (use the `codewhale` CLI).
     Login {
-        /// API key to store (otherwise read from stdin)
-        #[arg(long)]
+        /// Legacy provider-key flag: rejected with a redirect to `auth set`.
+        #[arg(long, hide = true)]
         api_key: Option<String>,
     },
     /// Remove the saved API key
@@ -1193,10 +1193,22 @@ impl FeatureToggles {
 #[derive(Args, Debug, Clone)]
 struct ReviewArgs {
     /// Review staged changes instead of the working tree
-    #[arg(long, conflicts_with = "base")]
+    #[arg(long, conflicts_with_all = ["pr", "base"])]
     staged: bool,
+    /// Review GitHub pull request #N instead of a local diff (fetched via `gh`)
+    #[arg(long, conflicts_with_all = ["staged", "base", "path"])]
+    pr: Option<u32>,
+    /// Repository in `owner/name` form for --pr. Defaults to the current
+    /// workspace's `gh` config (i.e. the repo gh thinks you're in).
+    #[arg(long, requires = "pr")]
+    repo: Option<String>,
+    /// Post the review to the pull request (one COMMENT review with inline
+    /// line comments plus a summary). Requires --pr; without it the review
+    /// is only printed locally.
+    #[arg(long, requires = "pr")]
+    post: bool,
     /// Base ref to diff against (e.g. origin/main)
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["staged", "pr"])]
     base: Option<String>,
     /// Limit diff to a specific path
     #[arg(long)]
@@ -8000,28 +8012,19 @@ fn apply_saved_reasoning_preference(config: &mut Config, settings: &crate::setti
     config.reasoning_effort_inferred_from_legacy_alias = false;
 }
 
-fn read_api_key_from_stdin() -> Result<String> {
-    let mut stdin = io::stdin();
-    if stdin.is_terminal() {
-        bail!("No API key provided. Pass --api-key or pipe one via stdin.");
-    }
-    let mut buffer = String::new();
-    stdin.read_to_string(&mut buffer)?;
-    let api_key = buffer.trim().to_string();
-    if api_key.is_empty() {
-        bail!("No API key provided via stdin.");
-    }
-    Ok(api_key)
-}
-
 fn run_login(api_key: Option<String>) -> Result<()> {
-    let api_key = match api_key {
-        Some(key) => key,
-        None => read_api_key_from_stdin()?,
-    };
-    let saved = config::save_api_key(&api_key)?;
-    println!("Saved API key to {}", saved.describe());
-    Ok(())
+    if api_key.is_some() {
+        bail!(
+            "`login --api-key` is not account sign-in. \
+             Use `codewhale login` for the Codewhale account, \
+             or `codewhale auth set --provider <id>` for a provider key."
+        );
+    }
+    bail!(
+        "This binary's `login` command does not store provider keys. \
+         Use the `codewhale` CLI: `codewhale login` for the Codewhale account device flow, \
+         or `codewhale auth set --provider <id>` for a provider key."
+    );
 }
 
 fn run_logout() -> Result<()> {
@@ -8167,6 +8170,19 @@ fn pick_session_id() -> Result<String> {
 async fn run_review(config: &Config, args: ReviewArgs) -> Result<()> {
     use crate::client::DeepSeekClient;
 
+    if args.pr.is_some() && !is_command_available("gh") {
+        bail!(
+            "`gh` CLI not found on PATH. Install GitHub CLI \
+             (https://cli.github.com) and authenticate (`gh auth login`) \
+             so `codewhale review --pr` can fetch the pull request."
+        );
+    }
+    // Fetched before the diff so a missing/hidden PR fails before any model
+    // route is resolved or billed.
+    let pr_view = match args.pr {
+        Some(number) => Some((number, run_gh_pr_view(number, args.repo.as_deref())?)),
+        None => None,
+    };
     let diff = collect_diff(&args)?;
     if diff.trim().is_empty() {
         bail!("No diff to review.");
@@ -8181,17 +8197,27 @@ async fn run_review(config: &Config, args: ReviewArgs) -> Result<()> {
     let execution_config = config_for_cli_route(config, &route);
     let route_provider = execution_config.provider_identity_for(route.provider);
     let model = route.model.clone();
-    let user_prompt =
-        format!("Review the following diff and provide feedback:\n\n{diff}\n\nEnd of diff.");
+    // PR reviews run under the structured JSON review contract so findings
+    // carry file/line positions that can be posted as inline review comments.
+    let (user_prompt, system) = if let Some((number, view)) = &pr_view {
+        (
+            format_pr_prompt(*number, view, &diff),
+            SystemPrompt::Text(crate::tools::review::review_system_prompt().to_string()),
+        )
+    } else {
+        (
+            format!("Review the following diff and provide feedback:\n\n{diff}\n\nEnd of diff."),
+            SystemPrompt::Text(
+                "You are a senior code reviewer. Focus on bugs, risks, behavioral regressions, and missing tests. \
+Provide findings ordered by severity with file references, then open questions, then a brief summary."
+                    .to_string(),
+            ),
+        )
+    };
     let reasoning_effort = route.reasoning_effort.and_then(|effort| {
         cli_reasoning_effort_value_for_prompt(&execution_config, &model, effort, &user_prompt)
     });
 
-    let system = SystemPrompt::Text(
-        "You are a senior code reviewer. Focus on bugs, risks, behavioral regressions, and missing tests. \
-Provide findings ordered by severity with file references, then open questions, then a brief summary."
-            .to_string(),
-    );
     let client = DeepSeekClient::new(&execution_config)?;
     let request_route = client.effective_route_envelope(&model, chrono::Utc::now());
     let request = MessageRequest {
@@ -8224,8 +8250,20 @@ Provide findings ordered by severity with file references, then open questions, 
             output.push_str(&text);
         }
     }
-    // A truncated review must not become a receipt or a success. The partial
+    let structured = pr_view
+        .as_ref()
+        .map(|_| crate::tools::review::ReviewOutput::from_str(&output));
+    // A truncated review must not be posted or become a receipt. The partial
     // text is still printed for diagnostics below.
+    if args.post && !review_incomplete {
+        let (number, view) = pr_view
+            .as_ref()
+            .expect("--post requires --pr (enforced by clap)");
+        let review = structured
+            .as_ref()
+            .expect("structured output exists for PR reviews");
+        post_pr_review(*number, view, args.repo.as_deref(), review, &diff)?;
+    }
     let receipt = if args.write_receipt && !review_incomplete {
         let parsed_output = crate::tools::review::ReviewOutput::from_str(&output);
         let receipt = crate::tools::review::build_review_receipt(
@@ -8258,6 +8296,13 @@ Provide findings ordered by severity with file references, then open questions, 
                 "model": model,
                 "success": !review_incomplete,
                 "content": output,
+                "pr": pr_view.as_ref().map(|(number, view)| serde_json::json!({
+                    "number": number,
+                    "url": view.url,
+                    "title": view.title,
+                    "head_sha": view.head_sha,
+                })),
+                "review": structured,
                 "stop_reason": review_stop_reason,
                 "error": review_error,
                 "receipt_path": receipt
@@ -8266,6 +8311,20 @@ Provide findings ordered by severity with file references, then open questions, 
                 "receipt": receipt.as_ref().map(|(_, receipt)| receipt),
             }))?
         );
+        if let Some(error) = review_error {
+            anyhow::bail!(error);
+        }
+    } else if let Some((number, view)) = &pr_view {
+        let review = structured
+            .as_ref()
+            .expect("structured output exists for PR reviews");
+        println!(
+            "{}",
+            render_pr_review_markdown(*number, view, review, args.post)
+        );
+        if let Some((path, _)) = receipt {
+            eprintln!("Review receipt written: {}", path.display());
+        }
         if let Some(error) = review_error {
             anyhow::bail!(error);
         }
@@ -8470,6 +8529,9 @@ struct GhPullRequest {
     base: String,
     head: String,
     url: String,
+    /// Head commit SHA (`headRefOid`). Anchors posted review comments to the
+    /// exact revision that was reviewed.
+    head_sha: String,
 }
 
 fn run_gh_pr_view(number: u32, repo: Option<&str>) -> Result<GhPullRequest> {
@@ -8480,7 +8542,7 @@ fn run_gh_pr_view(number: u32, repo: Option<&str>) -> Result<GhPullRequest> {
         cmd.arg("--repo").arg(r);
     }
     cmd.arg("--json")
-        .arg("title,body,baseRefName,headRefName,url");
+        .arg("title,body,baseRefName,headRefName,url,headRefOid");
     let output = cmd
         .output()
         .map_err(|e| anyhow::anyhow!("Failed to run `gh pr view`: {e}"))?;
@@ -8504,6 +8566,7 @@ fn run_gh_pr_view(number: u32, repo: Option<&str>) -> Result<GhPullRequest> {
         base: pick("baseRefName"),
         head: pick("headRefName"),
         url: pick("url"),
+        head_sha: pick("headRefOid"),
     })
 }
 
@@ -8537,6 +8600,223 @@ fn run_gh_pr_checkout(number: u32, repo: Option<&str>) -> Result<()> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         bail!("gh pr checkout #{number} failed: {stderr}");
+    }
+    Ok(())
+}
+
+/// Resolve the `owner/name` repository `gh` believes the current workspace
+/// belongs to. `gh api` needs an explicit repository path, unlike `gh pr`
+/// which infers it from the working directory.
+fn run_gh_repo_name() -> Result<String> {
+    let mut cmd = crate::dependencies::Gh::command()
+        .ok_or_else(|| anyhow::anyhow!("gh not found on PATH"))?;
+    cmd.arg("repo")
+        .arg("view")
+        .arg("--json")
+        .arg("nameWithOwner")
+        .arg("--jq")
+        .arg(".nameWithOwner");
+    let output = cmd
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run `gh repo view`: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        bail!("gh repo view failed: {stderr}");
+    }
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if name.is_empty() {
+        bail!("`gh repo view` returned an empty repository name");
+    }
+    Ok(name)
+}
+
+/// True when `path` appears as a file touched by the unified diff. Guards the
+/// inline-comment payload: GitHub rejects the whole review with a 422 when a
+/// comment's path is not part of the diff.
+fn diff_touches_path(diff: &str, path: &str) -> bool {
+    diff.contains(&format!("+++ b/{path}")) || diff.contains(&format!("--- a/{path}"))
+}
+
+/// Map structured review issues to GitHub inline-review-comment payloads.
+/// Issues without a locatable position stay in the summary body instead.
+fn inline_review_comments(
+    review: &crate::tools::review::ReviewOutput,
+    diff: &str,
+) -> Vec<serde_json::Value> {
+    review
+        .issues
+        .iter()
+        .filter_map(|issue| {
+            let path = issue.path.as_deref()?.trim().trim_start_matches("./");
+            if path.is_empty() || !diff_touches_path(diff, path) {
+                return None;
+            }
+            let line = issue.line?;
+            Some(serde_json::json!({
+                "path": path,
+                "line": line,
+                "body": format!(
+                    "**[{}] {}**\n\n{}",
+                    issue.severity.to_uppercase(),
+                    issue.title,
+                    issue.description
+                ),
+            }))
+        })
+        .collect()
+}
+
+/// Render a structured review as the markdown body printed for — and, with
+/// `--post`, attached to — a pull-request review.
+fn render_pr_review_markdown(
+    number: u32,
+    view: &GhPullRequest,
+    review: &crate::tools::review::ReviewOutput,
+    posted: bool,
+) -> String {
+    let mut body = String::new();
+    body.push_str("## Codewhale review\n\n");
+    if !review.summary.is_empty() {
+        body.push_str(review.summary.trim());
+        body.push_str("\n\n");
+    }
+    if !review.issues.is_empty() {
+        body.push_str("### Findings\n\n");
+        for issue in &review.issues {
+            let location = match (&issue.path, issue.line) {
+                (Some(path), Some(line)) => format!("`{}:{line}`", path.trim()),
+                (Some(path), None) => format!("`{}`", path.trim()),
+                _ => String::new(),
+            };
+            if location.is_empty() {
+                body.push_str(&format!(
+                    "- **[{}] {}**\n",
+                    issue.severity.to_uppercase(),
+                    issue.title
+                ));
+            } else {
+                body.push_str(&format!(
+                    "- **[{}] {}** ({location})\n",
+                    issue.severity.to_uppercase(),
+                    issue.title
+                ));
+            }
+            if !issue.description.is_empty() {
+                body.push_str(&format!("  {}\n", issue.description));
+            }
+        }
+        body.push('\n');
+    }
+    if !review.suggestions.is_empty() {
+        body.push_str("### Suggestions\n\n");
+        for suggestion in &review.suggestions {
+            let location = match (&suggestion.path, suggestion.line) {
+                (Some(path), Some(line)) => format!("`{}:{line}`", path.trim()),
+                (Some(path), None) => format!("`{}`", path.trim()),
+                _ => String::new(),
+            };
+            if location.is_empty() {
+                body.push_str(&format!("- {}\n", suggestion.suggestion));
+            } else {
+                body.push_str(&format!("- {location} — {}\n", suggestion.suggestion));
+            }
+        }
+        body.push('\n');
+    }
+    if !review.overall_assessment.is_empty() {
+        body.push_str("### Assessment\n\n");
+        body.push_str(review.overall_assessment.trim());
+        body.push_str("\n\n");
+    }
+    if posted {
+        body.push_str(&format!(
+            "---\n*Advisory review by Codewhale (`codewhale review --pr {number} --post`, \
+             head `{head}`). Line-specific findings are also posted as inline review \
+             comments. CODEOWNERS approval still governs merge.*\n",
+            head = if view.head_sha.is_empty() {
+                "unknown"
+            } else {
+                view.head_sha.as_str()
+            }
+        ));
+    }
+    body
+}
+
+/// Post one COMMENT review: summary body plus inline comments anchored to the
+/// PR head SHA. Never approves or requests changes — the review is advisory
+/// and posts alongside CODEOWNERS, like `claude-review.yml`.
+fn run_gh_post_pr_review(
+    repo: &str,
+    number: u32,
+    body: &str,
+    commit_id: &str,
+    comments: &[serde_json::Value],
+) -> Result<()> {
+    let mut payload = serde_json::json!({
+        "body": body,
+        "event": "COMMENT",
+    });
+    if !commit_id.is_empty() {
+        payload["commit_id"] = serde_json::json!(commit_id);
+    }
+    if !comments.is_empty() {
+        payload["comments"] = serde_json::json!(comments);
+    }
+    let mut cmd = crate::dependencies::Gh::command()
+        .ok_or_else(|| anyhow::anyhow!("gh not found on PATH"))?;
+    cmd.arg("api")
+        .arg("--method")
+        .arg("POST")
+        .arg(format!("repos/{repo}/pulls/{number}/reviews"))
+        .arg("--input")
+        .arg("-")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to run `gh api`: {e}"))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        stdin
+            .write_all(serde_json::to_string(&payload)?.as_bytes())
+            .map_err(|e| anyhow::anyhow!("Failed to write review payload: {e}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| anyhow::anyhow!("Failed to wait for `gh api`: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        bail!("gh api POST repos/{repo}/pulls/{number}/reviews failed: {stderr}");
+    }
+    Ok(())
+}
+
+/// Publish a completed PR review: resolve the repository, render the summary,
+/// and post it (with inline comments where the diff confirms the position).
+fn post_pr_review(
+    number: u32,
+    view: &GhPullRequest,
+    repo: Option<&str>,
+    review: &crate::tools::review::ReviewOutput,
+    diff: &str,
+) -> Result<()> {
+    let repo_name = match repo.map(str::trim).filter(|repo| !repo.is_empty()) {
+        Some(repo) => repo.to_string(),
+        None => run_gh_repo_name()?,
+    };
+    let inline = inline_review_comments(review, diff);
+    let body = render_pr_review_markdown(number, view, review, true);
+    if inline.is_empty() {
+        run_gh_post_pr_review(&repo_name, number, &body, &view.head_sha, &[])?;
+    } else if let Err(err) =
+        run_gh_post_pr_review(&repo_name, number, &body, &view.head_sha, &inline)
+    {
+        // One model-estimated line outside the diff hunks makes GitHub reject
+        // the whole review; retry summary-only rather than lose the review.
+        eprintln!("warning: inline review comments rejected ({err}); retrying summary-only");
+        run_gh_post_pr_review(&repo_name, number, &body, &view.head_sha, &[])?;
     }
     Ok(())
 }
@@ -8600,27 +8880,31 @@ fn format_pr_prompt(number: u32, view: &GhPullRequest, diff: &str) -> String {
 }
 
 fn collect_diff(args: &ReviewArgs) -> Result<String> {
-    let mut cmd = crate::dependencies::Git::command()
-        .ok_or_else(|| anyhow::anyhow!("git not found on PATH"))?;
-    cmd.arg("diff");
-    if args.staged {
-        cmd.arg("--cached");
-    }
-    if let Some(base) = &args.base {
-        cmd.arg(format!("{base}...HEAD"));
-    }
-    if let Some(path) = &args.path {
-        cmd.arg("--").arg(path);
-    }
+    let mut diff = if let Some(number) = args.pr {
+        run_gh_pr_diff(number, args.repo.as_deref())?
+    } else {
+        let mut cmd = crate::dependencies::Git::command()
+            .ok_or_else(|| anyhow::anyhow!("git not found on PATH"))?;
+        cmd.arg("diff");
+        if args.staged {
+            cmd.arg("--cached");
+        }
+        if let Some(base) = &args.base {
+            cmd.arg(format!("{base}...HEAD"));
+        }
+        if let Some(path) = &args.path {
+            cmd.arg("--").arg(path);
+        }
 
-    let output = cmd
-        .output()
-        .map_err(|e| anyhow::anyhow!("Failed to run git diff. Is git installed? ({e})"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git diff failed: {}", stderr.trim());
-    }
-    let mut diff = String::from_utf8_lossy(&output.stdout).to_string();
+        let output = cmd
+            .output()
+            .map_err(|e| anyhow::anyhow!("Failed to run git diff. Is git installed? ({e})"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("git diff failed: {}", stderr.trim());
+        }
+        String::from_utf8_lossy(&output.stdout).to_string()
+    };
     if diff.len() > args.max_chars {
         diff = crate::utils::truncate_with_ellipsis(&diff, args.max_chars, "\n...[truncated]\n");
     }
@@ -8628,7 +8912,9 @@ fn collect_diff(args: &ReviewArgs) -> Result<String> {
 }
 
 fn review_target_label(args: &ReviewArgs) -> String {
-    let mut label = if args.staged {
+    let mut label = if let Some(number) = args.pr {
+        format!("pr:{number}")
+    } else if args.staged {
         "staged".to_string()
     } else if let Some(base) = args
         .base
@@ -14425,6 +14711,40 @@ reasoning = "high"
         let serialized = serde_json::to_string(&receipt).expect("review receipt");
         assert!(!serialized.contains("127.0.0.1"));
         assert!(!serialized.contains("local-test-key"));
+    }
+
+    #[test]
+    fn inline_review_comments_keep_only_diff_locatable_issues() {
+        let issue = |severity: &str, path: Option<&str>, line: Option<u32>| {
+            crate::tools::review::ReviewIssue {
+                severity: severity.to_string(),
+                title: format!("{severity} finding"),
+                description: "detail".to_string(),
+                path: path.map(str::to_string),
+                line,
+            }
+        };
+        let review = crate::tools::review::ReviewOutput {
+            summary: "summary".to_string(),
+            issues: vec![
+                issue("error", Some("./crates/tui/src/lib.rs"), Some(10)),
+                issue("warning", Some("docs/NOT_IN_DIFF.md"), Some(3)),
+                issue("info", Some("crates/tui/src/lib.rs"), None),
+                issue("error", None, Some(7)),
+            ],
+            suggestions: Vec::new(),
+            overall_assessment: String::new(),
+        };
+        let diff = "diff --git a/crates/tui/src/lib.rs b/crates/tui/src/lib.rs\n\
+                    index 111..222 100644\n\
+                    --- a/crates/tui/src/lib.rs\n\
+                    +++ b/crates/tui/src/lib.rs\n";
+        let comments = inline_review_comments(&review, diff);
+        // GitHub rejects the entire review (422) when a comment's path is not
+        // part of the diff, and inline comments need a line to anchor to.
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0]["path"], "crates/tui/src/lib.rs");
+        assert_eq!(comments[0]["line"], 10);
     }
 
     #[tokio::test]

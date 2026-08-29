@@ -56,6 +56,21 @@ const EXTRA_PAGES: readonly { path: string; title: string; description: string }
     title: "Contribute",
     description: "The pull-request workflow: scoped issue, fork, test the change, explain the result.",
   },
+  {
+    path: "/pricing",
+    title: "Pricing",
+    description: "The open-source runtime is free. Hosted membership billing is built but not for sale yet.",
+  },
+  {
+    path: "/legal/terms",
+    title: "Terms of service",
+    description: "Terms that govern your use of Codewhale, a Shannon Labs product.",
+  },
+  {
+    path: "/legal/privacy",
+    title: "Privacy policy",
+    description: "How Shannon Labs handles information when you use Codewhale.",
+  },
 ];
 
 function topicSitePath(topic: (typeof DOC_TOPICS)[number]): string | null {

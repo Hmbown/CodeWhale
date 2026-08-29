@@ -473,6 +473,7 @@
   "CmdThemeDescription": "Сменить тему или открыть выбор темы",
   "CmdProviderDescription": "Сменить активного провайдера и/или модель",
   "CmdAuthDescription": "Управление способами аутентификации провайдеров",
+  "CmdLoginDescription": "Войти в Codewhale или сохранить ключи провайдера",
   "CmdQueueDescription": "Просмотр и редактирование сообщений в очереди",
   "CmdQueueUsage": "Использование: /queue [list|send <n>|edit <n>|drop <n>|clear]",
   "CmdQueueDraftHeader": "Редактирование сообщения из очереди:",

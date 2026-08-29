@@ -605,7 +605,8 @@ fn run_with<T: CloudTransport, W: Write>(
             let _ =
                 client.poll_device(&device, Duration::from_secs(login.timeout_seconds), sleeper)?;
             let user = client.me()?;
-            write_account(out, "Signed in to Codewhale.", profile, api_base, &user)
+            write_account(out, "Signed in to Codewhale.", profile, api_base, &user)?;
+            Ok(())
         }
         CloudCommand::Status => match client.load_auth()? {
             Some(_) => {

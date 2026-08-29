@@ -1,0 +1,9 @@
+{
+  "defaultLocale": "en",
+  "locales": ["zh"],
+  "files": {
+    "json": {
+      "include": ["gt-catalog/[locale].json"]
+    }
+  }
+}

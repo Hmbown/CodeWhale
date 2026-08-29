@@ -1742,7 +1742,7 @@ impl ShellManager {
             Ok(())
         } else {
             // Do not disclose whether the id exists in another session.
-            Err(anyhow!("Task {task_id} not found"))
+            Err(anyhow!("Job {task_id} not found"))
         }
     }
 
@@ -3039,7 +3039,7 @@ impl ShellManager {
                 stderr: snapshot.stderr_tail.clone(),
             });
         }
-        Err(anyhow!("Task {task_id} not found"))
+        Err(anyhow!("Job {task_id} not found"))
     }
 
     pub fn inspect_job_for_session(

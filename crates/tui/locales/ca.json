@@ -473,6 +473,7 @@
   "CmdThemeDescription": "Canvia de tema o obre el selector de temes",
   "CmdProviderDescription": "Canvia el proveïdor i/o model actiu",
   "CmdAuthDescription": "Gestiona els fluxos d'autenticació dels proveïdors",
+  "CmdLoginDescription": "Inicia sessió a Codewhale o desa claus de proveïdor",
   "CmdQueueDescription": "Mostra o edita els missatges en cua",
   "CmdQueueUsage": "Ús: /queue [list|send <n>|edit <n>|drop <n>|clear]",
   "CmdQueueDraftHeader": "S'està editant el missatge en cua:",

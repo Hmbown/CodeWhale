@@ -59,13 +59,11 @@ fd-lock = "4.0.4"
 dirs.workspace = true
 futures-util = "0.3.31"
 oauth2 = "5"
-# ratatui-core >= 0.1.1 queries cursor position inside `Terminal::clear()`
-# and races our input loop at startup (ratatui/ratatui#2483/#2640).
-# ColorCompatBackend answers `get_cursor_position()` from tracked state
-# (#2640's recommended workaround), so the pin is no longer needed and lru
-# can resolve to >= 0.18.2 (RUSTSEC-2026-0253).
+# No ratatui-core pin: ColorCompatBackend answers `get_cursor_position()`
+# from tracked state (ratatui#2640's recommended workaround), so the CPR query
+# inside `Terminal::clear()` no longer races the input loop. See
+# `tui/color_compat.rs`.
 ratatui = { version = "=0.30.2", features = ["unstable-rendered-line-info"] }
-ratatui-core = "0.1"
 regex = "1.11"
 reqwest = { workspace = true, features = ["blocking", "stream", "form", "http2"] }
 rusqlite.workspace = true

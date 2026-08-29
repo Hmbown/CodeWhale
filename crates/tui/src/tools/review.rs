@@ -50,6 +50,15 @@ the following schema:\n\
 }\n\
 If a field is unknown, use an empty string or null. Prioritize correctness and missing tests.";
 
+/// The system prompt shared by every structured review path (`review`
+/// tool and `codewhale review --pr`). Callers parse the reply with
+/// [`ReviewOutput::from_str`], which falls back to freeform text when a
+/// model ignores the JSON contract.
+#[must_use]
+pub fn review_system_prompt() -> &'static str {
+    REVIEW_SYSTEM_PROMPT
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewIssue {
     #[serde(default)]

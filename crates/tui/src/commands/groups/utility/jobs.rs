@@ -9,7 +9,7 @@ use crate::tui::app::{AppAction, ShellJobAction};
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "jobs",
     aliases: &["job", "zuoye"],
-    usage: "/jobs [list|show <id>|poll <id>|wait <id>|stdin <id> <input>|cancel <id>]",
+    usage: "/jobs [list|show <id>|poll <id>|wait <id>|stdin <id> <input>|cancel <id|all>]",
     description_key: "cmd_jobs_description",
 };
 
@@ -23,6 +23,10 @@ impl RegisterCommand<CommandResult> for JobsCmd {
     fn handler() -> CommandHandler<CommandResult> {
         CommandHandler::Pure(jobs)
     }
+}
+
+fn is_cancel_all_token(id: &str) -> bool {
+    id.eq_ignore_ascii_case("all")
 }
 
 fn jobs(args: Option<&str>) -> CommandResult {
@@ -70,16 +74,21 @@ fn jobs(args: Option<&str>) -> CommandResult {
             None => CommandResult::error("Usage: /jobs close-stdin <id>"),
         },
         "cancel" | "kill" | "stop" => match id {
+            Some(id) if is_cancel_all_token(id) => {
+                CommandResult::action(AppAction::ShellJob(ShellJobAction::CancelAll))
+            }
             Some(id) => CommandResult::action(AppAction::ShellJob(ShellJobAction::Cancel {
                 id: id.to_string(),
             })),
-            None => CommandResult::error("Usage: /jobs cancel <id>"),
+            None => CommandResult::error(
+                "Usage: /jobs cancel <id|all> — id is the shell_* shown on the Shells work-strip row",
+            ),
         },
         "cancel-all" | "kill-all" | "stop-all" => {
             CommandResult::action(AppAction::ShellJob(ShellJobAction::CancelAll))
         }
         _ => CommandResult::error(
-            "Usage: /jobs [list|show <id>|poll <id>|wait <id>|stdin <id> <input>|close-stdin <id>|cancel <id>|cancel-all]",
+            "Usage: /jobs [list|show <id>|poll <id>|wait <id>|stdin <id> <input>|close-stdin <id>|cancel <id|all>]",
         ),
     }
 }
@@ -108,6 +117,37 @@ mod tests {
             cancel_all.action,
             Some(AppAction::ShellJob(ShellJobAction::CancelAll))
         ));
+
+        let cancel_all_spaced = jobs(Some("cancel all"));
+        assert!(matches!(
+            cancel_all_spaced.action,
+            Some(AppAction::ShellJob(ShellJobAction::CancelAll))
+        ));
+
+        let cancel_id = jobs(Some("cancel shell_abcd"));
+        assert!(matches!(
+            cancel_id.action,
+            Some(AppAction::ShellJob(ShellJobAction::Cancel { id })) if id == "shell_abcd"
+        ));
+
+        let bare_cancel = jobs(Some("cancel"));
+        assert!(bare_cancel.action.is_none());
+        assert!(
+            bare_cancel
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("shell_*") && message.contains("<id|all>")),
+            "bare cancel must name the work-strip id space, not a task: {:?}",
+            bare_cancel.message
+        );
+        assert!(
+            !bare_cancel
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("Task")),
+            "bare cancel must not mention Task: {:?}",
+            bare_cancel.message
+        );
     }
 
     #[test]
