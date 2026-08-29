@@ -839,7 +839,7 @@ mod tests {
     use super::*;
     use crate::cloud_dispatch::{
         CloudJobStatus, CredentialSource, CredentialState, DispatchOutcome, GitRemote,
-        execute_dispatch, plan_dispatch,
+        MachineTokenState, execute_dispatch, plan_dispatch,
     };
     use std::sync::Arc;
 
@@ -871,6 +871,7 @@ mod tests {
             &CredentialState::Present {
                 source: CredentialSource::Env,
             },
+            &MachineTokenState::Present,
         )
         .unwrap()
         {
@@ -1194,9 +1195,9 @@ mod tests {
         let mut stale = store.load(&job.id).unwrap();
         stale.status = CloudJobStatus::Running;
         stale.sandbox_id = Some("sandbox_orphan".to_string());
-        stale.created_unix = stale.created_unix.saturating_sub(
-            u64::try_from(crate::cloud_dispatch::STALE_ACTIVE_JOB_SECS).unwrap() + 120,
-        );
+        stale.created_unix = stale
+            .created_unix
+            .saturating_sub(crate::cloud_dispatch::STALE_ACTIVE_JOB_SECS + 120);
         store.save(&stale).unwrap();
         // A sandbox labeled for a job that is not in the store at all.
         let launcher = RecordingLauncher::new("unused", fixture_patch());
@@ -1240,6 +1241,7 @@ mod tests {
             &CredentialState::Present {
                 source: CredentialSource::Env,
             },
+            &MachineTokenState::Present,
         )
         .unwrap()
         {

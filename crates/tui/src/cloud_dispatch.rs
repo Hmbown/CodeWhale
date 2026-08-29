@@ -49,6 +49,19 @@ pub const SANDBOX_JOB_LABEL: &str = "codewhale.job";
 /// label reconciler filters the provider's sandbox list on.
 pub const SANDBOX_PRODUCT_LABEL: &str = "codewhale.product";
 pub const SANDBOX_PRODUCT_VALUE: &str = "dispatch";
+/// The only environment variable that carries the Codewhale account machine
+/// token (`cwc_key_…`) into the sandbox, so the preinstalled `codewhale`
+/// authenticates as the dispatching account. Same name the CLI's CI path
+/// reads — one token, one meaning, every host.
+pub const CLOUD_AGENT_TOKEN_ENV: &str = "CODEWHALE_API_KEY";
+/// Operator override for the cloud-agent snapshot name.
+pub const CLOUD_AGENT_SNAPSHOT_ENV: &str = "CODEWHALE_DISPATCH_SNAPSHOT";
+/// The Daytona snapshot every cloud agent launches from: built by
+/// `docs/cloud-agent-snapshot/Dockerfile` with the `codewhale` CLI
+/// preinstalled (founder decision 2026-08-29 — the sandbox ships Codewhale
+/// itself, so `codewhale exec` exists inside it and closes the self-hosting
+/// loop: dispatch → sandbox(own codewhale) → account identity → forge PR).
+pub const DEFAULT_CLOUD_AGENT_SNAPSHOT: &str = "codewhale-cloud-agent";
 /// Active jobs older than this are stale. The declared harness budget for
 /// one cloud-agent turn is an hour (`HARNESS_TIMEOUT_SECS`), so an active
 /// record with no terminal state after 90 minutes (harness budget plus
@@ -509,6 +522,37 @@ pub fn should_auto_confirm(_plan: &DispatchPlan) -> bool {
     false
 }
 
+/// Presence of the Codewhale account machine token that authenticates the
+/// IN-SANDBOX agent. Mirrors [`CredentialState`]: a fact about availability,
+/// never the value — the token is used in the create body and nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MachineTokenState {
+    Present,
+    Missing,
+}
+
+/// Discover the account machine token without returning or logging it.
+/// The sandbox's `codewhale` resolves the account's configured model and
+/// raises the PR as this identity, so a dispatch without it would spend on
+/// a sandbox whose agent cannot authenticate — confirm refuses instead.
+pub fn discover_machine_token() -> MachineTokenState {
+    if env_present(CLOUD_AGENT_TOKEN_ENV) {
+        MachineTokenState::Present
+    } else {
+        MachineTokenState::Missing
+    }
+}
+
+/// Truthful refusal for a confirmed dispatch with no account machine token.
+/// Names the requirement and the fix, never a provider brand, never a secret.
+pub fn missing_machine_token_message() -> String {
+    "cloud dispatch fails closed: the cloud agent runs Codewhale itself, so it \
+     needs a Codewhale account machine token to act as your account. Set \
+     CODEWHALE_API_KEY to a `cwc_key_…` machine key (Account → API keys in the \
+     web app) and confirm again."
+        .to_string()
+}
+
 /// Propose or launch. Confirmation and credentials are enforced here.
 ///
 /// With `confirm`, the job is persisted as `launching` and returned as
@@ -520,6 +564,7 @@ pub fn execute_dispatch(
     plan: DispatchPlan,
     confirm: bool,
     credentials: &CredentialState,
+    machine_token: &MachineTokenState,
 ) -> Result<DispatchOutcome> {
     let mut job = CloudJob {
         id: allocate_job_id(&plan),
@@ -561,6 +606,14 @@ pub fn execute_dispatch(
         store.save(&job)?;
         return Ok(DispatchOutcome::Refused(job));
     }
+    if matches!(machine_token, MachineTokenState::Missing) {
+        job.status = CloudJobStatus::Refused;
+        job.refusal = Some(missing_machine_token_message());
+        job.note = missing_machine_token_message();
+        job.finished_unix = Some(unix_now());
+        store.save(&job)?;
+        return Ok(DispatchOutcome::Refused(job));
+    }
 
     job.status = CloudJobStatus::Launching;
     job.note = "Cloud agent confirmed; the sandbox is launching and the runner will raise the branch and open the PR. Watch `codewhale dispatch --show` or `/dispatch show`.".to_string();
@@ -580,6 +633,7 @@ pub fn confirm_job(
     store: &CloudJobStore,
     id: &str,
     credentials: &CredentialState,
+    machine_token: &MachineTokenState,
 ) -> Result<DispatchOutcome> {
     let mut job = store.load(id)?;
     if job.status != CloudJobStatus::Proposed {
@@ -594,6 +648,14 @@ pub fn confirm_job(
         job.status = CloudJobStatus::Refused;
         job.refusal = Some(missing_credentials_message());
         job.note = missing_credentials_message();
+        job.finished_unix = Some(unix_now());
+        store.save(&job)?;
+        return Ok(DispatchOutcome::Refused(job));
+    }
+    if matches!(machine_token, MachineTokenState::Missing) {
+        job.status = CloudJobStatus::Refused;
+        job.refusal = Some(missing_machine_token_message());
+        job.note = missing_machine_token_message();
         job.finished_unix = Some(unix_now());
         store.save(&job)?;
         return Ok(DispatchOutcome::Refused(job));
@@ -1214,6 +1276,28 @@ impl LiveDaytonaLauncher {
             .context("failed to build the sandbox toolbox URL")
     }
 
+    /// Apply the dispatch labels via Daytona's dedicated labels endpoint.
+    fn put_sandbox_labels(sandbox_id: &str, api_key: &str, job: &CloudJob) -> Result<()> {
+        if !valid_sandbox_id(sandbox_id) {
+            bail!("the sandbox id is not a usable path token");
+        }
+        let url = Self::control_plane_url(&format!("sandbox/{sandbox_id}/labels"))?;
+        let body = serde_json::json!({
+            "labels": {
+                SANDBOX_JOB_LABEL: job.id,
+                "codewhale.forge": job.forge.as_str(),
+                SANDBOX_PRODUCT_LABEL: SANDBOX_PRODUCT_VALUE,
+            }
+        });
+        let response = Self::send_json(reqwest::Method::PUT, &url, api_key, body)?;
+        let status = response.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            bail!("cloud agent label apply failed (HTTP {status}).")
+        }
+    }
+
     fn send_json(
         method: reqwest::Method,
         url: &reqwest::Url,
@@ -1246,24 +1330,9 @@ impl DaytonaLauncher for LiveDaytonaLauncher {
     fn create_sandbox(&self, job: &CloudJob) -> Result<SandboxReceipt> {
         let api_key = Self::api_key()?;
         let url = Self::control_plane_url("sandbox")?;
-        // TODO(founding decision, deliberately not invented here): the
-        // sandbox image / snapshot / env-vars design is still pending, so
-        // this create body carries no image, snapshot, or envVars and the
-        // created sandbox CANNOT be assumed to provide the `codewhale`
-        // harness (`codewhale exec --auto`). Once that decision lands, the
-        // confirm gate (confirm_job / execute_dispatch) must hard-fail
-        // truthfully — "the cloud agent image cannot run this job" — rather
-        // than take spend for a sandbox that cannot execute the harness
-        // step. No gating flag exists today and none is added here; wire
-        // the warning through whatever config surface that decision picks.
-        let body = serde_json::json!({
-            "name": format!("cw-{}", job.id.replace('_', "-")),
-            "labels": {
-                SANDBOX_JOB_LABEL: job.id,
-                "codewhale.forge": job.forge.as_str(),
-                SANDBOX_PRODUCT_LABEL: SANDBOX_PRODUCT_VALUE,
-            }
-        });
+        let machine_token =
+            read_cloud_agent_token().ok_or_else(|| anyhow!(missing_machine_token_message()))?;
+        let body = create_sandbox_body(job, &machine_token, &cloud_agent_snapshot());
         let response = Self::send_json(reqwest::Method::POST, &url, &api_key, body)?;
         let status = response.status();
         let text = response.text().unwrap_or_default();
@@ -1289,6 +1358,43 @@ impl DaytonaLauncher for LiveDaytonaLauncher {
             .filter(|value| !value.is_empty() && value.len() <= MAX_REMOTE_BYTES)
             .and_then(|value| validate_outbound_origin(value).ok())
             .map(|url| url.to_string());
+        // Daytona applies labels via a dedicated PUT, not the create body
+        // (kept there for forward compatibility). Labels are load-bearing:
+        // the orphan reconciler joins them back to job records, so a
+        // sandbox without them is untraceable spend. If the PUT fails, the
+        // already-created sandbox is torn down immediately and create
+        // fails truthfully — no orphan, retryable — rather than returning
+        // a receipt the reconciler can never find again.
+        if let Err(label_error) = Self::put_sandbox_labels(&sandbox_id, &api_key, job) {
+            let undo = Self::send_json(
+                reqwest::Method::DELETE,
+                &Self::control_plane_url(&format!("sandbox/{sandbox_id}"))?,
+                &api_key,
+                serde_json::Value::Null,
+            )
+            .and_then(|response| {
+                let status = response.status();
+                if status.is_success() || status.as_u16() == 404 {
+                    Ok(())
+                } else {
+                    bail!("HTTP {status}")
+                }
+            });
+            match undo {
+                Ok(()) => bail!(
+                    "cloud agent created but its labels could not be applied ({}); \
+                     the sandbox was torn down — retry the job.",
+                    sanitize_error(&label_error.to_string())
+                ),
+                Err(undo_error) => bail!(
+                    "cloud agent created but its labels could not be applied ({}) and \
+                     teardown also failed ({}); a sandbox may need manual cleanup at \
+                     the provider.",
+                    sanitize_error(&label_error.to_string()),
+                    sanitize_error(&undo_error.to_string())
+                ),
+            }
+        }
         Ok(SandboxReceipt {
             sandbox_id,
             toolbox_url,
@@ -1639,6 +1745,67 @@ fn read_api_key() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// The account machine token for the in-sandbox agent. Read at create
+/// time only; used in the create body and never returned, logged, or
+/// persisted by the store.
+fn read_cloud_agent_token() -> Option<String> {
+    std::env::var(CLOUD_AGENT_TOKEN_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && value.len() <= MAX_MACHINE_TOKEN_BYTES)
+}
+
+/// Bound on the injected machine token: real `cwc_key_…` keys are 76
+/// chars; the bound exists so a misconfigured env var cannot balloon the
+/// create body.
+const MAX_MACHINE_TOKEN_BYTES: usize = 512;
+
+/// The cloud-agent snapshot to launch from. `CODEWHALE_DISPATCH_SNAPSHOT`
+/// overrides the default for operators; an invalid override falls back to
+/// the default rather than shipping an arbitrary string to the provider.
+fn cloud_agent_snapshot() -> String {
+    std::env::var(CLOUD_AGENT_SNAPSHOT_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| valid_snapshot_name(value))
+        .unwrap_or_else(|| DEFAULT_CLOUD_AGENT_SNAPSHOT.to_string())
+}
+
+/// Snapshot names are provider path tokens: slug charset, bounded length.
+/// Same policy shape as [`valid_sandbox_id`].
+fn valid_snapshot_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+/// The cloud-agent sandbox create body (pure so tests pin the contract).
+///
+/// Founder decision 2026-08-29: the sandbox launches from the Codewhale
+/// cloud-agent snapshot — Daytona snapshots are the only restorable
+/// create source (raw images are snapshot-build inputs) — with the CLI
+/// preinstalled, and the account machine token injected as
+/// `CODEWHALE_API_KEY` so the in-sandbox `codewhale exec` authenticates as
+/// the dispatching account and resolves the account's configured model.
+/// No provider API key ever widens into the sandbox (BYOK stays local);
+/// the sandbox speaks only with the Codewhale account.
+fn create_sandbox_body(job: &CloudJob, machine_token: &str, snapshot: &str) -> serde_json::Value {
+    serde_json::json!({
+        "name": format!("cw-{}", job.id.replace('_', "-")),
+        "snapshot": snapshot,
+        "env": {
+            CLOUD_AGENT_TOKEN_ENV: machine_token,
+        },
+        "labels": {
+            SANDBOX_JOB_LABEL: job.id,
+            "codewhale.forge": job.forge.as_str(),
+            SANDBOX_PRODUCT_LABEL: SANDBOX_PRODUCT_VALUE,
+        }
+    })
+}
+
 fn remote_host(url: &str) -> Option<String> {
     let url = url.trim();
     if url.len() > MAX_REMOTE_BYTES {
@@ -1828,6 +1995,7 @@ mod tests {
             &CredentialState::Present {
                 source: CredentialSource::Env,
             },
+            &MachineTokenState::Present,
         )
         .unwrap();
         let DispatchOutcome::Proposal(job) = outcome else {
@@ -1860,7 +2028,14 @@ mod tests {
             Some("codewhale/cloud-cnb"),
         )
         .unwrap();
-        let outcome = execute_dispatch(&store, plan, true, &CredentialState::Missing).unwrap();
+        let outcome = execute_dispatch(
+            &store,
+            plan,
+            true,
+            &CredentialState::Missing,
+            &MachineTokenState::Present,
+        )
+        .unwrap();
         let DispatchOutcome::Refused(job) = outcome else {
             panic!("expected refuse");
         };
@@ -1871,6 +2046,173 @@ mod tests {
         assert!(job.note.contains("cloud dispatch fails closed"));
         assert!(!job.note.contains("DAYTONA"));
         assert!(!job.note.contains("sk-"));
+    }
+
+    #[test]
+    fn confirmed_dispatch_without_machine_token_refuses_truthfully() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        let plan = plan_dispatch(
+            &remotes(&[("origin", "https://cnb.cool/org/repo.git")]),
+            "raise a CNB PR",
+            Some(Forge::Cnb),
+            Some("codewhale/cloud-cnb"),
+        )
+        .unwrap();
+        // Daytona credentials ARE present: the machine token is the missing
+        // fact, so the refusal must be the account-token one.
+        let outcome = execute_dispatch(
+            &store,
+            plan,
+            true,
+            &CredentialState::Present {
+                source: CredentialSource::Env,
+            },
+            &MachineTokenState::Missing,
+        )
+        .unwrap();
+        let DispatchOutcome::Refused(job) = outcome else {
+            panic!("expected refuse");
+        };
+        assert_eq!(job.status, CloudJobStatus::Refused);
+        assert!(job.confirmed);
+        assert!(job.sandbox_id.is_none());
+        assert!(job.finished_unix.is_some(), "the refusal is terminal");
+        assert!(job.note.contains("CODEWHALE_API_KEY"));
+        assert!(job.note.contains("cwc_key_"));
+        assert!(job.note.contains("cloud dispatch fails closed"));
+        // No provider brand in user copy, no secret-shaped text.
+        assert!(!job.note.contains("Daytona"));
+        assert!(!job.note.contains("sk-"));
+    }
+
+    #[test]
+    fn confirm_without_machine_token_refuses_in_place() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        let plan = plan_dispatch(
+            &remotes(&[("gitee", "https://gitee.com/org/repo.git")]),
+            "gitee offload",
+            Some(Forge::Gitee),
+            Some("codewhale/cloud-confirm-token"),
+        )
+        .unwrap();
+        let DispatchOutcome::Proposal(job) = execute_dispatch(
+            &store,
+            plan,
+            false,
+            &CredentialState::Present {
+                source: CredentialSource::Env,
+            },
+            &MachineTokenState::Present,
+        )
+        .unwrap() else {
+            panic!("expected proposal");
+        };
+        let id = job.id.clone();
+
+        let refused = match confirm_job(
+            &store,
+            &id,
+            &CredentialState::Present {
+                source: CredentialSource::Env,
+            },
+            &MachineTokenState::Missing,
+        )
+        .unwrap()
+        {
+            DispatchOutcome::Refused(job) => job,
+            other => panic!("expected refuse, got {other:?}"),
+        };
+        // Refused in place: SAME id, one record, terminal.
+        assert_eq!(refused.id, id);
+        assert_eq!(refused.status, CloudJobStatus::Refused);
+        assert!(refused.note.contains("CODEWHALE_API_KEY"));
+        let listed = store.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, id);
+        // A second confirm cannot re-mint a run from the refusal.
+        assert!(
+            confirm_job(
+                &store,
+                &id,
+                &CredentialState::Present {
+                    source: CredentialSource::Env,
+                },
+                &MachineTokenState::Present,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn create_body_launches_from_the_cloud_agent_snapshot_with_the_account_token() {
+        let job = CloudJob {
+            id: "cloud_deadbeef".to_string(),
+            kind: JOB_KIND.to_string(),
+            status: CloudJobStatus::Launching,
+            prompt: "pin the create contract".to_string(),
+            forge: Forge::Github,
+            remote_name: "origin".to_string(),
+            remote_url: "https://github.com/org/repo.git".to_string(),
+            branch: "codewhale/cloud-create-body".to_string(),
+            confirmed: true,
+            sandbox_id: None,
+            pr_url: None,
+            refusal: None,
+            note: String::new(),
+            created_unix: 1,
+            base_branch: None,
+            head_sha: None,
+            agent_summary: None,
+            finished_unix: None,
+            sandbox_pending: false,
+        };
+        let token = "cwc_key_0123456789abcdef01234567_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let body = create_sandbox_body(&job, token, DEFAULT_CLOUD_AGENT_SNAPSHOT);
+        // The sandbox launches from the codewhale cloud-agent snapshot…
+        assert_eq!(
+            body.get("snapshot").and_then(serde_json::Value::as_str),
+            Some(DEFAULT_CLOUD_AGENT_SNAPSHOT)
+        );
+        // …with exactly one injected env var: the account machine token.
+        let env = body.get("env").expect("env present");
+        assert_eq!(
+            env.get(CLOUD_AGENT_TOKEN_ENV)
+                .and_then(serde_json::Value::as_str),
+            Some(token)
+        );
+        let env_len = env.as_object().map(|map| map.len()).unwrap_or(0);
+        assert_eq!(env_len, 1, "no provider key widens into the sandbox");
+        // Labels stay: the reconciler's join keys.
+        let labels = body.get("labels").expect("labels present");
+        assert_eq!(
+            labels
+                .get(SANDBOX_JOB_LABEL)
+                .and_then(serde_json::Value::as_str),
+            Some("cloud_deadbeef")
+        );
+        assert_eq!(
+            labels
+                .get(SANDBOX_PRODUCT_LABEL)
+                .and_then(serde_json::Value::as_str),
+            Some(SANDBOX_PRODUCT_VALUE)
+        );
+        // No provider API key ever ships into the sandbox.
+        let serialized = body.to_string();
+        assert!(!serialized.contains("DAYTONA_API_KEY"));
+        assert!(!serialized.contains("sk-"));
+    }
+
+    #[test]
+    fn snapshot_names_are_slug_charset_and_bounded() {
+        assert!(valid_snapshot_name("codewhale-cloud-agent"));
+        assert!(valid_snapshot_name("team.agent_2026"));
+        assert!(!valid_snapshot_name(""));
+        assert!(!valid_snapshot_name("has space"));
+        assert!(!valid_snapshot_name("unicodé"));
+        assert!(!valid_snapshot_name("a".repeat(65).as_str()));
+        assert!(valid_snapshot_name("a".repeat(64).as_str()));
     }
 
     #[test]
@@ -1891,6 +2233,7 @@ mod tests {
             &CredentialState::Present {
                 source: CredentialSource::Keyring,
             },
+            &MachineTokenState::Present,
         )
         .unwrap();
         let DispatchOutcome::Accepted(job) = outcome else {
@@ -1928,6 +2271,7 @@ mod tests {
             &CredentialState::Present {
                 source: CredentialSource::Env,
             },
+            &MachineTokenState::Present,
         )
         .unwrap() else {
             panic!("expected proposal");
@@ -1940,6 +2284,7 @@ mod tests {
             &CredentialState::Present {
                 source: CredentialSource::Env,
             },
+            &MachineTokenState::Present,
         )
         .unwrap()
         {
@@ -1963,6 +2308,7 @@ mod tests {
             &CredentialState::Present {
                 source: CredentialSource::Env,
             },
+            &MachineTokenState::Present,
         )
         .unwrap_err()
         .to_string();
@@ -1988,12 +2334,20 @@ mod tests {
             &CredentialState::Present {
                 source: CredentialSource::Env,
             },
+            &MachineTokenState::Present,
         )
         .unwrap() else {
             panic!("expected proposal");
         };
         let id = job.id.clone();
-        let refused = match confirm_job(&store, &id, &CredentialState::Missing).unwrap() {
+        let refused = match confirm_job(
+            &store,
+            &id,
+            &CredentialState::Missing,
+            &MachineTokenState::Present,
+        )
+        .unwrap()
+        {
             DispatchOutcome::Refused(job) => job,
             other => panic!("expected refuse, got {other:?}"),
         };
@@ -2003,7 +2357,15 @@ mod tests {
         assert!(refused.finished_unix.is_some());
         assert_eq!(store.list().unwrap().len(), 1);
         // And it cannot be confirmed again either.
-        assert!(confirm_job(&store, &id, &CredentialState::Missing).is_err());
+        assert!(
+            confirm_job(
+                &store,
+                &id,
+                &CredentialState::Missing,
+                &MachineTokenState::Present
+            )
+            .is_err()
+        );
     }
 
     /// Launcher that can create but never tear down; used to pin the

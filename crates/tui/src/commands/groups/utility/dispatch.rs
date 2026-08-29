@@ -6,8 +6,8 @@ use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::cloud_dispatch::{
     CloudJobStore, DispatchOutcome, Forge, LiveDaytonaLauncher, cancel_job, confirm_job,
-    discover_credentials, discover_remotes, execute_dispatch, format_job, format_job_list,
-    format_status, plan_dispatch,
+    discover_credentials, discover_machine_token, discover_remotes, execute_dispatch, format_job,
+    format_job_list, format_status, plan_dispatch,
 };
 use crate::commands::CommandResult;
 use crate::dispatch_runner::spawn_confirmed_runner;
@@ -75,7 +75,12 @@ fn dispatch(workspace: &mut dyn CommandWorkspaceContext, args: Option<&str>) -> 
             if rest.is_empty() {
                 return CommandResult::error("Usage: /dispatch confirm <id>");
             }
-            match confirm_job(&store, rest, &discover_credentials()) {
+            match confirm_job(
+                &store,
+                rest,
+                &discover_credentials(),
+                &discover_machine_token(),
+            ) {
                 Ok(outcome) => {
                     if let DispatchOutcome::Accepted(job) = &outcome {
                         // Detached: the TUI stays responsive and the job
@@ -116,7 +121,13 @@ fn propose_or_run(
         Ok(plan) => plan,
         Err(error) => return CommandResult::error(error.to_string()),
     };
-    match execute_dispatch(store, plan, confirm, &discover_credentials()) {
+    match execute_dispatch(
+        store,
+        plan,
+        confirm,
+        &discover_credentials(),
+        &discover_machine_token(),
+    ) {
         Ok(outcome) => {
             if let DispatchOutcome::Accepted(job) = &outcome {
                 spawn_confirmed_runner(store.clone(), job.id.clone());

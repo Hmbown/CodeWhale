@@ -82,6 +82,13 @@ Every phase persists its transition, so `codewhale dispatch --show <id>` /
 
 ### Where the run happens
 
+- The sandbox launches from the Codewhale cloud-agent snapshot — the
+  `codewhale` CLI is preinstalled in it (see
+  [`cloud-agent-snapshot/`](./cloud-agent-snapshot/)) — with the
+  dispatching account's machine token injected as `CODEWHALE_API_KEY`, so
+  the in-sandbox `codewhale exec --auto` runs as the account and resolves
+  the account's configured model. No provider API key widens into the
+  sandbox.
 - The CLI stays attached: after `--confirm` it prints the launching card and
   waits for the runner so a sandbox is never orphaned by an early exit
   (Ctrl-C exits the wait; the job record survives, and `--cancel` tears the
@@ -127,6 +134,12 @@ written into a job record, and is not a user surface: there is no
 Forge credentials follow the same rule: GitHub auth comes from the existing
 `gh` CLI login; Gitee and CNB tokens live in the Codewhale service slots
 `gitee` and `cnb` and are read only at PR-open time.
+
+The dispatching host also needs the account machine token
+(`CODEWHALE_API_KEY`, a `cwc_key_…` key from Account → API keys): it is
+injected into the sandbox so the in-sandbox `codewhale` runs as the
+account. Without it confirm refuses before any spend — a sandbox whose
+agent has no identity is money for nothing.
 
 ## Confirmation and fail-closed rules
 

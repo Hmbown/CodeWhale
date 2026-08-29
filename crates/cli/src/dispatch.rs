@@ -7,8 +7,8 @@ use anyhow::{Result, bail};
 use clap::{Args, ValueEnum};
 use codewhale_tui::cloud_dispatch::{
     CloudJobStore, DispatchOutcome, Forge, LiveDaytonaLauncher, cancel_job, confirm_job,
-    discover_credentials, discover_remotes, execute_dispatch, format_job, format_job_list,
-    format_status, plan_dispatch,
+    discover_credentials, discover_machine_token, discover_remotes, execute_dispatch, format_job,
+    format_job_list, format_status, plan_dispatch,
 };
 use codewhale_tui::dispatch_runner::spawn_confirmed_runner;
 
@@ -118,7 +118,12 @@ fn run_with<W: Write>(args: DispatchArgs, out: &mut W) -> Result<()> {
 
     let prompt = args.prompt.join(" ");
     if prompt.starts_with("cloud_") && args.confirm && prompt.split_whitespace().count() == 1 {
-        let outcome = confirm_job(&store, prompt.trim(), &credentials)?;
+        let outcome = confirm_job(
+            &store,
+            prompt.trim(),
+            &credentials,
+            &discover_machine_token(),
+        )?;
         let runner = spawn_accepted(&store, &outcome);
         write_outcome(out, outcome)?;
         return join_runner(out, &store, prompt.trim(), runner);
@@ -130,7 +135,13 @@ fn run_with<W: Write>(args: DispatchArgs, out: &mut W) -> Result<()> {
         args.remote.map(Forge::from),
         args.branch.as_deref(),
     )?;
-    let outcome = execute_dispatch(&store, plan, args.confirm, &credentials)?;
+    let outcome = execute_dispatch(
+        &store,
+        plan,
+        args.confirm,
+        &credentials,
+        &discover_machine_token(),
+    )?;
     let runner = spawn_accepted(&store, &outcome);
     let job_id = outcome_job_id(&outcome).unwrap_or_default();
     write_outcome(out, outcome)?;
