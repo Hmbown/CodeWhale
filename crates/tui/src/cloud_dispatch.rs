@@ -284,6 +284,31 @@ impl CloudJobStore {
         Ok(())
     }
 
+    /// Cancel-authoritative save: refuse to overwrite a `canceled` record.
+    ///
+    /// The runner does read-modify-write phase saves while `/dispatch
+    /// cancel` (or `--cancel`) can flip the record concurrently; an
+    /// unconditional phase save landing after the cancel would resurrect a
+    /// dead run — including its branch push and PR. Returns `Ok(false)`
+    /// (leaving the cancellation exactly as the user left it) when the
+    /// persisted record is already `canceled`, `Ok(true)` after a normal
+    /// save.
+    ///
+    /// This is load-check-save: the store is file-backed with no
+    /// cross-process lock, so the check cannot remove the load→save window
+    /// entirely — it narrows the clobber window from a whole phase (seconds
+    /// to minutes) to the span of one save, which is the single-writer
+    /// discipline this store assumes elsewhere.
+    pub fn save_unless_canceled(&self, job: &CloudJob) -> Result<bool> {
+        if let Ok(current) = self.load(&job.id)
+            && current.status == CloudJobStatus::Canceled
+        {
+            return Ok(false);
+        }
+        self.save(job)?;
+        Ok(true)
+    }
+
     /// Load one job by id.
     pub fn load(&self, id: &str) -> Result<CloudJob> {
         let path = self.job_path(id)?;
@@ -2060,6 +2085,33 @@ mod tests {
             finished_unix: None,
             sandbox_pending: false,
         }
+    }
+
+    #[test]
+    fn save_unless_canceled_refuses_to_resurrect_a_canceled_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        let mut job = stored_job(CloudJobStatus::Running, 10_000_000);
+        store.save(&job).unwrap();
+        // A phase save while the record is still active goes through.
+        job.note = "phase save".to_string();
+        assert!(store.save_unless_canceled(&job).unwrap());
+        assert_eq!(store.load(&job.id).unwrap().note, "phase save");
+        // The user cancels; the runner's next phase save must be refused and
+        // leave the cancellation exactly as written.
+        let mut canceled = store.load(&job.id).unwrap();
+        canceled.status = CloudJobStatus::Canceled;
+        canceled.note = "Canceled locally".to_string();
+        canceled.finished_unix = Some(10_000_060);
+        store.save(&canceled).unwrap();
+        let mut stale_runner_copy = job.clone();
+        stale_runner_copy.status = CloudJobStatus::OpeningPr;
+        stale_runner_copy.note = "the runner's read-modify-write".to_string();
+        assert!(!store.save_unless_canceled(&stale_runner_copy).unwrap());
+        let persisted = store.load(&job.id).unwrap();
+        assert_eq!(persisted.status, CloudJobStatus::Canceled);
+        assert_eq!(persisted.note, "Canceled locally");
+        assert_eq!(persisted.finished_unix, Some(10_000_060));
     }
 
     #[test]

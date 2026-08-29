@@ -87,12 +87,33 @@ pub fn run_confirmed_job(
         Ok(()) => store.load(id),
         Err(error) => {
             let message = sanitize_error(&error.to_string());
-            job.status = CloudJobStatus::Failed;
-            job.refusal = Some(message.clone());
-            job.finished_unix = Some(unix_timestamp());
-            job.note = format!("Cloud agent run failed closed. {message}");
-            let _ = store.save(&job);
-            teardown_best_effort(launcher, &job);
+            // Re-load before writing any failure: a job the user canceled
+            // stays canceled — a later run error must not overwrite the
+            // user's terminal word with `failed`. The error is appended to
+            // the note instead. And if a cancel lands inside the load→save
+            // span of the failure write, the disk record (already
+            // `canceled`, with the user's note) wins and is left alone.
+            let current = match store.load(id) {
+                Ok(mut record) if record.status == CloudJobStatus::Canceled => {
+                    record.finished_unix =
+                        Some(record.finished_unix.unwrap_or_else(unix_timestamp));
+                    record.note = format!("{}. Run error after cancel: {message}", record.note);
+                    let _ = store.save(&record);
+                    record
+                }
+                loaded => {
+                    let mut failed = loaded.unwrap_or_else(|_| job.clone());
+                    failed.status = CloudJobStatus::Failed;
+                    failed.refusal = Some(message.clone());
+                    failed.finished_unix = Some(unix_timestamp());
+                    failed.note = format!("Cloud agent run failed closed. {message}");
+                    match store.save_unless_canceled(&failed) {
+                        Ok(true) => failed,
+                        _ => store.load(id).unwrap_or(failed),
+                    }
+                }
+            };
+            teardown_best_effort(launcher, &current);
             Err(error)
         }
     }
@@ -170,6 +191,12 @@ fn drive(
     // up (or the process dies), the sandbox may still come into being with
     // no recorded id — `sandbox_pending` is what cancel and the label
     // reconciler use to find and delete it by label.
+    //
+    // Every phase save below is cancel-authoritative
+    // (`save_unless_canceled`): a cancel that lands while a phase is in
+    // flight wins over the runner's read-modify-write, so a canceled job
+    // can never be resurrected into a later phase — above all never into
+    // the branch push / PR open.
     job.sandbox_pending = true;
     store.save(job)?;
     let receipt = launcher.create_sandbox(job)?;
@@ -180,8 +207,7 @@ fn drive(
         "Sandbox {} created; the Codewhale cloud agent turn is running.",
         receipt.sandbox_id
     );
-    store.save(job)?;
-    if cancel_requested(store, job)? {
+    if !store.save_unless_canceled(job)? {
         return finish_canceled(store, job, launcher, &receipt);
     }
 
@@ -206,12 +232,15 @@ fn drive(
         job.branch,
         job.forge.as_str()
     );
-    store.save(job)?;
-    if cancel_requested(store, job)? {
+    if !store.save_unless_canceled(job)? {
         return finish_canceled(store, job, launcher, &receipt);
     }
 
-    // OpeningPr → Done: push the branch and open the PR.
+    // OpeningPr → Done: push the branch and open the PR. The cancel check
+    // is the last gate before money-adjacent side effects on the forge.
+    if cancel_requested(store, job)? {
+        return finish_canceled(store, job, launcher, &receipt);
+    }
     let opened = forge.open(job, &patch)?;
     job.status = CloudJobStatus::Done;
     job.pr_url = Some(opened.url.clone());
@@ -221,7 +250,23 @@ fn drive(
         opened.url,
         teardown_note(launcher, &receipt)
     );
-    store.save(job)
+    if !store.save_unless_canceled(job)? {
+        // A cancel landed while the PR was opening. The PR may well exist —
+        // keep its URL and say exactly that rather than claiming success or
+        // silently dropping the receipt.
+        let mut canceled = store.load(&job.id)?;
+        canceled.pr_url = job.pr_url.clone();
+        canceled.agent_summary = job.agent_summary.clone();
+        canceled.finished_unix = Some(canceled.finished_unix.unwrap_or_else(unix_timestamp));
+        canceled.note = format!(
+            "Canceled as the PR was opening; it may still have landed at {}. {}",
+            opened.url,
+            teardown_note(launcher, &receipt)
+        );
+        *job = canceled.clone();
+        return store.save(&canceled).map(|_| ());
+    }
+    Ok(())
 }
 
 /// True when the user canceled the job mid-run.
@@ -237,6 +282,7 @@ fn finish_canceled(
 ) -> Result<()> {
     let mut canceled = store.load(&job.id)?;
     canceled.agent_summary = job.agent_summary.clone();
+    canceled.finished_unix = Some(canceled.finished_unix.unwrap_or_else(unix_timestamp));
     canceled.note = format!("Canceled mid-run. {}", teardown_note(launcher, receipt));
     *job = canceled.clone();
     store.save(&canceled)
@@ -908,6 +954,187 @@ mod tests {
         );
         assert!(forge.opened().is_empty());
         assert!(canceled_seen.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// Cancels the job from inside a phase hook with a raw status flip (no
+    /// `finished_unix`), mirroring the reviewer's reproduction: cancel_job
+    /// saves `canceled` while a phase is in flight.
+    fn raw_cancel_from_hook(root: std::path::PathBuf, id: String) -> impl Fn(&str) + Send + Sync {
+        move |_phase: &str| {
+            let store = CloudJobStore::from_path(root.clone());
+            let mut current = store.load(&id).unwrap();
+            current.status = CloudJobStatus::Canceled;
+            store.save(&current).unwrap();
+        }
+    }
+
+    #[test]
+    fn cancel_during_create_wins_over_the_post_create_save() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("jobs");
+        let store = CloudJobStore::from_path(root.clone());
+        let job = confirmed_job(&store);
+        let forge = RecordingForgePr::new("https://github.com/org/repo/pull/9");
+        // The cancel lands while the create POST is in flight — before the
+        // runner ever holds a receipt. The post-create phase save must
+        // refuse to resurrect the run.
+        let mut launcher = RecordingLauncher::new("sandbox_cancel_1", fixture_patch());
+        launcher.hook = Some(Box::new({
+            let cancel = raw_cancel_from_hook(root.clone(), job.id.clone());
+            move |phase| {
+                if phase == "create" {
+                    cancel(phase);
+                }
+            }
+        }));
+        let finished = run_confirmed_job(&store, &job.id, &launcher, &forge).unwrap();
+
+        assert_eq!(finished.status, CloudJobStatus::Canceled);
+        assert!(finished.pr_url.is_none());
+        assert!(finished.finished_unix.is_some());
+        assert!(finished.note.contains("Canceled mid-run"));
+        assert!(finished.note.contains("torn down"));
+        // The run never reached readiness, the forge never fired, teardown ran.
+        assert_eq!(launcher.calls(), vec!["create", "teardown"]);
+        assert!(forge.opened().is_empty());
+        let persisted = store.load(&job.id).unwrap();
+        assert_eq!(persisted.status, CloudJobStatus::Canceled);
+        assert!(persisted.finished_unix.is_some());
+    }
+
+    #[test]
+    fn cancel_during_collect_blocks_the_branch_raise_and_the_pr() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("jobs");
+        let store = CloudJobStore::from_path(root.clone());
+        let job = confirmed_job(&store);
+        let forge = RecordingForgePr::new("https://github.com/org/repo/pull/9");
+        // The cancel lands while the patch is being collected; the
+        // OpeningPr phase save must refuse, so the branch is never raised
+        // and the PR never opened.
+        let mut launcher = RecordingLauncher::new("sandbox_cancel_2", fixture_patch());
+        launcher.hook = Some(Box::new({
+            let cancel = raw_cancel_from_hook(root.clone(), job.id.clone());
+            move |phase| {
+                if phase == "collect" {
+                    cancel(phase);
+                }
+            }
+        }));
+        let finished = run_confirmed_job(&store, &job.id, &launcher, &forge).unwrap();
+
+        assert_eq!(finished.status, CloudJobStatus::Canceled);
+        assert!(finished.pr_url.is_none());
+        assert!(finished.base_branch.is_none());
+        assert!(finished.finished_unix.is_some());
+        assert!(finished.note.contains("Canceled mid-run"));
+        assert_eq!(
+            launcher.calls(),
+            vec![
+                "create",
+                "wait_ready",
+                "clone",
+                "harness",
+                "collect",
+                "teardown"
+            ]
+        );
+        assert!(forge.opened().is_empty());
+    }
+
+    /// Launcher whose harness step fails; earlier phases record normally.
+    struct HarnessFailsLauncher {
+        calls: Mutex<Vec<String>>,
+        hook: Option<PhaseHook>,
+    }
+
+    impl HarnessFailsLauncher {
+        fn note(&self, phase: &str) {
+            if let Ok(mut calls) = self.calls.lock() {
+                calls.push(phase.to_string());
+            }
+            if let Some(hook) = self.hook.as_ref() {
+                hook(phase);
+            }
+        }
+    }
+
+    impl DaytonaLauncher for HarnessFailsLauncher {
+        fn create_sandbox(&self, _job: &CloudJob) -> Result<SandboxReceipt> {
+            self.note("create");
+            Ok(SandboxReceipt {
+                sandbox_id: "sandbox_err_1".to_string(),
+                toolbox_url: None,
+            })
+        }
+        fn wait_ready(&self, _receipt: &SandboxReceipt) -> Result<()> {
+            self.note("wait_ready");
+            Ok(())
+        }
+        fn clone_repository(&self, _receipt: &SandboxReceipt, url: &str, path: &str) -> Result<()> {
+            self.note("clone");
+            assert_eq!(path, SANDBOX_WORKSPACE);
+            assert!(url.starts_with("https://"));
+            Ok(())
+        }
+        fn run_harness(
+            &self,
+            _receipt: &SandboxReceipt,
+            _command: &HarnessCommand,
+        ) -> Result<String> {
+            self.note("harness");
+            bail!("harness exploded")
+        }
+        fn teardown(&self, _receipt: &SandboxReceipt) -> Result<()> {
+            self.note("teardown");
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn run_error_after_cancel_keeps_the_canceled_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("jobs");
+        let store = CloudJobStore::from_path(root.clone());
+        let job = confirmed_job(&store);
+        let forge = RecordingForgePr::new("https://github.com/org/repo/pull/9");
+        // The cancel lands as the harness explodes: the failure arm must not
+        // overwrite the user's `canceled` with `failed` — the error rides
+        // along in the note.
+        let mut launcher = HarnessFailsLauncher {
+            calls: Mutex::new(Vec::new()),
+            hook: None,
+        };
+        launcher.hook = Some(Box::new({
+            let cancel = raw_cancel_from_hook(root.clone(), job.id.clone());
+            move |phase| {
+                if phase == "harness" {
+                    cancel(phase);
+                }
+            }
+        }));
+        let error = run_confirmed_job(&store, &job.id, &launcher, &forge)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("harness exploded"), "{error}");
+
+        let persisted = store.load(&job.id).unwrap();
+        assert_eq!(
+            persisted.status,
+            CloudJobStatus::Canceled,
+            "a user cancel survives a later run error"
+        );
+        assert!(persisted.note.contains("Run error after cancel"));
+        assert!(persisted.note.contains("harness exploded"));
+        assert!(persisted.refusal.is_none());
+        assert!(persisted.pr_url.is_none());
+        assert!(persisted.finished_unix.is_some());
+        assert!(forge.opened().is_empty());
+        let calls = launcher.calls.lock().unwrap().clone();
+        assert_eq!(
+            calls,
+            vec!["create", "wait_ready", "clone", "harness", "teardown"]
+        );
     }
 
     #[test]
