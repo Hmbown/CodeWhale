@@ -18,6 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credential-bearing call goes through one https-only host guard, and branch
   pushes are never forced. See
   [DAYTONA_CLOUD_DISPATCH.md](docs/DAYTONA_CLOUD_DISPATCH.md).
+- Follow-up to #5712: the dispatch sandbox now ships Codewhale itself — every `/dispatch`
+  sandbox launches from the `codewhale-cloud-agent` snapshot (CLI
+  preinstalled; see
+  [docs/cloud-agent-snapshot/](docs/cloud-agent-snapshot/)) with the
+  account's machine token injected as `CODEWHALE_API_KEY`, so the
+  in-sandbox `codewhale exec` runs as your account and resolves the
+  account's configured model — no provider key ever widens into the
+  sandbox. Confirming without a machine token refuses before any spend,
+  in place, under the same job id. Sandbox labels are applied through
+  the provider's dedicated labels endpoint with an immediate
+  teardown-undo if the apply fails, so a labels outage can never leave
+  spend the orphan reconciler cannot find. `CODEWHALE_DISPATCH_SNAPSHOT`
+  overrides the snapshot name for operators.
 - Add `codewhale dispatch` / `/dispatch` so a local session can propose a
   Codewhale cloud agent against an explicit `github`, `cnb`, or `gitee` remote.
   Confirmation is required; missing credentials fail closed; cloud jobs share
