@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add Concentrate (`concentrate`) as a first-class, opt-in, BYOK provider:
+  the OpenAI Responses-compatible gateway at `https://api.concentrate.ai/v1`
+  with a distinct `CONCENTRATE_API_KEY` slot, verbatim model ids (plain
+  catalog id, `provider/model`, or `concentrate/auto` for the gateway
+  router), documented-fields-only requests, typed `response.*` streaming,
+  the unauthenticated live `/v1/models` catalog, and
+  `scripts/concentrate-selftest.sh`, which proves the real `codewhale exec`
+  path against a local contract stub without a key or network. Codewhale
+  adds no fee, no managed default, and no resale lane (Concentrate's terms
+  gate those on written consent).
 - Add `codewhale dispatch` / `/dispatch` so a local session can propose a
   Codewhale cloud agent against an explicit `github`, `cnb`, or `gitee` remote.
   Confirmation is required; missing credentials fail closed; cloud jobs share

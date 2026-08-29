@@ -1815,8 +1815,10 @@ pub async fn verify_provider_api_key(
         // malformed; in that case failure-preserving catalog semantics keep the
         // existing/static rows.
         let body = response.text().await.unwrap_or_default();
-        if matches!(provider, ApiProvider::Telecomjs | ApiProvider::Edenai)
-            && let Some(kind) = provider.kind()
+        if matches!(
+            provider,
+            ApiProvider::Telecomjs | ApiProvider::Edenai | ApiProvider::Concentrate
+        ) && let Some(kind) = provider.kind()
             && let Ok(offerings) = named_gateway_catalog_offerings_from_body(
                 &body,
                 kind,
@@ -2481,6 +2483,17 @@ impl DeepSeekClient {
                 &fingerprint,
                 fetched_at,
             )?
+        } else if provider == "concentrate" {
+            // Concentrate's unauthenticated `GET /v1/models` is the same
+            // OpenAI list shape (`{"object":"list","data":[{"id":..}]}`);
+            // rows stay unclaimed unless a same-provider bundled row exists.
+            named_gateway_catalog_offerings_from_body(
+                &body,
+                codewhale_config::ProviderKind::Concentrate,
+                &provider,
+                &fingerprint,
+                fetched_at,
+            )?
         } else {
             let models = apply_provider_model_cutline(
                 self.api_provider,
@@ -2565,7 +2578,10 @@ impl DeepSeekClient {
         let provider = config.api_provider();
         // Only refresh for providers that serve their own model list and are
         // not already covered by the Models.dev catalog.
-        if !matches!(provider, ApiProvider::Telecomjs | ApiProvider::Edenai) {
+        if !matches!(
+            provider,
+            ApiProvider::Telecomjs | ApiProvider::Edenai | ApiProvider::Concentrate
+        ) {
             return;
         }
 
@@ -3551,6 +3567,9 @@ pub(super) fn apply_reasoning_effort(
             // This gateway can route unrelated model families, so the generic
             // provider must not inject a model-specific reasoning dialect.
             ApiProvider::Edenai => {}
+            // Concentrate rides the Responses wire (`reasoning.effort`), never
+            // these Chat Completions controls.
+            ApiProvider::Concentrate => {}
             // Model Studio (DashScope): its top-level controls are route- AND
             // model-specific, so the provider enum alone cannot decide them —
             // a custom `base_url` on the same identity is an arbitrary
@@ -3642,6 +3661,9 @@ pub(super) fn apply_reasoning_effort(
             // Chat Completions API does not support reasoning_effort or thinking.
             ApiProvider::Telecomjs => {}
             ApiProvider::Edenai => {}
+            // Concentrate rides the Responses wire (`reasoning.effort`), never
+            // these Chat Completions controls.
+            ApiProvider::Concentrate => {}
             // Model Studio: see the "off" branch — the route- and model-aware
             // shaper in client::chat is the sole writer of these fields.
             ApiProvider::ModelstudioTokenPlan
@@ -3759,6 +3781,9 @@ pub(super) fn apply_reasoning_effort(
             // Chat Completions API does not support reasoning_effort or thinking.
             ApiProvider::Telecomjs => {}
             ApiProvider::Edenai => {}
+            // Concentrate rides the Responses wire (`reasoning.effort`), never
+            // these Chat Completions controls.
+            ApiProvider::Concentrate => {}
             // Model Studio: see the "off" branch — the route- and model-aware
             // shaper in client::chat is the sole writer of these fields.
             ApiProvider::ModelstudioTokenPlan
@@ -4152,8 +4177,8 @@ mod tests {
     };
     use crate::client::responses::build_responses_body;
     use crate::config::{
-        DEFAULT_EDENAI_MODEL, DEFAULT_TELECOMJS_MODEL, OPENROUTER_QWEN_3_6_FLASH_MODEL,
-        ProviderConfig, ProvidersConfig,
+        DEFAULT_CONCENTRATE_BASE_URL, DEFAULT_CONCENTRATE_MODEL, DEFAULT_EDENAI_MODEL,
+        DEFAULT_TELECOMJS_MODEL, OPENROUTER_QWEN_3_6_FLASH_MODEL, ProviderConfig, ProvidersConfig,
     };
     use crate::models::{
         ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, MessageResponse,
@@ -6264,6 +6289,257 @@ mod tests {
     #[tokio::test]
     async fn create_message_captures_exact_mfjs_safe_general_child_catalog() {
         assert_kimi_code_captures_exact_general_child_catalog().await;
+    }
+
+    fn concentrate_client(server: &MockServer, model: &str) -> DeepSeekClient {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let config = Config {
+            provider: Some("concentrate".to_string()),
+            providers: Some(ProvidersConfig {
+                concentrate: ProviderConfig {
+                    api_key: Some("concentrate-test-key".to_string()),
+                    base_url: Some(format!("{}/v1", server.uri())),
+                    model: Some(model.to_string()),
+                    ..ProviderConfig::default()
+                },
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        };
+        DeepSeekClient::new(&config).expect("Concentrate client should resolve its route")
+    }
+
+    /// The documented Concentrate stream: `event:`-typed `response.*` frames
+    /// with sequence numbers and NO `data: [DONE]` sentinel.
+    /// https://concentrate.ai/docs/api-reference/endpoint/streaming
+    fn concentrate_sse_fixture(model: &str) -> String {
+        let completed = json!({
+            "id": "resp_1",
+            "object": "response",
+            "status": "completed",
+            "model": model,
+            "output": [{
+                "type": "message", "id": "msg_1", "status": "completed", "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok from stub", "annotations": []}]
+            }],
+            "usage": {"input_tokens": 12, "output_tokens": 5, "total_tokens": 17,
+                      "input_tokens_details": {"cached_tokens": 0}}
+        });
+        let frame = |event: &str, payload: Value| format!("event: {event}\ndata: {}\n\n", payload);
+        [
+            frame("response.created", json!({"type": "response.created", "sequence_number": 0, "response": {"id": "resp_1", "status": "in_progress"}})),
+            frame("response.output_item.added", json!({"type": "response.output_item.added", "sequence_number": 1, "output_index": 0, "item": {"type": "message", "id": "msg_1", "status": "in_progress", "role": "assistant", "content": []}})),
+            frame("response.content_part.added", json!({"type": "response.content_part.added", "sequence_number": 2, "item_id": "msg_1", "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": ""}})),
+            frame("response.output_text.delta", json!({"type": "response.output_text.delta", "sequence_number": 3, "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": "ok "})),
+            frame("response.output_text.delta", json!({"type": "response.output_text.delta", "sequence_number": 4, "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": "from stub"})),
+            frame("response.output_text.done", json!({"type": "response.output_text.done", "sequence_number": 5, "item_id": "msg_1", "output_index": 0, "content_index": 0, "text": "ok from stub"})),
+            frame("response.output_item.done", json!({"type": "response.output_item.done", "sequence_number": 6, "output_index": 0, "item": completed["output"][0].clone()})),
+            frame("response.completed", json!({"type": "response.completed", "sequence_number": 7, "response": completed})),
+        ]
+        .concat()
+    }
+
+    /// Request URL, bearer header, verbatim model, documented-fields body, and
+    /// the typed SSE stream (no `[DONE]`) — the whole Concentrate contract on
+    /// a loopback wiremock, never the live gateway.
+    #[tokio::test]
+    async fn concentrate_responses_request_matches_the_documented_contract() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .and(header("authorization", "Bearer concentrate-test-key"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Type", "text/event-stream")
+                    .set_body_string(concentrate_sse_fixture("openai/gpt-5.6-sol")),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = concentrate_client(&server, "openai/gpt-5.6-sol");
+        assert_eq!(client.wire_format, WireFormat::Responses);
+        assert_eq!(client.api_provider, ApiProvider::Concentrate);
+        assert_eq!(
+            responses_api_url(DEFAULT_CONCENTRATE_BASE_URL, ApiProvider::Concentrate),
+            "https://api.concentrate.ai/v1/responses",
+            "the official base URL maps to the documented Responses endpoint"
+        );
+
+        let mut stream = client
+            .create_message_stream(minimal_zen_request("openai/gpt-5.6-sol"))
+            .await
+            .expect("Concentrate Responses request should start");
+        let mut text = String::new();
+        let mut usage = None;
+        let mut stopped = false;
+        while let Some(event) = stream.next().await {
+            match event.expect("Concentrate stream event") {
+                StreamEvent::ContentBlockDelta {
+                    delta: Delta::TextDelta { text: piece },
+                    ..
+                } => text.push_str(&piece),
+                StreamEvent::MessageDelta { usage: Some(u), .. } => usage = Some(u),
+                StreamEvent::MessageStop => stopped = true,
+                _ => {}
+            }
+        }
+        assert_eq!(text, "ok from stub", "typed deltas assemble the reply");
+        let usage = usage.expect("response.completed carries usage");
+        assert_eq!((usage.input_tokens, usage.output_tokens), (12, 5));
+        assert!(
+            stopped,
+            "the stream ends on response.completed without a [DONE] sentinel"
+        );
+
+        let requests = server.received_requests().await.expect("recorded request");
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request.url.path(), "/v1/responses");
+        for forbidden in [
+            "openai-beta",
+            "originator",
+            "chatgpt-account-id",
+            "x-api-key",
+        ] {
+            assert!(
+                request.headers.get(forbidden).is_none(),
+                "Concentrate request must not include {forbidden}"
+            );
+        }
+        let body: Value = serde_json::from_slice(&request.body).expect("Responses JSON body");
+        assert_eq!(
+            body["model"], "openai/gpt-5.6-sol",
+            "model id verbatim: {body}"
+        );
+        assert_eq!(body["stream"], true);
+        assert!(
+            body.get("messages").is_none(),
+            "Responses body, not Chat: {body}"
+        );
+        for undocumented in [
+            "store",
+            "include",
+            "instructions",
+            "metadata",
+            "previous_response_id",
+        ] {
+            assert!(
+                body.get(undocumented).is_none(),
+                "undocumented field {undocumented} on the wire: {body}"
+            );
+        }
+        assert_eq!(
+            body["input"][0]["role"], "system",
+            "system prompt rides as a system input item: {body}"
+        );
+    }
+
+    /// The documented error body surfaces verbatim and classifies by message:
+    /// 401 → authentication, 402 → quota (insufficient credits).
+    /// https://concentrate.ai/docs/api-reference/endpoint/errors
+    #[tokio::test]
+    async fn concentrate_error_bodies_surface_verbatim_and_classify() {
+        for (status, body, expected, needle) in [
+            (
+                401,
+                r#"{"error":"Unauthorized","message":"Invalid API key"}"#,
+                crate::error_taxonomy::ErrorCategory::Authentication,
+                "Invalid API key",
+            ),
+            (
+                402,
+                r#"{"error":"Insufficient funds","message":"Your account has insufficient credits. Please add credits to continue."}"#,
+                crate::error_taxonomy::ErrorCategory::RateLimit,
+                "insufficient credits",
+            ),
+            (
+                400,
+                r#"{"error":"Bad Request","message":"Invalid model name: 'invalid-model-xyz'"}"#,
+                crate::error_taxonomy::ErrorCategory::InvalidInput,
+                "Invalid model name",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/responses"))
+                .respond_with(ResponseTemplate::new(status).set_body_string(body))
+                .mount(&server)
+                .await;
+            let client = concentrate_client(&server, "gpt-5.6-sol");
+            let error = match client
+                .create_message_stream(minimal_zen_request("gpt-5.6-sol"))
+                .await
+            {
+                Ok(mut stream) => {
+                    let mut failure = None;
+                    while let Some(event) = stream.next().await {
+                        if let Err(err) = event {
+                            failure = Some(err);
+                            break;
+                        }
+                    }
+                    failure.expect("HTTP {status} must fail the stream")
+                }
+                Err(err) => err,
+            };
+            let message = format!("{error:#}");
+            assert!(
+                message.contains(needle),
+                "HTTP {status}: message must carry the documented text, got: {message}"
+            );
+            assert_eq!(
+                crate::error_taxonomy::classify_error_message(&message),
+                expected,
+                "HTTP {status}: {message}"
+            );
+        }
+    }
+
+    /// `GET /v1/models` needs no key and answers the OpenAI list shape; rows
+    /// are provider-scoped, the default is marked, and unknowns stay unclaimed.
+    /// https://concentrate.ai/docs/api-reference/endpoint/list-models
+    #[tokio::test]
+    async fn concentrate_live_catalog_is_provider_scoped_and_marks_the_default() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "object": "list",
+                "data": [
+                    {"id": "claude-fable-5", "object": "model", "owned_by": "anthropic"},
+                    {"id": DEFAULT_CONCENTRATE_MODEL, "object": "model", "owned_by": "deepseek"},
+                    {"id": "gpt-5.6-sol", "object": "model", "owned_by": "openai"}
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let delta = concentrate_client(&server, DEFAULT_CONCENTRATE_MODEL)
+            .fetch_catalog_delta()
+            .await
+            .expect("Concentrate catalog delta");
+        assert_eq!(delta.provider, "concentrate");
+        assert_eq!(delta.offerings.len(), 3);
+        let default = delta
+            .offerings
+            .iter()
+            .find(|offering| offering.wire_model_id == DEFAULT_CONCENTRATE_MODEL)
+            .expect("default row");
+        assert!(default.default_for_provider);
+        let unknown = delta
+            .offerings
+            .iter()
+            .find(|offering| offering.wire_model_id == "claude-fable-5")
+            .expect("unclaimed row");
+        assert!(!unknown.default_for_provider);
+        assert_eq!(unknown.canonical_model, None);
+        assert_eq!(
+            unknown.cost, None,
+            "no pricing claim from a gateway catalog"
+        );
+        assert!(matches!(unknown.source, CatalogSource::Live { .. }));
     }
 
     fn opencode_zen_client(server: &MockServer, model: &str) -> DeepSeekClient {

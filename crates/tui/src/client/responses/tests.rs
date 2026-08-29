@@ -8,6 +8,7 @@ use futures_util::StreamExt;
 use crate::config::{Config, ProviderConfig, ProvidersConfig, RetryConfig};
 use crate::models::Message;
 use crate::models::Role;
+use crate::models::SystemPrompt;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -535,6 +536,93 @@ fn codex_reasoning_effort_uses_responses_labels() {
     assert_eq!(codex_responses_reasoning_effort("minimal"), Some("low"));
     assert_eq!(codex_responses_reasoning_effort("auto"), Some("medium"));
     assert_eq!(codex_responses_reasoning_effort("off"), Some("low"));
+}
+
+/// Concentrate's parameter reference documents `model`, `input`, `stream`,
+/// `max_output_tokens`, `tools`/`tool_choice`/`parallel_tool_calls`, and
+/// `reasoning.effort`; `store`, `include`, `instructions`, and
+/// `reasoning.summary` are absent. The body sends only documented fields and
+/// carries the system prompt as a leading `system` input item.
+/// https://concentrate.ai/docs/api-reference/endpoint/request-parameters
+#[test]
+fn concentrate_responses_body_sends_only_documented_fields() {
+    let mut request = minimal_responses_request();
+    request.model = "openai/gpt-5.6-sol".to_string();
+    request.system = Some(SystemPrompt::Text(
+        "You are the Codewhale test system prompt.".to_string(),
+    ));
+    request.reasoning_effort = Some("high".to_string());
+    request.tools = Some(vec![Tool {
+        tool_type: None,
+        name: "read".to_string(),
+        description: "Read a file".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": { "path": { "type": "string" } },
+            "required": ["path"]
+        }),
+        allowed_callers: None,
+        defer_loading: None,
+        input_examples: None,
+        strict: None,
+        cache_control: None,
+    }]);
+
+    let body = build_responses_body_for_provider(&request, ApiProvider::Concentrate);
+    let documented = [
+        "model",
+        "input",
+        "max_output_tokens",
+        "temperature",
+        "top_p",
+        "stream",
+        "text",
+        "reasoning",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "routing",
+        "cache_control",
+        "prompt_cache_options",
+    ];
+    for key in body.as_object().expect("object body").keys() {
+        assert!(
+            documented.contains(&key.as_str()),
+            "undocumented top-level field `{key}` reached the Concentrate wire: {body}"
+        );
+    }
+    assert_eq!(
+        body["model"], "openai/gpt-5.6-sol",
+        "provider/model ids pass through verbatim"
+    );
+    assert_eq!(body["stream"], true);
+    assert!(body.get("store").is_none(), "{body}");
+    assert!(body.get("include").is_none(), "{body}");
+    assert!(body.get("instructions").is_none(), "{body}");
+    let input = body["input"].as_array().expect("input array");
+    assert_eq!(input[0]["type"], "message");
+    assert_eq!(input[0]["role"], "system");
+    assert_eq!(input[0]["content"][0]["type"], "input_text");
+    assert_eq!(
+        input[0]["content"][0]["text"],
+        "You are the Codewhale test system prompt."
+    );
+    assert_eq!(input[1]["role"], "user");
+    assert_eq!(body["reasoning"], serde_json::json!({ "effort": "high" }));
+    assert_eq!(body["tools"][0]["type"], "function");
+    assert_eq!(body["tools"][0]["name"], "read");
+    assert_eq!(body["tools"][0]["strict"], false);
+    assert_eq!(body["tool_choice"], "auto");
+    assert_eq!(body["parallel_tool_calls"], true);
+
+    // The same request on the generic Responses path still carries the
+    // OpenAI-only fields, so the Concentrate branch is a deliberate subset.
+    let generic = build_responses_body_for_provider(&request, ApiProvider::Openai);
+    assert!(
+        generic.get("store").is_some()
+            && generic.get("include").is_some()
+            && generic.get("instructions").is_some()
+    );
 }
 
 #[test]

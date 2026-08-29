@@ -215,6 +215,21 @@ pub enum ProviderKind {
     /// namespaced wire ids over the OpenAI Chat Completions protocol.
     #[serde(alias = "eden-ai", alias = "eden_ai", alias = "edenai")]
     Edenai,
+    /// Concentrate — OpenAI Responses-compatible AI gateway (aggregator).
+    ///
+    /// Serves a broad catalog of upstream models over the OpenAI Responses
+    /// protocol at `/v1/responses` with a bearer Universal API key. Model ids
+    /// pass through verbatim: a plain catalog id (`gpt-5.6-sol`) lets the
+    /// gateway choose the upstream provider, `provider/model` pins one, and
+    /// `concentrate/auto` reaches the gateway's own `auto` router. Opt-in and
+    /// BYOK only: the key lives in the local secret store and Codewhale adds
+    /// no fee, no managed default, and no resale lane (see docs/PROVIDERS.md).
+    #[serde(
+        alias = "concentrate-ai",
+        alias = "concentrate_ai",
+        alias = "concentrateai"
+    )]
+    Concentrate,
     /// User-defined OpenAI-compatible endpoint (#1519).
     ///
     /// A single dynamic identity for arbitrary `[providers.<name>]
@@ -232,7 +247,7 @@ impl ProviderKind {
     /// stay on the enum for serde and `provider_for_kind`, but they are not
     /// first-class catalog rows. Plan is `mode` / base_url; dialect is
     /// `wire = openai|anthropic` on the primary provider config.
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 43] = [
         Self::Deepseek,
         Self::NvidiaNim,
         Self::Openai,
@@ -274,6 +289,7 @@ impl ProviderKind {
         Self::Google,
         Self::Antigravity,
         Self::Edenai,
+        Self::Concentrate,
         Self::Custom,
     ];
 

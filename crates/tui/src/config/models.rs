@@ -255,6 +255,10 @@ pub const DEFAULT_TELECOMJS_MODEL: &str = "deepseek-v4-pro";
 pub const DEFAULT_TELECOMJS_BASE_URL: &str = "https://aigw.telecomjs.com/v1";
 pub const DEFAULT_EDENAI_MODEL: &str = "deepseek/deepseek-v4-pro";
 pub const DEFAULT_EDENAI_BASE_URL: &str = "https://api.edenai.run/v3";
+// Concentrate (OpenAI Responses-compatible AI gateway) defaults; mirrors
+// crates/config/src/provider_defaults.rs for the docs drift check.
+pub const DEFAULT_CONCENTRATE_MODEL: &str = "deepseek-v4-pro";
+pub const DEFAULT_CONCENTRATE_BASE_URL: &str = "https://api.concentrate.ai/v1";
 // Alibaba Cloud Model Studio (DashScope) defaults
 pub const DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL: &str = "qwen3.8-max";
 pub const DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL: &str =

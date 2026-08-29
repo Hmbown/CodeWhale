@@ -110,6 +110,8 @@ pub enum ApiProvider {
     Telecomjs,
     /// Eden AI — OpenAI-compatible AI gateway (aggregator).
     Edenai,
+    /// Concentrate — OpenAI Responses-compatible AI gateway (aggregator; BYOK only).
+    Concentrate,
     /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible Chat Completions).
     ModelstudioTokenPlan,
     /// Alibaba Cloud Model Studio — Token Plan Anthropic-compatible endpoint.
@@ -342,7 +344,7 @@ impl ApiProvider {
 
     /// `ApiProvider` discriminant → `ProviderKind` lookup.
     /// Index 1 is `None` for the legacy `DeepseekCN` variant.
-    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 48] = [
+    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 49] = [
         Some(codewhale_config::ProviderKind::Deepseek),
         None, // DeepseekCN
         Some(codewhale_config::ProviderKind::DeepseekAnthropic),
@@ -386,6 +388,7 @@ impl ApiProvider {
         Some(codewhale_config::ProviderKind::Antigravity),
         Some(codewhale_config::ProviderKind::Telecomjs),
         Some(codewhale_config::ProviderKind::Edenai),
+        Some(codewhale_config::ProviderKind::Concentrate),
         Some(codewhale_config::ProviderKind::ModelstudioTokenPlan),
         Some(codewhale_config::ProviderKind::ModelstudioTokenPlanAnthropic),
         Some(codewhale_config::ProviderKind::ModelstudioCodingPlan),
@@ -394,7 +397,7 @@ impl ApiProvider {
     ];
 
     /// `ProviderKind` discriminant → `ApiProvider` lookup.
-    const FROM_KIND_LOOKUP: [Self; 47] = [
+    const FROM_KIND_LOOKUP: [Self; 48] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -441,6 +444,7 @@ impl ApiProvider {
         Self::Antigravity,
         Self::Google,
         Self::Edenai,
+        Self::Concentrate,
         Self::Custom,
     ];
 
@@ -509,6 +513,10 @@ fn subagent_provider_key_matches(key: &str, provider: ApiProvider) -> bool {
         ApiProvider::Openrouter => matches!(normalized.as_str(), "openrouter" | "open_router"),
         ApiProvider::Orcarouter => matches!(normalized.as_str(), "orcarouter" | "orca_router"),
         ApiProvider::Edenai => matches!(normalized.as_str(), "edenai" | "eden_ai"),
+        ApiProvider::Concentrate => matches!(
+            normalized.as_str(),
+            "concentrate" | "concentrate_ai" | "concentrateai"
+        ),
         ApiProvider::OpenaiCodex => matches!(
             normalized.as_str(),
             "openai_codex" | "codex" | "chatgpt" | "openai_chatgpt"
@@ -1621,6 +1629,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         // advertised for the credential-import-only route.
         ApiProvider::Antigravity => Vec::new(),
         ApiProvider::Edenai => vec![DEFAULT_EDENAI_MODEL],
+        ApiProvider::Concentrate => vec![DEFAULT_CONCENTRATE_MODEL],
         // Custom endpoints expose no built-in completion names; the user
         // supplies their own model id (#1519).
         ApiProvider::Custom => Vec::new(),
@@ -3908,6 +3917,9 @@ pub struct ProvidersConfig {
     /// Eden AI — OpenAI-compatible AI gateway (aggregator).
     #[serde(default, alias = "eden-ai", alias = "eden_ai")]
     pub edenai: ProviderConfig,
+    /// Concentrate — OpenAI Responses-compatible AI gateway (aggregator).
+    #[serde(default, alias = "concentrate-ai", alias = "concentrate_ai")]
+    pub concentrate: ProviderConfig,
     /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible Chat Completions).
     #[serde(default, alias = "modelstudio-token-plan")]
     pub modelstudio_token_plan: ProviderConfig,
@@ -5525,6 +5537,7 @@ impl Config {
             ApiProvider::Antigravity => &providers.antigravity,
             ApiProvider::Telecomjs => &providers.telecomjs,
             ApiProvider::Edenai => &providers.edenai,
+            ApiProvider::Concentrate => &providers.concentrate,
             ApiProvider::ModelstudioTokenPlan => &providers.modelstudio_token_plan,
             ApiProvider::ModelstudioTokenPlanAnthropic => {
                 &providers.modelstudio_token_plan_anthropic
@@ -5608,6 +5621,7 @@ impl Config {
             ApiProvider::Antigravity => &mut providers.antigravity,
             ApiProvider::Telecomjs => &mut providers.telecomjs,
             ApiProvider::Edenai => &mut providers.edenai,
+            ApiProvider::Concentrate => &mut providers.concentrate,
             ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
             ApiProvider::ModelstudioTokenPlanAnthropic => {
                 &mut providers.modelstudio_token_plan_anthropic
@@ -5974,6 +5988,7 @@ impl Config {
             ApiProvider::Antigravity => DEFAULT_ANTIGRAVITY_MODEL,
             ApiProvider::Telecomjs => DEFAULT_TELECOMJS_MODEL,
             ApiProvider::Edenai => DEFAULT_EDENAI_MODEL,
+            ApiProvider::Concentrate => DEFAULT_CONCENTRATE_MODEL,
             ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
@@ -6097,6 +6112,7 @@ impl Config {
             | ApiProvider::Antigravity
             | ApiProvider::Telecomjs
             | ApiProvider::Edenai
+            | ApiProvider::Concentrate
             | ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
@@ -6207,6 +6223,7 @@ impl Config {
                         ApiProvider::Antigravity => DEFAULT_ANTIGRAVITY_BASE_URL,
                         ApiProvider::Telecomjs => DEFAULT_TELECOMJS_BASE_URL,
                         ApiProvider::Edenai => DEFAULT_EDENAI_BASE_URL,
+                        ApiProvider::Concentrate => DEFAULT_CONCENTRATE_BASE_URL,
                         ApiProvider::ModelstudioTokenPlan
                         | ApiProvider::ModelstudioTokenPlanAnthropic
                         | ApiProvider::ModelstudioCodingPlan
@@ -7918,6 +7935,7 @@ fn provider_env_base_url_override(provider: ApiProvider) -> Option<String> {
         ApiProvider::Antigravity => &["ANTIGRAVITY_BASE_URL"],
         ApiProvider::Telecomjs => &["TELECOMJS_BASE_URL"],
         ApiProvider::Edenai => &["EDENAI_BASE_URL"],
+        ApiProvider::Concentrate => &["CONCENTRATE_BASE_URL"],
         ApiProvider::ModelstudioTokenPlan | ApiProvider::ModelstudioTokenPlanAnthropic => {
             &["MODELSTUDIO_TOKEN_PLAN_BASE_URL"]
         }
@@ -8298,6 +8316,13 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                     .edenai
                     .base_url = Some(value);
             }
+            ApiProvider::Concentrate => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .concentrate
+                    .base_url = Some(value);
+            }
             ApiProvider::ModelstudioTokenPlan => {
                 config
                     .providers
@@ -8555,6 +8580,16 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
             .edenai
             .base_url = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::Concentrate)
+        && let Ok(value) = std::env::var("CONCENTRATE_BASE_URL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .concentrate
+            .base_url = Some(value);
+    }
     if matches!(
         config.api_provider(),
         ApiProvider::ModelstudioTokenPlan | ApiProvider::ModelstudioTokenPlanAnthropic
@@ -8667,6 +8702,7 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                 ApiProvider::Antigravity => &mut providers.antigravity,
                 ApiProvider::Telecomjs => &mut providers.telecomjs,
                 ApiProvider::Edenai => &mut providers.edenai,
+                ApiProvider::Concentrate => &mut providers.concentrate,
                 ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
                 ApiProvider::ModelstudioTokenPlanAnthropic => {
                     &mut providers.modelstudio_token_plan_anthropic
@@ -8897,6 +8933,16 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
             .telecomjs
             .model = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::Concentrate)
+        && let Ok(value) = std::env::var("CONCENTRATE_MODEL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .concentrate
+            .model = Some(value);
+    }
     if matches!(config.api_provider(), ApiProvider::Edenai)
         && let Ok(value) = std::env::var("EDENAI_MODEL")
         && !value.trim().is_empty()
@@ -9044,6 +9090,7 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                 ApiProvider::Antigravity => &mut providers.antigravity,
                 ApiProvider::Telecomjs => &mut providers.telecomjs,
                 ApiProvider::Edenai => &mut providers.edenai,
+                ApiProvider::Concentrate => &mut providers.concentrate,
                 ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
                 ApiProvider::ModelstudioTokenPlanAnthropic => {
                     &mut providers.modelstudio_token_plan_anthropic
@@ -9372,6 +9419,9 @@ pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
             | ApiProvider::Xai
             | ApiProvider::Telecomjs
             | ApiProvider::Edenai
+            // Concentrate ids are gateway-owned (plain, `provider/model`, or the
+            // gateway's own `auto`); the resolver strips only `concentrate/`.
+            | ApiProvider::Concentrate
             | ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
@@ -10554,6 +10604,7 @@ fn merge_providers(
             antigravity: merge_provider_config(base.antigravity, override_cfg.antigravity),
             telecomjs: merge_provider_config(base.telecomjs, override_cfg.telecomjs),
             edenai: merge_provider_config(base.edenai, override_cfg.edenai),
+            concentrate: merge_provider_config(base.concentrate, override_cfg.concentrate),
             modelstudio_token_plan: merge_provider_config(
                 base.modelstudio_token_plan,
                 override_cfg.modelstudio_token_plan,

@@ -27,7 +27,7 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-08-29T03:01:38.446Z",
+  "generatedAt": "2026-08-29T23:20:31.411Z",
   "sourceRevision": null,
   "sourceCommittedAt": null,
   "version": "0.9.11",
@@ -263,6 +263,11 @@ export const FACTS: RepoFacts = {
       "id": "edenai",
       "label": "Eden AI",
       "env": "EDENAI_API_KEY"
+    },
+    {
+      "id": "concentrate",
+      "label": "Concentrate",
+      "env": "CONCENTRATE_API_KEY"
     },
     {
       "id": "modelstudio-token-plan",

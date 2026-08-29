@@ -51,7 +51,7 @@ The canonical provider IDs are the 42 entries of `ProviderKind::ALL`
 `together`, `qianfan`, `openai-codex`, `anthropic`, `openmodel`, `zai`,
 `stepfun`, `minimax`, `deepinfra`, `sakana`, `longcat`, `opencode-go`,
 `opencode-zen`, `meta`, `xai`, `mistral`, `telecomjs`, `modelstudio-token-plan`,
-`google`, `antigravity`, `edenai`, and `custom`.
+`google`, `antigravity`, `edenai`, `concentrate`, and `custom`.
 
 `deepseek-anthropic` is *not* on this list — it is a wire dialect of
 `deepseek`, reached with `wire = "anthropic"`, not a separate route to select.
@@ -146,6 +146,7 @@ the listed provider env vars.
 | `google` | `[providers.google]` | OpenAI Chat Completions (official Gemini OpenAI-compat route; captures and replays thought signatures on tool calls) | `GOOGLE_API_KEY`, `GEMINI_API_KEY` |
 | `antigravity` | `[providers.antigravity]` | none — requests fail closed; credential import only | `ANTIGRAVITY_API_KEY` (key plane); `AGY_ADC_AUTH` (process env) |
 | `edenai` | `[providers.edenai]` | OpenAI Chat Completions | `EDENAI_API_KEY` |
+| `concentrate` | `[providers.concentrate]` | OpenAI Responses (`/v1/responses`) | `CONCENTRATE_API_KEY` |
 | `modelstudio-token-plan` | `[providers.modelstudio_token_plan]` | OpenAI Chat Completions | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
 | `modelstudio-token-plan-anthropic` | `[providers.modelstudio_token_plan_anthropic]` | Anthropic Messages | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
 | `modelstudio-coding-plan` | `[providers.modelstudio_coding_plan]` | OpenAI Chat Completions | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
@@ -501,6 +502,7 @@ configuration path instead of guessing a vendor page.
 | `google` | [Google AI Studio](https://aistudio.google.com/apikey) — Codewhale uses the official Gemini OpenAI-compatible endpoint and never reads Google OAuth files. |
 | `antigravity` | Sign in with the official `agy` CLI (1.1.13). Codewhale can read that login's OAuth token read-only from the exact pinned `state.vscdb` after `codewhale auth external-consent`; it never writes or refreshes the file. An `ANTIGRAVITY_API_KEY` or the process's `AGY_ADC_AUTH` wins over the file. The cloud-code wire protocol is not implemented: requests fail closed with an actionable message — use `google` for Gemini models. |
 | `edenai` | [Eden AI API keys](https://app.edenai.run/settings/api-keys) |
+| `concentrate` | [Concentrate dashboard](https://concentrate.ai/) → API Keys → Create API Key (a Universal API key); docs: [API introduction](https://concentrate.ai/docs/api-reference/introduction). BYOK only — the key stays in the local secret store. |
 | `modelstudio-token-plan`, `modelstudio-token-plan-anthropic`, `modelstudio-coding-plan`, `modelstudio-coding-plan-anthropic` | [Alibaba Cloud Model Studio (Bailian console)](https://bailian.console.aliyun.com/) — create or copy a Model Studio API key. |
 | `custom` | Set the named provider's `base_url` and `api_key_env` or `api_key`; no canonical vendor credential page exists. |
 
@@ -604,6 +606,7 @@ overlay and lets DSH resolve its own keys.
 | `telecomjs` | `[providers.telecomjs]` | `TELECOMJS_API_KEY` | `TELECOMJS_BASE_URL`; default `https://aigw.telecomjs.com/v1` | `deepseek-v4-pro` conservative fallback; authenticated `/models` rows when a key is configured | TelecomJS TokenHub OpenAI-compatible Chat Completions route. Live catalogs are isolated by provider and key fingerprint, stale rows survive transient refresh failures, and unsupported reasoning request fields are omitted. `TELECOMJS_MODEL` is accepted. Provider aliases: `telecom-js`, `telecom_js`, `telecomjs-cn`, `tokenhub`. |
 | `mistral` | `[providers.mistral]` | `MISTRAL_API_KEY` | `MISTRAL_BASE_URL`; default `https://api.mistral.ai/v1` | `mistral-code-latest` (default; `codestral-latest` accepted as alias), `mistral-medium-latest` (aliases: `mistral-medium-3-5`), `mistral-small-latest` (aliases: `mistral-small-2603`), `mistral-large-latest` | Mistral AI (la Plateforme) OpenAI-compatible Chat route. On the documented first-party HTTPS `/v1` hosts, Medium and Small send adjustable `reasoning_effort` (`none` or `high` only), parse Mistral's polymorphic thinking/text blocks, and replay stored thinking in that same wire shape. Deprecated native Magistral IDs remain explicit-configuration compatibility routes: they are always-reasoning and never receive the adjustable effort field. Code and Large are non-reasoning. A custom `MISTRAL_BASE_URL` keeps generic Chat semantics unless it is one of the documented first-party hosts. `MISTRAL_MODEL` is accepted. Provider aliases: `mistral-ai`, `mistralai`, `la-plateforme`. |
 | `edenai` | `[providers.edenai]` | `EDENAI_API_KEY` | `EDENAI_BASE_URL`; default `https://api.edenai.run/v3`; EU `https://api.eu.edenai.run/v3` | `deepseek/deepseek-v4-pro` (default); live `/models` catalog of `provider/model` ids | Eden AI OpenAI-compatible aggregation gateway. Catalog rows remain provider-scoped; generic reasoning controls are omitted because supported fields depend on the selected upstream family. `EDENAI_MODEL` is accepted. The default `deepseek/deepseek-v4-pro` is listed on the global catalog only; on the EU endpoint set `EDENAI_MODEL` (or `model`) to a row from the EU `/models` list, for example `qwen/deepseek-v4-pro`. Provider aliases: `eden-ai`, `eden_ai`. |
+| `concentrate` | `[providers.concentrate]` | `CONCENTRATE_API_KEY` | `CONCENTRATE_BASE_URL`; default `https://api.concentrate.ai/v1` | `deepseek-v4-pro` (default; a plain catalog id lets the gateway pick the upstream provider); `provider/model` ids such as `openai/gpt-5.6-sol` pin one upstream; `concentrate/auto` is the gateway's own router; unauthenticated live `/v1/models` catalog | Concentrate OpenAI Responses-compatible gateway (`POST /v1/responses`, bearer Universal API key). Opt-in and BYOK only: your key, your Concentrate bill, zero Codewhale fee, no managed default. Requests carry only documented fields (the system prompt rides as a `system` input item). Contract: [API introduction](https://concentrate.ai/docs/api-reference/introduction), [request parameters](https://concentrate.ai/docs/api-reference/endpoint/request-parameters), [streaming](https://concentrate.ai/docs/api-reference/endpoint/streaming), [errors](https://concentrate.ai/docs/api-reference/endpoint/errors). See [Concentrate Notes](#concentrate-notes). |
 | `xai` | `[providers.xai]` | `XAI_API_KEY`, Codewhale-owned device OAuth, or explicit read-only Grok CLI consent | `XAI_BASE_URL`; default `https://api.x.ai/v1` | `grok-4.6` (default), `grok-4.5`, `grok-4.3`, `grok-build`, `grok-composer-2.5-fast`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning` | xAI/Grok OpenAI-compatible Chat Completions route. Grok 4.6 has a 500K context window, text/image input, function calls, structured output, server-side web search, and `low`/`medium`/`high`/`xhigh` reasoning (default `high`). Its standard rates double when the prompt reaches 200K tokens; the same 2x long-context rule applies to `grok-4.5` (500K context, $2.00 / $0.30 cached / $6.00) and `grok-4.3` (1M context, $1.25 / $0.20 cached / $2.50) per their [model pages](https://docs.x.ai/docs/models/grok-4.5). There is no documented `latest`/`fast` alias and no published numeric output limit. **API-key** (default): Bearer token from console.x.ai via `XAI_API_KEY` / keyring / `api_key`. **OAuth**: `codewhale auth xai-device` uses SSH-friendly device login and Codewhale-owned storage, which may refresh itself. Existing Grok CLI credentials require `codewhale auth external-consent --provider xai --mode read-only`; the granted external file is never refreshed or rewritten. OAuth may return HTTP 403 on some SuperGrok tiers — keep API-key as the reliable fallback. `XAI_MODEL` is accepted. Provider aliases: `x-ai`, `x_ai`, `grok`. |
 | `modelstudio-token-plan` | `[providers.modelstudio_token_plan]` | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` | `MODELSTUDIO_TOKEN_PLAN_BASE_URL`; default `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` | `qwen3.8-max` (default), `qwen3.8-max-preview`, `qwen3.7-plus`, `qwen3.7-max`, `qwen3.6-flash`, `deepseek-v4-pro`, `deepseek-v4-flash-0731`, `glm-5.2` | Alibaba Cloud Model Studio Token Plan OpenAI-compatible Chat Completions route. Token Plan Personal and Team share this endpoint. `qwen3.8-max`, `qwen3.7-plus`, and `qwen3.7-max` can use provider-native web search through the Token Plan Responses Harness; the preview, Coding Plan, and Anthropic routes do not inherit that capability. All listed models are reasoning-capable text/coding models. DeepSeek and GLM entries are provider-scoped and do not collide with first-party routes. `MODELSTUDIO_TOKEN_PLAN_MODEL` is accepted. Provider aliases: `modelstudio-token-plan`, `alibaba-token-plan`, `dashscope-token-plan`. |
 | `modelstudio-token-plan-anthropic` | `[providers.modelstudio_token_plan_anthropic]` | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` | default `https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic` | Same model catalog as `modelstudio-token-plan` | Token Plan Anthropic-compatible Messages route (`/apps/anthropic`). Same API key as the OpenAI dialect. Provider aliases: `modelstudio-token-plan-anthropic`, `alibaba-token-plan-anthropic`. |
@@ -639,6 +642,49 @@ table](https://opencode.ai/docs/zen/) and is intentionally explicit:
 Gemini entries are excluded because the official table assigns them Google's
 model-specific protocol. A catalog miss never falls back to another Zen wire
 shape, including when a custom Zen base URL is configured.
+
+### Concentrate Notes
+
+Concentrate (`concentrate`) is an OpenAI **Responses**-compatible gateway:
+`POST https://api.concentrate.ai/v1/responses` with `Authorization: Bearer
+<Universal API key>`. It is opt-in and **BYOK only**.
+
+- **Model ids pass through.** A plain catalog id (`gpt-5.6-sol`,
+  `deepseek-v4-pro`) lets the gateway choose the upstream provider;
+  `provider/model` (`openai/gpt-5.6-sol`) pins the upstream provider inside the
+  gateway; `concentrate/auto` sends the gateway's own `auto` router. Codewhale's
+  bare `--model auto` remains the resolver sentinel (provider default), which is
+  why the gateway router has its own explicit spelling. Once streaming begins
+  the gateway commits to one provider ([auto routing](https://concentrate.ai/docs/api-reference/endpoint/auto-routing)).
+- **Wire.** Fixed Responses dialect. The request carries only documented
+  fields — `model`, `input`, `stream`, `max_output_tokens`, `tools`,
+  `tool_choice`, `parallel_tool_calls`, `reasoning.effort` — and the system
+  prompt travels as a leading `system` input item because `instructions` is
+  not in the gateway's [parameter reference](https://concentrate.ai/docs/api-reference/endpoint/request-parameters).
+  Streaming follows the typed `response.*` SSE events and ends on
+  `response.completed` without a `[DONE]` sentinel ([streaming](https://concentrate.ai/docs/api-reference/endpoint/streaming)).
+- **Errors.** `{ "error", "message", "model"?, "retry_after"? }` with 400
+  (bad request / unknown model), 401 (invalid key), 402 (insufficient
+  credits), 424 (upstream provider unavailable), 429 (rate limit) —
+  surfaced verbatim and classified by message ([errors](https://concentrate.ai/docs/api-reference/endpoint/errors)).
+- **Catalog.** `GET /v1/models` needs no key
+  ([list models](https://concentrate.ai/docs/api-reference/endpoint/list-models)); the live rows
+  are provider-scoped and unclaimed (no pricing or capability claims).
+- **Commercial boundary.** Concentrate's [Terms of Service](https://concentrate.ai/legal/terms-of-service)
+  forbid reselling, white-labeling, or providing the service on a
+  service-bureau basis without written consent, and its
+  [Acceptable Use Policy](https://concentrate.ai/legal/acceptable-use-policy)
+  forbids sharing or sublicensing keys. Codewhale therefore ships **no**
+  Codewhale-owned Concentrate key, no stored customer key, no default or
+  managed routing, and no markup — activation of any hosted lane is gated on
+  written consent, terms, and billing approval (tracked in the Codewhale ops
+  evidence checklist `concentrate-gateway-20260829/CHECKLIST.md`). Public
+  pricing states "No platform markup on tokens".
+- **Self-test without a key.** `scripts/concentrate-selftest.sh` boots a
+  local stub that speaks the documented contract and drives the real
+  `codewhale exec` path through it, asserting the URL, bearer header, model
+  passthrough, streaming, and the completed-turn receipt. No network call
+  leaves the machine and no account is required.
 
 ### Hugging Face Provider vs MCP vs Hub
 

@@ -46,12 +46,20 @@ pub(super) fn build_responses_body_for_provider(
     provider: ApiProvider,
 ) -> Value {
     let is_deepseek = matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN);
+    // Concentrate documents `model`, `input`, `stream`, `max_output_tokens`,
+    // `tools` / `tool_choice` / `parallel_tool_calls`, and `reasoning.effort`;
+    // `store`, `include`, `instructions`, and `reasoning.summary` are absent
+    // from its parameter reference, so this route sends only documented
+    // fields and carries the system prompt as a leading `system` message item
+    // (a documented input role) instead of `instructions`.
+    // https://concentrate.ai/docs/api-reference/endpoint/request-parameters
+    let is_concentrate = provider == ApiProvider::Concentrate;
     let model = &request.model;
     let mut body = json!({
         "model": model,
         "stream": true,
     });
-    if !is_deepseek {
+    if !is_deepseek && !is_concentrate {
         body["store"] = json!(false);
     }
     // Every Responses route receives the same resolved request envelope as
@@ -80,10 +88,21 @@ pub(super) fn build_responses_body_for_provider(
     let instructions = system_to_instructions(request.system.clone())
         .filter(|text| !text.trim().is_empty())
         .unwrap_or_else(|| "You are a helpful assistant.".to_string());
-    body["instructions"] = json!(instructions);
 
     // Convert messages to Responses input items.
-    let input = convert_messages_to_responses_input(request, provider);
+    let mut input = convert_messages_to_responses_input(request, provider);
+    if is_concentrate {
+        input.insert(
+            0,
+            json!({
+                "type": "message",
+                "role": "system",
+                "content": [{ "type": "input_text", "text": instructions }],
+            }),
+        );
+    } else {
+        body["instructions"] = json!(instructions);
+    }
     body["input"] = json!(input);
 
     // Convert tools to Responses function tools.
@@ -106,7 +125,7 @@ pub(super) fn build_responses_body_for_provider(
     if let Some(raw) = request.reasoning_effort.as_deref()
         && let Some(effort) = responses_reasoning_effort(raw, is_deepseek)
     {
-        body["reasoning"] = if is_deepseek {
+        body["reasoning"] = if is_deepseek || is_concentrate {
             json!({ "effort": effort })
         } else {
             json!({
@@ -118,7 +137,7 @@ pub(super) fn build_responses_body_for_provider(
 
     // OpenAI Codex can replay encrypted reasoning. DeepSeek exposes plain
     // `reasoning_text` and does not support `include`.
-    if !is_deepseek {
+    if !is_deepseek && !is_concentrate {
         body["include"] = json!(["reasoning.encrypted_content"]);
     }
 

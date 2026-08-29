@@ -105,6 +105,24 @@
       "transport": "chat-completions"
     },
     {
+      "id": "concentrate",
+      "family": "concentrate",
+      "label": "Concentrate",
+      "endpoint": "https://api.concentrate.ai/v1",
+      "wire": "responses",
+      "defaultModel": "deepseek-v4-pro",
+      "envVars": [
+        "CONCENTRATE_API_KEY"
+      ],
+      "auth": [
+        {
+          "kind": "api-key",
+          "label": "API key"
+        }
+      ],
+      "transport": "open-ai-responses"
+    },
+    {
       "id": "custom",
       "family": "custom",
       "label": "Custom (OpenAI-compatible)",

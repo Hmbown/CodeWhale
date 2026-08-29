@@ -367,6 +367,13 @@ pub fn classify_error_message(message: &str) -> ErrorCategory {
         || lower.contains("429")
         || lower.contains("quota")
         || lower.contains("usage limit")
+        // Prepaid gateways answer an exhausted balance with HTTP 402; that is
+        // a quota condition the operator resolves by topping up, not an input
+        // or authentication fault (Concentrate: "Insufficient funds").
+        || lower.contains("insufficient credits")
+        || lower.contains("insufficient funds")
+        || lower.contains("payment required")
+        || lower.contains("http 402")
     {
         return ErrorCategory::RateLimit;
     }
@@ -588,6 +595,29 @@ mod tests {
                 "expected InvalidInput for `{msg}`",
             );
         }
+    }
+
+    /// A prepaid gateway's exhausted balance (HTTP 402) is a quota condition:
+    /// the request was well-formed and the key was valid.
+    #[test]
+    fn insufficient_credits_classifies_as_rate_limit_not_auth() {
+        for msg in [
+            "Responses API error (HTTP 402 Payment Required): {\"error\":\"Insufficient funds\",\"message\":\"Your account has insufficient credits. Please add credits to continue.\"}",
+            "insufficient credits",
+        ] {
+            assert_eq!(
+                classify(msg),
+                ErrorCategory::RateLimit,
+                "expected RateLimit for `{msg}`"
+            );
+        }
+        // The documented 401 body still classifies as authentication.
+        assert_eq!(
+            classify(
+                "Responses API error (HTTP 401 Unauthorized): {\"error\":\"Unauthorized\",\"message\":\"Invalid API key\"}"
+            ),
+            ErrorCategory::Authentication
+        );
     }
 
     #[test]
