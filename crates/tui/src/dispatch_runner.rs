@@ -1138,6 +1138,20 @@ mod tests {
     }
 
     #[test]
+    fn the_declared_harness_budget_fits_the_harness_client_budget() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        let job = confirmed_job(&store);
+        let command = harness_command(&job);
+        assert_eq!(command.timeout_secs, HARNESS_TIMEOUT_SECS);
+        assert!(
+            cloud_dispatch::LiveDaytonaLauncher::harness_client_budget_secs(&command)
+                >= u64::from(HARNESS_TIMEOUT_SECS),
+            "the client that carries the harness turn must cover the declared hour"
+        );
+    }
+
+    #[test]
     fn sandbox_intent_is_persisted_before_the_create_post() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("jobs");

@@ -1151,13 +1151,44 @@ pub fn validate_outbound_origin(raw: &str) -> Result<reqwest::Url> {
 pub struct LiveDaytonaLauncher;
 
 impl LiveDaytonaLauncher {
+    /// Total timeout for short control-plane calls (create/status/delete/
+    /// list). A dispatched harness turn is NOT a short call — see
+    /// [`Self::harness_client`].
+    const CONTROL_PLANE_TIMEOUT_SECS: u64 = 120;
+
+    /// Slack added to a harness command's declared budget for the client
+    /// that carries it: process start, clone drift, and response transfer
+    /// are not part of the declared turn budget, but the client must still
+    /// cut off eventually so a hung execute cannot hold a runner forever.
+    const HARNESS_CLIENT_SLACK_SECS: u64 = 120;
+
     fn blocking_client() -> Result<reqwest::blocking::Client> {
+        Self::blocking_client_with_timeout(Self::CONTROL_PLANE_TIMEOUT_SECS)
+    }
+
+    fn blocking_client_with_timeout(total_secs: u64) -> Result<reqwest::blocking::Client> {
         reqwest::blocking::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(8))
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(total_secs))
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .context("failed to initialize the cloud agent client")
+    }
+
+    /// A client scoped to one harness command: its total timeout is the
+    /// command's declared budget plus fixed slack. The declared turn budget
+    /// is an hour, so the 120s control-plane cap must NOT carry this call —
+    /// otherwise every dispatched turn longer than two minutes fails after
+    /// the spend has already started.
+    fn harness_client(command: &HarnessCommand) -> Result<reqwest::blocking::Client> {
+        Self::blocking_client_with_timeout(Self::harness_client_budget_secs(command))
+    }
+
+    /// The total-timeout budget for a harness-carrying client, in seconds.
+    /// Public to the crate so the runner's tests can pin it against the
+    /// declared `HARNESS_TIMEOUT_SECS`.
+    pub(crate) fn harness_client_budget_secs(command: &HarnessCommand) -> u64 {
+        u64::from(command.timeout_secs).saturating_add(Self::HARNESS_CLIENT_SLACK_SECS)
     }
 
     fn api_key() -> Result<String> {
@@ -1189,7 +1220,20 @@ impl LiveDaytonaLauncher {
         api_key: &str,
         body: serde_json::Value,
     ) -> Result<reqwest::blocking::Response> {
-        Self::blocking_client()?
+        Self::send_json_on(&Self::blocking_client()?, method, url, api_key, body)
+    }
+
+    /// [`Self::send_json`] on a caller-supplied client, so a call whose
+    /// declared budget differs from the control-plane cap (the harness
+    /// turn) can carry a client scoped to its own budget.
+    fn send_json_on(
+        client: &reqwest::blocking::Client,
+        method: reqwest::Method,
+        url: &reqwest::Url,
+        api_key: &str,
+        body: serde_json::Value,
+    ) -> Result<reqwest::blocking::Response> {
+        client
             .request(method, url.clone())
             .bearer_auth(api_key)
             .json(&body)
@@ -1305,7 +1349,11 @@ impl DaytonaLauncher for LiveDaytonaLauncher {
             "cwd": command.cwd,
             "timeout": command.timeout_secs,
         });
-        let response = Self::send_json(reqwest::Method::POST, &url, &api_key, body)?;
+        // This call carries the declared turn budget (an hour for the agent
+        // entry), so it rides a client scoped to that budget plus slack —
+        // never the 120s control-plane client that used to cap it.
+        let client = Self::harness_client(command)?;
+        let response = Self::send_json_on(&client, reqwest::Method::POST, &url, &api_key, body)?;
         let status = response.status();
         let text = response.text().unwrap_or_default();
         if !status.is_success() {
@@ -2192,6 +2240,38 @@ mod tests {
             finished_unix: None,
             sandbox_pending: false,
         }
+    }
+
+    #[test]
+    fn harness_client_budget_covers_the_declared_turn_budget() {
+        let hour = HarnessCommand {
+            argv: vec!["codewhale".to_string()],
+            cwd: SANDBOX_WORKSPACE.to_string(),
+            timeout_secs: 3_600,
+        };
+        let budget = LiveDaytonaLauncher::harness_client_budget_secs(&hour);
+        assert!(
+            budget >= u64::from(hour.timeout_secs),
+            "the client budget must cover the declared budget ({budget} < {})",
+            hour.timeout_secs
+        );
+        assert!(
+            budget > LiveDaytonaLauncher::CONTROL_PLANE_TIMEOUT_SECS,
+            "an hour-long dispatched turn must not ride the 120s control-plane client"
+        );
+        // The budget scales with the declared timeout, not a fixed cap.
+        let double = HarnessCommand {
+            timeout_secs: 7_200,
+            ..hour.clone()
+        };
+        assert!(LiveDaytonaLauncher::harness_client_budget_secs(&double) >= 7_200);
+        // Short helper commands (collect_patch's git probes) keep a sane
+        // bounded budget too.
+        let probe = HarnessCommand {
+            timeout_secs: 30,
+            ..hour
+        };
+        assert!(LiveDaytonaLauncher::harness_client_budget_secs(&probe) >= 30);
     }
 
     #[test]
