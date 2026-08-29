@@ -1195,15 +1195,27 @@ impl DeepSeekClient {
         if api_provider == ApiProvider::OpencodeGo {
             validate_route(api_provider, &default_model).map_err(anyhow::Error::msg)?;
         }
-        let (api_key, codex_account_id) =
-            if api_provider == ApiProvider::OpenaiCodex
-                && !config.provider_uses_custom_endpoint(ApiProvider::OpenaiCodex)
-            {
-                let credentials = config.codex_credentials()?;
-                (credentials.access_token, credentials.account_id)
-            } else {
-                (config.deepseek_api_key()?, None)
-            };
+        let (api_key, codex_account_id) = if api_provider == ApiProvider::OpenaiCodex {
+            // The official endpoint requires Codex OAuth credentials. A custom
+            // endpoint prefers its own configured key, but an explicit
+            // `OPENAI_CODEX_ACCESS_TOKEN` still wins (`codex_credentials`
+            // checks env before enforcing the official-endpoint consent
+            // grant), so existing token-plus-custom-base-url setups keep
+            // working. Only when no env token exists does the custom endpoint
+            // fall back to the generic provider-scoped key resolver.
+            match config.codex_credentials() {
+                Ok(credentials) => (credentials.access_token, credentials.account_id),
+                Err(error) => {
+                    if config.provider_uses_custom_endpoint(ApiProvider::OpenaiCodex) {
+                        (config.deepseek_api_key()?, None)
+                    } else {
+                        return Err(error);
+                    }
+                }
+            }
+        } else {
+            (config.deepseek_api_key()?, None)
+        };
         let model_bound_secret_values =
             Arc::new(configured_model_bound_secret_values(config, &api_key));
         validate_base_url_security(&base_url)?;
@@ -1700,9 +1712,7 @@ fn provider_wire_format_for_config(
     config: Option<&crate::config::Config>,
 ) -> WireFormat {
     let catalog = api_provider.catalog_identity();
-    let wire = config
-        .and_then(|cfg| cfg.provider_config_for(catalog))
-        .and_then(|entry| entry.wire.as_deref());
+    let wire = config.and_then(|cfg| cfg.provider_wire_dialect(catalog));
     let prefers_anthropic = matches!(
         api_provider,
         ApiProvider::DeepseekAnthropic
@@ -1790,7 +1800,7 @@ fn wire_config_prefers_responses(wire: Option<&str>) -> bool {
             | "response-api"
             | "openai-responses-compat"
             | "responses-compat"
-    ) || normalized.contains("responses")
+    )
 }
 
 fn api_provider_skips_models_probe(api_provider: ApiProvider) -> bool {
