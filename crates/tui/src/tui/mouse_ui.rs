@@ -314,6 +314,28 @@ fn handle_workflow_panel_mouse(app: &mut App, mouse: MouseEvent) -> bool {
     true
 }
 
+fn handle_plugin_cta_mouse(app: &mut App, mouse: MouseEvent) -> Option<Vec<ViewEvent>> {
+    if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        return None;
+    }
+    if !mouse_hits_rect(mouse, app.viewport.last_plugin_cta_area) {
+        return None;
+    }
+    if mouse_hits_rect(mouse, app.viewport.last_plugin_cta_dismiss_area) {
+        let _ = app.dismiss_plugin_cta();
+        return Some(Vec::new());
+    }
+    // Review button, or the rest of the CTA line, runs the existing review
+    // command. Never auto-installs: the slash command is the human path.
+    if let Some(command) = app.accept_plugin_cta_command() {
+        return Some(apply_sidebar_row_action(
+            app,
+            crate::tui::app::SidebarRowAction::Command(command),
+        ));
+    }
+    Some(Vec::new())
+}
+
 /// Handle mouse events within the composer area.
 /// Returns true if the event was consumed.
 pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
@@ -492,6 +514,10 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
     // above the input remains clickable.
     if handle_workflow_panel_mouse(app, mouse) {
         return Vec::new();
+    }
+
+    if let Some(events) = handle_plugin_cta_mouse(app, mouse) {
+        return events;
     }
 
     // Composer mouse events take priority over transcript.

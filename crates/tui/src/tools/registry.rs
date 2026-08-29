@@ -1173,6 +1173,15 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(NotifyTool))
     }
 
+    /// Include `request_plugin_install` — model-callable review request.
+    /// Never installs; the TUI surfaces `/plugin trust` or catalog install
+    /// for the human.
+    #[must_use]
+    pub fn with_request_plugin_install_tool(self) -> Self {
+        use super::request_plugin_install::RequestPluginInstallTool;
+        self.with_tool(Arc::new(RequestPluginInstallTool))
+    }
+
     /// Include MCP tools from a connected pool as first-class registry
     /// citizens. Each MCP tool is wrapped in a lightweight adapter that
     /// implements `ToolSpec`, so the unified `ToolRegistryBuilder` flow
@@ -1318,7 +1327,9 @@ impl ToolRegistryBuilder {
             builder = builder.with_vision_tools(vision_config, vision_client);
         }
 
-        builder.with_notify_tool()
+        builder
+            .with_notify_tool()
+            .with_request_plugin_install_tool()
     }
 
     /// Include the full child-inherited Agent surface under resolved

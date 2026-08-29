@@ -1136,6 +1136,8 @@ pub(crate) async fn run_event_loop(
         // #1830/#2317: service any already-arrived terminal keys before a
         // potentially long engine batch so composer/modal input stays live.
         collect_pending_terminal_events(&terminal_input, &mut pending_terminal_events)?;
+        app.maybe_poll_plugin_catalog_idle();
+        app.maybe_poll_plugin_cta();
 
         if drain_remote_control_events(app, config, &engine_handle).await? {
             app.needs_redraw = true;
@@ -1488,6 +1490,22 @@ pub(crate) async fn run_event_loop(
                                 .retain(|(tool_id, _, _)| tool_id != &id);
                         }
                         handle_tool_call_complete(app, &id, &name, &result);
+                        if name
+                            == crate::tools::request_plugin_install::REQUEST_PLUGIN_INSTALL_TOOL_NAME
+                            && let Ok(output) = &result
+                            && output.success
+                            && let Some(meta) = output.metadata.as_ref()
+                        {
+                            let plugin = meta
+                                .get("plugin")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            let command = meta
+                                .get("command")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            app.surface_plugin_review_request(plugin, command);
+                        }
                         if flush_gate_receipts_for(app, Some(&id)) {
                             transcript_batch_updated = true;
                         }
@@ -5059,6 +5077,10 @@ pub(crate) async fn run_event_loop(
                                 app.status_message =
                                     Some("Queued edit canceled; follow-up restored".to_string());
                             }
+                        }
+                        EscapeAction::DismissPluginCta => {
+                            app.backtrack.reset();
+                            let _ = app.dismiss_plugin_cta();
                         }
                         EscapeAction::ClearInput => {
                             app.backtrack.reset();

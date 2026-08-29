@@ -3,6 +3,7 @@
 mod cloud;
 mod config_bundles;
 mod credential_handoff;
+mod dispatch;
 mod metrics;
 #[cfg(not(target_env = "ohos"))]
 mod update;
@@ -395,6 +396,9 @@ New integrations should prefer `codewhale app-server`.")]
     /// Sign in to your Codewhale account and manage account-scoped provider keys.
     #[command(visible_alias = "cloud")]
     Account(cloud::CloudArgs),
+    /// Offload a coding agent to Daytona. Never spends or pushes without --confirm.
+    #[command(visible_alias = "cloud-agent")]
+    Dispatch(dispatch::DispatchArgs),
     /// Run MCP server mode over stdio.
     McpServer,
     /// Read/write/list config values.
@@ -2081,6 +2085,7 @@ fn run() -> Result<()> {
             cloud::reject_inline_api_key(cli.api_key.as_deref())?;
             cloud::run(args, cli.profile.as_deref(), &store)
         }
+        Some(Commands::Dispatch(args)) => dispatch::run(args),
         Some(Commands::McpServer) => {
             // `codewhale serve --mcp` delegates to the TUI and arms there, so
             // without this the same user action reported differently depending

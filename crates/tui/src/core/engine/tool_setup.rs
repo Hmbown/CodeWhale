@@ -136,7 +136,9 @@ impl Engine {
         // headless entry points install the merged notification policy before
         // tool setup, including method=off, quiet/category, and attention.
         // The tool returns a truthful suppressed/delivered receipt.
-        builder = builder.with_notify_tool();
+        builder = builder
+            .with_notify_tool()
+            .with_request_plugin_install_tool();
 
         // Register the `registry_sync` tool for fetching and caching
         // MCP Registry server metadata. Rides on `Feature::Mcp` — the same

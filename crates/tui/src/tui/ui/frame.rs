@@ -888,13 +888,19 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             .map(|panel| panel.desired_height(shell_area.width))
             .unwrap_or(0)
     };
+    let plugin_cta_height = if mini && !mini_cfg.keep_input {
+        0
+    } else {
+        app.plugin_cta_row_height()
+    };
     let auxiliary_budget = body_height
         .saturating_sub(
             top_work_strip_height
                 .saturating_add(MIN_CHAT_HEIGHT)
                 .saturating_add(composer_height)
                 .saturating_add(footer_height)
-                .saturating_add(activity_height),
+                .saturating_add(activity_height)
+                .saturating_add(plugin_cta_height),
         )
         .saturating_sub(indicator_height);
     // Queued-only previews author the direct controls in row two (and fall
@@ -936,14 +942,16 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             Constraint::Length(indicator_height),      // Background-work chip (#5286, 0 if idle)
             Constraint::Length(session_boot_height),   // MCP+plugin boot receipt (0 if quiet)
             Constraint::Length(activity_height),       // Activity band above the composer
+            Constraint::Length(plugin_cta_height),     // Live plugin CTA (0 unless matched)
             Constraint::Length(composer_height),       // Composer
             Constraint::Length(footer_height),         // Identity band below the composer
         ])
         .split(body_area);
     let session_boot_slot = 5;
     let activity_slot = 6;
-    let composer_slot = 7;
-    let footer_slot = 8;
+    let plugin_cta_slot = 7;
+    let composer_slot = 8;
+    let footer_slot = 9;
 
     let (work_chat_area, side_work_area) = if mini && !mini_cfg.keep_sidebar {
         // Mini mode without the side rail: the transcript takes the whole
@@ -1075,6 +1083,15 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         crate::tui::phase_strip::render_activity(body_chunks[activity_slot], buf, app);
     }
 
+    if plugin_cta_height > 0 {
+        let buf = f.buffer_mut();
+        crate::tui::plugin_suggestions::draw_plugin_cta(app, body_chunks[plugin_cta_slot], buf);
+    } else {
+        app.viewport.last_plugin_cta_area = None;
+        app.viewport.last_plugin_cta_review_area = None;
+        app.viewport.last_plugin_cta_dismiss_area = None;
+    }
+
     // Render composer
     let cursor_pos = {
         let composer_widget = ComposerWidget::new(
@@ -1186,6 +1203,13 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
                 body_chunks[activity_slot],
                 f.buffer_mut(),
                 app.ui_theme.footer_bg,
+            );
+        }
+        if plugin_cta_height > 0 {
+            column.paint_matching(
+                body_chunks[plugin_cta_slot],
+                f.buffer_mut(),
+                app.ui_theme.composer_bg,
             );
         }
         column.paint_matching(

@@ -79,6 +79,7 @@ pub mod paste;
 pub mod paste_burst;
 pub mod persistence_actor;
 pub mod phase_strip;
+pub(crate) mod plugin_suggestions;
 pub mod prompt_suggestion;
 pub mod provider_picker;
 pub mod scrolling;

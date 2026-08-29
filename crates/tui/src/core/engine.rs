@@ -3521,12 +3521,26 @@ impl Engine {
                 cache_control: None,
             }];
         }
+        let recommended_plugins = crate::plugins::recommend::recommended_plugins_user_fragment(
+            &text,
+            self.plugin_registry.as_ref(),
+            &crate::plugins::recommend::load_marketplace_candidates(
+                self.plugin_registry.state_path(),
+            ),
+        );
         let expanded = crate::image_attach::expand_attachment_blocks(&text);
-        let mut content = Vec::with_capacity(2 + expanded.blocks.len());
+        let mut content = Vec::with_capacity(3 + expanded.blocks.len());
         content.push(ContentBlock::Text {
             text,
             cache_control: None,
         });
+        // Append-only on this turn. Never spliced into the pinned system prefix.
+        if let Some(fragment) = recommended_plugins {
+            content.push(ContentBlock::Text {
+                text: fragment,
+                cache_control: None,
+            });
+        }
         content.extend(expanded.blocks);
         if let Some(notice) = crate::image_attach::notice_block(&expanded.notices) {
             content.push(notice);

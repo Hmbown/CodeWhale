@@ -29,6 +29,7 @@ mod auto_reasoning;
 mod automation_manager;
 mod child_env;
 mod client;
+pub mod cloud_dispatch;
 mod codex_model_cache;
 mod command_safety;
 mod commands;

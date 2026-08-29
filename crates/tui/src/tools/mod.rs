@@ -48,6 +48,7 @@ pub mod project;
 pub mod read_media;
 pub mod registry;
 pub mod remember;
+pub mod request_plugin_install;
 mod resource_admission;
 pub mod revert_turn;
 pub mod review;

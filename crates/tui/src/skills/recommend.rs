@@ -20,6 +20,13 @@ pub struct RemoteSkillRecommendation<'a> {
     score: usize,
 }
 
+impl RemoteSkillRecommendation<'_> {
+    #[must_use]
+    pub fn score(&self) -> usize {
+        self.score
+    }
+}
+
 /// Rank up to `limit` remote skills for `query`.
 ///
 /// Explicit registry keywords and domains outrank name and description

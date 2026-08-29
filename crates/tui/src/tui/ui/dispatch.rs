@@ -524,6 +524,7 @@ pub(crate) fn prepare_user_dispatch(
     message: QueuedMessage,
 ) -> Result<UserDispatchPrepare> {
     let _ = app.maybe_nudge_for_planning_prompt(&message.display);
+    let _ = app.maybe_nudge_plugin_for_prompt(&message.display);
 
     // Plan paused-command changes without touching App or the engine pause
     // gate. Route selection can await and client preflight can fail; neither

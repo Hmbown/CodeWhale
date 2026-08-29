@@ -17,7 +17,7 @@
 //! * [`legacy`] — the separate `[tools].plugin_dir` executable inventory,
 //!   which shares no trust state with declarative bundles.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -149,95 +149,75 @@ fn plugins_with_kimi_home_override(
     }
 }
 
-/// Rank already installed bundle metadata for a task without changing trust,
-/// enablement, disk state, or network state. A full remote plugin marketplace
-/// needs separately curated publisher/provenance policy; the existing plugin
-/// registry is intentionally local-only for this release.
+/// Rank installed bundles and locally-added marketplace candidates for a task
+/// without changing trust, enablement, disk state, or network state.
 fn suggest_bundles(app: &App, task: &str) -> CommandResult {
     let task = task.trim();
     if task.chars().count() < 3 {
         return CommandResult::error("Usage: /plugin suggest <task of at least 3 characters>");
     }
 
-    let mut skills = BTreeMap::new();
-    for plugin in app.plugin_registry.list() {
-        let mut description_parts = plugin
-            .manifest
-            .plugin
-            .description
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut keywords = Vec::new();
-        for skill in &plugin.skill_snapshots {
-            description_parts.push(skill.name.clone());
-            description_parts.push(skill.description.clone());
-            keywords.push(skill.name.clone());
-            keywords.extend(skill.aliases.iter().cloned());
-        }
-        skills.insert(
-            plugin.name().to_string(),
-            crate::skills::RegistryEntry {
-                source: plugin.id.as_str().to_string(),
-                description: (!description_parts.is_empty()).then(|| description_parts.join(" ")),
-                keywords,
-                domains: plugin.inventory.network_hosts.clone(),
-            },
-        );
-    }
-
-    let index = crate::skills::RegistryDocument { skills };
-    let recommendations = crate::skills::recommend::recommend_remote_skills(task, &index, 3);
+    let marketplace =
+        crate::plugins::recommend::load_marketplace_candidates(app.plugin_registry.state_path());
+    let recommendations = crate::plugins::recommend::recommend_plugins_for_task(
+        task,
+        app.plugin_registry.as_ref(),
+        &marketplace,
+        crate::plugins::recommend::RecommendOptions::default(),
+    );
     if recommendations.is_empty() {
         return CommandResult::message(format!(
-            "No installed plugin bundles matched `{}`.\n\nInstall a reviewed bundle with /plugin install <source>. Nothing was installed, trusted, or enabled.",
+            "No installed or catalog plugin matched `{}`.\n\nInstall a reviewed bundle with /plugin install <source>, or add a catalog with /plugin marketplace add. Nothing was installed, trusted, or enabled.",
             escape_review_text(task)
         ));
     }
 
-    let mut output = format!(
-        "Suggested installed plugins for `{}`:\n",
-        escape_review_text(task)
-    );
+    let mut output = format!("Suggested plugins for `{}`:\n", escape_review_text(task));
     output.push_str("─────────────────────────────\n");
     for recommendation in recommendations {
-        let Some(plugin) = app.plugin_registry.get(&recommendation.entry.source) else {
-            continue;
+        let description = match &recommendation.source {
+            crate::plugins::recommend::PluginMatchSource::Installed { id } => app
+                .plugin_registry
+                .get(id)
+                .and_then(|plugin| plugin.manifest.plugin.description.clone())
+                .filter(|description| !description.trim().is_empty())
+                .unwrap_or_else(|| "No description provided.".to_string()),
+            crate::plugins::recommend::PluginMatchSource::Marketplace { .. } => marketplace
+                .iter()
+                .find(|candidate| {
+                    candidate.name.eq_ignore_ascii_case(&recommendation.name)
+                        && matches!(
+                            &recommendation.source,
+                            crate::plugins::recommend::PluginMatchSource::Marketplace { catalog_id }
+                                if candidate.catalog_id.as_str() == catalog_id
+                        )
+                })
+                .and_then(|candidate| candidate.description.clone())
+                .filter(|description| !description.trim().is_empty())
+                .unwrap_or_else(|| "Catalog plugin.".to_string()),
         };
-        let description = plugin
-            .manifest
-            .plugin
-            .description
-            .as_deref()
-            .filter(|description| !description.trim().is_empty())
-            .unwrap_or("No description provided.");
+        let state = match &recommendation.source {
+            crate::plugins::recommend::PluginMatchSource::Installed { id } => app
+                .plugin_registry
+                .get(id)
+                .map(|plugin| plugin.state_label())
+                .unwrap_or("installed"),
+            crate::plugins::recommend::PluginMatchSource::Marketplace { .. } => "not installed",
+        };
         let why = recommendation
             .matched_terms
             .iter()
             .map(|term| escape_review_text(term))
             .collect::<Vec<_>>()
             .join(", ");
-        let next_step = if plugin.active() {
-            format!("Already active: /plugin show {}", plugin.name())
-        } else if !plugin.trusted() {
-            format!("Review before enabling: /plugin trust {}", plugin.name())
-        } else if !plugin.enabled {
-            format!(
-                "Enable if that review still applies: /plugin enable {}",
-                plugin.name()
-            )
-        } else {
-            format!("Inspect its inactive state: /plugin show {}", plugin.name())
-        };
         let _ = writeln!(
             output,
-            "  {} — {} · {}",
-            escape_review_text(plugin.name()),
-            plugin.state_label(),
-            escape_review_text(description)
+            "  {} — {state} · {}",
+            escape_review_text(&recommendation.name),
+            escape_review_text(&description)
         );
         let _ = writeln!(output, "    Why: {why}");
-        let _ = writeln!(output, "    {next_step}");
+        let _ = writeln!(output, "    {}", recommendation.command());
     }
     output.push_str("\nNothing was installed, trusted, or enabled.");
     CommandResult::message(output)

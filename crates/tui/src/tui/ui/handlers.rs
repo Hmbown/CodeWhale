@@ -678,7 +678,15 @@ pub(crate) fn handle_shell_job_action(app: &mut App, action: crate::tui::app::Sh
     match action {
         crate::tui::app::ShellJobAction::List => {
             let jobs = manager.list_jobs_for_session(&active_session_id);
-            add_shell_job_message(app, format_shell_job_list(&jobs));
+            let mut text = format_shell_job_list(&jobs);
+            if let Ok(cloud) =
+                crate::cloud_dispatch::CloudJobStore::from_env().and_then(|store| store.list())
+                && !cloud.is_empty()
+            {
+                text.push_str("\n\n");
+                text.push_str(&crate::cloud_dispatch::format_job_list(&cloud));
+            }
+            add_shell_job_message(app, text);
         }
         crate::tui::app::ShellJobAction::Show { id } => {
             match manager.inspect_job_for_session(&active_session_id, &id) {

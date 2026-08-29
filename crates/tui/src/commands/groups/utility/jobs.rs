@@ -43,6 +43,7 @@ fn jobs(args: Option<&str>) -> CommandResult {
     match action.as_str() {
         "list" => CommandResult::action(AppAction::ShellJob(ShellJobAction::List)),
         "show" | "inspect" => match id {
+            Some(id) if id.starts_with("cloud_") => show_cloud_job(id),
             Some(id) => CommandResult::action(AppAction::ShellJob(ShellJobAction::Show {
                 id: id.to_string(),
             })),
@@ -74,6 +75,7 @@ fn jobs(args: Option<&str>) -> CommandResult {
             None => CommandResult::error("Usage: /jobs close-stdin <id>"),
         },
         "cancel" | "kill" | "stop" => match id {
+            Some(id) if id.starts_with("cloud_") => cancel_cloud_job(id),
             Some(id) if is_cancel_all_token(id) => {
                 CommandResult::action(AppAction::ShellJob(ShellJobAction::CancelAll))
             }
@@ -90,6 +92,22 @@ fn jobs(args: Option<&str>) -> CommandResult {
         _ => CommandResult::error(
             "Usage: /jobs [list|show <id>|poll <id>|wait <id>|stdin <id> <input>|close-stdin <id>|cancel <id|all>]",
         ),
+    }
+}
+
+fn show_cloud_job(id: &str) -> CommandResult {
+    match crate::cloud_dispatch::CloudJobStore::from_env().and_then(|store| store.load(id)) {
+        Ok(job) => CommandResult::message(crate::cloud_dispatch::format_job(&job)),
+        Err(error) => CommandResult::error(error.to_string()),
+    }
+}
+
+fn cancel_cloud_job(id: &str) -> CommandResult {
+    match crate::cloud_dispatch::CloudJobStore::from_env()
+        .and_then(|store| crate::cloud_dispatch::cancel_job(&store, id))
+    {
+        Ok(job) => CommandResult::message(crate::cloud_dispatch::format_job(&job)),
+        Err(error) => CommandResult::error(error.to_string()),
     }
 }
 
@@ -117,6 +135,10 @@ mod tests {
             cancel_all.action,
             Some(AppAction::ShellJob(ShellJobAction::CancelAll))
         ));
+
+        let cloud = jobs(Some("show cloud_deadbeef"));
+        assert!(cloud.action.is_none());
+        assert!(cloud.message.is_some() || cloud.is_error);
 
         let cancel_all_spaced = jobs(Some("cancel all"));
         assert!(matches!(

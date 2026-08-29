@@ -713,6 +713,10 @@ pub struct ViewportState {
     /// WorkflowPanel rect above the composer (#4121), for mouse toggle/cancel.
     pub last_workflow_panel_area: Option<Rect>,
     pub last_workflow_cancel_area: Option<Rect>,
+    /// Live plugin CTA row above the composer, plus review/dismiss hitboxes.
+    pub last_plugin_cta_area: Option<Rect>,
+    pub last_plugin_cta_review_area: Option<Rect>,
+    pub last_plugin_cta_dismiss_area: Option<Rect>,
     pub last_transcript_top: usize,
     pub last_transcript_visible: usize,
     pub last_transcript_total: usize,
@@ -745,6 +749,9 @@ impl Default for ViewportState {
             last_approval_area: None,
             last_workflow_panel_area: None,
             last_workflow_cancel_area: None,
+            last_plugin_cta_area: None,
+            last_plugin_cta_review_area: None,
+            last_plugin_cta_dismiss_area: None,
             last_transcript_top: 0,
             last_transcript_visible: 0,
             last_transcript_total: 0,
@@ -1302,6 +1309,13 @@ pub struct App {
     pub context_pressure_warning_dismissed: Option<crate::context_budget::PressureLevel>,
     /// Last on-disk plugin catalog stamp we already nudged `/plugin reload` for.
     pub plugin_reload_nudge_stamp: Option<crate::plugins::PluginCatalogStamp>,
+    /// Plugin names already toasted for this session's prompt matching.
+    pub plugin_prompt_suggest_names: HashSet<String>,
+    pub plugin_prompt_suggest_count: u8,
+    /// Last idle catalog fingerprint poll, so disk changes can surface between turns.
+    pub last_plugin_catalog_poll: Option<Instant>,
+    /// Live composer plugin CTA (debounce + one match, never auto-install).
+    pub plugin_cta: crate::tui::plugin_suggestions::PluginCtaState,
     pub model: String,
     /// Persisted model selections by provider name. Loaded from settings so
     /// `/model` and the picker can surface saved provider-specific choices.
