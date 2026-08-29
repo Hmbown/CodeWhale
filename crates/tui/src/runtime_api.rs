@@ -3845,8 +3845,8 @@ fn operate_store() -> Result<crate::operate::OperationStore, ApiError> {
         .map_err(|e| ApiError::internal(format!("Failed to open operate store: {e}")))
 }
 
-fn operate_credentials_present() -> bool {
-    crate::operate::glm_credentials_present(|name| std::env::var(name).is_ok())
+fn operate_credentials_present(config: &Config) -> bool {
+    crate::operate::operate_credentials_present(config)
 }
 
 fn operate_view(operation: crate::operate::Operation) -> Json<OperateView> {
@@ -3864,25 +3864,20 @@ fn load_operate(
         .map_err(|e| ApiError::internal(format!("Failed to load operate: {e}")))
 }
 
-fn require_operate(
-    store: &crate::operate::OperationStore,
-) -> Result<crate::operate::Operation, ApiError> {
-    load_operate(store)?.ok_or_else(|| ApiError::not_found("Unknown Operation."))
-}
-
 fn parse_request_burn_rate(value: Option<&serde_json::Value>) -> Result<Option<f64>, ApiError> {
     Ok(crate::operate::parse_burn_rate(value)
         .map_err(|e| ApiError::bad_request(e.to_string()))?
         .map(|rate| rate.amount_usd_per_hour))
 }
 
-async fn get_operate() -> Result<Json<OperateView>, ApiError> {
+async fn get_operate(State(state): State<RuntimeApiState>) -> Result<Json<OperateView>, ApiError> {
     let store = operate_store()?;
     let operation = match load_operate(&store)? {
         Some(operation) => operation,
         None => {
+            let config = state.config.read();
             let mut operation = crate::operate::Operation::new(String::new(), None);
-            operation.credentials_present = operate_credentials_present();
+            operation.credentials_present = operate_credentials_present(&config);
             operation.project();
             operation
         }
@@ -3895,58 +3890,90 @@ async fn start_operate(
     Json(req): Json<StartOperateRequest>,
 ) -> Result<Json<OperateView>, ApiError> {
     let store = operate_store()?;
+    let burn = parse_request_burn_rate(req.burn_rate.as_ref())?;
+    // Keepalive first: a persisted operation without its keepalive is not
+    // always-on, and a fresh operation has no lead plan yet — kick the first
+    // lead run to the next scheduler tick instead of waiting out the hourly
+    // recurrence.
+    {
+        let manager = state.automations.lock().await;
+        crate::operate::upsert_keepalive(&manager, &state.workspace, true)
+            .map_err(|e| ApiError::internal(format!("Failed to keep operate alive: {e}")))?;
+    }
+    let config = state.config.read();
     let operation = crate::operate::start_operation(
         &store,
         &state.workspace,
         req.direction,
-        parse_request_burn_rate(req.burn_rate.as_ref())?,
-        operate_credentials_present(),
+        burn,
+        operate_credentials_present(&config),
     )
     .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let manager = state.automations.lock().await;
-    crate::operate::upsert_keepalive(&manager, &state.workspace)
-        .map_err(|e| ApiError::internal(format!("Failed to keep operate alive: {e}")))?;
     Ok(operate_view(operation))
 }
 
 async fn patch_operate(
+    State(state): State<RuntimeApiState>,
     Json(patch): Json<serde_json::Value>,
 ) -> Result<Json<OperateView>, ApiError> {
     let store = operate_store()?;
-    let mut operation = require_operate(&store)?;
-    crate::operate::apply_operate_patch(&mut operation, &patch).map_err(|e| {
-        if e.to_string().contains("cancelled") {
-            ApiError::conflict(e.to_string())
-        } else {
-            ApiError::bad_request(e.to_string())
-        }
-    })?;
-    operation.credentials_present = operate_credentials_present();
-    operation.project();
-    store
-        .save(&operation)
-        .map_err(|e| ApiError::internal(format!("Failed to save operate: {e}")))?;
+    let credentials = {
+        let config = state.config.read();
+        operate_credentials_present(&config)
+    };
+    // Read-merge-write under the operate store lock: a concurrent keepalive
+    // or plan save can no longer be lost by a stale read.
+    let direction_changed = std::cell::Cell::new(false);
+    let operation = store
+        .mutate(|op| {
+            let before = op.direction.clone();
+            crate::operate::apply_operate_patch(op, &patch)?;
+            direction_changed.set(op.direction != before);
+            op.credentials_present = credentials;
+            op.project();
+            Ok(())
+        })
+        .map_err(|e| {
+            if e.to_string().contains("cancelled") {
+                ApiError::conflict(e.to_string())
+            } else {
+                ApiError::bad_request(e.to_string())
+            }
+        })?
+        .ok_or_else(|| ApiError::not_found("Unknown Operation."))?;
+    // A changed direction invalidated the lead plan; pull the keepalive lead
+    // run forward so the operation does not idle until the next recurrence.
+    if direction_changed.get() {
+        let manager = state.automations.lock().await;
+        crate::operate::kick_keepalive(&manager)
+            .map_err(|e| ApiError::internal(format!("Failed to reschedule operate: {e}")))?;
+    }
     Ok(operate_view(operation))
 }
 
 async fn keepalive_operate(
+    State(state): State<RuntimeApiState>,
     Json(req): Json<KeepAliveOperateRequest>,
 ) -> Result<Json<OperateView>, ApiError> {
     let store = operate_store()?;
-    let mut operation = require_operate(&store)?;
-    crate::operate::keep_alive_observation(
-        &mut operation,
-        req.observed_burn_usd_per_hour,
-        req.spent_usd,
-        Some(
-            req.credentials_present
-                .unwrap_or_else(operate_credentials_present),
-        ),
-        req.human_gated,
-    );
-    store
-        .save(&operation)
-        .map_err(|e| ApiError::internal(format!("Failed to keep operate alive: {e}")))?;
+    let config = state.config.read();
+    let credentials = req
+        .credentials_present
+        .unwrap_or_else(|| operate_credentials_present(&config));
+    drop(config);
+    let operation = store
+        .mutate(|op| {
+            crate::operate::keep_alive_observation(
+                op,
+                req.observed_burn_usd_per_hour,
+                req.spent_usd,
+                Some(credentials),
+                req.human_gated,
+            );
+            Ok(())
+        })
+        .map_err(|e| ApiError::internal(format!("Failed to keep operate alive: {e}")))?
+        .ok_or_else(|| ApiError::not_found("Unknown Operation."))?;
     Ok(operate_view(operation))
 }
 
@@ -3954,21 +3981,36 @@ async fn put_operate_plan(
     Json(plan): Json<serde_json::Value>,
 ) -> Result<Json<OperateView>, ApiError> {
     let store = operate_store()?;
-    let mut operation = require_operate(&store)?;
     let patch = serde_json::json!({ "leadPlan": plan });
-    crate::operate::apply_operate_patch(&mut operation, &patch)
-        .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    store
-        .save(&operation)
-        .map_err(|e| ApiError::internal(format!("Failed to save operate plan: {e}")))?;
+    let operation = store
+        .mutate(|op| crate::operate::apply_operate_patch(op, &patch))
+        .map_err(|e| {
+            if e.to_string().contains("cancelled") {
+                ApiError::conflict(e.to_string())
+            } else if e.to_string().contains("leadPlan") {
+                ApiError::bad_request(e.to_string())
+            } else {
+                ApiError::internal(format!("Failed to save operate plan: {e}"))
+            }
+        })?
+        .ok_or_else(|| ApiError::not_found("Unknown Operation."))?;
     Ok(operate_view(operation))
 }
 
-async fn cancel_operate() -> Result<Json<OperateView>, ApiError> {
+async fn cancel_operate(
+    State(state): State<RuntimeApiState>,
+) -> Result<Json<OperateView>, ApiError> {
     let store = operate_store()?;
     let operation = crate::operate::cancel_operation(&store)
         .map_err(|e| ApiError::internal(format!("Failed to cancel operate: {e}")))?
         .ok_or_else(|| ApiError::not_found("Unknown Operation."))?;
+    // Cancel tears down the keepalive too: an unattended hourly lead run
+    // after cancel is pure cost.
+    {
+        let manager = state.automations.lock().await;
+        crate::operate::pause_keepalive(&manager)
+            .map_err(|e| ApiError::internal(format!("Failed to pause operate keepalive: {e}")))?;
+    }
     Ok(operate_view(operation))
 }
 
@@ -3994,14 +4036,24 @@ async fn check_operate_auto_merge(
     Json(req): Json<OperateAutoMergeCheckRequest>,
 ) -> Result<Json<OperateAutoMergeCheckView>, ApiError> {
     let checker = crate::operate::discover_auto_merge_checker(&state.workspace);
-    let decision = crate::operate::evaluate_auto_merge(
-        crate::operate::AutoMergeRequest {
-            repo: &req.repo,
-            pr: &req.pr,
-            role: &req.agent,
-        },
-        checker.as_deref(),
-    );
+    let repo = req.repo.clone();
+    let pr = req.pr.clone();
+    let agent = req.agent.clone();
+    let checker_for_task = checker.clone();
+    // The checker shells out synchronously (`python3 …; .status()`); run it on
+    // the blocking pool so a slow `gh`/network wait cannot pin a Tokio worker.
+    let decision = tokio::task::spawn_blocking(move || {
+        crate::operate::evaluate_auto_merge(
+            crate::operate::AutoMergeRequest {
+                repo: &repo,
+                pr: &pr,
+                role: &agent,
+            },
+            checker_for_task.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| ApiError::internal(format!("auto-merge check join failed: {e}")))?;
     let (allow, reason) = match decision {
         crate::operate::AutoMergeDecision::Allow => (true, None),
         crate::operate::AutoMergeDecision::Deny { reason } => (false, Some(reason)),

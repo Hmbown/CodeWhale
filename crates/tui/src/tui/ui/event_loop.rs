@@ -5944,27 +5944,27 @@ pub(crate) async fn run_event_loop(
                     app.paste_from_clipboard();
                 }
                 KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    apply_mode_update(app, &engine_handle, AppMode::Agent).await;
+                    apply_mode_update(app, &engine_handle, config, AppMode::Agent).await;
                     continue;
                 }
                 KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    apply_mode_update(app, &engine_handle, AppMode::Yolo).await;
+                    apply_mode_update(app, &engine_handle, config, AppMode::Yolo).await;
                     continue;
                 }
                 KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    apply_mode_update(app, &engine_handle, AppMode::Plan).await;
+                    apply_mode_update(app, &engine_handle, config, AppMode::Plan).await;
                     continue;
                 }
                 KeyCode::Char('A') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    apply_mode_update(app, &engine_handle, AppMode::Agent).await;
+                    apply_mode_update(app, &engine_handle, config, AppMode::Agent).await;
                     continue;
                 }
                 KeyCode::Char('Y') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    apply_mode_update(app, &engine_handle, AppMode::Yolo).await;
+                    apply_mode_update(app, &engine_handle, config, AppMode::Yolo).await;
                     continue;
                 }
                 KeyCode::Char('P') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    apply_mode_update(app, &engine_handle, AppMode::Plan).await;
+                    apply_mode_update(app, &engine_handle, config, AppMode::Plan).await;
                     continue;
                 }
                 // Vim composer: Normal-mode motion / operator keys.

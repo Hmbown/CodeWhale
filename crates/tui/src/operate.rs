@@ -7,7 +7,7 @@
 //! no second `Engine::run_turn`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
@@ -15,9 +15,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::automation_manager::{
-    AutomationManager, AutomationStatus, CreateAutomationRequest, UpdateAutomationRequest,
-};
+use crate::automation_manager::{AutomationManager, AutomationRecord, AutomationStatus};
 
 pub const CWC_OPERATE_SCHEMA_VERSION: u32 = 1;
 pub const CWC_OPERATE_DEFAULT_LEAD_MODEL: &str = "GLM-5.3";
@@ -25,7 +23,16 @@ pub const CWC_OPERATE_DEFAULT_WORKER_MODEL: &str = "GLM-5.3-Flash";
 pub const OPERATE_LEAD_MODEL: &str = CWC_OPERATE_DEFAULT_LEAD_MODEL;
 pub const OPERATE_WORKER_MODEL: &str = CWC_OPERATE_DEFAULT_WORKER_MODEL;
 pub const OPERATE_MAX_WRITERS: usize = 3;
+/// `hold` admits no new writers past this budget (the 8% band is met; hold
+/// the current width instead of widening).
+pub const OPERATE_HOLD_WRITERS: usize = 2;
+/// `throttle` (observed more than 8% over target) cuts worker concurrency to
+/// one writer. Pace throttles; it never stops the operation.
+pub const OPERATE_THROTTLE_WRITERS: usize = 1;
 pub const OPERATE_KEEPALIVE_ID: &str = "cw-operate";
+/// Follow-up lead runs recur hourly; the first lead-plan step is kicked to
+/// the next scheduler tick instead of waiting for the first recurrence.
+pub const OPERATE_KEEPALIVE_RRULE: &str = "FREQ=HOURLY;INTERVAL=1";
 pub const AUTO_MERGE_CHECKER_ENV: &str = "CODEWHALE_AUTO_MERGE_CHECKER";
 pub const DIRECTION_PATH_ENV: &str = "CODEWHALE_DIRECTION_PATH";
 pub const CHECK_AUTO_MERGE_SCRIPT: &str = "scripts/check-auto-merge.py";
@@ -164,21 +171,7 @@ impl Operation {
 
     pub fn plan_from_direction(&mut self) {
         self.lead_plan = slices_from_direction(&self.direction);
-        if let Some(plan) = &self.lead_plan {
-            for slice in &plan.slices {
-                if slice.owner_id != "lead"
-                    && !self.roster.iter().any(|member| member.id == slice.owner_id)
-                {
-                    self.roster.push(OperateRosterMember {
-                        id: slice.owner_id.clone(),
-                        display_name: slice.owner_id.clone(),
-                        role: "worker".to_string(),
-                        model: OPERATE_WORKER_MODEL.to_string(),
-                        state: "idle".to_string(),
-                    });
-                }
-            }
-        }
+        sync_plan_owners(self);
         self.project();
     }
 
@@ -197,13 +190,17 @@ impl Operation {
         self.idle_blocked_reason = reason;
         self.workers_admitted = workers_admitted(self);
         self.pace = derive_pace(self);
-        live_roster(self);
+        // Pace is a dispatch budget, not a label: the roster and the
+        // `writersInFlight` count the keepalive lead actually dispatches at
+        // come from `worker_dispatch_budget`, so over-target burn reduces
+        // real concurrency instead of only renaming it.
+        let budget = worker_dispatch_budget(self);
+        live_roster(self, budget);
         self.writers_in_flight = if self.workers_admitted {
             self.roster
                 .iter()
                 .filter(|member| member.role == "worker" && member.state == "in_flight")
                 .count()
-                .min(OPERATE_MAX_WRITERS)
         } else {
             0
         };
@@ -269,9 +266,16 @@ fn parse_burn_amount(amount: Option<f64>) -> Result<Option<OperateBurnRate>> {
     if amount > 10_000.0 {
         anyhow::bail!("Burn rate must be 10000 $/hr or less.");
     }
+    let rounded = (amount * 100.0).round() / 100.0;
+    if rounded <= 0.0 {
+        // A sub-cent rate rounds to a $0/hr target, which the pace governor
+        // would treat as unbounded — reject it instead of silently dropping
+        // the requested cap.
+        anyhow::bail!("Burn rate must be at least $0.01/hr.");
+    }
     Ok(Some(OperateBurnRate {
         kind: "usd_per_hour".to_string(),
-        amount_usd_per_hour: (amount * 100.0).round() / 100.0,
+        amount_usd_per_hour: rounded,
     }))
 }
 
@@ -342,13 +346,34 @@ fn derive_pace(op: &Operation) -> OperatePace {
     }
 }
 
-fn live_roster(op: &mut Operation) {
+/// Pace-driven worker-dispatch budget within the 8% band semantics.
+///
+/// `widen`/`unbounded` opens the full writer width, `hold` admits no new
+/// writers past the hold width, and `throttle` cuts concurrency to one
+/// writer. While workers are admitted the budget is never zero — pace
+/// throttles spend, it never stops the operation.
+#[must_use]
+pub fn worker_dispatch_budget(op: &Operation) -> usize {
+    if !op.workers_admitted {
+        return 0;
+    }
+    match op.pace {
+        OperatePace::Unbounded | OperatePace::Widen => OPERATE_MAX_WRITERS,
+        OperatePace::Hold => OPERATE_HOLD_WRITERS,
+        OperatePace::Throttle => OPERATE_THROTTLE_WRITERS,
+    }
+}
+
+fn live_roster(op: &mut Operation, budget: usize) {
     let admitted = op.workers_admitted;
     let cancelled = op.status == OperateStatus::Cancelled;
     let has_plan = op
         .lead_plan
         .as_ref()
         .is_some_and(|plan| !plan.slices.is_empty());
+    // Only the first `budget` workers in roster (plan) order dispatch; the
+    // rest stay idle until a slot frees or pace widens.
+    let mut worker_slot = 0usize;
     for member in &mut op.roster {
         if cancelled {
             member.state = "idle".to_string();
@@ -363,7 +388,12 @@ fn live_roster(op: &mut Operation) {
                 "idle".to_string()
             };
         } else if member.role == "worker" {
-            member.state = "in_flight".to_string();
+            worker_slot += 1;
+            member.state = if worker_slot <= budget {
+                "in_flight".to_string()
+            } else {
+                "idle".to_string()
+            };
         } else {
             member.state = "planning".to_string();
         }
@@ -429,35 +459,54 @@ fn direction_items(direction: &str) -> Vec<String> {
 
 #[must_use]
 pub fn render_plan_board(op: &Operation) -> String {
+    render_plan_board_locale(op, crate::localization::Locale::En)
+}
+
+/// Plan board with locale-aware chrome. Contract tokens (status / pace enum
+/// values, slice ids, owner ids) stay verbatim; the surrounding prose comes
+/// from the TUI locale packs.
+#[must_use]
+pub fn render_plan_board_locale(op: &Operation, locale: crate::localization::Locale) -> String {
+    use crate::localization::{MessageId, tr};
+    let tr_line = |id: MessageId| tr(locale, id).into_owned();
+
     let mut out = String::new();
-    out.push_str(&format!(
-        "Operate {id}  [{status}]  pace={pace}  writers={writers}\n",
-        id = op.id,
-        status = status_label(op),
-        pace = pace_label(op.pace),
-        writers = op.writers_in_flight
-    ));
+    out.push_str(
+        &tr_line(MessageId::OperateBoardHeader)
+            .replace("{id}", &op.id)
+            .replace("{status}", &status_label(op))
+            .replace("{pace}", pace_label(op.pace))
+            .replace("{writers}", &op.writers_in_flight.to_string()),
+    );
+    out.push('\n');
     match &op.burn_rate {
-        Some(rate) => out.push_str(&format!(
-            "burn  ${actual}/hr observed  vs  ${target}/hr target\n",
-            actual = op.observed_burn_usd_per_hour.unwrap_or(0.0),
-            target = rate.amount_usd_per_hour
-        )),
-        None => out.push_str("burn  No cap\n"),
+        Some(rate) => out.push_str(
+            &tr_line(MessageId::OperateBoardBurnObserved)
+                .replace(
+                    "{actual}",
+                    &format!("{}", op.observed_burn_usd_per_hour.unwrap_or(0.0)),
+                )
+                .replace("{target}", &format!("{}", rate.amount_usd_per_hour)),
+        ),
+        None => out.push_str(&tr_line(MessageId::OperateBoardBurnNoCap)),
     }
+    out.push('\n');
     if op.direction.is_empty() {
-        out.push_str("direction  (empty — idle-blocked)\n");
+        out.push_str(&tr_line(MessageId::OperateBoardDirectionEmpty));
     } else {
-        out.push_str(&format!(
-            "direction  {}\n",
-            op.direction.lines().next().unwrap_or("")
-        ));
+        out.push_str(
+            &tr_line(MessageId::OperateBoardDirectionLine)
+                .replace("{line}", op.direction.lines().next().unwrap_or("")),
+        );
     }
+    out.push('\n');
     let Some(plan) = &op.lead_plan else {
-        out.push_str("leadPlan  (none — workers not admitted)\n");
+        out.push_str(&tr_line(MessageId::OperateBoardPlanMissing));
+        out.push('\n');
         return out;
     };
-    out.push_str("leadPlan  id        owner    start  dur   est$   depends  title\n");
+    out.push_str(&tr_line(MessageId::OperateBoardPlanHeader));
+    out.push('\n');
     for slice in &plan.slices {
         out.push_str(&format!(
             "          {:<9} {:<8} {:>5} {:>5} {:>6.2}  {:<7} {}\n",
@@ -474,11 +523,12 @@ pub fn render_plan_board(op: &Operation) -> String {
             slice.title
         ));
     }
-    out.push_str(&render_timeline(&plan.slices));
+    out.push_str(&render_timeline(&plan.slices, locale));
     out
 }
 
-fn render_timeline(slices: &[OperatePlanSlice]) -> String {
+fn render_timeline(slices: &[OperatePlanSlice], locale: crate::localization::Locale) -> String {
+    use crate::localization::{MessageId, tr};
     let max_end = slices
         .iter()
         .map(|slice| slice.start_offset_sec.saturating_add(slice.duration_sec))
@@ -486,7 +536,7 @@ fn render_timeline(slices: &[OperatePlanSlice]) -> String {
         .unwrap_or(0)
         .max(1);
     let width = 24u32;
-    let mut out = String::from("gantt  time →\n");
+    let mut out = format!("{}\n", tr(locale, MessageId::OperateBoardGantt));
     for slice in slices {
         let start = (slice.start_offset_sec.saturating_mul(width)) / max_end;
         let end = (slice
@@ -538,13 +588,48 @@ fn pace_label(pace: OperatePace) -> &'static str {
     }
 }
 
+/// Honor an explicit operator-provided path (env override) only when it is a
+/// non-empty value without NUL bytes or `..` traversal segments that actually
+/// names one regular file. Keeps env-provided values out of raw path
+/// expressions (CodeQL "uncontrolled data in path" class).
+fn explicit_file_path(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.contains('\0') {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return None;
+    }
+    path.is_file().then_some(path)
+}
+
+/// Same hardening for an explicit directory (env override): no NUL bytes, no
+/// `..` traversal segments. Existence is probed by the caller.
+fn explicit_dir_path(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.contains('\0') {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return None;
+    }
+    Some(path)
+}
+
 #[must_use]
 pub fn discover_direction_path(workspace: &Path) -> Option<PathBuf> {
-    if let Ok(explicit) = std::env::var(DIRECTION_PATH_ENV) {
-        let path = PathBuf::from(explicit.trim());
-        if path.is_file() {
-            return Some(path);
-        }
+    if let Ok(explicit) = std::env::var(DIRECTION_PATH_ENV)
+        && let Some(path) = explicit_file_path(&explicit)
+    {
+        return Some(path);
     }
     let local = workspace.join("DIRECTION.md");
     if local.is_file() {
@@ -564,9 +649,16 @@ pub fn read_direction(workspace: &Path) -> Result<String> {
     }
 }
 
+/// Operate runs GLM lead/workers, so its credential question is the Z.ai
+/// provider's. Resolve through the normal provider credential resolution —
+/// configured `[providers.zai] api_key`/`api_key_env`, the CLI override, the
+/// durable secret store, or the provider's ambient env vars (`ZAI_API_KEY`,
+/// `Z_AI_API_KEY`, `ZHIPU_API_KEY`, `GLM_API_KEY`) — instead of a bespoke
+/// env probe that ignored all of it. The resolver treats blank values as
+/// unset, so an empty variable never admits workers.
 #[must_use]
-pub fn glm_credentials_present(lookup: impl Fn(&str) -> bool) -> bool {
-    lookup("ZAI_API_KEY") || lookup("Z_AI_API_KEY") || lookup("ZAI_AUTH_TOKEN")
+pub fn operate_credentials_present(config: &crate::config::Config) -> bool {
+    crate::config::has_api_key_for(config, crate::config::ApiProvider::Zai)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -647,11 +739,10 @@ pub fn evaluate_auto_merge(
 
 #[must_use]
 pub fn discover_auto_merge_checker(_workspace: &Path) -> Option<PathBuf> {
-    if let Ok(explicit) = std::env::var(AUTO_MERGE_CHECKER_ENV) {
-        let path = PathBuf::from(explicit.trim());
-        if path.is_file() {
-            return Some(path);
-        }
+    if let Ok(explicit) = std::env::var(AUTO_MERGE_CHECKER_ENV)
+        && let Some(path) = explicit_file_path(&explicit)
+    {
+        return Some(path);
     }
     materialize_ops_origin_main()
         .ok()
@@ -662,11 +753,10 @@ pub fn discover_auto_merge_checker(_workspace: &Path) -> Option<PathBuf> {
 fn ops_git_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     for key in ["CODEWHALE_OPS_GIT", "CODEWHALE_OPS_ROOT"] {
-        if let Ok(path) = std::env::var(key) {
-            let trimmed = path.trim();
-            if !trimmed.is_empty() {
-                out.push(PathBuf::from(trimmed));
-            }
+        if let Ok(path) = std::env::var(key)
+            && let Some(path) = explicit_dir_path(&path)
+        {
+            out.push(path);
         }
     }
     out
@@ -684,7 +774,12 @@ fn git_origin_main_sha(repo: &Path) -> Option<String> {
         return None;
     }
     let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (sha.len() >= 7).then_some(sha)
+    // The sha becomes a path segment below; only plain hex of a plausible
+    // length may flow into it.
+    if !(7..=64).contains(&sha.len()) || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(sha)
 }
 
 pub fn materialize_ops_origin_main() -> Result<PathBuf> {
@@ -766,18 +861,35 @@ pub fn default_operate_dir() -> PathBuf {
 
 pub struct OperationStore {
     path: PathBuf,
+    lock_path: PathBuf,
 }
 
 impl OperationStore {
     pub fn open(dir: impl Into<PathBuf>) -> Result<Self> {
         let dir = dir.into();
         fs::create_dir_all(&dir).with_context(|| format!("Failed to create {}", dir.display()))?;
-        Ok(Self {
-            path: dir.join("current.json"),
-        })
+        let path = dir.join("current.json");
+        let lock_path = dir.join("current.json.lock");
+        Ok(Self { path, lock_path })
     }
 
     pub fn load(&self) -> Result<Option<Operation>> {
+        // Match the skill-state discipline: pure readers take the shared
+        // cross-process read lock only when one exists, so a read never
+        // fabricates a lock file.
+        if self.lock_path.exists() {
+            let file = fs::File::open(&self.lock_path)
+                .with_context(|| format!("Failed to open {}", self.lock_path.display()))?;
+            let lock = fd_lock::RwLock::new(file);
+            let _guard = lock
+                .read()
+                .with_context(|| format!("read-lock {}", self.path.display()))?;
+            return self.load_unlocked();
+        }
+        self.load_unlocked()
+    }
+
+    fn load_unlocked(&self) -> Result<Option<Operation>> {
         if !self.path.exists() {
             return Ok(None);
         }
@@ -788,18 +900,52 @@ impl OperationStore {
         Ok(Some(op))
     }
 
+    /// Save under the cross-process writer lock with an atomic temp+rename
+    /// write, so concurrent Codewhale processes never interleave partial
+    /// records.
     pub fn save(&self, op: &Operation) -> Result<()> {
-        let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, serde_json::to_string_pretty(op)?)
-            .with_context(|| format!("Failed to write {}", tmp.display()))?;
-        fs::rename(&tmp, &self.path).with_context(|| {
-            format!(
-                "Failed to move {} to {}",
-                tmp.display(),
-                self.path.display()
-            )
-        })?;
-        Ok(())
+        let file = self.open_lock_file()?;
+        let mut lock = fd_lock::RwLock::new(file);
+        let _guard = lock
+            .write()
+            .with_context(|| format!("write-lock {}", self.path.display()))?;
+        self.save_unlocked(op)
+    }
+
+    /// Read-merge-write under the cross-process writer lock: the latest
+    /// on-disk record is reloaded *inside* the lock before `edit` runs, so a
+    /// concurrent PATCH/keepalive/plan save can no longer be silently lost by
+    /// a stale read. Returns `None` when no operation is recorded yet.
+    pub fn mutate(
+        &self,
+        edit: impl FnOnce(&mut Operation) -> Result<()>,
+    ) -> Result<Option<Operation>> {
+        let file = self.open_lock_file()?;
+        let mut lock = fd_lock::RwLock::new(file);
+        let _guard = lock
+            .write()
+            .with_context(|| format!("write-lock {}", self.path.display()))?;
+        let Some(mut op) = self.load_unlocked()? else {
+            return Ok(None);
+        };
+        edit(&mut op)?;
+        self.save_unlocked(&op)?;
+        Ok(Some(op))
+    }
+
+    fn open_lock_file(&self) -> Result<fs::File> {
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&self.lock_path)
+            .with_context(|| format!("Failed to open {}", self.lock_path.display()))
+    }
+
+    fn save_unlocked(&self, op: &Operation) -> Result<()> {
+        codewhale_config::persistence::atomic_write_json(&self.path, op)
+            .with_context(|| format!("Failed to write {}", self.path.display()))
     }
 }
 
@@ -826,13 +972,57 @@ pub fn start_operation(
     Ok(op)
 }
 
+/// Re-entering Operate attaches to the recorded operation — same id, spend,
+/// lead plan, and roster — instead of minting a fresh record that silently
+/// resets progress. A cancelled record (or an empty store) starts a new
+/// operation. An explicitly provided direction is applied through the normal
+/// patch rules (which invalidate a superseded lead plan).
+pub fn attach_or_start_operation(
+    store: &OperationStore,
+    workspace: &Path,
+    direction: Option<String>,
+    burn_usd_per_hour: Option<f64>,
+    credentials_present: bool,
+) -> Result<Operation> {
+    if store
+        .load()?
+        .is_some_and(|op| op.status != OperateStatus::Cancelled)
+    {
+        let attached = store.mutate(|op| {
+            if let Some(text) = direction.as_ref().filter(|text| !text.trim().is_empty()) {
+                apply_operate_patch(op, &serde_json::json!({ "direction": text }))?;
+            }
+            op.credentials_present = credentials_present;
+            op.project();
+            Ok(())
+        })?;
+        if let Some(op) = attached {
+            return Ok(op);
+        }
+    }
+    start_operation(
+        store,
+        workspace,
+        direction,
+        burn_usd_per_hour,
+        credentials_present,
+    )
+}
+
 pub fn apply_operate_patch(op: &mut Operation, patch: &serde_json::Value) -> Result<()> {
     if op.status == OperateStatus::Cancelled {
         anyhow::bail!("A cancelled Operation cannot be edited.");
     }
     if let Some(direction) = patch.get("direction") {
-        op.direction =
-            normalize_direction(direction.as_str().map(str::to_string).unwrap_or_default());
+        let next = normalize_direction(direction.as_str().map(str::to_string).unwrap_or_default());
+        if patch.get("leadPlan").is_none() && next != op.direction {
+            // A changed direction supersedes the recorded lead plan: workers
+            // must stop executing slices derived from the old direction. The
+            // operation idles `awaiting_lead_plan` until the lead re-plans
+            // (same patch may instead carry an explicit replacement plan).
+            op.lead_plan = None;
+        }
+        op.direction = next;
     }
     if patch.get("burnRate").is_some() {
         op.burn_rate = parse_burn_rate(patch.get("burnRate"))?;
@@ -843,6 +1033,9 @@ pub fn apply_operate_patch(op: &mut Operation, patch: &serde_json::Value) -> Res
         } else {
             Some(serde_json::from_value(plan.clone()).context("leadPlan is invalid")?)
         };
+        // Plan owners are the worker roster: PUT /v1/operate/plan and a
+        // PATCHed plan must admit their owners or workers never dispatch.
+        sync_plan_owners(op);
     }
     if let Some(flag) = patch.get("humanGated").and_then(serde_json::Value::as_bool) {
         op.human_gated = flag;
@@ -864,18 +1057,37 @@ pub fn apply_operate_patch(op: &mut Operation, patch: &serde_json::Value) -> Res
     Ok(())
 }
 
+/// Add every non-lead plan owner to the roster (idempotent) so admitted
+/// slices have a worker to dispatch to.
+fn sync_plan_owners(op: &mut Operation) {
+    if let Some(plan) = &op.lead_plan {
+        for slice in &plan.slices {
+            if slice.owner_id != "lead"
+                && !slice.owner_id.is_empty()
+                && !op.roster.iter().any(|member| member.id == slice.owner_id)
+            {
+                op.roster.push(OperateRosterMember {
+                    id: slice.owner_id.clone(),
+                    display_name: slice.owner_id.clone(),
+                    role: "worker".to_string(),
+                    model: OPERATE_WORKER_MODEL.to_string(),
+                    state: "idle".to_string(),
+                });
+            }
+        }
+    }
+}
+
 pub fn cancel_operation(store: &OperationStore) -> Result<Option<Operation>> {
-    let Some(mut op) = store.load()? else {
-        return Ok(None);
-    };
-    let now = Utc::now().to_rfc3339();
-    op.status = OperateStatus::Cancelled;
-    op.cancelled_at = now.clone();
-    op.updated_at = now.clone();
-    op.last_keep_alive_at = now;
-    op.project();
-    store.save(&op)?;
-    Ok(Some(op))
+    store.mutate(|op| {
+        let now = Utc::now().to_rfc3339();
+        op.status = OperateStatus::Cancelled;
+        op.cancelled_at = now.clone();
+        op.updated_at = now.clone();
+        op.last_keep_alive_at = now;
+        op.project();
+        Ok(())
+    })
 }
 
 pub fn keep_alive_observation(
@@ -903,44 +1115,96 @@ pub fn keep_alive_observation(
     op.project();
 }
 
-pub fn upsert_keepalive(manager: &AutomationManager, workspace: &Path) -> Result<()> {
+/// Install (or refresh) the `cw-operate` keepalive bound to `workspace`.
+///
+/// The record is built directly under the fixed id — no create-then-delete
+/// id swap that could orphan an active UUID-named automation. Reuse
+/// refreshes *every* field that names this start: the prompt, the model, and
+/// the `cwds` the scheduled lead run executes in, so starting from workspace
+/// B after workspace A cannot leave scheduled runs pinned to A.
+///
+/// `kick_now` schedules the first lead-plan step for the next scheduler tick
+/// (a fresh operation otherwise idles up to an hour awaiting its plan); the
+/// hourly recurrence covers follow-ups.
+pub fn upsert_keepalive(
+    manager: &AutomationManager,
+    workspace: &Path,
+    kick_now: bool,
+) -> Result<()> {
+    let now = Utc::now();
     let prompt = format!(
-        "Keep Operate alive. Read direction, refresh the lead plan, dispatch ready slices up to the burn-rate governor, and never stop for a wallet cap. Workspace: {}",
+        "Keep Operate alive. Read the Operate record (current.json) and its direction, refresh the lead plan, and dispatch ready slices with at most `writersInFlight` concurrent workers — that budget already encodes pace (hold/throttle/widen), so honor it instead of widening on your own. Burn rate paces spend; it never stops the operation. Workspace: {}",
         workspace.display()
     );
-    if manager.get_automation(OPERATE_KEEPALIVE_ID).is_ok() {
-        manager.update_automation(
-            OPERATE_KEEPALIVE_ID,
-            UpdateAutomationRequest {
-                name: Some("Operate keep-alive".to_string()),
-                prompt: Some(prompt),
-                rrule: Some("FREQ=HOURLY;INTERVAL=1".to_string()),
-                model: Some(OPERATE_LEAD_MODEL.to_string()),
-                mode: Some("operate".to_string()),
-                status: Some(AutomationStatus::Active),
-                ..UpdateAutomationRequest::default()
-            },
-        )?;
-        return Ok(());
+    let mut record = manager
+        .get_automation(OPERATE_KEEPALIVE_ID)
+        .unwrap_or_else(|_| AutomationRecord {
+            schema_version: crate::automation_manager::CURRENT_AUTOMATION_SCHEMA_VERSION,
+            id: OPERATE_KEEPALIVE_ID.to_string(),
+            name: "Operate keep-alive".to_string(),
+            prompt: prompt.clone(),
+            rrule: OPERATE_KEEPALIVE_RRULE.to_string(),
+            cwds: Vec::new(),
+            model: Some(OPERATE_LEAD_MODEL.to_string()),
+            mode: Some("operate".to_string()),
+            allow_shell: Some(true),
+            trust_mode: Some(false),
+            auto_approve: Some(false),
+            delivery_mode: None,
+            status: AutomationStatus::Active,
+            created_at: now,
+            updated_at: now,
+            next_run_at: None,
+            last_run_at: None,
+        });
+    record.name = "Operate keep-alive".to_string();
+    record.prompt = prompt;
+    record.rrule = OPERATE_KEEPALIVE_RRULE.to_string();
+    record.cwds = vec![workspace.to_path_buf()];
+    record.model = Some(OPERATE_LEAD_MODEL.to_string());
+    record.mode = Some("operate".to_string());
+    record.allow_shell = Some(true);
+    record.trust_mode = Some(false);
+    record.auto_approve = Some(false);
+    record.delivery_mode = None;
+    record.status = AutomationStatus::Active;
+    record.updated_at = now;
+    if kick_now {
+        record.next_run_at = Some(now);
     }
-    let created = manager.create_automation(CreateAutomationRequest {
-        name: "Operate keep-alive".to_string(),
-        prompt,
-        rrule: "FREQ=HOURLY;INTERVAL=1".to_string(),
-        cwds: vec![workspace.to_path_buf()],
-        model: Some(OPERATE_LEAD_MODEL.to_string()),
-        mode: Some("operate".to_string()),
-        allow_shell: Some(true),
-        trust_mode: Some(false),
-        auto_approve: Some(false),
-        delivery_mode: None,
-        status: Some(AutomationStatus::Active),
-    })?;
-    let mut record = created;
-    let _ = manager.delete_automation(&record.id);
-    record.id = OPERATE_KEEPALIVE_ID.to_string();
+    manager.save_automation(&record)
+}
+
+/// Cancel tears the operation down *including* its keepalive: an unattended
+/// hourly lead run after cancel is pure cost. The automation is paused
+/// (never deleted) so its run history survives and a later start reactivates
+/// it. A missing keepalive is not an error.
+pub fn pause_keepalive(manager: &AutomationManager) -> Result<()> {
+    match manager.get_automation(OPERATE_KEEPALIVE_ID) {
+        Ok(record) if matches!(record.status, AutomationStatus::Active) => {
+            manager.pause_automation(OPERATE_KEEPALIVE_ID)?;
+            Ok(())
+        }
+        Ok(_) => Ok(()),
+        Err(_) => Ok(()),
+    }
+}
+
+/// Pull the next keepalive lead run to the next scheduler tick (for example
+/// after a direction PATCH invalidated the plan). No-op when the keepalive is
+/// absent or paused (a paused keepalive belongs to a cancelled operation).
+pub fn kick_keepalive(manager: &AutomationManager) -> Result<bool> {
+    let Ok(mut record) = manager.get_automation(OPERATE_KEEPALIVE_ID) else {
+        return Ok(false);
+    };
+    if !matches!(record.status, AutomationStatus::Active) {
+        return Ok(false);
+    }
+    let now = Utc::now();
+    record.next_run_at = Some(now);
+    record.updated_at = now;
     manager.save_automation(&record)?;
-    Ok(())
+    Ok(true)
 }
 
 #[must_use]
@@ -998,13 +1262,34 @@ mod tests {
 
     #[test]
     fn burn_rate_paces_and_never_stops() {
-        let mut op = with_credentials(Operation::new("Hold a $12/hr burn", Some(12.0)));
+        let mut op = with_credentials(Operation::new(
+            "Hold a $12/hr burn\nSecond slice\nThird slice",
+            Some(12.0),
+        ));
         op.plan_from_direction();
         assert_eq!(op.status, OperateStatus::Running);
         assert!(op.workers_admitted);
         keep_alive_observation(&mut op, Some(20.0), Some(80.0), None, None);
         assert_eq!(op.status, OperateStatus::Running);
         assert_eq!(op.pace, OperatePace::Throttle);
+        // Throttle is a real dispatch cut, not a label: of the two planned
+        // workers only one stays in flight while the operation keeps running.
+        assert_eq!(op.writers_in_flight, OPERATE_THROTTLE_WRITERS);
+        assert_eq!(
+            op.roster
+                .iter()
+                .filter(|member| member.role == "worker" && member.state == "in_flight")
+                .count(),
+            OPERATE_THROTTLE_WRITERS
+        );
+        assert_eq!(
+            op.roster
+                .iter()
+                .filter(|member| member.role == "worker" && member.state == "idle")
+                .count(),
+            1,
+            "the worker past the throttle budget idles"
+        );
         assert!(op.idle_blocked_reason.is_none());
         assert!(op.workers_admitted);
         let board = render_plan_board(&op);
@@ -1012,6 +1297,291 @@ mod tests {
         assert!(!board.contains("wallet"));
         assert_eq!(op.burn_rate.as_ref().unwrap().kind, "usd_per_hour");
         assert!((op.burn_rate.as_ref().unwrap().amount_usd_per_hour - 12.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn hold_band_freezes_writer_width() {
+        let mut op = with_credentials(Operation::new("one\ntwo\nthree", Some(12.0)));
+        op.plan_from_direction();
+        keep_alive_observation(&mut op, Some(12.0), None, None, None);
+        assert_eq!(op.pace, OperatePace::Hold);
+        assert_eq!(op.status, OperateStatus::Running);
+        // Hold admits no new writers past the hold width; this plan has two
+        // workers, so both stay in flight but the budget stops at two.
+        assert_eq!(op.writers_in_flight, 2);
+        let mut four = with_credentials(Operation::new("one\ntwo\nthree\nfour\nfive", Some(12.0)));
+        four.plan_from_direction();
+        keep_alive_observation(&mut four, Some(12.3), None, None, None);
+        assert_eq!(four.pace, OperatePace::Hold);
+        assert_eq!(
+            four.writers_in_flight, OPERATE_HOLD_WRITERS,
+            "hold never widens to the full writer width"
+        );
+    }
+
+    #[test]
+    fn under_rate_widens() {
+        let mut op = with_credentials(Operation::new("one\ntwo\nthree\nfour", Some(12.0)));
+        op.plan_from_direction();
+        keep_alive_observation(&mut op, Some(1.0), None, None, None);
+        assert_eq!(op.pace, OperatePace::Widen);
+        assert_eq!(op.status, OperateStatus::Running);
+        assert_eq!(
+            op.writers_in_flight, OPERATE_MAX_WRITERS,
+            "widen opens the full writer width"
+        );
+    }
+
+    #[test]
+    fn cancelled_field_matches_landed_cwc_contract() {
+        // CWC `packages/contracts/src/operate.js` (`20de981`, PR #284) names
+        // the field `cancelledAt` — `publicOperateRecord` always emits it,
+        // as `""` before cancellation. There is no bare `cancelled` field.
+        let dir = TempDir::new().expect("temp");
+        let store = OperationStore::open(dir.path()).expect("store");
+        let op = start_operation(
+            &store,
+            dir.path(),
+            Some("Contract shape".into()),
+            None,
+            true,
+        )
+        .expect("start");
+        let json = serde_json::to_value(&op).expect("json");
+        assert_eq!(json["cancelledAt"], serde_json::json!(""));
+        assert!(json.get("cancelled").is_none());
+
+        let cancelled = cancel_operation(&store).expect("cancel").expect("present");
+        let json = serde_json::to_value(&cancelled).expect("json");
+        assert!(!json["cancelledAt"].as_str().unwrap().is_empty());
+        assert!(json.get("cancelled").is_none());
+    }
+
+    #[test]
+    fn direction_change_invalidates_stale_lead_plan() {
+        let mut op = with_credentials(Operation::new("Old direction", None));
+        op.plan_from_direction();
+        assert_eq!(op.status, OperateStatus::Running);
+
+        apply_operate_patch(
+            &mut op,
+            &serde_json::json!({ "direction": "Brand new direction" }),
+        )
+        .expect("patch");
+        assert_eq!(op.direction, "Brand new direction");
+        assert!(
+            op.lead_plan.is_none(),
+            "a changed direction must not leave superseded slices executing"
+        );
+        assert_eq!(op.status, OperateStatus::IdleBlocked);
+        assert_eq!(
+            op.idle_blocked_reason,
+            Some(OperateIdleReason::AwaitingLeadPlan)
+        );
+        assert!(!op.workers_admitted);
+        assert_eq!(op.writers_in_flight, 0);
+    }
+
+    #[test]
+    fn same_direction_patch_keeps_plan() {
+        let mut op = with_credentials(Operation::new("Steady", None));
+        op.plan_from_direction();
+        apply_operate_patch(&mut op, &serde_json::json!({ "direction": "Steady" })).expect("patch");
+        assert!(op.lead_plan.is_some());
+        assert_eq!(op.status, OperateStatus::Running);
+    }
+
+    #[test]
+    fn put_plan_admits_worker_owners() {
+        let mut op = with_credentials(Operation::new("Slice it", None));
+        let plan = serde_json::json!({
+            "slices": [
+                { "id": "slice-1", "title": "Scout", "ownerId": "lead",
+                  "dependsOn": [], "estCostUsd": 0.1, "startOffsetSec": 0, "durationSec": 600 },
+                { "id": "slice-2", "title": "Build", "ownerId": "worker-7",
+                  "dependsOn": ["slice-1"], "estCostUsd": 0.2, "startOffsetSec": 600, "durationSec": 1200 }
+            ]
+        });
+        apply_operate_patch(&mut op, &serde_json::json!({ "leadPlan": plan })).expect("patch");
+        assert!(
+            op.roster.iter().any(|member| member.id == "worker-7"),
+            "plan owners must join the roster or workers never dispatch"
+        );
+        assert_eq!(op.status, OperateStatus::Running);
+        assert!(op.workers_admitted);
+        // Idempotent: re-applying the same plan must not duplicate the owner.
+        let before = op.roster.len();
+        apply_operate_patch(&mut op, &serde_json::json!({ "leadPlan": plan })).expect("patch");
+        assert_eq!(op.roster.len(), before);
+    }
+
+    #[test]
+    fn attach_preserves_operation_record() {
+        let dir = TempDir::new().expect("temp");
+        let store = OperationStore::open(dir.path()).expect("store");
+        let first = start_operation(
+            &store,
+            dir.path(),
+            Some("Keep the lineage".into()),
+            None,
+            true,
+        )
+        .expect("start");
+        let mut spent = first.clone();
+        keep_alive_observation(&mut spent, Some(3.0), Some(42.0), None, None);
+        store.save(&spent).expect("save spend");
+
+        let reentered =
+            attach_or_start_operation(&store, dir.path(), None, None, true).expect("attach");
+        assert_eq!(reentered.id, first.id, "re-entry must attach, not reset");
+        assert_eq!(reentered.spent_usd, 42.0);
+        assert_eq!(reentered.observed_burn_usd_per_hour, Some(3.0));
+
+        // A cancelled record is terminal: re-entry starts a new operation.
+        cancel_operation(&store).expect("cancel");
+        let fresh =
+            attach_or_start_operation(&store, dir.path(), None, None, true).expect("restart");
+        assert_ne!(fresh.id, first.id);
+        // The fresh operation reuses the recorded direction and awaits its
+        // own lead plan (CWC projects a plan-less record to idle_blocked).
+        assert_eq!(fresh.direction, "Keep the lineage");
+        assert_eq!(fresh.status, OperateStatus::IdleBlocked);
+        assert_eq!(
+            fresh.idle_blocked_reason,
+            Some(OperateIdleReason::AwaitingLeadPlan)
+        );
+        assert_eq!(fresh.spent_usd, 0.0);
+    }
+
+    #[test]
+    fn mutate_reloads_latest_record_under_lock() {
+        let dir = TempDir::new().expect("temp");
+        let writer = OperationStore::open(dir.path()).expect("store a");
+        let reader = OperationStore::open(dir.path()).expect("store b");
+        start_operation(&writer, dir.path(), Some("First".into()), None, true).expect("start");
+
+        writer
+            .mutate(|op| {
+                apply_operate_patch(op, &serde_json::json!({ "direction": "Second" }))?;
+                Ok(())
+            })
+            .expect("mutate a")
+            .expect("present");
+        reader
+            .mutate(|op| {
+                keep_alive_observation(op, Some(9.0), Some(5.0), None, None);
+                Ok(())
+            })
+            .expect("mutate b")
+            .expect("present");
+
+        // The second store reloaded under the lock, so the first store's
+        // direction write survives alongside the keepalive observation.
+        let merged = writer.load().expect("load").expect("present");
+        assert_eq!(merged.direction, "Second");
+        assert_eq!(merged.spent_usd, 5.0);
+        assert_eq!(merged.observed_burn_usd_per_hour, Some(9.0));
+    }
+
+    #[test]
+    fn burn_rate_below_a_cent_is_rejected() {
+        let err = parse_burn_rate(Some(&serde_json::json!(0.001))).expect_err("rejects");
+        assert!(err.to_string().contains("at least $0.01/hr"));
+        let zero_target = parse_burn_rate(Some(&serde_json::json!(0.004))).expect_err("rejects");
+        assert!(zero_target.to_string().contains("at least $0.01/hr"));
+    }
+
+    #[test]
+    fn keepalive_reuse_refreshes_cwds_and_kicks_first_lead_run() {
+        let dir = TempDir::new().expect("temp");
+        let manager = AutomationManager::open(dir.path().to_path_buf()).expect("manager");
+        let workspace_a = dir.path().join("workspace-a");
+        let workspace_b = dir.path().join("workspace-b");
+        fs::create_dir_all(&workspace_a).expect("dir a");
+        fs::create_dir_all(&workspace_b).expect("dir b");
+
+        upsert_keepalive(&manager, &workspace_a, false).expect("upsert a");
+        let first = manager
+            .get_automation(OPERATE_KEEPALIVE_ID)
+            .expect("keepalive a");
+        assert_eq!(first.cwds, vec![workspace_a.clone()]);
+
+        upsert_keepalive(&manager, &workspace_b, true).expect("upsert b");
+        let second = manager
+            .get_automation(OPERATE_KEEPALIVE_ID)
+            .expect("keepalive b");
+        assert_eq!(
+            second.cwds,
+            vec![workspace_b],
+            "reuse must retarget the workspace scheduled runs execute in"
+        );
+        assert_eq!(
+            second.next_run_at.map(|at| at <= Utc::now()),
+            Some(true),
+            "kick schedules the first lead run for the next scheduler tick"
+        );
+        assert_eq!(second.model.as_deref(), Some("GLM-5.3"));
+        assert_eq!(second.mode.as_deref(), Some("operate"));
+        assert_eq!(second.rrule, OPERATE_KEEPALIVE_RRULE);
+
+        // Only one automation exists — no orphaned UUID-named twin.
+        assert_eq!(
+            manager
+                .list_automations()
+                .expect("list")
+                .iter()
+                .filter(|record| record.mode.as_deref() == Some("operate"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn cancel_pauses_keepalive_so_no_cost_accrues() {
+        let dir = TempDir::new().expect("temp");
+        let manager = AutomationManager::open(dir.path().to_path_buf()).expect("manager");
+        upsert_keepalive(&manager, dir.path(), false).expect("upsert");
+        pause_keepalive(&manager).expect("pause");
+        let paused = manager
+            .get_automation(OPERATE_KEEPALIVE_ID)
+            .expect("keepalive");
+        assert_eq!(paused.status, AutomationStatus::Paused);
+        assert_eq!(paused.next_run_at, None, "nothing fires after cancel");
+
+        // Pausing is idempotent and a missing keepalive is not an error.
+        pause_keepalive(&manager).expect("pause again");
+        let empty = AutomationManager::open(dir.path().join("empty")).expect("empty manager");
+        pause_keepalive(&empty).expect("missing keepalive is a no-op");
+        assert!(!kick_keepalive(&empty).expect("kick missing"));
+
+        // A fresh start reactivates the keepalive.
+        upsert_keepalive(&manager, dir.path(), false).expect("reactivate");
+        let active = manager
+            .get_automation(OPERATE_KEEPALIVE_ID)
+            .expect("keepalive");
+        assert_eq!(active.status, AutomationStatus::Active);
+
+        // Kicks only touch an active keepalive.
+        assert!(kick_keepalive(&manager).expect("kick"));
+        pause_keepalive(&manager).expect("pause");
+        assert!(!kick_keepalive(&manager).expect("kick paused"));
+    }
+
+    #[test]
+    fn explicit_env_paths_reject_traversal() {
+        assert!(explicit_file_path("  /tmp/does-not-exist.md ").is_none());
+        assert!(explicit_file_path("").is_none());
+        assert!(explicit_file_path("/tmp/../etc/passwd").is_none());
+        // Keep the temp dir alive for the whole assertion: dropping it first
+        // would delete the file under the path.
+        let dir = TempDir::new().expect("temp");
+        let checker = dir.path().join("check.py");
+        fs::write(&checker, "# marker").expect("write");
+        let found =
+            explicit_file_path(checker.to_str().expect("utf8")).expect("regular file accepted");
+        assert_eq!(found, checker);
+        assert!(explicit_dir_path("../escape").is_none());
+        assert!(explicit_dir_path("ops/inside").is_some());
     }
 
     #[test]
@@ -1071,15 +1641,6 @@ mod tests {
             op.idle_blocked_reason,
             Some(OperateIdleReason::DirectionEmpty)
         );
-    }
-
-    #[test]
-    fn under_rate_widens() {
-        let mut op = with_credentials(Operation::new("one\ntwo\nthree", Some(12.0)));
-        op.plan_from_direction();
-        keep_alive_observation(&mut op, Some(1.0), None, None, None);
-        assert_eq!(op.pace, OperatePace::Widen);
-        assert_eq!(op.status, OperateStatus::Running);
     }
 
     #[test]
@@ -1143,15 +1704,34 @@ mod tests {
     }
 
     #[test]
+    fn plan_board_localizes_chrome_but_not_contract_tokens() {
+        let mut op = with_credentials(Operation::new("Scout\nWrite", None));
+        op.plan_from_direction();
+        let english = render_plan_board_locale(&op, crate::localization::Locale::En);
+        assert!(english.contains("gantt  time →"), "{english}");
+        assert!(english.contains("burn  No cap"), "{english}");
+        let japanese = render_plan_board_locale(&op, crate::localization::Locale::Ja);
+        assert!(japanese.contains("ガント"), "{japanese}");
+        // Contract tokens stay verbatim in every locale.
+        assert!(japanese.contains("slice-1"), "{japanese}");
+        assert!(japanese.contains(&op.id), "{japanese}");
+    }
+
+    #[test]
     fn keepalive_automation_and_defaults() {
         let dir = TempDir::new().expect("temp");
         let manager = AutomationManager::open(dir.path().to_path_buf()).expect("manager");
-        upsert_keepalive(&manager, dir.path()).expect("upsert");
+        upsert_keepalive(&manager, dir.path(), false).expect("upsert");
         let record = manager
             .get_automation(OPERATE_KEEPALIVE_ID)
             .expect("keepalive");
         assert_eq!(record.model.as_deref(), Some("GLM-5.3"));
         assert_eq!(record.mode.as_deref(), Some("operate"));
+        assert_eq!(record.cwds, vec![dir.path().to_path_buf()]);
+        assert_eq!(
+            record.next_run_at, None,
+            "without a kick the hourly recurrence owns the next run"
+        );
         assert_eq!(CWC_OPERATE_DEFAULT_WORKER_MODEL, "GLM-5.3-Flash");
         assert_eq!(OPERATE_WORKER_MODEL, "GLM-5.3-Flash");
         assert_eq!(OPERATE_MAX_WRITERS, 3);

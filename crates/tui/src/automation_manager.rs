@@ -23,7 +23,9 @@ use uuid::Uuid;
 use crate::task_manager::{NewTaskRequest, SharedTaskManager, TaskStatus};
 use crate::utils::spawn_supervised;
 
-const CURRENT_AUTOMATION_SCHEMA_VERSION: u32 = 1;
+/// Current automation record schema. `pub(crate)` so the Operate keepalive
+/// can build a fixed-id record directly (no create/delete id swap).
+pub(crate) const CURRENT_AUTOMATION_SCHEMA_VERSION: u32 = 1;
 const CURRENT_RUN_SCHEMA_VERSION: u32 = 1;
 const CURRENT_TRIGGER_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_AUTOMATION_MODE: &str = "agent";
