@@ -326,7 +326,9 @@ pub fn harness_command(job: &CloudJob) -> HarnessCommand {
 
 /// First non-empty line of harness output, bounded for notes and PR bodies.
 pub fn summary_line(output: &str) -> String {
-    output
+    // Redacted first: the sandbox env carries the account machine token, and
+    // harness output must not be able to echo it into the job record.
+    crate::cloud_dispatch::redact_machine_tokens(output)
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())

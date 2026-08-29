@@ -536,7 +536,7 @@ pub enum MachineTokenState {
 /// raises the PR as this identity, so a dispatch without it would spend on
 /// a sandbox whose agent cannot authenticate — confirm refuses instead.
 pub fn discover_machine_token() -> MachineTokenState {
-    if env_present(CLOUD_AGENT_TOKEN_ENV) {
+    if read_cloud_agent_token().is_some() {
         MachineTokenState::Present
     } else {
         MachineTokenState::Missing
@@ -1260,8 +1260,7 @@ impl LiveDaytonaLauncher {
     /// Control-plane URL under the validated base.
     fn control_plane_url(path: &str) -> Result<reqwest::Url> {
         let base = validate_outbound_origin(&daytona_api_url())?;
-        base.join(path.trim_start_matches('/'))
-            .context("failed to build the cloud agent request URL")
+        join_api_path(base, path).context("failed to build the cloud agent request URL")
     }
 
     /// Toolbox base for one sandbox: `{toolboxProxyUrl}/{sandboxId}`.
@@ -1272,8 +1271,7 @@ impl LiveDaytonaLauncher {
         let fallback = format!("{}/toolbox", DEFAULT_DAYTONA_API);
         let raw = receipt.toolbox_url.as_deref().unwrap_or(&fallback);
         let base = validate_outbound_origin(raw)?;
-        base.join(&format!("{}/", receipt.sandbox_id))
-            .context("failed to build the sandbox toolbox URL")
+        join_api_path(base, &receipt.sandbox_id).context("failed to build the sandbox toolbox URL")
     }
 
     /// Apply the dispatch labels via Daytona's dedicated labels endpoint.
@@ -1349,7 +1347,30 @@ impl DaytonaLauncher for LiveDaytonaLauncher {
             .trim()
             .to_string();
         if !valid_sandbox_id(&sandbox_id) {
-            bail!("Cloud agent create succeeded but returned no usable sandbox id.");
+            // The provider says the sandbox exists (2xx) but gave us an id
+            // we cannot safely interpolate into a path, so explicit teardown
+            // is impossible. Best-effort delete with the raw string when it
+            // is at least non-empty (the DELETE path itself validates and
+            // will refuse dangerous shapes), and always name it in the
+            // error so an operator can clean it up.
+            let raw = parsed
+                .get("id")
+                .or_else(|| parsed.get("sandboxId"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .trim();
+            if !raw.is_empty() && valid_sandbox_id(raw) {
+                let _ = Self::send_json(
+                    reqwest::Method::DELETE,
+                    &Self::control_plane_url(&format!("sandbox/{raw}"))?,
+                    &api_key,
+                    serde_json::Value::Null,
+                );
+            }
+            bail!(
+                "Cloud agent create succeeded but returned no usable sandbox id (raw: \"{raw}\"). \
+                 A sandbox may need manual cleanup at the provider."
+            );
         }
         let toolbox_url = parsed
             .get("toolboxProxyUrl")
@@ -1387,9 +1408,9 @@ impl DaytonaLauncher for LiveDaytonaLauncher {
                     sanitize_error(&label_error.to_string())
                 ),
                 Err(undo_error) => bail!(
-                    "cloud agent created but its labels could not be applied ({}) and \
-                     teardown also failed ({}); a sandbox may need manual cleanup at \
-                     the provider.",
+                    "cloud agent {sandbox_id} was created but its labels could not be \
+                     applied ({}) and teardown also failed ({}); the sandbox needs \
+                     manual cleanup at the provider.",
                     sanitize_error(&label_error.to_string()),
                     sanitize_error(&undo_error.to_string())
                 ),
@@ -1747,13 +1768,26 @@ fn read_api_key() -> Option<String> {
 
 /// The account machine token for the in-sandbox agent. Read at create
 /// time only; used in the create body and never returned, logged, or
-/// persisted by the store.
+/// persisted by the store. Shape-checked (`cwc_key_…`) so a misconfigured
+/// env var refuses at the confirm gate instead of paying for a sandbox
+/// whose agent can never authenticate.
 fn read_cloud_agent_token() -> Option<String> {
-    std::env::var(CLOUD_AGENT_TOKEN_ENV)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty() && value.len() <= MAX_MACHINE_TOKEN_BYTES)
+    let raw = std::env::var(CLOUD_AGENT_TOKEN_ENV).ok()?;
+    machine_token_from_value(&raw)
 }
+
+/// Pure core of [`read_cloud_agent_token`] and
+/// [`discover_machine_token`]: trim, shape-check, bound.
+pub(crate) fn machine_token_from_value(raw: &str) -> Option<String> {
+    let value = raw.trim().to_string();
+    (value.starts_with("cwc_key_")
+        && MACHINE_TOKEN_MIN_BYTES <= value.len()
+        && value.len() <= MAX_MACHINE_TOKEN_BYTES)
+        .then_some(value)
+}
+
+/// `cwc_key_` (8) + at least the 24-hex id + one separator + a secret.
+const MACHINE_TOKEN_MIN_BYTES: usize = 40;
 
 /// Bound on the injected machine token: real `cwc_key_…` keys are 76
 /// chars; the bound exists so a misconfigured env var cannot balloon the
@@ -1776,6 +1810,8 @@ fn cloud_agent_snapshot() -> String {
 fn valid_snapshot_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
+        && !name.starts_with(['.', '-'])
+        && !name.contains("..")
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
@@ -1804,6 +1840,21 @@ fn create_sandbox_body(job: &CloudJob, machine_token: &str, snapshot: &str) -> s
             SANDBOX_PRODUCT_LABEL: SANDBOX_PRODUCT_VALUE,
         }
     })
+}
+
+/// Join an API path onto a base WITHOUT dropping the base's own path.
+/// `Url::join` with a relative path replaces the base's last segment
+/// (`https://host/api` + "sandbox" -> `https://host/sandbox`), which would
+/// silently drop the `/api` prefix every control-plane call needs — so the
+/// base is normalized to a trailing slash first.
+fn join_api_path(base: reqwest::Url, path: &str) -> Result<reqwest::Url> {
+    let mut base = base;
+    if !base.path().ends_with('/') {
+        let path = format!("{}/", base.path());
+        base.set_path(&path);
+    }
+    base.join(path.trim_start_matches('/'))
+        .context("failed to join the cloud agent request path")
 }
 
 fn remote_host(url: &str) -> Option<String> {
@@ -1875,11 +1926,48 @@ fn one_line(value: &str, max: usize) -> String {
 
 /// Sanitized (control-character-free, bounded) error text for job notes.
 pub fn sanitize_error(message: &str) -> String {
-    message
-        .chars()
-        .filter(|ch| !ch.is_control())
-        .take(240)
-        .collect()
+    redact_machine_tokens(
+        &message
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .collect::<String>(),
+    )
+    .chars()
+    .take(240)
+    .collect()
+}
+
+/// Replace anything shaped like a Codewhale account machine token with its
+/// non-secret head + `[redacted]`. The sandbox environment carries
+/// `CODEWHALE_API_KEY`, so harness output and provider errors must never be
+/// able to echo a live token into a job record, note, or summary.
+pub fn redact_machine_tokens(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if text[i..].starts_with("cwc_key_") {
+            let rest = &text[i + "cwc_key_".len()..];
+            let end = rest
+                .char_indices()
+                .find(|(_, ch)| !ch.is_ascii_alphanumeric() && *ch != '_' && *ch != '-')
+                .map(|(idx, _)| idx)
+                .unwrap_or(rest.len());
+            // The 24-hex id head is non-secret by design; the secret tail is not.
+            if end >= 24 {
+                // Non-secret head by design: `cwc_key_` + the 24-hex id.
+                out.push_str("cwc_key_");
+                out.push_str(&rest[..24]);
+                out.push_str("_[redacted]");
+                i += "cwc_key_".len() + end;
+                continue;
+            }
+        }
+        let ch = text[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 /// Join argv into one POSIX shell command with every element single-quoted,
@@ -2205,12 +2293,70 @@ mod tests {
     }
 
     #[test]
+    fn join_api_path_preserves_the_base_path_segment() {
+        let base = reqwest::Url::parse("https://app.daytona.io/api").unwrap();
+        let joined = join_api_path(base, "sandbox").unwrap();
+        assert_eq!(
+            joined.as_str(),
+            "https://app.daytona.io/api/sandbox",
+            "Url::join would drop the /api segment without the trailing-slash fix"
+        );
+        let base = reqwest::Url::parse("https://proxy.internal/control/").unwrap();
+        let joined = join_api_path(base, "sandbox/abc/labels").unwrap();
+        assert_eq!(
+            joined.as_str(),
+            "https://proxy.internal/control/sandbox/abc/labels"
+        );
+    }
+
+    #[test]
+    fn machine_tokens_are_shape_checked_before_they_can_spend() {
+        let good = "cwc_key_0123456789abcdef01234567_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        assert_eq!(machine_token_from_value(good).as_deref(), Some(good));
+        // A bare env var (wrong secret family) never authorizes a sandbox.
+        assert_eq!(machine_token_from_value("sk-not-a-machine-key"), None);
+        assert_eq!(machine_token_from_value(""), None);
+        assert_eq!(machine_token_from_value("cwc_key_short"), None);
+        assert_eq!(
+            machine_token_from_value(&format!("cwc_key_{}", "x".repeat(600))),
+            None,
+            "over-long values are refused, not truncated"
+        );
+        assert_eq!(
+            machine_token_from_value(&format!("  {good}  ")).as_deref(),
+            Some(good),
+            "surrounding whitespace is trimmed"
+        );
+    }
+
+    #[test]
+    fn machine_tokens_never_survive_into_errors_or_summaries() {
+        let token = "cwc_key_0123456789abcdef01234567_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        assert_eq!(
+            redact_machine_tokens(&format!("auth failed for {token}")),
+            "auth failed for cwc_key_0123456789abcdef01234567_[redacted]"
+        );
+        // Too short to be a real key head stays untouched (no false positives).
+        assert_eq!(
+            redact_machine_tokens("prefix cwc_key_abc suffix"),
+            "prefix cwc_key_abc suffix"
+        );
+        // The dispatch runner's summary path inherits the redaction.
+        let summary = crate::dispatch_runner::summary_line(&format!("done with {token}"));
+        assert!(!summary.contains("AAAAAAAA"));
+        assert!(summary.contains("[redacted]"));
+    }
+
+    #[test]
     fn snapshot_names_are_slug_charset_and_bounded() {
         assert!(valid_snapshot_name("codewhale-cloud-agent"));
         assert!(valid_snapshot_name("team.agent_2026"));
         assert!(!valid_snapshot_name(""));
         assert!(!valid_snapshot_name("has space"));
         assert!(!valid_snapshot_name("unicodé"));
+        assert!(!valid_snapshot_name(".hidden"));
+        assert!(!valid_snapshot_name("-leading-dash"));
+        assert!(!valid_snapshot_name("dot..dot"));
         assert!(!valid_snapshot_name("a".repeat(65).as_str()));
         assert!(valid_snapshot_name("a".repeat(64).as_str()));
     }
