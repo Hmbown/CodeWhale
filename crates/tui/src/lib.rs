@@ -47,6 +47,7 @@ mod cost_status;
 mod credentials;
 mod deepseek_theme;
 mod dependencies;
+pub mod dispatch_runner;
 mod doctor;
 mod doctor_fix;
 mod dsh_credentials;

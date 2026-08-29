@@ -10,7 +10,11 @@
 //! - confirmation is required; nothing spends or pushes silently
 //! - missing Daytona credentials fail closed; success is never faked
 //!
-//! Watch/cancel of a live sandbox and auto-decide heuristics are leftover.
+//! The engine that drives a confirmed job end to end (sandbox → harness →
+//! forge PR → teardown) lives in [`crate::dispatch_runner`]; this module owns
+//! the persisted contract, the launcher seam, and the fail-closed gates.
+//! Auto-decide heuristics remain leftover: Codewhale may propose, never
+//! confirm itself.
 
 use std::fs;
 use std::io::Write;
@@ -32,6 +36,11 @@ const CWC_DAYTONA_TOKEN_ENV: &str = "CWC_DAYTONA_TOKEN";
 const CWC_DAYTONA_ENDPOINT_ENV: &str = "CWC_DAYTONA_ENDPOINT";
 const KEYRING_SLOT: &str = "daytona";
 const DEFAULT_DAYTONA_API: &str = "https://app.daytona.io/api";
+/// Path inside the sandbox where the target repository is cloned.
+pub const SANDBOX_WORKSPACE: &str = "/workspace";
+const MAX_HARNESS_OUTPUT_CHARS: usize = 200_000;
+const READY_POLL_ATTEMPTS: u32 = 40;
+const READY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Explicit PR forge. Never inferred from a generic "origin means GitHub" rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +103,11 @@ pub enum CredentialState {
 }
 
 /// First-class cloud job lifecycle. `kind` is always `cloud`.
+///
+/// The runner path is `Proposed` (queued for an explicit confirm) →
+/// `Launching` → `Running` (harness turn in the sandbox) → `OpeningPr` →
+/// `Done`, with `Failed` / `Canceled` reachable from every active state and
+/// `Refused` reserved for the fail-closed membership/credential gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CloudJobStatus {
@@ -101,11 +115,17 @@ pub enum CloudJobStatus {
     Refused,
     Launching,
     Running,
+    #[serde(rename = "openingpr")]
+    OpeningPr,
+    Done,
     Failed,
     Canceled,
 }
 
 /// Durable cloud job record, listed on the same `/jobs` surface as Bash jobs.
+///
+/// Fields added after the first landing carry `#[serde(default)]` so job
+/// records written by earlier builds still load.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CloudJob {
     pub id: String,
@@ -122,6 +142,18 @@ pub struct CloudJob {
     pub refusal: Option<String>,
     pub note: String,
     pub created_unix: u64,
+    /// Default branch of the agent's clone (the PR base), when known.
+    #[serde(default)]
+    pub base_branch: Option<String>,
+    /// Head commit the agent produced, when known.
+    #[serde(default)]
+    pub head_sha: Option<String>,
+    /// One-line truthful summary of what the agent did, when reported.
+    #[serde(default)]
+    pub agent_summary: Option<String>,
+    /// When the job reached a terminal state (`done`/`failed`/`canceled`).
+    #[serde(default)]
+    pub finished_unix: Option<u64>,
 }
 
 /// Validated plan that still requires an explicit confirm to spend or push.
@@ -431,12 +463,16 @@ pub fn should_auto_confirm(_plan: &DispatchPlan) -> bool {
 }
 
 /// Propose or launch. Confirmation and credentials are enforced here.
+///
+/// With `confirm`, the job is persisted as `launching` and returned as
+/// `Accepted`; the caller then starts the remote runner
+/// ([`crate::dispatch_runner::run_confirmed_job`]) so this function stays
+/// synchronous and offline-testable.
 pub fn execute_dispatch(
     store: &CloudJobStore,
     plan: DispatchPlan,
     confirm: bool,
     credentials: &CredentialState,
-    launcher: &dyn DaytonaLauncher,
 ) -> Result<DispatchOutcome> {
     let mut job = CloudJob {
         id: allocate_job_id(&plan),
@@ -453,6 +489,10 @@ pub fn execute_dispatch(
         refusal: None,
         note: proposal_note(&plan),
         created_unix: unix_now(),
+        base_branch: None,
+        head_sha: None,
+        agent_summary: None,
+        finished_unix: None,
     };
 
     if !confirm {
@@ -469,32 +509,15 @@ pub fn execute_dispatch(
         job.status = CloudJobStatus::Refused;
         job.refusal = Some(missing_credentials_message());
         job.note = missing_credentials_message();
+        job.finished_unix = Some(unix_now());
         store.save(&job)?;
         return Ok(DispatchOutcome::Refused(job));
     }
 
     job.status = CloudJobStatus::Launching;
+    job.note = "Cloud agent confirmed; the sandbox is launching and the runner will raise the branch and open the PR. Watch `codewhale dispatch --show` or `/dispatch show`.".to_string();
     store.save(&job)?;
-    match launcher.create_sandbox(&job) {
-        Ok(receipt) => {
-            job.sandbox_id = Some(receipt.sandbox_id);
-            job.status = CloudJobStatus::Running;
-            job.pr_url = None;
-            job.note = "Cloud agent sandbox created. PR open is not claimed: this slice does not fake a forge pull request.".to_string();
-            store.save(&job)?;
-            Ok(DispatchOutcome::Accepted(job))
-        }
-        Err(error) => {
-            job.status = CloudJobStatus::Failed;
-            job.refusal = Some(sanitize_error(&error.to_string()));
-            job.note = format!(
-                "Cloud agent launch failed closed. {}",
-                job.refusal.as_deref().unwrap_or("unknown error")
-            );
-            store.save(&job)?;
-            Ok(DispatchOutcome::Refused(job))
-        }
-    }
+    Ok(DispatchOutcome::Accepted(job))
 }
 
 /// Confirm a previously proposed job.
@@ -502,7 +525,6 @@ pub fn confirm_job(
     store: &CloudJobStore,
     id: &str,
     credentials: &CredentialState,
-    launcher: &dyn DaytonaLauncher,
 ) -> Result<DispatchOutcome> {
     let job = store.load(id)?;
     if job.status != CloudJobStatus::Proposed {
@@ -521,11 +543,27 @@ pub fn confirm_job(
         },
         branch: job.branch,
     };
-    execute_dispatch(store, plan, true, credentials, launcher)
+    execute_dispatch(store, plan, true, credentials)
 }
 
-/// Cancel a job. Live sandbox teardown is leftover when no sandbox id exists.
-pub fn cancel_job(store: &CloudJobStore, id: &str) -> Result<CloudJob> {
+/// True while the job may still hold a live sandbox.
+pub fn job_is_active(status: CloudJobStatus) -> bool {
+    matches!(
+        status,
+        CloudJobStatus::Launching | CloudJobStatus::Running | CloudJobStatus::OpeningPr
+    )
+}
+
+/// Cancel a job, tearing down a live sandbox when one exists.
+///
+/// The record flips to `canceled` first (so a concurrent runner step sees it),
+/// then teardown runs best-effort through the launcher; a teardown failure is
+/// reported in the note, never silently dropped.
+pub fn cancel_job(
+    store: &CloudJobStore,
+    id: &str,
+    launcher: &dyn DaytonaLauncher,
+) -> Result<CloudJob> {
     let mut job = store.load(id)?;
     if matches!(
         job.status,
@@ -533,10 +571,33 @@ pub fn cancel_job(store: &CloudJobStore, id: &str) -> Result<CloudJob> {
     ) {
         return Ok(job);
     }
+    let had_sandbox = job.sandbox_id.is_some();
     job.status = CloudJobStatus::Canceled;
-    job.note =
-        "Canceled locally. Live sandbox teardown is leftover when one was created.".to_string();
+    job.finished_unix = Some(unix_now());
+    job.note = if had_sandbox {
+        "Canceled locally; the cloud agent sandbox is being torn down.".to_string()
+    } else {
+        "Canceled locally before a sandbox was created.".to_string()
+    };
     store.save(&job)?;
+    if let Some(sandbox_id) = job.sandbox_id.clone() {
+        let receipt = SandboxReceipt {
+            sandbox_id,
+            toolbox_url: None,
+        };
+        match launcher.teardown(&receipt) {
+            Ok(()) => {
+                job.note = "Canceled locally; the cloud agent sandbox was torn down.".to_string();
+            }
+            Err(error) => {
+                job.note = format!(
+                    "Canceled locally; sandbox teardown failed and may need a retry: {}",
+                    sanitize_error(&error.to_string())
+                );
+            }
+        }
+        store.save(&job)?;
+    }
     Ok(job)
 }
 
@@ -565,12 +626,24 @@ pub fn format_job_list(jobs: &[CloudJob]) -> String {
         if let Some(pr) = job.pr_url.as_ref() {
             lines.push(format!("  pr: {pr}"));
         }
+        if let Some(minutes) = runtime_minutes(job) {
+            lines.push(format!("  runtime: {minutes}m"));
+        }
     }
     lines.push(
         "Controls: /dispatch show <id>, /dispatch confirm <id>, /dispatch cancel <id>, /jobs list."
             .to_string(),
     );
     lines.join("\n")
+}
+
+/// Whole minutes a terminal job was active, when internally known. This is
+/// local bookkeeping (created → finished), not a provider billing figure;
+/// sub-minute runs are omitted rather than rounded up.
+pub fn runtime_minutes(job: &CloudJob) -> Option<u64> {
+    job.finished_unix
+        .map(|end| end.saturating_sub(job.created_unix) / 60)
+        .filter(|minutes| *minutes > 0)
 }
 
 /// Job inspector used by `/dispatch show` and `/jobs show cloud_*`.
@@ -582,12 +655,27 @@ pub fn format_job(job: &CloudJob) -> String {
         format!("Forge: {}", job.forge.as_str()),
         format!("Remote: {} {}", job.remote_name, job.remote_url),
         format!("Branch: {}", job.branch),
+        format!(
+            "Base: {}",
+            job.base_branch
+                .as_deref()
+                .unwrap_or("(detected at run time)")
+        ),
         format!("Confirmed: {}", job.confirmed),
         format!("Sandbox: {}", job.sandbox_id.as_deref().unwrap_or("(none)")),
         format!("PR: {}", job.pr_url.as_deref().unwrap_or("(not opened)")),
-        format!("Prompt: {}", job.prompt),
-        format!("Note: {}", job.note),
+        format!("Head: {}", job.head_sha.as_deref().unwrap_or("(pending)")),
     ];
+    if let Some(minutes) = runtime_minutes(job) {
+        lines.push(format!(
+            "Runtime: {minutes}m (Codewhale bookkeeping, not a bill)"
+        ));
+    }
+    if let Some(summary) = job.agent_summary.as_deref() {
+        lines.push(format!("Agent: {}", one_line(summary, 200)));
+    }
+    lines.push(format!("Prompt: {}", job.prompt));
+    lines.push(format!("Note: {}", job.note));
     if let Some(refusal) = job.refusal.as_ref() {
         lines.push(format!("Refusal: {refusal}"));
     }
@@ -595,7 +683,14 @@ pub fn format_job(job: &CloudJob) -> String {
 }
 
 /// Status card for bare `/dispatch` and `codewhale dispatch --status`.
-pub fn format_status(remotes: &[GitRemote], credentials: &CredentialState) -> String {
+///
+/// `recent` is the newest slice of the job store; when the runner has
+/// receipts (sandbox id, PR URL, runtime) they are surfaced here verbatim.
+pub fn format_status(
+    remotes: &[GitRemote],
+    credentials: &CredentialState,
+    recent: &[CloudJob],
+) -> String {
     let mut lines = vec!["Codewhale cloud dispatch".to_string()];
     match credentials {
         CredentialState::Missing => {
@@ -616,6 +711,26 @@ pub fn format_status(remotes: &[GitRemote], credentials: &CredentialState) -> St
                 "Cloud agents: ready (account-linked). Confirmation is still required before spend or push."
                     .to_string(),
             );
+        }
+    }
+    if !recent.is_empty() {
+        lines.push("Recent cloud jobs:".to_string());
+        for job in recent.iter().take(5) {
+            let mut line = format!(
+                "  {}  {}  {}",
+                job.id,
+                status_label(job.status),
+                one_line(&job.prompt, 60)
+            );
+            if let Some(pr) = job.pr_url.as_deref() {
+                line.push_str(&format!("  pr: {pr}"));
+            } else if let Some(sandbox) = job.sandbox_id.as_deref() {
+                line.push_str(&format!("  sandbox: {sandbox}"));
+            }
+            if let Some(minutes) = runtime_minutes(job) {
+                line.push_str(&format!("  {minutes}m"));
+            }
+            lines.push(line);
         }
     }
     if remotes.is_empty() {
@@ -647,27 +762,205 @@ pub fn daytona_api_url() -> String {
 }
 
 /// Launch seam. Tests inject a recorder; production uses [`LiveDaytonaLauncher`].
+///
+/// The methods after `create_sandbox` default to "unsupported" so partial
+/// fixtures keep compiling; the real runner (and the recording tests) drive
+/// the full protocol.
 pub trait DaytonaLauncher {
+    /// Create the sandbox and return its id plus the (validated) toolbox URL.
     fn create_sandbox(&self, job: &CloudJob) -> Result<SandboxReceipt>;
+    /// Block until the sandbox accepts toolbox calls (bounded poll).
+    fn wait_ready(&self, _receipt: &SandboxReceipt) -> Result<()> {
+        Ok(())
+    }
+    /// Clone the target forge repository inside the sandbox.
+    fn clone_repository(&self, _receipt: &SandboxReceipt, _url: &str, _path: &str) -> Result<()> {
+        bail!("this launcher does not support repository clones")
+    }
+    /// Run one harness command inside the sandbox and return bounded stdout.
+    fn run_harness(&self, _receipt: &SandboxReceipt, _command: &HarnessCommand) -> Result<String> {
+        bail!("this launcher does not support harness execution")
+    }
+    /// Collect the agent's work product from the sandbox.
+    fn collect_patch(&self, _receipt: &SandboxReceipt) -> Result<PatchReceipt> {
+        bail!("this launcher does not support patch collection")
+    }
+    /// Tear the sandbox down. Called on cancel, failure, and completion.
+    fn teardown(&self, _receipt: &SandboxReceipt) -> Result<()> {
+        bail!("this launcher does not support teardown")
+    }
 }
 
-/// Provider receipt. `pr_url` is intentionally omitted from this slice.
+/// Provider receipt for a created sandbox. `toolbox_url` is the validated
+/// per-sandbox toolbox origin returned by the create call, when present.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxReceipt {
     pub sandbox_id: String,
+    pub toolbox_url: Option<String>,
 }
 
-/// Real Daytona HTTP create. Fails closed; never invents a PR URL.
+/// One command the runner asks the sandbox to execute. `argv` is exact: the
+/// recording tests pin it so the live protocol cannot drift silently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HarnessCommand {
+    pub argv: Vec<String>,
+    pub cwd: String,
+    pub timeout_secs: u32,
+}
+
+/// The agent's work product collected from the sandbox clone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatchReceipt {
+    /// Base branch of the clone (the PR base), e.g. `main`.
+    pub base_branch: String,
+    /// Head commit the agent produced.
+    pub head_sha: String,
+    /// One-line truthful summary of the agent's commit.
+    pub summary: String,
+    /// `git format-patch --stdout` payload (bounded) of the agent's commits.
+    pub patch: String,
+}
+
+/// Validate an outbound origin for credential-bearing HTTP calls.
+///
+/// Rules:
+/// - `https` only for public hosts.
+/// - explicit loopback hosts (`localhost`, `127.0.0.1`, `::1`) are allowed
+///   only in debug builds, as the escape hatch for local smoke tests against
+///   a self-hosted sandbox service; release builds reject them outright.
+/// - the host must not be a private / link-local / reserved / multicast
+///   address or a `.local` / `.internal` name, and no userinfo may ride
+///   along.
+///
+/// DNS-resolved rebinding is out of scope and documented as such.
+pub fn validate_outbound_origin(raw: &str) -> Result<reqwest::Url> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_REMOTE_BYTES {
+        bail!("outbound origin is empty or oversized");
+    }
+    let url = reqwest::Url::parse(trimmed).context("outbound origin is not a valid URL")?;
+    if !matches!(url.scheme(), "http" | "https") {
+        bail!("outbound origin must be http or https");
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        bail!("outbound origin must not embed credentials");
+    }
+    let host = url
+        .host_str()
+        .context("outbound origin has no host")?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    // `Url::host_str` keeps IPv6 brackets; strip them for the checks below.
+    let host = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .map(str::to_string)
+        .unwrap_or(host);
+    let loopback_name = host == "localhost" || host == "127.0.0.1" || host == "::1";
+    if loopback_name {
+        if cfg!(debug_assertions) {
+            return Ok(url);
+        }
+        bail!("loopback origins are not allowed in release builds");
+    }
+    if host.ends_with(".local") || host.ends_with(".internal") {
+        bail!("outbound origin must be a public service host");
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        let blocked = match ip {
+            std::net::IpAddr::V4(v4) => {
+                let octets = v4.octets();
+                v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_unspecified()
+                    || v4.is_broadcast()
+                    || v4.is_multicast()
+                    || v4.is_documentation()
+                    // 100.64.0.0/10 (carrier-grade NAT, `is_shared` is
+                    // not stable yet)
+                    || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 0b0100_0000)
+            }
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6.is_multicast()
+                    || (v6.segments()[0] & 0xfe00) == 0xfc00
+                    || (v6.segments()[0] & 0xffc0) == 0xfe80
+            }
+        };
+        if blocked {
+            bail!("outbound origin must not target a loopback, private, or reserved address");
+        }
+    }
+    if url.scheme() != "https" {
+        bail!("outbound origin must use https");
+    }
+    Ok(url)
+}
+
+/// Real Daytona HTTP launcher. Fails closed on every step; never invents a
+/// PR URL; never logs or returns the API key.
+///
+/// API shape (pinned against the published OpenAPI specs, see
+/// docs/DAYTONA_CLOUD_DISPATCH.md):
+/// - control plane `POST /sandbox`, `GET /sandbox/{id}`, `DELETE /sandbox/{id}`
+/// - toolbox `{toolboxProxyUrl}/{sandboxId}` with `POST /git/clone` and
+///   `POST /process/execute` (`{command, cwd, timeout}` → `{exitCode, result}`)
 pub struct LiveDaytonaLauncher;
+
+impl LiveDaytonaLauncher {
+    fn blocking_client() -> Result<reqwest::blocking::Client> {
+        reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(8))
+            .timeout(std::time::Duration::from_secs(120))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .context("failed to initialize the cloud agent client")
+    }
+
+    fn api_key() -> Result<String> {
+        read_api_key().ok_or_else(|| anyhow!(missing_credentials_message()))
+    }
+
+    /// Control-plane URL under the validated base.
+    fn control_plane_url(path: &str) -> Result<reqwest::Url> {
+        let base = validate_outbound_origin(&daytona_api_url())?;
+        base.join(path.trim_start_matches('/'))
+            .context("failed to build the cloud agent request URL")
+    }
+
+    /// Toolbox base for one sandbox: `{toolboxProxyUrl}/{sandboxId}`.
+    fn toolbox_base(receipt: &SandboxReceipt) -> Result<reqwest::Url> {
+        if !valid_sandbox_id(&receipt.sandbox_id) {
+            bail!("the sandbox id is not a usable path token");
+        }
+        let fallback = format!("{}/toolbox", DEFAULT_DAYTONA_API);
+        let raw = receipt.toolbox_url.as_deref().unwrap_or(&fallback);
+        let base = validate_outbound_origin(raw)?;
+        base.join(&format!("{}/", receipt.sandbox_id))
+            .context("failed to build the sandbox toolbox URL")
+    }
+
+    fn send_json(
+        method: reqwest::Method,
+        url: &reqwest::Url,
+        api_key: &str,
+        body: serde_json::Value,
+    ) -> Result<reqwest::blocking::Response> {
+        Self::blocking_client()?
+            .request(method, url.clone())
+            .bearer_auth(api_key)
+            .json(&body)
+            .send()
+            .context("could not reach the cloud agent service")
+    }
+}
 
 impl DaytonaLauncher for LiveDaytonaLauncher {
     fn create_sandbox(&self, job: &CloudJob) -> Result<SandboxReceipt> {
-        let api_key = read_api_key().ok_or_else(|| anyhow!(missing_credentials_message()))?;
-        let base = daytona_api_url();
-        if !base.starts_with("https://") && !base.starts_with("http://127.0.0.1") {
-            bail!("Daytona API URL must be HTTPS (loopback HTTP is allowed for tests).");
-        }
-        let url = format!("{}/sandbox", base.trim_end_matches('/'));
+        let api_key = Self::api_key()?;
+        let url = Self::control_plane_url("sandbox")?;
         let body = serde_json::json!({
             "name": format!("cw-{}", job.id.replace('_', "-")),
             "labels": {
@@ -676,24 +969,14 @@ impl DaytonaLauncher for LiveDaytonaLauncher {
                 "codewhale.product": "dispatch",
             }
         });
-        let response = reqwest::blocking::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(8))
-            .timeout(std::time::Duration::from_secs(60))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .context("failed to initialize the Daytona client")?
-            .post(&url)
-            .bearer_auth(&api_key)
-            .json(&body)
-            .send()
-            .context("could not reach Daytona")?;
+        let response = Self::send_json(reqwest::Method::POST, &url, &api_key, body)?;
         let status = response.status();
         let text = response.text().unwrap_or_default();
         if !status.is_success() {
-            bail!("Cloud agent create failed (HTTP {status}).",);
+            bail!("Cloud agent create failed (HTTP {status}).");
         }
         let parsed: serde_json::Value =
-            serde_json::from_str(&text).context("Daytona returned invalid JSON")?;
+            serde_json::from_str(&text).context("the cloud agent service returned invalid JSON")?;
         let sandbox_id = parsed
             .get("id")
             .or_else(|| parsed.get("sandboxId"))
@@ -701,11 +984,207 @@ impl DaytonaLauncher for LiveDaytonaLauncher {
             .unwrap_or("")
             .trim()
             .to_string();
-        if sandbox_id.is_empty() || sandbox_id.len() > 128 {
-            bail!("Daytona create succeeded but returned no sandbox id.");
+        if !valid_sandbox_id(&sandbox_id) {
+            bail!("Cloud agent create succeeded but returned no usable sandbox id.");
         }
-        let _ = text;
-        Ok(SandboxReceipt { sandbox_id })
+        let toolbox_url = parsed
+            .get("toolboxProxyUrl")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && value.len() <= MAX_REMOTE_BYTES)
+            .and_then(|value| validate_outbound_origin(value).ok())
+            .map(|url| url.to_string());
+        Ok(SandboxReceipt {
+            sandbox_id,
+            toolbox_url,
+        })
+    }
+
+    fn wait_ready(&self, receipt: &SandboxReceipt) -> Result<()> {
+        let api_key = Self::api_key()?;
+        if !valid_sandbox_id(&receipt.sandbox_id) {
+            bail!("the sandbox id is not a usable path token");
+        }
+        let url = Self::control_plane_url(&format!("sandbox/{}", receipt.sandbox_id))?;
+        for _ in 0..READY_POLL_ATTEMPTS {
+            let response = Self::send_json(
+                reqwest::Method::GET,
+                &url,
+                &api_key,
+                serde_json::Value::Null,
+            );
+            match response {
+                Ok(response) if response.status().is_success() => {
+                    let text = response.text().unwrap_or_default();
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text)
+                        && let Some(state) = parsed.get("state").and_then(|v| v.as_str())
+                    {
+                        match state {
+                            "started" | "ready" => return Ok(()),
+                            "error" | "destroyed" | "archived" => {
+                                bail!("Cloud agent sandbox entered state '{state}'.");
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        return Ok(());
+                    }
+                }
+                Err(error) => return Err(error),
+                Ok(response) => {
+                    if response.status().as_u16() == 404 {
+                        bail!("Cloud agent sandbox disappeared before it was ready.");
+                    }
+                }
+            }
+            std::thread::sleep(READY_POLL_INTERVAL);
+        }
+        bail!("Cloud agent sandbox was not ready in time.");
+    }
+
+    fn clone_repository(&self, receipt: &SandboxReceipt, repo_url: &str, path: &str) -> Result<()> {
+        let api_key = Self::api_key()?;
+        let url = Self::toolbox_base(receipt)?.join("git/clone")?;
+        let body = serde_json::json!({ "url": repo_url, "path": path });
+        let response = Self::send_json(reqwest::Method::POST, &url, &api_key, body)?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("Cloud agent repository clone failed (HTTP {status}).");
+        }
+        Ok(())
+    }
+
+    fn run_harness(&self, receipt: &SandboxReceipt, command: &HarnessCommand) -> Result<String> {
+        let api_key = Self::api_key()?;
+        let url = Self::toolbox_base(receipt)?.join("process/execute")?;
+        // The toolbox executes one shell command string, so every argv
+        // element is POSIX-single-quoted — a prompt cannot interpolate.
+        let body = serde_json::json!({
+            "command": shell_quote_join(&command.argv),
+            "cwd": command.cwd,
+            "timeout": command.timeout_secs,
+        });
+        let response = Self::send_json(reqwest::Method::POST, &url, &api_key, body)?;
+        let status = response.status();
+        let text = response.text().unwrap_or_default();
+        if !status.is_success() {
+            bail!("Cloud agent harness execution failed (HTTP {status}).");
+        }
+        let parsed: serde_json::Value = serde_json::from_str(&text)
+            .context("the sandbox returned an unreadable harness result")?;
+        let exit_code = parsed
+            .get("exitCode")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        let result = parsed
+            .get("result")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if exit_code != 0 {
+            bail!(
+                "Cloud agent harness exited with code {exit_code}: {}",
+                sanitize_error(result)
+            );
+        }
+        Ok(result.chars().take(MAX_HARNESS_OUTPUT_CHARS).collect())
+    }
+
+    fn collect_patch(&self, receipt: &SandboxReceipt) -> Result<PatchReceipt> {
+        let base_branch = self
+            .run_harness(
+                receipt,
+                &HarnessCommand {
+                    argv: vec![
+                        "git".to_string(),
+                        "rev-parse".to_string(),
+                        "--abbrev-ref".to_string(),
+                        "origin/HEAD".to_string(),
+                    ],
+                    cwd: SANDBOX_WORKSPACE.to_string(),
+                    timeout_secs: 30,
+                },
+            )?
+            .trim()
+            .trim_start_matches("origin/")
+            .to_string();
+        let head_sha = self
+            .run_harness(
+                receipt,
+                &HarnessCommand {
+                    argv: vec![
+                        "git".to_string(),
+                        "rev-parse".to_string(),
+                        "HEAD".to_string(),
+                    ],
+                    cwd: SANDBOX_WORKSPACE.to_string(),
+                    timeout_secs: 30,
+                },
+            )?
+            .trim()
+            .to_string();
+        let summary = self
+            .run_harness(
+                receipt,
+                &HarnessCommand {
+                    argv: vec![
+                        "git".to_string(),
+                        "log".to_string(),
+                        "-1".to_string(),
+                        "--format=%s".to_string(),
+                    ],
+                    cwd: SANDBOX_WORKSPACE.to_string(),
+                    timeout_secs: 30,
+                },
+            )?
+            .trim()
+            .to_string();
+        let patch = self.run_harness(
+            receipt,
+            &HarnessCommand {
+                argv: vec![
+                    "git".to_string(),
+                    "format-patch".to_string(),
+                    "origin/HEAD..HEAD".to_string(),
+                    "--stdout".to_string(),
+                ],
+                cwd: SANDBOX_WORKSPACE.to_string(),
+                timeout_secs: 60,
+            },
+        )?;
+        if base_branch.is_empty() || head_sha.len() < 7 {
+            bail!("Cloud agent produced no branch head to raise.");
+        }
+        if patch.trim().is_empty() {
+            bail!("Cloud agent produced an empty patch; refusing to open a PR.");
+        }
+        Ok(PatchReceipt {
+            base_branch,
+            head_sha,
+            summary,
+            patch,
+        })
+    }
+
+    fn teardown(&self, receipt: &SandboxReceipt) -> Result<()> {
+        let api_key = Self::api_key()?;
+        if !valid_sandbox_id(&receipt.sandbox_id) {
+            bail!("the sandbox id is not a usable path token");
+        }
+        let url = Self::control_plane_url(&format!("sandbox/{}", receipt.sandbox_id))?;
+        let response = Self::send_json(
+            reqwest::Method::DELETE,
+            &url,
+            &api_key,
+            serde_json::Value::Null,
+        )?;
+        // Daytona returns 204 on delete; treat 404 as already-gone success so
+        // cancel/complete teardown is idempotent.
+        let status = response.status();
+        if status.is_success() || status.as_u16() == 404 {
+            Ok(())
+        } else {
+            bail!("Cloud agent sandbox teardown failed (HTTP {status}).");
+        }
     }
 }
 
@@ -787,6 +1266,11 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Current unix time, shared with the runner for receipt timestamps.
+pub fn unix_timestamp() -> u64 {
+    unix_now()
+}
+
 fn env_present(name: &str) -> bool {
     std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
 }
@@ -854,6 +1338,8 @@ fn status_label(status: CloudJobStatus) -> &'static str {
         CloudJobStatus::Refused => "refused",
         CloudJobStatus::Launching => "launching",
         CloudJobStatus::Running => "running",
+        CloudJobStatus::OpeningPr => "openingpr",
+        CloudJobStatus::Done => "done",
         CloudJobStatus::Failed => "failed",
         CloudJobStatus::Canceled => "canceled",
     }
@@ -873,12 +1359,33 @@ fn one_line(value: &str, max: usize) -> String {
     }
 }
 
-fn sanitize_error(message: &str) -> String {
+/// Sanitized (control-character-free, bounded) error text for job notes.
+pub fn sanitize_error(message: &str) -> String {
     message
         .chars()
         .filter(|ch| !ch.is_control())
         .take(240)
         .collect()
+}
+
+/// Join argv into one POSIX shell command with every element single-quoted,
+/// so nothing (the prompt included) can interpolate when the sandbox toolbox
+/// executes the string.
+pub fn shell_quote_join(argv: &[String]) -> String {
+    argv.iter()
+        .map(|part| format!("'{}'", part.replace('\'', "'\\''")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Sandbox ids must be plain URL-path-safe tokens before they are used in
+/// control-plane or toolbox paths.
+fn valid_sandbox_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 #[cfg(test)]
@@ -892,22 +1399,6 @@ mod tests {
                 url: (*url).to_string(),
             })
             .collect()
-    }
-
-    struct RecordingLauncher {
-        sandbox_id: String,
-        fail: bool,
-    }
-
-    impl DaytonaLauncher for RecordingLauncher {
-        fn create_sandbox(&self, _job: &CloudJob) -> Result<SandboxReceipt> {
-            if self.fail {
-                bail!("fixture launcher refused");
-            }
-            Ok(SandboxReceipt {
-                sandbox_id: self.sandbox_id.clone(),
-            })
-        }
     }
 
     #[test]
@@ -983,10 +1474,6 @@ mod tests {
             Some("codewhale/cloud-test"),
         )
         .unwrap();
-        let launcher = RecordingLauncher {
-            sandbox_id: "should-not-create".to_string(),
-            fail: false,
-        };
         let outcome = execute_dispatch(
             &store,
             plan,
@@ -994,7 +1481,6 @@ mod tests {
             &CredentialState::Present {
                 source: CredentialSource::Env,
             },
-            &launcher,
         )
         .unwrap();
         let DispatchOutcome::Proposal(job) = outcome else {
@@ -1027,12 +1513,7 @@ mod tests {
             Some("codewhale/cloud-cnb"),
         )
         .unwrap();
-        let launcher = RecordingLauncher {
-            sandbox_id: "should-not-create".to_string(),
-            fail: false,
-        };
-        let outcome =
-            execute_dispatch(&store, plan, true, &CredentialState::Missing, &launcher).unwrap();
+        let outcome = execute_dispatch(&store, plan, true, &CredentialState::Missing).unwrap();
         let DispatchOutcome::Refused(job) = outcome else {
             panic!("expected refuse");
         };
@@ -1046,7 +1527,7 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_dispatch_with_launcher_never_claims_a_pr() {
+    fn confirmed_dispatch_queues_launching_without_touching_the_forge() {
         let temp = tempfile::tempdir().unwrap();
         let store = CloudJobStore::from_path(temp.path().join("jobs"));
         let plan = plan_dispatch(
@@ -1056,10 +1537,6 @@ mod tests {
             Some("codewhale/cloud-gitee"),
         )
         .unwrap();
-        let launcher = RecordingLauncher {
-            sandbox_id: "sandbox_fixture_1".to_string(),
-            fail: false,
-        };
         let outcome = execute_dispatch(
             &store,
             plan,
@@ -1067,21 +1544,177 @@ mod tests {
             &CredentialState::Present {
                 source: CredentialSource::Keyring,
             },
-            &launcher,
         )
         .unwrap();
         let DispatchOutcome::Accepted(job) = outcome else {
             panic!("expected accept");
         };
-        assert_eq!(job.status, CloudJobStatus::Running);
-        assert_eq!(job.sandbox_id.as_deref(), Some("sandbox_fixture_1"));
+        assert_eq!(job.status, CloudJobStatus::Launching);
+        assert!(job.confirmed);
+        assert!(job.sandbox_id.is_none());
         assert!(job.pr_url.is_none());
-        assert!(job.note.contains("not claimed"));
+        assert!(job.note.contains("runner will raise the branch"));
         let listed = store.list().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, job.id);
-        let canceled = cancel_job(&store, &job.id).unwrap();
+        // No sandbox exists yet, so cancel is a pure record flip.
+        let canceled = cancel_job(&store, &job.id, &NoopLauncher).unwrap();
         assert_eq!(canceled.status, CloudJobStatus::Canceled);
+        assert!(canceled.note.contains("before a sandbox"));
+    }
+
+    /// Launcher that can create but never tear down; used to pin the
+    /// cancel-without-sandbox path without any network surface.
+    struct NoopLauncher;
+
+    impl DaytonaLauncher for NoopLauncher {
+        fn create_sandbox(&self, _job: &CloudJob) -> Result<SandboxReceipt> {
+            bail!("no sandbox in this fixture")
+        }
+    }
+
+    #[test]
+    fn old_job_records_without_runner_fields_still_load() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("jobs");
+        std::fs::create_dir_all(&root).unwrap();
+        // Exactly the JSON shape written by the first landing of the slice.
+        let legacy = serde_json::json!({
+            "id": "cloud_00000000000000ff",
+            "kind": "cloud",
+            "status": "running",
+            "prompt": "legacy job",
+            "forge": "github",
+            "remote_name": "github",
+            "remote_url": "https://github.com/org/repo.git",
+            "branch": "codewhale/cloud-legacy",
+            "confirmed": true,
+            "sandbox_id": "sandbox_legacy",
+            "pr_url": null,
+            "refusal": null,
+            "note": "legacy note",
+            "created_unix": 1_000_u64
+        });
+        std::fs::write(
+            root.join("cloud_00000000000000ff.json"),
+            serde_json::to_vec_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+        let store = CloudJobStore::from_path(root);
+        let jobs = store.list().unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].sandbox_id.as_deref(), Some("sandbox_legacy"));
+        assert!(jobs[0].base_branch.is_none());
+        assert!(jobs[0].finished_unix.is_none());
+        assert!(jobs[0].status == CloudJobStatus::Running);
+    }
+
+    #[test]
+    fn shell_quoting_and_sandbox_id_guards_hold() {
+        // A hostile prompt stays one single-quoted argument: every embedded
+        // quote becomes '\'' and no metacharacter can escape the quoting.
+        let hostile = "fix it'; rm -rf /; echo '$(whoami)'";
+        let joined = shell_quote_join(&[
+            "codewhale".to_string(),
+            "exec".to_string(),
+            "--auto".to_string(),
+            hostile.to_string(),
+        ]);
+        assert_eq!(
+            joined,
+            "'codewhale' 'exec' '--auto' 'fix it'\\''; rm -rf /; echo '\\''$(whoami)'\\'''"
+        );
+        // Behavioral pin: a real shell sees the prompt as ONE argument.
+        let printed = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "printf %s {}",
+                shell_quote_join(&[hostile.to_string()])
+            ))
+            .output()
+            .expect("sh is available in test environments");
+        assert!(printed.status.success());
+        assert_eq!(String::from_utf8_lossy(&printed.stdout), hostile);
+        assert_eq!(shell_quote_join(&["a'b".to_string()]), "'a'\\''b'");
+        assert!(valid_sandbox_id("sbx-123_abc"));
+        for bad in ["", "../../evil", "sbx 1"] {
+            assert!(!valid_sandbox_id(bad), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn net_guard_rejects_private_and_non_https_origins() {
+        assert!(validate_outbound_origin("https://app.daytona.io/api").is_ok());
+        assert!(validate_outbound_origin("https://gitee.com/api/v5").is_ok());
+        assert!(validate_outbound_origin("ftp://example.com").is_err());
+        assert!(validate_outbound_origin("https://user:pw@example.com/x").is_err());
+        for blocked in [
+            "http://example.com",
+            "https://10.1.2.3/api",
+            "https://192.168.1.10/api",
+            "https://172.16.0.1/api",
+            "https://169.254.169.254/latest/meta-data",
+            "https://100.64.0.1/api",
+            "https://0.0.0.0/api",
+            "https://[fc00::1]/api",
+            "https://[fe80::1]/api",
+            "https://router.internal/api",
+            "https://printer.local/api",
+        ] {
+            assert!(
+                validate_outbound_origin(blocked).is_err(),
+                "expected {blocked} to be rejected"
+            );
+        }
+        // Loopback is the debug-only escape hatch for local smoke tests;
+        // release builds reject it (pinned by the cfg! branch above).
+        if cfg!(debug_assertions) {
+            assert!(validate_outbound_origin("http://127.0.0.1:3986/api").is_ok());
+            assert!(validate_outbound_origin("https://localhost/api").is_ok());
+        }
+    }
+
+    #[test]
+    fn status_card_surfaces_runner_receipts_without_provider_branding() {
+        let rows = remotes(&[("github", "https://github.com/org/repo.git")]);
+        let jobs = vec![CloudJob {
+            id: "cloud_00000000000000aa".to_string(),
+            kind: "cloud".to_string(),
+            status: CloudJobStatus::Done,
+            prompt: "fix the flake".to_string(),
+            forge: Forge::Github,
+            remote_name: "github".to_string(),
+            remote_url: "https://github.com/org/repo.git".to_string(),
+            branch: "codewhale/cloud-1".to_string(),
+            confirmed: true,
+            sandbox_id: Some("sandbox_receipt_1".to_string()),
+            pr_url: Some("https://github.com/org/repo/pull/7".to_string()),
+            refusal: None,
+            note: "done".to_string(),
+            created_unix: 1_000,
+            base_branch: Some("main".to_string()),
+            head_sha: Some("abc1234def".to_string()),
+            agent_summary: Some("Fixed the flake".to_string()),
+            finished_unix: Some(1_960),
+        }];
+        let card = format_status(
+            &rows,
+            &CredentialState::Present {
+                source: CredentialSource::Env,
+            },
+            &jobs,
+        );
+        assert!(card.contains("cloud_00000000000000aa"));
+        assert!(card.contains("done"));
+        assert!(card.contains("https://github.com/org/repo/pull/7"));
+        assert!(card.contains("16m"));
+        assert!(!card.contains("Daytona"));
+        assert!(!card.contains("daytona"));
+        let detail = format_job(&jobs[0]);
+        assert!(detail.contains("Sandbox: sandbox_receipt_1"));
+        assert!(detail.contains("PR: https://github.com/org/repo/pull/7"));
+        assert!(detail.contains("Runtime: 16m"));
+        assert!(detail.contains("Agent: Fixed the flake"));
     }
 
     #[test]
