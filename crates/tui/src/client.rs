@@ -1195,12 +1195,15 @@ impl DeepSeekClient {
         if api_provider == ApiProvider::OpencodeGo {
             validate_route(api_provider, &default_model).map_err(anyhow::Error::msg)?;
         }
-        let (api_key, codex_account_id) = if api_provider == ApiProvider::OpenaiCodex {
-            let credentials = config.codex_credentials()?;
-            (credentials.access_token, credentials.account_id)
-        } else {
-            (config.deepseek_api_key()?, None)
-        };
+        let (api_key, codex_account_id) =
+            if api_provider == ApiProvider::OpenaiCodex
+                && !config.provider_uses_custom_endpoint(ApiProvider::OpenaiCodex)
+            {
+                let credentials = config.codex_credentials()?;
+                (credentials.access_token, credentials.account_id)
+            } else {
+                (config.deepseek_api_key()?, None)
+            };
         let model_bound_secret_values =
             Arc::new(configured_model_bound_secret_values(config, &api_key));
         validate_base_url_security(&base_url)?;
@@ -1687,9 +1690,11 @@ fn provider_default_wire_format(api_provider: ApiProvider) -> WireFormat {
 
 /// Resolve the wire dialect for a dual-protocol vendor.
 ///
-/// Power-user toggle: `providers.<id>.wire = "openai" | "anthropic"`.
-/// Legacy dialect kinds (`*Anthropic`) still force Messages. Everyone else
-/// keeps the descriptor's fixed policy (or Chat Completions).
+/// Power-user toggle: `providers.<id>.wire = "openai" | "anthropic" | "responses"`.
+/// Legacy dialect kinds (`*Anthropic`) still force Messages. Custom providers
+/// honor `wire = "responses" | "anthropic" | "chat"` per-config (see
+/// `crates/config/src/provider.rs:Custom`). Everyone else keeps the descriptor's
+/// fixed policy (or Chat Completions).
 fn provider_wire_format_for_config(
     api_provider: ApiProvider,
     config: Option<&crate::config::Config>,
@@ -1722,6 +1727,22 @@ fn provider_wire_format_for_config(
         return WireFormat::AnthropicMessages;
     }
 
+    // Custom providers honor `wire = "anthropic"` / `wire = "responses"` explicitly.
+    // The static `Custom::wire_policy()` remains `Chat` as a safe default; the
+    // per-config override lives here (and in `provider_capability`) so existing
+    // `[providers.<name>]` tables gain the three-way switch without changing the
+    // provider registry trait. Supported aliases:
+    //   anthropic: "anthropic" | "messages" | "claude" | "anthropic-messages" | ...
+    //   responses: "responses" | "responses-api" | "openai-responses" | "openai_responses" | ...
+    if api_provider == ApiProvider::Custom {
+        if wire_config_prefers_anthropic(wire) {
+            return WireFormat::AnthropicMessages;
+        }
+        if wire_config_prefers_responses(wire) {
+            return WireFormat::Responses;
+        }
+    }
+
     api_provider
         .kind()
         .and_then(|kind| {
@@ -1752,6 +1773,24 @@ fn wire_config_prefers_anthropic(wire: Option<&str>) -> bool {
             | "anthropic-compatible"
             | "anthropic-compat"
     )
+}
+
+fn wire_config_prefers_responses(wire: Option<&str>) -> bool {
+    let Some(raw) = wire.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let normalized = raw.to_ascii_lowercase().replace(['_', ' '], "-");
+    matches!(
+        normalized.as_str(),
+        "responses"
+            | "responses-api"
+            | "openai-responses"
+            | "openai-responses-api"
+            | "response"
+            | "response-api"
+            | "openai-responses-compat"
+            | "responses-compat"
+    ) || normalized.contains("responses")
 }
 
 fn api_provider_skips_models_probe(api_provider: ApiProvider) -> bool {
