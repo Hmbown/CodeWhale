@@ -295,6 +295,17 @@ pub(crate) fn open_context_inspector(app: &mut App) {
     app.view_stack.push(ContextInspectorView::new(app));
 }
 
+/// Open the notification center — the topbar notifications segment's
+/// destination (wiring manifest `header.notifications`). Same shape as the
+/// context inspector's opener: push the view, snapshot happens in `new`.
+pub(crate) fn open_notification_center(app: &mut App) {
+    if app.view_stack.top_kind() == Some(ModalKind::NotificationCenter) {
+        return;
+    }
+    app.view_stack
+        .push(crate::tui::notifications::NotificationCenterView::new(app));
+}
+
 pub(crate) fn open_external_url(url: &str) -> Result<()> {
     crate::utils::open_url(url)
 }
@@ -320,6 +331,22 @@ pub(crate) fn refresh_context_inspector_overlay(app: &mut App) {
         return;
     };
     if let Some(typed) = overlay.as_any_mut().downcast_mut::<ContextInspectorView>() {
+        typed.refresh_from_app(app);
+    }
+    app.view_stack.push_boxed(overlay);
+}
+
+/// Pull fresh records/read-state into an open notification center, the same
+/// pop-refresh-push shape the context inspector uses (no aliasing between
+/// the view and the `&mut App` it snapshots).
+pub(crate) fn refresh_notification_center_overlay(app: &mut App) {
+    let Some(mut overlay) = app.view_stack.pop() else {
+        return;
+    };
+    if let Some(typed) = overlay
+        .as_any_mut()
+        .downcast_mut::<crate::tui::notifications::NotificationCenterView>()
+    {
         typed.refresh_from_app(app);
     }
     app.view_stack.push_boxed(overlay);

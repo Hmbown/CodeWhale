@@ -39,7 +39,10 @@ fn startup_segments() -> Vec<TopbarSegment> {
     ]
 }
 
-/// Approved work + pod screen: run, pod, whale capacity, effective model.
+/// Approved work + pod screen: run, pod capacity (`n/m` live/max — wiring
+/// manifest `header.pod`), attention inbox count, effective model. The
+/// notifications segment carries the Attention ink only because the fixture
+/// holds an unseen action-required record; the passive form uses Info.
 fn work_segments() -> Vec<TopbarSegment> {
     vec![
         TopbarSegment::new(
@@ -48,8 +51,13 @@ fn work_segments() -> Vec<TopbarSegment> {
             "release 0.9.12",
             ChromeInk::Identity,
         ),
-        TopbarSegment::new(TopbarSegmentId::Pod, "pod", "launch pod", ChromeInk::Active),
-        TopbarSegment::new(TopbarSegmentId::Whales, "pod", "3/4", ChromeInk::Info),
+        TopbarSegment::new(TopbarSegmentId::Pod, "pod", "3/4", ChromeInk::Active),
+        TopbarSegment::new(
+            TopbarSegmentId::Notifications,
+            "notifications",
+            "2",
+            ChromeInk::Attention,
+        ),
         TopbarSegment::new(
             TopbarSegmentId::Model,
             "",
@@ -162,8 +170,9 @@ fn topbar_matches_goldens_at_blocker_sizes() {
 
 #[test]
 fn topbar_sheds_in_declared_order_and_keeps_floor() {
-    // The work fixture sheds Whales, then Pod, then Run; brand, context
-    // meter, clock, and the model segment survive at every blocker size.
+    // The work fixture sheds Pod, then the notifications inbox and the run
+    // chip together; brand, context meter, clock, and the model segment
+    // survive at every blocker size.
     let segments = work_segments();
     for (w, _h) in BLOCKER_SIZES {
         let row = render_row(&UI_THEME, w, &segments, 61);
@@ -175,14 +184,18 @@ fn topbar_sheds_in_declared_order_and_keeps_floor() {
             "{w}: route identity never sheds first"
         );
     }
-    // At 80 the work fixture sheds Whales, Pod, and Run; the model segment
-    // (shed priority 0) and the floor survive.
+    // At 80 the work fixture sheds Pod, notifications, and Run; the model
+    // segment (shed priority 0) and the floor survive.
     let row80 = render_row(&UI_THEME, 80, &work_segments(), 61);
     assert!(
         !row80.contains("release 0.9.12"),
         "80: run sheds before model"
     );
-    assert!(!row80.contains("launch pod"), "80: pod sheds before model");
+    assert!(!row80.contains("pod 3/4"), "80: pod sheds before model");
+    assert!(
+        !row80.contains("notifications"),
+        "80: the inbox sheds before model"
+    );
     // The startup fixture sheds Theme (priority 5) first at 80; the model
     // stays. At 120 both segments fit, matching the reference screen.
     let startup80 = render_row(&UI_THEME, 80, &startup_segments(), 0);
@@ -239,6 +252,37 @@ fn topbar_hitboxes_match_painted_cells() {
             hb.id
         );
     }
+}
+
+#[test]
+fn shed_segments_record_no_hitbox() {
+    // A segment the width dropped paints no cells, so it must claim no
+    // hitbox — a click can never target cells another element owns. At 80
+    // the work fixture sheds Pod, Notifications, and Run; at 160 all paint.
+    use super::topbar_hitboxes;
+    let segments = work_segments();
+    let topbar = Topbar::new(&UI_THEME, CLOCK, 61, &segments);
+    let narrow = topbar_hitboxes(&topbar, ratatui::layout::Rect::new(0, 0, 80, 1));
+    assert!(
+        narrow.iter().all(|hb| hb.id != TopbarSegmentId::Run),
+        "80: the shed run chip records no hitbox"
+    );
+    assert!(
+        narrow
+            .iter()
+            .all(|hb| hb.id != TopbarSegmentId::Notifications),
+        "80: the shed inbox records no hitbox"
+    );
+    let wide = topbar_hitboxes(&topbar, ratatui::layout::Rect::new(0, 0, 160, 1));
+    assert!(
+        wide.iter().any(|hb| hb.id == TopbarSegmentId::Pod),
+        "160: the painted pod segment records its hitbox"
+    );
+    assert!(
+        wide.iter()
+            .any(|hb| hb.id == TopbarSegmentId::Notifications),
+        "160: the painted inbox segment records its hitbox"
+    );
 }
 
 /// Per-cell symbols of one rendered row (the golden dump, before joining).

@@ -2002,17 +2002,30 @@ pub(crate) async fn run_event_loop(
                         // Emit OSC 9 / BEL desktop notification for long turns, and
                         // always stop the title animation that began on TurnStarted.
                         if status == crate::core::events::TurnOutcomeStatus::Completed {
-                            if let Some((method, threshold, include_summary)) =
-                                notifications::settings(config)
-                            {
+                            let notification_settings = notifications::settings(config);
+                            // One typed payload feeds both surfaces: the
+                            // desktop delivery below and the attention inbox
+                            // (`header.notifications`). The inbox records the
+                            // same long-turn event the desktop stream would —
+                            // threshold-gated, so ordinary quick turns do not
+                            // flood the inbox — independent of desktop
+                            // delivery being configured at all.
+                            let include_summary =
+                                notification_settings.is_some_and(|(_, _, summary)| summary);
+                            let payload = notifications::completed_turn_payload(
+                                app,
+                                &current_streaming_text,
+                                include_summary,
+                                turn_elapsed,
+                                turn_cost,
+                            );
+                            let inbox_threshold =
+                                Duration::from_secs(config.notifications_config().threshold_secs);
+                            if turn_elapsed >= inbox_threshold {
+                                app.record_notification_payload(&payload);
+                            }
+                            if let Some((method, threshold, _)) = notification_settings {
                                 let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
-                                let payload = notifications::completed_turn_payload(
-                                    app,
-                                    &current_streaming_text,
-                                    include_summary,
-                                    turn_elapsed,
-                                    turn_cost,
-                                );
                                 crate::tui::notifications::notify_done(
                                     method,
                                     in_tmux,
@@ -2787,14 +2800,20 @@ pub(crate) async fn run_event_loop(
                         let subagent_notification_mode =
                             config.notifications_config().subagent_completion;
                         let workflow_tool_running = workflow_tool_is_running(app);
-                        if should_notify_subagent_completion(
+                        let should_notify_subagent_completion = should_notify_subagent_completion(
                             subagent_notification_mode,
                             has_other_running_subagents,
                             workflow_tool_running,
-                        ) && let Some((method, threshold, include_summary)) =
-                            notifications::settings(config)
-                        {
-                            let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
+                        );
+                        // The final-only policy decides whether this terminal
+                        // event becomes a notification at all — the inbox and
+                        // the desktop stream stay in lockstep on that (wiring
+                        // manifest `notification.pod-complete`: final-only
+                        // suppresses mid-pod noise).
+                        if should_notify_subagent_completion {
+                            let notification_settings = notifications::settings(config);
+                            let include_summary =
+                                notification_settings.is_some_and(|(_, _, summary)| summary);
                             let payload = notifications::subagent_terminal_payload(
                                 app.ui_locale,
                                 &id,
@@ -2803,13 +2822,17 @@ pub(crate) async fn run_event_loop(
                                 include_summary,
                                 subagent_elapsed,
                             );
-                            crate::tui::notifications::notify_done(
-                                method,
-                                in_tmux,
-                                &payload,
-                                threshold,
-                                subagent_elapsed,
-                            );
+                            app.record_notification_payload(&payload);
+                            if let Some((method, threshold, _)) = notification_settings {
+                                let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
+                                crate::tui::notifications::notify_done(
+                                    method,
+                                    in_tmux,
+                                    &payload,
+                                    threshold,
+                                    subagent_elapsed,
+                                );
+                            }
                         }
                         if should_recapture_terminal && event_broker.is_paused() {
                             resume_terminal(
@@ -3095,21 +3118,24 @@ pub(crate) async fn run_event_loop(
                                         "mode": app.mode.label(),
                                     }),
                                 );
+                                // #4834: the tool *description* is the
+                                // pending command. It stays in the
+                                // terminal, where the user can read it
+                                // in context; the banner names only the
+                                // tool. Copy is centralized (#5041) so
+                                // the action-first phrasing is tested.
+                                let payload =
+                                    crate::tui::notifications::approval_needed_payload(&tool_name);
+                                // The approval ask is genuine attention:
+                                // record it for the inbox even when desktop
+                                // delivery is off (wiring manifest
+                                // `notification.approval`).
+                                app.record_notification_payload(&payload);
                                 if let Some((method, _, _)) =
                                     crate::tui::notifications::settings(config)
                                 {
                                     let in_tmux =
                                         std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
-                                    // #4834: the tool *description* is the
-                                    // pending command. It stays in the
-                                    // terminal, where the user can read it
-                                    // in context; the banner names only the
-                                    // tool. Copy is centralized (#5041) so
-                                    // the action-first phrasing is tested.
-                                    let payload =
-                                        crate::tui::notifications::approval_needed_payload(
-                                            &tool_name,
-                                        );
                                     crate::tui::notifications::notify_done(
                                         method,
                                         in_tmux,
@@ -3150,11 +3176,16 @@ pub(crate) async fn run_event_loop(
                         } else {
                             app.pending_user_input_prompt = Some((id.clone(), request.clone()));
                             app.view_stack.push(UserInputView::new(id.clone(), request));
+                            // The blocked question is genuine attention:
+                            // record it for the inbox even when desktop
+                            // delivery is off (wiring manifest
+                            // `notification.approval`'s sibling ask).
+                            let payload = crate::tui::notifications::input_needed_payload();
+                            app.record_notification_payload(&payload);
                             if let Some((method, _, _)) =
                                 crate::tui::notifications::settings(config)
                             {
                                 let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
-                                let payload = crate::tui::notifications::input_needed_payload();
                                 crate::tui::notifications::notify_done(
                                     method,
                                     in_tmux,
@@ -3216,14 +3247,17 @@ pub(crate) async fn run_event_loop(
                             );
                             app.view_stack
                                 .push(ElevationView::new(request, app.ui_locale));
+                            // The sandbox ask is genuine attention: record it
+                            // for the inbox even when desktop delivery is off.
+                            let payload = crate::tui::notifications::elevation_needed_payload(
+                                &tool_name,
+                                &denial_reason,
+                            );
+                            app.record_notification_payload(&payload);
                             if let Some((method, _, _)) =
                                 crate::tui::notifications::settings(config)
                             {
                                 let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
-                                let payload = crate::tui::notifications::elevation_needed_payload(
-                                    &tool_name,
-                                    &denial_reason,
-                                );
                                 crate::tui::notifications::notify_done(
                                     method,
                                     in_tmux,

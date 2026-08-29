@@ -763,6 +763,11 @@ impl App {
             status_toasts: VecDeque::new(),
             update_available: None,
             sticky_status: None,
+            // Attention inbox (wiring manifest `header.notifications`):
+            // retained notification records + the read watermark. Empty on
+            // boot — records accrue as the session mints notifications.
+            notification_records: Vec::new(),
+            notifications_read_at: None,
             last_status_message_seen: None,
             context_pressure_warning_dismissed: None,
             plugin_reload_nudge_stamp: None,

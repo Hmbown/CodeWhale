@@ -2389,7 +2389,6 @@ use crate::palette::{ChromeInk, UiTheme, chrome_style};
 /// status / desktop payload. `at` is an injected clock string so renders
 /// stay deterministic (spec §5a: caller owns the wall clock).
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub struct TidelineInboxRecord {
     pub kind: NotificationKind,
     pub title: String,
@@ -2431,7 +2430,6 @@ impl TidelineInboxRecord {
 }
 
 /// What the caller owes the inbox render.
-#[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub struct TidelineInbox<'a> {
     pub theme: &'a UiTheme,
     pub records: &'a [TidelineInboxRecord],
@@ -2440,9 +2438,7 @@ pub struct TidelineInbox<'a> {
     pub ascii_safe: bool,
 }
 
-#[allow(dead_code)] // translation scaffolding: builder methods feed tests + the landing slice
 impl<'a> TidelineInbox<'a> {
-    #[allow(dead_code)] // translation scaffolding: wired by the landing slice
     #[must_use]
     pub fn new(theme: &'a UiTheme, records: &'a [TidelineInboxRecord]) -> Self {
         Self {
@@ -2494,7 +2490,6 @@ fn put(buf: &mut Buffer, x: u16, y: u16, text: &str, style: Style) {
 /// Paint the notifications inbox: header row (count of unread), then one
 /// row per record — unread gold ◆, read hollow ○, selected `▸`, kind word,
 /// title, injected time. Truncates, never wraps.
-#[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub fn render_tideline_inbox(area: Rect, buf: &mut Buffer, inbox: &TidelineInbox<'_>) {
     if area.width < 8 || area.height < 2 {
         return;
@@ -2600,7 +2595,6 @@ fn truncate_to_width_owned(text: &str, width: usize) -> String {
 /// painted rows exactly — the selected record's body row belongs to its
 /// rect. Must be called with the same inputs as [`render_tideline_inbox`].
 #[must_use]
-#[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub fn tideline_inbox_hitboxes(area: Rect, inbox: &TidelineInbox<'_>) -> Vec<Rect> {
     let mut out = Vec::new();
     if area.width < 8 || area.height < 2 {
@@ -2628,3 +2622,253 @@ pub fn tideline_inbox_hitboxes(area: Rect, inbox: &TidelineInbox<'_>) -> Vec<Rec
 
 #[cfg(test)]
 mod tideline_tests;
+
+// ---------------------------------------------------------------------------
+// Notification center (wiring manifest `header.notifications` /
+// `notifications.mark-read`): the attention inbox's host surface. This is
+// NOT a second notification system — the records are the same typed
+// payloads the desktop stream already mints (one [`NotificationPayload`]
+// per event, recorded beside its desktop delivery), and the inbox render
+// is the existing [`TidelineInbox`] widget. The center only owns the
+// browse/read interaction over that stream.
+
+use std::cell::RefCell;
+use std::time::Instant;
+
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+
+use crate::tui::views::{
+    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,
+    render_underwater_surface,
+};
+
+/// Inbox retention: the newest records kept for the attention surface.
+/// Mirrors the toast queue's bound so neither surface can grow unbounded.
+const INBOX_RECORDS_MAX: usize = 24;
+
+/// One retained attention record — the TUI-side mirror of a
+/// [`NotificationPayload`] that was already minted for desktop delivery.
+/// `at` is when the event happened; read state is owned by the
+/// `notifications_read_at` watermark on `App`, so records themselves stay
+/// immutable (marking read is reversible by record, never destructive).
+#[derive(Debug, Clone)]
+pub struct NotificationRecord {
+    pub kind: NotificationKind,
+    pub title: String,
+    pub body: Option<String>,
+    pub at: Instant,
+}
+
+impl NotificationRecord {
+    /// Genuine attention: the record asks the user for a decision or an
+    /// answer. Completions and model-authored notes never qualify — gold
+    /// is reserved for asks (wiring manifest `header.notifications`).
+    #[must_use]
+    pub const fn requires_attention(&self) -> bool {
+        matches!(
+            self.kind,
+            NotificationKind::ApprovalNeeded
+                | NotificationKind::InputNeeded
+                | NotificationKind::ElevationNeeded
+        )
+    }
+
+    /// Project into the inbox widget's row shape. `at` becomes a wall-clock
+    /// label here (the caller owns the clock, spec §5a) and `read` comes
+    /// from the watermark, keeping the widget pure and deterministic.
+    #[must_use]
+    fn to_inbox_record(&self, read: bool) -> TidelineInboxRecord {
+        TidelineInboxRecord {
+            kind: self.kind,
+            title: self.title.clone(),
+            body: self.body.clone(),
+            at: chrono::Local::now().format("%H:%M").to_string(),
+            read,
+        }
+    }
+}
+
+impl App {
+    /// Retain one notification in the attention inbox. Recorded beside the
+    /// desktop delivery of the same payload — never instead of it — so the
+    /// inbox can never invent an event the notification stream did not mint.
+    pub fn record_notification_payload(&mut self, payload: &NotificationPayload) {
+        self.notification_records.push(NotificationRecord {
+            kind: payload.kind(),
+            title: payload.headline().to_string(),
+            body: payload.detail().map(str::to_string),
+            at: Instant::now(),
+        });
+        while self.notification_records.len() > INBOX_RECORDS_MAX {
+            self.notification_records.remove(0);
+        }
+        self.needs_redraw = true;
+    }
+
+    /// Mark every currently retained record read (wiring manifest
+    /// `notifications.mark-read`): advance the watermark past the newest
+    /// record. Reversible in the sense the manifest requires — the records
+    /// stay inspectable and later events mark themselves unread again.
+    pub fn mark_notifications_read(&mut self) {
+        if let Some(newest) = self.notification_records.last() {
+            self.notifications_read_at = Some(newest.at);
+        } else {
+            self.notifications_read_at = Some(Instant::now());
+        }
+        self.needs_redraw = true;
+    }
+}
+
+/// The notification center: full-screen modal hosting the Tideline inbox
+/// over the session's retained records. Opened from the topbar's
+/// notifications segment (`header.notifications`); the host refreshes the
+/// snapshot before every render exactly like the context inspector, so a
+/// record arriving while the center is open appears without reopening.
+pub(crate) struct NotificationCenterView {
+    records: Vec<TidelineInboxRecord>,
+    selected: usize,
+    hitboxes: RefCell<Vec<(u16, usize)>>,
+    locale: Locale,
+    theme: crate::palette::UiTheme,
+}
+
+impl NotificationCenterView {
+    #[must_use]
+    pub(crate) fn new(app: &App) -> Self {
+        let mut view = Self {
+            records: Vec::new(),
+            selected: 0,
+            hitboxes: RefCell::new(Vec::new()),
+            locale: app.ui_locale,
+            theme: app.ui_theme,
+        };
+        view.refresh_from_app(app);
+        view
+    }
+
+    pub(crate) fn refresh_from_app(&mut self, app: &App) {
+        let read_at = app.notifications_read_at;
+        self.records = app
+            .notification_records
+            .iter()
+            .map(|record| {
+                let read = read_at.is_some_and(|seen| record.at <= seen);
+                record.to_inbox_record(read)
+            })
+            .collect();
+        self.selected = self.selected.min(self.records.len().saturating_sub(1));
+        self.locale = app.ui_locale;
+        self.theme = app.ui_theme;
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        if self.records.is_empty() {
+            return;
+        }
+        self.selected = if delta.is_negative() {
+            self.selected.saturating_sub(delta.unsigned_abs())
+        } else {
+            (self.selected + delta as usize).min(self.records.len() - 1)
+        };
+    }
+
+    fn open_selected(&self) -> ViewAction {
+        let Some(record) = self.records.get(self.selected) else {
+            return ViewAction::None;
+        };
+        let mut content = format!("{}\n", record.kind_word());
+        content.push_str(&record.title);
+        if let Some(body) = record.body.as_deref() {
+            content.push_str("\n\n");
+            content.push_str(body);
+        }
+        ViewAction::Emit(ViewEvent::OpenTextPager {
+            title: tr(self.locale, MessageId::NotifCenterSurfaceTitle).into_owned(),
+            content,
+        })
+    }
+}
+
+impl ModalView for NotificationCenterView {
+    fn kind(&self) -> ModalKind {
+        ModalKind::NotificationCenter
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => ViewAction::Close,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.move_selection(-1);
+                ViewAction::None
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.move_selection(1);
+                ViewAction::None
+            }
+            KeyCode::Char('r') => ViewAction::Emit(ViewEvent::NotificationsMarkReadRequested),
+            KeyCode::Enter => self.open_selected(),
+            _ => ViewAction::None,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.move_selection(-1);
+                ViewAction::None
+            }
+            MouseEventKind::ScrollDown => {
+                self.move_selection(1);
+                ViewAction::None
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let hit = self
+                    .hitboxes
+                    .borrow()
+                    .iter()
+                    .find_map(|(y, idx)| (*y == mouse.row).then_some(*idx));
+                let Some(idx) = hit else {
+                    return ViewAction::None;
+                };
+                if idx == self.selected {
+                    self.open_selected()
+                } else {
+                    self.selected = idx;
+                    ViewAction::None
+                }
+            }
+            _ => ViewAction::None,
+        }
+    }
+
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let inner = render_underwater_surface(
+            area,
+            buf,
+            tr(self.locale, MessageId::NotifCenterSurfaceTitle),
+        );
+        let content = render_modal_footer(
+            inner,
+            buf,
+            &[
+                ActionHint::new("↑/↓", tr(self.locale, MessageId::CtxInspActionSelect)),
+                ActionHint::new("r", tr(self.locale, MessageId::NotifCenterActionMarkRead)),
+                ActionHint::new("Enter", tr(self.locale, MessageId::CtxInspActionDrillDown)),
+                ActionHint::new("Esc", tr(self.locale, MessageId::CtxInspActionClose)),
+            ],
+        );
+        let inbox = TidelineInbox::new(&self.theme, &self.records)
+            .selected(self.selected)
+            .ascii_safe(crate::tui::color_compat::ascii_safe_enabled());
+        render_tideline_inbox(content, buf, &inbox);
+        *self.hitboxes.borrow_mut() = tideline_inbox_hitboxes(content, &inbox)
+            .iter()
+            .enumerate()
+            .map(|(idx, rect)| (rect.y, idx))
+            .collect();
+    }
+}

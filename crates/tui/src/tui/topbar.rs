@@ -61,8 +61,10 @@ pub enum TopbarSegmentId {
     Run,
     /// Active pod (work screen) — click opens the pod ledger.
     Pod,
-    /// Whale capacity `n/m` (work screen) — click opens the pod roster.
-    Whales,
+    /// Attention inbox count — click opens the notification center
+    /// (wiring manifest `header.notifications`). Paints only when the
+    /// session holds notification records.
+    Notifications,
     /// Effective model / route — click opens the provider inspector.
     Model,
     /// Theme name (startup) — click opens the theme picker.
@@ -78,15 +80,20 @@ impl TopbarSegmentId {
     /// Shed priority: higher sheds first as width drops. `0` never sheds.
     /// The floor is brand + context meter + clock; among segments, Model and
     /// the settings breadcrumb are the last to go because route identity is
-    /// the one fact the user must always be able to read (spec §5b).
+    /// the one fact the user must always be able to read (spec §5b). The
+    /// attention inbox sheds with the run chip: an unseen ask outranks
+    /// every capacity or identity extra.
+    ///
+    /// (The interim `Whales` capacity twin is gone: the wiring manifest's
+    /// `header.pod` is the one capacity segment — `pod n/m` live/max — and
+    /// the external product term is pod.)
     #[must_use]
     pub fn shed_priority(self) -> u8 {
         match self {
             Self::Theme => 5,
             Self::Workspace => 4,
-            Self::Whales => 3,
             Self::Pod => 2,
-            Self::Run | Self::SettingsPath => 1,
+            Self::Run | Self::Notifications | Self::SettingsPath => 1,
             Self::Model | Self::Brand => 0,
         }
     }
@@ -431,6 +438,10 @@ pub struct TopbarHitbox {
 /// The brand lockup and the pinned right block are hitboxes too (brand opens
 /// the product menu; context opens the context inspector) — returned first
 /// and last respectively.
+///
+/// Shed-aware by the same pass the render runs: a segment the width dropped
+/// records no hitbox, so a click can never target cells another element
+/// paints (the posture-floor discipline).
 #[must_use]
 pub fn topbar_hitboxes(topbar: &Topbar<'_>, area: Rect) -> Vec<TopbarHitbox> {
     let mut out = Vec::new();
@@ -447,9 +458,10 @@ pub fn topbar_hitboxes(topbar: &Topbar<'_>, area: Rect) -> Vec<TopbarHitbox> {
             height: 1,
         },
     });
+    let shed = shed_pass(topbar, area);
     let mut x = area.x as usize + brand_w + BRAND_GAP.width();
     let join_w = SEGMENT_JOIN.width();
-    for (index, segment) in topbar.segments.iter().enumerate() {
+    for (index, segment) in shed.kept.iter().enumerate() {
         if index > 0 {
             x += join_w;
         }

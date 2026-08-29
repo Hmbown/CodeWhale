@@ -44,25 +44,41 @@ pub(crate) fn topbar_segments(app: &App, width: u16) -> Vec<TopbarSegment> {
         segments.push(TopbarSegment::new(TopbarSegmentId::Run, "run", value, ink));
     }
 
-    // Pod membership and whale capacity from the sub-agent state: `pod n/m`
-    // of known members, `whales n/capacity` while any whale is in the water.
-    let running = running_agent_count(app);
-    let pod_total = app.subagent_cache.len();
-    if pod_total > 0 {
+    // Pod capacity from the sub-agent manager snapshot (wiring manifest
+    // `header.pod`): `pod n/m` of live workers over the configured maximum.
+    // Renders only while a pod is or was active this session — a session
+    // with no workers keeps the row for the guaranteed floor plus route
+    // identity. The known-member count stays in the ledger; the topbar
+    // states capacity. (The interim `whales` capacity twin is gone: one
+    // capacity fact, one segment, and the external product term is pod.)
+    let pod = crate::tui::tideline::PodCapacitySnapshot::from_app(app);
+    if pod.is_active() {
         segments.push(TopbarSegment::new(
             TopbarSegmentId::Pod,
             "pod",
-            format!("{running}/{pod_total}"),
+            format!("{}/{}", pod.live, pod.max),
             ChromeInk::Active,
         ));
-        if running > 0 {
-            segments.push(TopbarSegment::new(
-                TopbarSegmentId::Whales,
-                "whales",
-                format!("{}/{}", running, app.max_subagents.max(1)),
-                ChromeInk::Info,
-            ));
-        }
+    }
+
+    // Attention inbox (wiring manifest `header.notifications`): the count of
+    // retained notification records. Gold only while an unseen
+    // action-required record exists; otherwise the passive metadata ink —
+    // the same label/value grammar and truncate-before-wrap discipline the
+    // neighboring segments use.
+    let inbox = crate::tui::tideline::AttentionInboxSnapshot::from_app(app);
+    if inbox.is_active() {
+        let ink = if inbox.demands_attention() {
+            ChromeInk::Attention
+        } else {
+            ChromeInk::Info
+        };
+        segments.push(TopbarSegment::new(
+            TopbarSegmentId::Notifications,
+            &tr(app.ui_locale, MessageId::TopbarNotificationsLabel),
+            inbox.records.to_string(),
+            ink,
+        ));
     }
 
     // Route identity — the old identity band's fact, same shed discipline:
@@ -1189,18 +1205,55 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
                 inspect_detail: crate::tui::tideline::InspectDetail::ContextBudget(context_budget),
             });
     }
+    // The pod and notifications segments are inspectable targets exactly
+    // like the context meter: their hitboxes come from this frame's own
+    // topbar render (painted cells only — the shed-aware pass), the
+    // destinations are the pod ledger and the notification center, and the
+    // typed snapshots ride along so routing never re-derives state (wiring
+    // manifest `header.pod` / `header.notifications`).
+    let pod_snapshot = crate::tui::tideline::PodCapacitySnapshot::from_app(app);
+    let inbox_snapshot = crate::tui::tideline::AttentionInboxSnapshot::from_app(app);
+    for hitbox in &app.viewport.last_topbar_hitboxes {
+        let (id, action, detail) = match hitbox.id {
+            TopbarSegmentId::Pod if pod_snapshot.is_active() => (
+                crate::tui::tideline::InteractionTargetId::HEADER_POD,
+                crate::tui::app::HeaderActionTarget::InspectPod,
+                crate::tui::tideline::InspectDetail::PodCapacity(pod_snapshot),
+            ),
+            TopbarSegmentId::Notifications if inbox_snapshot.is_active() => (
+                crate::tui::tideline::InteractionTargetId::HEADER_NOTIFICATIONS,
+                crate::tui::app::HeaderActionTarget::InspectNotifications,
+                crate::tui::tideline::InspectDetail::AttentionInbox(inbox_snapshot),
+            ),
+            _ => continue,
+        };
+        app.viewport
+            .interaction_targets
+            .register(crate::tui::tideline::InteractionTarget {
+                id,
+                area: hitbox.area,
+                focus: crate::tui::tideline::InteractionFocus::Direct,
+                keyboard_action: Some(action),
+                mouse_action: Some(action),
+                inspect_detail: detail,
+            });
+    }
     for target in app.viewport.interaction_targets.iter() {
         let label = match target.mouse_action {
             Some(crate::tui::tideline::InteractionAction::InspectContext) => format!(
                 "{} · {}",
-                crate::localization::tr(
-                    app.ui_locale,
-                    crate::localization::MessageId::CtxMenuContextInspector,
-                ),
-                crate::localization::tr(
-                    app.ui_locale,
-                    crate::localization::MessageId::CtxMenuContextInspectorDesc,
-                ),
+                tr(app.ui_locale, MessageId::CtxMenuContextInspector),
+                tr(app.ui_locale, MessageId::CtxMenuContextInspectorDesc),
+            ),
+            Some(crate::tui::tideline::InteractionAction::InspectPod) => format!(
+                "{} · {}",
+                tr(app.ui_locale, MessageId::TopbarPodTooltipTitle),
+                tr(app.ui_locale, MessageId::TopbarPodTooltipDesc),
+            ),
+            Some(crate::tui::tideline::InteractionAction::InspectNotifications) => format!(
+                "{} · {}",
+                tr(app.ui_locale, MessageId::TopbarNotificationsTooltipTitle),
+                tr(app.ui_locale, MessageId::TopbarNotificationsTooltipDesc),
             ),
             None => continue,
         };
@@ -1480,6 +1533,8 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             refresh_live_transcript_overlay(app);
         } else if app.view_stack.top_kind() == Some(ModalKind::ContextInspector) {
             refresh_context_inspector_overlay(app);
+        } else if app.view_stack.top_kind() == Some(ModalKind::NotificationCenter) {
+            refresh_notification_center_overlay(app);
         }
         if app.view_stack.top_kind() == Some(ModalKind::Approval) {
             app.viewport.last_approval_area = app.view_stack.top_occupied_region(size);

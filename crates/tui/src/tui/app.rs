@@ -1345,6 +1345,15 @@ pub struct App {
     pub update_available: Option<String>,
     /// Sticky status toast used for important warnings/errors.
     pub sticky_status: Option<StatusToast>,
+    /// Retained attention records — the TUI-side mirror of the typed
+    /// notification payloads the session mints (wiring manifest
+    /// `header.notifications`). Bounded by
+    /// [`crate::tui::notifications::INBOX_RECORDS_MAX`].
+    pub notification_records: Vec<crate::tui::notifications::NotificationRecord>,
+    /// Read watermark for the attention inbox: records at or before this
+    /// instant count as read. `None` until the user marks read in the
+    /// notification center.
+    pub notifications_read_at: Option<std::time::Instant>,
     /// Last status text already promoted from `status_message` into toast state.
     pub last_status_message_seen: Option<String>,
     /// Prevents the same pressure condition from immediately re-arming after

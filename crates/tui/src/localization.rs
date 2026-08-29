@@ -1098,6 +1098,23 @@ pub enum MessageId {
     CtxMenuWindowPinDesc,
     /// `/pin` command description (always-on-top mini-window toggle).
     CmdPinDescription,
+    /// Topbar segment label: attention inbox record count (wiring manifest
+    /// `header.notifications`).
+    TopbarNotificationsLabel,
+    /// Hover tooltip title for the topbar pod segment (`header.pod`).
+    TopbarPodTooltipTitle,
+    /// Hover tooltip description for the topbar pod segment.
+    TopbarPodTooltipDesc,
+    /// Hover tooltip title for the topbar notifications segment
+    /// (`header.notifications`).
+    TopbarNotificationsTooltipTitle,
+    /// Hover tooltip description for the topbar notifications segment.
+    TopbarNotificationsTooltipDesc,
+    /// Notification center surface title.
+    NotifCenterSurfaceTitle,
+    /// Notification center footer action: mark records read
+    /// (`notifications.mark-read`).
+    NotifCenterActionMarkRead,
     /// Status toast: host window is now the always-on-top mini window.
     WindowPinActive,
     /// Status toast: host window restored from the pinned mini window.
@@ -2915,6 +2932,13 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxMenuWindowUnpin,
     MessageId::CtxMenuWindowPinDesc,
     MessageId::CmdPinDescription,
+    MessageId::TopbarNotificationsLabel,
+    MessageId::TopbarPodTooltipTitle,
+    MessageId::TopbarPodTooltipDesc,
+    MessageId::TopbarNotificationsTooltipTitle,
+    MessageId::TopbarNotificationsTooltipDesc,
+    MessageId::NotifCenterSurfaceTitle,
+    MessageId::NotifCenterActionMarkRead,
     MessageId::WindowPinActive,
     MessageId::WindowPinReleased,
     MessageId::FanoutCounts,

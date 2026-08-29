@@ -49,6 +49,91 @@ impl ContextBudgetSnapshot {
     }
 }
 
+/// Pod capacity as the topbar's `pod n/m` segment states it: live workers
+/// over the configured maximum, plus the known-member count the ledger
+/// lists (wiring manifest `header.pod` — state: SubAgentManager snapshot).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PodCapacitySnapshot {
+    /// Workers in the water right now (running sub-agents).
+    pub live: usize,
+    /// Configured worker maximum for this session.
+    pub max: usize,
+    /// Members the manager knows about this session, completed included.
+    pub known_members: usize,
+}
+
+impl PodCapacitySnapshot {
+    /// Project the sub-agent manager's TUI-side cache without becoming a
+    /// second owner of worker state. `live` unions the running cache entries
+    /// with progress-only workers exactly like the segment builder does.
+    #[must_use]
+    pub(crate) fn from_app(app: &App) -> Self {
+        let live = crate::tui::subagent_routing::running_agent_count(app);
+        Self {
+            live,
+            max: app.max_subagents.max(1),
+            known_members: app.subagent_cache.len(),
+        }
+    }
+
+    /// The segment renders once a pod is or was active this session.
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        self.live > 0 || self.known_members > 0
+    }
+}
+
+/// Attention inbox counts for the topbar's notifications segment (wiring
+/// manifest `header.notifications` — state: the session's notification
+/// records). Gold is reserved for unseen action-required attention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttentionInboxSnapshot {
+    /// Records currently retained in the inbox.
+    pub records: usize,
+    /// Unseen records that ask the user for a decision or answer.
+    pub unseen_attention: usize,
+    /// Unseen records of any kind.
+    pub unseen: usize,
+}
+
+impl AttentionInboxSnapshot {
+    #[must_use]
+    pub(crate) fn from_app(app: &App) -> Self {
+        let read_at = app.notifications_read_at;
+        let mut records = 0usize;
+        let mut unseen = 0usize;
+        let mut unseen_attention = 0usize;
+        for record in &app.notification_records {
+            records += 1;
+            let unseen_record = read_at.is_none_or(|seen| record.at > seen);
+            if unseen_record {
+                unseen += 1;
+                if record.requires_attention() {
+                    unseen_attention += 1;
+                }
+            }
+        }
+        Self {
+            records,
+            unseen_attention,
+            unseen,
+        }
+    }
+
+    /// The segment paints only when the inbox holds something this session.
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        self.records > 0
+    }
+
+    /// Gold only for genuine attention: an unseen record that asks the user
+    /// to act (approval / question / sandbox elevation).
+    #[must_use]
+    pub const fn demands_attention(self) -> bool {
+        self.unseen_attention > 0
+    }
+}
+
 /// The owner whose value currently wins for a setting fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(
@@ -153,12 +238,25 @@ pub struct InteractionTargetId(&'static str);
 
 impl InteractionTargetId {
     pub const HEADER_CONTEXT: Self = Self("header.context");
+    pub const HEADER_POD: Self = Self("header.pod");
+    pub const HEADER_NOTIFICATIONS: Self = Self("header.notifications");
 }
 
-/// Typed destination shared by keyboard and mouse input routes.
+/// Typed destination shared by keyboard and mouse input routes. The shared
+/// `Inspect` prefix is the grammar, not an accident: every topbar segment's
+/// action opens an inspector over state the renderer already holds (wiring
+/// manifest `header.*` rows all say "action opens the ...").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)] // the prefix is the contract, not noise
 pub enum InteractionAction {
     InspectContext,
+    /// Open the pod ledger — the workers register over `SubAgentResult[]`
+    /// (wiring manifest `header.pod` / `pod.ledger`).
+    InspectPod,
+    /// Open the notification center — the attention inbox over the
+    /// session's notification records (wiring manifest
+    /// `header.notifications`).
+    InspectNotifications,
 }
 
 /// Focus metadata for a selectable target.
@@ -178,6 +276,8 @@ pub enum InteractionFocus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InspectDetail {
     ContextBudget(ContextBudgetSnapshot),
+    PodCapacity(PodCapacitySnapshot),
+    AttentionInbox(AttentionInboxSnapshot),
 }
 
 /// A selectable region painted in the current frame.
@@ -228,9 +328,9 @@ impl InteractionRegistry {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContextBudgetSnapshot, InspectDetail, InteractionAction, InteractionFocus,
-        InteractionRegistry, InteractionTarget, InteractionTargetId, SettingApplySemantics,
-        SettingAuthority, SettingFact, UiSnapshot,
+        AttentionInboxSnapshot, ContextBudgetSnapshot, InspectDetail, InteractionAction,
+        InteractionFocus, InteractionRegistry, InteractionTarget, InteractionTargetId,
+        PodCapacitySnapshot, SettingApplySemantics, SettingAuthority, SettingFact, UiSnapshot,
     };
     use crate::config::ApiProvider;
     use ratatui::layout::Rect;
@@ -283,6 +383,85 @@ mod tests {
         assert_eq!(snapshot.max_tokens, max_tokens);
         assert!(snapshot.used_tokens <= snapshot.max_tokens);
         assert!(snapshot.percent_basis_points <= 10_000);
+    }
+
+    #[test]
+    fn attention_inbox_snapshot_reserves_gold_for_unseen_asks_only() {
+        let mut app =
+            crate::test_support::test_app_with_options(crate::test_support::test_tui_options("."));
+        let empty = AttentionInboxSnapshot::from_app(&app);
+        assert!(!empty.is_active(), "quiet session paints no segment");
+        assert!(!empty.demands_attention());
+
+        // One ask + one completion: only the ask is attention, and only
+        // while unseen.
+        app.record_notification_payload(
+            &crate::tui::notifications::NotificationPayload::approval_needed(
+                "Approval needed",
+                "bash",
+            ),
+        );
+        app.record_notification_payload(
+            &crate::tui::notifications::NotificationPayload::turn_complete("Turn complete"),
+        );
+        let inbox = AttentionInboxSnapshot::from_app(&app);
+        assert_eq!(inbox.records, 2);
+        assert_eq!(inbox.unseen, 2);
+        assert_eq!(inbox.unseen_attention, 1);
+        assert!(inbox.is_active());
+        assert!(inbox.demands_attention());
+
+        app.mark_notifications_read();
+        let read = AttentionInboxSnapshot::from_app(&app);
+        assert_eq!(read.unseen, 0);
+        assert_eq!(read.unseen_attention, 0);
+        assert!(read.is_active(), "records stay inspectable after reading");
+        assert!(!read.demands_attention(), "read asks are not gold");
+    }
+
+    #[test]
+    fn pod_capacity_snapshot_activates_on_any_session_pod_history() {
+        let mut app =
+            crate::test_support::test_app_with_options(crate::test_support::test_tui_options("."));
+        let idle = PodCapacitySnapshot::from_app(&app);
+        assert!(!idle.is_active(), "no pod, no segment");
+        assert_eq!(idle.max, app.max_subagents.max(1));
+
+        // A completed worker keeps the capacity fact alive this session
+        // (pod is/was active), with zero live.
+        app.subagent_cache
+            .push(crate::tools::subagent::SubAgentResult {
+                name: "agent_a".to_string(),
+                agent_id: "agent_a".to_string(),
+                context_mode: "fresh".to_string(),
+                fork_context: false,
+                workspace: None,
+                git_branch: None,
+                agent_type: crate::tools::subagent::FleetRole::Worker,
+                assignment: crate::tools::subagent::SubAgentAssignment {
+                    objective: "objective".to_string(),
+                    role: None,
+                },
+                model: "deepseek-v4-flash".to_string(),
+                nickname: None,
+                status: crate::tools::subagent::SubAgentStatus::Completed,
+                worker_status: None,
+                runtime_permissions: None,
+                parent_run_id: None,
+                spawn_depth: 0,
+                child_route: None,
+                result: None,
+                steps_taken: 0,
+                checkpoint: None,
+                needs_input: None,
+                duration_ms: 0,
+                started_at: None,
+                from_prior_session: false,
+            });
+        let done = PodCapacitySnapshot::from_app(&app);
+        assert_eq!(done.known_members, 1);
+        assert_eq!(done.live, 0, "a completed worker is not live");
+        assert!(done.is_active(), "pod was active this session");
     }
 
     #[test]

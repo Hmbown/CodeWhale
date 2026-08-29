@@ -67,6 +67,11 @@ pub enum ModalKind {
     ThemePicker,
     ContextMenu,
     ContextInspector,
+    /// Attention inbox (wiring manifest `header.notifications`): the
+    /// Tideline notifications surface over the session's retained
+    /// notification records. Rendered by
+    /// [`crate::tui::notifications::NotificationCenterView`].
+    NotificationCenter,
     SkillsManager,
     /// Unified, read-only extensions inventory. Mutations delegate to the
     /// existing Hooks / Plugins / Skills / MCP command controllers.
@@ -945,6 +950,16 @@ pub enum ViewEvent {
     },
     /// Open the live workers tab from the unified Fleet surface.
     FleetRosterOpenWorkersRequested,
+
+    /// Open the pod ledger (wiring manifest `header.pod` / `pod.ledger`):
+    /// the workers register over the SubAgentManager snapshot. Emitted by
+    /// the topbar's pod segment so mouse and keyboard share one route.
+    PodLedgerOpenRequested,
+
+    /// Mark the retained notification records read (wiring manifest
+    /// `notifications.mark-read`): advance the attention inbox's read
+    /// watermark. Emitted by the notification center's `r` key.
+    NotificationsMarkReadRequested,
 
     /// The roster asks the host to open the secondary named-Fleet switcher
     /// (`/pod fleets`). Editing stays on setup; this is pick/select only.

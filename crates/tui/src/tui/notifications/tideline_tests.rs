@@ -7,8 +7,8 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
 use super::{
-    NotificationKind, TidelineInbox, TidelineInboxRecord, render_tideline_inbox,
-    tideline_inbox_hitboxes,
+    NotificationCenterView, NotificationKind, NotificationPayload, TidelineInbox,
+    TidelineInboxRecord, render_tideline_inbox, tideline_inbox_hitboxes,
 };
 use crate::palette::UI_THEME;
 use crate::tui::golden_harness::{BLOCKER_SIZES, assert_matches_golden, render_golden_text};
@@ -178,4 +178,62 @@ fn notifications_degenerate_sizes_do_not_panic() {
         let inbox = TidelineInbox::new(&UI_THEME, &recs);
         let _ = draw(w, h, &inbox);
     }
+}
+
+fn inbox_test_app() -> crate::tui::app::App {
+    crate::test_support::test_app_with_options(crate::test_support::test_tui_options("."))
+}
+
+#[test]
+fn notification_center_projects_records_with_the_read_watermark() {
+    let mut app = inbox_test_app();
+    app.record_notification_payload(&NotificationPayload::approval_needed(
+        "Approval needed",
+        "bash",
+    ));
+    app.record_notification_payload(&NotificationPayload::turn_complete("Turn complete"));
+
+    let view = NotificationCenterView::new(&app);
+    assert_eq!(view.records.len(), 2, "one row per retained record");
+    assert!(
+        view.records.iter().all(|record| !record.read),
+        "fresh records are unread"
+    );
+
+    // Marking read advances the watermark; the records stay inspectable.
+    app.mark_notifications_read();
+    let mut view = NotificationCenterView::new(&app);
+    assert!(
+        view.records.iter().all(|record| record.read),
+        "the watermark reads every retained record"
+    );
+
+    // A later ask marks itself unread again without resurrecting the old.
+    app.record_notification_payload(&NotificationPayload::input_needed("Input needed"));
+    view.refresh_from_app(&app);
+    assert_eq!(view.records.len(), 3);
+    assert!(!view.records[2].read, "the new ask is unread");
+    assert!(view.records[0].read && view.records[1].read);
+}
+
+#[test]
+fn notification_retention_stays_bounded() {
+    let mut app = inbox_test_app();
+    for index in 0..30 {
+        app.record_notification_payload(&NotificationPayload::turn_complete(&format!(
+            "Turn complete {index}"
+        )));
+    }
+    assert_eq!(
+        app.notification_records.len(),
+        super::INBOX_RECORDS_MAX,
+        "the inbox keeps only the newest records"
+    );
+    assert_eq!(
+        app.notification_records
+            .last()
+            .map(|record| record.title.as_str()),
+        Some("Turn complete 29"),
+        "the newest record survives the bound"
+    );
 }

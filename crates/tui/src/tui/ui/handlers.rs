@@ -1422,6 +1422,25 @@ pub(crate) async fn handle_view_events(
                     Some(tr(app.ui_locale, MessageId::SubagentsFetching).to_string());
                 let _ = engine_handle.try_send(Op::ListSubAgents);
             }
+            // The topbar pod segment's destination (wiring manifest
+            // `header.pod` → `pod.ledger`): the workers register over the
+            // SubAgentManager snapshot, opened through the same path the
+            // roster's workers tab uses — push the register, then ask the
+            // engine for a fresh listing.
+            ViewEvent::PodLedgerOpenRequested => {
+                if app.view_stack.top_kind() != Some(ModalKind::SubAgents) {
+                    let agents = subagent_view_agents(app, &app.subagent_cache);
+                    app.view_stack
+                        .push(crate::tui::views::SubAgentsView::for_app(app, agents));
+                }
+                let _ = engine_handle.try_send(Op::ListSubAgents);
+            }
+            // The notification center's `r` key: advance the read watermark
+            // past every retained record (wiring manifest
+            // `notifications.mark-read`). The records stay inspectable.
+            ViewEvent::NotificationsMarkReadRequested => {
+                app.mark_notifications_read();
+            }
             ViewEvent::FleetSetupExternalConsentActivationRequested { provider_id, model } => {
                 // Validate the selected Fleet route by minting the read-only
                 // external credential capability only for this exact

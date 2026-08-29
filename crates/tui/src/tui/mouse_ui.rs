@@ -120,7 +120,7 @@ use crate::tui::views::{ContextMenuAction, HelpView, ModalKind, ViewEvent};
 // These functions will need to be imported from ui.rs or we can just import crate::tui::ui::*.
 use crate::tui::ui::{
     copy_cell_to_clipboard, detail_target_label, open_context_inspector,
-    open_details_pager_for_cell, open_pager_for_selection,
+    open_details_pager_for_cell, open_notification_center, open_pager_for_selection,
 };
 
 const COMPOSER_MOUSE_SCROLL_LINES: usize = 3;
@@ -555,6 +555,15 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
         if let Some(action) = action {
             match action {
                 InteractionAction::InspectContext => open_context_inspector(app),
+                // The pod ledger's register refresh needs the engine, so the
+                // click emits the same typed event the roster's workers tab
+                // uses; the host opens the register with a fresh listing.
+                InteractionAction::InspectPod => {
+                    return vec![ViewEvent::PodLedgerOpenRequested];
+                }
+                InteractionAction::InspectNotifications => {
+                    open_notification_center(app);
+                }
             }
             app.needs_redraw = true;
             return Vec::new();
@@ -1830,7 +1839,7 @@ mod tests {
         ContextBudgetSnapshot, InspectDetail, InteractionAction, InteractionFocus,
         InteractionTarget, InteractionTargetId,
     };
-    use crate::tui::views::{ContextMenuAction, ModalKind};
+    use crate::tui::views::{ContextMenuAction, ModalKind, ViewEvent};
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
@@ -2057,6 +2066,60 @@ mod tests {
                 KeyCode::Char('c'),
                 KeyModifiers::ALT
             ))
+        );
+    }
+
+    #[test]
+    fn pod_and_notification_segment_clicks_route_to_their_inspectors() {
+        let mut app = create_test_app();
+        app.launch.visible = false;
+        app.viewport
+            .interaction_targets
+            .register(InteractionTarget {
+                id: InteractionTargetId::HEADER_POD,
+                area: Rect::new(10, 0, 8, 1),
+                focus: InteractionFocus::Direct,
+                keyboard_action: Some(InteractionAction::InspectPod),
+                mouse_action: Some(InteractionAction::InspectPod),
+                inspect_detail: InspectDetail::PodCapacity(
+                    crate::tui::tideline::PodCapacitySnapshot {
+                        live: 1,
+                        max: 4,
+                        known_members: 2,
+                    },
+                ),
+            });
+        app.viewport
+            .interaction_targets
+            .register(InteractionTarget {
+                id: InteractionTargetId::HEADER_NOTIFICATIONS,
+                area: Rect::new(30, 0, 16, 1),
+                focus: InteractionFocus::Direct,
+                keyboard_action: Some(InteractionAction::InspectNotifications),
+                mouse_action: Some(InteractionAction::InspectNotifications),
+                inspect_detail: InspectDetail::AttentionInbox(
+                    crate::tui::tideline::AttentionInboxSnapshot {
+                        records: 1,
+                        unseen: 1,
+                        unseen_attention: 1,
+                    },
+                ),
+            });
+
+        // The pod click emits the typed ledger event (the host opens the
+        // register with a fresh listing); the notifications click pushes
+        // the center directly, like the context meter's inspector.
+        let events = handle_mouse_event(&mut app, left_click(12, 0));
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events.as_slice(),
+            [ViewEvent::PodLedgerOpenRequested]
+        ));
+
+        handle_mouse_event(&mut app, left_click(34, 0));
+        assert_eq!(
+            app.view_stack.top_kind(),
+            Some(ModalKind::NotificationCenter)
         );
     }
 

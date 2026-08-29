@@ -11822,6 +11822,82 @@ fn subagent_terminal_projection_from_mailbox_maps_terminal_messages() {
 }
 
 #[test]
+fn topbar_pod_and_notification_segments_register_inspectable_targets() {
+    // Wiring manifest `header.pod` + `header.notifications`: when the
+    // session has pod history and retained notification records, a real
+    // frame paints both segments in row 0 and registers their typed
+    // interaction targets through the same channel the context meter uses.
+    let mut app = create_test_app();
+    app.onboarding = crate::tui::app::OnboardingState::None;
+    app.launch.visible = false;
+    app.subagent_cache = vec![
+        make_subagent("agent_a", crate::tools::subagent::SubAgentStatus::Running),
+        make_subagent("agent_b", crate::tools::subagent::SubAgentStatus::Completed),
+    ];
+    app.record_notification_payload(
+        &crate::tui::notifications::NotificationPayload::approval_needed("Approval needed", "bash"),
+    );
+
+    let config = Config::default();
+    // Wide enough that the pod and inbox segments keep their cells (the
+    // widget sheds them below ~110 columns with this fixture).
+    let width = 140u16;
+    let height = 40u16;
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| {
+            let _ = super::frame::render(frame, &mut app, &config);
+        })
+        .unwrap();
+    let buf = terminal.backend().buffer();
+    let topbar_row: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect::<String>();
+    assert!(
+        topbar_row.contains("pod 1/"),
+        "pod segment states live/max: {topbar_row:?}"
+    );
+    assert!(
+        topbar_row.contains("notifications 1"),
+        "inbox segment states the record count: {topbar_row:?}"
+    );
+
+    use crate::tui::tideline::{InteractionAction, InteractionTargetId};
+    let targets: Vec<_> = app.viewport.interaction_targets.iter().collect();
+    let pod = targets
+        .iter()
+        .find(|target| target.id == InteractionTargetId::HEADER_POD)
+        .expect("pod segment registers an inspectable target");
+    assert_eq!(pod.mouse_action, Some(InteractionAction::InspectPod));
+    let inbox = targets
+        .iter()
+        .find(|target| target.id == InteractionTargetId::HEADER_NOTIFICATIONS)
+        .expect("notifications segment registers an inspectable target");
+    assert_eq!(
+        inbox.mouse_action,
+        Some(InteractionAction::InspectNotifications)
+    );
+
+    // A quiet session paints neither segment and registers neither target.
+    let mut quiet = create_test_app();
+    quiet.onboarding = crate::tui::app::OnboardingState::None;
+    quiet.launch.visible = false;
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| {
+            let _ = super::frame::render(frame, &mut quiet, &config);
+        })
+        .unwrap();
+    assert!(
+        quiet
+            .viewport
+            .interaction_targets
+            .iter()
+            .all(|target| target.id != InteractionTargetId::HEADER_POD
+                && target.id != InteractionTargetId::HEADER_NOTIFICATIONS),
+        "quiet session registers neither pod nor inbox target"
+    );
+}
+
+#[test]
 fn running_agent_count_unions_cache_and_progress() {
     let mut app = create_test_app();
     app.subagent_cache = vec![

@@ -189,12 +189,21 @@ if width >= 100 {
 ```
 
 **Shed order (global, what collapses first):** ① topbar Theme segment →
-② topbar Workspace → ③ topbar Whales → ④ Pod → ⑤ Run/breadcrumb →
-⑥ settings preview pane → ⑦ rail (100 → 0) → ⑧ ledger time columns
-(LAST UPDATE → RECEIPTS → ELAPSED) → ⑨ clock sheds date prefix →
-⑩ option strip 4→2 columns. Transcript and composer never shed below their
+② topbar Workspace → ③ topbar Pod → ④ Run/breadcrumb + attention inbox →
+⑤ settings preview pane → ⑥ rail (100 → 0) → ⑦ ledger time columns
+(LAST UPDATE → RECEIPTS → ELAPSED) → ⑧ clock sheds date prefix →
+⑨ option strip 4→2 columns. Transcript and composer never shed below their
 existing floors (`MIN_CHAT_HEIGHT = 3`, `MIN_COMPOSER_HEIGHT = 2` + border).
-Topbar ①–⑤ and ⑨ are implemented and tested.
+Topbar ①–④ and ⑧ are implemented and tested.
+
+*Design change 2026-08-29 (header-group wiring per the 20260829 takeover +
+wiring manifest):* the reference screens' two capacity segments (`pod n/m`
+of known members + `3/4 whales` of live/capacity) are consolidated into the
+manifest's one `header.pod` segment — `pod n/m` live workers over the
+configured maximum — and `header.notifications` joins the row as the
+attention-inbox count (gold only for unseen action-required records,
+shedding with the run chip). `topbar_work_*` goldens re-blessed under that
+approval.
 
 ## 5c. Golden buffers
 
