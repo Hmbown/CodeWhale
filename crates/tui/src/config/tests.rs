@@ -2825,6 +2825,10 @@ fn tui_stream_chunk_timeout_defaults_env_and_clamps() {
     let zero = Config {
         tui: Some(TuiConfig {
             stream_chunk_timeout_secs: Some(0),
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             ..TuiConfig::default()
         }),
         ..Config::default()
@@ -2837,6 +2841,10 @@ fn tui_stream_chunk_timeout_defaults_env_and_clamps() {
     let explicit_min = Config {
         tui: Some(TuiConfig {
             stream_chunk_timeout_secs: Some(MIN_STREAM_CHUNK_TIMEOUT_SECS),
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             ..TuiConfig::default()
         }),
         ..Config::default()
@@ -2849,6 +2857,10 @@ fn tui_stream_chunk_timeout_defaults_env_and_clamps() {
     let high = Config {
         tui: Some(TuiConfig {
             stream_chunk_timeout_secs: Some(MAX_STREAM_CHUNK_TIMEOUT_SECS + 1),
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             ..TuiConfig::default()
         }),
         ..Config::default()

@@ -1738,6 +1738,25 @@ impl App {
         self.submit_input()
     }
 
+    /// Non-destructive twin of [`Self::handle_composer_enter`] for callers
+    /// that must commit other state before the composer may be consumed:
+    /// the startup composer begins the launch session before it consumes
+    /// its draft, so it probes first and never begins a session for an
+    /// Enter the paste-burst window is about to absorb. Reads the exact
+    /// same two predicates `handle_composer_enter` acts on — the burst
+    /// window and the trimmed-empty buffer — without mutating anything.
+    #[must_use]
+    pub fn composer_enter_would_submit(&self) -> bool {
+        if self.use_paste_burst_detection
+            && self
+                .paste_burst
+                .newline_should_insert_instead_of_submit(Instant::now())
+        {
+            return false;
+        }
+        !self.input.trim().is_empty()
+    }
+
     /// Public wrapper around [`Self::consolidate_large_input`] that no-ops
     /// when the current input fits inside the safety cap. Both the paste-
     /// insert path (visible-before-submit) and the submit-time safety net

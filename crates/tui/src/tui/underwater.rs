@@ -7,7 +7,6 @@
 //! sidebar + dashboard + footer composition with four owners for one fact.
 
 use std::borrow::Cow;
-use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -23,7 +22,7 @@ use crate::config::HeaderItem;
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette::{ChromeInk, chrome_style};
 use crate::tui::{
-    app::{App, AppMode, OnboardingState},
+    app::{App, AppMode, HeaderActionTarget, HeaderHitbox, OnboardingState},
     approval::ApprovalMode,
     footer_ui::format_token_count_compact,
     views::ModalKind,
@@ -38,24 +37,36 @@ pub enum ShellTier {
     Wide,
 }
 
-const LAUNCH_ROWS: [(MessageId, &str); 6] = [
-    (MessageId::LaunchMenuWork, "Enter"),
-    (MessageId::LaunchMenuChat, "C"),
+/// The launch input model's seven-choice table (main's #5698 authority,
+/// kept verbatim): the row a direct key or ↑/↓ focuses, and what Enter
+/// dispatches. The Tideline startup stage PROJECTS this table onto its
+/// visible rows (`QUICK_ACTION_ROWS`/`OPTION_TILE_ROWS` below); the table
+/// itself is no longer rendered anywhere.
+const LAUNCH_ROWS: [(MessageId, &str); 7] = [
+    (MessageId::LaunchMenuConnect, "P"),
     (MessageId::LaunchMenuResumeSession, "Ctrl+R"),
+    (MessageId::LaunchMenuWork, "W"),
     (MessageId::LaunchMenuNewWorktree, "Ctrl+N"),
-    (MessageId::LaunchMenuChangelog, "Ctrl+L"),
-    (MessageId::LaunchMenuQuit, "Ctrl+Q"),
+    (MessageId::LaunchMenuChat, "C"),
+    (MessageId::LaunchMenuTheme, "T"),
+    (MessageId::LaunchMenuHelp, "F1"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchAction {
     None,
+    Connect,
     NewSession,
     NewChat,
     CreateWorktree(String),
     Resume,
+    Theme,
+    Help,
     Changelog,
     Quit,
+    /// Submit the composed pre-session message: begin the launch session,
+    /// then hand the text to the normal composer dispatch path.
+    SendComposer,
 }
 
 impl LaunchAction {
@@ -112,18 +123,63 @@ pub fn handle_launch_key(
         };
     }
 
+    // Tab moves keyboard focus between the startup choices and the
+    // pre-session composer — the mouse equivalent is clicking the composer
+    // row. The worktree name prompt above keeps its own keys while open.
+    if matches!(key.code, KeyCode::Tab)
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+    {
+        launch.composer_focus = !launch.composer_focus;
+        return LaunchAction::None;
+    }
+
     let direct = match key.code {
+        KeyCode::Char('p') | KeyCode::Char('P')
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) =>
+        {
+            Some(0)
+        }
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(1),
+        KeyCode::Char('w') | KeyCode::Char('W')
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) =>
+        {
+            Some(2)
+        }
+        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(3),
         KeyCode::Char('c') | KeyCode::Char('C')
             if !key
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) =>
         {
-            Some(1)
+            Some(4)
         }
-        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(2),
-        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(3),
-        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(4),
-        KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(5),
+        KeyCode::Char('t') | KeyCode::Char('T')
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) =>
+        {
+            Some(5)
+        }
+        KeyCode::F(1) => Some(6),
+        // Changelog and quit remain stable keyboard-only shell actions. They
+        // are intentionally outside the seven startup choices in the Tideline
+        // contract, so invoking either must not move visible row focus.
+        KeyCode::Char('l') | KeyCode::Char('L')
+            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            return LaunchAction::Changelog;
+        }
+        KeyCode::Char('q') | KeyCode::Char('Q')
+            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            return LaunchAction::Quit;
+        }
         _ => None,
     };
     if let Some(selected) = direct {
@@ -144,21 +200,127 @@ pub fn handle_launch_key(
     }
 
     match launch.selected {
-        0 => LaunchAction::NewSession,
-        1 => LaunchAction::NewChat,
-        2 => LaunchAction::Resume,
+        0 => LaunchAction::Connect,
+        1 => LaunchAction::Resume,
+        2 => LaunchAction::NewSession,
         3 if launch.worktree_available => {
             launch.worktree_input = Some(String::new());
             launch.status = Some(tr(locale, MessageId::LaunchWorktreePrompt).into_owned());
+            // The name prompt owns the keyboard while it is open; the
+            // composer must not hold focus underneath it.
+            launch.composer_focus = false;
             LaunchAction::None
         }
         3 => {
             launch.status = Some(tr(locale, MessageId::LaunchWorktreeNeedsGit).into_owned());
             LaunchAction::None
         }
-        4 => LaunchAction::Changelog,
-        5 => LaunchAction::Quit,
+        4 => LaunchAction::NewChat,
+        5 => LaunchAction::Theme,
+        6 => LaunchAction::Help,
         _ => LaunchAction::None,
+    }
+}
+
+/// What the pre-session composer layer decided about one key while it holds
+/// focus.
+///
+/// This is only an admission guard, never an input implementation: the
+/// startup composer is the session's own [`crate::tui::app::ComposerState`],
+/// and every editing key is answered by the conversation composer match in
+/// the event loop — the single composer input authority — exactly as it
+/// would be in a live session. Word motion, selection, completion menus,
+/// attachments, history, paste bursts, and vim behaviour therefore cannot
+/// drift from the shell. Only three things are launch-specific here: leaving
+/// the composer, handing a key to the startup menu, and submitting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchComposerKey {
+    /// Leave the composer; the key is fully consumed (Esc, Tab, empty
+    /// Enter).
+    Blur,
+    /// Leave the composer and let the same key then drive the menu (plain
+    /// Up/Down while no completion menu is open).
+    BlurToMenu,
+    /// Submit the composed message through the normal dispatch path.
+    Submit,
+    /// A completion-menu selection was applied (a slash or mention popup was
+    /// open and Enter picked the highlighted entry); the key is consumed
+    /// without submitting — the completed text stays in the composer.
+    MenuSelect,
+    /// A chord the startup menu owns (Ctrl+R resume, Ctrl+N worktree,
+    /// Ctrl+L changelog, Ctrl+Q quit, F1 help): the same key is then handed
+    /// to [`handle_launch_key`]. Startup shortcuts deliberately win over
+    /// their composer meanings while the startup screen is up.
+    MenuChord,
+    /// Not launch-specific: the conversation composer match below owns the
+    /// key. The event loop must not run [`handle_launch_key`] for it.
+    ComposerAuthority,
+}
+
+/// Admit one key for the pre-session composer.
+///
+/// Editing keys are never handled here — they fall through to the
+/// conversation composer match so there is exactly one composer input
+/// system. Plain startup shortcut letters (p/w/c/t) intentionally lose to
+/// typing while the composer holds focus; their chords (Ctrl+R/N/L/Q, F1)
+/// stay menu-owned via [`LaunchComposerKey::MenuChord`].
+pub fn handle_launch_composer_key(app: &mut App, key: KeyEvent) -> LaunchComposerKey {
+    let multiline = app.composer_multiline_mode;
+    match key.code {
+        KeyCode::Esc | KeyCode::Tab => {
+            app.launch.composer_focus = false;
+            LaunchComposerKey::Blur
+        }
+        KeyCode::Up | KeyCode::Down
+            // Completion menus stay composer-owned: navigating their entries
+            // must match the conversation composer exactly.
+            if crate::tui::slash_menu::visible_slash_menu_entries(app, 1).is_empty()
+                && crate::tui::file_mention::visible_mention_menu_entries(app, 1).is_empty() =>
+        {
+            app.launch.composer_focus = false;
+            LaunchComposerKey::BlurToMenu
+        }
+        KeyCode::Enter
+            if crate::tui::composer_ui::composer_submit_chord(key, multiline).is_some() =>
+        {
+            // #573 parity with the session composer's Enter arm: when a
+            // completion popup is matching (e.g. `/mo` → `/model`), Enter
+            // applies the highlighted entry instead of sending the literal
+            // prefix. A mention completion amends the composed text and is
+            // consumed; a slash completion completes the command and falls
+            // through to Submit so the launch dispatch path executes it.
+            let mention_entries =
+                crate::tui::file_mention::visible_mention_menu_entries(app, 1);
+            if !mention_entries.is_empty()
+                && crate::tui::file_mention::apply_mention_menu_selection(
+                    app,
+                    &mention_entries,
+                )
+            {
+                return LaunchComposerKey::MenuSelect;
+            }
+            let slash_entries = crate::tui::slash_menu::visible_slash_menu_entries(app, 1);
+            if !slash_entries.is_empty() {
+                crate::tui::slash_menu::apply_slash_menu_selection(app, &slash_entries, false);
+                app.close_slash_menu();
+            }
+            if app.input.trim().is_empty() {
+                app.launch.composer_focus = false;
+                LaunchComposerKey::Blur
+            } else {
+                LaunchComposerKey::Submit
+            }
+        }
+        KeyCode::Char('r' | 'n' | 'l' | 'q')
+            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            LaunchComposerKey::MenuChord
+        }
+        KeyCode::F(1) => LaunchComposerKey::MenuChord,
+        // Every other key — text, caret motion, word motion, selection,
+        // newline chords, Home/End, kill/chord editing, vim motions — is
+        // answered by the conversation composer authority.
+        _ => LaunchComposerKey::ComposerAuthority,
     }
 }
 
@@ -325,36 +487,11 @@ impl RunningToolFacts {
 const WORKING_BUBBLE_FRAMES: [&str; 8] = ["⠀", "⢀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣿"];
 const COMPLETION_BREATH_MS: u128 = 800;
 const COMPLETION_RELEASE_MS: u128 = 560;
-/// Signal Cut hero mark. The Whale Teams roster (CWC 2026-08-15) reads
-/// head-left, blunt nose, swept dorsal on an arched back, a short tail stock
-/// that stays body mass (`▙▄▄▞`) and rises into the attached crown fluke
-/// `▚△▞`. The fluke's notch `△` sits directly above the rising stock tip
-/// `▞`, so the tail reads as one continuous animal instead of a bar with a
-/// shape floating past it. The belly carries one cyan current cut. The glyph
-/// vocabulary is the one `whales::art` uses for the six-role portraits.
-const IDLE_WHALE_SPOUT_ROW: &str = "    ˚";
-const IDLE_WHALE_ROWS: [&str; 3] = ["  ▗▄▄▟▄▄▄▄▄▖  ▚△▞", " ▐█·████████▙▄▄▞", "  ▝▀▀▀▀▀▀▀▀▘"];
-
-/// Soft variant: same silhouette, one body cell shorter, blush around the eye
-/// and a sparkle beside the spout.
-const UWU_IDLE_WHALE_SPOUT_ROW: &str = "    ˚✦";
-const UWU_IDLE_WHALE_ROWS: [&str; 3] = ["  ▗▄▄▟▄▄▄▄▖  ▚△▞", " ▐█░·░█████▙▄▄▞", "  ▝▀▀▀▀▀▀▀▘"];
-
-/// The belly row is the mark's cyan current cut, not gold body mass; it holds
-/// still while the caustic sweep travels across the gold rows above it.
-const IDLE_WHALE_CURRENT_ROW: usize = 2;
-
-const IDLE_SHIMMER_CYCLE_MS: u128 = 4_000;
-const IDLE_SHIMMER_SWEEP_FRACTION: f32 = 0.32;
-const IDLE_SHIMMER_BAND_HALF_WIDTH: f32 = 0.38;
-const IDLE_SHIMMER_STRENGTH: f32 = 0.33;
-
-/// The build-version string the header renders. An unstamped local build uses
-/// the build script's development marker while CI/release carries its source
-/// stamp; the header always reports that real build provenance.
-fn shell_build_version() -> Cow<'static, str> {
-    Cow::Borrowed(env!("CODEWHALE_BUILD_VERSION"))
-}
+// The idle whale portrait rows (IDLE_WHALE_ROWS / UWU_IDLE_WHALE_ROWS) and
+// their caustic shimmer were deleted per the 2026-08-29 founder directive:
+// hand-drawn whale art is out; the only sanctioned terminal mark is the one
+// generated from the brand master path. The ambient empty-state surface
+// (wordmark, context caption, prompt) below is not whale art and stays.
 
 impl ShellPhase {
     #[must_use]
@@ -424,6 +561,8 @@ impl ShellPhase {
     }
 
     #[must_use]
+    #[allow(dead_code)] // classic header/band renderer: superseded by the Tideline shell
+    // (topbar + merged footer, spec §3, 2026-08-29); deletion is its own slice.
     pub fn color(self, app: &App) -> Color {
         phase_ink(self).color(&app.ui_theme)
     }
@@ -466,8 +605,36 @@ fn header_permission_ink(mode: ApprovalMode) -> ChromeInk {
     }
 }
 
+#[allow(dead_code)] // classic header/band renderer: superseded by the Tideline shell
+// (topbar + merged footer, spec §3, 2026-08-29); deletion is its own slice.
 fn header_fg(app: &App, ink: ChromeInk) -> Style {
     chrome_style(&app.ui_theme, ink)
+}
+
+/// One posture word with its ink — the unit the classic header's lockup was
+/// made of, now carried as merged-footer chips.
+pub(crate) type PostureChip = (Cow<'static, str>, ChromeInk);
+
+/// The posture lockup as two standalone chips for the Tideline merged
+/// footer (spec §3: the old header's mode/permission chips move into the
+/// footer activity segment). Same words, same inks, and the same mapping
+/// the classic header used — [`header_mode_ink`] for the mode word,
+/// [`header_permission_ink`] for the permission phrase. The filesystem
+/// scope notice, when it deviates, folds into the permission chip's text
+/// (the header already painted it in the permission ink).
+pub(crate) fn posture_chips(app: &App) -> (Option<PostureChip>, Option<PostureChip>) {
+    let mode = (
+        mode_label(app.ui_locale, app.mode),
+        header_mode_ink(app.mode),
+    );
+    let mut permission = (
+        permission_label(app),
+        header_permission_ink(app.approval_mode),
+    );
+    if let Some(scope) = filesystem_scope_notice(app) {
+        permission.0 = format!("{} · {scope}", permission.0).into();
+    }
+    (Some(mode), Some(permission))
 }
 
 /// Summarize only tools whose lifecycle is actually `Running`. A read label
@@ -811,312 +978,324 @@ fn render_launch_content_line(
     );
 }
 
-fn launch_has_detail(area: Rect) -> bool {
-    area.width >= 60 && area.height >= 22
+/// Where the pre-session composer strip docks inside the startup stage.
+///
+/// The dock owns the stage spacer's bottom rows (spec §5b: composer
+/// `Length(4)` incl. border, below the option strip and above the merged
+/// footer): `[input, hint, rule, prompt]` at four rows, shedding the rule
+/// first, then the hint shares the prompt row — the tiers the classic
+/// screen's strip authored, re-derived against `startup_layout`. Rows are
+/// stage-relative; `None` when the stage cannot fit even the input row.
+fn launch_composer_rows(stage: Rect) -> Option<(u16, u16)> {
+    let dock = startup_layout(stage).dock;
+    let input_y = dock.y.saturating_sub(stage.y);
+    (dock.height >= 1).then_some((input_y, input_y.saturating_add(1)))
 }
 
-fn launch_content_start(_area: Rect) -> u16 {
-    // Keep the decision block anchored just below the shell header at every
-    // detailed size. Vertically centering it made a wide terminal look like
-    // an old fixed-height menu floating in decorative emptiness.
-    3
-}
-
-fn launch_row_y(area: Rect, index: usize) -> u16 {
-    const DETAIL_ROW_OFFSETS: [u16; 6] = [4, 7, 11, 12, 15, 16];
-    let start = launch_content_start(area);
-    if launch_has_detail(area) {
-        start.saturating_add(DETAIL_ROW_OFFSETS[index])
-    } else {
-        start.saturating_add(u16::try_from(index).unwrap_or(0))
-    }
-}
-
-fn launch_workspace_name(app: &App) -> String {
-    app.workspace
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .map_or_else(
-            || crate::utils::display_path(&app.workspace),
-            str::to_string,
-        )
-}
-
-/// Render the distinct pre-session choice state. This screen contains no
-/// transcript, composer, dashboard, or post-launch whale: each row dispatches
-/// to real session/worktree machinery before the idle ocean is entered.
-pub fn render_launch_screen(area: Rect, buf: &mut Buffer, app: &App) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    Block::default()
-        .style(Style::default().bg(app.ui_theme.surface_bg))
-        .render(area, buf);
-    let width = usize::from(area.width);
-    let version = format!("v{}", shell_build_version());
-    let workspace_budget = width.saturating_sub(version.width() + 6);
-    let workspace = truncate_to_width(
-        &crate::utils::display_path(&app.workspace),
-        workspace_budget,
-    );
-    let mut header = vec![
-        Span::styled(
-            "cw",
-            Style::default()
-                .fg(app.ui_theme.accent_primary)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled(workspace, Style::default().fg(app.ui_theme.text_muted)),
-    ];
-    let gap = width.saturating_sub(span_width(&header) + version.width());
-    header.push(Span::raw(" ".repeat(gap)));
-    header.push(Span::styled(
-        version,
-        Style::default().fg(app.ui_theme.text_hint),
-    ));
-    render_launch_line(area, buf, 0, header);
-    if area.height > 1 {
-        render_launch_line(
-            area,
-            buf,
-            1,
-            vec![Span::styled(
-                "─".repeat(width),
-                Style::default().fg(app.ui_theme.border),
-            )],
-        );
-    }
-
-    if launch_has_detail(area) {
-        let content_start = launch_content_start(area);
-        render_launch_content_line(
-            area,
-            buf,
-            content_start,
-            2,
-            vec![Span::styled(
-                tr(app.ui_locale, MessageId::LaunchStartTitle).into_owned(),
-                Style::default()
-                    .fg(app.ui_theme.text_body)
-                    .add_modifier(Modifier::BOLD),
-            )],
-        );
-        let workspace_id = if app.launch.worktree_available {
-            MessageId::LaunchWorkspaceGitReady
-        } else {
-            MessageId::LaunchWorkspaceFolderReady
-        };
-        render_launch_content_line(
-            area,
-            buf,
-            content_start.saturating_add(1),
-            2,
-            vec![Span::styled(
-                tr(app.ui_locale, workspace_id).replace("{name}", &launch_workspace_name(app)),
-                Style::default().fg(app.ui_theme.text_soft),
-            )],
-        );
-        let provider_id = if app.onboarding_needs_api_key {
-            MessageId::LaunchProviderSetupNeeded
-        } else {
-            MessageId::LaunchProviderConfigured
-        };
-        render_launch_content_line(
-            area,
-            buf,
-            content_start.saturating_add(2),
-            2,
-            vec![Span::styled(
-                tr(app.ui_locale, provider_id).into_owned(),
-                Style::default().fg(if app.onboarding_needs_api_key {
-                    app.ui_theme.warning
-                } else {
-                    app.ui_theme.success
-                }),
-            )],
-        );
-        for (row, description_id) in [
-            (launch_row_y(area, 0), MessageId::LaunchWorkDescription),
-            (launch_row_y(area, 1), MessageId::LaunchChatDescription),
-        ] {
-            render_launch_content_line(
-                area,
-                buf,
-                row.saturating_add(1),
-                4,
-                vec![Span::styled(
-                    tr(app.ui_locale, description_id).into_owned(),
-                    Style::default().fg(app.ui_theme.text_muted),
-                )],
-            );
+/// The line the caret sits on in a multi-line composer buffer, plus the
+/// caret's column within that line. The launch strip projects one row, so a
+/// Shift+Enter newline is truthfully shown as the line being edited.
+fn launch_cursor_line(text: &str, caret: usize) -> (&str, usize) {
+    let mut consumed = 0usize;
+    for line in text.split('\n') {
+        let len = line.chars().count();
+        if caret <= consumed + len {
+            return (line, caret - consumed);
         }
-        for (row, heading_id) in [
-            (launch_row_y(area, 2), MessageId::LaunchGroupContinue),
-            (launch_row_y(area, 4), MessageId::LaunchGroupMore),
-        ] {
-            render_launch_content_line(
-                area,
-                buf,
-                row.saturating_sub(1),
-                2,
-                vec![Span::styled(
-                    tr(app.ui_locale, heading_id).into_owned(),
-                    Style::default()
-                        .fg(app.ui_theme.text_hint)
-                        .add_modifier(Modifier::BOLD),
-                )],
-            );
-        }
+        consumed += len + 1;
     }
+    ("", 0)
+}
 
-    for (index, (label_id, key)) in LAUNCH_ROWS.iter().enumerate() {
-        let y = launch_row_y(area, index);
-        if y >= area.height.saturating_sub(3) {
+/// Visible `(before_caret, after_caret)` text for the caret's line so the
+/// single-row projection keeps the caret on screen while editing.
+fn launch_caret_window(line: &str, caret_col: usize, budget: usize) -> (String, String) {
+    let chars: Vec<char> = line.chars().collect();
+    let caret_col = caret_col.min(chars.len());
+    // The budget is display columns, not characters: CJK and emoji occupy
+    // two cells, and a character-count slice let a wide draft push the caret
+    // past the clip end (review finding 4 — the caret vanished on
+    // CJK/emoji-heavy lines because the downstream truncation cuts from the
+    // end). Accumulate backward from the caret by rendered width so the
+    // caret always lands inside the budget, then fill forward with whatever
+    // width remains.
+    let before_budget = budget.saturating_sub(1);
+    let mut before = String::new();
+    let mut before_width = 0usize;
+    for &ch in chars[..caret_col].iter().rev() {
+        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if before_width.saturating_add(ch_width) > before_budget {
             break;
         }
-        let selected = app.launch.selected == index;
-        let mut label = tr(app.ui_locale, *label_id).into_owned();
-        if index == 3 && !app.launch.worktree_available {
-            label.push_str(&format!(
-                " · {}",
-                tr(app.ui_locale, MessageId::LaunchMenuUnavailable)
-            ));
+        before_width += ch_width;
+        before.insert(0, ch);
+    }
+    let after_budget = budget.saturating_sub(before_width + 1);
+    let mut after = String::new();
+    let mut after_width = 0usize;
+    for &ch in chars[caret_col..].iter() {
+        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if after_width.saturating_add(ch_width) > after_budget {
+            break;
         }
-        if index == 2 {
-            label.push_str(&format!(
-                " · {}",
-                tr(app.ui_locale, MessageId::LaunchMenuSavedCount)
-                    .replace("{count}", &app.launch.workspace_session_count.to_string())
-            ));
+        after_width += ch_width;
+        after.push(ch);
+    }
+    (before, after)
+}
+
+/// Same caret convention as the worktree name prompt on this screen: a
+/// static block that low_motion renders as an underscore.
+fn launch_cursor_glyph(low_motion: bool) -> &'static str {
+    if low_motion { "_" } else { "▌" }
+}
+
+/// Paint the active completion popup for the launch composer (#5698 review
+/// finding 2: the menus existed — the conversation composer match drove
+/// them — but the launch screen returned before `ComposerWidget`, so typing
+/// `/mo` showed nothing). A compact list directly above the input row; the
+/// same entries, the same selected-row convention, and the same mention-
+/// before-slash precedence as the session popup inside `ComposerWidget`.
+pub fn render_launch_completion_popup(
+    area: Rect,
+    buf: &mut Buffer,
+    app: &App,
+    input_y: u16,
+    slash_menu_entries: &[crate::tui::widgets::SlashMenuEntry],
+    mention_menu_entries: &[String],
+) {
+    if !app.launch.composer_focus {
+        return;
+    }
+    // Rows are (marker, label, description) rendered as one inset line.
+    let rows: Vec<(bool, String, String)> = if !mention_menu_entries.is_empty() {
+        let selected = app
+            .mention_menu_selected
+            .min(mention_menu_entries.len().saturating_sub(1));
+        mention_menu_entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| (i == selected, format!("@{entry}"), String::new()))
+            .collect()
+    } else if !slash_menu_entries.is_empty() {
+        let selected = app
+            .slash_menu_selected
+            .min(slash_menu_entries.len().saturating_sub(1));
+        slash_menu_entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                let label = if let Some(ref hint) = e.alias_hint {
+                    format!("{} or /{}", e.name, hint)
+                } else {
+                    e.name.clone()
+                };
+                (i == selected, label, e.description.clone())
+            })
+            .collect()
+    } else {
+        return;
+    };
+
+    // Popup rows stack upward from the composer input row; never past the
+    // header rule, and never more than eight.
+    let max_rows = (input_y.saturating_sub(2) as usize).min(8);
+    if max_rows == 0 {
+        return;
+    }
+    // Show the tail around the selection like the session popup scrolls.
+    let total = rows.len();
+    let selected_idx = rows.iter().position(|(sel, _, _)| *sel).unwrap_or(0);
+    let top = if total <= max_rows {
+        0
+    } else {
+        let half = max_rows / 2;
+        if selected_idx <= half {
+            0
+        } else if selected_idx + half >= total {
+            total - max_rows
+        } else {
+            selected_idx - half
         }
-        let prefix = if selected { "▸ " } else { "  " };
-        let key_width = key.width();
-        let content_width = width.saturating_sub(4);
-        let label_budget = content_width.saturating_sub(prefix.width() + key_width + 2);
-        let label = truncate_to_width(&label, label_budget);
-        let fill = content_width.saturating_sub(prefix.width() + label.width() + key_width);
-        let row_style = if selected {
-            crate::tui::menu_style::theme_selected_row_style(&app.ui_theme)
-        } else if index == 3 && !app.launch.worktree_available {
-            Style::default().fg(app.ui_theme.text_dim)
+    };
+    for (offset, (is_selected, label, description)) in rows
+        .iter()
+        .enumerate()
+        .skip(top)
+        .take(max_rows)
+        .map(|(_, row)| row.clone())
+        .enumerate()
+    {
+        let y = input_y - 1 - offset as u16;
+        let style = if is_selected {
+            crate::tui::menu_style::selected_row_bg_style().fg(crate::palette::SELECTION_TEXT)
         } else {
-            Style::default().fg(app.ui_theme.text_body)
+            Style::default().fg(app.ui_theme.text_muted)
         };
-        let key_style = if selected {
-            row_style
-        } else {
-            Style::default().fg(app.ui_theme.text_hint)
-        };
+        let marker = crate::tui::glyphs::selection_marker(is_selected);
+        let mut line = format!("{marker} {label}");
+        if !description.is_empty() {
+            let used = line.width();
+            let budget = usize::from(area.width)
+                .saturating_sub(4)
+                .saturating_sub(used + 2);
+            if budget > 1 {
+                line.push_str("  ");
+                line.push_str(&truncate_to_width(description.as_str(), budget));
+            }
+        }
         render_launch_content_line(
             area,
             buf,
             y,
             2,
-            vec![
-                Span::styled(prefix, row_style),
-                Span::styled(label, row_style),
-                Span::styled(" ".repeat(fill), row_style),
-                Span::styled(*key, key_style),
-            ],
+            vec![Span::styled(
+                truncate_to_width(&line, usize::from(area.width).saturating_sub(4)),
+                style,
+            )],
         );
     }
+}
 
-    if area.height < 3 {
+/// The pre-session composer's display projection — everything the docked
+/// strip paints, injected so the startup stage stays a deterministic
+/// widget for golden buffers (the everything-injectable law
+/// `TidelineStartup` follows). Built from `App` by
+/// [`LaunchComposerDisplay::from_app`]; the row painting itself is
+/// `render_launch_composer` — #5698's docked strip, reused line-for-line
+/// and re-docked below the option strip.
+#[derive(Debug, Clone, Default)]
+pub struct LaunchComposerDisplay<'a> {
+    /// Whether the composer holds keyboard focus (`launch.composer_focus`).
+    pub focused: bool,
+    /// The session composer's own draft (`composer_display_input`).
+    pub input: &'a str,
+    /// The caret position inside `input` (`composer_display_cursor`).
+    pub caret: usize,
+    /// Low-motion mode renders the caret as an underscore.
+    pub low_motion: bool,
+    /// The blurred, empty composer's placeholder.
+    pub placeholder: std::borrow::Cow<'a, str>,
+    /// The focused composer's hint line.
+    pub hint_focused: std::borrow::Cow<'a, str>,
+    /// The blurred composer's hint line.
+    pub hint_blurred: std::borrow::Cow<'a, str>,
+}
+
+impl<'a> LaunchComposerDisplay<'a> {
+    /// Project the session's own composer state — the single input
+    /// authority; the launch dock only re-frames it.
+    #[must_use]
+    pub fn from_app(app: &'a App) -> Self {
+        Self {
+            focused: app.launch.composer_focus,
+            input: app.composer_display_input(),
+            caret: app.composer_display_cursor(),
+            low_motion: app.low_motion,
+            placeholder: tr(app.ui_locale, MessageId::ComposerPlaceholder),
+            hint_focused: tr(app.ui_locale, MessageId::LaunchComposerHint),
+            hint_blurred: tr(app.ui_locale, MessageId::LaunchComposerFocusHint),
+        }
+    }
+}
+
+/// Draw the docked pre-session composer strip: the session's own
+/// `ComposerState` projected as one bottom-docked row — prompt glyph,
+/// caret line or placeholder, and a send glyph — with its hint line
+/// beneath. This is the same composer state the conversation view edits,
+/// not a second input system; only the geometry is the startup stage's
+/// dock.
+fn render_launch_composer(
+    area: Rect,
+    buf: &mut Buffer,
+    theme: &UiTheme,
+    display: &LaunchComposerDisplay<'_>,
+    input_y: u16,
+    hint_y: u16,
+) {
+    let focused = display.focused;
+    let content_width = usize::from(area.width).saturating_sub(4);
+    if content_width == 0 {
         return;
     }
-    let rule_y = area.height.saturating_sub(3);
-    render_launch_line(
-        area,
-        buf,
-        rule_y,
-        vec![Span::styled(
-            "─".repeat(width),
-            Style::default().fg(app.ui_theme.border),
-        )],
-    );
-    let prompt = if let Some(input) = app.launch.worktree_input.as_deref() {
-        format!(
-            "{}  {}{}",
-            tr(app.ui_locale, MessageId::LaunchWorktreeNameLabel),
-            input,
-            if app.low_motion { "_" } else { "▌" }
-        )
-    } else if let Some(status) = app.launch.status.as_deref() {
-        status.to_string()
-    } else if area.width < 60 {
-        format!(
-            "j/k:{} · Enter:{}",
-            tr(app.ui_locale, MessageId::LaunchHintMove),
-            tr(app.ui_locale, MessageId::LaunchHintOpen)
-        )
+    // Inside the row: prompt glyph + space up front, the send affordance's
+    // last two columns, and the input between them.
+    let text_budget = content_width.saturating_sub(4);
+    let prompt_style = if focused {
+        theme.accent_primary
     } else {
-        tr(app.ui_locale, MessageId::LaunchTipFlags).into_owned()
+        theme.text_hint
     };
-    render_launch_line(
-        area,
-        buf,
-        area.height.saturating_sub(2),
-        vec![Span::styled(
-            truncate_to_width(&prompt, width),
-            Style::default().fg(if app.launch.status.is_some() {
-                app.ui_theme.text_muted
-            } else {
-                app.ui_theme.text_hint
-            }),
-        )],
-    );
+    let mut spans = vec![
+        Span::styled("❯", Style::default().fg(prompt_style)),
+        Span::raw(" "),
+    ];
 
-    let workspace_kind = tr(
-        app.ui_locale,
-        if app.launch.worktree_available {
-            MessageId::LaunchWorkspaceGitShort
+    let input = display.input;
+    let caret = launch_cursor_glyph(display.low_motion);
+    let body = if input.is_empty() {
+        if focused {
+            caret.to_string()
         } else {
-            MessageId::LaunchWorkspaceFolderShort
-        },
-    );
-    let provider = tr(
-        app.ui_locale,
-        if app.onboarding_needs_api_key {
-            MessageId::LaunchProviderSetupShort
-        } else {
-            MessageId::LaunchProviderConfiguredShort
-        },
-    );
-    let status = format!(
-        "{} · {workspace_kind} · {provider}",
-        launch_workspace_name(app)
-    );
-    render_launch_line(
-        area,
-        buf,
-        area.height.saturating_sub(1),
-        vec![Span::styled(
-            truncate_to_width(&status, width),
-            Style::default().fg(app.ui_theme.text_dim),
-        )],
-    );
-}
-
-/// Record the launch row rects immediately after the launch frame is painted.
-/// The coordinates mirror the renderer's responsive row placement exactly.
-pub fn record_launch_row_areas(area: Rect, launch: &mut crate::tui::app::LaunchState) {
-    launch.row_areas.clear();
-    for index in 0..LAUNCH_ROWS.len() {
-        let y = launch_row_y(area, index);
-        if y >= area.height.saturating_sub(3) {
-            break;
+            display.placeholder.to_string()
         }
-        launch.row_areas.push(Rect {
-            x: area.x.saturating_add(2),
-            y: area.y.saturating_add(y),
-            width: area.width.saturating_sub(4),
-            height: 1,
-        });
+    } else if focused {
+        let (line, col) = launch_cursor_line(input, display.caret);
+        let (before, after) = launch_caret_window(line, col, text_budget);
+        format!("{before}{caret}{after}")
+    } else {
+        let (line, _) = launch_cursor_line(input, display.caret);
+        line.to_string()
+    };
+    let body_style = if focused {
+        theme.text_body
+    } else if input.is_empty() {
+        theme.text_hint
+    } else {
+        theme.text_muted
+    };
+    let body = truncate_to_width(&body, text_budget);
+    let body_width = body.width();
+    spans.push(Span::styled(body, Style::default().fg(body_style)));
+
+    let send_style = if input.trim().is_empty() {
+        theme.text_hint
+    } else {
+        theme.accent_action
+    };
+    spans.push(Span::raw(
+        " ".repeat(text_budget.saturating_sub(body_width)),
+    ));
+    spans.push(Span::styled(" ↑", Style::default().fg(send_style)));
+    render_launch_content_line(area, buf, input_y, 2, spans);
+
+    // In the dock's compact tiers the hint row is the shared prompt row —
+    // the stage's transient status line paints over it after — so the row
+    // only has to exist inside the stage.
+    if hint_y < area.height {
+        let hint = if focused {
+            display.hint_focused.clone()
+        } else {
+            display.hint_blurred.clone()
+        };
+        render_launch_content_line(
+            area,
+            buf,
+            hint_y,
+            2,
+            vec![Span::styled(
+                truncate_to_width(hint.as_ref(), content_width),
+                Style::default().fg(if focused {
+                    theme.text_hint
+                } else {
+                    theme.text_dim
+                }),
+            )],
+        );
     }
 }
-
+#[allow(dead_code)] // classic header/band renderer: superseded by the Tideline shell
+// (topbar + merged footer, spec §3, 2026-08-29); deletion is its own slice.
 fn compact_tokens(tokens: i64) -> String {
     if tokens >= 1_000_000 {
         format!("{:.1}M", tokens as f64 / 1_000_000.0)
@@ -1125,6 +1304,93 @@ fn compact_tokens(tokens: i64) -> String {
     } else {
         tokens.to_string()
     }
+}
+
+#[allow(dead_code)]
+// classic header/band renderer: superseded by the Tideline shell
+// (topbar + merged footer, spec §3, 2026-08-29); deletion is its own slice.
+/// The context meter is one measured fact: an exact percentage for scanning,
+/// a token fraction for auditability when room permits, and a short bar for
+/// peripheral vision. It is deliberately the final header fact so its rect
+/// stays stable and can point at the inspector without parsing rendered text.
+fn header_context_meter(app: &App, tier: ShellTier) -> Option<Span<'static>> {
+    crate::tui::ui::context_usage_snapshot(app).map(|(used, max, percent)| {
+        let filled = ((percent / 100.0) * 5.0).ceil().clamp(0.0, 5.0) as usize;
+        let percentage = format!("{percent:.0}%");
+        let text = match tier {
+            ShellTier::Compact => format!("ctx {percentage}"),
+            ShellTier::Normal | ShellTier::Wide => format!(
+                "context {percentage} {}/{} {}{}",
+                compact_tokens(used),
+                compact_tokens(i64::from(max)),
+                "▰".repeat(filled),
+                "▱".repeat(5usize.saturating_sub(filled)),
+            ),
+        };
+        Span::styled(text, header_fg(app, ChromeInk::Info))
+    })
+}
+
+/// Return concrete, typed header targets for the latest frame.
+///
+/// The context meter is right-aligned and always the final header span, so
+/// its visible geometry does not depend on optional git/token facts. The
+/// keyboard route remains `Alt+C`; this gives that same inspectable fact a
+/// mouse route without inventing another context screen or state owner.
+#[allow(dead_code)]
+// classic header/band renderer: superseded by the Tideline shell
+// (topbar + merged footer, spec §3, 2026-08-29); deletion is its own slice.
+// Its posture-floor guard (a hitbox never claims overlapped cells) is the
+// discipline `topbar::context_meter_hitbox` carries forward.
+#[must_use]
+pub(crate) fn header_hitboxes(area: Rect, app: &App) -> Vec<HeaderHitbox> {
+    if area.width == 0 || area.height == 0 {
+        return Vec::new();
+    }
+    let tier = ShellTier::for_chrome_width(area.width);
+    let Some(meter) = header_context_meter(app, tier) else {
+        return Vec::new();
+    };
+    let width = u16::try_from(span_width(&[meter]))
+        .unwrap_or(area.width)
+        .min(area.width);
+    if width == 0 {
+        return Vec::new();
+    }
+    // The posture lockup is the header's guaranteed floor and is never
+    // truncated to make room for the right cluster (see
+    // render_header_with_git_status). At compact widths that floor can run
+    // into the meter's columns, so a hitbox anchored blindly at the right
+    // edge would claim cells the posture actually paints (review finding 5).
+    // Recompute the floor's width with the same spans the renderer composes
+    // and refuse the hitbox when the two would overlap.
+    let mut posture_width = 0usize;
+    if let Some(indicator) = crate::tui::widgets::header_status_indicator_frame(
+        (!app.low_motion && app.fancy_animations)
+            .then_some(app.turn_started_at)
+            .flatten(),
+        &app.status_indicator,
+    ) {
+        posture_width += indicator.width() + GROUP_GAP.len();
+    }
+    posture_width += mode_label(app.ui_locale, app.mode).width();
+    posture_width += FIELD_JOIN.len() + permission_label(app).width();
+    if let Some(scope) = filesystem_scope_notice(app) {
+        posture_width += FIELD_JOIN.len() + scope.width();
+    }
+    let meter_start = usize::from(area.width.saturating_sub(width));
+    if meter_start <= posture_width.saturating_add(usize::from(width > 0)) {
+        return Vec::new();
+    }
+    vec![HeaderHitbox {
+        area: Rect {
+            x: area.x.saturating_add(area.width.saturating_sub(width)),
+            y: area.y,
+            width,
+            height: 1,
+        },
+        target: HeaderActionTarget::InspectContext,
+    }]
 }
 
 fn session_token_breakdown(app: &App) -> Option<Span<'static>> {
@@ -1156,11 +1422,17 @@ fn session_token_breakdown(app: &App) -> Option<Span<'static>> {
 /// was nothing for the eye to group on. The gap is deliberately wider than the
 /// visual whitespace inside `" · "` — four blank columns against one — because
 /// that ratio is the only thing carrying the grouping.
+#[allow(dead_code)] // classic header/band renderer: superseded by the Tideline shell
+// (topbar + merged footer, spec §3, 2026-08-29); deletion is its own slice.
 const FIELD_JOIN: &str = " · ";
+#[allow(dead_code)] // classic header/band renderer: superseded by the Tideline shell
+// (topbar + merged footer, spec §3, 2026-08-29); deletion is its own slice.
 const GROUP_GAP: &str = "    ";
 
 /// Append one chrome element, inserting the group separator only between
 /// elements so an absent element never leaves trailing padding.
+#[allow(dead_code)] // classic header/band renderer: superseded by the Tideline shell
+// (topbar + merged footer, spec §3, 2026-08-29); deletion is its own slice.
 fn push_chrome(spans: &mut Vec<Span<'static>>, span: Span<'static>) {
     if !spans.is_empty() {
         spans.push(Span::raw(GROUP_GAP));
@@ -1170,11 +1442,15 @@ fn push_chrome(spans: &mut Vec<Span<'static>>, span: Span<'static>) {
 
 /// Render the one-line shell header. Immediate operating posture and workspace
 /// truth live here; quieter route identity lives beside the phase footer.
+#[allow(dead_code)] // classic header/band renderer: superseded by the Tideline shell
+// (topbar + merged footer, spec §3, 2026-08-29); deletion is its own slice.
 pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
     let git_status = crate::tui::git_status::cached_status();
     render_header_with_git_status(area, buf, app, &git_status);
 }
 
+#[allow(dead_code)] // classic header/band renderer: superseded by the Tideline shell
+// (topbar + merged footer, spec §3, 2026-08-29); deletion is its own slice.
 fn render_header_with_git_status(
     area: Rect,
     buf: &mut Buffer,
@@ -1302,28 +1578,7 @@ fn render_header_with_git_status(
         ));
     }
 
-    let context_meter = (tier != ShellTier::Compact)
-        .then(|| crate::tui::ui::context_usage_snapshot(app))
-        .flatten()
-        .map(|(used, max, percent)| {
-            let filled = ((percent / 100.0) * 5.0).ceil().clamp(0.0, 5.0) as usize;
-            // One number, stated twice on purpose and no more: the fraction is
-            // the precise fact, the bar is the glance. The `0%` numeral that
-            // used to close the meter was a third encoding of the same
-            // quantity at a resolution between the other two, and the brackets
-            // fenced a bar that its own filled/hollow glyphs already delimit —
-            // together nine columns of permanent chrome carrying nothing.
-            Span::styled(
-                format!(
-                    "{}/{} {}{}",
-                    compact_tokens(used),
-                    compact_tokens(i64::from(max)),
-                    "▰".repeat(filled),
-                    "▱".repeat(5usize.saturating_sub(filled)),
-                ),
-                header_fg(app, ChromeInk::Info),
-            )
-        });
+    let context_meter = header_context_meter(app, tier);
     let token_breakdown = (tier != ShellTier::Compact)
         .then(|| session_token_breakdown(app))
         .flatten();
@@ -1465,14 +1720,6 @@ fn render_header_with_git_status(
     }
 }
 
-/// Render the identity band: the persistent one-line route rail below the
-/// composer. This row is the canonical home for
-/// `provider · model · thinking level` and never trades places with the
-/// composer or the activity band above it.
-pub fn render_footer(area: Rect, buf: &mut Buffer, app: &mut App) {
-    crate::tui::phase_strip::render_identity(area, buf, app);
-}
-
 /// The transcript rows the idle brand mark needs before it will draw at all.
 ///
 /// Named so the *layout* can honour it before the frame is split. Anything that reserves rows above
@@ -1503,142 +1750,6 @@ pub(crate) fn decorative_shell_motion_enabled(app: &App) -> bool {
         && app.onboarding == OnboardingState::None
         && !app.launch.visible
         && app.view_stack.is_empty()
-}
-
-#[must_use]
-fn idle_mark_animation_enabled(app: &App) -> bool {
-    decorative_shell_motion_enabled(app) && matches!(ShellPhase::from_app(app), ShellPhase::Idle)
-}
-
-/// Start the idle-welcome caustic the first time that mark is actually on
-/// screen. Launch and onboarding sit in front of the empty ocean; starting at
-/// `App` construction lets the first sweep finish behind those surfaces.
-pub(crate) fn ensure_idle_welcome_started(app: &mut App, area: Rect) {
-    if idle_mark_animation_enabled(app)
-        && empty_state_mark_visible(area)
-        && app.ocean_started_at.is_none()
-    {
-        app.ocean_started_at = Some(Instant::now());
-    }
-}
-
-/// Raised-cosine caustic band for the idle whale. The 4s cycle spends roughly
-/// 1.3s crossing the mark and parks off-screen for the remainder, so the brand
-/// has a clear moment of life without becoming looping chrome.
-#[must_use]
-fn idle_mark_shine_opacity(diagonal: f32, elapsed_ms: u128) -> f32 {
-    let cycle_progress = (elapsed_ms % IDLE_SHIMMER_CYCLE_MS) as f32 / IDLE_SHIMMER_CYCLE_MS as f32;
-    let sweep_progress = (cycle_progress / IDLE_SHIMMER_SWEEP_FRACTION).min(1.0);
-    let band_position =
-        -IDLE_SHIMMER_BAND_HALF_WIDTH + sweep_progress * (1.0 + 2.0 * IDLE_SHIMMER_BAND_HALF_WIDTH);
-    let distance = (diagonal - band_position).abs();
-    if distance >= IDLE_SHIMMER_BAND_HALF_WIDTH {
-        return 0.0;
-    }
-    let raised_cosine =
-        0.5 * (1.0 + (std::f32::consts::PI * distance / IDLE_SHIMMER_BAND_HALF_WIDTH).cos());
-    IDLE_SHIMMER_STRENGTH * raised_cosine
-}
-
-#[must_use]
-fn idle_mark_color(base: Color, highlight: Color, opacity: f32) -> Color {
-    if opacity <= 0.0 {
-        return base;
-    }
-    match (base, highlight) {
-        (Color::Rgb(..), Color::Rgb(..)) => crate::palette::blend(highlight, base, opacity),
-        // Named/terminal-owned colors cannot be blended truthfully. Hold the
-        // stable brand color instead of flashing the entire mark at full ink.
-        _ => base,
-    }
-}
-
-fn idle_whale_is_uwu(app: &App) -> bool {
-    app.ui_theme.name == "uwu"
-}
-
-fn idle_whale_spout_row(app: &App) -> &'static str {
-    if idle_whale_is_uwu(app) {
-        UWU_IDLE_WHALE_SPOUT_ROW
-    } else {
-        IDLE_WHALE_SPOUT_ROW
-    }
-}
-
-fn idle_whale_rows(app: &App) -> [&'static str; 3] {
-    if idle_whale_is_uwu(app) {
-        UWU_IDLE_WHALE_ROWS
-    } else {
-        IDLE_WHALE_ROWS
-    }
-}
-
-/// Signal Current cyan owns the spout and the belly cut. It resolves through
-/// the same Whale Teams ink the `/fleet` portraits use, so every theme gets
-/// the brand cyan lifted to the secondary-chrome contrast floor rather than a
-/// per-theme guess.
-fn idle_whale_current_color(app: &App) -> Color {
-    crate::tui::whales::WhaleInk::from_theme(&app.ui_theme).current
-}
-
-fn idle_whale_row_spans(
-    text: &'static str,
-    row: usize,
-    elapsed_ms: u128,
-    animated: bool,
-    base: Color,
-    highlight: Color,
-    eye: Color,
-) -> Vec<Span<'static>> {
-    let rows = IDLE_WHALE_ROWS.len() as f32;
-    let cols = IDLE_WHALE_ROWS
-        .iter()
-        .map(|line| line.chars().count())
-        .max()
-        .unwrap_or(1) as f32;
-    let mut spans = Vec::new();
-    let mut run = String::new();
-    let mut run_color = None;
-
-    for (column, ch) in text.chars().enumerate() {
-        let diagonal = (column as f32 + (rows - 1.0 - row as f32)) / (cols + rows);
-        let color = if matches!(ch, '·' | '░' | '✦' | '△') {
-            // Soft uwu blush/sparkle and the quiet crown-fluke center use the
-            // eye/sakura channel; classic otherwise only has the eye dot.
-            eye
-        } else if animated {
-            idle_mark_color(
-                base,
-                highlight,
-                idle_mark_shine_opacity(diagonal, elapsed_ms),
-            )
-        } else {
-            base
-        };
-        if run_color != Some(color) {
-            if let Some(previous) = run_color {
-                spans.push(Span::styled(
-                    std::mem::take(&mut run),
-                    Style::default().fg(previous),
-                ));
-            }
-            run_color = Some(color);
-        }
-        run.push(ch);
-    }
-    if let Some(previous) = run_color {
-        spans.push(Span::styled(run, Style::default().fg(previous)));
-    }
-    spans
-}
-
-#[must_use]
-fn idle_whale_block_width(spout: &str, rows: &[&str]) -> usize {
-    std::iter::once(spout)
-        .chain(rows.iter().copied())
-        .map(UnicodeWidthStr::width)
-        .max()
-        .unwrap_or(0)
 }
 
 /// Shorten a workspace path to its trailing components, marked with a leading
@@ -1716,52 +1827,9 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
     }
     let width = usize::from(area.width);
     let mut lines = vec![Line::from(""); usize::from(area.height / 4)];
-    if empty_state_mark_visible(area) {
-        let animated = idle_mark_animation_enabled(app);
-        let elapsed_ms = app
-            .ocean_started_at
-            .map(|started| started.elapsed().as_millis())
-            .unwrap_or(0);
-        let spout = idle_whale_spout_row(app);
-        let rows = idle_whale_rows(app);
-        let current = idle_whale_current_color(app);
-        let mut mark = vec![vec![Span::styled(spout, Style::default().fg(current))]];
-        // Soft uwu: sakura blush/sparkle glyphs; classic keeps body peach + text eye.
-        let highlight = if idle_whale_is_uwu(app) {
-            app.ui_theme.accent_primary
-        } else {
-            app.ui_theme.text_body
-        };
-        mark.extend(rows.iter().enumerate().map(|(row, text)| {
-            // The belly cut is water, not chrome: it holds the flat brand cyan
-            // while the caustic sweep travels across the gold body above it.
-            let is_current = row == IDLE_WHALE_CURRENT_ROW;
-            idle_whale_row_spans(
-                text,
-                row,
-                elapsed_ms,
-                animated && !is_current,
-                if is_current {
-                    current
-                } else {
-                    app.ui_theme.accent_action
-                },
-                app.ui_theme.text_body,
-                highlight,
-            )
-        }));
-        // The spout, head, belly, peduncle, and flukes are one drawing. Give
-        // every row the same outer inset so the authored offsets survive;
-        // centering each row independently shears the silhouette apart.
-        let block_inset =
-            " ".repeat(width.saturating_sub(idle_whale_block_width(spout, &rows)) / 2);
-        for row in mark {
-            let mut spans = vec![Span::raw(block_inset.clone())];
-            spans.extend(row);
-            lines.push(Line::from(spans));
-        }
-        lines.push(Line::from(""));
-    }
+    // The idle whale portrait that used to open this block was deleted per
+    // the 2026-08-29 founder directive; the ambient empty-state surface
+    // (wordmark, context caption, prompt) is not whale art and stays.
 
     let identity = crate::tui::workspace_context::identity_from_context(
         &app.workspace,
@@ -1812,59 +1880,710 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
 }
 
 #[cfg(test)]
-mod idle_welcome_shine_tests {
+mod launch_contract_tests {
     use super::{
-        IDLE_SHIMMER_CYCLE_MS, empty_state_mark_visible, ensure_idle_welcome_started,
-        idle_mark_shine_opacity,
+        LaunchAction, QUICK_ACTION_ROWS, apply_launch_hitboxes, handle_launch_key,
+        tideline_startup_hitboxes,
     };
-    use crate::tui::app::OnboardingState;
+    use crate::localization::Locale;
+    use crate::tui::app::LaunchState;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::layout::Rect;
 
-    fn idle_app() -> crate::tui::app::App {
+    fn launch_state() -> LaunchState {
+        LaunchState {
+            visible: true,
+            selected: 0,
+            worktree_input: None,
+            status: None,
+            workspace_session_count: 2,
+            worktree_available: true,
+            row_areas: Vec::new(),
+            option_areas: Vec::new(),
+            composer_focus: false,
+            composer_area: None,
+            send_area: None,
+        }
+    }
+
+    #[test]
+    fn launch_rows_are_seven_table_slots_with_the_quick_actions_painted() {
+        // `row_areas` is the launch table's seven slots: the stage's three
+        // quick-action rows land at [2, 4, 1] and the unreachable slots hold
+        // zero rects that never hit-test. Re-derived from `startup_layout`
+        // through the same hitbox path `frame.rs` runs after the paint.
+        let mut launch = launch_state();
+        let stage = Rect::new(0, 1, 80, 22); // the frame's stage slot at 80x24
+        let hitboxes = tideline_startup_hitboxes(stage);
+        apply_launch_hitboxes(&hitboxes, &mut launch);
+        assert_eq!(launch.row_areas.len(), 7, "one slot per launch-table row");
+        for (quick_index, slot) in QUICK_ACTION_ROWS.iter().enumerate() {
+            let row = launch.row_areas[*slot];
+            assert_eq!(
+                row, hitboxes.actions[quick_index],
+                "quick action {quick_index} owns table slot {slot}"
+            );
+            assert!(row.width > 0);
+        }
+        for slot in [0usize, 5, 6] {
+            assert_eq!(
+                launch.row_areas[slot].width, 0,
+                "slot {slot} has no painted row on the stage"
+            );
+        }
+        // The docked composer's hitboxes ride the same registry.
+        assert!(launch.composer_area.is_some() && launch.send_area.is_some());
+        assert_eq!(launch.option_areas.len(), 4, "four tiles at 80 columns");
+
+        // The 40x12 floor: the stage slot is 10 rows — the three quick
+        // actions keep their slots and the dock survives as its input row.
+        let floor_stage = Rect::new(0, 1, 40, 10);
+        let floor_hitboxes = tideline_startup_hitboxes(floor_stage);
+        apply_launch_hitboxes(&floor_hitboxes, &mut launch);
+        assert_eq!(launch.row_areas.len(), 7);
+        assert!(
+            launch.composer_area.is_some(),
+            "the floor keeps the composer"
+        );
+    }
+
+    #[test]
+    fn selected_rows_and_direct_keys_dispatch_the_same_startup_actions() {
+        let cases = [
+            (
+                0,
+                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+                LaunchAction::Connect,
+            ),
+            (
+                1,
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+                LaunchAction::Resume,
+            ),
+            (
+                2,
+                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
+                LaunchAction::NewSession,
+            ),
+            (
+                4,
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+                LaunchAction::NewChat,
+            ),
+            (
+                5,
+                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+                LaunchAction::Theme,
+            ),
+            (
+                6,
+                KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE),
+                LaunchAction::Help,
+            ),
+        ];
+        for (index, direct, expected) in cases {
+            let mut selected = launch_state();
+            selected.selected = index;
+            assert_eq!(
+                handle_launch_key(
+                    &mut selected,
+                    KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                    Locale::En,
+                ),
+                expected
+            );
+
+            let mut shortcut = launch_state();
+            assert_eq!(
+                handle_launch_key(&mut shortcut, direct, Locale::En),
+                expected
+            );
+            assert_eq!(shortcut.selected, index);
+        }
+
+        let mut worktree = launch_state();
+        worktree.selected = 3;
+        assert_eq!(
+            handle_launch_key(
+                &mut worktree,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                Locale::En,
+            ),
+            LaunchAction::None
+        );
+        assert_eq!(worktree.worktree_input.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn changelog_and_quit_remain_keyboard_actions_without_claiming_a_row() {
+        let mut launch = launch_state();
+        launch.selected = 4;
+        assert_eq!(
+            handle_launch_key(
+                &mut launch,
+                KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL),
+                Locale::En,
+            ),
+            LaunchAction::Changelog
+        );
+        assert_eq!(launch.selected, 4);
+        assert_eq!(
+            handle_launch_key(
+                &mut launch,
+                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL),
+                Locale::En,
+            ),
+            LaunchAction::Quit
+        );
+        assert_eq!(launch.selected, 4);
+    }
+}
+
+#[cfg(test)]
+mod launch_composer_tests {
+    use super::{
+        LaunchAction, LaunchComposerKey, apply_launch_hitboxes, handle_launch_composer_key,
+        handle_launch_key, launch_composer_rows, render_launch_completion_popup,
+        render_tideline_startup, tideline_startup_from_app, tideline_startup_hitboxes,
+    };
+    use crate::localization::{Locale, MessageId, tr};
+    use crate::tui::app::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    /// The four supported TERMINAL sizes from the Tideline responsiveness
+    /// contract, exercised by every test in this module. The startup stage
+    /// is the terminal minus the topbar and the merged footer (two rows).
+    const LAUNCH_SIZES: [(u16, u16); 4] = [(40, 12), (60, 16), (80, 24), (140, 40)];
+
+    fn launch_app() -> App {
         let mut app = crate::test_support::test_app_with_options(
             crate::test_support::test_tui_options(std::env::temp_dir()),
         );
+        app.onboarding = crate::tui::app::OnboardingState::None;
         app.low_motion = false;
-        app.fancy_animations = true;
-        app.onboarding = OnboardingState::None;
-        app.launch.visible = false;
+        app.launch.visible = true;
         app
     }
 
+    /// The frame's stage slot for one terminal size (spec §5b: topbar 1,
+    /// stage Min(1), footer 1) — the rect `render_tideline_startup` owns.
+    fn stage_for(width: u16, height: u16) -> Rect {
+        Rect::new(0, 1, width, height.saturating_sub(2))
+    }
+
+    /// Render the launch surface's stage exactly as `frame.rs` does: the
+    /// projected startup widget (hero, quick actions, option strip, docked
+    /// composer), with the hitboxes applied as the frame applies them.
+    fn render(app: &App, width: u16, height: u16) -> (Buffer, Rect) {
+        let area = stage_for(width, height);
+        let mut buf = Buffer::empty(area);
+        let startup = tideline_startup_from_app(app);
+        render_tideline_startup(area, &mut buf, &startup);
+        let hitboxes = tideline_startup_hitboxes(area);
+        let mut launch = app.launch.clone();
+        apply_launch_hitboxes(&hitboxes, &mut launch);
+        (buf, area)
+    }
+
     #[test]
-    fn shine_is_parked_late_in_the_cycle() {
-        // A clock that starts at App construction can sit in this parked
-        // window after the launch menu, so the first visible idle frame
-        // has no caustic at all.
-        assert_eq!(IDLE_SHIMMER_CYCLE_MS, 4_000);
-        let parked = idle_mark_shine_opacity(0.5, 2_500);
-        assert_eq!(parked, 0.0);
-        let crossing = idle_mark_shine_opacity(0.5, 800);
+    fn caret_window_budgets_by_display_width_so_wide_drafts_keep_the_caret() {
+        use unicode_width::UnicodeWidthStr;
+        // 12 CJK characters = 24 display cells against a 9-column budget:
+        // a character-count slice kept 8 CHARACTERS (16 cells) and pushed
+        // the caret past the clip end (review finding 4).
+        let line = "你好世界你好世界你好世界";
+        let (before, after) = super::launch_caret_window(line, line.chars().count(), 9);
         assert!(
-            crossing > 0.0,
-            "the first sweep should still be crossing the mark at 800ms, got {crossing}"
+            before.width() <= 8,
+            "before must fit its cell budget: {} cells",
+            before.width()
+        );
+        assert!(before.width() + 1 + after.width() <= 9);
+        assert!(
+            !before.is_empty(),
+            "the window keeps the widest tail that fits"
+        );
+        // ASCII behavior is unchanged: the trailing characters, nothing wider.
+        let (ascii_before, ascii_after) = super::launch_caret_window("hello world", 11, 6);
+        assert_eq!(ascii_before, "world");
+        assert_eq!(ascii_after, "");
+    }
+
+    #[test]
+    fn context_meter_hitbox_yields_to_the_posture_floor() {
+        let mut app = launch_app();
+        app.session.last_prompt_tokens = Some(1_000);
+        // Wide header: the meter owns its right-edge columns.
+        let wide = super::header_hitboxes(Rect::new(0, 0, 120, 1), &app);
+        assert_eq!(wide.len(), 1, "wide header registers the meter hitbox");
+        // Compact header: the posture lockup is the guaranteed floor and is
+        // never truncated, so at narrow widths it can run into the meter's
+        // columns — the hitbox must not claim cells the posture paints
+        // (review finding 5).
+        let narrow = super::header_hitboxes(Rect::new(0, 0, 16, 1), &app);
+        assert!(
+            narrow.is_empty(),
+            "compact header must not claim overlapped cells"
         );
     }
 
     #[test]
-    fn welcome_clock_stays_stopped_until_the_mark_can_draw() {
-        let mut app = idle_app();
-        assert!(app.ocean_started_at.is_none());
+    fn enter_applies_a_visible_slash_completion_instead_of_sending_the_prefix() {
+        // #5698 review finding 1: the launch composer classified Enter as
+        // Submit without consulting the completion menus, so `/mo` + Enter
+        // sent the literal text instead of running `/model`.
+        let mut app = launch_app();
+        app.launch.composer_focus = true;
+        app.input = "/mo".to_string();
+        app.cursor_position = app.input.chars().count();
+        let entries = crate::tui::slash_menu::visible_slash_menu_entries(&app, 1);
+        assert!(
+            !entries.is_empty(),
+            "precondition: /mo must match at least one command"
+        );
+        let verdict =
+            handle_launch_composer_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(verdict, LaunchComposerKey::Submit);
+        let completed = app.input.clone();
+        assert!(
+            completed.starts_with('/')
+                && completed != "/mo"
+                && entries.iter().any(|e| {
+                    e.name == completed.trim_end() || completed.starts_with(&format!("{}/", e.name))
+                }),
+            "Enter must apply the highlighted completion (matched {:?}), input now: {completed:?}",
+            entries.first().map(|e| e.name.clone())
+        );
+    }
 
-        let too_small = Rect::new(0, 0, 40, 12);
-        assert!(!empty_state_mark_visible(too_small));
-        ensure_idle_welcome_started(&mut app, too_small);
-        assert!(app.ocean_started_at.is_none());
+    #[test]
+    fn completion_popup_paints_above_the_launch_composer() {
+        // #5698 review finding 2: the menus were invisible on launch — the
+        // frame returned before the ComposerWidget popup path ran. The
+        // stage dock keeps that fix: the popup paints above the docked
+        // input row, inside the stage.
+        let app = launch_app();
+        let area = stage_for(80, 24);
+        let (input_y, _) = launch_composer_rows(area).unwrap();
+        let entries = vec![crate::tui::widgets::SlashMenuEntry {
+            name: "/model".to_string(),
+            description: "Pick the model".to_string(),
+            is_skill: false,
+            alias_hint: None,
+        }];
+        let mut buf = Buffer::empty(area);
+        let mut app = app;
+        app.launch.composer_focus = true;
+        let startup = tideline_startup_from_app(&app);
+        render_tideline_startup(area, &mut buf, &startup);
+        render_launch_completion_popup(area, &mut buf, &app, input_y, &entries, &[]);
+        let popup_row = (area.y..area.y + input_y)
+            .rev()
+            .map(|y| {
+                (area.x..area.x + area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .find(|line| line.contains("/model"))
+            .expect("the completion menu must be visible above the composer");
+        assert!(
+            popup_row.contains("▸") || popup_row.contains('>') || popup_row.contains('*'),
+            "the selected entry carries a selection marker: {popup_row:?}"
+        );
+    }
 
-        app.launch.visible = true;
-        let roomy = Rect::new(0, 0, 80, 24);
-        assert!(empty_state_mark_visible(roomy));
-        ensure_idle_welcome_started(&mut app, roomy);
-        assert!(app.ocean_started_at.is_none());
+    /// Row `y` of `area` as text — `y` is area-relative.
+    fn row_text(buf: &Buffer, area: Rect, y: u16) -> String {
+        (area.x..area.x + area.width)
+            .map(|x| buf[(x, area.y + y)].symbol().to_string())
+            .collect()
+    }
 
-        app.launch.visible = false;
-        ensure_idle_welcome_started(&mut app, roomy);
-        assert!(app.ocean_started_at.is_some());
+    /// Cell columns `from..to` of one row (byte-safe against wide glyphs).
+    /// Cell columns `from..to` of row `y` (area-relative, byte-safe against
+    /// wide glyphs).
+    fn row_cells(buf: &Buffer, area: Rect, y: u16, from: u16, to: u16) -> String {
+        (from..to.min(area.x + area.width))
+            .map(|x| buf[(x, area.y + y)].symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn composer_strip_docks_at_every_supported_size_without_displacing_choices() {
+        for (width, height) in LAUNCH_SIZES {
+            let mut app = launch_app();
+            let stage = stage_for(width, height);
+            let hitboxes = tideline_startup_hitboxes(stage);
+            apply_launch_hitboxes(&hitboxes, &mut app.launch);
+            let (input_y, hint_y) =
+                launch_composer_rows(stage).expect("composer must fit at a supported size");
+
+            let (buf, area) = render(&app, width, height);
+            let input_row = row_text(&buf, area, input_y);
+            assert!(
+                input_row.contains('❯') && input_row.contains('↑'),
+                "{width}x{height}: composer row lacks its prompt/send anchors: {input_row:?}"
+            );
+            assert!(
+                input_row.contains(&tr(Locale::En, MessageId::ComposerPlaceholder).into_owned()),
+                "{width}x{height}: empty composer must show the shared placeholder: {input_row:?}"
+            );
+
+            // The launch table keeps all seven slots; the quick actions own
+            // theirs and the tiles ride the option registry.
+            assert_eq!(
+                app.launch.row_areas.len(),
+                7,
+                "{width}x{height}: every startup choice must stay reachable"
+            );
+            assert!(
+                app.launch.option_areas.len() >= 2,
+                "{width}x{height}: the option strip keeps at least two tiles"
+            );
+            // Hitboxes mirror the rendered row, and send sits at its end.
+            let composer = app.launch.composer_area.expect("composer hitbox");
+            let send = app.launch.send_area.expect("send hitbox");
+            assert_eq!(composer.y, area.y + input_y);
+            assert_eq!(send.y, composer.y);
+            assert_eq!(send.right(), composer.right());
+            assert_eq!(
+                row_cells(&buf, area, send.y - area.y, send.x, send.right()),
+                " ↑",
+                "{width}x{height}: send hitbox must cover the rendered send glyph"
+            );
+            assert!(
+                input_y < hint_y && hint_y <= area.height,
+                "{width}x{height}: composer rows must stack inside the stage"
+            );
+        }
+    }
+
+    #[test]
+    fn unfocused_composer_advertises_tab_and_focused_composer_advertises_submit() {
+        let mut app = launch_app();
+        let (buf, area) = render(&app, 80, 24);
+        let (input_y, hint_y) = launch_composer_rows(stage_for(80, 24)).unwrap();
+        assert!(
+            row_text(&buf, area, hint_y)
+                .contains(&tr(Locale::En, MessageId::LaunchComposerFocusHint).into_owned()),
+            "unfocused hint row must show how to start typing"
+        );
+        assert!(!row_text(&buf, area, input_y).contains('▌'));
+
+        // Tab is the keyboard path into the composer.
+        assert_eq!(
+            handle_launch_key(
+                &mut app.launch,
+                KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+                Locale::En,
+            ),
+            LaunchAction::None
+        );
+        assert!(app.launch.composer_focus);
+        let (buf, area) = render(&app, 80, 24);
+        assert!(row_text(&buf, area, input_y).contains('▌'));
+        let _ = hint_y;
+        assert!(
+            row_text(&buf, area, hint_y)
+                .contains(&tr(Locale::En, MessageId::LaunchComposerHint).into_owned()),
+            "focused hint row must explain Enter/Esc"
+        );
+
+        // Esc hands focus back without touching the composed text.
+        app.insert_char('h');
+        assert_eq!(
+            handle_launch_composer_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            LaunchComposerKey::Blur
+        );
+        assert!(!app.launch.composer_focus);
+        assert_eq!(app.input, "h");
+    }
+
+    /// Mirror of the event loop's fall-through: an admitted editing key is
+    /// answered by the conversation composer authority — the router never
+    /// performs the edit itself, so the test performs exactly the shared
+    /// call the conversation match makes.
+    fn type_char(app: &mut App, ch: char) {
+        assert_eq!(
+            handle_launch_composer_key(app, KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+            LaunchComposerKey::ComposerAuthority
+        );
+        app.insert_char(ch);
+    }
+
+    #[test]
+    fn editing_keys_are_omitted_to_the_composer_authority_not_reimplemented() {
+        let mut app = launch_app();
+        app.launch.composer_focus = true;
+
+        // Text and caret keys are only admitted here; the shared App edit
+        // methods the conversation match calls produce the edit.
+        type_char(&mut app, 'h');
+        type_char(&mut app, 'i');
+        assert_eq!(app.input, "hi");
+        assert_eq!(
+            handle_launch_composer_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)
+            ),
+            LaunchComposerKey::ComposerAuthority
+        );
+        app.delete_char();
+        assert_eq!(app.input, "h");
+
+        // A direct startup shortcut letter types into the composer now…
+        type_char(&mut app, 'p');
+        assert_eq!(app.input, "hp");
+
+        // …and word motion is composer-owned too: Alt+B moves a whole word
+        // back through the exact shared helper the conversation composer
+        // uses, instead of blurring or reaching the startup menu.
+        for ch in " one two".chars() {
+            type_char(&mut app, ch);
+        }
+        assert_eq!(app.input, "hp one two");
+        assert_eq!(app.cursor_position, 10);
+        let alt_b = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT);
+        assert_eq!(
+            handle_launch_composer_key(&mut app, alt_b),
+            LaunchComposerKey::ComposerAuthority
+        );
+        assert!(crate::tui::composer_ui::handle_composer_alt_word_motion_key(&mut app, alt_b));
+        assert_eq!(
+            app.cursor_position, 7,
+            "Alt+B must move a word back inside the focused composer"
+        );
+        assert!(app.launch.composer_focus);
+
+        // …while the startup menu's chords stay menu-owned.
+        assert_eq!(
+            handle_launch_composer_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)
+            ),
+            LaunchComposerKey::MenuChord
+        );
+        assert!(app.launch.composer_focus);
+        assert_eq!(
+            handle_launch_key(
+                &mut app.launch,
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+                Locale::En,
+            ),
+            LaunchAction::Resume
+        );
+        for (code, modifiers) in [
+            (KeyCode::Char('n'), KeyModifiers::CONTROL),
+            (KeyCode::Char('l'), KeyModifiers::CONTROL),
+            (KeyCode::Char('q'), KeyModifiers::CONTROL),
+            (KeyCode::F(1), KeyModifiers::NONE),
+        ] {
+            assert_eq!(
+                handle_launch_composer_key(&mut app, KeyEvent::new(code, modifiers)),
+                LaunchComposerKey::MenuChord,
+                "{code:?} must stay menu-owned while the composer holds focus"
+            );
+        }
+
+        // Up/Down leave the composer and then move the menu selection. The
+        // Ctrl+R shortcut above moved it to its row; start from the top.
+        app.launch.selected = 0;
+        assert_eq!(
+            handle_launch_composer_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            LaunchComposerKey::BlurToMenu
+        );
+        assert!(!app.launch.composer_focus);
+        assert_eq!(
+            handle_launch_key(
+                &mut app.launch,
+                KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+                Locale::En,
+            ),
+            LaunchAction::None
+        );
+        assert_eq!(app.launch.selected, 1);
+    }
+
+    #[test]
+    fn completion_menus_stay_composer_owned_instead_of_blurring_to_the_menu() {
+        let mut app = launch_app();
+        app.launch.composer_focus = true;
+        type_char(&mut app, '/');
+        type_char(&mut app, 'm');
+        type_char(&mut app, 'o');
+        assert!(
+            !crate::tui::slash_menu::visible_slash_menu_entries(&app, 1).is_empty(),
+            "precondition: /mo must open the command completion menu"
+        );
+        // The completion menu is composer-owned: plain Up must reach the
+        // conversation authority for entry navigation, not blur to rows.
+        assert_eq!(
+            handle_launch_composer_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            LaunchComposerKey::ComposerAuthority
+        );
+        assert!(app.launch.composer_focus);
+    }
+
+    #[test]
+    fn composer_enter_probe_mirrors_the_real_enter_without_mutating() {
+        let mut app = launch_app();
+        app.launch.composer_focus = true;
+        assert!(
+            !app.composer_enter_would_submit(),
+            "an empty composer must not submit"
+        );
+
+        app.input = "  ".to_string();
+        assert!(
+            !app.composer_enter_would_submit(),
+            "a whitespace-only draft is not a submit"
+        );
+
+        app.input = "ship it".to_string();
+        app.cursor_position = 7;
+        assert!(app.composer_enter_would_submit());
+        assert_eq!(app.input, "ship it", "the probe must not consume the draft");
+        assert!(app.launch.composer_focus);
+    }
+
+    #[test]
+    fn enter_submits_through_the_real_composer_path() {
+        let mut app = launch_app();
+        app.launch.composer_focus = true;
+        for ch in "hello world".chars() {
+            type_char(&mut app, ch);
+        }
+        assert_eq!(app.input, "hello world");
+        assert_eq!(
+            handle_launch_composer_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            LaunchComposerKey::Submit
+        );
+        // The event loop feeds this exact call into the normal dispatch
+        // path after the launch session begins; the composer owns the text.
+        assert_eq!(app.handle_composer_enter().as_deref(), Some("hello world"));
+        assert!(app.input.is_empty());
+
+        // Enter on an empty composer only returns focus to the menu.
+        let mut empty = launch_app();
+        empty.launch.composer_focus = true;
+        assert_eq!(
+            handle_launch_composer_key(
+                &mut empty,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+            ),
+            LaunchComposerKey::Blur
+        );
+        assert!(!empty.launch.composer_focus);
+    }
+
+    #[test]
+    fn shift_enter_keeps_a_real_newline_in_the_composer_state() {
+        let mut app = launch_app();
+        app.launch.composer_focus = true;
+        type_char(&mut app, 'a');
+        type_char(&mut app, 'b');
+        // Shift+Enter is a newline chord, not a submit: the router omits it
+        // to the composer authority, whose newline arm owns the insertion.
+        assert_eq!(
+            handle_launch_composer_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)
+            ),
+            LaunchComposerKey::ComposerAuthority
+        );
+        assert!(crate::tui::composer_ui::is_composer_newline_key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+            app.composer_multiline_mode
+        ));
+        app.insert_char('\n');
+        type_char(&mut app, 'c');
+        assert_eq!(app.input, "ab\nc");
+
+        // The single-row projection truthfully shows the caret's line.
+        let (buf, area) = render(&app, 80, 24);
+        let (input_y, _) = launch_composer_rows(stage_for(80, 24)).unwrap();
+        assert!(
+            row_text(&buf, area, input_y).contains("c▌"),
+            "composer row must show the caret's line, not the first line"
+        );
+    }
+
+    #[test]
+    fn floor_keeps_every_choice_and_a_usable_composer_row() {
+        // The 40x12 floor's stage is 10 rows: the dock sheds to its input
+        // row, the quick actions keep their table slots, and the composer
+        // never disappears (the data — caret, draft — survives; only the
+        // hint surface sheds, and it returns one tier up).
+        let mut app = launch_app();
+        app.launch.composer_focus = true;
+        let stage = stage_for(40, 12);
+        let hitboxes = tideline_startup_hitboxes(stage);
+        apply_launch_hitboxes(&hitboxes, &mut app.launch);
+        assert_eq!(
+            app.launch.row_areas.len(),
+            7,
+            "the supported 40x12 floor must retain every startup choice"
+        );
+        assert!(app.launch.composer_area.is_some() && app.launch.send_area.is_some());
+        let (buf, area) = render(&app, 40, 12);
+        let (input_y, hint_y) = launch_composer_rows(stage).unwrap();
+        assert_eq!(input_y, 9, "the dock's one row is the stage's last");
+        assert_eq!(hint_y, area.height, "no second row to share at this tier");
+        let input_row = row_text(&buf, area, input_y);
+        assert!(
+            input_row.contains('❯') && input_row.contains('▌'),
+            "focused floor composer keeps its anchors and caret: {input_row:?}"
+        );
+
+        // One tier up (a 22-row terminal, stage 20, dock 2) the hint shares
+        // the dock's second row — the classic compact tier's semantic.
+        let (buf, area) = render(&app, 80, 22);
+        let stage22 = stage_for(80, 22);
+        let (input_y, hint_y) = launch_composer_rows(stage22).unwrap();
+        assert_eq!(hint_y, input_y + 1, "the two-row dock shares its row");
+        let hint_row = row_text(&buf, area, hint_y);
+        assert!(
+            hint_row.trim_start().starts_with(
+                &tr(Locale::En, MessageId::LaunchComposerHint)
+                    .chars()
+                    .take(20)
+                    .collect::<String>()
+            ),
+            "focused compact dock must carry the composer hint: {hint_row:?}"
+        );
+    }
+
+    #[test]
+    fn floor_blurred_composer_keeps_the_draft_and_the_next_tier_advertises_refocus() {
+        // Esc keeps the draft but hands focus back. At the floor the dock is
+        // one row — the draft itself is the surface that must survive; the
+        // how-to-refocus copy returns with the hint row one tier up.
+        let mut app = launch_app();
+        app.launch.composer_focus = true;
+        type_char(&mut app, 'd');
+        type_char(&mut app, 'r');
+        assert_eq!(
+            handle_launch_composer_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            LaunchComposerKey::Blur
+        );
+        assert!(!app.launch.composer_focus);
+        let (buf, area) = render(&app, 40, 12);
+        let (input_y, _) = launch_composer_rows(stage_for(40, 12)).unwrap();
+        let input_row = row_text(&buf, area, input_y);
+        assert!(
+            input_row.contains("dr"),
+            "the blurred composer must keep the draft: {input_row:?}"
+        );
+
+        let (buf, area) = render(&app, 80, 22);
+        let (_, hint_y) = launch_composer_rows(stage_for(80, 22)).unwrap();
+        let hint_row = row_text(&buf, area, hint_y);
+        assert!(
+            hint_row.contains(&tr(Locale::En, MessageId::LaunchComposerFocusHint).into_owned()),
+            "blurred compact dock must still say how to refocus: {hint_row:?}"
+        );
     }
 }
 
@@ -1970,7 +2689,10 @@ mod empty_state_caption_tests {
 
 #[cfg(test)]
 mod header_tests {
-    use super::{FIELD_JOIN, GROUP_GAP, filesystem_scope_notice, render_header_with_git_status};
+    use super::{
+        FIELD_JOIN, GROUP_GAP, filesystem_scope_notice, header_hitboxes,
+        render_header_with_git_status,
+    };
     use crate::palette::ChromeInk;
     use crate::tui::app::{App, AppMode};
     use crate::tui::approval::ApprovalMode;
@@ -2014,7 +2736,7 @@ mod header_tests {
         assert!(filesystem_scope_notice(&app).is_none());
         let line = header_line(&app, 120);
         assert!(!line.contains("files:"), "{line:?}");
-        assert!(line.starts_with("cw"), "{line:?}");
+        assert!(line.starts_with("Codewhale"), "{line:?}");
         assert!(line.contains("work"), "{line:?}");
         assert!(line.contains("ask"), "{line:?}");
     }
@@ -2132,16 +2854,782 @@ mod header_tests {
     }
 
     #[test]
-    fn the_context_meter_states_its_number_twice_not_four_times() {
-        // Fraction (precise) + bar (glance). The `%` numeral was a third
-        // encoding of the same quantity and the brackets fenced a bar its own
-        // glyphs already delimit.
+    fn the_context_meter_states_its_percentage_and_registers_an_inspector_target() {
+        // The percentage is the direct operator question ("how full am I?").
+        // Fraction remains the auditable fact and the bar is the glance.
         let mut app = app();
         app.session.total_input_tokens = 3_000;
         let line = header_line(&app, 120);
         if line.contains('▱') || line.contains('▰') {
             assert!(!line.contains('['), "{line:?}");
-            assert!(!line.contains('%'), "{line:?}");
+            assert!(line.contains("context"), "{line:?}");
+            assert!(line.contains('%'), "{line:?}");
+            let hitboxes = header_hitboxes(Rect::new(0, 0, 120, 1), &app);
+            assert_eq!(hitboxes.len(), 1);
+            assert_eq!(hitboxes[0].area.right(), 120);
+            assert_eq!(
+                hitboxes[0].target,
+                crate::tui::app::HeaderActionTarget::InspectContext
+            );
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tideline startup stage — hero, quick actions, option strip (spec §5a
+// components "Hero (startup)", "Quick actions", "Option strip"; §5b startup
+// layout contract; golden `startup_{w}x{h}`).
+//
+// Landed 2026-08-29: the startup stage is the launch screen's body inside
+// the Tideline shell (`ui/frame.rs` renders topbar → this stage → the merged
+// footer). It stays a pure, deterministic widget fed injected facts
+// (`LaunchState`/`workspace_session_count`/provider state are projected by
+// the caller via `tideline_startup_from_app`), proven against golden
+// buffers. Cell rules per spec §2: one glyph per action with declared ASCII
+// fallbacks; the wave rules are static `Span`s; semantic ink only.
+
+use ratatui::layout::{Constraint, Layout};
+
+use crate::palette::UiTheme;
+
+/// The founder's fluke mark — the generated 12x6 cell rendition from the
+/// brand master path (`designs/brand/20260829-fluke-founder/TUI_GLYPHS.md`,
+/// produced by `build-tui-glyph.py`; never hand-drawn). The hand-projected
+/// three-cell crown was deleted by founder decree; this block is its
+/// replacement everywhere in the startup path. The ASCII-safe projection maps each
+/// quadrant block through its declared `glyphs::ascii_fallback` (`#`, `.`,
+/// `\`) — a legible silhouette, not a smear.
+const FLUKE_BLOCK: [&str; 6] = [
+    "▚▄▄▖    ▗▄▄▟",
+    "▝▜███▙▟███▛▘",
+    "  ▝▀▜██▛▀▘",
+    "     ▜█",
+    "     ██▖",
+    "   ▝▀▜█▙▄▖",
+];
+/// Rows of fluke-mark ink, one `String` per terminal row. `ascii_safe`
+/// projects each cell through the declared fallbacks (spec §2: every
+/// authored glyph has one).
+fn fluke_rows(ascii_safe: bool) -> Vec<String> {
+    FLUKE_BLOCK
+        .iter()
+        .map(|row| fluke_row(row, ascii_safe))
+        .collect()
+}
+
+/// Single-row projection: the unicode row verbatim, or each block through
+/// its declared ASCII fallback.
+fn fluke_row(row: &str, ascii_safe: bool) -> String {
+    if !ascii_safe {
+        return row.to_string();
+    }
+    row.chars()
+        .map(|ch| {
+            if ch == ' ' {
+                ch.to_string()
+            } else {
+                crate::tui::glyphs::ascii_fallback(&ch.to_string())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| ch.to_string())
+            }
+        })
+        .collect()
+}
+
+/// Static wave rule between the hero and the quick actions (spec §5b). Dim,
+/// never animated — decoration is opt-in and this is not decoration that
+/// carries state.
+const WAVE_RULE: &str = "⋯ ∼∼∼ ⋯";
+
+/// One QUICK ACTIONS row: icon · label · description · command + `›`.
+///
+/// The `disabled` projection is the caller's (provider state, session
+/// count); the widget only renders it dimmer and never invents availability.
+#[derive(Debug, Clone)]
+pub struct TidelineQuickAction {
+    pub icon: &'static str,
+    pub label: &'static str,
+    pub description: &'static str,
+    pub command: &'static str,
+    pub disabled: bool,
+}
+
+impl TidelineQuickAction {
+    /// The approved startup screen's three rows. `provider_ready` gates the
+    /// chat-only row (no model — spec states the disabled state), and a
+    /// workspace with zero saved sessions gates resume.
+    #[must_use]
+    pub fn approved_set(provider_ready: bool, session_count: usize) -> Vec<Self> {
+        vec![
+            Self {
+                icon: "⌁",
+                label: "New session",
+                description: "start a fresh agent run in this workspace",
+                command: "Enter",
+                disabled: false,
+            },
+            Self {
+                icon: "◌",
+                label: "Chat only",
+                description: "plan and converse without touching the repo",
+                command: "C",
+                disabled: !provider_ready,
+            },
+            Self {
+                icon: "↺",
+                label: "Resume last",
+                description: "pick up a saved session where it ended",
+                command: "Ctrl+R",
+                disabled: session_count == 0,
+            },
+        ]
+    }
+}
+
+/// One option-strip tile: icon + label over its key (spec §5b, 4 columns).
+///
+/// Every printed key is a real dispatch on this branch: `Ctrl+N` and `C` go
+/// through `handle_launch_key`'s direct-key table; `F1` and `F2` are the
+/// shell-global help and settings routes (`shell_key_routing`), which stay
+/// live on the launch screen. No tile advertises a key that does nothing.
+#[derive(Debug, Clone)]
+pub struct TidelineOption {
+    pub icon: &'static str,
+    pub label: &'static str,
+    pub key: &'static str,
+}
+
+impl TidelineOption {
+    /// The approved four: New worktree / Chat only / Theme / Help. Every
+    /// printed key is a real dispatch through the launch table (main's
+    /// #5698 input model): Ctrl+N/C/T/F1 are the table's direct keys for
+    /// rows 3/4/5/6, the same code a tile click takes. The shell-global
+    /// F2 settings route stays live alongside — it simply is not the
+    /// tile's advertised key now that the table's `T` is.
+    #[must_use]
+    pub fn approved_set() -> Vec<Self> {
+        vec![
+            Self {
+                icon: "⑂",
+                label: "New worktree",
+                key: "Ctrl+N",
+            },
+            Self {
+                icon: "◌",
+                label: "Chat only",
+                key: "C",
+            },
+            Self {
+                icon: "◐",
+                label: "Theme",
+                key: "T",
+            },
+            Self {
+                icon: "?",
+                label: "Help",
+                key: "F1",
+            },
+        ]
+    }
+}
+
+/// What the caller owes the startup stage. Everything injectable so renders
+/// stay deterministic for golden buffers (spec §5a data sources:
+/// `LaunchState`, `workspace_session_count`, provider state).
+pub struct TidelineStartup<'a> {
+    pub theme: &'a UiTheme,
+    /// `workspace_session_count > 0` — the hero subtitle and resume row read
+    /// differently for a returning workspace (spec §5a "first-run vs
+    /// returning").
+    pub session_count: usize,
+    /// Provider configured — gates the chat-only rows.
+    pub provider_ready: bool,
+    /// Focused quick action, if one holds focus (keyboard parity with the
+    /// launch table's rows — see `QUICK_ACTION_ROWS`). `None` when an
+    /// option tile or an unshown table row holds the selection instead.
+    pub selected_action: Option<usize>,
+    /// Hovered quick action, if any (value ink brightens + underline).
+    pub hovered_action: Option<usize>,
+    /// Selected option-strip tile, if any (see `OPTION_TILE_ROWS`).
+    pub selected_option: Option<usize>,
+    /// The launch surface's one transient line — the worktree-name prompt or
+    /// a launch status message — painted over the composer dock's last row.
+    pub status_line: Option<String>,
+    /// The docked pre-session composer's display projection (#5698's
+    /// composer authority, re-docked below the option strip per §5b).
+    pub composer: LaunchComposerDisplay<'a>,
+    /// ASCII-safe / NO_COLOR mode: every glyph through `ascii_fallback`.
+    pub ascii_safe: bool,
+}
+
+impl<'a> TidelineStartup<'a> {
+    #[must_use]
+    pub fn new(theme: &'a UiTheme, session_count: usize, provider_ready: bool) -> Self {
+        Self {
+            theme,
+            session_count,
+            provider_ready,
+            selected_action: Some(0),
+            hovered_action: None,
+            selected_option: None,
+            status_line: None,
+            composer: LaunchComposerDisplay::default(),
+            ascii_safe: false,
+        }
+    }
+
+    #[must_use]
+    pub fn status_line(mut self, line: Option<String>) -> Self {
+        self.status_line = line;
+        self
+    }
+
+    #[must_use]
+    pub fn composer(mut self, composer: LaunchComposerDisplay<'a>) -> Self {
+        self.composer = composer;
+        self
+    }
+
+    #[must_use]
+    pub fn ascii_safe(mut self, ascii_safe: bool) -> Self {
+        self.ascii_safe = ascii_safe;
+        self
+    }
+
+    fn actions(&self) -> Vec<TidelineQuickAction> {
+        TidelineQuickAction::approved_set(self.provider_ready, self.session_count)
+    }
+
+    fn options(&self) -> Vec<TidelineOption> {
+        TidelineOption::approved_set()
+    }
+
+    fn sym(&self, glyph: &str) -> String {
+        if !self.ascii_safe {
+            return glyph.to_string();
+        }
+        if let Some(fb) = crate::tui::glyphs::ascii_fallback(glyph) {
+            return fb.to_string();
+        }
+        glyph
+            .chars()
+            .map(|c| {
+                crate::tui::glyphs::ascii_fallback(&c.to_string())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| c.to_string())
+            })
+            .collect()
+    }
+
+    fn fluke(&self) -> Vec<String> {
+        fluke_rows(self.ascii_safe)
+    }
+}
+
+fn chrome(theme: &UiTheme, ink: ChromeInk) -> Style {
+    chrome_style(theme, ink)
+}
+
+fn set_span(buf: &mut Buffer, x: u16, y: u16, span: &Span<'_>) {
+    if let Ok(clamped) = span.content.width().try_into() {
+        buf.set_span(x, y, span, clamped);
+    }
+}
+
+fn centered(buf: &mut Buffer, area: Rect, y: u16, span: &Span<'_>) {
+    let inset = (area.width.saturating_sub(span.content.width() as u16)) / 2;
+    set_span(buf, area.x + inset, area.y + y, span);
+}
+
+/// The startup stage's shared row budget — render and hitboxes must agree,
+/// so the constraint arithmetic lives here (spec §5b). Fixed bands shed as
+/// the stage shrinks: the QUICK ACTIONS label row and its margin collapse
+/// below 15 stage rows, then the static wave rules below 11; the hero
+/// percentage and the strip's column count (never its rows) absorb the rest.
+/// The pre-session composer docks in the spacer's bottom rows (§5b:
+/// composer `Length(4)` incl. border) and sheds within itself before the
+/// bands above ever move.
+struct StartupLayout {
+    hero: Rect,
+    rule_a: Rect,
+    quick: Rect,
+    rule_b: Rect,
+    strip: Rect,
+    /// The docked pre-session composer: the spacer's bottom rows, at most
+    /// four — `[input, hint, rule, prompt]` top to bottom (the prompt row
+    /// is the stage's transient status line; the worktree-name prompt and
+    /// launch status messages own it, painting over the hint).
+    dock: Rect,
+    /// Row within `quick` where the first action row paints.
+    quick_rows_start: u16,
+    /// Row within `hero` where the centered hero block starts.
+    hero_top: u16,
+    /// Whether the 12x6 fluke mark fits (`FLUKE_BLOCK` + heading + subtitle).
+    fluke_shown: bool,
+    /// Option-strip column count: 4 tiles need ~14 cells each to name
+    /// themselves whole, so below 56 stage columns the strip sheds to 2
+    /// (§5b shed ⑩) rather than truncate every label mid-word.
+    strip_columns: u16,
+}
+
+fn startup_layout(stage: Rect) -> StartupLayout {
+    let quick_len: u16 = if stage.height >= 15 { 3 + 2 } else { 3 };
+    let rule_len: u16 = if stage.height >= 11 { 1 } else { 0 };
+    let [hero, rule_a, quick, rule_b, strip, tail] = Layout::vertical([
+        Constraint::Percentage(38),
+        Constraint::Length(rule_len),
+        Constraint::Length(quick_len),
+        Constraint::Length(rule_len),
+        Constraint::Length(3),
+        Constraint::Min(1),
+    ])
+    .areas(stage);
+    // The composer dock owns the tail's bottom rows — the spacer keeps
+    // whatever the dock did not need. The dock never takes more than its
+    // spec'd four rows, and never takes rows the fixed bands above already
+    // claimed (the Min(1) guarantee).
+    let dock_h = tail.height.min(4);
+    let dock = Rect {
+        y: tail.y + tail.height - dock_h,
+        height: dock_h,
+        ..tail
+    };
+    let fluke_h = FLUKE_BLOCK.len() as u16;
+    let fluke_shown = hero.height >= fluke_h.saturating_add(2);
+    let block_h = if fluke_shown {
+        fluke_h + 2
+    } else {
+        u16::min(hero.height, 2)
+    };
+    StartupLayout {
+        hero,
+        rule_a,
+        quick,
+        rule_b,
+        strip,
+        dock,
+        quick_rows_start: quick.height.saturating_sub(3),
+        hero_top: hero.height.saturating_sub(block_h) / 2,
+        fluke_shown,
+        strip_columns: if strip.width < 56 { 2 } else { 4 },
+    }
+}
+
+/// Paint the startup stage (spec §5b): hero → wave rule → QUICK ACTIONS →
+/// wave rule → option strip → spacer. Deterministic; no clock, no motion.
+pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &TidelineStartup<'_>) {
+    if stage.width < 8 || stage.height < 5 {
+        return;
+    }
+    let theme = startup.theme;
+    let layout = startup_layout(stage);
+
+    // Hero: the generated fluke mark (when the vertical budget admits it),
+    // the heading, and one dim subtitle (first-run vs returning) as one
+    // vertically centered block.
+    let mut hero_row = layout.hero_top;
+    if layout.fluke_shown {
+        for row in startup.fluke() {
+            centered(
+                buf,
+                layout.hero,
+                hero_row,
+                &Span::styled(row, chrome(theme, ChromeInk::Attention)),
+            );
+            hero_row = hero_row.saturating_add(1);
+        }
+    }
+    let heading = "What are we working on?";
+    centered(
+        buf,
+        layout.hero,
+        hero_row,
+        &Span::styled(
+            heading,
+            chrome(theme, ChromeInk::MetadataValue).add_modifier(Modifier::BOLD),
+        ),
+    );
+    let subtitle = if startup.session_count > 0 {
+        format!(
+            "welcome back · {} saved {} in this workspace",
+            startup.session_count,
+            if startup.session_count == 1 {
+                "session"
+            } else {
+                "sessions"
+            },
+        )
+    } else {
+        "type below, or pick a first move".to_string()
+    };
+    centered(
+        buf,
+        layout.hero,
+        hero_row.saturating_add(1),
+        &Span::styled(subtitle, chrome(theme, ChromeInk::MetadataHint)),
+    );
+
+    // Static wave rules.
+    if layout.rule_a.height > 0 {
+        let rule = startup.sym(WAVE_RULE);
+        let rule_span = Span::styled(rule, chrome(theme, ChromeInk::MetadataDim));
+        centered(buf, layout.rule_a, 0, &rule_span);
+        centered(buf, layout.rule_b, 0, &rule_span);
+    }
+
+    // QUICK ACTIONS: label row + 3 rows of icon · label · description ·
+    // command + `›`, right-aligned command. The label row is the first
+    // thing to shed (§5b: identity of the band is its rows, not its title).
+    if layout.quick_rows_start > 0 {
+        set_span(
+            buf,
+            layout.quick.x + 2,
+            layout.quick.y,
+            &Span::styled(
+                "QUICK ACTIONS",
+                chrome(theme, ChromeInk::Metadata).add_modifier(Modifier::BOLD),
+            ),
+        );
+    }
+    let actions = startup.actions();
+    let row_right = layout.quick.x + layout.quick.width.saturating_sub(2);
+    for (index, action) in actions.iter().enumerate().take(3) {
+        let y = layout.quick.y + layout.quick_rows_start + index as u16;
+        if y >= layout.quick.bottom() {
+            break;
+        }
+        let selected = startup.selected_action == Some(index);
+        let hovered = startup.hovered_action == Some(index);
+        let ink = if action.disabled {
+            ChromeInk::MetadataDim
+        } else if selected {
+            ChromeInk::Identity
+        } else {
+            ChromeInk::MetadataValue
+        };
+        let mut style = chrome(theme, ink);
+        if hovered && !action.disabled {
+            style = style
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::UNDERLINED);
+        }
+        if selected && !action.disabled {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        let marker = if selected { "▸ " } else { "  " };
+        let mut row = format!(
+            "{}{} {} — {}",
+            marker,
+            startup.sym(action.icon),
+            action.label,
+            action.description
+        );
+        if row.width() + 2 + action.command.width() + 2
+            > layout.quick.width.saturating_sub(4) as usize
+        {
+            // Shed the description before the label: identity first.
+            row = format!("{}{} {}", marker, startup.sym(action.icon), action.label);
+        }
+        let trailer = format!("{} ›", action.command);
+        let trailer_w = trailer.width() as u16;
+        set_span(
+            buf,
+            layout.quick.x + 2,
+            y,
+            &Span::styled(row, chrome(theme, ink)),
+        );
+        set_span(
+            buf,
+            row_right.saturating_sub(trailer_w),
+            y,
+            &Span::styled(startup.sym(&trailer), style),
+        );
+    }
+
+    // Option strip: 4 columns × 2 rows (label over key). Tiles shed 4→2
+    // below the 40-column floor so the 80-wide blocker still reads.
+    let options = startup.options();
+    let columns = layout.strip_columns;
+    let column_w = layout.strip.width / columns.max(1);
+    for (index, option) in options.iter().enumerate().take(usize::from(columns)) {
+        let x = layout.strip.x + index as u16 * column_w;
+        let selected = startup.selected_option == Some(index);
+        let ink = if selected {
+            ChromeInk::Identity
+        } else {
+            ChromeInk::MetadataValue
+        };
+        let mut label_style = chrome(theme, ink);
+        if selected {
+            label_style = label_style.add_modifier(Modifier::BOLD);
+        }
+        let label = format!("{} {}", startup.sym(option.icon), option.label);
+        let budget = column_w.saturating_sub(1) as usize;
+        let label = truncate_to_width(&label, budget);
+        set_span(
+            buf,
+            x,
+            layout.strip.y + 1,
+            &Span::styled(label, label_style),
+        );
+        set_span(
+            buf,
+            x,
+            layout.strip.y + 2,
+            &Span::styled(option.key, chrome(theme, ChromeInk::MetadataHint)),
+        );
+    }
+
+    // The docked pre-session composer (§5b: composer Length(4) incl.
+    // border): #5698's strip re-docked below the option strip, in the
+    // spacer's bottom rows. Paint order is precedence — the strip first,
+    // then the stage's one transient line (the worktree-name prompt or a
+    // launch status message) over the dock's last row, so a modal prompt
+    // outranks the hint exactly as the classic screen's prompt row did.
+    if let Some((input_row, hint_row)) = launch_composer_rows(stage) {
+        render_launch_composer(stage, buf, theme, &startup.composer, input_row, hint_row);
+        if layout.dock.height == 4 {
+            // The dock's border row between hint and prompt.
+            render_launch_line(
+                stage,
+                buf,
+                input_row + 2,
+                vec![Span::styled(
+                    "─".repeat(usize::from(stage.width)),
+                    chrome(theme, ChromeInk::MetadataDim),
+                )],
+            );
+        }
+        if let Some(line) = startup.status_line.as_deref() {
+            let y = if layout.dock.height == 1 {
+                input_row
+            } else {
+                layout
+                    .dock
+                    .bottom()
+                    .saturating_sub(1)
+                    .saturating_sub(stage.y)
+            };
+            set_span(
+                buf,
+                stage.x + 2,
+                stage.y + y,
+                &Span::styled(
+                    truncate_to_width(line, usize::from(stage.width.saturating_sub(4))),
+                    chrome(theme, ChromeInk::Metadata),
+                ),
+            );
+        }
+    }
+}
+
+/// Recorded hitboxes for the startup stage (spec §6): the hero fluke, each
+/// quick action row, and each option-strip tile. Same shapes as the painted
+/// cells.
+#[derive(Debug, Clone, Default)]
+pub struct TidelineStartupHitboxes {
+    pub fluke: Rect,
+    pub actions: Vec<Rect>,
+    pub options: Vec<Rect>,
+    /// The docked composer's input row (click focuses, exactly like Tab).
+    pub composer: Option<Rect>,
+    /// The send glyph inside the composer row (click submits).
+    pub send: Option<Rect>,
+}
+
+/// Compute the startup hitboxes for one render area. Pure geometry through
+/// the same `startup_layout` the renderer uses, so rects match painted
+/// cells wherever both run on the same stage.
+#[must_use]
+pub fn tideline_startup_hitboxes(stage: Rect) -> TidelineStartupHitboxes {
+    let mut out = TidelineStartupHitboxes::default();
+    if stage.width < 8 || stage.height < 5 {
+        return out;
+    }
+    let layout = startup_layout(stage);
+
+    if layout.fluke_shown {
+        let fluke_w = FLUKE_BLOCK[0].width() as u16;
+        out.fluke = Rect {
+            x: layout.hero.x + (layout.hero.width.saturating_sub(fluke_w)) / 2,
+            y: layout.hero.y + layout.hero_top,
+            width: fluke_w,
+            height: FLUKE_BLOCK.len() as u16,
+        };
+    }
+    out.actions = (0..3)
+        .map(|index| Rect {
+            x: layout.quick.x + 2,
+            y: layout.quick.y + layout.quick_rows_start + index,
+            width: layout.quick.width.saturating_sub(4),
+            height: 1,
+        })
+        .collect();
+    let columns = layout.strip_columns;
+    let column_w = layout.strip.width / columns.max(1);
+    out.options = (0..columns)
+        .map(|index| Rect {
+            x: layout.strip.x + index * column_w,
+            y: layout.strip.y + 1,
+            width: column_w,
+            height: 2,
+        })
+        .collect();
+    // The docked composer's hitboxes: the input row, and the trailing
+    // " ↑" send affordance at its end — #5698's shapes, re-anchored to the
+    // dock's geometry through the same `startup_layout` arithmetic.
+    if layout.dock.height >= 1 {
+        out.composer = Some(Rect {
+            x: stage.x.saturating_add(2),
+            y: layout.dock.y,
+            width: stage.width.saturating_sub(4),
+            height: 1,
+        });
+        out.send = Some(Rect {
+            x: stage.x.saturating_add(stage.width.saturating_sub(4)),
+            y: layout.dock.y,
+            width: 2.min(stage.width),
+            height: 1,
+        });
+    }
+    out
+}
+
+/// Mouse dispatch intent for one option-strip tile (spec §6: keyboard and
+/// mouse parity). Every tile dispatches through the launch table — the
+/// same `handle_launch_key` path its printed key takes; `launch_row` is
+/// the table row the tile owns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchOptionAction {
+    Worktree,
+    Chat,
+    Theme,
+    Help,
+}
+
+impl LaunchOptionAction {
+    /// The tile order [`TidelineOption::approved_set`] paints.
+    const STRIP: [Self; 4] = [Self::Worktree, Self::Chat, Self::Theme, Self::Help];
+
+    /// The launch-table row this tile dispatches through (the same row its
+    /// printed direct key selects in `handle_launch_key`).
+    #[must_use]
+    pub fn launch_row(self) -> usize {
+        match self {
+            Self::Worktree => 3,
+            Self::Chat => 4,
+            Self::Theme => 5,
+            Self::Help => 6,
+        }
+    }
+}
+
+/// The startup stage's visible rows as launch-table indices: the three
+/// QUICK ACTIONS (New session, Chat only, Resume last) are table rows
+/// `[2, 4, 1]`; the option tiles (worktree, chat, theme, help) are rows
+/// `[3, 4, 5, 6]`. Chat (4) shows focus on its quick-action row — the
+/// richer affordance — and its tile stays plain. Connect (row 0) has no
+/// stage home: its `P` direct key and the topbar's Model segment are its
+/// routes, so focus resting there shows no marker (the input model is
+/// main's exactly; the stage only projects it).
+const QUICK_ACTION_ROWS: [usize; 3] = [2, 4, 1];
+const OPTION_TILE_ROWS: [usize; 4] = [3, 4, 5, 6];
+
+/// Project live `App` state onto the startup stage's inputs (spec §5a data
+/// sources: `LaunchState.workspace_session_count`, provider onboarding, the
+/// launch selection, and the previous frame's row hitboxes for hover — the
+/// same one-frame-lag registry the topbar uses).
+#[must_use]
+pub fn tideline_startup_from_app(app: &App) -> TidelineStartup<'_> {
+    let ascii_safe = crate::tui::color_compat::ascii_safe_enabled();
+    // Hover resolves through the seven-slot row registry: the slot under
+    // the mouse is a table row; its quick-action position (if any) is the
+    // hovered row.
+    let hovered_action = app.last_mouse_pos.and_then(|(mx, my)| {
+        let slot = app
+            .launch
+            .row_areas
+            .iter()
+            .position(|area| area.x <= mx && mx < area.right() && area.y == my)?;
+        QUICK_ACTION_ROWS.iter().position(|row| *row == slot)
+    });
+    let selected = app.launch.selected;
+    let mut startup = TidelineStartup::new(
+        &app.ui_theme,
+        app.launch.workspace_session_count,
+        !app.onboarding_needs_api_key,
+    )
+    .ascii_safe(ascii_safe)
+    .composer(LaunchComposerDisplay::from_app(app))
+    .status_line(launch_status_line(app, ascii_safe));
+    // Keyboard parity with the launch table: a quick action holds the
+    // marker when the selected table row is one of QUICK_ACTION_ROWS; a
+    // tile holds it when the row is that tile's; row 0 (Connect) rests
+    // nowhere visible by design.
+    startup.selected_action = QUICK_ACTION_ROWS.iter().position(|row| *row == selected);
+    startup.selected_option = if startup.selected_action.is_some() {
+        None
+    } else {
+        OPTION_TILE_ROWS.iter().position(|row| *row == selected)
+    };
+    startup.hovered_action = hovered_action;
+    startup
+}
+
+/// The launch surface's transient line: the worktree-name prompt while the
+/// name is being typed, else the most recent launch status message.
+fn launch_status_line(app: &App, ascii_safe: bool) -> Option<String> {
+    if let Some(input) = app.launch.worktree_input.as_deref() {
+        let caret = if app.low_motion || ascii_safe {
+            "_"
+        } else {
+            "▌"
+        };
+        Some(format!(
+            "{}  {}{caret}",
+            tr(app.ui_locale, MessageId::LaunchWorktreeNameLabel),
+            input
+        ))
+    } else {
+        app.launch.status.as_deref().map(str::to_string)
+    }
+}
+
+/// Store the startup stage's clickable rects into the launch state — the
+/// role #5698's `record_launch_hitboxes` owned, re-anchored to the stage.
+/// Call after the stage is painted, with the hitboxes computed for the
+/// same stage rect. `row_areas` is the launch table's seven slots (main's
+/// meaning: index == the table row, so `mouse_ui`'s click path — set the
+/// row, Enter — dispatches unchanged); the three quick-action rects land
+/// at their `QUICK_ACTION_ROWS` slots and unreachable slots hold a
+/// zero-size rect that never hit-tests. The option tiles land in the
+/// typed `option_areas` registry, and the docked composer's input and
+/// send rects in `composer_area`/`send_area` (main's fields, main's
+/// shapes).
+pub fn apply_launch_hitboxes(
+    hitboxes: &TidelineStartupHitboxes,
+    launch: &mut crate::tui::app::LaunchState,
+) {
+    let mut rows = vec![Rect::default(); LAUNCH_ROWS.len()];
+    for (slot, area) in QUICK_ACTION_ROWS.iter().zip(hitboxes.actions.iter()) {
+        if let Some(slot) = rows.get_mut(*slot) {
+            *slot = *area;
+        }
+    }
+    launch.row_areas = rows;
+    launch.option_areas = hitboxes
+        .options
+        .iter()
+        .enumerate()
+        .filter_map(|(index, area)| {
+            LaunchOptionAction::STRIP
+                .get(index)
+                .map(|action| (*action, *area))
+        })
+        .collect();
+    launch.composer_area = hitboxes.composer;
+    launch.send_area = hitboxes.send;
+}
+
+#[cfg(test)]
+mod tideline_tests;

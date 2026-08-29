@@ -2988,3 +2988,30 @@ pub(crate) fn apply_hot_tail_to_line(line: &mut Line<'static>, low_motion: bool)
 
 #[cfg(test)]
 mod tests;
+
+// ---------------------------------------------------------------------------
+// Tideline receipt stream (spec §5a "Receipt stream", §1 work screen): turn
+// rows, the pod-formation `├──/└──` tree, state-marked receipt rows with
+// timestamps and receipt counts, an indented conclusion block, and the
+// legend row that teaches the marks in place. Translation scaffolding in
+// the topbar mold: pure, deterministic, injected events — the transcript
+// click path (`work_surface` row rects) is reused at the landing slice;
+// not wired into `ui/frame.rs` (#5698 gate).
+
+pub use tideline_stream::{TidelineStream, render_tideline_stream};
+
+/// Full export alias for the Tideline components that compose the stream
+/// into their stages (work surface, settings preview).
+pub(crate) mod tideline_exports {
+    #![allow(unused_imports)] // consumed by the work-surface/settings test suites and landing slice
+
+    pub use super::tideline_stream::{
+        TidelineReceiptState, TidelineStream, TidelineStreamEvent, render_tideline_stream,
+        tideline_stream_hitboxes,
+    };
+}
+
+mod tideline_stream;
+
+#[cfg(test)]
+mod tideline_stream_tests;

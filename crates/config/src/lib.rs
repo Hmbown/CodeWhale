@@ -1324,6 +1324,20 @@ pub const DEFAULT_HOTBAR_ACTIONS: [&str; HOTBAR_SLOT_COUNT as usize] = [
     "sidebar.toggle",
 ];
 
+/// Normalize persisted action ids at the compatibility boundary.
+///
+/// `/pod` is the canonical public command, but existing settings may still
+/// contain the former `slash.fleet` hotbar id. Resolution and direct registry
+/// lookup both use this helper so those slots continue to dispatch while any
+/// subsequent save naturally writes the canonical id.
+#[must_use]
+pub fn normalize_hotbar_action_id(action_id: &str) -> &str {
+    match action_id {
+        "slash.fleet" => "slash.pod",
+        other => other,
+    }
+}
+
 /// On-disk schema for one `[[hotbar]]` table.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -1433,7 +1447,7 @@ pub fn resolve_hotbar_bindings(
             .iter()
             .map(|binding| HotbarBinding {
                 slot: binding.slot,
-                action: binding.action.clone(),
+                action: normalize_hotbar_action_id(&binding.action).to_string(),
                 label: binding.label.clone(),
             })
             .collect::<Vec<_>>(),

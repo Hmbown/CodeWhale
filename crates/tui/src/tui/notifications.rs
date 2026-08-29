@@ -2366,3 +2366,265 @@ mod tests {
         COMPLETION_SOUND_FILE_MISSING_WARNED.store(false, Ordering::SeqCst);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tideline notifications inbox (spec §5a "Notifications inbox"): the
+// attention surface that replaces the toast soup. Records are typed — the
+// same `NotificationKind` disclosure policy the desktop payloads use — and
+// the unread mark is the sanctioned gold ◆. Translation scaffolding in the
+// topbar mold: a pure deterministic widget over injected records (`App`
+// projects `status_toasts`/`sticky_status` into it at the landing slice);
+// not wired into `ui/frame.rs` (#5698 gate).
+
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Modifier, Style},
+};
+use unicode_width::UnicodeWidthStr;
+
+use crate::palette::{ChromeInk, UiTheme, chrome_style};
+
+/// One attention record: a typed projection of a status toast / sticky
+/// status / desktop payload. `at` is an injected clock string so renders
+/// stay deterministic (spec §5a: caller owns the wall clock).
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub struct TidelineInboxRecord {
+    pub kind: NotificationKind,
+    pub title: String,
+    /// One-line body, already disclosure-approved per kind.
+    pub body: Option<String>,
+    /// Wall-clock label, e.g. `14:42`.
+    pub at: String,
+    pub read: bool,
+}
+
+impl TidelineInboxRecord {
+    /// Kind word — a noun, never "Error" (spec §7 failure microcopy rule).
+    #[must_use]
+    pub fn kind_word(&self) -> &'static str {
+        match self.kind {
+            NotificationKind::TurnComplete => "turn done",
+            NotificationKind::SubagentTerminal => "whale done",
+            NotificationKind::ApprovalNeeded => "approval",
+            NotificationKind::InputNeeded => "question",
+            NotificationKind::ElevationNeeded => "sandbox",
+            NotificationKind::ModelNotify => "notify",
+        }
+    }
+
+    /// Per-kind ink per the §5d table: interactive asks read as cognition
+    /// (permission family), completions as outcome, terminal whales as info.
+    #[must_use]
+    pub fn kind_ink(&self) -> ChromeInk {
+        match self.kind {
+            NotificationKind::TurnComplete => ChromeInk::Outcome,
+            NotificationKind::SubagentTerminal => ChromeInk::Info,
+            NotificationKind::ApprovalNeeded | NotificationKind::InputNeeded => {
+                ChromeInk::PermissionAsk
+            }
+            NotificationKind::ElevationNeeded => ChromeInk::PermissionFullAccess,
+            NotificationKind::ModelNotify => ChromeInk::MetadataValue,
+        }
+    }
+}
+
+/// What the caller owes the inbox render.
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub struct TidelineInbox<'a> {
+    pub theme: &'a UiTheme,
+    pub records: &'a [TidelineInboxRecord],
+    /// Selected row (Enter inspects, `r` marks read, Esc backs out).
+    pub selected: usize,
+    pub ascii_safe: bool,
+}
+
+#[allow(dead_code)] // translation scaffolding: builder methods feed tests + the landing slice
+impl<'a> TidelineInbox<'a> {
+    #[allow(dead_code)] // translation scaffolding: wired by the landing slice
+    #[must_use]
+    pub fn new(theme: &'a UiTheme, records: &'a [TidelineInboxRecord]) -> Self {
+        Self {
+            theme,
+            records,
+            selected: 0,
+            ascii_safe: false,
+        }
+    }
+
+    #[must_use]
+    pub fn selected(mut self, selected: usize) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    #[must_use]
+    pub fn ascii_safe(mut self, ascii_safe: bool) -> Self {
+        self.ascii_safe = ascii_safe;
+        self
+    }
+
+    fn sym(&self, glyph: &str) -> String {
+        if !self.ascii_safe {
+            return glyph.to_string();
+        }
+        if let Some(fb) = crate::tui::glyphs::ascii_fallback(glyph) {
+            return fb.to_string();
+        }
+        glyph
+            .chars()
+            .map(|c| {
+                crate::tui::glyphs::ascii_fallback(&c.to_string())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| c.to_string())
+            })
+            .collect()
+    }
+}
+
+fn chrome(theme: &UiTheme, ink: ChromeInk) -> Style {
+    chrome_style(theme, ink)
+}
+
+fn put(buf: &mut Buffer, x: u16, y: u16, text: &str, style: Style) {
+    buf.set_stringn(x, y, text, text.width(), style);
+}
+
+/// Paint the notifications inbox: header row (count of unread), then one
+/// row per record — unread gold ◆, read hollow ○, selected `▸`, kind word,
+/// title, injected time. Truncates, never wraps.
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub fn render_tideline_inbox(area: Rect, buf: &mut Buffer, inbox: &TidelineInbox<'_>) {
+    if area.width < 8 || area.height < 2 {
+        return;
+    }
+    let theme = inbox.theme;
+    let unread = inbox.records.iter().filter(|record| !record.read).count();
+    let header = if unread == 0 {
+        "NOTIFICATIONS".to_string()
+    } else {
+        format!("NOTIFICATIONS · {unread} unread")
+    };
+    put(
+        buf,
+        area.x,
+        area.y,
+        &header,
+        chrome(theme, ChromeInk::Metadata).add_modifier(Modifier::BOLD),
+    );
+
+    if inbox.records.is_empty() {
+        put(
+            buf,
+            area.x,
+            area.y + 1,
+            "quiet water — nothing needs you",
+            chrome(theme, ChromeInk::MetadataHint),
+        );
+        return;
+    }
+
+    let width = area.width as usize;
+    let mut y = area.y + 1;
+    for (index, record) in inbox.records.iter().enumerate() {
+        if y >= area.y + area.height {
+            break;
+        }
+        let selected = inbox.selected == index;
+        let marker = if selected { "▸ " } else { "  " };
+        let mark = if record.read { "○" } else { "◆" };
+        let mark_ink = if record.read {
+            ChromeInk::MetadataDim
+        } else {
+            ChromeInk::Attention
+        };
+        let row = format!("{} {} — {}", record.kind_word(), record.title, record.at);
+        let row = truncate_to_width_owned(&inbox.sym(&row), width.saturating_sub(6));
+        put(
+            buf,
+            area.x + 2,
+            y,
+            &inbox.sym(marker),
+            chrome(theme, ChromeInk::Identity),
+        );
+        put(
+            buf,
+            area.x + 4,
+            y,
+            &inbox.sym(mark),
+            chrome(theme, mark_ink),
+        );
+        let mut style = chrome(theme, record.kind_ink());
+        if record.read {
+            style = chrome(theme, ChromeInk::MetadataDim);
+        }
+        if selected {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        put(buf, area.x + 6, y, &row, style);
+        // The selected record's approved body earns its own indented row —
+        // the inspect affordance; other bodies stay collapsed.
+        if selected
+            && let Some(body) = record.body.as_deref()
+            && y + 1 < area.y + area.height
+        {
+            put(
+                buf,
+                area.x + 8,
+                y + 1,
+                &truncate_to_width_owned(&inbox.sym(body), width.saturating_sub(10)),
+                chrome(theme, ChromeInk::MetadataHint),
+            );
+            y += 1;
+        }
+        y += 1;
+    }
+}
+
+fn truncate_to_width_owned(text: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + w > width {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out
+}
+
+/// Row hitboxes for one render (spec §6): one rect per record, matching the
+/// painted rows exactly — the selected record's body row belongs to its
+/// rect. Must be called with the same inputs as [`render_tideline_inbox`].
+#[must_use]
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub fn tideline_inbox_hitboxes(area: Rect, inbox: &TidelineInbox<'_>) -> Vec<Rect> {
+    let mut out = Vec::new();
+    if area.width < 8 || area.height < 2 {
+        return out;
+    }
+    let mut y = area.y + 1;
+    for (index, record) in inbox.records.iter().enumerate() {
+        let mut height = 1;
+        if inbox.selected == index && record.body.is_some() {
+            height = 2;
+        }
+        if y + height > area.y + area.height {
+            break;
+        }
+        out.push(Rect {
+            x: area.x + 2,
+            y,
+            width: area.width.saturating_sub(2),
+            height,
+        });
+        y += height;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tideline_tests;

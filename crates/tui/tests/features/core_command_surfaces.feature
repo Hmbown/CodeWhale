@@ -38,6 +38,6 @@ Feature: Core command visible surfaces
     Then the message window should include "Opening persistent sub-agent at depth 2"
     When the user runs the core command "/rlm 1 inspect command extraction"
     Then the message window should include "Loading that into a persistent working context"
-    When the user runs the core command "/fleet help"
-    Then the message window should include "/fleet workers (and /subagents) shows sub-agents in the current TUI session only"
+  When the user runs the core command "/pod help"
+  Then the message window should include "/pod workers (and /subagents) shows sub-agents in the current TUI session only"
     And the message window should include "CLI: codewhale fleet status"

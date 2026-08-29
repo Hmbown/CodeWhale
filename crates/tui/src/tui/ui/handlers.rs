@@ -916,6 +916,42 @@ pub(crate) async fn handle_config_updated(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn handle_theme_selection_updated(
+    terminal: &mut AppTerminal,
+    app: &mut App,
+    config: &mut Config,
+    task_manager: &SharedTaskManager,
+    engine_handle: &mut EngineHandle,
+    web_config_session: &mut Option<WebConfigSession>,
+    theme: String,
+    ocean_treatment: String,
+    persist: bool,
+) -> Result<bool> {
+    let result = prepare_config_update_result(
+        commands::set_theme_selection(app, &theme, &ocean_treatment, persist),
+        persist,
+    );
+    // Both halves affect shell paint and must bypass ratatui's incremental
+    // cell diff, including a Deepsea -> Flat preview or Esc rollback.
+    app.force_next_full_repaint = true;
+    if apply_command_result(
+        terminal,
+        app,
+        engine_handle,
+        task_manager,
+        config,
+        web_config_session,
+        result,
+    )
+    .await?
+    {
+        return Ok(true);
+    }
+    refresh_config_view_if_open(app, "theme");
+    Ok(false)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_view_events(
     terminal: &mut AppTerminal,
     app: &mut App,
@@ -1224,6 +1260,27 @@ pub(crate) async fn handle_view_events(
                     web_config_session,
                     key,
                     value,
+                    persist,
+                )
+                .await?
+                {
+                    return Ok(true);
+                }
+            }
+            ViewEvent::ThemeSelectionUpdated {
+                theme,
+                ocean_treatment,
+                persist,
+            } => {
+                if handle_theme_selection_updated(
+                    terminal,
+                    app,
+                    config,
+                    task_manager,
+                    engine_handle,
+                    web_config_session,
+                    theme,
+                    ocean_treatment,
                     persist,
                 )
                 .await?
@@ -2152,6 +2209,27 @@ pub(crate) fn handle_view_events_boxed<'a>(
                         web_config_session,
                         key,
                         value,
+                        persist,
+                    )
+                    .await?
+                    {
+                        return Ok(true);
+                    }
+                }
+                ViewEvent::ThemeSelectionUpdated {
+                    theme,
+                    ocean_treatment,
+                    persist,
+                } => {
+                    if handle_theme_selection_updated(
+                        terminal,
+                        app,
+                        config,
+                        task_manager,
+                        engine_handle,
+                        web_config_session,
+                        theme,
+                        ocean_treatment,
                         persist,
                     )
                     .await?

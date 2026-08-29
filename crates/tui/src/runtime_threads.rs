@@ -32,7 +32,7 @@ use crate::compaction::CompactionConfig;
 use crate::config::DEFAULT_TEXT_MODEL;
 use crate::config::{ApiProvider, Config, MAX_SUBAGENTS, ProviderIdentity};
 use crate::core::engine::{
-    EngineConfig, EngineHandle, UNBOUNDED_MODEL_STEPS, spawn_engine_with_authoritative_route_config,
+    EngineConfig, EngineHandle, spawn_engine_with_authoritative_route_config,
 };
 use crate::core::events::{Event as EngineEvent, TurnOutcomeStatus};
 use crate::core::ops::Op;
@@ -7641,9 +7641,9 @@ impl RuntimeThreadManager {
                 },
                 project_context_pack_enabled: !isolated_chat && cfg.project_context_pack_enabled(),
                 translation_enabled: false,
-                // Runtime/API turns follow the same no-hidden-step-budget
+                // R1: runtime/API turns follow the same finite-budget
                 // contract as the ordinary interactive engine.
-                max_steps: UNBOUNDED_MODEL_STEPS,
+                max_steps: cfg.max_model_steps(),
                 max_subagents,
                 max_admitted_subagents: cfg
                     .max_admitted_subagents_for_provider(provider)
@@ -7703,6 +7703,9 @@ impl RuntimeThreadManager {
                 stream_chunk_timeout: std::time::Duration::from_secs(
                     cfg.stream_chunk_timeout_secs(),
                 ),
+                turn_wall_clock: cfg.turn_wall_clock(),
+                stream_max_content_bytes: cfg.stream_max_content_bytes(),
+                stream_max_duration: cfg.stream_max_duration(),
                 subagent_heartbeat_timeout: std::time::Duration::from_secs(
                     cfg.subagent_heartbeat_timeout_secs_for_provider(provider),
                 ),
@@ -7711,7 +7714,7 @@ impl RuntimeThreadManager {
                     read_only_roots: cfg.bwrap_ro_roots.clone(),
                     device_roots: cfg.bwrap_dev_roots.clone(),
                 },
-                denied_read_subpaths: cfg.sandbox_denied_read_paths.clone(),
+                read_denylist: cfg.read_denylist(),
                 memory_enabled: !isolated_chat && cfg.memory_enabled(),
                 memory_path: cfg.memory_path(),
                 speech_output_dir: cfg.speech_output_dir(),

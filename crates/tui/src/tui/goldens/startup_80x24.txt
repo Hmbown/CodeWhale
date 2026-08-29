@@ -1,0 +1,24 @@
+                                  ▚▄▄▖    ▗▄▄▟                                  
+                                  ▝▜███▙▟███▛▘                                  
+                                     ▝▀▜██▛▀▘                                   
+                                         ▜█                                     
+                                         ██▖                                    
+                                      ▝▀▜█▙▄▖                                   
+                            What are we working on?                             
+               welcome back · 4 saved sessions in this workspace                
+                                                                                
+                                    ⋯ ∼∼∼ ⋯                                     
+  QUICK ACTIONS                                                                 
+                                                                                
+  ▸ ⌁ New session — start a fresh agent run in this workspace          Enter ›  
+    ◌ Chat only — plan and converse without touching the repo              C ›  
+    ↺ Resume last — pick up a saved session where it ended            Ctrl+R ›  
+                                    ⋯ ∼∼∼ ⋯                                     
+                                                                                
+⑂ New worktree      ◌ Chat only         ◐ Theme             ? Help              
+Ctrl+N              C                   T                   F1                  
+                                                                                
+  ❯ Type a message…                                                          ↑  
+  Tab to type                                                                   
+────────────────────────────────────────────────────────────────────────────────
+                                                                                

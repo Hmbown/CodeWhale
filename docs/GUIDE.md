@@ -351,6 +351,9 @@ kept in the provider registry document.
 
 Soft-auto multi-agent work: [AUTOMATIC_WORKFLOWS.md](AUTOMATIC_WORKFLOWS.md).
 
+Posting Codewhale PR reviews as a bot identity:
+[GITHUB_APP.md](GITHUB_APP.md).
+
 Next for durable multi-worker work: [FLEET_WORKFLOW_TUTORIAL.md](FLEET_WORKFLOW_TUTORIAL.md)
 walks through Fleet task specs, monitoring, and Workflow authoring.
 

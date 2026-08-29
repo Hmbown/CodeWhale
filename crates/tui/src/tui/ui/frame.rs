@@ -5,6 +5,173 @@
 
 use super::*;
 use crate::models::Role;
+use crate::tui::topbar::{Topbar, TopbarSegment, TopbarSegmentId, topbar_hitboxes};
+
+/// The topbar's clock string, read from the wall clock exactly once per
+/// render (spec §5e cadence law). `27 Aug 2026 14:42:18` — the widget sheds
+/// the date prefix itself at narrow widths, so this is always the full form.
+pub(crate) fn topbar_clock() -> String {
+    chrono::Local::now().format("%d %b %Y %H:%M:%S").to_string()
+}
+
+/// Context window percentage for the topbar meter — the same snapshot the
+/// merged footer's depth line reads, so the two can never disagree.
+pub(crate) fn topbar_context_percent(app: &App) -> u8 {
+    crate::tui::phase_strip::context_percent_from_app(app)
+}
+
+/// Build the topbar's contextual segments from live `App` state (spec §5a
+/// "Topbar" data sources). Shedding is the widget's job; this only states
+/// the facts, in reference order: run, pod, whales, model, theme, folder.
+pub(crate) fn topbar_segments(app: &App, width: u16) -> Vec<TopbarSegment> {
+    use crate::palette::ChromeInk;
+    let mut segments = Vec::new();
+
+    // Run/breadcrumb while a workflow run is active — the collapsed
+    // workflow chip's new home (the classic header's `top_bar_chip`, with
+    // its redundant `wf ` prefix dropped now that the `run` label says it).
+    if let Some(panel) = app.workflow_panel.as_ref() {
+        let ink = if matches!(
+            panel.lifecycle,
+            crate::tui::widgets::workflow_panel::WorkflowPanelLifecycle::Degraded
+        ) {
+            ChromeInk::Attention
+        } else {
+            ChromeInk::Info
+        };
+        let chip = panel.top_bar_chip();
+        let value = chip.strip_prefix("wf ").unwrap_or(&chip).to_string();
+        segments.push(TopbarSegment::new(TopbarSegmentId::Run, "run", value, ink));
+    }
+
+    // Pod membership and whale capacity from the sub-agent state: `pod n/m`
+    // of known members, `whales n/capacity` while any whale is in the water.
+    let running = running_agent_count(app);
+    let pod_total = app.subagent_cache.len();
+    if pod_total > 0 {
+        segments.push(TopbarSegment::new(
+            TopbarSegmentId::Pod,
+            "pod",
+            format!("{running}/{pod_total}"),
+            ChromeInk::Active,
+        ));
+        if running > 0 {
+            segments.push(TopbarSegment::new(
+                TopbarSegmentId::Whales,
+                "whales",
+                format!("{}/{}", running, app.max_subagents.max(1)),
+                ChromeInk::Info,
+            ));
+        }
+    }
+
+    // Route identity — the old identity band's fact, same shed discipline:
+    // provider first, then effort, whole names or none. When no model is
+    // configured the segment says so and waits.
+    let (_, model) = app.effective_route_identity_display();
+    if model.is_empty() {
+        segments.push(TopbarSegment::new(
+            TopbarSegmentId::Model,
+            "model",
+            "not connected",
+            ChromeInk::Waiting,
+        ));
+    } else {
+        let tier = crate::tui::underwater::ShellTier::for_chrome_width(width);
+        // The brand lockup, gap, and the pinned meter + clock floor claim
+        // the rest of the row; the route sheds its own qualifiers first.
+        let budget = (usize::from(width)).saturating_sub(60).max(24);
+        let fields = crate::tui::phase_strip::route_identity_fields(app, tier, budget)
+            .unwrap_or_else(|| vec![model]);
+        segments.push(TopbarSegment::new(
+            TopbarSegmentId::Model,
+            "",
+            fields.join(" · "),
+            ChromeInk::Identity,
+        ));
+    }
+
+    // Theme name from the active theme id.
+    segments.push(TopbarSegment::new(
+        TopbarSegmentId::Theme,
+        "theme",
+        app.theme_id.display_name(),
+        ChromeInk::Info,
+    ));
+
+    // Workspace truth: the cached git status label (it already leads with
+    // the repo name) or the workspace folder name. Cached only — the render
+    // path never probes; background refresh belongs to the event loop.
+    let tier = crate::tui::underwater::ShellTier::for_chrome_width(width);
+    let max_git_width = match tier {
+        crate::tui::underwater::ShellTier::Compact => 24,
+        crate::tui::underwater::ShellTier::Normal => 36,
+        crate::tui::underwater::ShellTier::Wide => 52,
+    };
+    let workspace_label =
+        crate::tui::git_status::chrome_label(&crate::tui::git_status::cached_status())
+            .map(|label| crate::localization::truncate_to_width(&label, max_git_width));
+    let workspace_label = workspace_label.unwrap_or_else(|| {
+        app.workspace
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| app.workspace.to_string_lossy().into_owned())
+    });
+    segments.push(TopbarSegment::new(
+        TopbarSegmentId::Workspace,
+        "folder",
+        workspace_label,
+        ChromeInk::Metadata,
+    ));
+
+    segments
+}
+
+/// Render the Tideline topbar into one header row and record its segment
+/// hitboxes (spec §5b `Constraint::Length(1)`). The ONE header on every
+/// screen: the session shell and the launch screen both call this, so the
+/// brand lockup, contextual segments, and the pinned meter + clock never
+/// change identity between pre- and post-session states. Segment rects are
+/// recorded for hover (this frame's highlight resolves against the previous
+/// frame's rects, the standard one-frame-lag registry pattern) and for click
+/// routing in a follow-up slice.
+/// Render the Tideline topbar row and record its segment hitboxes. Returns
+/// the pinned context meter's hitbox — the chrome row's one always-present
+/// inspector target (`Alt+C`'s mouse route) — or `None` when the meter could
+/// not paint whole and clear of the brand at this width.
+pub(crate) fn render_topbar_row(f: &mut Frame, app: &mut App, area: Rect) -> Option<Rect> {
+    if area.height == 0 {
+        app.viewport.last_topbar_hitboxes.clear();
+        return None;
+    }
+    let segments = topbar_segments(app, area.width);
+    let clock = topbar_clock();
+    let hovered = app.last_mouse_pos.and_then(|(mx, my)| {
+        app.viewport
+            .last_topbar_hitboxes
+            .iter()
+            .find(|hb| hb.area.x <= mx && mx < hb.area.right() && hb.area.y == my)
+            .map(|hb| hb.id)
+    });
+    let topbar = Topbar::new(
+        &app.ui_theme,
+        &clock,
+        topbar_context_percent(app),
+        &segments,
+    )
+    .ascii_safe(crate::tui::color_compat::ascii_safe_enabled())
+    .hovered(hovered);
+    let hitboxes = topbar_hitboxes(&topbar, area);
+    let context_hitbox = crate::tui::topbar::context_meter_hitbox(&topbar, area);
+    // Keep the header row's quiet background under the widget itself.
+    let buf = f.buffer_mut();
+    Block::default()
+        .style(Style::default().bg(app.ui_theme.header_bg))
+        .render(area, buf);
+    ratatui::widgets::Widget::render(topbar, area, buf);
+    app.viewport.last_topbar_hitboxes = hitboxes;
+    context_hitbox
+}
 
 /// Map the host terminal rect onto the session shell canvas.
 ///
@@ -213,13 +380,13 @@ pub(crate) fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         project_context_pack_enabled: config.project_context_pack_enabled(),
         translation_enabled: app.translation_enabled,
         verbosity: app.verbosity.clone(),
-        // Effectively unlimited: the previous cap of 100 hit the ceiling on
-        // long multi-step plans (wide refactors, sub-agent orchestration) and
-        // presented as the agent "giving up mid-task". `u32::MAX` is the type
-        // ceiling; users can still interrupt with Ctrl+C / Esc, and a turn
-        // naturally ends when the model stops emitting tool calls. A real
-        // runaway is rare and human-noticeable; we trust the operator.
-        max_steps: u32::MAX,
+        // R1: finite, not `u32::MAX`. The old comment argued a runaway is
+        // "human-noticeable", but an interactive session left running is
+        // exactly where an unbounded loop spends real money unattended.
+        // The default (200) is far above what a long multi-step plan needs;
+        // operators who want more raise `[tui].max_model_steps`, and the
+        // clamp keeps even the maximum finite.
+        max_steps: config.max_model_steps(),
         max_subagents,
         max_admitted_subagents: config
             .max_admitted_subagents_for_provider(provider)
@@ -267,6 +434,9 @@ pub(crate) fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             config.subagent_api_timeout_secs_for_provider(provider),
         ),
         stream_chunk_timeout: Duration::from_secs(app.stream_chunk_timeout_secs),
+        turn_wall_clock: config.turn_wall_clock(),
+        stream_max_content_bytes: config.stream_max_content_bytes(),
+        stream_max_duration: config.stream_max_duration(),
         subagent_heartbeat_timeout: Duration::from_secs(
             config.subagent_heartbeat_timeout_secs_for_provider(provider),
         ),
@@ -275,7 +445,7 @@ pub(crate) fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             read_only_roots: config.bwrap_ro_roots.clone(),
             device_roots: config.bwrap_dev_roots.clone(),
         },
-        denied_read_subpaths: config.sandbox_denied_read_paths.clone(),
+        read_denylist: config.read_denylist(),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
         speech_output_dir: config.speech_output_dir(),
@@ -702,6 +872,7 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         .set_focus_texture(app.focus_texture, app.ui_theme);
     app.sidebar_hover = crate::tui::app::SidebarHoverState::default();
     app.viewport.last_approval_area = None;
+    app.viewport.interaction_targets.clear();
     // Keep the OSC-0 whale title truthful to the current shell phase so
     // alt-tabbed sessions communicate state without a second in-app spinner.
     crate::tui::underwater::sync_title_activity(app);
@@ -725,11 +896,61 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     }
 
     if app.launch.visible {
-        // Launch is a distinct full-canvas choice state, not a reading column.
-        // Keep it edge-to-edge so opening Codewhale never recreates black side
-        // banks before the responsive session ocean takes over.
-        crate::tui::underwater::render_launch_screen(size, f.buffer_mut(), app);
-        crate::tui::underwater::record_launch_row_areas(size, &mut app.launch);
+        // The launch screen lives inside the session shell frame (spec
+        // §5b): the ONE topbar header, the Tideline startup stage as the
+        // body, and the merged footer — the same chrome every post-session
+        // screen wears, so opening Codewhale and working in it are one
+        // design. The pre-session composer docks in the stage's bottom
+        // rows; completion entries are computed here — the same way the
+        // session path below computes them for ComposerWidget — so the
+        // stage can paint its popup (#5698 review finding 2); the mention
+        // walker needs &mut App, rendering does not.
+        let launch_slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
+        let launch_mention_menu_entries =
+            crate::tui::file_mention::visible_mention_menu_entries(app, app.mention_menu_limit);
+        let [topbar_area, stage_area, footer_area] = Layout::default()
+            .direction(Direction::Vertical)
+            .flex(ratatui::layout::Flex::Start)
+            .constraints([
+                Constraint::Length(1), // topbar: the one header
+                Constraint::Min(1),    // stage: Tideline startup
+                Constraint::Length(1), // merged footer (slots 6+8)
+            ])
+            .areas(size);
+        render_topbar_row(f, app, topbar_area);
+        let startup = crate::tui::underwater::tideline_startup_from_app(app);
+        let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage_area);
+        crate::tui::underwater::render_tideline_startup(stage_area, f.buffer_mut(), &startup);
+        // The completion popup paints above the docked composer's input row,
+        // over the stage rows it needs — the same caller-computed entries
+        // the session popup rides.
+        if let Some(input_row) = hitboxes
+            .composer
+            .map(|area| area.y.saturating_sub(stage_area.y))
+        {
+            crate::tui::underwater::render_launch_completion_popup(
+                stage_area,
+                f.buffer_mut(),
+                app,
+                input_row,
+                &launch_slash_menu_entries,
+                &launch_mention_menu_entries,
+            );
+        }
+        crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
+        // The merged footer is the screen's last row on every screen.
+        if footer_area.height > 0 {
+            let facts = crate::tui::phase_strip::tideline_footer_from_app(app, footer_area.width);
+            let footer = facts.widget(
+                &app.ui_theme,
+                crate::tui::color_compat::ascii_safe_enabled(),
+            );
+            let buf = f.buffer_mut();
+            Block::default()
+                .style(Style::default().bg(app.ui_theme.footer_bg))
+                .render(footer_area, buf);
+            crate::tui::phase_strip::render_tideline_footer(footer_area, buf, &footer);
+        }
         if !app.view_stack.is_empty() {
             if app.view_stack.top_kind() == Some(ModalKind::Approval) {
                 app.viewport.last_approval_area = app.view_stack.top_occupied_region(size);
@@ -746,47 +967,26 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     // `/config mini_window.keep_*`). The message stream takes the rest.
     let mini = crate::tui::window_control::pinned();
     let mini_cfg = app.mini_window.clone();
+    // The Tideline topbar owns the header slot as exactly one row (spec §5b:
+    // `Constraint::Length(1)`); mini mode still hides it wholesale.
     let header_height = if mini && !mini_cfg.keep_header {
         0
     } else {
         header_height_for(size.height)
     };
     // Evaluate the fully-idle predicate exactly once per frame. It decides
-    // how many rows the rail may reserve, whether the activity band yields
-    // its row on the shortest terminals, and whether the idle ocean draws
+    // how many rows the rail may reserve and whether the idle ocean draws
     // its brand mark (in ChatWidget); calling it twice would let the
     // reservation and the render disagree inside a single frame.
     let idle_empty = crate::tui::widgets::should_render_empty_state(app);
+    // The merged Tideline footer is the single bottom row (spec §3: slots
+    // 6+8 collapsed; §5b `Constraint::Length(1)`): phase·cost·posture on the
+    // left, depth·keys on the right. It hides with the rest of the footer
+    // chrome in mini mode, never with the composer.
     let footer_height = if mini && !mini_cfg.keep_footer {
         0
     } else {
         crate::tui::phase_strip::height()
-    };
-    // The activity band is footer chrome too: it hides with the identity
-    // row in mini mode, never with the composer. It also yields its row on
-    // the shortest terminals while the shell is fully idle — the same rule
-    // the work rail follows (`rail_row_budget`): decorative water outranks
-    // standing chrome nobody is reading, so the idle ocean keeps its
-    // sixteen-row floor. The moment there is live work the band is back;
-    // `rail_row_budget` then charges both bands, so the work rail yields
-    // first and the transcript never funds the chrome.
-    let activity_height = if mini && !mini_cfg.keep_footer {
-        0
-    } else {
-        let ambient_mark_can_draw =
-            idle_empty && shell_area.width >= crate::tui::underwater::AMBIENT_MIN_CHAT_WIDTH;
-        let chat_floor = if ambient_mark_can_draw {
-            crate::tui::underwater::AMBIENT_MIN_CHAT_HEIGHT
-        } else {
-            MIN_CHAT_HEIGHT
-        };
-        let composer_floor = MIN_COMPOSER_HEIGHT.saturating_add(u16::from(app.composer_border));
-        let fixed_chrome = header_height
-            .saturating_add(crate::tui::phase_strip::height())
-            .saturating_add(crate::tui::phase_strip::activity_height())
-            .saturating_add(composer_floor)
-            .saturating_add(chat_floor);
-        u16::from(shell_area.height >= fixed_chrome)
     };
     let slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
     let mention_menu_limit = app.mention_menu_limit;
@@ -829,7 +1029,6 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         .saturating_sub(
             MIN_CHAT_HEIGHT
                 .saturating_add(footer_height)
-                .saturating_add(activity_height)
                 .saturating_add(top_work_strip_height),
         )
         .max(MIN_COMPOSER_HEIGHT);
@@ -899,7 +1098,6 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
                 .saturating_add(MIN_CHAT_HEIGHT)
                 .saturating_add(composer_height)
                 .saturating_add(footer_height)
-                .saturating_add(activity_height)
                 .saturating_add(plugin_cta_height),
         )
         .saturating_sub(indicator_height);
@@ -923,14 +1121,14 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             .saturating_sub(session_boot_height),
     );
 
-    // Two pinned bands bracket the composer and never trade places with
-    // it: the activity band (transient phase pulse, notices, and the
-    // cost/metrics ledger) sits directly above the composer, and the
-    // identity band (provider · model · thinking level) is the persistent
-    // row below it. Both rows are reserved in every phase, so a turn moving
-    // between idle, thinking, tool use, approval, completion, failure, and
-    // cancellation rewrites text inside fixed rows — the composer is never
-    // displaced and the route identity never migrates above the prompt.
+    // One pinned footer row brackets the composer from below (spec §3: the
+    // activity band and identity band merged into it): phase · live detail ·
+    // cost · posture chips on the left, depth line · keys — or a live
+    // notice — on the right. The row is reserved in every phase, so a turn
+    // moving between idle, thinking, tool use, approval, completion,
+    // failure, and cancellation rewrites text inside a fixed row — the
+    // composer is never displaced. The freed activity row above the composer
+    // was reclaimed by the stage (`Min(1)` chat slot).
     let body_chunks = Layout::default()
         .direction(Direction::Vertical)
         .flex(ratatui::layout::Flex::Start)
@@ -941,17 +1139,15 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             Constraint::Length(preview_height),        // Pending input preview (0 if empty)
             Constraint::Length(indicator_height),      // Background-work chip (#5286, 0 if idle)
             Constraint::Length(session_boot_height),   // MCP+plugin boot receipt (0 if quiet)
-            Constraint::Length(activity_height),       // Activity band above the composer
             Constraint::Length(plugin_cta_height),     // Live plugin CTA (0 unless matched)
             Constraint::Length(composer_height),       // Composer
-            Constraint::Length(footer_height),         // Identity band below the composer
+            Constraint::Length(footer_height),         // Merged Tideline footer (slots 6+8)
         ])
         .split(body_area);
     let session_boot_slot = 5;
-    let activity_slot = 6;
-    let plugin_cta_slot = 7;
-    let composer_slot = 8;
-    let footer_slot = 9;
+    let plugin_cta_slot = 6;
+    let composer_slot = 7;
+    let footer_slot = 8;
 
     let (work_chat_area, side_work_area) = if mini && !mini_cfg.keep_sidebar {
         // Mini mode without the side rail: the transcript takes the whole
@@ -967,7 +1163,54 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         crate::tui::work_surface::render(f, work_area, app);
     }
 
-    crate::tui::underwater::render_header(header_area, f.buffer_mut(), app);
+    // The Tideline topbar owns the header slot (spec §3: it replaces
+    // `underwater::render_header`). One row: brand wordmark, contextual
+    // segments, then the pinned context meter + clock. The route identity
+    // the old identity band carried below the composer now lives here as
+    // the Model segment — its new permanent home.
+    let mut topbar_context_hitbox = None;
+    if header_height > 0 {
+        topbar_context_hitbox = render_topbar_row(f, app, header_area);
+    } else {
+        app.viewport.last_topbar_hitboxes.clear();
+    }
+    if let (Some(hitbox), Some(context_budget)) = (
+        topbar_context_hitbox,
+        crate::tui::tideline::ContextBudgetSnapshot::from_app(app),
+    ) {
+        app.viewport
+            .interaction_targets
+            .register(crate::tui::tideline::InteractionTarget {
+                id: crate::tui::tideline::InteractionTargetId::HEADER_CONTEXT,
+                area: hitbox,
+                focus: crate::tui::tideline::InteractionFocus::Direct,
+                keyboard_action: Some(crate::tui::app::HeaderActionTarget::InspectContext),
+                mouse_action: Some(crate::tui::app::HeaderActionTarget::InspectContext),
+                inspect_detail: crate::tui::tideline::InspectDetail::ContextBudget(context_budget),
+            });
+    }
+    for target in app.viewport.interaction_targets.iter() {
+        let label = match target.mouse_action {
+            Some(crate::tui::tideline::InteractionAction::InspectContext) => format!(
+                "{} · {}",
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::CtxMenuContextInspector,
+                ),
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::CtxMenuContextInspectorDesc,
+                ),
+            ),
+            None => continue,
+        };
+        crate::tui::hover_layer::register_rect(
+            crate::tui::hover_hit::HoverTargetKind::Link,
+            target.area,
+            label,
+            false,
+        );
+    }
 
     // Render the transcript and optional file-tree sidecar. The underwater
     // default deliberately has no legacy right sidebar: Tasks and To-do own
@@ -1075,14 +1318,6 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         crate::tui::session_boot::render(body_chunks[session_boot_slot], buf, app);
     }
 
-    // Render the pinned activity band (transient phase pulse, notices,
-    // cost/metrics ledger). Its row is fixed above the composer in every
-    // phase; only the text inside it changes.
-    if activity_height > 0 {
-        let buf = f.buffer_mut();
-        crate::tui::phase_strip::render_activity(body_chunks[activity_slot], buf, app);
-    }
-
     if plugin_cta_height > 0 {
         let buf = f.buffer_mut();
         crate::tui::plugin_suggestions::draw_plugin_cta(app, body_chunks[plugin_cta_slot], buf);
@@ -1164,10 +1399,24 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         app.viewport.last_composer_scroll_offset = scroll_offset;
         app.viewport.last_composer_top_padding = top_padding;
     }
-    // The identity band below the composer is the persistent route row:
-    // provider · model · thinking level, before, during, and after a
-    // prompt.
-    crate::tui::underwater::render_footer(body_chunks[footer_slot], f.buffer_mut(), app);
+    // The merged Tideline footer is the screen's last row: phase verb,
+    // live detail, cost, and the posture chips the old header carried, with
+    // the depth line and key legend (or a live notice) pinned right. Every
+    // fact the two classic bands stated survives here except the session
+    // metrics strip, which spec §3 moves behind `/cost`.
+    if footer_height > 0 {
+        let area = body_chunks[footer_slot];
+        let facts = crate::tui::phase_strip::tideline_footer_from_app(app, area.width);
+        let footer = facts.widget(
+            &app.ui_theme,
+            crate::tui::color_compat::ascii_safe_enabled(),
+        );
+        let buf = f.buffer_mut();
+        Block::default()
+            .style(Style::default().bg(app.ui_theme.footer_bg))
+            .render(area, buf);
+        crate::tui::phase_strip::render_tideline_footer(area, buf, &footer);
+    }
 
     // The underwater shell is one water column, not a stack of independently
     // shaded panels. Continue the transcript's absolute-row ramp through each
@@ -1196,13 +1445,6 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
                 body_chunks[session_boot_slot],
                 f.buffer_mut(),
                 app.ui_theme.surface_bg,
-            );
-        }
-        if activity_height > 0 {
-            column.paint_matching(
-                body_chunks[activity_slot],
-                f.buffer_mut(),
-                app.ui_theme.footer_bg,
             );
         }
         if plugin_cta_height > 0 {

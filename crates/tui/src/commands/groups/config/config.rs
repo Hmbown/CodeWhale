@@ -1907,6 +1907,72 @@ fn live_route_setting_subject(key: &str) -> Option<MessageId> {
     }
 }
 
+/// Apply the canonical theme picker's compound theme + ocean-treatment state.
+///
+/// Preview and rollback update both live fields through the same per-setting
+/// owner used by `/config`. A save validates the pair before any live mutation,
+/// then persists both fields inside one [`Settings::transact`] critical section
+/// so Deepsea cannot survive on disk with only half of its selection.
+pub fn set_theme_selection(
+    app: &mut App,
+    theme: &str,
+    ocean_treatment: &str,
+    persist: bool,
+) -> CommandResult {
+    let mut candidate = match Settings::load_persisted() {
+        Ok(settings) => settings,
+        Err(error) if !persist => {
+            app.status_message = Some(format!(
+                "Settings unavailable; applying session-only theme override ({error})"
+            ));
+            Settings::default()
+        }
+        Err(error) => return CommandResult::error(format!("Failed to load settings: {error}")),
+    };
+    if let Err(error) = candidate.set("theme", theme) {
+        return CommandResult::error(error.to_string());
+    }
+    if let Err(error) = candidate.set("ocean_treatment", ocean_treatment) {
+        return CommandResult::error(error.to_string());
+    }
+    let normalized_theme = candidate.theme.clone();
+    let normalized_treatment = candidate.ocean_treatment.clone();
+
+    // Resolve/apply the theme first: custom themes can fail resolution even
+    // after their selector syntax validates, and treatment must not change in
+    // that case. The treatment value has already passed Settings validation.
+    let theme_result = set_config_value(app, "theme", &normalized_theme, false);
+    if theme_result.is_error {
+        return theme_result;
+    }
+    let treatment_result = set_config_value(app, "ocean_treatment", &normalized_treatment, false);
+    if treatment_result.is_error {
+        return treatment_result;
+    }
+
+    if persist
+        && let Err(error) = Settings::transact(|settings| {
+            settings.set("theme", &normalized_theme)?;
+            settings.set("ocean_treatment", &normalized_treatment)
+        })
+    {
+        return CommandResult::error(format!("Failed to save: {error}"));
+    }
+
+    CommandResult {
+        message: Some(format!(
+            "theme = {normalized_theme}, ocean_treatment = {normalized_treatment} ({})",
+            if persist {
+                "saved"
+            } else {
+                "session only, add --save to persist"
+            }
+        )),
+        action: theme_result.action.or(treatment_result.action),
+        is_error: false,
+    }
+}
+
 /// Modify a setting at runtime
 pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) -> CommandResult {
     let key = key.to_lowercase();
@@ -4814,6 +4880,73 @@ context_window = 262144
     }
 
     #[test]
+    fn compound_theme_selection_updates_live_state_and_persists_one_pair_transaction() {
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-deepsea-selection-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(temp_root.join(".deepseek")).expect("settings dir");
+        let _guard = EnvGuard::new(&temp_root);
+        fs::write(
+            temp_root.join(".deepseek").join("settings.toml"),
+            "theme = \"light\"\nocean_treatment = \"flat\"\nmax_input_history = 77\n",
+        )
+        .expect("seed settings");
+
+        let mut app = create_test_app();
+        let result = set_theme_selection(&mut app, "dark", "deepsea", true);
+
+        assert!(!result.is_error, "{:?}", result.message);
+        assert_eq!(app.theme_id, crate::palette::ThemeId::Whale);
+        assert_eq!(
+            app.ocean_treatment,
+            crate::tui::ocean::OceanTreatment::Deepsea
+        );
+        let persisted = Settings::load_persisted().expect("persisted compound selection");
+        assert_eq!(persisted.theme, "dark");
+        assert_eq!(persisted.ocean_treatment, "deepsea");
+        assert_eq!(
+            persisted.max_input_history, 77,
+            "the compound transaction must not overwrite unrelated settings"
+        );
+    }
+
+    #[test]
+    fn compound_theme_selection_preflights_both_fields_before_live_mutation() {
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-deepsea-preflight-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(temp_root.join(".deepseek")).expect("settings dir");
+        let _guard = EnvGuard::new(&temp_root);
+        fs::write(
+            temp_root.join(".deepseek").join("settings.toml"),
+            "theme = \"light\"\nocean_treatment = \"flat\"\n",
+        )
+        .expect("seed settings");
+
+        let mut app = create_test_app();
+        let original_theme = app.theme_id;
+        let original_treatment = app.ocean_treatment;
+        let result = set_theme_selection(&mut app, "dark", "kelp", true);
+
+        assert!(result.is_error);
+        assert_eq!(app.theme_id, original_theme);
+        assert_eq!(app.ocean_treatment, original_treatment);
+        let persisted = Settings::load_persisted().expect("unchanged persisted settings");
+        assert_eq!(persisted.theme, "light");
+        assert_eq!(persisted.ocean_treatment, "flat");
+    }
+
+    #[test]
     fn explicit_default_background_override_survives_theme_preview() {
         let temp_root = env::temp_dir().join(format!(
             "codewhale-tui-background-override-test-{}-{}",
@@ -4843,7 +4976,7 @@ context_window = 262144
         assert_eq!(app.ui_theme.surface_bg, explicit_base3);
         assert!(
             crate::tui::ocean::OceanRamp::for_theme(&app.ui_theme).is_some(),
-            "the explicit surface must retain ombre when previewing another theme"
+            "the explicit surface must retain Deepsea when previewing another theme"
         );
     }
 

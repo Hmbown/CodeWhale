@@ -255,6 +255,7 @@ pub enum UiLocale {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum UiThemeValue {
+    Terminal,
     System,
     Dark,
     Light,
@@ -271,7 +272,8 @@ pub enum UiThemeValue {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OceanTreatmentValue {
-    Ombre,
+    #[serde(alias = "ombre")]
+    Deepsea,
     Flat,
 }
 
@@ -1092,6 +1094,7 @@ impl UiLocale {
 impl UiThemeValue {
     fn as_setting(self) -> &'static str {
         match self {
+            Self::Terminal => "terminal",
             Self::System => "system",
             Self::Dark => "dark",
             Self::Light => "light",
@@ -1114,6 +1117,7 @@ impl UiThemeValue {
             return Ok(Self::Custom);
         }
         match crate::palette::normalize_theme_name(value) {
+            Some("terminal") => Ok(Self::Terminal),
             Some("system") => Ok(Self::System),
             Some("dark") => Ok(Self::Dark),
             Some("light") => Ok(Self::Light),
@@ -1133,7 +1137,7 @@ impl UiThemeValue {
 impl OceanTreatmentValue {
     fn as_setting(self) -> &'static str {
         match self {
-            Self::Ombre => "ombre",
+            Self::Deepsea => "deepsea",
             Self::Flat => "flat",
         }
     }
@@ -1141,10 +1145,9 @@ impl OceanTreatmentValue {
 
 impl From<&str> for OceanTreatmentValue {
     fn from(value: &str) -> Self {
-        if value.trim().eq_ignore_ascii_case("flat") {
-            Self::Flat
-        } else {
-            Self::Ombre
+        match value.trim().to_ascii_lowercase().as_str() {
+            "deepsea" | "ombre" | "gradient" | "classic" => Self::Deepsea,
+            _ => Self::Flat,
         }
     }
 }
@@ -1840,6 +1843,7 @@ background_color = "#1A1B26"
         assert_eq!(
             theme,
             &serde_json::json!([
+                "terminal",
                 "system",
                 "dark",
                 "light",

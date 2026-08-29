@@ -235,6 +235,34 @@ pub enum ProgressEvent {
         /// The rejection already surfaced to JS.
         message: String,
     },
+    /// A `parallel()` / `pipeline()` fan-out resolved with every slot failed
+    /// and nothing surviving (R9). Emitted by the prelude beside its run-log
+    /// breadcrumb. A fan-out of thunks that throw without calling `task()`
+    /// leaves no task record and no dispatch failure behind, so a log line
+    /// was the only trace — and a log line cannot feed the status
+    /// classifier. This event is the structured twin of that breadcrumb:
+    /// drivers count it so the terminal-status ledger can refuse to record
+    /// such a run as a plain success.
+    FanoutAllSlotsFailed {
+        /// Which fan-out construct died: `parallel` or `pipeline`.
+        construct: String,
+        /// Slots that failed (always equal to `total`).
+        failed: u32,
+        /// Total slots the fan-out declared.
+        total: u32,
+    },
+    /// ONE slot of a settled fan-out dropped to null while other slots
+    /// survived. The structured twin of the per-slot breadcrumb: the ledger
+    /// counts these so a PARTIALLY failed fan-out records Degraded instead
+    /// of a clean Completed with silently lost work.
+    FanoutSlotDropped {
+        /// Which fan-out construct dropped it: `parallel` or `pipeline`.
+        construct: String,
+        /// Typed failure kind (`script`, `task`, `schema`, ...).
+        kind: String,
+        /// Zero-based slot index.
+        slot: u32,
+    },
 }
 
 /// Host-side executor for a Workflow run.

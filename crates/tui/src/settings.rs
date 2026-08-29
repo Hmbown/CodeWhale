@@ -74,7 +74,7 @@ impl InlineDiffMode {
 /// # Example `~/.codewhale/tui.toml`
 ///
 /// ```toml
-/// theme    = "dark"        # "system" | "dark" | "light" | "grayscale" | "catppuccin-mocha" | ...
+/// theme    = "terminal"    # host-owned background; "dark" | "light" | "grayscale" | ... remain available
 /// font_size = 14
 ///
 /// [keybinds]
@@ -90,7 +90,8 @@ impl InlineDiffMode {
 #[serde(default)]
 pub struct TuiPrefs {
     /// UI colour theme.
-    /// Default `"dark"`.
+    /// Default `"terminal"`, which leaves foreground and background to the
+    /// host terminal while retaining ANSI-safe semantic accents.
     pub theme: String,
     /// Terminal font size hint forwarded to supporting front-ends (e.g. the
     /// Tauri shell). `0` means "use terminal default". Default `0`.
@@ -103,7 +104,7 @@ pub struct TuiPrefs {
 impl Default for TuiPrefs {
     fn default() -> Self {
         Self {
-            theme: "dark".to_string(),
+            theme: "terminal".to_string(),
             font_size: 0,
             keybinds: KeybindPrefs::default(),
         }
@@ -311,7 +312,7 @@ pub struct Settings {
     /// Enable expressive live-state motion. This affects chrome and state
     /// affordances only; model text always follows upstream stream deltas.
     pub fancy_animations: bool,
-    /// Background treatment: `ombre` paints the terminal-native water column;
+    /// Background treatment: `deepsea` paints the terminal-native water column;
     /// `flat` preserves all state marks on the theme's plain surface.
     pub ocean_treatment: String,
     /// Focus-context texture prototype for modal views (#4823): `off`
@@ -334,6 +335,11 @@ pub struct Settings {
     /// explicit choice that happens to equal the default ("tasks").
     #[serde(skip)]
     pub(crate) rail_panel_explicit: bool,
+    /// Runtime-only: whether the loaded settings document explicitly named
+    /// `work_surface_placement`. A legacy hidden sidebar must become `off`,
+    /// unless the user had already chosen a first-class rail placement.
+    #[serde(skip)]
+    pub(crate) work_surface_placement_explicit: bool,
     /// Runtime-only 30 FPS cap for terminals that flicker at high redraw
     /// rates. Separate from accessibility motion and text delivery.
     #[serde(skip)]
@@ -387,8 +393,9 @@ pub struct Settings {
     /// ca, de, fr, id, hi, ru, uk.
     /// Every shipped pack holds full `en.json` parity; nothing falls back.
     pub locale: String,
-    /// Named UI theme. Accepts `"system"` (follow terminal background),
-    /// `"dark"`, `"light"`, `"grayscale"`, or one of the community
+    /// Named UI theme. `"terminal"` is the fresh-install default and fully
+    /// inherits the host terminal's foreground/background. `"system"`,
+    /// `"dark"`, `"light"`, `"grayscale"`, and the community
     /// presets: `"catppuccin-mocha"`, `"tokyo-night"`, `"dracula"`,
     /// `"gruvbox-dark"`. The `background_color` setting still overrides the
     /// surface color on top of the resolved theme.
@@ -556,15 +563,21 @@ impl Default for Settings {
             tool_collapse_mode: "compact".to_string(),
             low_motion: false,
             fancy_animations: true,
-            ocean_treatment: "ombre".to_string(),
+            // A fresh terminal follows the host surface. Deep/ocean treatment
+            // remains an explicit appearance choice rather than a backdrop
+            // painted over every terminal the user brings.
+            ocean_treatment: "flat".to_string(),
             focus_texture: "off".to_string(),
-            work_surface_placement: "top".to_string(),
+            // Side rail on spacious terminals; the typed layout falls back to
+            // the compact top strip before it steals transcript width.
+            work_surface_placement: "left".to_string(),
             // Cap, not fixed height: the top strip auto-fits its rows and
             // only grows to this many lines (user request, 2026-07-23).
             work_surface_top_height: 8,
             work_surface_side_width: 30,
             rail_panel: "tasks".to_string(),
             rail_panel_explicit: false,
+            work_surface_placement_explicit: false,
             constrained_frame_rate: false,
             bracketed_paste: true,
             paste_burst_detection: true,
@@ -582,7 +595,7 @@ impl Default for Settings {
             show_tool_details: false,
             inline_diffs: "full".to_string(),
             locale: "auto".to_string(),
-            theme: "system".to_string(),
+            theme: "terminal".to_string(),
             background_color: None,
             composer_density: "comfortable".to_string(),
             composer_border: true,
@@ -636,10 +649,9 @@ pub const CALM_PRESET_FIELDS: &[(&str, &str)] = &[
 ];
 
 fn normalize_ocean_treatment(value: &str) -> &'static str {
-    if value.trim().eq_ignore_ascii_case("flat") {
-        "flat"
-    } else {
-        "ombre"
+    match value.trim().to_ascii_lowercase().as_str() {
+        "deepsea" | "ombre" | "gradient" | "classic" => "deepsea",
+        _ => "flat",
     }
 }
 
@@ -674,7 +686,10 @@ fn normalize_rail_panel(value: &str) -> &'static str {
 fn migrate_sidebar_settings_to_rail(s: &mut Settings) {
     match s.sidebar_focus.trim().to_ascii_lowercase().as_str() {
         "hidden" | "hide" | "closed" | "off" | "none" => {
-            if s.work_surface_placement == "top" {
+            // A legacy hidden sidebar is an explicit intent. Preserve it even
+            // now that fresh sessions prefer the responsive left rail, but do
+            // not override a newer placement the user explicitly saved.
+            if !s.work_surface_placement_explicit {
                 s.work_surface_placement = "off".to_string();
             }
         }
@@ -875,6 +890,10 @@ impl Settings {
                 .as_ref()
                 .and_then(toml::Value::as_table)
                 .is_some_and(|table| table.contains_key("rail_panel"));
+            s.work_surface_placement_explicit = parsed_document
+                .as_ref()
+                .and_then(toml::Value::as_table)
+                .is_some_and(|table| table.contains_key("work_surface_placement"));
             if parsed_document.as_ref().is_some_and(|document| {
                 document.as_table().is_some_and(|table| {
                     !table.contains_key("auto_compact")
@@ -1241,12 +1260,13 @@ impl Settings {
             }
             "ocean_treatment" | "treatment" | "background_treatment" => {
                 let normalized = value.trim().to_ascii_lowercase();
-                if !matches!(normalized.as_str(), "ombre" | "flat") {
-                    anyhow::bail!(
-                        "Failed to update setting: invalid ocean treatment '{value}'. Expected: ombre or flat."
-                    );
-                }
-                self.ocean_treatment = normalized;
+                self.ocean_treatment = match normalized.as_str() {
+                    "deepsea" | "ombre" | "gradient" | "classic" => "deepsea".to_string(),
+                    "flat" | "terminal" | "none" => "flat".to_string(),
+                    _ => anyhow::bail!(
+                        "Failed to update setting: invalid ocean treatment '{value}'. Expected: deepsea or flat."
+                    ),
+                };
             }
             "focus_texture" | "texture" => {
                 let normalized = value.trim().to_ascii_lowercase();
@@ -1681,7 +1701,7 @@ impl Settings {
             ("fancy_animations", "Expressive live-state motion: on/off"),
             (
                 "ocean_treatment",
-                "Transcript background treatment: ombre/flat (independent of motion)",
+                "Transcript background treatment: deepsea/flat (independent of motion)",
             ),
             (
                 "focus_texture",
@@ -2686,7 +2706,10 @@ fn normalize_synchronized_output(value: &str) -> &str {
 }
 
 fn normalize_settings_theme(value: &str) -> String {
-    normalize_theme_setting(value).unwrap_or_else(|_| "system".to_string())
+    // A malformed persisted selector must not turn into a painted application
+    // background. Falling back to Terminal preserves the host surface and
+    // ANSI semantics until the user picks an explicit palette.
+    normalize_theme_setting(value).unwrap_or_else(|_| "terminal".to_string())
 }
 
 /// Returns `true` when the active terminal is Ptyxis (the new default
@@ -3085,21 +3108,30 @@ mod tests {
     #[test]
     fn ocean_treatment_is_appearance_not_motion() {
         let mut settings = Settings::default();
-        assert_eq!(settings.ocean_treatment, "ombre");
+        assert_eq!(settings.ocean_treatment, "flat");
         assert!(!settings.low_motion);
 
         settings.set("ocean_treatment", "flat").unwrap();
         assert_eq!(settings.ocean_treatment, "flat");
         assert!(!settings.low_motion, "appearance must not change motion");
 
+        settings.set("ocean_treatment", "deepsea").unwrap();
+        assert_eq!(settings.ocean_treatment, "deepsea");
+        settings.set("ocean_treatment", "ombre").unwrap();
+        assert_eq!(
+            settings.ocean_treatment, "deepsea",
+            "legacy values migrate one way to the public Deepsea contract"
+        );
+        assert_eq!(normalize_ocean_treatment("kelp"), "flat");
+
         let err = settings.set("ocean_treatment", "kelp").unwrap_err();
-        assert!(err.to_string().contains("ombre or flat"));
+        assert!(err.to_string().contains("deepsea or flat"));
     }
 
     #[test]
     fn work_surface_placement_persists_top_left_right_and_off() {
         let mut settings = Settings::default();
-        assert_eq!(settings.work_surface_placement, "top");
+        assert_eq!(settings.work_surface_placement, "left");
 
         for placement in ["left", "right", "top", "off"] {
             settings
@@ -3512,6 +3544,7 @@ mod tests {
         let mut left = Settings {
             sidebar_focus: "hidden".to_string(),
             work_surface_placement: "left".to_string(),
+            work_surface_placement_explicit: true,
             ..Settings::default()
         };
         migrate_sidebar_settings_to_rail(&mut left);
@@ -3662,7 +3695,7 @@ mod tests {
     #[test]
     fn theme_normalizes_supported_values_and_rejects_unknowns() {
         let mut settings = Settings::default();
-        assert_eq!(settings.theme, "system");
+        assert_eq!(settings.theme, "terminal");
 
         settings.set("theme", "grayscale").expect("set grayscale");
         assert_eq!(settings.theme, "grayscale");
@@ -4975,7 +5008,7 @@ mod tests {
         let loaded = Settings::load().expect("load settings");
 
         assert_eq!(
-            loaded.theme, "system",
+            loaded.theme, "terminal",
             "explicit CODEWHALE_HOME must not inherit ambient legacy settings"
         );
         assert_eq!(
@@ -5006,7 +5039,7 @@ mod tests {
         // A settings.toml that only names `sidebar_focus = "auto"` — the
         // shipped default — must not silently earn an always-on rail strip.
         assert_eq!(loaded.rail_panel, "tasks");
-        assert_eq!(loaded.work_surface_placement, "top");
+        assert_eq!(loaded.work_surface_placement, "left");
     }
 
     #[test]
@@ -5021,6 +5054,24 @@ mod tests {
         let loaded = Settings::load().expect("load settings");
 
         assert_eq!(loaded.work_surface_placement, "off");
+    }
+
+    #[test]
+    fn hidden_legacy_sidebar_does_not_override_an_explicit_new_rail_placement() {
+        let _g = config_path_test_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let settings_path = tmp.path().join("settings.toml");
+        std::fs::write(
+            &settings_path,
+            "sidebar_focus = \"hidden\"\nwork_surface_placement = \"left\"\n",
+        )
+        .expect("settings");
+        let _config_override =
+            EnvVarRestore::set("DEEPSEEK_CONFIG_PATH", tmp.path().join("config.toml"));
+
+        let loaded = Settings::load().expect("load settings");
+
+        assert_eq!(loaded.work_surface_placement, "left");
     }
 
     #[test]
@@ -5070,9 +5121,9 @@ mod tests {
     }
 
     #[test]
-    fn tui_prefs_defaults_are_dark_theme_zero_font() {
+    fn tui_prefs_defaults_inherit_the_terminal_zero_font() {
         let prefs = TuiPrefs::default();
-        assert_eq!(prefs.theme, "dark");
+        assert_eq!(prefs.theme, "terminal");
         assert_eq!(prefs.font_size, 0);
         assert!(prefs.keybinds.submit.is_none());
         assert!(prefs.keybinds.new_line.is_none());
@@ -5081,6 +5132,7 @@ mod tests {
     #[test]
     fn tui_prefs_validate_accepts_known_themes() {
         for theme in [
+            "terminal",
             "dark",
             "light",
             "system",
@@ -5167,7 +5219,7 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let _config_override = EnvVarRestore::set("DEEPSEEK_CONFIG_PATH", tmp.join("config.toml"));
         let prefs = TuiPrefs::load().expect("load should not fail when file absent");
-        assert_eq!(prefs.theme, "dark", "should fall back to default theme");
+        assert_eq!(prefs.theme, "terminal", "should fall back to default theme");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

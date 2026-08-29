@@ -36,6 +36,7 @@ pub mod backend;
 pub mod opensandbox;
 pub mod policy;
 pub mod process_hardening;
+pub mod read_guard;
 
 #[cfg(target_os = "macos")]
 pub mod seatbelt;

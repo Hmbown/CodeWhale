@@ -845,7 +845,7 @@ fn subagent_output_handle(row: &SidebarAgentRow) -> Option<String> {
 
 /// Build the Agents panel lines together with a parallel per-line
 /// click-action vector (#3028). Agent label rows open the current-session
-/// Fleet worker view (`/fleet workers`, formerly spelled `/fleet status`
+/// Fleet worker view (`/pod workers`, formerly spelled `/fleet status`
 /// before that name moved to the durable ledger in #4022); header, role-mix,
 /// detail, and RLM lines are not clickable.
 fn subagent_panel_rows(
