@@ -38,6 +38,30 @@ pub fn new_shared_goal_state_from_host_status(
     Arc::new(Mutex::new(state))
 }
 
+/// Create shared state restored from a persisted goal record, keeping the
+/// accumulated usage and continuation counters. See
+/// [`GoalState::from_persisted`].
+#[must_use]
+pub fn new_shared_goal_state_from_persisted(
+    objective: &str,
+    token_budget: Option<u32>,
+    status: GoalStatus,
+    pause_reason: Option<GoalPauseReason>,
+    tokens_used: u64,
+    time_used_seconds: u64,
+    continuation_count: u32,
+) -> SharedGoalState {
+    Arc::new(Mutex::new(GoalState::from_persisted(
+        objective,
+        token_budget,
+        status,
+        pause_reason,
+        tokens_used,
+        time_used_seconds,
+        continuation_count,
+    )))
+}
+
 /// A goal declaration stated in ordinary user prose rather than as a leading
 /// `/goal <objective>` command.
 ///
@@ -338,6 +362,44 @@ impl GoalState {
         self.last_gap_fingerprint = None;
         self.repeated_gap_count = 0;
         Ok(())
+    }
+
+    /// Restore goal state from a persisted runtime goal, keeping the
+    /// accumulated usage and continuation counters.
+    ///
+    /// Unlike [`Self::sync_from_host_status`], which resets the counters
+    /// whenever the objective changes, this constructor treats the persisted
+    /// values as the authoritative history: the durable store owns them and
+    /// the engine is rehydrating, not re-declaring, the goal. Evidence,
+    /// blockers, and review notes are runtime-only and start empty; the
+    /// durable loop re-derives them on the next pass.
+    #[must_use]
+    pub fn from_persisted(
+        objective: &str,
+        token_budget: Option<u32>,
+        status: GoalStatus,
+        pause_reason: Option<GoalPauseReason>,
+        tokens_used: u64,
+        time_used_seconds: u64,
+        continuation_count: u32,
+    ) -> Self {
+        Self {
+            objective: Some(objective.to_string()),
+            token_budget,
+            status: Some(status),
+            tokens_used,
+            time_used_seconds,
+            continuation_count,
+            started_at: Some(Instant::now()),
+            finished_at: (status != GoalStatus::Active).then(Instant::now),
+            evidence: None,
+            blocker: None,
+            pause_reason,
+            completion_verification: None,
+            advisories: Vec::new(),
+            last_gap_fingerprint: None,
+            repeated_gap_count: 0,
+        }
     }
 
     pub fn record_usage(&mut self, token_delta: u64, time_delta_seconds: u64) {
