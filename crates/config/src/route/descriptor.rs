@@ -10,10 +10,12 @@
 //! inside a `Serialize` struct; serialize the resolved facts instead.
 
 use crate::ProviderKind;
-use crate::provider::{self, Provider, WirePolicy};
+use crate::provider::{self, CredentialAcquisition, Provider, WirePolicy};
+use serde::{Deserialize, Serialize};
 
 use super::RequestProtocol;
-use super::ids::{ProviderId, WireModelId};
+use super::auth::AuthMethod;
+use super::ids::{ProviderId, RouteId, WireModelId};
 
 /// Route-facing view of a built-in provider's transport facts.
 ///
@@ -40,6 +42,30 @@ impl ProviderDescriptor {
     #[must_use]
     pub fn id(&self) -> ProviderId {
         ProviderId::from(self.inner.id())
+    }
+
+    /// Flat kebab route id for this descriptor.
+    #[must_use]
+    pub fn route_id(&self) -> RouteId {
+        RouteId::from_kind(self.kind)
+    }
+
+    /// Display-grouping family. Not a second identity: stored identity is [`Self::route_id`].
+    #[must_use]
+    pub fn family(&self) -> &'static str {
+        family_for(self.kind)
+    }
+
+    /// Bespoke-transport classification. OpenAI-compatible catalog rows share one kind.
+    #[must_use]
+    pub fn transport(&self) -> TransportKind {
+        TransportKind::for_kind(self.kind)
+    }
+
+    /// Declared auth methods. OAuth is a type only; no adapter is implemented here.
+    #[must_use]
+    pub fn auth_methods(&self) -> &'static [AuthMethod] {
+        auth_methods_for(self.kind)
     }
 
     /// Default base URL when no override is present.
@@ -97,4 +123,88 @@ pub struct EndpointDescriptor {
     pub default_base_url: String,
     /// Whether streaming is supported.
     pub streaming: bool,
+}
+
+/// Bespoke-transport classification. Catalog rows that speak OpenAI Chat
+/// Completions share [`TransportKind::ChatCompletions`]; only genuinely
+/// different wires get their own kind. This is the direction `ProviderKind`
+/// shrinks toward.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TransportKind {
+    /// OpenAI-compatible `/v1/chat/completions`.
+    ChatCompletions,
+    /// Native Anthropic Messages (`/v1/messages`).
+    AnthropicMessages,
+    /// OpenAI Responses (`/responses`).
+    OpenAiResponses,
+    /// Closed, model-aware protocol roster (OpenCode Zen, DeepSeek dual-wire).
+    ModelAware,
+    /// ChatGPT Codex OAuth route.
+    Codex,
+    /// Google Antigravity consent-gated OAuth.
+    Antigravity,
+    /// Local runtime (Ollama / vLLM / SGLang).
+    LocalRuntime,
+    /// User-defined OpenAI-compatible endpoint.
+    Custom,
+}
+
+impl TransportKind {
+    /// Map a known kind onto the ~8 bespoke transports. Everything else is a
+    /// catalog row on [`Self::ChatCompletions`].
+    #[must_use]
+    pub fn for_kind(kind: ProviderKind) -> Self {
+        match kind {
+            ProviderKind::Anthropic
+            | ProviderKind::DeepseekAnthropic
+            | ProviderKind::MinimaxAnthropic
+            | ProviderKind::ModelstudioTokenPlanAnthropic
+            | ProviderKind::ModelstudioCodingPlanAnthropic => Self::AnthropicMessages,
+            ProviderKind::OpenaiCodex => Self::Codex,
+            ProviderKind::Antigravity => Self::Antigravity,
+            ProviderKind::Ollama | ProviderKind::Vllm | ProviderKind::Sglang => Self::LocalRuntime,
+            ProviderKind::Custom => Self::Custom,
+            ProviderKind::Deepseek | ProviderKind::OpencodeZen => Self::ModelAware,
+            _ => match kind.provider().wire_policy() {
+                WirePolicy::ModelAware => Self::ModelAware,
+                WirePolicy::Fixed(crate::provider::WireFormat::Responses) => Self::OpenAiResponses,
+                WirePolicy::Fixed(crate::provider::WireFormat::AnthropicMessages) => {
+                    Self::AnthropicMessages
+                }
+                WirePolicy::Fixed(crate::provider::WireFormat::ChatCompletions) => {
+                    Self::ChatCompletions
+                }
+            },
+        }
+    }
+}
+
+/// Display-grouping family. Selecting a family with multiple routes asks a
+/// `select` whose option value **is a route id**.
+#[must_use]
+pub fn family_for(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::Deepseek | ProviderKind::DeepseekAnthropic => "deepseek",
+        ProviderKind::Minimax | ProviderKind::MinimaxAnthropic => "minimax",
+        ProviderKind::ModelstudioTokenPlan
+        | ProviderKind::ModelstudioTokenPlanAnthropic
+        | ProviderKind::ModelstudioCodingPlan
+        | ProviderKind::ModelstudioCodingPlanAnthropic => "alibaba-modelstudio",
+        ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => "siliconflow",
+        ProviderKind::Ollama | ProviderKind::OllamaCloud => "ollama",
+        other => other.as_str(),
+    }
+}
+
+/// Auth methods declared for a provider kind. OAuth is a type, not an adapter.
+#[must_use]
+pub fn auth_methods_for(kind: ProviderKind) -> &'static [AuthMethod] {
+    match kind.provider().credential_help().acquisition {
+        CredentialAcquisition::ApiKey => &[AuthMethod::API_KEY],
+        CredentialAcquisition::ApiKeyOrOAuth => &[AuthMethod::API_KEY, AuthMethod::OAUTH],
+        CredentialAcquisition::LocalOptional => &[AuthMethod::KEYLESS],
+        CredentialAcquisition::OAuth => &[AuthMethod::OAUTH],
+        CredentialAcquisition::Configuration => &[AuthMethod::EXTERNAL_CONSENT],
+    }
 }

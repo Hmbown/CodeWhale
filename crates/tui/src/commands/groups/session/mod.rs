@@ -6,6 +6,7 @@ mod acceptance;
 mod branch;
 mod compact;
 mod export;
+pub(crate) use export::write_last_copy;
 mod fork;
 mod load;
 mod new;

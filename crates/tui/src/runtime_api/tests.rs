@@ -2037,6 +2037,32 @@ async fn fleet_status_runtime_api_exposes_state_and_actions() -> Result<()> {
     assert_eq!(runs["status"]["running"], 1);
     assert_eq!(runs["runs"][0]["id"], report.run_id.0);
 
+    let profiles: serde_json::Value = client
+        .get(format!("http://{addr}/v1/fleet/profiles"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let profile_ids: Vec<&str> = profiles["profiles"]
+        .as_array()
+        .expect("profiles array")
+        .iter()
+        .map(|member| member["id"].as_str().expect("profile id"))
+        .collect();
+    assert!(
+        profile_ids.contains(&"manager"),
+        "built-in roster member 'manager' missing from /v1/fleet/profiles: {profile_ids:?}"
+    );
+    assert!(
+        profiles["profiles"]
+            .as_array()
+            .expect("profiles array")
+            .iter()
+            .all(|member| member["origin"].is_string()),
+        "every profile must carry its roster origin"
+    );
+
     let worker: serde_json::Value = client
         .get(format!("http://{addr}/v1/fleet/workers/{worker_id}"))
         .send()

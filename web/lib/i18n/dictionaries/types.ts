@@ -153,6 +153,12 @@ export interface ChromeDict {
   footerIssues: string;
   footerContribute: string;
   footerLicense: string;
+  /** Footer link to the pricing page, e.g. "Pricing". */
+  footerPricing: string;
+  /** Footer link to the terms route, e.g. "Terms". */
+  footerTerms: string;
+  /** Footer link to the privacy route, e.g. "Privacy". */
+  footerPrivacy: string;
   /** Prefix before the canonical-source link, e.g. "Canonical source: ". */
   footerCanonicalSource: string;
   /** Separator + label before the releases link, e.g. " · Releases: ". */

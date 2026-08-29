@@ -1025,6 +1025,7 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/workspace/status", get(workspace_status))
         .route("/v1/agent-runs", get(list_agent_runs))
         .route("/v1/agent-runs/{run_id}", get(get_agent_run))
+        .route("/v1/fleet/profiles", get(list_fleet_profiles))
         .route(
             "/v1/fleet/runs",
             get(list_fleet_runs).post(create_fleet_run),
@@ -1480,6 +1481,32 @@ async fn get_agent_run(
         })
         .ok_or_else(|| ApiError::not_found(format!("agent run '{run_id}' not found")))?;
     Ok(Json(run))
+}
+
+async fn list_fleet_profiles(
+    State(state): State<RuntimeApiState>,
+) -> Result<Json<Value>, ApiError> {
+    let manager = open_fleet_manager(&state)?;
+    // Same roster path the manager uses to validate `agent_profile` ids on
+    // run creation, so GUI pickers can never offer a profile the runtime
+    // would reject.
+    let roster = manager.agent_roster();
+    let profiles = roster
+        .members()
+        .iter()
+        .map(|member| {
+            json!({
+                "id": member.id.clone(),
+                "display_name": member.display_name.clone(),
+                "description": member.description.clone(),
+                "origin": member.origin.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({
+        "profiles": profiles,
+        "load_error": roster.load_error().map(str::to_string),
+    })))
 }
 
 async fn create_fleet_run(

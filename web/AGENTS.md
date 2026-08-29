@@ -12,7 +12,10 @@ site.
 - Localization migrations are one-way. New or touched pages use the shared
   dictionary/content spine; do not add page-local language booleans, `isZh`
   copy forks, or hard-coded translated page clones. A compatibility exception
-  must name the external contract that still requires it.
+  must name the external contract that still requires it. Website/docs
+  machine translation uses `npm run i18n:gt` (local JSON catalogs into the
+  same dictionaries). Do not add `gt-next` beside that path, and do not
+  point GT at TUI locale packs.
 - Real-session media is owned by `lib/media-manifest.ts`. `pending` is the
   truthful state until the complete asset set passes manifest tests.
 - `AGENT.md` (singular) documents maintainer-owned community automation. Do not

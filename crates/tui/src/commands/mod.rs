@@ -325,6 +325,16 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
     groups::config::config::set_config_value(app, key, value, persist)
 }
 
+/// Update the canonical theme + ocean-treatment selection as one operation.
+pub fn set_theme_selection(
+    app: &mut App,
+    theme: &str,
+    ocean_treatment: &str,
+    persist: bool,
+) -> CommandResult {
+    groups::config::config::set_theme_selection(app, theme, ocean_treatment, persist)
+}
+
 pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
     groups::config::config::switch_mode(app, mode)
 }
@@ -608,6 +618,35 @@ mod tests {
         assert!(message.contains("Hugging Face provider route"));
         assert!(message.contains("Hugging Face MCP"));
         assert!(message.contains("Hub workflows"));
+    }
+
+    #[test]
+    fn login_slash_command_reports_status_and_key_opens_picker() {
+        let mut app = create_test_app();
+        let status = execute("/login", &mut app);
+        assert!(!status.is_error);
+        let message = status.message.expect("login status");
+        assert!(message.contains("Codewhale login"), "{message}");
+        assert!(message.contains("Account:"), "{message}");
+        assert!(message.contains("codewhale login"), "{message}");
+        // No-brand invariant: the internal cloud-agent slot is not user
+        // surface, so status never names it or teaches a set-slot command.
+        assert!(!message.contains("Daytona"), "{message}");
+        assert!(!message.contains("set-slot"), "{message}");
+
+        let key = execute("/login key", &mut app);
+        assert!(!key.is_error);
+        assert_eq!(key.action, Some(AppAction::OpenProviderPicker));
+
+        let daytona = execute("/login daytona", &mut app);
+        assert!(daytona.is_error);
+        let err = daytona.message.expect("usage");
+        assert!(err.contains("Usage: /login [status|account|key]"), "{err}");
+
+        let unknown = execute("/login oauth", &mut app);
+        assert!(unknown.is_error);
+        let err = unknown.message.expect("usage");
+        assert!(err.contains("Usage: /login"), "{err}");
     }
 
     #[test]
@@ -921,9 +960,9 @@ mod tests {
                 has_config = true;
                 assert_eq!(
                     commands.len(),
-                    13,
+                    14,
                     "config group (group-local metadata exception) expected \
-                     exactly 13 commands, got {}",
+                     exactly 14 commands, got {}",
                     commands.len()
                 );
             }
@@ -1083,6 +1122,7 @@ mod tests {
     fn flagship_orchestration_and_workspace_commands_are_visible_at_the_palette_root() {
         for name in [
             "auto",
+            "dispatch",
             "goal",
             "hooks",
             "tokens",
@@ -1863,11 +1903,13 @@ mod tests {
         // FEAT-015 shipped no production contextual command, so the assertion
         // below used to exclude nothing. FEAT-018 migrates the utility group;
         // the remaining non-fixture commands must still use the legacy
-        // concrete-App path. The seven utility entries are asserted separately
-        // by the FEAT-018 public-dispatch and inventory tests (Phase 6).
+        // concrete-App path. The migrated utility entries (the FEAT-018 seven
+        // plus `/dispatch`, which joins the same portable path) are asserted
+        // separately by the FEAT-018 public-dispatch and inventory tests.
         const FEAT_018_UTILITY: &[&str] = &[
             "attach",
             "automation",
+            "dispatch",
             "jobs",
             "mcp",
             "network",

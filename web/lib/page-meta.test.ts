@@ -112,6 +112,9 @@ describe("page metadata", () => {
       ["faq", "/faq"],
       ["feed", "/feed"],
       ["roadmap", "/roadmap"],
+      ["pricing", "/pricing"],
+      ["legal/terms", "/legal/terms"],
+      ["legal/privacy", "/legal/privacy"],
     ]) {
       const source = readFileSync(
         new URL(`../app/[locale]/${route}/page.tsx`, import.meta.url),

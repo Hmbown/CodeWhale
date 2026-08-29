@@ -107,7 +107,7 @@ fn feature_intro_shows_once_persists_then_is_idempotent() {
     assert!(
         app.status_message
             .as_deref()
-            .is_some_and(|message| message.contains("Fleet") && message.contains("/fleet setup"))
+            .is_some_and(|message| message.contains("Pod") && message.contains("/pod setup"))
     );
 
     // Persisted flag now set → a second call is a no-op.
@@ -2856,13 +2856,28 @@ fn paste_defers_oversized_text_consolidation_until_submit() {
     );
 
     let submitted = app.submit_input().expect("expected submitted input");
+    // The submission is an attachment card, never a bare path: a size
+    // header, the @-mention that attaches the file for the model, and a
+    // bounded preview of the pasted content.
     assert!(
-        submitted.starts_with("@.codewhale/pastes/paste-"),
-        "submitted should be the @mention only, got: {}",
+        submitted.starts_with("[Pasted content attached · "),
+        "submission must open with the attachment header, got: {}",
         &submitted[..submitted.len().min(80)]
     );
-    assert!(submitted.ends_with(".md"), "expected .md extension");
-    let mention = &submitted[1..]; // strip leading '@'
+    assert!(
+        submitted.contains("\n@.codewhale/pastes/paste-"),
+        "the @-mention must survive verbatim for file-mention resolution"
+    );
+    assert!(
+        submitted.contains("--- preview ---\nyyy"),
+        "a bounded preview of the pasted content must be visible"
+    );
+    let mention_line = submitted
+        .lines()
+        .find(|line| line.starts_with("@.codewhale/pastes/"))
+        .expect("mention line");
+    let mention = &mention_line[1..]; // strip leading '@'
+    assert!(mention.ends_with(".md"), "expected .md extension");
     let abs = tmp.path().join(mention);
     assert!(abs.is_file(), "paste file must exist at {abs:?}");
     let written = std::fs::read_to_string(&abs).expect("read");
@@ -2872,6 +2887,42 @@ fn paste_defers_oversized_text_consolidation_until_submit() {
             .iter()
             .any(|toast| toast.text.contains("backed up")),
         "expected backup toast after submit"
+    );
+}
+
+#[test]
+fn oversized_paste_submission_never_renders_as_a_bare_path() {
+    // The reported incident: a large paste became a transcript row that
+    // showed only `@.codewhale/pastes/paste-….md` — a mysterious path where
+    // the user's message should be. The submission must carry a visible
+    // size header and content preview around the mention so the user can
+    // always see what they sent.
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let mut opts = test_options(false);
+    opts.workspace = tmp.path().to_path_buf();
+    let mut app = App::new(opts, &Config::default());
+    let full_content = format!(
+        "IMPORTANT INSTRUCTIONS\n{}",
+        "x".repeat(MAX_SUBMITTED_INPUT_CHARS + 10)
+    );
+
+    app.insert_paste_text(&full_content);
+    let submitted = app.submit_input().expect("expected submitted input");
+
+    assert_ne!(submitted, submitted.lines().nth(1).expect("mention line"));
+    assert!(
+        submitted.contains("IMPORTANT INSTRUCTIONS"),
+        "the preview must surface the pasted content's first line"
+    );
+    assert!(
+        submitted.contains(&format!("· {} chars]", full_content.chars().count())),
+        "the header must state the full pasted size"
+    );
+    // The full oversized content must NOT be inlined — the file is the
+    // single source of truth for the model.
+    assert!(
+        !submitted.contains(&"x".repeat(MAX_SUBMITTED_INPUT_CHARS)),
+        "the inline copy must stay bounded; the @-mention attaches the file"
     );
 }
 
@@ -2949,21 +3000,25 @@ fn submit_input_consolidates_oversized_input_into_paste_file() {
 
     let submitted = app.submit_input().expect("expected submitted input");
 
-    // The submitted text should be the @mention only so the model reads the
-    // full content from the paste file instead of receiving it twice inline
-    // and as a mention (#3263).
+    // The submitted text is an attachment card: size header, the @-mention
+    // that attaches the file for the model, and a bounded preview (#3263
+    // follow-up: never a bare path).
     assert!(
-        submitted.starts_with("@.codewhale/pastes/paste-"),
-        "submitted text should be the @mention, got: {}",
+        submitted.starts_with("[Pasted content attached · "),
+        "submission must open with the attachment header, got: {}",
         &submitted[..submitted.len().min(80)]
     );
+    let mention_line = submitted
+        .lines()
+        .find(|line| line.starts_with("@.codewhale/pastes/paste-"))
+        .expect("mention line");
     assert!(
-        submitted.ends_with(".md"),
-        "expected .md extension, got: {submitted}"
+        mention_line.ends_with(".md"),
+        "expected .md extension, got: {mention_line}"
     );
 
     // The paste file must exist on disk with the full original content.
-    let mention = &submitted[1..]; // strip leading '@'
+    let mention = &mention_line[1..]; // strip leading '@'
     let abs_path = tmp.path().join(mention);
     assert!(abs_path.is_file(), "paste file must exist at {abs_path:?}");
     let written = std::fs::read_to_string(&abs_path).expect("read paste file");

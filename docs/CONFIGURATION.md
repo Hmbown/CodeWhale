@@ -2163,12 +2163,12 @@ reasoning contract, and all four membership ids omit generic sampling fields.
   - `[retry].initial_delay` (float seconds, default `1.0`)
   - `[retry].max_delay` (float seconds, default `60.0`)
   - `[retry].exponential_base` (float, default `2.0`)
-- `[notifications].method` (string, optional): `auto`, `osc9`, `bel`, or
-  `off`. Defaults to `auto`. The TUI fires this on completed (successful)
+- `[notifications].method` (string, optional): `auto`, `osc9`, `kitty`,
+  `ghostty`, `bel`, or `off`. Defaults to `auto`. The TUI fires this on completed (successful)
   turns whose elapsed time meets `threshold_secs`; failed and cancelled
   turns are silent. `auto` resolves to `osc9` for `iTerm.app`, `Ghostty`,
-  and `WezTerm` (detected via `$TERM_PROGRAM`). Otherwise the fallback is
-  `bel`; on Windows the BEL path is routed through `MessageBeep(MB_OK)`.
+  and `WezTerm` (detected via `$TERM_PROGRAM`). Unknown terminals fail closed
+  to `off`; Codewhale never invents an audible BEL fallback.
 - `[notifications].threshold_secs` (int, optional): defaults to `30`.
   Only completed turns whose elapsed time meets or exceeds this fire a
   notification.
@@ -2176,15 +2176,15 @@ reasoning contract, and all four membership ids omit generic sampling fields.
   `false`. When `true`, the notification body includes the elapsed
   duration and the turn's cost in the configured display currency.
 - `[notifications].completion_sound` (string, optional): `off`, `beep`,
-  `bell`, or `file`. Defaults to `beep`. `file` plays the WAV path from
-  `[notifications].sound_file` on Windows.
+  `bell`, or `file`. Defaults to `off`. This opt-in sound follows the same
+  focus and quiet policy as desktop notifications. `file` plays the WAV path
+  from `[notifications].sound_file` on Windows.
 - `[notifications].sound_file` (path, optional): path to a custom WAV file
   used when `completion_sound = "file"`.
 - `[notifications].quiet` (bool, optional): defaults to `false`. Quiet
-  mode — suppresses every desktop notification (all categories, all
-  delivery methods) and the paired `event_sound` cues, without changing
-  `method` or the per-category switches. The turn-completion chime
-  (`completion_sound`) is governed separately.
+  mode — suppresses every desktop notification and sound (all categories,
+  all delivery methods) without changing `method`, `completion_sound`, or the
+  per-category switches.
 - `[notifications.events]` (table, optional): per-category
   desktop-notification switches; every key defaults to `true`. Keys:
   `turn-complete`, `subagent-terminal`, `approval-needed`,
@@ -2303,9 +2303,9 @@ The TUI can emit a desktop notification (OSC 9 escape or plain BEL) when a turn 
 method          = "auto"  # auto | osc9 | bel | off
 threshold_secs  = 30      # only notify when the turn took >= this many seconds
 include_summary = false   # include elapsed time + cost in the notification body
-completion_sound = "beep" # off | beep | bell | file
+completion_sound = "off"  # off | beep | bell | file; sound is opt-in
 sound_file = "E:\\google\\downloads\\notify.wav" # for completion_sound = "file"
-quiet = false             # true suppresses every desktop notification
+quiet = false             # true suppresses every desktop notification and sound
 
 [notifications.events]    # per-category switches; all default to true
 turn-complete     = true  # an agent turn finished
@@ -2323,15 +2323,22 @@ previous policy. `[notifications.events]` disables single categories the
 same way — a disabled category is suppressed at the emission path, so it
 cannot leak through one specific protocol. A suppressed notification also
 suppresses its paired `[notifications.event_sound]` cue (no orphaned bells
-for events you turned off); the turn-completion chime (`completion_sound`)
-is governed separately.
+for events you turned off). The turn-completion chime also respects `quiet`.
 
 Method semantics:
 
-- `auto` (default) — picks `osc9` for `iTerm.app`, `Ghostty`, and `WezTerm` (detected via `$TERM_PROGRAM`). Otherwise it falls back to `bel`; on Windows that BEL path is routed through `MessageBeep(MB_OK)`.
+- `auto` (default) — picks a supported native or terminal banner transport. Unknown terminals fail closed to `off`; automatic banner selection never invents a BEL sound.
 - `osc9` — emit `\x1b]9;<msg>\x07`. Inside tmux the sequence is wrapped in DCS passthrough so it reaches the outer terminal.
 - `bel` — emit a single `\x07` byte. Use this on Windows only if you actively want the chime back.
-- `off` — disable post-turn notifications entirely.
+- `off` — disable banners. An explicitly selected completion sound remains an independent control.
+
+By default, delivery is background-only: Codewhale waits until the terminal
+has remained unfocused for two seconds. Set `notification_condition =
+"always"` under `[tui]` to allow configured notifications in the foreground,
+or `"never"` to suppress all operator notifications. macOS native banners are
+silent. `completion_sound` controls the turn-completion cue; the separate,
+opt-in `[notifications.event_sound]` table controls event BEL cues. Explicit
+`method = "bel"` is also audible and should be used only when that is wanted.
 
 Windows users who run inside a known OSC-9 terminal (e.g. WezTerm on Windows) keep getting OSC-9 notifications. Set `method = "off"` to disable threshold-based desktop notifications entirely.
 

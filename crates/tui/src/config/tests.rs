@@ -1324,9 +1324,15 @@ fn live_search_provider_update_preserves_environment_precedence() {
 fn notification_defaults_and_live_updates_share_one_consistent_model() {
     let mut notifications = NotificationsConfig::default();
     assert_eq!(notifications.threshold_secs, 30);
+    assert_eq!(notifications.completion_sound, CompletionSound::Off);
     assert_eq!(
         Config::default().notifications_config().threshold_secs,
         notifications.threshold_secs
+    );
+    assert_eq!(
+        Config::default().notifications_config().completion_sound,
+        CompletionSound::Off,
+        "a fresh install must never opt itself into an audible completion cue"
     );
 
     notifications.apply_update(NotificationConfigUpdate::Method(NotificationMethod::Osc9));
@@ -1337,6 +1343,22 @@ fn notification_defaults_and_live_updates_share_one_consistent_model() {
     assert_eq!(
         notifications.threshold_secs, 30,
         "field deltas must preserve both defaults and earlier live edits"
+    );
+}
+
+#[test]
+fn notification_condition_accepts_background_only_policy() {
+    let config: Config = toml::from_str(
+        r#"
+        [tui]
+        notification_condition = "unfocused"
+        "#,
+    )
+    .expect("unfocused attention policy should parse");
+
+    assert_eq!(
+        config.tui.and_then(|tui| tui.notification_condition),
+        Some(NotificationCondition::Unfocused)
     );
 }
 
@@ -2803,6 +2825,10 @@ fn tui_stream_chunk_timeout_defaults_env_and_clamps() {
     let zero = Config {
         tui: Some(TuiConfig {
             stream_chunk_timeout_secs: Some(0),
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             ..TuiConfig::default()
         }),
         ..Config::default()
@@ -2815,6 +2841,10 @@ fn tui_stream_chunk_timeout_defaults_env_and_clamps() {
     let explicit_min = Config {
         tui: Some(TuiConfig {
             stream_chunk_timeout_secs: Some(MIN_STREAM_CHUNK_TIMEOUT_SECS),
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             ..TuiConfig::default()
         }),
         ..Config::default()
@@ -2827,6 +2857,10 @@ fn tui_stream_chunk_timeout_defaults_env_and_clamps() {
     let high = Config {
         tui: Some(TuiConfig {
             stream_chunk_timeout_secs: Some(MAX_STREAM_CHUNK_TIMEOUT_SECS + 1),
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             ..TuiConfig::default()
         }),
         ..Config::default()

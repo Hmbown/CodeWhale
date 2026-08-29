@@ -113,6 +113,12 @@ pub(crate) struct ContextTokenCache {
     pub(crate) message_tokens: Vec<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompletedAssistantOutputReceipt {
+    history_index: usize,
+    text: String,
+}
+
 impl ContextTokenCache {
     pub(crate) fn clear(&mut self) {
         self.message_tokens.clear();
@@ -541,6 +547,16 @@ pub struct LaunchState {
     pub worktree_available: bool,
     /// Row hitboxes from the most recent launch render.
     pub row_areas: Vec<Rect>,
+    /// Whether launch keys type into the pre-session composer instead of
+    /// driving the menu. The composer itself is the session `App`'s own
+    /// `ComposerState` — this flag only decides where keystrokes go.
+    pub composer_focus: bool,
+    /// Composer input-row hitbox from the most recent launch render. A
+    /// click here focuses the composer, exactly like the Tab key.
+    pub composer_area: Option<Rect>,
+    /// Send-glyph hitbox inside the composer row. A click here submits the
+    /// composed message through the normal dispatch path.
+    pub send_area: Option<Rect>,
 }
 
 impl LaunchState {
@@ -575,6 +591,9 @@ impl LaunchState {
             workspace_session_count,
             worktree_available,
             row_areas: Vec::new(),
+            composer_focus: false,
+            composer_area: None,
+            send_area: None,
         }
     }
 }
@@ -687,6 +706,21 @@ impl Default for ComposerState {
     }
 }
 
+/// Compatibility name retained for the first Tideline header slice. New
+/// surfaces register [`crate::tui::tideline::InteractionAction`] directly.
+pub type HeaderActionTarget = crate::tui::tideline::InteractionAction;
+
+/// A header target painted in the latest frame.
+///
+/// The visible chrome owns placement; input owns dispatch. Keeping the
+/// rectangular target alongside its typed action gives mouse and keyboard
+/// routes one shared destination without a second navigation system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeaderHitbox {
+    pub area: Rect,
+    pub target: HeaderActionTarget,
+}
+
 /// Viewport/scroll state — fields related to transcript scrolling and caching.
 pub struct ViewportState {
     pub transcript_scroll: TranscriptScroll,
@@ -698,6 +732,9 @@ pub struct ViewportState {
     pub transcript_scrollbar_dragging: bool,
     pub last_transcript_area: Option<Rect>,
     pub last_composer_area: Option<Rect>,
+    /// Selectable targets from the latest painted frame. Cleared before every
+    /// render so resized or hidden controls can never swallow a click.
+    pub interaction_targets: crate::tui::tideline::InteractionRegistry,
     /// Last left-click trace over the composer, for double/triple-click
     /// word/line selection (crossterm does not decode click counts).
     pub composer_click_trace: Option<crate::tui::mouse_ui::ComposerClickTrace>,
@@ -707,6 +744,10 @@ pub struct ViewportState {
     /// WorkflowPanel rect above the composer (#4121), for mouse toggle/cancel.
     pub last_workflow_panel_area: Option<Rect>,
     pub last_workflow_cancel_area: Option<Rect>,
+    /// Live plugin CTA row above the composer, plus review/dismiss hitboxes.
+    pub last_plugin_cta_area: Option<Rect>,
+    pub last_plugin_cta_review_area: Option<Rect>,
+    pub last_plugin_cta_dismiss_area: Option<Rect>,
     pub last_transcript_top: usize,
     pub last_transcript_visible: usize,
     pub last_transcript_total: usize,
@@ -735,10 +776,14 @@ impl Default for ViewportState {
             transcript_scrollbar_dragging: false,
             last_transcript_area: None,
             last_composer_area: None,
+            interaction_targets: crate::tui::tideline::InteractionRegistry::default(),
             composer_click_trace: None,
             last_approval_area: None,
             last_workflow_panel_area: None,
             last_workflow_cancel_area: None,
+            last_plugin_cta_area: None,
+            last_plugin_cta_review_area: None,
+            last_plugin_cta_dismiss_area: None,
             last_transcript_top: 0,
             last_transcript_visible: 0,
             last_transcript_total: 0,
@@ -1237,6 +1282,10 @@ pub struct App {
     /// Monotonic counter used to issue fresh per-cell revisions.
     pub next_history_revision: u64,
     pub api_messages: Vec<Message>,
+    /// User-visible assistant text that crossed typed completion boundaries.
+    /// Receipts are aligned to transcript cells because provider context can
+    /// be compacted or purged without changing what remains visible.
+    completed_assistant_outputs: Vec<CompletedAssistantOutputReceipt>,
     pub(crate) context_token_cache: RefCell<ContextTokenCache>,
     /// Typed account-owned browser relay for this exact TUI session.
     pub remote_control: crate::remote_control::RemoteControlController,
@@ -1292,6 +1341,13 @@ pub struct App {
     pub context_pressure_warning_dismissed: Option<crate::context_budget::PressureLevel>,
     /// Last on-disk plugin catalog stamp we already nudged `/plugin reload` for.
     pub plugin_reload_nudge_stamp: Option<crate::plugins::PluginCatalogStamp>,
+    /// Plugin names already toasted for this session's prompt matching.
+    pub plugin_prompt_suggest_names: HashSet<String>,
+    pub plugin_prompt_suggest_count: u8,
+    /// Last idle catalog fingerprint poll, so disk changes can surface between turns.
+    pub last_plugin_catalog_poll: Option<Instant>,
+    /// Live composer plugin CTA (debounce + one match, never auto-install).
+    pub plugin_cta: crate::tui::plugin_suggestions::PluginCtaState,
     pub model: String,
     /// Persisted model selections by provider name. Loaded from settings so
     /// `/model` and the picker can surface saved provider-specific choices.
@@ -2217,8 +2273,8 @@ fn push_enabled_provider_model(
 }
 
 impl App {
-    /// Persist the pending session route as the explicit choice (`/fleet
-    /// save`, `/fleet save-as`, `/model save-default`). Returns the receipt
+    /// Persist the pending session route as the explicit choice (`/pod save`,
+    /// `/pod save-as`, `/model save-default`). Returns the receipt
     /// message naming the exact file written — or an error message when the
     /// write failed. Nothing is ever written without this explicit call.
     pub fn apply_route_save_choice(
@@ -2234,7 +2290,7 @@ impl App {
         match choice {
             RouteSaveChoice::UpdateFleet => {
                 let Some((name, scope)) = pending.fleet.clone() else {
-                    return "Nothing to update — no Fleet is selected. Use /fleet save-as to \
+                    return "Nothing to update — no Fleet is selected. Use /pod save-as to \
                              save this route as a new Fleet."
                         .to_string();
                 };
@@ -2256,7 +2312,7 @@ impl App {
                     }
                     Err(err) => format!(
                         "Fleet update failed: {err} — the saved Fleet may have moved. Use \
-                         /fleet save-as to persist the route."
+                         /pod save-as to persist the route."
                     ),
                 }
             }
@@ -3814,6 +3870,18 @@ impl App {
     /// `n` history cells. Every map key >= n is mapped to key - n; keys < n
     /// are dropped.
     fn shift_history_maps_down(&mut self, n: usize) {
+        // A folded-range placeholder is inserted at index 0 immediately
+        // after this shift, so surviving completed-output receipts move down
+        // by `n` and then forward by one.
+        self.completed_assistant_outputs.retain_mut(|receipt| {
+            if receipt.history_index >= n {
+                receipt.history_index = receipt.history_index - n + 1;
+                true
+            } else {
+                false
+            }
+        });
+
         // tool_cells: HashMap<String, usize>
         self.tool_cells.retain(|_, idx| {
             if *idx >= n {
@@ -4174,6 +4242,7 @@ impl App {
     pub fn clear_history(&mut self) {
         self.history.clear();
         self.history_revisions.clear();
+        self.completed_assistant_outputs.clear();
         self.context_references_by_cell.clear();
         self.session_context_references.clear();
         self.session_artifacts.clear();
@@ -4182,11 +4251,63 @@ impl App {
         self.needs_redraw = true;
     }
 
+    /// Record one user-visible assistant message after its typed completion
+    /// boundary. Interrupted salvage never calls this path.
+    pub(crate) fn record_completed_assistant_output(&mut self, history_index: usize, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        if let Some(receipt) = self
+            .completed_assistant_outputs
+            .iter_mut()
+            .find(|receipt| receipt.history_index == history_index)
+        {
+            receipt.text = text.to_string();
+            return;
+        }
+        self.completed_assistant_outputs
+            .push(CompletedAssistantOutputReceipt {
+                history_index,
+                text: text.to_string(),
+            });
+    }
+
+    /// Rebuild receipts only from the restored typed transcript projection.
+    /// `history_cells_from_message` has already routed repair receipts to
+    /// System cells and omitted interrupted assistant salvage.
+    pub(crate) fn rebuild_completed_assistant_outputs_from_restored_history(&mut self) {
+        self.completed_assistant_outputs = self
+            .history
+            .iter()
+            .enumerate()
+            .filter_map(|(history_index, cell)| match cell {
+                HistoryCell::Assistant {
+                    content,
+                    streaming: false,
+                } if !content.trim().is_empty() => Some(CompletedAssistantOutputReceipt {
+                    history_index,
+                    text: content.clone(),
+                }),
+                _ => None,
+            })
+            .collect();
+    }
+
+    pub(crate) fn completed_assistant_output_receipt(&self) -> Option<&str> {
+        self.completed_assistant_outputs
+            .iter()
+            .rev()
+            .find(|receipt| !receipt.text.trim().is_empty())
+            .map(|receipt| receipt.text.as_str())
+    }
+
     /// Pop the trailing history cell, keeping revisions in sync.
     pub fn pop_history(&mut self) -> Option<HistoryCell> {
         let cell = self.history.pop();
         if cell.is_some() {
             self.history_revisions.pop();
+            self.completed_assistant_outputs
+                .retain(|receipt| receipt.history_index < self.history.len());
             self.context_references_by_cell.remove(&self.history.len());
             self.rebuild_session_context_references();
             self.prune_transcript_index_state(self.history.len());
@@ -4210,6 +4331,8 @@ impl App {
         if self.history_revisions.len() > new_len {
             self.history_revisions.truncate(new_len);
         }
+        self.completed_assistant_outputs
+            .retain(|receipt| receipt.history_index < new_len);
         // Drop any auxiliary maps keyed on history indices that now point
         // past the new tail. We keep the rest intact so unaffected tool
         // cells continue to render correctly.

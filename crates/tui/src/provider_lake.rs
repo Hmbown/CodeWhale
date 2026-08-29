@@ -484,21 +484,6 @@ pub fn models_for_provider(
     }
 }
 
-/// Every built-in provider that carries at least one merged-catalog row.
-#[must_use]
-#[allow(dead_code)]
-pub fn all_catalog_providers() -> Vec<ApiProvider> {
-    let mut seen = Vec::new();
-    for offering in &merged_snapshot().offerings {
-        if let Some(provider) = ApiProvider::parse(&offering.provider)
-            && !seen.contains(&provider)
-        {
-            seen.push(provider);
-        }
-    }
-    seen
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -323,7 +323,7 @@ impl<'a, T: CloudTransport> CloudClient<'a, T> {
         // immediately and sleep afterwards. It has no slow_down.
         let bundle = codewhale_config::device_code::DeviceCodePoll::new(
             timeout.min(server_lifetime),
-            "Codewhale account login timed out; run `codewhale account login` to try again",
+            "Codewhale account login timed out; run `codewhale login` to try again",
         )
         .interval_seconds(Some(device.interval))
         .max_interval_seconds(10)
@@ -436,7 +436,7 @@ impl<'a, T: CloudTransport> CloudClient<'a, T> {
         body: Option<Vec<u8>>,
     ) -> Result<CloudResponse> {
         let Some(mut stored) = self.load_auth()? else {
-            bail!("Not signed in. Run `codewhale account login` first");
+            bail!("Not signed in. Run `codewhale login` first");
         };
         let first = self.transport.execute(CloudRequest {
             method,
@@ -460,7 +460,7 @@ impl<'a, T: CloudTransport> CloudClient<'a, T> {
             200 => {}
             401 => {
                 self.clear_auth()?;
-                bail!("The Codewhale account session expired. Run `codewhale account login` again");
+                bail!("The Codewhale account session expired. Run `codewhale login` again");
             }
             _ => return Err(response_error(&refresh)),
         }
@@ -479,7 +479,7 @@ impl<'a, T: CloudTransport> CloudClient<'a, T> {
         })?;
         if retried.status == 401 {
             self.clear_auth()?;
-            bail!("The Codewhale account session expired. Run `codewhale account login` again");
+            bail!("The Codewhale account session expired. Run `codewhale login` again");
         }
         Ok(retried)
     }
@@ -605,7 +605,8 @@ fn run_with<T: CloudTransport, W: Write>(
             let _ =
                 client.poll_device(&device, Duration::from_secs(login.timeout_seconds), sleeper)?;
             let user = client.me()?;
-            write_account(out, "Signed in to Codewhale.", profile, api_base, &user)
+            write_account(out, "Signed in to Codewhale.", profile, api_base, &user)?;
+            Ok(())
         }
         CloudCommand::Status => match client.load_auth()? {
             Some(_) => {
@@ -616,7 +617,7 @@ fn run_with<T: CloudTransport, W: Write>(
                 writeln!(out, "Not signed in to Codewhale.")?;
                 writeln!(out, "Profile: {}", printable(profile))?;
                 writeln!(out, "API: {api_base}")?;
-                writeln!(out, "Run `codewhale account login` to sign in.")?;
+                writeln!(out, "Run `codewhale login` to sign in.")?;
                 Ok(())
             }
         },

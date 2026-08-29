@@ -12,11 +12,9 @@
 //! The indicator mirrors state the Work strip and the `/jobs` surface already
 //! read — it introduces no new registry and takes no lock in the render path:
 //!
-//! - **Background shells + durable tasks**: `App::task_panel`, the merged
-//!   snapshot `refresh_active_task_panel` builds from the shell manager's
-//!   `list_jobs()` and the TaskManager (`/jobs` surface). The event loop
-//!   refreshes it every ~2.5s, so the chip follows shell/task lifecycle with
-//!   the same cadence as the Work panel.
+//! - **Durable tasks**: `App::task_panel` entries that are not live shells.
+//!   Background shells are first-class work-strip rows (`▾ Shells N`) and
+//!   are not mirrored here.
 //! - **Sub-agents**: the union of `App::subagent_cache` entries still in
 //!   `Running` state and `App::agent_progress` keys — the same live projection
 //!   `running_agent_count` uses, so spawn/completion events update the chip
@@ -167,10 +165,12 @@ pub fn pending_work_from_app(app: &App) -> PendingWork {
         if !matches!(entry.status.as_str(), "running" | "queued") {
             continue;
         }
-        let (kind, raw_label) = match entry.prompt_summary.strip_prefix("shell: ") {
-            Some(command) => (PendingItemKind::Shell, command),
-            None => (PendingItemKind::Task, entry.id.as_str()),
-        };
+        // Live shells belong on the work strip (`▾ Shells N`), not this
+        // composer crumb. A dual surface hid the PTY behind hourglasses.
+        if entry.prompt_summary.starts_with("shell: ") || entry.id.starts_with("shell_") {
+            continue;
+        }
+        let (kind, raw_label) = (PendingItemKind::Task, entry.id.as_str());
         items.push(PendingItem {
             kind,
             label: truncate_label(raw_label),
@@ -414,7 +414,11 @@ mod tests {
             .insert("agent_live".to_string(), "Agent 1".to_string());
 
         let work = pending_work_from_app(&app);
-        assert_eq!(work.count(PendingItemKind::Shell), 1, "shell job counted");
+        assert_eq!(
+            work.count(PendingItemKind::Shell),
+            0,
+            "shells are work-strip rows, not crumb items"
+        );
         assert_eq!(work.count(PendingItemKind::Task), 1, "durable task counted");
         assert_eq!(
             work.count(PendingItemKind::Agent),
@@ -422,7 +426,10 @@ mod tests {
             "running agent counted"
         );
         let line = work.render_line(400).unwrap();
-        assert!(line.contains("cargo test"), "shell command labeled: {line}");
+        assert!(
+            !line.contains("cargo test"),
+            "shell command must not occupy the crumb: {line}"
+        );
         assert!(line.contains("run"), "task id labeled: {line}");
         assert!(line.contains("Agent 1"), "agent label shown: {line}");
 

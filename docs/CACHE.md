@@ -18,8 +18,9 @@ Concretely:
   (which changes the project-context pack, a directory listing, a skills scan)
   cannot move the pinned prefix under the model's feet mid-turn.
 - **History only grows.** Volatile facts the model must see (LSP diagnostics,
-  steer input, subagent completions) are appended to the message list, never
-  spliced into the frozen prefix. Workspace drift is delivered the same way:
+  steer input, subagent completions, `<recommended_plugins>` on a matching
+  user turn) are appended to the message list, never spliced into the frozen
+  prefix. Workspace drift is delivered the same way:
   at the start of each **new user turn** (never mid-tool-loop) the engine
   recomposes the volatile contributors and, if anything differs from what the
   model last saw, appends **one** `<context_update>` user-role message with a

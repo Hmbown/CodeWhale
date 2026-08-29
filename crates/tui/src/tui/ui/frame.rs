@@ -213,13 +213,13 @@ pub(crate) fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         project_context_pack_enabled: config.project_context_pack_enabled(),
         translation_enabled: app.translation_enabled,
         verbosity: app.verbosity.clone(),
-        // Effectively unlimited: the previous cap of 100 hit the ceiling on
-        // long multi-step plans (wide refactors, sub-agent orchestration) and
-        // presented as the agent "giving up mid-task". `u32::MAX` is the type
-        // ceiling; users can still interrupt with Ctrl+C / Esc, and a turn
-        // naturally ends when the model stops emitting tool calls. A real
-        // runaway is rare and human-noticeable; we trust the operator.
-        max_steps: u32::MAX,
+        // R1: finite, not `u32::MAX`. The old comment argued a runaway is
+        // "human-noticeable", but an interactive session left running is
+        // exactly where an unbounded loop spends real money unattended.
+        // The default (200) is far above what a long multi-step plan needs;
+        // operators who want more raise `[tui].max_model_steps`, and the
+        // clamp keeps even the maximum finite.
+        max_steps: config.max_model_steps(),
         max_subagents,
         max_admitted_subagents: config
             .max_admitted_subagents_for_provider(provider)
@@ -267,6 +267,9 @@ pub(crate) fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             config.subagent_api_timeout_secs_for_provider(provider),
         ),
         stream_chunk_timeout: Duration::from_secs(app.stream_chunk_timeout_secs),
+        turn_wall_clock: config.turn_wall_clock(),
+        stream_max_content_bytes: config.stream_max_content_bytes(),
+        stream_max_duration: config.stream_max_duration(),
         subagent_heartbeat_timeout: Duration::from_secs(
             config.subagent_heartbeat_timeout_secs_for_provider(provider),
         ),
@@ -702,6 +705,7 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         .set_focus_texture(app.focus_texture, app.ui_theme);
     app.sidebar_hover = crate::tui::app::SidebarHoverState::default();
     app.viewport.last_approval_area = None;
+    app.viewport.interaction_targets.clear();
     // Keep the OSC-0 whale title truthful to the current shell phase so
     // alt-tabbed sessions communicate state without a second in-app spinner.
     crate::tui::underwater::sync_title_activity(app);
@@ -728,8 +732,21 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         // Launch is a distinct full-canvas choice state, not a reading column.
         // Keep it edge-to-edge so opening Codewhale never recreates black side
         // banks before the responsive session ocean takes over.
-        crate::tui::underwater::render_launch_screen(size, f.buffer_mut(), app);
-        crate::tui::underwater::record_launch_row_areas(size, &mut app.launch);
+        // Completion entries are computed here — the same way the session
+        // path below computes them for ComposerWidget — so the launch screen
+        // can paint its popup (#5698 review finding 2); the mention walker
+        // needs &mut App, rendering does not.
+        let launch_slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
+        let launch_mention_menu_entries =
+            crate::tui::file_mention::visible_mention_menu_entries(app, app.mention_menu_limit);
+        crate::tui::underwater::render_launch_screen(
+            size,
+            f.buffer_mut(),
+            app,
+            &launch_slash_menu_entries,
+            &launch_mention_menu_entries,
+        );
+        crate::tui::underwater::record_launch_hitboxes(size, &mut app.launch);
         if !app.view_stack.is_empty() {
             if app.view_stack.top_kind() == Some(ModalKind::Approval) {
                 app.viewport.last_approval_area = app.view_stack.top_occupied_region(size);
@@ -888,13 +905,19 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             .map(|panel| panel.desired_height(shell_area.width))
             .unwrap_or(0)
     };
+    let plugin_cta_height = if mini && !mini_cfg.keep_input {
+        0
+    } else {
+        app.plugin_cta_row_height()
+    };
     let auxiliary_budget = body_height
         .saturating_sub(
             top_work_strip_height
                 .saturating_add(MIN_CHAT_HEIGHT)
                 .saturating_add(composer_height)
                 .saturating_add(footer_height)
-                .saturating_add(activity_height),
+                .saturating_add(activity_height)
+                .saturating_add(plugin_cta_height),
         )
         .saturating_sub(indicator_height);
     // Queued-only previews author the direct controls in row two (and fall
@@ -936,14 +959,16 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             Constraint::Length(indicator_height),      // Background-work chip (#5286, 0 if idle)
             Constraint::Length(session_boot_height),   // MCP+plugin boot receipt (0 if quiet)
             Constraint::Length(activity_height),       // Activity band above the composer
+            Constraint::Length(plugin_cta_height),     // Live plugin CTA (0 unless matched)
             Constraint::Length(composer_height),       // Composer
             Constraint::Length(footer_height),         // Identity band below the composer
         ])
         .split(body_area);
     let session_boot_slot = 5;
     let activity_slot = 6;
-    let composer_slot = 7;
-    let footer_slot = 8;
+    let plugin_cta_slot = 7;
+    let composer_slot = 8;
+    let footer_slot = 9;
 
     let (work_chat_area, side_work_area) = if mini && !mini_cfg.keep_sidebar {
         // Mini mode without the side rail: the transcript takes the whole
@@ -960,6 +985,45 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     }
 
     crate::tui::underwater::render_header(header_area, f.buffer_mut(), app);
+    let context_budget = crate::tui::tideline::ContextBudgetSnapshot::from_app(app);
+    for hitbox in crate::tui::underwater::header_hitboxes(header_area, app) {
+        if let Some(context_budget) = context_budget {
+            app.viewport
+                .interaction_targets
+                .register(crate::tui::tideline::InteractionTarget {
+                    id: crate::tui::tideline::InteractionTargetId::HEADER_CONTEXT,
+                    area: hitbox.area,
+                    focus: crate::tui::tideline::InteractionFocus::Direct,
+                    keyboard_action: Some(hitbox.target),
+                    mouse_action: Some(hitbox.target),
+                    inspect_detail: crate::tui::tideline::InspectDetail::ContextBudget(
+                        context_budget,
+                    ),
+                });
+        }
+    }
+    for target in app.viewport.interaction_targets.iter() {
+        let label = match target.mouse_action {
+            Some(crate::tui::tideline::InteractionAction::InspectContext) => format!(
+                "{} · {}",
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::CtxMenuContextInspector,
+                ),
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::CtxMenuContextInspectorDesc,
+                ),
+            ),
+            None => continue,
+        };
+        crate::tui::hover_layer::register_rect(
+            crate::tui::hover_hit::HoverTargetKind::Link,
+            target.area,
+            label,
+            false,
+        );
+    }
 
     // Render the transcript and optional file-tree sidecar. The underwater
     // default deliberately has no legacy right sidebar: Tasks and To-do own
@@ -1075,6 +1139,15 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         crate::tui::phase_strip::render_activity(body_chunks[activity_slot], buf, app);
     }
 
+    if plugin_cta_height > 0 {
+        let buf = f.buffer_mut();
+        crate::tui::plugin_suggestions::draw_plugin_cta(app, body_chunks[plugin_cta_slot], buf);
+    } else {
+        app.viewport.last_plugin_cta_area = None;
+        app.viewport.last_plugin_cta_review_area = None;
+        app.viewport.last_plugin_cta_dismiss_area = None;
+    }
+
     // Render composer
     let cursor_pos = {
         let composer_widget = ComposerWidget::new(
@@ -1186,6 +1259,13 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
                 body_chunks[activity_slot],
                 f.buffer_mut(),
                 app.ui_theme.footer_bg,
+            );
+        }
+        if plugin_cta_height > 0 {
+            column.paint_matching(
+                body_chunks[plugin_cta_slot],
+                f.buffer_mut(),
+                app.ui_theme.composer_bg,
             );
         }
         column.paint_matching(

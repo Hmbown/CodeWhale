@@ -1,0 +1,507 @@
+{
+  "chrome": {
+    "navDocs": "文档",
+    "navStart": "指引",
+    "navInstall": "安装",
+    "navFaq": "常见问题",
+    "navCommunity": "社区",
+    "navContribute": "贡献",
+    "navDocsSecondary": "Docs",
+    "navStartSecondary": "Start",
+    "navInstallSecondary": "Install",
+    "navFaqSecondary": "FAQ",
+    "navCommunitySecondary": "Community",
+    "navContributeSecondary": "Contribute",
+    "skipToContent": "跳转到主要内容",
+    "navPrimaryAria": "主导航",
+    "navHomeAria": "Codewhale 首页",
+    "installCta": "安装 →",
+    "authSignIn": "登录",
+    "authRegister": "注册",
+    "authGroupAria": "账户",
+    "wordmarkSeal": "深",
+    "wordmarkTag": "任意模型，本机运行",
+    "issueLabel": "第 {date} 期",
+    "dateLocale": "zh-CN",
+    "starsAria": "GitHub 星标数",
+    "githubFallback": "GitHub",
+    "tickerLiveLabel": "实 时",
+    "tickerLiveTag": "LIVE",
+    "tickerMerged": "已合并",
+    "tickerOpened": "已开启",
+    "tickerClosed": "已关闭",
+    "tickerReleased": "已发布",
+    "tickerFirstContribution": "首次贡献",
+    "tickerBy": "作者 {handle}",
+    "tickerAria": "仓库近期动态",
+    "traceLabel": "推理痕迹",
+    "traceTabsAria": "会话片段",
+    "menuOpen": "打开菜单",
+    "menuClose": "关闭菜单",
+    "themeAuto": "自动",
+    "themeLight": "浅色",
+    "themeDark": "深色",
+    "themeAria": "文档主题：{mode}（点击切换）",
+    "themeTitle": "文档主题 · 自动 / 浅色 / 深色",
+    "footerTagline": "Codewhale 潜入深海，你不必亲自下潜——开源运行时的文档、源码与社区。",
+    "footerProduct": "产品",
+    "footerProject": "项目",
+    "footerDocs": "文档",
+    "footerGuide": "新手指引",
+    "footerInstall": "安装",
+    "footerModels": "模型",
+    "footerRuntime": "运行时",
+    "footerFaq": "常见问题",
+    "footerIssues": "议题",
+    "footerContribute": "参与贡献",
+    "footerLicense": "MIT 许可证",
+    "footerPricing": "价格",
+    "footerTerms": "服务条款",
+    "footerPrivacy": "隐私政策",
+    "footerCanonicalSource": "官方源码：",
+    "footerReleases": " · 发布：",
+    "footerReleasesLink": "GitHub 发布页",
+    "footerSecurity": "安全",
+    "switcherLabel": "语言",
+    "switcherSwitchTo": "切换到 {label}",
+    "partialBadge": "(部分)"
+  },
+  "home": {
+    "metaTitle": "Codewhale — 一入码门深似海，它替你潜。",
+    "metaDescription": "Codewhale 潜入深海，你不必亲自下潜——开源的终端编程智能体。模型自带，跑在你自己的机器上。Rust 编写，MIT 许可。",
+    "kicker": "开源 · 自带模型 · 运行在你的终端",
+    "heroTitleA": "一入码门深似海，",
+    "heroTitleB": "Codewhale 替你潜。",
+    "heroIntro": "{brand} 是一个跑在终端里的开源编程智能体。给它一个模型和一个任务。它会读你的代码、改文件、跑检查，活干完了或需要你拿主意时就停下来。模型随便用，也可以给每个角色各配一个。",
+    "install": "安装",
+    "docs": "文档",
+    "copy": "复制",
+    "copied": "已复制 ✓",
+    "installEyebrow": "一行安装",
+    "installRequirement": "需要 Node 18+，无需 Rust 工具链",
+    "installOtherWays": "其他方式 →",
+    "latestRelease": "最新发布 {tag}",
+    "releaseUnavailable": "发布状态暂不可用",
+    "currentSource": "源码",
+    "sourceCandidate": "未发布",
+    "providerRoutes": "{count} 个提供商",
+    "publishedRelease": "已发布",
+    "figcaptionSourceCandidate": "未发布",
+    "shotSession": "会话",
+    "screenshotAlt": "Codewhale 终端会话，Operate 模式：鲸鱼、输入区与状态栏",
+    "figcaption": "Codewhale 会话 · Operate 模式 · 权限：Ask",
+    "proofHeading": "终端里的编程智能体。任意模型。本机运行。",
+    "proofBody": "用你手头已有的模型——托管、网关或本地都行。选一个模式：Plan、Work 或 Operate。再选它不问你就能做多少：Ask、Auto-Review 或 Full Access。",
+    "sealDecides": "法",
+    "decidesEyebrow": "它如何决策",
+    "decidesHeading": "推理过程，原话呈现",
+    "decidesLede": "会话摘录。每一段都写明模型依据了哪条项目规则，以及接着做了什么。",
+    "sealWorkflow": "行",
+    "workflowHeading": "从任务到验证过的改动。",
+    "workflow": [
+      [
+        "检查",
+        "读取仓库、项目说明与任务。"
+      ],
+      [
+        "执行",
+        "修改文件，你要求先问的地方会先问。"
+      ],
+      [
+        "验证",
+        "运行检查，核对结果。"
+      ],
+      [
+        "报告",
+        "说明改了什么、通过了什么。"
+      ]
+    ],
+    "receiptAria": "运行摘要示例",
+    "receiptInspect": "仓库与项目说明",
+    "receiptAct": "在你设定的权限内修改文件",
+    "receiptReport": "检查通过 · 摘要已保存",
+    "sealStart": "起",
+    "startHeading": "第一次用？四步。",
+    "startLede": "安装 → 首次会话，无需密钥 → 接入提供商 → 配置 Fleet。",
+    "startGuideLink": "阅读新手指引 →",
+    "startVocabularyLink": "查名词 →",
+    "sealBoundaries": "界",
+    "boundariesHeadingA": "你的模型。",
+    "boundariesHeadingB": "你的边界。",
+    "boundariesBody": "模型、模式、以及它不问你能做多少，都由你来选。你不改，提供商和模型就不会变。预览功能会标注预览。",
+    "hostedGatewayLocal": "托管、网关与本地模型",
+    "planActOperateDesc": "从只读规划到自主执行",
+    "askAutoReviewDesc": "它在问你之前能做多少",
+    "tuiExecWebDesc": "交互式或脚本化",
+    "sealSurfaces": "面",
+    "surfacesHeading": "活在哪里干，就在哪里用。",
+    "surfaces": [
+      [
+        "TUI",
+        "交互式终端工作"
+      ],
+      [
+        "codewhale exec",
+        "脚本与 CI"
+      ],
+      [
+        "Web 客户端",
+        "浏览器客户端，仅限本机"
+      ],
+      [
+        "运行时 API + MCP",
+        "本地集成"
+      ],
+      [
+        "Fleet",
+        "多个智能体协作一件事"
+      ]
+    ],
+    "runtimeLink": "运行时界面与稳定程度 →",
+    "installBandHeading": "从一条命令开始。",
+    "binaries": "预编译包",
+    "chinaMirrors": "中国镜像",
+    "installGuideLink": "阅读安装指南 →",
+    "sealCommunity": "众",
+    "communityHeading": "公开构建",
+    "communityBody": "MIT 许可。贡献者的工作覆盖运行时、提供商、平台、文档与测试。",
+    "communityLinksAria": "社区链接",
+    "contribute": "参与贡献"
+  },
+  "docs-guide": {
+    "metaTitle": "新手指引 · Codewhale 文档",
+    "metaDescription": "从安装到配置理想 Fleet 的完整路径：安装、无需密钥的首次会话、连接提供商、设置 Fleet。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "新手指引",
+    "overviewLead": "从一条安装命令到配置好你的 Fleet，四步走完。",
+    "sessionTitle": "看一次真实会话",
+    "sessionLead": "这里将放一段真实会话的录像。目前还没有录制，所以什么也不显示。",
+    "nextTitle": "接下来",
+    "sourceNote": "来源文档：docs/GUIDE.md, docs/KEYBINDINGS.md · 步骤文案来自 web/lib/content/getting-started.ts；更新时请同步修改 docs-map.ts。"
+  },
+  "docs-shell": {
+    "metaTitle": "文档 · Codewhale",
+    "metaDescription": "Codewhale 文档：安装、使用指南、配置、提供商、核心概念、工具、MCP、技能、沙箱、运行时 API、排障。",
+    "portalMark": "Codewhale 文档",
+    "heroTitle": "查找准确的使用说明。",
+    "heroLead": "从新手指引和安装开始，或直接查看名词、模式、权限、工具、提供商、Fleet、钩子、MCP 与运行时 API。每页都链接到仓库中的源文档。",
+    "installCta": "安装 Codewhale",
+    "sourceDocsCta": "浏览源文档 ↗"
+  },
+  "docs-hooks": {
+    "metaTitle": "钩子 · Codewhale 文档",
+    "metaDescription": "已发布的生命周期钩子：可变 message_submit、tool_call_before 决策、turn_end 与子 Agent 观察事件。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "钩子",
+    "overviewLead": "钩子让你把自己的命令挂进 Codewhale 的生命周期：在消息提交前注入上下文、在工具调用前执行策略、在回合结束或子 Agent 启停时做审计。本页描述当前已发布的行为；docs/rfcs/1364-hooks-lifecycle.md 是这组能力的设计 RFC，完整配置 schema 见 docs/CONFIGURATION.md。",
+    "configIntro": "钩子配置在 config.toml 的 {hooksTable} 条目下；TUI 里运行 {hooksCommand} 可以按事件分组查看每个钩子的名称、命令预览、超时和条件，以及 {enabledKey} 的全局开关状态。",
+    "events": [
+      [
+        "message_submit（可变）",
+        "在用户消息进入历史或发给模型之前运行。钩子从 stdin 收到 JSON；exit 0 且 stdout 打印含非空 text 字段的 JSON 时替换提交文本；exit 2 在回合开始前阻止提交。多个钩子按配置顺序串行执行，每个钩子收到上一个钩子的输出文本。标记 background = true 的钩子只能观察，不能改写或阻止。"
+      ],
+      [
+        "tool_call_before（决策）",
+        "在每次工具调用执行前运行。除 exit 2 硬拒绝（始终生效）外，前台钩子可在 exit 0 时用 stdout JSON 给出决策：allow / deny / ask，并可附带 updatedInput 改写工具输入、additionalContext 追加进给模型的工具结果。多个钩子命中时优先级为 deny > ask > allow；tool_name 条件支持 * 通配（如 mcp__* 匹配所有 MCP 工具）。Full Access 不打开工具审批提示，因此 ask 不会降低该姿态。"
+      ],
+      [
+        "turn_end（观察）",
+        "在每个模型回合结束后触发，此时用量、成本、通知、收据和队列恢复状态都已更新。stdin 收到包含 status、duration_ms、usage、totals、queued_message_count 等字段的 JSON。stdout 被忽略，失败只记警告——不能阻止输入、改写 transcript 或改变下一个排队消息。"
+      ],
+      [
+        "subagent_spawn / subagent_complete（观察）",
+        "观察子 Agent 的启动与完成，stdin 收到有界的 JSON 元数据（agent_id、状态、截断后的 prompt/result 预览）。失败只记警告，不阻塞调度、不改 prompt 或结果；需要完整细节时使用 agent 返回的 transcript 句柄。"
+      ]
+    ],
+    "projectTitle": "项目级钩子",
+    "projectLead": "仓库可以在 <workspace>/.codewhale/hooks.toml 中携带策略。因为项目钩子是可执行的 shell 配置，Codewhale 只有在工作区通过信任提示或用户配置中的 trust_level = \"trusted\" 被信任后才加载它们——会话内的 /trust on 和旧版 .deepseek/trusted 标记都不会单独启用项目钩子。受信任后，项目钩子追加在 config.toml 的全局钩子之后运行，因此对 updatedInput 而言最后生效。格式错误但已受信任的项目文件会记警告并回退到只用全局钩子。",
+    "sourceNote": "来源文档：docs/rfcs/1364-hooks-lifecycle.md（设计 RFC）, docs/CONFIGURATION.md（配置 schema）· 更新时请同步修改 docs-map.ts。"
+  },
+  "docs-troubleshooting": {
+    "metaTitle": "排障 · Codewhale 文档",
+    "metaDescription": "常见问题的快速分诊：挂起的回合、离线队列、崩溃恢复、schema 错误、MCP 故障与 Docker 说明。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "排障",
+    "overviewLead": "先快速分诊：确认二进制与配置（codewhale --version、~/.codewhale/config.toml），需要更详细日志时用 RUST_LOG=deepseek_cli=debug 启动（HTTP 重试/重连用 RUST_LOG=deepseek_cli::client=debug），并看一眼 ~/.codewhale/sessions 与 ~/.codewhale/tasks 的当前状态。",
+    "incidents": [
+      [
+        "回合挂起或流停止",
+        "前台 shell 命令还在跑时按 Ctrl+B 把它移到后台（回合继续，命令变成 /jobs 下的后台任务）；想取消回合本身用 Esc 或 Ctrl+C。检查 deepseek_cli::client 的重试日志和端点连通性，重启后确认此前在途的回合被标记为中断，而不是停在运行态。"
+      ],
+      [
+        "网络中断 / 离线行为",
+        "离线时新提示词会排队，队列持久化在 ~/.codewhale/sessions/checkpoints/offline_queue.json。用 /queue list 查看，恢复连接后重新发送（/queue edit <n> 加回车，或走正常输入流程），队列清空后文件随之清除。"
+      ],
+      [
+        "崩溃恢复",
+        "检查点保存在 ~/.codewhale/sessions/checkpoints/latest.json；除非传入 --resume/--continue，启动会开新会话。用 codewhale --resume <id> 或 TUI 里的 Ctrl+R 显式恢复；若检查点 schema 比二进制新，升级二进制或移除过期检查点。"
+      ],
+      [
+        "持久状态 schema 错误",
+        "形如 schema vX is newer than supported vY 的错误涉及 sessions、运行时 thread/turn/item 记录和 tasks。先确认二进制版本，编辑前备份状态目录，然后用更新的兼容二进制运行，或归档不兼容记录并重建状态。"
+      ],
+      [
+        "MCP / 工具执行失败",
+        "校验 ~/.codewhale/mcp.json 的 schema 和服务器命令路径，手动确认服务器进程能启动，并在 TUI 历史/日志中检查沙箱拒绝。用 /mcp validate 诊断，可暂时禁用出问题的服务器隔离原因，验证后再启用。"
+      ]
+    ],
+    "dockerTitle": "Docker 说明",
+    "dockerLead": "每个发布都会向 GitHub Container Registry 推送多架构 Linux 镜像。默认镜像是保守的运行时镜像：以非 root 的 codewhale 用户（UID/GID 1000:1000）运行，不授予免密 sudo，用户状态放在挂载到 /home/codewhale/.codewhale 的卷里。可复现的安装请固定发布标签而不是 latest。",
+    "dockerToolboxNote": "需要在容器内使用 apt-get、编译工具链或包管理器时，不要改默认镜像约定——基于 docs/examples/Dockerfile.toolbox 构建显式的 toolbox 镜像，并为每个项目使用独立的命名状态卷，避免会话、配置和离线队列跨工作区串扰。不要把 API 密钥或 SSH 私钥烘进自定义镜像。",
+    "sourceNote": "来源文档：docs/OPERATIONS_RUNBOOK.md, docs/DOCKER.md · 更新时请同步修改 docs-map.ts。"
+  },
+  "docs-configuration": {
+    "metaTitle": "配置 · Codewhale 文档",
+    "metaDescription": "config.toml 的查找顺序、项目级覆盖、凭据优先级和旧版路径迁移。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "配置",
+    "overviewLead": "Codewhale 从 ~/.codewhale/config.toml 读取配置（旧版 ~/.deepseek/config.toml 仍作为回退读取）。--config 标志和 CODEWHALE_CONFIG_PATH 环境变量可以指定别的路径，两者同时设置时 --config 优先；文件加载之后再应用环境变量覆盖。",
+    "auditLead": "在 TUI 里运行 {auditCommand} 可以查看哪些文档化的键能在当前会话修改、哪些能持久化、哪些只能改文件或需要重启——改动前以它输出的“Command / reason”列为准。",
+    "overlayTitle": "项目级覆盖",
+    "overlayLead": "当工作区包含常规文件 <workspace>/.codewhale/config.toml 时，其中声明的安全取值会合并到全局配置之上（旧版 <workspace>/.deepseek/config.toml 在新路径缺失时仍会读取；符号链接的项目配置会被拒绝）。这让仓库可以建议模型或收紧本地安全姿态，而不动用户的全局配置。单次启动可用 --no-project-config 跳过覆盖。",
+    "overlayLimits": "覆盖层有意保持狭窄：支持 model、reasoning_effort、approval_policy 与 sandbox_mode（只能收紧）、notes_path、max_subagents（夹紧到 1..=20）、allow_shell（false 生效，true 被忽略）。凭据、端点、提供商选择、MCP 配置、hooks、skills 和 instructions = [...] 始终属于用户全局配置——仓库里的 config.toml 声明 api_key、base_url 或 provider 会被忽略，克隆的仓库无法借此选择任意本地文件进入提示词。",
+    "credentialsTitle": "凭据查找",
+    "credentialsLead": "在显式 {apiKey} 之后，凭据按 config → keyring → env 的顺序解析。{authStatus} 可以查看当前提供商的配置文件、系统 keyring 后端、环境变量、生效来源和末四位标签，而不会打印密钥本身。托管、OpenAI 兼容、自托管或 Anthropic 原生路由用 {providerConfig} 或 {providerFlag} 选择；完整注册表见模型与提供商页和 docs/PROVIDERS.md。",
+    "legacyTitle": "旧版 .deepseek/ 路径",
+    "legacyLead": "Codewhale 由 DeepSeek-TUI 更名而来。为了不破坏既有安装，运行时从新的 ~/.codewhale/ 位置读取状态，但在只有旧目录存在时回退到 ~/.deepseek/，并且始终写入 ~/.codewhale/——读取带回退、写入新位置。状态目录解析集中在 crates/config/src/lib.rs 的 resolve_state_dir / ensure_state_dir 中，每一处旧路径引用都有审计过的保留决定。",
+    "sourceNote": "来源文档：docs/CONFIGURATION.md, docs/LEGACY_PATHS.md · 更新时请同步修改 docs-map.ts。"
+  },
+  "docs-constitution": {
+    "metaTitle": "宪章与 /constitution · Codewhale 文档",
+    "metaDescription": "用户全局宪章、仓库本地法、项目说明和运行时边界。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "宪章与 /constitution",
+    "overviewTitleAside": "Constitution",
+    "overviewLead": "Codewhale 先给 Agent 一个可追责的地址，再给上下文冲突一套法律。{constitutionCommand} 是管理个人常驻宪章的主入口： 它把结构化的用户全局设置保存在 {homeConfig}， 再渲染成模型可读的 prose block。仓库仍可通过 {repoConfig} 增加本地 law；runtime policy 独立负责模式、审批、沙箱、成本和工具边界。",
+    "principles": [
+      [
+        "userGlobal",
+        "用 /constitution 管理跨项目个人常驻法。它是结构化数据渲染成 prose，不是裸 prompt 编辑器。"
+      ],
+      [
+        "repoLocal",
+        ".codewhale/constitution.json 是可选项目 law，用于不变量、分支规则、验证和升级条件。"
+      ],
+      [
+        "runtime",
+        "宪章文本可以表达偏好；审批、沙箱、Shell、网络、信任和 MCP 权限仍由运行时配置强制执行。"
+      ]
+    ],
+    "authorityNote": "普通项目说明仍放在 AGENTS.md；记忆和交接低于宪章与项目说明；完整 base prompt Markdown 覆盖只是专家逃生口，不是普通设置路径。详见 {configDocs}。",
+    "configDocsLabel": "配置文档",
+    "sourceNote": "来源文档：docs/ARCHITECTURE.md · 更新时请同步修改 docs-map.ts。"
+  },
+  "docs-fleet": {
+    "metaTitle": "Fleet 与 Workflow · Codewhale 文档",
+    "metaDescription": "持久 Agent 花名册与成员选择层，以及可选的 Workflow 编排层。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "Fleet 与 Workflow",
+    "overviewLead": "Fleet 是持久花名册：记录有哪些成员以及选中了哪一位。它不是执行或权限引擎。Runtime 将选定成员作为无头 codewhale exec 运行来启动和跟踪，负责重试与远程放置，并写入持久收据和台账投影。",
+    "runTitle": "运行一次 Fleet",
+    "runLead": "Runtime 的 Fleet 运行投影存放在工作区的 .codewhale/fleet.jsonl 台账中，worker 日志在 .codewhale/fleet/ 下。codewhale fleet resume <run-id> 会让 Runtime 重放台账并调和过期租约；该操作幂等，可在管理进程退出、笔记本睡眠或运行时重启后安全执行。",
+    "statusLead": "注意两个同名状态面：TUI 里的 {fleetStatusTui}（或 {subagents}）只显示当前交互会话的子 Agent；shell 里的 {fleetStatusShell} 才读取持久 Fleet 台账。",
+    "profilesTitle": "角色与 /fleet setup",
+    "profilesLead": "/fleet setup 打开渐进式向导来编写可复用的花名册成员：依次选择语义角色、模型（继承或具体已配置路由）和思考档位，再核对准确的身份与路由后保存。档案可写在项目级（.codewhale/agents/<role>.toml）或个人级（$CODEWHALE_HOME/agents/<role>.toml）；同 ID 的项目档案优先。Runtime 另行负责信任、文件系统/网络范围、密钥、审批、沙箱和工具，因此档案存储范围不会扩大执行权限。",
+    "workflowTitle": "Workflow 编排",
+    "workflowLead": "普通多 Agent 工作不需要 Workflow：在 Operate 里直接发消息，需要并行、隔离或长时间工作时让 Codewhale 优先委派后台 worker 即可。只有当工作需要有序阶段、门禁、共享预算、回放或确定性汇总时才用 Workflow。Workflow 脚本只负责协调：它选择 Fleet 成员，但没有自己的文件系统或 shell；Runtime 在实时权限策略下启动真正的 worker。脚本使用编译专用的声明式 JS 子集，降低到类型化 WorkflowSpec 后由 Rust 校验与执行；import、fetch、process、eval、async/await 会被拒绝。",
+    "workflowLimits": "默认校验边界：每次 Workflow 运行最多 1,000 个 worker Agent、最多 8 层递归 Fleet 环（默认 3 层）、循环必须声明 max_iterations、动态 expand 节点必须声明 max_children 和模板。这些是数量上限而非并发要求：Runtime 每个运行最多接纳 16 个存活 worker，其余排队。省略 max_steps 或设为 0 都保持无界；只有正值才增加模型轮次上限。",
+    "sourceNote": "来源文档：docs/FLEET.md, docs/WORKFLOW_AUTHORING.md · 更新时请同步修改 docs-map.ts。"
+  },
+  "docs-mcp": {
+    "metaTitle": "MCP · Codewhale 文档",
+    "metaDescription": "通过 Model Context Protocol 消费外部工具服务器，或把 Codewhale 作为 MCP 服务器暴露。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewLead": "Codewhale 可以通过 MCP（Model Context Protocol）加载额外的工具。MCP 服务器可以是由 TUI 启动的本地 stdio 进程，也可以是远程 URL 服务器（Streamable HTTP，带旧版 SSE 回退）。连接成功的服务器会把工具注册进模型目录；失败或被禁用的服务器不会作为可用工具呈现给模型。",
+    "overviewConfig": "配置文件默认在 {configPath}（新文件缺失时仍读取旧版 {legacyConfigPath}），可用 {configPathOption} 或 {configEnvVar} 覆盖。也兼容其他客户端使用的 {serversKey} 键名。",
+    "setupTitle": "配置与管理",
+    "setupLead": "用 {initCommand} 生成初始配置；TUI 内的 {mcpCommand} 打开紧凑管理器，显示每个服务器的启用状态、传输方式、命令或 URL、超时和连接错误。常用命令：",
+    "setupReload": "在 TUI 里做的配置编辑会立即写盘，但模型可见的 MCP 工具池不会热加载——管理器会把它标记为需要重启。/mcp validate 和 /mcp reload 会重新连接以刷新界面快照。",
+    "authTitle": "远程认证",
+    "authLead": "URL 服务器可以使用静态 headers、从环境变量派生的 env_headers、bearer_token_env_var 或 OAuth。优先级是保守的：先应用 headers 和 env_headers；bearer_token_env_var 只在尚未设置 Authorization 时添加；OAuth 登录获取的令牌同样不会覆盖已有的显式 header。应避免提交字面量 Authorization header——优先用 env_headers、bearer_token_env_var 或 OAuth 登录，让秘密留在 MCP 文件之外。",
+    "toolsTitle": "工具命名与安全",
+    "toolsLead": "发现的 MCP 工具以 {toolNamePattern} 的形式暴露给模型——例如名为 {gitServer} 的服务器的 {statusTool} 工具会变成 {gitStatusTool}。MCP 工具和内置工具走同一套审批框架：只读的 MCP 辅助工具在策略允许时可免提示运行，有副作用的 MCP 工具需要审批，Full Access 也不会绕过硬策略拦截。",
+    "toolsTrust": "只配置你信任的 MCP 服务器，并把 MCP 服务器配置视为等同于在本机运行代码。经过审查的本地插件包也可以贡献 MCP 服务器：它们复用同一个 MCP 管理器、审批和网络策略路径，以 <plugin>-<server> 的命名空间身份出现，边界比手写的 mcp.json 更严格。",
+    "serverTitle": "把 Codewhale 作为 MCP 服务器",
+    "serverLead": "{serveMcp} 会把 Codewhale 作为 stdio MCP 服务器运行，让其他会话（或任何 MCP 客户端）调用它的工具；{mcpServerCommand} 是 dispatcher 暴露的等价入口。{addSelfCommand} 会自动解析当前二进制路径并把服务器写进你的 MCP 配置。注意区分：{serveHttp} 是运行时 HTTP/SSE API，是另一种模式。",
+    "sourceNote": "来源文档：docs/MCP.md · 更新时请同步修改 docs-map.ts。"
+  },
+  "docs-modes": {
+    "metaTitle": "模式 · Codewhale 文档",
+    "metaDescription": "Plan、Work、Operate 三种运行模式与独立的权限姿态。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "模式",
+    "overviewLead": "模式决定 Codewhale 如何组织工作；权限姿态决定它如何处理具有后果的工具调用。两者相互独立。",
+    "modes": [
+      [
+        "Plan",
+        "用于只读调查与规划。Codewhale 可以检查工作区，但不能执行 Shell 命令或修改文件。"
+      ],
+      [
+        "Act",
+        "用于常规交互式编码。Codewhale 可以检查、编辑并使用工具；Shell 是否可用以及何时请求批准，取决于当前配置和权限姿态。"
+      ],
+      [
+        "Operate",
+        "用于从同一个输入区协调多项任务。父回合可以直接检查、编辑并使用 Shell 或 MCP 工具，其权限姿态、沙箱和安全规则与 Act 相同。独立、并行、后台或长时间工作会优先交给 Fleet worker，但并非所有可执行步骤都必须委派。只有需要有序阶段、门禁或确定性汇总时才需要 Workflow。"
+      ]
+    ],
+    "switchingTitle": "切换模式",
+    "switchingLead": "输入区空闲时，按 {tab} 循环 Plan → Act → Operate。补全菜单打开时，Tab 接受补全；回合运行时，它可以把当前草稿排入下一个跟进消息。",
+    "switchingCommandLead": "运行 /mode 打开模式选择器，或使用以下命令直接切换：",
+    "permissionsTitle": "权限姿态",
+    "permissionsLead": "Plan 始终为只读。在 Act 或 Operate 中且输入区空闲时，按 {shiftTab} 循环 Ask → Auto-Review → Full Access。运行 {configCommand} 可查看或编辑当前会话权限；项目或托管策略可能会锁定或收紧它。",
+    "postures": [
+      [
+        "Ask",
+        "在可能产生重要后果的工具执行前询问你。"
+      ],
+      [
+        "Auto-Review",
+        "自动评估工具风险，只在确实需要你决定时询问。"
+      ],
+      [
+        "Full Access",
+        "无需批准提示即可运行工具，并启用受信任工作区访问。仓库规则和托管约束仍然有效；仅在你信任的工作区中使用。"
+      ]
+    ],
+    "sourceNote": "来源文档：docs/MODES.md · 更新时请同步修改 docs-map.ts。"
+  },
+  "docs-runtime-api": {
+    "metaTitle": "运行时 API · Codewhale 文档",
+    "metaDescription": "面向集成、桥接和自动化的本地 HTTP/SSE、JSON-RPC stdio 与 ACP 入口。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "运行时 API",
+    "overviewLead": "codewhale app-server 是 canonical 的本地运行时 API 与控制平面。本地 SDK、移动/远控客户端和编辑器集成直接与它对话，而不是抓终端输出。引擎只作为本地进程运行：所有 API 默认绑定 localhost——没有托管中继，不托管 provider 令牌，不泄露秘密。codewhale serve --http / --mobile 保留为 app-server --http / --mobile 的兼容别名，启动的是同一个服务器；新集成应面向 app-server。",
+    "entries": [
+      [
+        "http",
+        "完整 /v1/* HTTP/SSE 运行时 API（canonical 入口），默认 127.0.0.1:7878。"
+      ],
+      [
+        "mobile",
+        "运行时 API 加 /mobile 手机控制页。"
+      ],
+      [
+        "stdio",
+        "换行分隔的 JSON-RPC 2.0 控制传输，无监听端口，适合本地 SDK 和探针。"
+      ],
+      [
+        "web",
+        "仅回环的浏览器客户端，内嵌于二进制并打开默认浏览器。"
+      ],
+      [
+        "doctor",
+        "机器可读的健康与能力报告。"
+      ],
+      [
+        "acp",
+        "面向 Zed 等编辑器的 ACP（Agent Client Protocol）stdio 适配器。"
+      ],
+      [
+        "exec",
+        "一次性无头 worker（stream-json、Fleet 子进程、CI 原语）——不属于本 API，但共享同一运行时与事件词汇。"
+      ]
+    ],
+    "stdioTitle": "零成本探测",
+    "stdioLead": "stdio 控制传输可以不花模型 token 地探测。capabilities 返回声明的方法族（thread/*、app/*、prompt/*）和完整方法列表；方法集由 crates/app-server/src/lib.rs 中的漂移测试固定，SDK 和本地集成可以放心依赖它不会悄悄变化。",
+    "interruptNote": "进行中的回合可以用 thread/interrupt（或 HTTP 的 POST /v1/threads/{id}/turns/{turn_id}/interrupt）请求中断；没有正在流式输出的回合时返回 interrupted: false——这不是错误，只是没有可停的东西。",
+    "securityTitle": "安全边界",
+    "securityLead": "运行时 API 令牌按 {authToken}、{runtimeTokenEnv}、{legacyTokenEnv} 的顺序读取；{insecureFlag} 只允许与回环绑定一起使用。浏览器侧的跨源请求会被 CORS 允许列表拒绝。选择非回环绑定（尤其是 {mobileFlag}）之前，请阅读 docs/RUNTIME_API.md 的完整部署与认证约定。",
+    "sourceNote": "来源文档：docs/RUNTIME_API.md · 更新时请同步修改 docs-map.ts。"
+  },
+  "docs-sandbox": {
+    "metaTitle": "沙箱与审批 · Codewhale 文档",
+    "metaDescription": "macOS Seatbelt、Linux 可选 bubblewrap、平台缺口和审批策略的真实边界。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "沙箱与审批",
+    "overviewLead": "Codewhale 可以启动由模型提出的 shell 命令。审批策略、感知工作区的文件工具和操作系统命令包装器是三个独立的控制：一次审批不是沙箱，选择 workspace-write 也不代表当前平台有可用的 OS 包装器。本页只描述已经接入命令执行路径的行为。",
+    "platforms": [
+      [
+        "macOS · Seatbelt",
+        "Codewhale 探测 /usr/bin/sandbox-exec；探测成功且策略要求沙箱时，子命令会被包上运行时生成的 Seatbelt profile：广泛的文件系统读取、按策略限制的写入、仅在策略允许时放行网络。探测失败则如实报告无 OS 沙箱。"
+      ],
+      [
+        "Linux · 可选 bubblewrap",
+        "Linux 命令沙箱是显式启用的：设置 prefer_bwrap = true，且 /usr/bin/bwrap 是可执行文件时才选用。子命令得到只读根视图，writable 挂载来自解析后的策略；默认隔离网络命名空间，仅在策略开启 network_access 时加 --share-net。未启用或未安装 bwrap 时报告 none。"
+      ],
+      [
+        "Windows · 无 OS 沙箱",
+        "Windows 命令路径目前报告无 OS 沙箱。主机权限和审批策略仍然有效，但它们不是 Codewhale 的 OS 命令沙箱。"
+      ],
+      [
+        "外部 OpenSandbox 执行",
+        "配置 sandbox_backend = \"opensandbox\" 后，shell 执行会发往配置的 OpenSandbox 兼容 HTTP 端点，而不是启动本地子进程。隔离保证属于所配置的服务及其运营者。"
+      ]
+    ],
+    "policiesTitle": "策略与回退",
+    "policiesLead": "本地 {sandboxMode} 取值为 {readOnly}、{workspaceWrite}、{dangerFullAccess} 或 {externalSandbox}。前两者只在选中且可用的 Seatbelt 或 bubblewrap 包装器下被强制执行；{dangerFullAccess} 有意绕过本地 OS 包装器；{externalSandbox} 声明执行已被外部隔离。没有选中包装器时，shell 命令在没有 Codewhale OS 隔离的情况下运行——审批规则和感知工作区的原生文件工具仍是独立的控制。",
+    "diagnosticsTitle": "诊断与限制",
+    "diagnosticsLead": "codewhale setup --status、codewhale doctor、codewhale doctor --json 和 diagnostics 工具会报告应用 bubblewrap 偏好后本地可用的包装器。拒绝归因是保守的：子命令的通用 Permission denied 本身并不能证明是 Codewhale 的沙箱拦截了它，未沙箱化的命令失败永远不会被标记为沙箱拒绝。",
+    "diagnosticsLimits": "限制同样如实说明：可用性在启动前检查，选中的包装器仍可能因主机策略、容器限制或竞态而失败；bubblewrap 会忽略缺失或不是目录的可写根；没有任何沙箱能防御内核漏洞或所有资源耗尽与侧信道攻击。",
+    "sourceNote": "来源文档：docs/SANDBOX.md · 更新时请同步修改 docs-map.ts。"
+  },
+  "docs-subagents": {
+    "metaTitle": "子 Agent · Codewhale 文档",
+    "metaDescription": "agent 工具、Fleet 角色、上下文分叉、worktree 隔离和并发上限。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "子 Agent",
+    "overviewLead": "父会话通过 agent 工具启动一个有明确职责的子 Agent，并立即拿回 agent_id、compact 收据和 transcript 句柄；子 Agent 在后台运行。子 Agent 默认继承父级的工具注册表，但它们是叶子 worker：不会再拿到 agent 或嵌套生命周期工具。agent 启动的是分离的后台工作——取消父回合会停止父级的等待路径，但不会杀死已经启动的子运行。",
+    "overviewFleetNote": "对于必须跨进程重启、睡眠或远程执行存活的工作，优先选择 Fleet 或 Workflow 支撑的 Fleet 运行，而不是会话内的短寿命 agent 调用。",
+    "roles": [
+      [
+        "worker",
+        "灵活执行父级交代的多步任务；可写、可用 shell。默认角色。"
+      ],
+      [
+        "scout",
+        "只读，快速摸清相关代码——例如“找出 Foo 的所有调用点”。"
+      ],
+      [
+        "planner",
+        "分析并产出策略，不执行——“设计迁移方案，不要动手”。"
+      ],
+      [
+        "reviewer",
+        "只读审查并按严重度打分——“审一遍这个 PR 的 bug”。"
+      ],
+      [
+        "builder",
+        "以最小改动落地一个明确的变更；可写、可用 shell。"
+      ],
+      [
+        "verifier",
+        "运行测试和校验并汇报结果，不写代码。"
+      ],
+      [
+        "consultant",
+        "只读的高推理力度顾问，用于判断类问题和设计评审。"
+      ],
+      [
+        "custom",
+        "手工指定狭窄的工具白名单，用于锁定的派发。"
+      ]
+    ],
+    "forkTitle": "上下文分叉",
+    "forkLead": "{agentTool} 默认开启全新会话：子 Agent 只拿到角色提示词和你给的任务。当任务依赖父 transcript 里已有的决定、文件、待办或计划状态时，用 {forkContext}——运行时在可用时保持父级前缀逐字节一致（保留前缀缓存复用），追加一份结构化状态快照，再把子 Agent 的角色说明和任务放在末尾。独立探索用新会话，延续、审查、总结或压缩类工作用分叉会话。",
+    "worktreeTitle": "Worktree 隔离",
+    "worktreeLead": "并行编辑通道用 {worktreeFlag} 启动：Codewhale 为子 Agent 创建新的 git worktree 和分支（默认 {branchPattern}，检出在父仓库旁的 {worktreeDir} 下），父检出保持干净。隔离不等于写权限：只带 prompt 的 worker 从只读开始；要写代码的子 Agent 还需声明 {writeAuthority} 和至少一个规范化的 {writeRoots}、{exactFiles} 或 {coordinationContracts}值；重叠的共享写声明会在任何改动之前失败。",
+    "capacityTitle": "并发上限",
+    "capacityLead": "子 Agent 容量的权威来源是 crates/tui/src/config/subagent_limits.rs：默认配置并发 64，最大配置并发 128，运行加排队的最大准入 1024。这些是容量上限，不是建议把每个槽位都派出去——管理者应使用最小的有效扇出，保持单一汇总负责人，并在汇报整体完成前验证 worker 收据。",
+    "sourceNote": "来源文档：docs/SUBAGENTS.md · 更新时请同步修改 docs-map.ts。"
+  },
+  "docs-web": {
+    "metaTitle": "浏览器客户端 · Codewhale 文档",
+    "metaDescription": "仅回环的内嵌浏览器客户端：一次性引导、会话 Cookie 与本地信任边界。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "浏览器客户端",
+    "overviewLead": "{webCommand} 在 canonical 运行时 API 之上打开 Codewhale 内嵌的浏览器客户端。它是一个纯本地界面：服务器始终绑定 {loopbackHost}，无法改绑到局域网地址，也无法在关闭运行时认证的情况下运行。默认地址是 {defaultUrl}；端口冲突时用 {portExample} 换一个回环端口。Ctrl+C 停止进程，浏览器会话随之结束。",
+    "overviewBody": "当前客户端提供响应式的线程与搜索侧栏、由运行时持有的会话事实、transcript 与工具收据，以及输入区。它可以创建、选择、重命名和归档线程；发起或引导回合；中断工作；处理审批；回答运行时的用户输入请求。浏览器只是同一个本地运行时的另一视图——不会创建第二个云账号，不会把 provider 凭据复制进浏览器存储，也不会削弱已配置的审批与沙箱策略。",
+    "authTitle": "认证边界",
+    "authLead": "启动 URL 携带的是一个随机、短寿命、一次性的引导凭证——绝不是运行时 bearer 令牌。一次回环请求把它换成 HttpOnly、SameSite=Strict、进程本地的会话 Cookie，并立即使该凭证失效。重用、过期、畸形或非回环的引导尝试都会失败关闭。运行时令牌不会出现在渲染的 HTML、浏览器存储、URL 查询或片段、或浏览器启动参数中。携带 Cookie 的状态变更请求还必须出示精确的本地 web 源；跨源浏览器请求会被拒绝。",
+    "localTitle": "本地就是本地",
+    "localLead": "{webCommand} 只接受 {portFlag}——没有 {hostFlag}，也没有关闭认证的选项。不要把它当公开网站，也不要通过路由器转发、公开反向代理或隧道暴露它的端口。单独的 {mobileCommand} 和 {httpFlag} 模式有不同的部署与认证约定，操作它们（尤其是选择非回环绑定）之前请阅读运行时 API 文档。",
+    "troubleshootingTitle": "常见问题",
+    "troubleshootingLead": "端口 7878 被占用时用 --port 换一个。浏览器无法打开时命令会报错退出，而不会留下可重用的引导凭证；检查系统默认浏览器设置后重新启动。页面能打开但 provider 不可用时，查 codewhale doctor 和 /provider——web 命令不配置也不迁移 provider 凭据。会话过期后重启 codewhale web 以签发新的进程本地会话；重用旧的引导 URL 本来就会失败。",
+    "sourceNote": "来源文档：docs/WEB.md · 更新时请同步修改 docs-map.ts。"
+  }
+}

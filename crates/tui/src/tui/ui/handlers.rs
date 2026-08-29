@@ -678,7 +678,15 @@ pub(crate) fn handle_shell_job_action(app: &mut App, action: crate::tui::app::Sh
     match action {
         crate::tui::app::ShellJobAction::List => {
             let jobs = manager.list_jobs_for_session(&active_session_id);
-            add_shell_job_message(app, format_shell_job_list(&jobs));
+            let mut text = format_shell_job_list(&jobs);
+            if let Ok(cloud) =
+                crate::cloud_dispatch::CloudJobStore::from_env().and_then(|store| store.list())
+                && !cloud.is_empty()
+            {
+                text.push_str("\n\n");
+                text.push_str(&crate::cloud_dispatch::format_job_list(&cloud));
+            }
+            add_shell_job_message(app, text);
         }
         crate::tui::app::ShellJobAction::Show { id } => {
             match manager.inspect_job_for_session(&active_session_id, &id) {
@@ -904,6 +912,42 @@ pub(crate) async fn handle_config_updated(
         // the localized result above it.
         app.push_status_toast(message, level, Some(12_000));
     }
+    Ok(false)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_theme_selection_updated(
+    terminal: &mut AppTerminal,
+    app: &mut App,
+    config: &mut Config,
+    task_manager: &SharedTaskManager,
+    engine_handle: &mut EngineHandle,
+    web_config_session: &mut Option<WebConfigSession>,
+    theme: String,
+    ocean_treatment: String,
+    persist: bool,
+) -> Result<bool> {
+    let result = prepare_config_update_result(
+        commands::set_theme_selection(app, &theme, &ocean_treatment, persist),
+        persist,
+    );
+    // Both halves affect shell paint and must bypass ratatui's incremental
+    // cell diff, including a Deepsea -> Flat preview or Esc rollback.
+    app.force_next_full_repaint = true;
+    if apply_command_result(
+        terminal,
+        app,
+        engine_handle,
+        task_manager,
+        config,
+        web_config_session,
+        result,
+    )
+    .await?
+    {
+        return Ok(true);
+    }
+    refresh_config_view_if_open(app, "theme");
     Ok(false)
 }
 
@@ -1216,6 +1260,27 @@ pub(crate) async fn handle_view_events(
                     web_config_session,
                     key,
                     value,
+                    persist,
+                )
+                .await?
+                {
+                    return Ok(true);
+                }
+            }
+            ViewEvent::ThemeSelectionUpdated {
+                theme,
+                ocean_treatment,
+                persist,
+            } => {
+                if handle_theme_selection_updated(
+                    terminal,
+                    app,
+                    config,
+                    task_manager,
+                    engine_handle,
+                    web_config_session,
+                    theme,
+                    ocean_treatment,
                     persist,
                 )
                 .await?
@@ -2144,6 +2209,27 @@ pub(crate) fn handle_view_events_boxed<'a>(
                         web_config_session,
                         key,
                         value,
+                        persist,
+                    )
+                    .await?
+                    {
+                        return Ok(true);
+                    }
+                }
+                ViewEvent::ThemeSelectionUpdated {
+                    theme,
+                    ocean_treatment,
+                    persist,
+                } => {
+                    if handle_theme_selection_updated(
+                        terminal,
+                        app,
+                        config,
+                        task_manager,
+                        engine_handle,
+                        web_config_session,
+                        theme,
+                        ocean_treatment,
                         persist,
                     )
                     .await?

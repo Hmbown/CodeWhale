@@ -581,6 +581,19 @@ fn settings_toggle_opens_and_closes_without_stacking_duplicates() {
 }
 
 #[test]
+fn launch_help_uses_the_same_toggle_and_shortcut_ordering_as_the_live_shell() {
+    let _lock = crate::test_support::lock_test_env();
+    let mut app = create_test_app();
+    app.launch.visible = true;
+
+    toggle_help_view(&mut app);
+    assert_eq!(app.view_stack.top_kind(), Some(ModalKind::Help));
+
+    toggle_help_view(&mut app);
+    assert!(app.view_stack.is_empty());
+}
+
+#[test]
 fn ctrl_t_key_event_reaches_reasoning_effort_cycle() {
     let mut app = create_test_app();
     app.api_provider = crate::config::ApiProvider::Deepseek;
@@ -1057,9 +1070,12 @@ fn canonical_completion_refreshes_workspace_only_for_semantic_mutations() {
 
 #[test]
 fn underwater_motion_ticks_only_for_visible_unobscured_owners() {
-    assert!(!underwater_motion_surface_visible(None, true, true, false));
+    assert!(!underwater_motion_surface_visible(
+        None, true, true, true, false
+    ));
     assert!(!underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 0, 24)),
+        true,
         true,
         true,
         false,
@@ -1067,29 +1083,41 @@ fn underwater_motion_ticks_only_for_visible_unobscured_owners() {
     assert!(underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 40, 12)),
         true,
+        true,
         false,
         false,
     ));
     assert!(underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 60, 16)),
+        true,
         false,
         true,
         false,
     ));
     assert!(underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 60, 16)),
+        true,
         false,
         false,
         false,
     ));
     assert!(underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 80, 24)),
+        true,
         false,
         false,
         false,
     ));
     assert!(!underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 100, 32)),
+        false,
+        false,
+        true,
+        false,
+    ));
+    assert!(!underwater_motion_surface_visible(
+        Some(Rect::new(0, 0, 100, 32)),
+        true,
         true,
         true,
         true,
@@ -2665,6 +2693,9 @@ fn loading_mouse_filter_keeps_hover_and_active_drags() {
     assert!(!should_drop_loading_mouse_motion(&app, drag));
 
     app.viewport.transcript_scrollbar_dragging = false;
+    app.work_surface = crate::tui::work_surface::WorkSurfaceState::with_placement(
+        crate::tui::work_surface::WorkSurfacePlacement::Top,
+    );
     app.work_surface.last_area = Some(Rect::new(0, 0, 80, 3));
     let started = crate::tui::work_surface::handle_mouse(
         &mut app,
@@ -4096,6 +4127,8 @@ fn wide_underwater_shell_aligns_transcript_and_composer_on_the_shared_canvas() {
 #[test]
 fn wide_underwater_canvas_carries_the_ocean_to_both_terminal_edges() {
     let mut app = create_test_app();
+    app.ui_theme = crate::palette::UI_THEME;
+    app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
     app.onboarding_workspace_trust_gate = false;
     app.onboarding = OnboardingState::None;
     let surface_bg = app.ui_theme.surface_bg;
@@ -4109,7 +4142,7 @@ fn wide_underwater_canvas_carries_the_ocean_to_both_terminal_edges() {
     let buffer = terminal.backend().buffer();
 
     // Full-width shell (#5322): both terminal edges stay in the water column.
-    // Ombre may tint left and right differently; what must not happen is a flat
+    // Deepsea may tint left and right differently; what must not happen is a flat
     // surface-bg dead margin on either side.
     let mut left_ocean = false;
     let mut right_ocean = false;
@@ -5281,7 +5314,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
     let mut app = create_test_app();
     app.onboarding = OnboardingState::None;
     app.launch.visible = false;
-    app.ocean_treatment = OceanTreatment::Ombre;
+    app.ocean_treatment = OceanTreatment::Deepsea;
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
 
@@ -7171,6 +7204,10 @@ fn terminal_probe_timeout_uses_tui_config_and_clamps() {
             mouse_capture: None,
             terminal_probe_timeout_ms: Some(750),
             stream_chunk_timeout_secs: None,
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             status_items: None,
             header_items: None,
             osc8_links: None,
@@ -21583,7 +21620,8 @@ fn notification_settings_tui_always_keeps_configured_method_no_threshold() {
     };
 
     let (method, threshold, include_summary) =
-        crate::tui::notifications::settings(&config).expect("notification should be enabled");
+        crate::tui::notifications::settings_projection(&config)
+            .expect("notification should be enabled");
     assert_eq!(method, crate::tui::notifications::Method::Bel);
     assert_eq!(threshold, Duration::ZERO);
     assert!(include_summary);
@@ -21599,7 +21637,7 @@ fn notification_settings_tui_never_disables_notifications() {
         ..Config::default()
     };
 
-    assert!(crate::tui::notifications::settings(&config).is_none());
+    assert!(crate::tui::notifications::settings_projection(&config).is_none());
 }
 
 #[test]
@@ -21620,7 +21658,8 @@ fn notification_settings_no_tui_override_uses_notifications_block() {
     };
 
     let (method, threshold, include_summary) =
-        crate::tui::notifications::settings(&config).expect("notification should be enabled");
+        crate::tui::notifications::settings_projection(&config)
+            .expect("notification should be enabled");
     assert_eq!(method, crate::tui::notifications::Method::Osc9);
     assert_eq!(threshold, Duration::from_secs(45));
     assert!(!include_summary);

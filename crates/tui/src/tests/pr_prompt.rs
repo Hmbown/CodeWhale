@@ -7,6 +7,7 @@ fn sample_pr() -> GhPullRequest {
         base: "main".to_string(),
         head: "feat/cool".to_string(),
         url: "https://github.com/example/repo/pull/123".to_string(),
+        head_sha: "abc123def456abc123def456abc123def456abc1".to_string(),
     }
 }
 
@@ -30,6 +31,7 @@ fn format_pr_prompt_handles_empty_body_and_unknown_branches() {
         base: String::new(),
         head: String::new(),
         url: String::new(),
+        head_sha: String::new(),
     };
     let prompt = format_pr_prompt(7, &pr, "(diff body)");
     assert!(prompt.contains("(PR #7)"));

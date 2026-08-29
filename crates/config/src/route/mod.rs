@@ -1,9 +1,9 @@
-//! Route foundation: additive, runtime-unwired types for EPIC #2608.
+//! Route Contract: the runtime path for provider/model identity (Phase 1).
 //!
-//! This module tree introduces the canonical identity newtypes (#3084) and the
-//! `ReadyRouteCandidate` / `RouteResolver` contract (#3384). The TUI, client,
-//! and engine consume these types; they remain a self-contained seam so later
-//! tracks can keep wiring through here.
+//! `RouteResolver` is the sole producer of [`ReadyRouteCandidate`]. Config and
+//! CLI resolution now go through it. Catalog rows are keyed by open kebab
+//! [`ids::RouteId`] strings; `ProviderKind` remains the bespoke-transport
+//! classification plus serde aliases for retired spellings.
 //!
 //! Layering:
 //! - [`ids`] — provider/model/wire string newtypes + namespace hints.
@@ -24,26 +24,40 @@
 /// avoid introducing yet another protocol synonym.
 pub use crate::provider::WireFormat as RequestProtocol;
 
+pub mod auth;
 pub mod candidate;
 pub mod capabilities;
 pub mod descriptor;
 pub mod errors;
+pub mod export;
 pub mod ids;
 pub mod offering;
+pub mod policy;
 pub mod resolver;
 
+pub use auth::{
+    AuthKind, AuthMethod, AuthMethodExport, Choice, ChoiceExport, Op, Prompt, PromptExport, When,
+    WhenExport,
+};
 pub use candidate::{
     LimitField, OverrideSource, PricingSku, ReadyRouteCandidate, ResolvedAuthSource,
     ResolvedEndpoint, SourcedLimitOverride, ValidationReport,
 };
 pub(crate) use capabilities::documented_server_side_web_search;
 pub use capabilities::{CapabilityState, RouteCapabilities};
-pub use descriptor::{EndpointDescriptor, ProviderDescriptor};
+pub use descriptor::{
+    EndpointDescriptor, ProviderDescriptor, TransportKind, auth_methods_for, family_for,
+};
 pub use errors::RouteError;
-pub use ids::{LogicalModelRef, ModelId, NamespaceHint, ProviderId, WireModelId};
+pub use export::{
+    PROVIDERS_EXPORT_SCHEMA_VERSION, ProvidersExport, RouteExport, RouteModelExport,
+    parse_route_kind, route_id_for,
+};
+pub use ids::{LogicalModelRef, ModelId, NamespaceHint, ProviderId, RouteId, WireModelId};
 pub use offering::{
     ProviderModelOffering, RouteLimits, bundled_offerings, opencode_zen_picker_models,
 };
+pub use policy::{CatalogPolicy, PolicyAction, PolicyEffect, PolicyRule};
 pub use resolver::{RouteRequest, RouteResolver};
 
 #[cfg(test)]

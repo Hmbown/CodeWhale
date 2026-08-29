@@ -22,6 +22,7 @@ impl CommandGroup for ConfigCommands {
             Box::new(FunctionCommand::new(&CONFIG_INFO, run_config)),
             Box::new(FunctionCommand::new(&IMPORT_CLAUDE_INFO, run_import_claude)),
             Box::new(FunctionCommand::new(&PERMISSIONS_INFO, run_permissions)),
+            Box::new(FunctionCommand::new(&LOGIN_INFO, run_login)),
             Box::new(FunctionCommand::new(&AUTH_INFO, run_auth)),
             Box::new(FunctionCommand::new(&RAIL_INFO, run_rail)),
             Box::new(FunctionCommand::new(&SETTINGS_INFO, run_settings)),
@@ -55,6 +56,12 @@ static PERMISSIONS_INFO: CommandInfo = CommandInfo {
     aliases: &["permission-rules", "permission_rules"],
     usage: "/permissions [list|remove <rule-number> [--confirm <token>]]",
     description_id: MessageId::CmdPermissionsDescription,
+};
+static LOGIN_INFO: CommandInfo = CommandInfo {
+    name: "login",
+    aliases: &[],
+    usage: "/login [status|account|key]",
+    description_id: MessageId::CmdLoginDescription,
 };
 static AUTH_INFO: CommandInfo = CommandInfo {
     name: "auth",
@@ -130,6 +137,9 @@ fn run_import_claude(app: &mut App, arg: Option<&str>) -> CommandResult {
 fn run_permissions(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "permissions", arg)
 }
+fn run_login(app: &mut App, arg: Option<&str>) -> CommandResult {
+    run_registered(app, "login", arg)
+}
 fn run_auth(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "auth", arg)
 }
@@ -170,6 +180,7 @@ pub(in crate::commands) fn dispatch(
         "permissions" | "permission-rules" | "permission_rules" => {
             permissions::permissions_command(app, arg)
         }
+        "login" => config::login(app, arg),
         "auth" => match arg.map(str::trim) {
             Some("xai-device") | Some("xai_device") => {
                 CommandResult::action(crate::tui::app::AppAction::StartXaiDeviceLogin)

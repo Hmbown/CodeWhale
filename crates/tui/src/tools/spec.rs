@@ -1187,13 +1187,6 @@ impl ToolContext {
         self
     }
 
-    /// Set the sandbox policy.
-    #[allow(dead_code)]
-    pub fn with_sandbox_policy(mut self, policy: SandboxPolicy) -> Self {
-        self.sandbox_policy = policy;
-        self
-    }
-
     /// Set feature flags for tool execution.
     pub fn with_features(mut self, features: Features) -> Self {
         self.features = features;

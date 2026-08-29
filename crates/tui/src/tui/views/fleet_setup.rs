@@ -1,6 +1,6 @@
 //! Legacy-profile setup — a progressive "set up your agent team" flow.
 //!
-//! `/fleet setup` routes here only when no named v2 Fleet is selected. When a
+//! `/pod setup` routes here only when no named v2 Fleet is selected. When a
 //! v2 Fleet is selected, the host opens that Fleet's exact detail editor so a
 //! save can never appear to update a member while writing an ignored legacy
 //! `.codewhale/agents/*.toml` profile.
@@ -51,7 +51,7 @@ use crate::tui::views::{
 
 const PROFILE_DIR: &str = ".codewhale/agents";
 
-/// The only two truthful destinations for `/fleet setup`.
+/// The only two truthful destinations for `/pod setup`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FleetSetupEditTarget {
     /// No named v2 Fleet is selected, so the legacy profile wizard remains
@@ -77,7 +77,7 @@ pub(crate) fn resolve_fleet_setup_edit_target(
         }),
         Ok(None) => Ok(FleetSetupEditTarget::LegacyProfiles),
         Err(_) => Err(
-            "Selected Fleet is missing or unreadable; open /fleet fleets to repair or clear the selection. Legacy profiles were not opened."
+            "Selected Fleet is missing or unreadable; open /pod fleets to repair or clear the selection. Legacy profiles were not opened."
                 .to_string(),
         ),
     }
@@ -244,7 +244,7 @@ pub struct FleetSetupSnapshot {
     roster_members: Vec<(String, String)>,
     /// Saved (file-backed) roster members keyed by lowercased id: where the
     /// file lives and the route it pins, so reopening a saved profile from
-    /// `/fleet` starts from what is on disk instead of the wizard defaults.
+    /// `/pod` starts from what is on disk instead of the wizard defaults.
     roster_details: Vec<RosterMemberDetail>,
     /// Whether project-scope profiles are enabled for this launch
     /// (`--no-project-config` disables them). When false, "This project" is
@@ -784,7 +784,7 @@ impl FleetSetupView {
         Self::from_snapshot(FleetSetupSnapshot::from_app(app, config))
     }
 
-    /// Open setup for a role the operator already selected in `/fleet`.
+    /// Open setup for a role the operator already selected in `/pod`.
     /// Unknown/custom roster roles map to the explicit custom authoring row;
     /// Left or Esc still exposes Role so the carried choice is never sticky.
     #[must_use]
@@ -2288,7 +2288,7 @@ impl FleetSetupView {
 
     fn review_policy_summary(&self) -> String {
         format!(
-            "Workers run without a token cap by default · {}s api, {}s heartbeat. Launch with Fleet → exec; /fleet workers (or /subagents) shows sub-agents in the current interactive session; /fleet status and codewhale fleet status both read the persistent .codewhale/fleet.jsonl ledger.",
+            "Workers run without a token cap by default · {}s api, {}s heartbeat. Launch with Pod → exec; /pod workers (or /subagents) shows sub-agents in the current interactive session; /pod status and codewhale fleet status both read the persistent .codewhale/fleet.jsonl ledger.",
             self.snapshot.api_timeout_secs, self.snapshot.heartbeat_timeout_secs
         )
     }

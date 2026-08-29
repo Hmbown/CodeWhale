@@ -1588,6 +1588,10 @@ fn plugin_skills_are_qualified_and_denied_until_trusted_and_enabled() {
     assert!(rendered.contains("reviewed plugin snapshot: demo"));
     assert!(rendered.contains("use load_skill"));
     assert!(
+        rendered.contains("hello"),
+        "plugin skill descriptions must reach the model catalogue like native skills: {rendered}"
+    );
+    assert!(
         !rendered.contains(&plugin_root.display().to_string()),
         "model prompt must not expose mutable plugin files after snapshot review"
     );

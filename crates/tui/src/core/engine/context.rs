@@ -6,7 +6,6 @@
 
 use crate::config::ApiProvider;
 use crate::context_budget::ContextBudget;
-use crate::error_taxonomy::ErrorCategory;
 use crate::models::SystemPrompt;
 #[cfg(test)]
 pub(super) use crate::route_budget::effective_max_output_tokens;
@@ -554,5 +553,18 @@ pub(super) fn route_context_budget_for_route(
 }
 
 pub(super) fn is_context_length_error_message(message: &str) -> bool {
-    crate::error_taxonomy::classify_error_message(message) == ErrorCategory::InvalidInput
+    // Only genuine context-length rejections may drive the bounded
+    // context-recovery retry. The broader `InvalidInput` bucket also holds
+    // wrong-model rejections ("Model not exist."), malformed requests, and
+    // truncated-output terminations, where re-sending a compacted history
+    // cannot help and would hide the real error.
+    let lower = message.to_lowercase();
+    lower.contains("model output truncated")
+        || lower.contains("model response incomplete")
+        || lower.contains("maximum context length")
+        || lower.contains("context length")
+        || lower.contains("context_length")
+        || lower.contains("prompt is too long")
+        || lower.contains("context window")
+        || (lower.contains("requested") && lower.contains("tokens") && lower.contains("maximum"))
 }

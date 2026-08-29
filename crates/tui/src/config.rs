@@ -1697,6 +1697,24 @@ pub struct TuiConfig {
     /// Per-SSE-chunk idle timeout in seconds. Defaults to 900 seconds when
     /// omitted. `0` maps to the default; values clamp to `1..=3600`.
     pub stream_chunk_timeout_secs: Option<u64>,
+    /// R1: ceiling on model steps in a single turn. Omitted or `0` resolve
+    /// to the finite default (200); explicit values clamp to
+    /// `1..=100_000`. There is deliberately no "unlimited" value — `0` is
+    /// an invalid setting, not a sentinel that disables the cap.
+    pub max_model_steps: Option<u32>,
+    /// R1: cumulative wall-clock budget for a single turn, in seconds.
+    /// Omitted or `0` resolve to the finite default (3600); explicit values
+    /// clamp to `30..=86_400`. Time blocked on a human approval decision is
+    /// excluded from the measurement.
+    pub turn_wall_clock_secs: Option<u64>,
+    /// R1: per-step cap on accumulated streamed content, in megabytes.
+    /// Omitted or `0` resolve to the default (10 MB); explicit values clamp
+    /// to `64 KiB..=512 MiB`.
+    pub stream_max_content_mb: Option<u64>,
+    /// R1: per-step cap on a single stream's wall-clock duration, in
+    /// seconds. Omitted or `0` resolve to the default (1800); explicit
+    /// values clamp to `10..=86_400`.
+    pub stream_max_duration_secs: Option<u64>,
     /// Ordered list of footer items the user wants visible. `None` (the field
     /// missing from `config.toml`) means "use the built-in default order"; an
     /// empty `Some(vec![])` means "show nothing in the footer".
@@ -1731,15 +1749,20 @@ pub struct TuiConfig {
     /// (e.g. for a terminal that misrenders the sequence). OSC 8 escapes are
     /// emitted out-of-band, so buffer-column corruption is not a concern.
     pub osc8_links: Option<bool>,
-    /// High-level notification trigger condition. When set, overrides the
-    /// `[notifications].threshold_secs` gate from the lower-level
-    /// `[notifications]` block:
+    /// High-level notification trigger condition. When set, controls whether
+    /// operator notifications may interrupt the current terminal and, for
+    /// `Always`, overrides the `[notifications].threshold_secs` gate from the
+    /// lower-level `[notifications]` block:
     ///
-    /// - `Always` — fire a turn-completion notification on every successful
-    ///   turn regardless of duration. The configured `[notifications].method`
-    ///   and `include_summary` flag are still respected.
-    /// - `Never` — suppress all turn-completion notifications.
-    /// - Unset (default) — fall back to the `[notifications]` defaults.
+    /// - `Always` — allow configured operator notifications even while the
+    ///   terminal is focused. Successful turn completion also ignores the
+    ///   duration threshold. Method, category, and quiet gates still apply.
+    /// - `Unfocused` — notify only after the terminal has remained unfocused
+    ///   for the built-in attention grace period. The normal duration
+    ///   threshold still applies.
+    /// - `Never` — suppress all operator notifications.
+    /// - Unset (default) — behave like `Unfocused` and fall back to the
+    ///   `[notifications]` duration threshold.
     pub notification_condition: Option<NotificationCondition>,
     /// When `true`, plain Up/Down on an empty composer scroll the
     /// transcript instead of recalling input history. Useful for
@@ -1754,9 +1777,12 @@ pub struct TuiConfig {
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationCondition {
-    /// Notify on every successful turn (no duration threshold).
+    /// Allow configured operator notifications in the foreground; completed
+    /// turns have no duration threshold.
     Always,
-    /// Suppress notifications entirely.
+    /// Notify only while the terminal is genuinely in the background.
+    Unfocused,
+    /// Suppress all operator notifications.
     Never,
 }
 
@@ -1821,9 +1847,9 @@ fn default_threshold_secs() -> u64 {
 #[serde(rename_all = "kebab-case")]
 pub enum CompletionSound {
     /// No sound on turn completion.
-    Off,
-    /// System notification beep (default). On Windows uses `MessageBeep`.
     #[default]
+    Off,
+    /// System notification beep. On Windows uses `MessageBeep`.
     Beep,
     /// Terminal BEL character (`\x07`).
     Bell,
@@ -1901,13 +1927,15 @@ impl SubagentCompletionNotification {
     }
 }
 
-/// Desktop-notification configuration (OSC 9 / BEL on turn completion).
+/// Operator notification configuration (native and terminal transports).
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct NotificationsConfig {
-    /// Delivery method: `auto` | `osc9` | `bel` | `off`. Default: `auto`.
+    /// Delivery method: `auto` | `osc9` | `kitty` | `ghostty` | `bel` |
+    /// `off`. Default: `auto`.
     /// `auto` resolves to OSC 9 for iTerm.app / Ghostty / WezTerm / Cmux
-    /// (detected via `$TERM_PROGRAM` then `$LC_TERMINAL`); otherwise it
-    /// falls back to BEL. On Windows the BEL path is routed through
+    /// (detected via `$TERM_PROGRAM` then `$LC_TERMINAL`) and the native macOS
+    /// transport where appropriate; unknown terminals fail closed to `off`.
+    /// Audible BEL is explicit only. On Windows explicit BEL is routed through
     /// `MessageBeep(MB_OK)`.
     /// Use `method = "osc9"` explicitly when your terminal is OSC-9 capable
     /// but sets neither env var (e.g. Cmux without `LC_TERMINAL`).
@@ -1928,8 +1956,9 @@ pub struct NotificationsConfig {
     #[serde(default)]
     pub subagent_completion: SubagentCompletionNotification,
 
-    /// Completion sound: `"off"` | `"beep"` | `"bell"` | `"file"`. Default: `"beep"`.
-    /// Plays a sound when every turn finishes (alongside the ✅ marker).
+    /// Completion sound: `"off"` | `"beep"` | `"bell"` | `"file"`. Default: `"off"`.
+    /// This is opt-in and follows the same foreground/quiet attention policy
+    /// as desktop notifications.
     #[serde(default)]
     pub completion_sound: CompletionSound,
 
@@ -1944,9 +1973,8 @@ pub struct NotificationsConfig {
 
     /// Quiet mode: suppress every desktop notification (all categories, all
     /// delivery methods) and the paired `[notifications.event_sound]` cues,
-    /// without editing `method` or the per-category switches under
-    /// `[notifications.events]`. The turn-completion chime
-    /// (`completion_sound`) is governed separately. Default: `false`.
+    /// without editing `method`, `completion_sound`, or the per-category
+    /// switches under `[notifications.events]`. Default: `false`.
     #[serde(default)]
     pub quiet: bool,
 
@@ -7345,6 +7373,65 @@ impl Config {
             return DEFAULT_STREAM_CHUNK_TIMEOUT_SECS;
         }
         raw.clamp(MIN_STREAM_CHUNK_TIMEOUT_SECS, MAX_STREAM_CHUNK_TIMEOUT_SECS)
+    }
+
+    /// R1: resolved ceiling on model steps in a single turn.
+    ///
+    /// Reads `[tui].max_model_steps`, falling back to the
+    /// `CODEWHALE_MAX_MODEL_STEPS` env var, then to the finite default.
+    /// `0` — from either source — is treated as an invalid value and
+    /// resolves to the default; it never means "unlimited".
+    #[must_use]
+    pub fn max_model_steps(&self) -> u32 {
+        let raw = self
+            .tui
+            .as_ref()
+            .and_then(|cfg| cfg.max_model_steps)
+            .or_else(|| {
+                std::env::var(MAX_MODEL_STEPS_ENV)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u32>().ok())
+            });
+        crate::core::engine::turn_budget::resolve_max_model_steps(raw)
+    }
+
+    /// R1: resolved cumulative per-turn wall-clock budget.
+    ///
+    /// Reads `[tui].turn_wall_clock_secs`, falling back to the
+    /// `CODEWHALE_TURN_WALL_CLOCK_SECS` env var, then to the finite
+    /// default. `0` resolves to the default; it never means "unlimited".
+    #[must_use]
+    pub fn turn_wall_clock(&self) -> std::time::Duration {
+        let raw = self
+            .tui
+            .as_ref()
+            .and_then(|cfg| cfg.turn_wall_clock_secs)
+            .or_else(|| {
+                std::env::var(TURN_WALL_CLOCK_ENV)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+            });
+        crate::core::engine::turn_budget::resolve_turn_wall_clock(raw)
+    }
+
+    /// R1: resolved per-step cap on accumulated streamed content, in bytes.
+    #[must_use]
+    pub fn stream_max_content_bytes(&self) -> usize {
+        crate::core::engine::turn_budget::resolve_stream_max_content_bytes(
+            self.tui.as_ref().and_then(|cfg| cfg.stream_max_content_mb),
+        )
+    }
+
+    /// R1: resolved per-step cap on a single stream's wall-clock duration.
+    #[must_use]
+    pub fn stream_max_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(
+            crate::core::engine::turn_budget::resolve_stream_max_duration_secs(
+                self.tui
+                    .as_ref()
+                    .and_then(|cfg| cfg.stream_max_duration_secs),
+            ),
+        )
     }
 
     /// Raw sub-agent model override map. Values are validated at spawn time

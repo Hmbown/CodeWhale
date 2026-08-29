@@ -240,20 +240,25 @@ fn copy_to_clipboard(app: &mut App, label: &str, markdown: &str) -> CommandResul
 /// (#5555): a clipboard-only export on SSH/headless must never dead-end the
 /// user, so the same content lands at `<home>/exports/last-copy.md` and every
 /// failure message names it. Returns the path when the write succeeded.
-fn write_last_copy(markdown: &str) -> Option<PathBuf> {
-    let home = crate::config::effective_home_dir()?;
-    write_last_copy_to(&Path::new(&home).join("exports"), markdown)
-        .ok()
-        .map(|_| Path::new(&home).join("exports").join("last-copy.md"))
+pub(crate) fn write_last_copy(markdown: &str) -> Option<PathBuf> {
+    let home = codewhale_paths::codewhale_home().ok().flatten()?;
+    let exports_dir = home.join("exports");
+    std::fs::create_dir_all(&exports_dir).ok()?;
+    let physical_home = std::fs::canonicalize(&home).ok()?;
+    let physical_exports = std::fs::canonicalize(&exports_dir).ok()?;
+    if !physical_exports.starts_with(&physical_home) {
+        return None;
+    }
+    write_last_copy_to(&exports_dir, markdown).ok()
 }
 
 fn write_last_copy_to(exports_dir: &Path, markdown: &str) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(exports_dir)?;
     let path = exports_dir.join("last-copy.md");
-    // Write-then-rename keeps a crash from leaving a truncated last-copy.
-    let tmp = exports_dir.join("last-copy.md.tmp");
-    std::fs::write(&tmp, markdown)?;
-    std::fs::rename(&tmp, &path)?;
+    // Reuse the private atomic writer: random same-directory temp names,
+    // restrictive creation mode, symlink-safe replacement, and Windows
+    // replace retries are all part of the existing persistence contract.
+    crate::utils::write_atomic(&path, markdown.as_bytes())?;
     Ok(path)
 }
 
@@ -968,13 +973,67 @@ mod tests {
             std::fs::read_to_string(&path).expect("read"),
             "# export\n\nhello\n"
         );
-        assert!(
-            !dir.join("last-copy.md.tmp").exists(),
-            "the temp file must be renamed away"
-        );
         // The next export overwrites the same predictable path.
         write_last_copy_to(&dir, "# second\n").expect("rewrite");
         assert_eq!(std::fs::read_to_string(&path).expect("read"), "# second\n");
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("read exports").count(),
+            1,
+            "the atomic writer must not leave a temp artifact"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path)
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0, "recovery copy must remain private");
+        }
+    }
+
+    #[test]
+    fn last_copy_stays_inside_an_explicit_codewhale_home() {
+        let ambient = TempDir::new().expect("ambient home");
+        let isolated = TempDir::new().expect("isolated Codewhale home");
+        let _env_lock = crate::test_support::lock_test_env();
+        let _home = crate::test_support::EnvVarGuard::set("HOME", ambient.path());
+        let _codewhale_home =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", isolated.path());
+
+        let path = write_last_copy("isolated response").expect("recovery copy");
+
+        assert_eq!(path, isolated.path().join("exports/last-copy.md"));
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read recovery copy"),
+            "isolated response"
+        );
+        assert!(
+            !ambient.path().join("exports/last-copy.md").exists(),
+            "explicit CODEWHALE_HOME must prevent ambient-home writes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn last_copy_refuses_an_exports_symlink_outside_codewhale_home() {
+        use std::os::unix::fs::symlink;
+
+        let ambient = TempDir::new().expect("ambient home");
+        let isolated = TempDir::new().expect("isolated Codewhale home");
+        let external = TempDir::new().expect("external dir");
+        symlink(external.path(), isolated.path().join("exports")).expect("exports symlink");
+        let _env_lock = crate::test_support::lock_test_env();
+        let _home = crate::test_support::EnvVarGuard::set("HOME", ambient.path());
+        let _codewhale_home =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", isolated.path());
+
+        assert_eq!(write_last_copy("must stay isolated"), None);
+        assert!(
+            !external.path().join("last-copy.md").exists(),
+            "recovery content must not escape through a nested symlink"
+        );
     }
 
     #[test]
@@ -1108,17 +1167,13 @@ mod tests {
     #[test]
     fn clipboard_export_reports_ssh_terminal_client_and_failure_honestly() {
         let tmpdir = TempDir::new().expect("tempdir");
-        // Point HOME at the tempdir so the last-copy backup lands in the test
-        // sandbox instead of the real user home. lock_test_env serializes env
-        // access with the other HOME-scoped tests (prompts, snapshot).
+        // Seal both ambient and product homes so the backup cannot escape the
+        // test sandbox even when the outer process has CODEWHALE_HOME set.
         let _env_lock = crate::test_support::lock_test_env();
-        let previous_home = std::env::var_os("HOME");
         let test_home = tmpdir.path().join("home");
         std::fs::create_dir_all(&test_home).expect("home dir");
-        // Safety: HOME is restored below and env access is serialized.
-        unsafe {
-            std::env::set_var("HOME", &test_home);
-        }
+        let _home = crate::test_support::EnvVarGuard::set("HOME", &test_home);
+        let _codewhale_home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &test_home);
         let mut app = test_app(&tmpdir);
         app.clipboard = ClipboardHandler::for_test(true, true);
         let ssh = execute_export(&mut app, Some("clipboard"));
@@ -1150,13 +1205,6 @@ mod tests {
         assert!(message.contains("/export file <path>"), "{message}");
         assert!(!tmpdir.path().join("chat_export.md").exists());
         assert!(test_home.join("exports/last-copy.md").exists());
-        // Safety: restore the previous HOME after the assertions.
-        unsafe {
-            match previous_home {
-                Some(home) => std::env::set_var("HOME", home),
-                None => std::env::remove_var("HOME"),
-            }
-        }
     }
 
     #[test]

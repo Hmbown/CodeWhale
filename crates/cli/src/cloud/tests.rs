@@ -323,6 +323,10 @@ fn device_flow_handles_pending_then_authorized_without_printing_tokens() {
     assert!(output.contains("ABCD-EFGH-JKLM"));
     assert!(output.contains("Account ID: acct-123"));
     assert!(output.contains("Profile: work"));
+    // No-brand invariant: login signs in the account; the internal
+    // cloud-agent credential is never taught here.
+    assert!(!output.to_lowercase().contains("daytona"), "{output}");
+    assert!(!output.contains("set-slot"), "{output}");
     assert!(!output.contains("access-never-print"));
     assert!(!output.contains("refresh-never-print"));
     assert_eq!(opened.len(), 1);

@@ -9,8 +9,17 @@
 
 use super::*;
 
+/// Resolve the headless `exec` model-step ceiling.
+///
+/// R1: omitting `--max-turns` no longer means `u32::MAX`. A non-interactive
+/// run has nobody watching it, so its default bound is the same finite
+/// ceiling the interactive engine uses. Clap already rejects `--max-turns
+/// 0`, so no "0 means unlimited" sentinel can reach here; an explicit value
+/// is still clamped to the documented finite range.
 pub(crate) fn exec_max_steps(max_turns: Option<u32>) -> u32 {
-    max_turns.unwrap_or(u32::MAX)
+    crate::core::engine::turn_budget::resolve_max_model_steps(max_turns.or(Some(
+        crate::core::engine::turn_budget::DEFAULT_EXEC_MAX_TURNS,
+    )))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -43,6 +52,14 @@ pub(crate) async fn run_exec_agent(
     use crate::tools::plan::new_shared_plan_state;
     use crate::tools::todo::new_shared_todo_list;
     use crate::tui::app::AppMode;
+
+    // Headless exec registers the model-facing notify tool too. Project the
+    // final merged config before tool setup so `off`, quiet/category gates,
+    // and explicit `always` are truthful outside the interactive TUI. With no
+    // focus-reporting channel, fail closed to focused; only explicit `always`
+    // may authorize a headless desktop notification.
+    crate::tui::notifications::set_terminal_focused(true);
+    let _ = crate::tui::notifications::settings(config);
 
     validate_exec_tool_authority_resume(tool_authority_json.as_deref(), resume_session.is_some())?;
     let fleet_authority = tool_authority_json
@@ -253,6 +270,9 @@ pub(crate) async fn run_exec_agent(
         stream_chunk_timeout: std::time::Duration::from_secs(
             execution_config.stream_chunk_timeout_secs(),
         ),
+        turn_wall_clock: execution_config.turn_wall_clock(),
+        stream_max_content_bytes: execution_config.stream_max_content_bytes(),
+        stream_max_duration: execution_config.stream_max_duration(),
         subagent_heartbeat_timeout: std::time::Duration::from_secs(
             execution_config.subagent_heartbeat_timeout_secs_for_provider(effective_provider),
         ),

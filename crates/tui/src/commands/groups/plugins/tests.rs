@@ -162,14 +162,41 @@ fn suggest_ranks_installed_plugins_without_trusting_or_enabling_them() {
     let result = plugins(&mut app, Some("suggest spreadsheet import"));
     assert!(!result.is_error, "{result:?}");
     let message = result.message.expect("suggestion message");
-    assert!(message.contains("Suggested installed plugins"), "{message}");
+    assert!(message.contains("Suggested plugins"), "{message}");
     assert!(message.contains("demo — disabled"), "{message}");
     assert!(message.contains("Why:"), "{message}");
     assert!(message.contains("/plugin trust demo"), "{message}");
+    assert!(
+        message.contains("spreadsheet") || message.contains("import"),
+        "{message}"
+    );
     assert!(message.contains("Nothing was installed, trusted, or enabled."));
     assert!(!codewhale_home.join("plugins/state.json").exists());
     let plugin = app.plugin_registry.get("demo").expect("demo plugin");
     assert!(!plugin.enabled && !plugin.trusted());
+}
+
+#[test]
+fn suggest_matches_manifest_keywords_for_a_named_integration() {
+    let _lock = crate::test_support::lock_test_env();
+    let root = TempDir::new().unwrap();
+    let codewhale_home = root.path().join("home");
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &codewhale_home);
+    let bundle = root.path().join(".codewhale/plugins/supabase");
+    fs::create_dir_all(&bundle).unwrap();
+    fs::write(
+        bundle.join("plugin.toml"),
+        "schema_version = 1\n[plugin]\nname = \"supabase\"\nversion = \"1.0.0\"\ndescription = \"Hosted Postgres and auth\"\nkeywords = [\"supabase\", \"postgres\"]\n",
+    )
+    .unwrap();
+    let (mut app, _temp) = create_test_app(root.path());
+
+    let result = plugins(&mut app, Some("suggest add supabase auth"));
+    assert!(!result.is_error, "{result:?}");
+    let message = result.message.expect("suggestion message");
+    assert!(message.contains("supabase"), "{message}");
+    assert!(message.contains("/plugin trust supabase"), "{message}");
+    assert!(message.contains("Nothing was installed, trusted, or enabled."));
 }
 
 #[test]

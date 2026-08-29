@@ -499,22 +499,6 @@ pub(crate) fn load_staged_skill_snapshots(
     Ok(snapshots)
 }
 
-#[cfg(test)]
-pub(crate) fn load_plugin_for_test(manifest_path: &Path) -> Result<LoadedPlugin, String> {
-    let discovery_root = manifest_path
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| "test plugin manifest needs a bundle and discovery root".to_string())?
-        .canonicalize()
-        .map_err(|error| format!("failed to canonicalize test discovery root: {error}"))?;
-    load_plugin(
-        manifest_path,
-        &discovery_root,
-        PluginScope::User,
-        PluginOrigin::CodeWhaleHome,
-    )
-}
-
 fn plugin_id(scope: PluginScope, name: &str, canonical_root: &Path) -> PluginId {
     let mut hasher = Sha256::new();
     // v2 intentionally invalidates receipts produced by the former lossy

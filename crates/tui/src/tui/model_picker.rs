@@ -300,7 +300,9 @@ impl ModelPickerView {
             .collect();
         let mut default_visible_rows: Vec<_> = model_rows
             .iter()
-            .filter(|row| model_row_visible_in_view(row, ModelListView::Configured))
+            .filter(|row| {
+                model_row_visible_in_view(row, ModelListView::Configured, app.api_provider)
+            })
             .collect();
         // Selection indices must be calculated in the same order that the
         // configured view renders. Pinned rows are sorted to the top by
@@ -415,7 +417,7 @@ impl ModelPickerView {
             .filter(|row| {
                 if query.is_empty() {
                     // Empty query: view scope only (Configured stays conservative).
-                    model_row_visible_in_view(row, self.view)
+                    model_row_visible_in_view(row, self.view, self.initial_provider)
                 } else {
                     // Typed filter searches the full lake so cross-provider
                     // routes remain discoverable without leaving Configured.
@@ -1837,10 +1839,16 @@ fn route_discriminator(display: &str, provider_id: &str) -> Option<String> {
 /// here: a token repeated on forty rows cannot tell them apart, and it is what
 /// pushed the differentiating tokens off the end of the line. Facts the
 /// registry does not know are omitted rather than guessed.
-/// The catalog model family for a provider/model row, when the catalog
-/// states one. Used for Provider → family → model grouping; unknown families
-/// render no header (never a guessed label).
+/// The picker section label for a provider/model row.
+///
+/// Catalog families are useful grouping metadata, but they are not model names.
+/// DeepSeek has published both `deepseek` and `deepseek-thinking` as family
+/// values for its current V4 models, so keep its picker heading stable and
+/// provider-facing rather than exposing either implementation detail.
 fn catalog_family_for(provider: ApiProvider, model_id: &str) -> Option<String> {
+    if provider == ApiProvider::Deepseek {
+        return Some(provider.display_name().to_string());
+    }
     crate::provider_lake::catalog_offering_for_model(provider, model_id)
         .and_then(|offering| offering.family)
 }
@@ -1920,9 +1928,13 @@ fn fit_meta_chips(chips: &[String], width: usize) -> String {
 }
 
 /// Whether a model row shows in the active catalog view (#3830 / #4115).
-fn model_row_visible_in_view(row: &ModelPickerRow, view: ModelListView) -> bool {
+fn model_row_visible_in_view(
+    row: &ModelPickerRow,
+    view: ModelListView,
+    active_provider: ApiProvider,
+) -> bool {
     match view {
-        ModelListView::Configured => model_row_visible_by_default(row),
+        ModelListView::Configured => model_row_visible_by_default(row, active_provider),
         ModelListView::Catalog => true,
         ModelListView::Recent
         | ModelListView::Coding
@@ -1936,11 +1948,11 @@ fn model_row_visible_in_view(row: &ModelPickerRow, view: ModelListView) -> bool 
 }
 
 /// Whether a model row shows up without the user typing a search query
-/// (#3830): `auto`, the active provider's own rows, and any other
-/// provider's rows once that provider is "configured" — same definition the
-/// `/provider` manager's default view uses.
-fn model_row_visible_by_default(row: &ModelPickerRow) -> bool {
-    row.provider.is_none() || row.enabled
+/// (#3830): `auto`, every catalog row for the active provider, and rows for
+/// other providers once those providers are configured — the selected route
+/// stays complete while cross-provider choices remain conservative.
+fn model_row_visible_by_default(row: &ModelPickerRow, active_provider: ApiProvider) -> bool {
+    row.provider.is_none() || row.provider == Some(active_provider) || row.enabled
 }
 
 fn sort_model_rows_for_view(
@@ -2304,9 +2316,13 @@ fn render_picker_model_hint(
         PickerPricing::Unknown => parts.push("price unknown".to_string()),
     }
     match metadata.source.as_ref() {
-        Some(CatalogSource::Live { .. }) => parts.push("live".to_string()),
+        Some(CatalogSource::Live { .. } | CatalogSource::ModelsDevLive { .. }) => {
+            parts.push("live".to_string())
+        }
         Some(CatalogSource::Bundled) => parts.push("bundled".to_string()),
-        Some(CatalogSource::UserOverride) => parts.push("override".to_string()),
+        Some(CatalogSource::ConfigOverride | CatalogSource::UserOverride) => {
+            parts.push("override".to_string())
+        }
         None => {}
     }
     if provider == Some(ApiProvider::OpenaiCodex) {
@@ -2957,4 +2973,38 @@ fn default_picker_effort_idx(
         .iter()
         .position(|effort| *effort == default_effort)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model_row(provider: ApiProvider, enabled: bool) -> ModelPickerRow {
+        ModelPickerRow {
+            id: "model".to_string(),
+            provider: Some(provider),
+            provider_identity: None,
+            hint: String::new(),
+            metadata: EffectivePickerMetadata::default(),
+            selectable: true,
+            blocked_reason: None,
+            enabled,
+        }
+    }
+
+    #[test]
+    fn deepseek_picker_heading_hides_legacy_family_metadata() {
+        assert_eq!(
+            catalog_family_for(ApiProvider::Deepseek, "deepseek-v4-pro").as_deref(),
+            Some("DeepSeek")
+        );
+    }
+
+    #[test]
+    fn configured_view_keeps_active_provider_catalog_models_visible() {
+        let row = model_row(ApiProvider::Deepseek, false);
+
+        assert!(model_row_visible_by_default(&row, ApiProvider::Deepseek));
+        assert!(!model_row_visible_by_default(&row, ApiProvider::Openai));
+    }
 }

@@ -680,6 +680,15 @@ pub enum ViewEvent {
         value: String,
         persist: bool,
     },
+    /// The canonical `/theme` picker owns theme and underwater treatment as
+    /// one selection. Keeping the pair in one event lets its command owner
+    /// preview, roll back, and persist both fields without an observable
+    /// half-selected Deepsea state.
+    ThemeSelectionUpdated {
+        theme: String,
+        ocean_treatment: String,
+        persist: bool,
+    },
     SubAgentsRefresh,
     SidebarAgentCancel {
         agent_id: String,
@@ -919,7 +928,7 @@ pub enum ViewEvent {
         reasoning_effort: Option<String>,
         locale: crate::localization::Locale,
     },
-    /// Emitted by the `/fleet` roster view (`s` / Enter) to edit a member.
+    /// Emitted by the `/pod` roster view (`s` / Enter) to edit a member.
     /// The host routes a selected v2 Fleet to its exact editor and uses the
     /// legacy profile wizard only when no named Fleet is selected.
     FleetRosterOpenSetupRequested {
@@ -927,7 +936,7 @@ pub enum ViewEvent {
         /// identify which row the operator selected.
         member_id: String,
     },
-    /// Emitted by the `/fleet` roster `m` shortcut to open the selected
+    /// Emitted by the `/pod` roster `m` shortcut to open the selected
     /// member's exact Fleet editor directly on its model picker.
     FleetRosterOpenModelRequested {
         /// Exact Fleet member id; roles are not unique and therefore cannot
@@ -938,7 +947,7 @@ pub enum ViewEvent {
     FleetRosterOpenWorkersRequested,
 
     /// The roster asks the host to open the secondary named-Fleet switcher
-    /// (`/fleet fleets`). Editing stays on setup; this is pick/select only.
+    /// (`/pod fleets`). Editing stays on setup; this is pick/select only.
     FleetRosterOpenFleetsRequested,
 
     /// The Fleet list view asks the host to open a saved Fleet's detail view.
@@ -1661,6 +1670,8 @@ impl ConfigView {
                 scope: ConfigScope::Saved,
             }
         };
+        let (active_route_provider, _) = app.effective_route_display();
+        let (active_provider_identity, active_route_model) = app.effective_route_identity_display();
         let routing_model = if app.auto_model {
             app.last_effective_model
                 .as_deref()
@@ -1669,7 +1680,7 @@ impl ConfigView {
             app.model.as_str()
         };
         let fast_model =
-            crate::model_routing::provider_router_candidates(app.api_provider, routing_model)
+            crate::model_routing::provider_router_candidates(active_route_provider, routing_model)
                 .cheap
                 .unwrap_or_else(|| {
                     if app.auto_model && app.last_effective_model.is_none() {
@@ -1682,9 +1693,9 @@ impl ConfigView {
             ConfigRow {
                 section: ConfigSection::Provider,
                 key: "provider".to_string(),
-                value: config_provider_row_value(app, &config),
+                value: active_provider_identity.clone(),
                 editable: true,
-                scope: ConfigScope::Saved,
+                scope: ConfigScope::Session,
             },
             ConfigRow {
                 section: ConfigSection::Provider,
@@ -1695,16 +1706,20 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Provider,
-                key: config_base_url_row_key(app.api_provider).to_string(),
+                key: config_base_url_row_key(active_route_provider).to_string(),
                 value: config_base_url_row_value(app),
-                editable: true,
-                scope: ConfigScope::Saved,
+                // An endpoint is a route receipt, not a loose global knob.
+                // `/provider` owns changing the credential, model, and endpoint
+                // together; this row must not pretend that editing a live
+                // receipt can mutate an already-running client.
+                editable: false,
+                scope: ConfigScope::Session,
             },
             ConfigRow {
                 section: ConfigSection::Provider,
                 key: "context_window".to_string(),
                 value: config
-                    .context_window_for_provider_config(app.api_provider)
+                    .context_window_for_provider_config(active_route_provider)
                     .map_or_else(|| "(not set)".to_string(), |tokens| tokens.to_string()),
                 editable: false,
                 scope: ConfigScope::Saved,
@@ -1727,13 +1742,11 @@ impl ConfigView {
             ConfigRow {
                 section: ConfigSection::Model,
                 key: "model".to_string(),
-                value: format!(
-                    "{} / {}",
-                    app.api_provider.as_str(),
-                    app.model_display_label()
-                ),
+                // `·` keeps the row unambiguous when a provider display name
+                // itself contains `/` (e.g. `Zhipu AI / Z.ai`).
+                value: format!("{active_provider_identity} · {active_route_model}"),
                 editable: true,
-                scope: ConfigScope::Saved,
+                scope: ConfigScope::Session,
             },
             ConfigRow {
                 section: ConfigSection::Model,
@@ -2372,11 +2385,16 @@ impl ConfigView {
 
     fn setting_description(key: &str) -> &'static str {
         match key {
-            "provider" => "Active model provider for this session. Scope: saved route.",
+            "provider" => {
+                "Active model provider for this session. Enter opens the provider picker."
+            }
             "provider_templates" => {
                 "Beginner templates for OpenCode Zen/Go, SenseNova, and unpublished Agnes. Enter opens the list."
             }
-            "model" => "Model id for the active provider. Scope: saved / session route.",
+            "model" => "Model id for the active provider. Enter opens the model picker.",
+            "base_url" | "provider_url" => {
+                "Current route endpoint. Change provider setup through /provider so credential, model, and endpoint stay together."
+            }
             "approval_mode" => {
                 "Session approval posture (ask / auto). Separate from filesystem sandbox."
             }
@@ -2388,7 +2406,7 @@ impl ConfigView {
             "theme" => "Named UI theme. Scope: saved settings.",
             "low_motion" => "Reduce motion: freezes pulses, keeps static highlights.",
             "calm_mode" => "Quieter chrome and denser transcript.",
-            "ocean_treatment" => "Underwater field treatment (ombre / flat / terminal).",
+            "ocean_treatment" => "Underwater field treatment (deepsea / flat / terminal).",
             "locale" => "UI language. Scope: saved settings.",
             "reasoning_effort" => "Default reasoning effort for capable models.",
             "default_mode" => "Startup mode (agent / plan / operate).",
@@ -2915,30 +2933,8 @@ fn config_base_url_row_key(provider: ApiProvider) -> &'static str {
     }
 }
 
-fn config_provider_row_value(app: &App, config: &Config) -> String {
-    config
-        .provider
-        .as_deref()
-        .filter(|provider| !provider.trim().is_empty())
-        .unwrap_or_else(|| app.provider_identity_for_persistence())
-        .to_string()
-}
-
 fn config_base_url_row_value(app: &App) -> String {
-    Config::load(app.config_path.clone(), app.config_profile.as_deref())
-        .map(|mut config| {
-            // A named custom provider is represented at runtime as `Custom`,
-            // but its table lookup still needs the original provider ID.
-            if config
-                .provider
-                .as_deref()
-                .is_none_or(|provider| provider.trim().is_empty())
-            {
-                config.provider = Some(app.provider_identity_for_persistence().to_string());
-            }
-            config.deepseek_base_url()
-        })
-        .unwrap_or_else(|_| tr(app.ui_locale, MessageId::ConfigUnavailable).to_string())
+    app.active_route_base_url.clone()
 }
 
 fn cost_currency_config_value(app: &App) -> String {
@@ -3127,11 +3123,13 @@ fn config_hint_for_key(locale: Locale, key: &str) -> Cow<'static, str> {
 
 fn config_literal_hint_for_key(key: &str) -> &'static str {
     match key {
-        "model" => "provider-scoped saved route; Enter opens /model",
+        "model" => "live route model for this session; Enter opens /model",
         "fast_model" => {
             "used by Auto routing and agent model_strength=faster when this provider has a known sibling"
         }
-        "provider" => "deepseek | openrouter | xiaomi-mimo | fireworks | siliconflow | ...",
+        "provider" => {
+            "live route provider for this session; Enter opens /provider (credential, model, and endpoint switch together)"
+        }
         "approval_mode" => "this session only: Ask | Auto-Review | Full Access",
         "permission_posture" => "default for new sessions: Ask | Auto-Review | Full Access",
         "approval_policy" => {
@@ -3180,7 +3178,9 @@ fn config_literal_hint_for_key(key: &str) -> &'static str {
         "rail_panel" => "tasks | agents | context | pinned · which panel the rail shows",
         "work_surface_top_height" => "5..=16 rows · also adjustable by dragging the divider",
         "work_surface_side_width" => "26..=80 columns · also adjustable by dragging the divider",
-        "base_url" => "global DeepSeek/root fallback; e.g. https://api.deepseek.com/beta",
+        "base_url" => {
+            "read-only route receipt for the live endpoint · change provider, credential, and endpoint together with /provider"
+        }
         // #5134: the filter matches hint text, so the words a confused user
         // actually types — "context length", "context size", "max context",
         // "1m" — have to appear here or these rows stay unfindable.
@@ -3194,7 +3194,7 @@ fn config_literal_hint_for_key(key: &str) -> &'static str {
         "calm_mode" => "quietens transcript chrome and tool detail; independent of live motion",
         "low_motion" => "on overrides live-state motion; model output is unchanged",
         "fancy_animations" => "on animates truthful tool, status, and ocean live state",
-        "ocean_treatment" => "ombre | flat (appearance; independent of motion)",
+        "ocean_treatment" => "deepsea | flat (appearance; independent of motion)",
         "show_thinking" => "show or hide model reasoning in chat; task lists stay concise",
         "thinking_default_expanded" => {
             "expand model reasoning by default; Space still toggles each block"
@@ -3231,9 +3231,7 @@ fn config_literal_hint_for_key(key: &str) -> &'static str {
         "fleet.exec.max_spawn_depth" => {
             "0 blocks child agents; 3 default (same axis as sub-agents); capped at 8"
         }
-        "features.subagents" => {
-            "read-only feature flag state; /fleet setup is the user-facing path"
-        }
+        "features.subagents" => "read-only feature flag state; /pod setup is the user-facing path",
         "features.web_search" => "read-only feature flag state for web search tools",
         "features.apply_patch" => "read-only feature flag state for patch editing tools",
         "features.mcp" => "read-only feature flag state for MCP tools",
@@ -3311,7 +3309,7 @@ fn config_choice_values(key: &str, provider: ApiProvider) -> Option<Vec<String>>
         "reasoning_effort" => {
             vec!["default", "auto", "off", "low", "medium", "high", "max"]
         }
-        "ocean_treatment" => vec!["ombre", "flat"],
+        "ocean_treatment" => vec!["deepsea", "flat"],
         "focus_texture" => vec!["off", "scrim", "grain"],
         "work_surface_placement" => vec!["top", "left", "right", "off"],
         "rail_panel" => vec!["tasks", "agents", "context", "pinned"],
@@ -3483,7 +3481,7 @@ fn config_choice_detail(locale: Locale, key: &str, value: &str) -> Cow<'static, 
         ("thinking_highlight", "false") => {
             "Keep the dashed reasoning rail and italic text without a filled background."
         }
-        ("ocean_treatment", "ombre") => "Use one continuous ocean color field.",
+        ("ocean_treatment", "deepsea") => "Use one continuous ocean color field.",
         ("ocean_treatment", "flat") => "Use a single flat background color.",
         _ => "",
     })
@@ -4491,7 +4489,7 @@ impl ModalView for SubAgentsView {
             KeyCode::Char('f') | KeyCode::Char('F') => {
                 ViewAction::Emit(ViewEvent::CommandPaletteSelected {
                     action: CommandPaletteAction::ExecuteCommand {
-                        command: "/fleet".to_string(),
+                        command: "/pod".to_string(),
                     },
                 })
             }
@@ -4577,7 +4575,7 @@ impl ModalView for SubAgentsView {
                 Style::default().fg(palette::TEXT_MUTED),
             )));
             lines.push(Line::from(Span::styled(
-                "Configure roles and launch posture with /fleet.",
+                "Configure roles and launch posture with /pod.",
                 Style::default().fg(palette::TEXT_DIM),
             )));
         } else {
@@ -5541,8 +5539,8 @@ mod tests {
         match action {
             ViewAction::Emit(ViewEvent::CommandPaletteSelected {
                 action: CommandPaletteAction::ExecuteCommand { command },
-            }) => assert_eq!(command, "/fleet"),
-            other => panic!("expected /fleet jump action, got {other:?}"),
+            }) => assert_eq!(command, "/pod"),
+            other => panic!("expected /pod jump action, got {other:?}"),
         }
     }
 
@@ -5785,8 +5783,9 @@ mod tests {
         assert!(!keys.contains(&"features.mcp"));
         assert!(!keys.contains(&"features.exec_policy"));
         assert!(!keys.contains(&"whaleflow"));
-        // Diagnostic-only model rows and managed permission rows are not
-        // editable; everything else outside Experimental/Fleet should be.
+        // Diagnostic-only model rows, managed permission rows, and live route
+        // receipts are not editable; everything else outside
+        // Experimental/Fleet should be.
         const DIAGNOSTIC_ONLY: &[&str] = &[
             "fast_model",
             "default_model",
@@ -5795,6 +5794,8 @@ mod tests {
             "effective_auto_compact",
             "external_credentials.openai-codex",
             "external_credentials.xai",
+            "base_url",
+            "provider_url",
         ];
         assert!(
             view.rows
@@ -5827,12 +5828,33 @@ mod tests {
                 })
                 .all(|row| !row.editable)
         );
-        for key in DIAGNOSTIC_ONLY {
+        // Route endpoint rows are provider-specific: DeepSeek routes expose
+        // `base_url`, every other provider exposes `provider_url`. Whichever
+        // exists must be a read-only route receipt.
+        const ROUTE_RECEIPT_KEYS: &[&str] = &["base_url", "provider_url"];
+        for key in DIAGNOSTIC_ONLY
+            .iter()
+            .filter(|key| !ROUTE_RECEIPT_KEYS.contains(key))
+        {
             assert!(
                 view.rows.iter().any(|row| row.key == *key && !row.editable),
                 "{key} must remain diagnostic-only"
             );
         }
+        let receipt_rows: Vec<_> = view
+            .rows
+            .iter()
+            .filter(|row| ROUTE_RECEIPT_KEYS.contains(&row.key.as_str()))
+            .collect();
+        assert_eq!(
+            receipt_rows.len(),
+            1,
+            "exactly one endpoint receipt row must exist for the active route"
+        );
+        assert!(
+            !receipt_rows[0].editable,
+            "endpoint receipt rows must be read-only"
+        );
     }
 
     #[test]
@@ -6027,7 +6049,7 @@ api_key_env = "ACME_API_KEY"
         .expect("custom provider config");
         let mut app = create_test_app();
         app.config_path = Some(config_path);
-        app.api_provider = crate::config::ApiProvider::Custom;
+        app.set_provider_identity(crate::config::ApiProvider::Custom, "acme_ai");
         let mut view = ConfigView::new_for_app(&app);
         view.selected = view
             .rows
@@ -6037,7 +6059,11 @@ api_key_env = "ACME_API_KEY"
 
         let row = &view.rows[view.selected];
         assert_eq!(row.value, "acme_ai");
-        assert_eq!(row.scope, ConfigScope::Saved);
+        assert_eq!(
+            row.scope,
+            ConfigScope::Session,
+            "the provider row shows the live route identity, not saved config"
+        );
         assert!(
             config_choice_values("provider", app.api_provider).is_none(),
             "provider must not be truncated to the generic enum chooser"
@@ -6095,13 +6121,74 @@ api_key_env = "ACME_API_KEY"
             .find(|row| row.key == "fast_model")
             .expect("fast model row");
 
-        assert_eq!(active.value, "zai / GLM-5.2");
+        assert_eq!(active.value, "Zhipu AI / Z.ai · GLM-5.2");
         assert_eq!(fast.value, "GLM-5-Turbo");
         // #4717: DeepSeek-only fallback must not appear on non-DeepSeek providers.
         assert!(
             view.rows.iter().all(|row| row.key != "default_model"),
             "default_model row must be hidden for zai when unset"
         );
+    }
+
+    #[test]
+    fn config_view_live_route_never_shows_stale_saved_provider() {
+        // The reported defect: the saved config still said `provider =
+        // "deepseek"` while the session was actually routed to Z.ai / GLM-5.3,
+        // and Settings presented the stale saved value as the "Active
+        // provider". Route rows must show the live route identity; saved
+        // config is a startup/default fact, never the active receipt.
+        let temp_root = std::env::temp_dir().join(format!(
+            "codewhale-stale-saved-provider-view-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let config_path = temp_root.join("config.toml");
+        fs::write(
+            &config_path,
+            "provider = \"deepseek\"\nbase_url = \"https://api.deepseek.com/v1\"\n",
+        )
+        .unwrap();
+
+        let mut app = create_test_app();
+        app.config_path = Some(config_path.clone());
+        // Live session route, exactly as a /provider switch would leave it.
+        app.api_provider = crate::config::ApiProvider::Zai;
+        app.model = "GLM-5.3".to_string();
+        app.active_route_base_url = crate::config::DEFAULT_ZAI_BASE_URL.to_string();
+
+        let view = ConfigView::new_for_app(&app);
+
+        let provider_row = view
+            .rows
+            .iter()
+            .find(|row| row.key == "provider")
+            .expect("provider row");
+        assert!(
+            provider_row.value.contains("Z.ai"),
+            "provider row must show the live route identity: {}",
+            provider_row.value
+        );
+        assert!(
+            !provider_row.value.to_lowercase().contains("deepseek"),
+            "stale saved provider must not appear as the active route: {}",
+            provider_row.value
+        );
+        assert_eq!(provider_row.scope, ConfigScope::Session);
+
+        let model_row = view
+            .rows
+            .iter()
+            .find(|row| row.key == "model")
+            .expect("model row");
+        assert_eq!(model_row.value, "Zhipu AI / Z.ai · GLM-5.3");
+
+        let url_row = view
+            .rows
+            .iter()
+            .find(|row| row.key == "provider_url")
+            .expect("endpoint row for the live Z.ai route");
+        assert_eq!(url_row.value, crate::config::DEFAULT_ZAI_BASE_URL);
+        assert!(!view.rows.iter().any(|row| row.key == "base_url"));
     }
 
     #[test]
@@ -6317,21 +6404,9 @@ max_spawn_depth = 2
     }
 
     #[test]
-    fn config_view_base_url_reflects_app_config_path() {
-        let temp_root = std::env::temp_dir().join(format!(
-            "deepseek-tui-base-url-view-test-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&temp_root).unwrap();
-        let config_path = temp_root.join("config.toml");
-        fs::write(
-            &config_path,
-            "base_url = \"https://ui-config-view.local/v1\"\n",
-        )
-        .unwrap();
-
+    fn config_view_base_url_reflects_active_route_receipt() {
         let mut app = create_test_app();
-        app.config_path = Some(config_path.clone());
+        app.active_route_base_url = "https://ui-config-view.local/v1".to_string();
         let view = ConfigView::new_for_app(&app);
 
         let row = view
@@ -6343,7 +6418,12 @@ max_spawn_depth = 2
             config_label_for_key(&row.key),
             "Provider API URL (DeepSeek route)"
         );
+        // The endpoint row is a read-only receipt for the live route; it must
+        // not re-read config files, which may describe a different saved
+        // route than the one the session is actually using.
         assert_eq!(row.value, "https://ui-config-view.local/v1");
+        assert!(!row.editable);
+        assert_eq!(row.scope, ConfigScope::Session);
     }
 
     #[test]
@@ -6368,6 +6448,7 @@ base_url = "https://api.xiaomimimo.com/v1"
 
         let mut app = create_test_app();
         app.api_provider = crate::config::ApiProvider::XiaomiMimo;
+        app.active_route_base_url = crate::config::DEFAULT_XIAOMI_MIMO_BASE_URL.to_string();
         app.ui_locale = Locale::Es419;
         app.config_path = Some(config_path.clone());
         let mut view = ConfigView::new_for_app(&app);
@@ -6377,7 +6458,10 @@ base_url = "https://api.xiaomimimo.com/v1"
             .iter()
             .find(|row| row.key == "provider_url")
             .expect("provider_url row missing");
+        // The endpoint row reflects the live route identity (the default when
+        // nothing overrides it), not a config-file re-read, and is a receipt.
         assert_eq!(row.value, crate::config::DEFAULT_XIAOMI_MIMO_BASE_URL);
+        assert!(!row.editable);
         assert!(!view.rows.iter().any(|row| row.key == "base_url"));
 
         view.focus_key("provider_url");
@@ -7342,8 +7426,8 @@ context_window = 262144
         view.selected = view
             .rows
             .iter()
-            .position(|row| row.key == "base_url")
-            .expect("base_url row");
+            .position(|row| row.key == "stream_chunk_timeout_secs")
+            .expect("editable row on the default tab");
 
         let _ = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let edit = view.editing.as_ref().expect("editing should be active");
@@ -7362,8 +7446,8 @@ context_window = 262144
         view.selected = view
             .rows
             .iter()
-            .position(|row| row.key == "base_url")
-            .expect("base_url row");
+            .position(|row| row.key == "stream_chunk_timeout_secs")
+            .expect("editable row on the default tab");
         let _ = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(view.editing.is_some());
 
@@ -7575,3 +7659,158 @@ context_window = 262144
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tideline settings rail + settings stage (spec §5a "Settings rail",
+// "Live preview"; §5b 3-pane settings layout). Translation scaffolding in
+// the topbar mold: pure, deterministic widgets; `ConfigView`'s own nav is
+// untouched and takes over these categories at the landing slice (#5698
+// gate).
+
+#[allow(dead_code)] // Tideline settings rail + preview (spec §5a)
+pub mod tideline_preview;
+
+/// The eight settings categories in rail order (Appearance → Advanced).
+#[must_use]
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub fn tideline_settings_categories() -> [&'static str; 8] {
+    [
+        "Appearance",
+        "Motion",
+        "Composer",
+        "Notifications",
+        "Provider",
+        "Keybindings",
+        "Privacy",
+        "Advanced",
+    ]
+}
+
+/// What the caller owes the settings rail.
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub struct TidelineSettingsRail<'a> {
+    pub theme: &'a crate::palette::UiTheme,
+    pub selected: usize,
+    pub ascii_safe: bool,
+}
+
+fn srail_put(buf: &mut Buffer, x: u16, y: u16, text: &str, style: Style) {
+    buf.set_stringn(x, y, text, text.width(), style);
+}
+
+/// Paint the settings rail: 8 categories with the selected `▸`, then the
+/// meta rows (help / file issue / feedback).
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub fn render_tideline_settings_rail(
+    area: Rect,
+    buf: &mut Buffer,
+    rail: &TidelineSettingsRail<'_>,
+) {
+    if area.width < 4 || area.height < 4 {
+        return;
+    }
+    let theme = rail.theme;
+    let categories = tideline_settings_categories();
+    for (index, label) in categories.iter().enumerate() {
+        let y = area.y + index as u16;
+        if y >= area.y + area.height.saturating_sub(3) {
+            break;
+        }
+        let selected = rail.selected == index;
+        let ink = if selected {
+            crate::palette::ChromeInk::Identity
+        } else {
+            crate::palette::ChromeInk::MetadataValue
+        };
+        let mut style = crate::palette::chrome_style(theme, ink);
+        if selected {
+            style = style.add_modifier(Modifier::BOLD);
+            srail_put(
+                buf,
+                area.x,
+                y,
+                "▸",
+                crate::palette::chrome_style(theme, crate::palette::ChromeInk::Identity),
+            );
+        }
+        srail_put(buf, area.x + 2, y, label, style);
+    }
+    // Meta rows pinned near the bottom (the reference's help/file/feedback).
+    let meta_y = area.y + area.height.saturating_sub(3);
+    for (offset, meta) in ["? help", "/ file issue", "f feedback"].iter().enumerate() {
+        let row_y = meta_y + offset as u16;
+        if row_y < area.y + area.height {
+            srail_put(
+                buf,
+                area.x,
+                row_y,
+                meta,
+                crate::palette::chrome_style(theme, crate::palette::ChromeInk::MetadataHint),
+            );
+        }
+    }
+}
+
+/// Category rects for the rail (spec §6: keyboard + mouse parity).
+#[must_use]
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub fn tideline_settings_rail_hitboxes(area: Rect, _rail: &TidelineSettingsRail<'_>) -> Vec<Rect> {
+    let mut out = Vec::new();
+    if area.width < 4 || area.height < 4 {
+        return out;
+    }
+    for index in 0..tideline_settings_categories().len() {
+        let y = area.y + index as u16;
+        if y >= area.y + area.height.saturating_sub(3) {
+            break;
+        }
+        out.push(Rect {
+            x: area.x,
+            y,
+            width: area.width,
+            height: 1,
+        });
+    }
+    out
+}
+
+use ratatui::layout::{Constraint, Layout};
+
+/// The settings stage composite (spec §5b): `nav │ form │ preview` at
+/// ≥100 columns; the preview pane sheds below 100.
+pub struct TidelineSettingsStage<'a> {
+    pub rail: TidelineSettingsRail<'a>,
+    pub theme_list: crate::tui::theme_picker::TidelineThemeList<'a>,
+    pub preview: tideline_preview::TidelineSettingsPreview<'a>,
+}
+
+/// Paint the settings stage.
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub fn render_tideline_settings_stage(
+    area: Rect,
+    buf: &mut Buffer,
+    stage: &TidelineSettingsStage<'_>,
+) {
+    if area.width < 30 || area.height < 4 {
+        return;
+    }
+    if area.width >= 100 {
+        let [nav, form, preview] = Layout::horizontal([
+            Constraint::Length(18),
+            Constraint::Min(30),
+            Constraint::Percentage(38),
+        ])
+        .areas(area);
+        render_tideline_settings_rail(nav, buf, &stage.rail);
+        crate::tui::theme_picker::render_tideline_theme_list(form, buf, &stage.theme_list);
+        tideline_preview::render_tideline_settings_preview(preview, buf, &stage.preview);
+    } else {
+        let [nav, form] =
+            Layout::horizontal([Constraint::Length(16), Constraint::Min(20)]).areas(area);
+        render_tideline_settings_rail(nav, buf, &stage.rail);
+        crate::tui::theme_picker::render_tideline_theme_list(form, buf, &stage.theme_list);
+    }
+}
+
+#[cfg(test)]
+mod tideline_tests;

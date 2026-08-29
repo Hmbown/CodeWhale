@@ -10,6 +10,7 @@ pub(crate) enum EscapeAction {
     CancelRequest,
     PauseCommand,
     DiscardQueuedDraft,
+    DismissPluginCta,
     ClearInput,
     Noop,
 }
@@ -35,6 +36,8 @@ pub(crate) fn next_escape_action(app: &App, slash_menu_open: bool) -> EscapeActi
         || matches!(app.runtime_turn_status.as_deref(), Some("in_progress"))
     {
         EscapeAction::CancelRequest
+    } else if app.plugin_cta.phase.is_visible() {
+        EscapeAction::DismissPluginCta
     } else if !app.input.is_empty() {
         EscapeAction::ClearInput
     } else {

@@ -80,6 +80,14 @@ string_newtype!(
 );
 
 string_newtype!(
+    /// A flat kebab route id (e.g. `"deepseek"`, `"alibaba-modelstudio-coding-plan"`).
+    ///
+    /// Route ids are open strings, stable across releases, and are **not** a
+    /// closed enum. Unknown catalog rows are still valid ids.
+    RouteId
+);
+
+string_newtype!(
     /// A canonical, provider-agnostic logical model identity.
     ///
     /// Distinct from [`WireModelId`]: this is "what the model is", not "what
@@ -106,6 +114,27 @@ string_newtype!(
 
 impl ProviderId {
     /// Build a [`ProviderId`] from a [`ProviderKind`] using its canonical id.
+    #[must_use]
+    pub fn from_kind(kind: ProviderKind) -> Self {
+        Self(kind.as_str().to_string())
+    }
+}
+
+impl RouteId {
+    /// Whether `raw` is a well-formed kebab route id (lowercase ASCII, digits, `-`).
+    #[must_use]
+    pub fn is_well_formed(raw: &str) -> bool {
+        let trimmed = raw.trim();
+        !trimmed.is_empty()
+            && trimmed
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+            && !trimmed.starts_with('-')
+            && !trimmed.ends_with('-')
+            && !trimmed.contains("--")
+    }
+
+    /// The route id for a known kind. Catalog rows that are not kinds use [`RouteId::from`].
     #[must_use]
     pub fn from_kind(kind: ProviderKind) -> Self {
         Self(kind.as_str().to_string())

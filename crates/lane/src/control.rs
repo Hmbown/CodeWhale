@@ -699,7 +699,7 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         backend: BackendCapability::Implemented,
         reconciles: false,
         hotbar_bare_dispatch: false,
-        slash_command: "fleet",
+        slash_command: "pod",
         cli_invocation: "codewhale fleet list",
         summary: "List durable Fleet runs from the workspace ledger.",
     },
@@ -716,7 +716,7 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         backend: BackendCapability::Implemented,
         reconciles: false,
         hotbar_bare_dispatch: false,
-        slash_command: "fleet",
+        slash_command: "pod",
         cli_invocation: "codewhale fleet status",
         summary: "Show durable Fleet run/worker counts from the workspace ledger.",
     },
@@ -733,7 +733,7 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         backend: BackendCapability::Implemented,
         reconciles: false,
         hotbar_bare_dispatch: false,
-        slash_command: "fleet",
+        slash_command: "pod",
         cli_invocation: "codewhale fleet interrupt <worker-id>",
         summary: "Cancel a Fleet worker's active task in the durable ledger.",
     },
@@ -753,7 +753,7 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         },
         reconciles: false,
         hotbar_bare_dispatch: false,
-        slash_command: "fleet",
+        slash_command: "pod",
         cli_invocation: "codewhale fleet restart <worker-id>",
         summary: "Re-lease a Fleet worker's task and drive the manager loop.",
     },
@@ -770,7 +770,7 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         backend: BackendCapability::Implemented,
         reconciles: false,
         hotbar_bare_dispatch: false,
-        slash_command: "fleet",
+        slash_command: "pod",
         cli_invocation: "codewhale fleet resume <run-id>",
         summary: "Reconcile a durable Fleet run's orphaned leases after a manager restart.",
     },
@@ -2349,7 +2349,7 @@ mod tests {
             }
         }
         // Exactly one verb is reachable from a bare press today: `/lane` with
-        // no argument lists. `/fleet` with no argument opens the roster, so no
+        // no argument lists. `/pod` with no argument opens the roster, so no
         // Fleet verb is bare-dispatchable.
         let reachable: Vec<&str> = OPERATIONS
             .iter()

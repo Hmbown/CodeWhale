@@ -588,6 +588,11 @@ impl Engine {
         // registry-derived field as unknown rather than guessing.
         inspection_surface: Option<crate::tool_inspection::ToolSurfaceContext>,
     ) -> (TurnOutcomeStatus, Option<String>) {
+        // R1: restart the cumulative per-turn wall-clock budget. This is the
+        // only place it is started, so exactly one turn owns it at a time.
+        self.turn_wall_clock =
+            crate::core::engine::turn_budget::TurnWallClock::start(self.config.turn_wall_clock);
+
         // Only interactive TUI hosts own terminal chrome. Headless exec,
         // app-server, and stream-json stdout must remain byte-clean.
         if self.config.terminal_chrome_enabled {
@@ -672,6 +677,22 @@ impl Engine {
             if self.cancel_token.is_cancelled() {
                 let _ = self.tx_event.send(Event::status("Request cancelled")).await;
                 return (TurnOutcomeStatus::Interrupted, None);
+            }
+
+            // R1: the cumulative per-turn wall-clock budget. Checked at the
+            // provider-request boundary so a turn that runs out of time stops
+            // before authorizing another billable request, and every tool
+            // result already produced stays in the transcript. Hitting it is
+            // never a clean success — the turn ends `Failed` with the limit
+            // named, matching how the step ceiling below reports.
+            if self.turn_wall_clock.exhausted() {
+                let error = format!(
+                    "Per-turn wall-clock budget exhausted after {}s (limit: {}s). The turn was stopped before another model request; work already done is in the transcript. Send another message to continue, or raise `[tui].turn_wall_clock_secs`.",
+                    self.turn_wall_clock.spent().as_secs(),
+                    self.turn_wall_clock.budget().as_secs(),
+                );
+                let _ = self.tx_event.send(Event::status(error.clone())).await;
+                return (TurnOutcomeStatus::Failed, Some(error));
             }
 
             if self.apply_pending_runtime_authority().await {
@@ -1349,7 +1370,9 @@ impl Engine {
                     turn_error = Some(message.clone());
                     let _ = self
                         .tx_event
-                        .send(Event::error(ErrorEnvelope::classify(message, true)))
+                        .send(Event::error(crate::error_taxonomy::envelope_for_llm_error(
+                            e, message,
+                        )))
                         .await;
                     return (TurnOutcomeStatus::Failed, turn_error);
                 }
@@ -4129,7 +4152,13 @@ impl Engine {
         let mut pending_resume: Option<StreamResume> = None;
         let mut stream_content_bytes: usize = 0;
         let (chunk_timeout_secs, chunk_timeout) = stream_chunk_timeout_budget(&self.config);
-        let max_duration = Duration::from_secs(STREAM_MAX_DURATION_SECS);
+        // R1: the per-step stream caps are resolved from config rather than
+        // read from the module constants, so both are overridable. Both stay
+        // finite: `resolve_stream_*` rejects `0` instead of reading it as
+        // "unlimited".
+        let max_duration = self.config.stream_max_duration;
+        let max_duration_secs = max_duration.as_secs();
+        let max_content_bytes = self.config.stream_max_content_bytes;
 
         // Process stream events
         loop {
@@ -4184,7 +4213,7 @@ impl Engine {
             // Guard: max wall-clock duration
             if stream_start.elapsed() > max_duration {
                 let envelope = StreamError::DurationLimit {
-                    limit_secs: STREAM_MAX_DURATION_SECS,
+                    limit_secs: max_duration_secs,
                 }
                 .into_envelope();
                 crate::logging::warn(&envelope.message);
@@ -4194,9 +4223,9 @@ impl Engine {
             }
 
             // Guard: max accumulated content bytes
-            if stream_content_bytes > STREAM_MAX_CONTENT_BYTES {
+            if stream_content_bytes > max_content_bytes {
                 let envelope = StreamError::Overflow {
-                    limit_bytes: STREAM_MAX_CONTENT_BYTES,
+                    limit_bytes: max_content_bytes,
                 }
                 .into_envelope();
                 crate::logging::warn(&envelope.message);
@@ -4283,7 +4312,11 @@ impl Engine {
                                 stream_error.get_or_insert(retry_msg.clone());
                                 let _ = self
                                     .tx_event
-                                    .send(Event::error(ErrorEnvelope::classify(retry_msg, true)))
+                                    .send(Event::error(
+                                        crate::error_taxonomy::envelope_for_llm_error(
+                                            retry_err, retry_msg,
+                                        ),
+                                    ))
                                     .await;
                                 break;
                             }
@@ -4357,11 +4390,16 @@ impl Engine {
                     let user_message =
                         stream_read_error_user_message(&message, any_content_received);
                     stream_error.get_or_insert(user_message.clone());
-                    let _ = self
-                        .tx_event
-                        .send(Event::error(ErrorEnvelope::classify(user_message, true)))
-                        .await;
-                    if stream_errors >= MAX_STREAM_ERRORS_BEFORE_FAIL {
+                    let envelope = crate::error_taxonomy::envelope_for_llm_error(e, user_message);
+                    // A terminal (non-recoverable) stream failure must stop
+                    // consumption immediately: re-issuing a wrong-model or
+                    // authorization rejection cannot succeed, and continuing
+                    // leaves the door open for stale deltas after the failure
+                    // card. Recoverable classes (rate limit, network) keep
+                    // the bounded retry tail.
+                    let terminal = !envelope.recoverable;
+                    let _ = self.tx_event.send(Event::error(envelope)).await;
+                    if terminal || stream_errors >= MAX_STREAM_ERRORS_BEFORE_FAIL {
                         break;
                     }
                     continue;
@@ -4644,12 +4682,26 @@ impl Engine {
                 }
                 StreamEvent::MessageStop | StreamEvent::Ping => {}
                 StreamEvent::Error { error } => {
-                    // #3014: Anthropic SSE error event. The adapter
-                    // surfaces fatal errors as stream Err items; this
-                    // defensive arm keeps any passed-through error
-                    // visible instead of silently dropped.
-                    crate::logging::warn(format!("Provider stream error event: {error}"));
-                    stream_errors += 1;
+                    // #3014: providers surface mid-stream failures as a
+                    // chunk-level `error` object (chat.rs converts the frame
+                    // to this event and keeps parsing later frames as
+                    // deltas). Historically this arm only warned and kept
+                    // consuming, so every delta after the failure frame —
+                    // including reasoning — still rendered while the real
+                    // error vanished into the retry tail. A mid-stream error
+                    // frame is terminal for this stream: surface it through
+                    // the same typed envelope contract, record it as the
+                    // turn's stream error, and stop consuming. Deltas that
+                    // arrive after the failure frame are never forwarded.
+                    let message = error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("provider stream error");
+                    let envelope = ErrorEnvelope::classify(message.to_string(), true);
+                    crate::logging::warn(format!("Provider stream error event: {message}"));
+                    let _ = self.tx_event.send(Event::error(envelope)).await;
+                    stream_error.get_or_insert(message.to_string());
+                    break;
                 }
             }
         }

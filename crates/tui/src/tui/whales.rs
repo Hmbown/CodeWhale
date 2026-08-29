@@ -1107,7 +1107,14 @@ mod tests {
 
     #[test]
     fn badge_accents_meet_secondary_chrome_contrast_on_dark_and_light() {
-        for theme in [palette::UI_THEME, palette::LIGHT_UI_THEME] {
+        // Flat Whale shells are terminal-owned and therefore deliberately
+        // unresolvable. Contrast is enforced against the concrete colors the
+        // explicit Deepsea treatment paints behind these badges.
+        let mut dark = palette::UI_THEME;
+        dark.surface_bg = palette::WHALE_BG;
+        let mut light = palette::LIGHT_UI_THEME;
+        light.surface_bg = palette::LIGHT_SURFACE;
+        for theme in [dark, light] {
             let ink = WhaleInk::from_theme(&theme);
             for species in WhaleSpecies::ALL {
                 for color in [ink.accent(species), ink.body_for(species)] {

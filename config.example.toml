@@ -1051,6 +1051,15 @@ alternate_screen = "auto"   # auto/always use the TUI screen; never uses termina
 mouse_capture = true        # true copies only transcript user/assistant text; false uses raw terminal selection/copy
 terminal_probe_timeout_ms = 500 # optional startup terminal-mode timeout (100-5000ms)
 stream_chunk_timeout_secs = 900 # optional SSE idle timeout per chunk (0 = default, 1-3600)
+# R1 turn budgets. An agent loop with no finite bound can spend real money
+# forever, so every one of these is finite by default and finite at its
+# maximum. `0` is an invalid value that falls back to the default — it is
+# never a "0 means unlimited" sentinel.
+max_model_steps = 200        # model steps one turn may take (0 = default, 1-100000)
+turn_wall_clock_secs = 3600  # cumulative wall clock for one turn, excluding time
+                             # blocked on a human approval (0 = default, 30-86400)
+stream_max_content_mb = 10   # per-step cap on streamed content (0 = default, 1-512)
+stream_max_duration_secs = 1800 # per-step cap on one stream's duration (0 = default, 10-86400)
 osc8_links = true            # emit OSC 8 escapes around URLs (Cmd+click in iTerm2/Ghostty/Kitty/WezTerm/Terminal.app 13+); set false for terminals that misrender
 # Ordered footer chips shown in the TUI status line. Omit the key to use the
 # built-in default; set [] to hide all configurable chips. You can also edit
@@ -1060,10 +1069,12 @@ osc8_links = true            # emit OSC 8 escapes around URLs (Cmd+click in iTer
 # reasoning_replay, prefix_stability, cache, context_percent, git_branch,
 # last_tool_elapsed (reserved), rate_limit (reserved), tokens.
 # status_items = ["mode", "model", "status", "git_branch", "tokens", "cache"]
-# notification_condition = "always" # always | never — overrides [notifications].threshold_secs.
-#                                    "always" = notify on every successful turn (no threshold);
-#                                    "never"  = suppress all turn-completion notifications;
-#                                    unset    = use [notifications] defaults (recommended).
+# notification_condition = "unfocused" # unfocused | always | never
+#                                    "unfocused" = notify only after this terminal has been
+#                                    in the background for two seconds (default);
+#                                    "always"    = allow configured notifications while focused;
+#                                                  successful turns skip the threshold;
+#                                    "never"     = suppress all operator notifications.
 # locale = "auto"           # UI chrome language: auto | en | ja | zh-Hans | zh-Hant | pt-BR | es-419
 #                           # | vi | ko | ca | de | fr | id | hi | ru | uk
 #                           # "auto" reads LC_ALL → LC_MESSAGES → LANG; falls back to English.
@@ -1216,27 +1227,27 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # intentionally silent. Useful when you tab away from the TUI and want an alert
 # for "your task is ready".
 #
-# method        = "auto"   # auto | osc9 | bel | off
-#                 auto: OSC 9 for iTerm.app / Ghostty / WezTerm.
-#                       On macOS / Linux, falls back to BEL.
-#                       On Windows, BEL is routed through MessageBeep(MB_OK).
+# method        = "auto"   # auto | osc9 | kitty | ghostty | bel | off
+#                 auto: native/terminal banner for known terminals.
+#                       On macOS, the native banner is silent; on Linux,
+#                       unknown terminals stay silent instead of ringing BEL.
 #                 osc9: \x1b]9;<msg>\x07 (iTerm2-style; shows macOS notification)
-#                 bel:  plain \x07 beep
-#                 off:  disable entirely
+#                 bel:  explicit \x07 beep (MessageBeep on Windows)
+#                 off:  disable banners; an explicit completion sound is independent
 # threshold_secs = 30      # only notify when the turn took >= this many seconds
 # include_summary = false  # include elapsed time + cost in the notification body
 # subagent_completion = "final-only" # always | final-only | off — per-subagent
 #                          notifications during fleet/workflow runs. final-only
 #                          (default) stays quiet mid-run and fires once when the
 #                          batch drains; off silences them entirely.
-# completion_sound = "beep" # off | beep | bell | file — sound on turn completion (✅ marker)
+# completion_sound = "off" # off | beep | bell | file — opt-in turn-completion sound
 # sound_file = "E:\\google\\downloads\\notify.wav" # WAV used when completion_sound = "file" (Windows)
 [notifications]
 # method = "auto"
 # threshold_secs = 30
 # include_summary = false
 # subagent_completion = "final-only"
-# completion_sound = "beep"
+# completion_sound = "off"
 # sound_file = "E:\\google\\downloads\\notify.wav"
 
 # Lifecycle event outbox: opt-in JSONL stream of session/turn/subagent

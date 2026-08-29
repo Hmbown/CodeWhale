@@ -14,7 +14,11 @@ pub(crate) fn next_terminal_event(
     if let Some(event) = pending.pop_front() {
         return Ok(Some(event));
     }
-    input.recv_timeout(timeout)
+    let event = input.recv_timeout(timeout)?;
+    if let Some(event) = event.as_ref() {
+        observe_terminal_attention(event);
+    }
+    Ok(event)
 }
 
 pub(crate) fn try_next_terminal_event(
@@ -24,7 +28,11 @@ pub(crate) fn try_next_terminal_event(
     if let Some(event) = pending.pop_front() {
         return Ok(Some(event));
     }
-    input.try_recv()
+    let event = input.try_recv()?;
+    if let Some(event) = event.as_ref() {
+        observe_terminal_attention(event);
+    }
+    Ok(event)
 }
 
 /// Drain input that Codewhale already read before releasing the terminal.
@@ -71,9 +79,21 @@ pub(crate) fn collect_pending_terminal_events(
     pending: &mut VecDeque<Event>,
 ) -> io::Result<()> {
     while let Some(event) = input.try_recv()? {
+        // Focus is notification authority, not merely a render event. Apply
+        // it at pump receipt so a queued FocusGained cannot sit behind an
+        // engine TurnComplete and produce a false background notification.
+        observe_terminal_attention(&event);
         pending.push_back(event);
     }
     Ok(())
+}
+
+fn observe_terminal_attention(event: &Event) {
+    match event {
+        Event::FocusGained => crate::tui::notifications::set_terminal_focused(true),
+        Event::FocusLost => crate::tui::notifications::set_terminal_focused(false),
+        _ => {}
+    }
 }
 
 /// Refuse to enter raw mode unless both interactive streams are TTYs.
@@ -212,6 +232,10 @@ pub(crate) fn pause_terminal(
     use_mouse_capture: bool,
     use_bracketed_paste: bool,
 ) -> Result<()> {
+    // Focus reporting is about to be disabled. Fail closed to "focused" so
+    // a child process or external editor cannot leave stale background state
+    // that later emits a surprise Codewhale notification.
+    crate::tui::notifications::set_terminal_focused(true);
     // #443: pop keyboard enhancement flags before handing the terminal
     // to a child process so it doesn't inherit a half-configured input
     // mode. Best-effort — terminals that didn't accept the flags
@@ -241,6 +265,9 @@ pub(crate) fn resume_terminal(
     use_bracketed_paste: bool,
     sync_output_enabled: bool,
 ) -> Result<()> {
+    // No trustworthy focus transition exists while reporting is disabled.
+    // Resume from the quiet/focused state and wait for a real FocusLost.
+    crate::tui::notifications::set_terminal_focused(true);
     enable_raw_mode()?;
     if use_alt_screen {
         execute!(terminal.backend_mut(), EnterAlternateScreen)?;

@@ -777,7 +777,7 @@ fn open_fleet_setup_target(app: &mut App, config: &Config, member_id: Option<&st
                 app, config, &name, scope, member_id,
             ) else {
                 app.set_sticky_status(
-                    "Selected Fleet is invalid or unreadable; open /fleet fleets to repair or clear the selection. Legacy profiles were not opened."
+                    "Selected Fleet is invalid or unreadable; open /pod fleets to repair or clear the selection. Legacy profiles were not opened."
                         .to_string(),
                     StatusToastLevel::Error,
                     None,
@@ -826,7 +826,7 @@ fn open_fleet_model_target(app: &mut App, config: &Config, member_id: &str) {
                 Some(member_id),
             ) else {
                 app.set_sticky_status(
-                    "Selected Fleet is invalid or unreadable; open /fleet fleets to repair or clear the selection."
+                    "Selected Fleet is invalid or unreadable; open /pod fleets to repair or clear the selection."
                         .to_string(),
                     StatusToastLevel::Error,
                     None,

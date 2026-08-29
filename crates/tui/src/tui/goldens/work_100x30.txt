@@ -1,0 +1,30 @@
+RUNS            ▎ ship the tideline work stage                                                      
+ release 0.9.12  ├── whale-1 · restyle the footer band                                              
+                 ├── whale-2 · golden buffers                                                       
+WHALES           └── whale-3 · preview render                                                       
+ 3/4 whales     ● working whale-1 editing crates/tui · 14:41:02 ×12                                 
+               ▸✓ done whale-2 wrote 4 goldens · 14:39:02 ×34                                       
+POD             ✗ failed whale-3 preview render · 14:20:55 ×3                                       
+ launch pod     ▏ two whales surfaced; the third failed — retrying                                  
+                   done: footer merged, 4 goldens blessed                                           
+WORK                                                                                                
+ ▸ footer band                                                                                      
+   goldens ×4                                                                                       
+                                                                                                    
+CONTEXT                                                                                             
+ ▰▰▰▱▱ 61%                                                                                          
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+? help · ⚙ settings                                                                                 
+« collapse      ● working   ○ ready   ✓ done   ! caution   ✗ failed                                 

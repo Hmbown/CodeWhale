@@ -271,8 +271,21 @@ fn policy_cell() -> &'static RwLock<EventSoundPolicy> {
 
 /// Install a policy process-wide. Called at startup from
 /// [`super::notifications::settings`] alongside `set_completion_sound`.
+#[cfg(test)]
 pub fn configure(policy: EventSoundPolicy) {
     if let Ok(mut slot) = policy_cell().write() {
+        *slot = policy;
+    }
+}
+
+/// Update runtime policy without erasing its per-event rate-limit history.
+///
+/// Notification Settings is consulted by several event producers. Rebuilding
+/// the policy on each producer path used to clear `last_played_ms`, making the
+/// documented minimum interval ineffective in real sessions.
+pub fn reconfigure(mut policy: EventSoundPolicy) {
+    if let Ok(mut slot) = policy_cell().write() {
+        policy.last_played_ms = slot.last_played_ms;
         *slot = policy;
     }
 }
@@ -559,6 +572,27 @@ mod tests {
         let mut out = Vec::new();
         handle_notification_kind_to(NotificationKind::ApprovalNeeded, 100_000, &mut out);
         assert!(out.is_empty(), "the default policy is disabled");
+    }
+
+    #[test]
+    fn runtime_reconfigure_preserves_rate_limit_history() {
+        let _lock = crate::test_support::lock_test_env();
+        let policy = enabled_policy(vec![SoundEvent::ApprovalNeeded]);
+        configure(policy.clone());
+
+        let mut out = Vec::new();
+        handle_notification_kind_to(NotificationKind::ApprovalNeeded, 0, &mut out);
+        assert_eq!(out, b"\x07\x07");
+
+        reconfigure(policy);
+        let mut out = Vec::new();
+        handle_notification_kind_to(NotificationKind::ApprovalNeeded, 1, &mut out);
+        assert!(
+            out.is_empty(),
+            "re-reading Settings must not erase the per-event rate limit"
+        );
+
+        configure(EventSoundPolicy::default());
     }
 
     #[test]

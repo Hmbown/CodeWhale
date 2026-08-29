@@ -294,13 +294,6 @@ pub fn create_worktree(
     Ok(())
 }
 
-/// List worktrees from the cache (refresh first if needed).
-#[must_use]
-pub fn list_worktrees(workspace: &Path) -> Vec<WorktreeEntry> {
-    refresh_if_stale(workspace);
-    cached_status().worktrees
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

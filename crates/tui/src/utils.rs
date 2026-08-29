@@ -419,10 +419,18 @@ fn is_codewhale_owned_state_dir(dir: &Path) -> bool {
     let legacy = (!codewhale_paths::codewhale_home_is_explicit())
         .then(codewhale_paths::legacy_deepseek_home)
         .flatten();
-    [primary, legacy]
-        .into_iter()
-        .flatten()
-        .any(|root| !root.as_os_str().is_empty() && dir.starts_with(root))
+    [primary, legacy].into_iter().flatten().any(|root| {
+        if root.as_os_str().is_empty() {
+            return false;
+        }
+        let Ok(physical_root) = std::fs::canonicalize(root) else {
+            return false;
+        };
+        let Ok(physical_dir) = std::fs::canonicalize(dir) else {
+            return false;
+        };
+        physical_dir.starts_with(physical_root)
+    })
 }
 
 /// Remove `.tmpXXXXXX` files this writer stranded in `dir` on an earlier run.
@@ -1366,13 +1374,13 @@ mod atomic_write_tests {
         let _lock = crate::test_support::lock_test_env();
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let (product, explicit_guards) = seal_product_home(tmp.path());
+        let sessions = product.join("sessions");
+        std::fs::create_dir_all(&sessions).expect("create sessions");
         let sibling = tmp.path().join("product-home-extra");
         std::fs::create_dir_all(&sibling).expect("create sibling");
 
         assert!(super::is_codewhale_owned_state_dir(&product));
-        assert!(super::is_codewhale_owned_state_dir(
-            &product.join("sessions")
-        ));
+        assert!(super::is_codewhale_owned_state_dir(&sessions));
         assert!(!super::is_codewhale_owned_state_dir(&sibling));
         assert!(!super::is_codewhale_owned_state_dir(tmp.path()));
         drop(explicit_guards);
@@ -1384,16 +1392,46 @@ mod atomic_write_tests {
         let _no_config = EnvVarGuard::remove("CODEWHALE_CONFIG_PATH");
         let _no_legacy_config = EnvVarGuard::remove("DEEPSEEK_CONFIG_PATH");
         let _no_legacy_home = EnvVarGuard::remove("DEEPSEEK_HOME");
+        let primary_sessions = tmp.path().join(".codewhale").join("sessions");
+        let legacy_home = tmp.path().join(".deepseek");
+        std::fs::create_dir_all(&primary_sessions).expect("create primary sessions");
+        std::fs::create_dir_all(&legacy_home).expect("create legacy home");
 
-        assert!(super::is_codewhale_owned_state_dir(
-            &tmp.path().join(".codewhale").join("sessions")
-        ));
-        assert!(super::is_codewhale_owned_state_dir(
-            &tmp.path().join(".deepseek")
-        ));
+        assert!(super::is_codewhale_owned_state_dir(&primary_sessions));
+        assert!(super::is_codewhale_owned_state_dir(&legacy_home));
         assert!(!super::is_codewhale_owned_state_dir(
             &tmp.path().join("user-chosen")
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_product_subdir_cannot_sweep_an_external_directory() {
+        use std::os::unix::fs::symlink;
+
+        let _lock = crate::test_support::lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let (product, _guards) = seal_product_home(tmp.path());
+        let external = tmp.path().join("external");
+        std::fs::create_dir_all(&external).expect("create external dir");
+        let linked = product.join("exports");
+        symlink(&external, &linked).expect("link product subdir outside");
+
+        let stray = external.join(".tmpEEEEEE");
+        std::fs::write(&stray, b"external tempfile").expect("write external fixture");
+        age_past_the_threshold(&stray);
+
+        assert!(
+            !super::is_codewhale_owned_state_dir(&linked),
+            "physical containment must reject a nested symlink escape"
+        );
+        super::write_atomic(&linked.join("state.json"), b"{\"ok\":true}")
+            .expect("atomic write through link remains non-sweeping");
+
+        assert!(
+            stray.exists(),
+            "external temp-shaped files must not be swept"
+        );
     }
 }
 

@@ -285,7 +285,8 @@ impl FleetManager {
     /// Effective session roster used everywhere a task references an
     /// `agent_profile` id. A selected v2 Fleet is authoritative; the merged
     /// legacy profile layers remain the fallback only when no Fleet is selected.
-    fn agent_roster(&self) -> crate::fleet::roster::FleetRoster {
+    /// Also exposed over `GET /v1/fleet/profiles` for GUI clients.
+    pub fn agent_roster(&self) -> crate::fleet::roster::FleetRoster {
         crate::fleet::identity::load_effective_roster(&self.fleet_config, &self.workspace, None)
     }
 

@@ -8,6 +8,7 @@ mod agent;
 mod anchor;
 mod clear;
 mod constitution;
+mod copy;
 // This group dir intentionally has a `core.rs` child module with the same
 // name. The module_inception allow is a permanent structure rationale, not
 // migration scaffolding; see docs/architecture/command-dispatch.md.
@@ -68,6 +69,10 @@ impl CommandGroup for CoreCommands {
             Box::new(FunctionCommand::new(
                 clear::ClearCmd::info(),
                 clear::ClearCmd::execute,
+            )),
+            Box::new(FunctionCommand::new(
+                copy::CopyCmd::info(),
+                copy::CopyCmd::execute,
             )),
             Box::new(FunctionCommand::new(
                 exit::ExitCmd::info(),

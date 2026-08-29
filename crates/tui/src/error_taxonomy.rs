@@ -206,6 +206,33 @@ impl ErrorEnvelope {
     }
 }
 
+/// Classify a boundary error from the typed [`LlmError`] when one is
+/// available, keeping the caller's display message.
+///
+/// Boundaries that only have an `anyhow::Error` historically stringified it
+/// and classified the *string* with `recoverable = true`. That downgraded
+/// terminal provider rejections such as `Model error: Model not exist.`
+/// (typed `LlmError::ModelError` → InvalidInput / `Error` severity /
+/// not recoverable) into `Internal` + `Warning` + recoverable noise, so the
+/// transcript showed a dismissable "Warn" row for a failure that actually
+/// ended the turn. When the typed error survives to the boundary, preserve
+/// its category, severity, and recovery contract verbatim; only genuinely
+/// untyped errors fall back to string classification.
+#[must_use]
+pub fn envelope_for_llm_error(error: anyhow::Error, display_message: String) -> ErrorEnvelope {
+    match error.downcast::<LlmError>() {
+        Ok(llm) => {
+            let mut envelope = ErrorEnvelope::from(llm);
+            envelope.message = display_message;
+            envelope
+        }
+        Err(error) => {
+            drop(error);
+            ErrorEnvelope::classify(display_message, true)
+        }
+    }
+}
+
 impl From<LlmError> for ErrorEnvelope {
     fn from(value: LlmError) -> Self {
         match value {
@@ -325,6 +352,13 @@ pub fn classify_error_message(message: &str) -> ErrorCategory {
         || lower.contains("prompt is too long")
         || (lower.contains("requested") && lower.contains("tokens") && lower.contains("maximum"))
         || lower.contains("context window")
+        || lower.contains("model not exist")
+        || lower.contains("model not found")
+        || lower.contains("no such model")
+        || lower.contains("unknown model")
+        || lower.contains("invalid model")
+        || lower.contains("model does not exist")
+        || lower.starts_with("model error:")
     {
         return ErrorCategory::InvalidInput;
     }

@@ -824,7 +824,11 @@ mod tests {
 
     #[test]
     fn working_marker_uses_the_live_work_status_role() {
-        let app = test_app();
+        let mut app = test_app();
+        // Match Terminal intentionally aliases both roles to ANSI Cyan. Use
+        // the branded palette here to prove the renderer selects the working
+        // slot rather than merely observing an equal terminal color.
+        app.ui_theme = crate::palette::UI_THEME;
         assert_eq!(ShellPhase::Working.color(&app), app.ui_theme.status_working);
         assert_ne!(ShellPhase::Working.color(&app), app.ui_theme.info);
         assert_eq!(
@@ -1390,3 +1394,277 @@ mod tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tideline merged footer (spec §3 slots 6+8 merged, §5a "Footer", §5e depth
+// line): one band — phase·cost on the left, depth line·keys on the right.
+// `render_footer` delegates to `render_identity` today; this is the merge
+// target shape, proven standalone. Translation scaffolding in the topbar
+// mold: the caller injects phase word/ink, live detail, cost label, and the
+// context percent (`SessionState`/`context_budget` facts at the landing
+// slice); not wired into `ui/frame.rs` (#5698 gate).
+//
+// Motion contract (spec §5e): the echolocation chip renders its still frame
+// `<·>` — the animated family is the landing slice's job through the 420 ms
+// heartbeat. The depth line is a hand-rolled span builder, never `Gauge`,
+// and changes only when the token count changes (no private clock).
+
+/// Depth-line cells: 9 rising ramp cells then wave cells for open water,
+/// plus the percentage — always ≤16 cells in the footer right.
+const DEPTH_CELLS: usize = 9;
+/// Ramp glyphs for the filled prefix (matches the spec's `▁▂▄▆` rise).
+const DEPTH_RAMP: [&str; 4] = ["▁", "▂", "▄", "▆"];
+/// Wave cell for unfilled depth (open water).
+const DEPTH_WAVE: &str = "∿";
+/// The depth cap warning at ≥80% (spec §5a/§5e).
+const DEPTH_WARN: &str = "surface soon — /compact";
+
+/// What the caller owes the merged footer. All injected, deterministic.
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub struct TidelineFooter<'a> {
+    pub theme: &'a crate::palette::UiTheme,
+    /// Phase word, e.g. `thinking` / `surfaced` / `idle`.
+    pub phase_word: &'a str,
+    /// Per-phase ink (the caller maps phase → ChromeInk; §5a "per-phase ink").
+    pub phase_ink: crate::palette::ChromeInk,
+    /// Live detail (`1m 15s`, `×3`), None when idle.
+    pub live_detail: Option<&'a str>,
+    /// Cost ledger label, e.g. `$0.42 · 61K tok`.
+    pub cost_label: &'a str,
+    /// Context window percentage 0–100 (depth line source).
+    pub context_percent: u8,
+    /// Key legend, e.g. `Enter send · Ctrl+K clear · ? help`.
+    pub keys_legend: &'a str,
+    pub ascii_safe: bool,
+}
+
+#[allow(dead_code)] // translation scaffolding: builder methods feed tests + the landing slice
+impl<'a> TidelineFooter<'a> {
+    #[allow(dead_code)] // translation scaffolding: wired by the landing slice
+    #[must_use]
+    pub fn new(
+        theme: &'a crate::palette::UiTheme,
+        phase_word: &'a str,
+        phase_ink: crate::palette::ChromeInk,
+        cost_label: &'a str,
+        context_percent: u8,
+        keys_legend: &'a str,
+    ) -> Self {
+        Self {
+            theme,
+            phase_word,
+            phase_ink,
+            live_detail: None,
+            cost_label,
+            context_percent,
+            keys_legend,
+            ascii_safe: false,
+        }
+    }
+
+    #[must_use]
+    pub fn live_detail(mut self, detail: Option<&'a str>) -> Self {
+        self.live_detail = detail;
+        self
+    }
+
+    #[must_use]
+    pub fn ascii_safe(mut self, ascii_safe: bool) -> Self {
+        self.ascii_safe = ascii_safe;
+        self
+    }
+
+    fn sym(&self, glyph: &str) -> String {
+        if !self.ascii_safe {
+            return glyph.to_string();
+        }
+        if let Some(fb) = crate::tui::glyphs::ascii_fallback(glyph) {
+            return fb.to_string();
+        }
+        glyph
+            .chars()
+            .map(|c| {
+                crate::tui::glyphs::ascii_fallback(&c.to_string())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| c.to_string())
+            })
+            .collect()
+    }
+
+    /// The depth sparkline for the current percent: filled prefix on the
+    /// `▁▂▄▆` ramp, `∿` waves for open water. Pure function of the count —
+    /// it never moves on its own (spec §5e).
+    #[must_use]
+    pub fn depth_cells(&self) -> String {
+        let pct = self.context_percent.clamp(0, 100);
+        let filled = (usize::from(pct) * DEPTH_CELLS / 100).min(DEPTH_CELLS);
+        let mut out = String::new();
+        for i in 0..DEPTH_CELLS {
+            if i < filled {
+                out.push_str(DEPTH_RAMP[i.min(DEPTH_RAMP.len() - 1)]);
+            } else {
+                out.push_str(DEPTH_WAVE);
+            }
+        }
+        self.sym(&out)
+    }
+
+    /// Depth ink: Info below 80%, Attention at the cap (§5a "80% warn").
+    #[must_use]
+    pub fn depth_ink(&self) -> crate::palette::ChromeInk {
+        depth_ink_for(self.context_percent)
+    }
+}
+
+/// Shared warn threshold ink rule (mirrors `topbar::meter_ink_for`).
+#[must_use]
+pub fn depth_ink_for(pct: u8) -> crate::palette::ChromeInk {
+    if pct >= 80 {
+        crate::palette::ChromeInk::Attention
+    } else {
+        crate::palette::ChromeInk::Info
+    }
+}
+
+fn tchrome(theme: &crate::palette::UiTheme, ink: crate::palette::ChromeInk) -> Style {
+    crate::palette::grammar::chrome_style(theme, ink)
+}
+
+fn tput(buf: &mut Buffer, x: u16, y: u16, text: &str, style: Style) {
+    buf.set_stringn(x, y, text, text.width(), style);
+}
+
+/// Paint the merged footer band (spec §5b: `Constraint::Length(1)`).
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFooter<'_>) {
+    if area.width < 8 || area.height < 1 {
+        return;
+    }
+    let theme = footer.theme;
+    let pct = footer.context_percent.clamp(0, 100);
+    let warn = pct >= 80;
+
+    // Right block first (spec §5a: depth·keys is pinned right; the left
+    // half's cost truncates against whatever the right half claims).
+    let depth = footer.depth_cells();
+    let pct_text = format!("{pct}%");
+    let mut right = format!("{depth} {pct_text}");
+    let warn_text = footer.sym(DEPTH_WARN);
+    let keys = footer.sym(footer.keys_legend);
+    let depth_ink = footer.depth_ink();
+    let extra: (&str, crate::palette::ChromeInk) = if warn {
+        right = format!("{} {right}", footer.sym("▲"));
+        (warn_text.as_str(), crate::palette::ChromeInk::Attention)
+    } else {
+        (keys.as_str(), crate::palette::ChromeInk::MetadataHint)
+    };
+    let right_width = right.width() as u16 + 1 + extra.0.width() as u16 + 1;
+
+    // Left: still-frame echolocation chip + phase word + live detail + cost.
+    let chip = footer.sym("<·>");
+    tput(buf, area.x, area.y, &chip, tchrome(theme, footer.phase_ink));
+    let mut x = area.x + chip.width() as u16 + 1;
+    let phase = footer.sym(footer.phase_word);
+    tput(
+        buf,
+        x,
+        area.y,
+        &phase,
+        tchrome(theme, footer.phase_ink).add_modifier(Modifier::BOLD),
+    );
+    x += phase.width() as u16 + 1;
+    if let Some(detail) = footer.live_detail {
+        let detail = footer.sym(detail);
+        tput(
+            buf,
+            x,
+            area.y,
+            &detail,
+            tchrome(theme, crate::palette::ChromeInk::Metadata),
+        );
+        x += detail.width() as u16 + 1;
+    }
+    let left_edge_end = (area.x + area.width).saturating_sub(right_width + 1);
+    if x + 2 <= left_edge_end {
+        tput(
+            buf,
+            x,
+            area.y,
+            "│",
+            tchrome(theme, crate::palette::ChromeInk::MetadataDim),
+        );
+        x += 2;
+    }
+    if x < left_edge_end {
+        let cost = footer.sym(footer.cost_label);
+        let budget = (left_edge_end - x) as usize;
+        let cost = truncate_owned(&cost, budget);
+        tput(
+            buf,
+            x,
+            area.y,
+            &cost,
+            tchrome(theme, crate::palette::ChromeInk::MetadataValue),
+        );
+    }
+
+    // Paint the right block pinned to the area edge.
+    let mut sx = (area.x + area.width)
+        .saturating_sub(right_width)
+        .max(area.x);
+    tput(buf, sx, area.y, &right, tchrome(theme, depth_ink));
+    sx += right.width() as u16 + 1;
+    let budget = (area.x + area.width).saturating_sub(sx) as usize;
+    tput(
+        buf,
+        sx,
+        area.y,
+        &truncate_owned(extra.0, budget),
+        tchrome(theme, extra.1),
+    );
+}
+
+fn truncate_owned(text: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + w > width {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out
+}
+
+/// Depth-segment hitbox → context inspector (spec §6). Returns the rect
+/// covering the painted depth line + percentage.
+#[must_use]
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub fn tideline_footer_depth_hitbox(area: Rect, footer: &TidelineFooter<'_>) -> Rect {
+    let pct = footer.context_percent.clamp(0, 100);
+    let depth = footer.depth_cells();
+    let mut right = format!("{depth} {pct}%");
+    if pct >= 80 {
+        right = format!("{} {right}", footer.sym("▲"));
+    }
+    // Mirror the render's right-block arithmetic: the extra span sits one
+    // space to the right of the depth line.
+    let extra_w = if pct >= 80 {
+        footer.sym(DEPTH_WARN).width() as u16
+    } else {
+        footer.keys_legend.width() as u16
+    };
+    let total = right.width() as u16 + 1 + extra_w + 1;
+    let x = (area.x + area.width).saturating_sub(total).max(area.x);
+    Rect {
+        x,
+        y: area.y,
+        width: right.width() as u16,
+        height: 1,
+    }
+}
+
+#[cfg(test)]
+mod tideline_tests;

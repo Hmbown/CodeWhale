@@ -384,10 +384,17 @@ async fn emergency_compaction_cancellation_drops_provider_and_never_mutates_cont
 }
 const REPRESENTATIVE_HANDOFF_RELAY: &str = "REPRESENTATIVE_HANDOFF_RELAY";
 
+/// R1 inverted this: the ordinary engine default used to be
+/// `UNBOUNDED_MODEL_STEPS = u32::MAX`, i.e. an agent loop with no finite
+/// bound. The default is now finite and every host resolves from it.
 #[test]
-fn ordinary_engine_default_has_no_hidden_step_budget() {
-    assert_eq!(UNBOUNDED_MODEL_STEPS, u32::MAX);
-    assert_eq!(EngineConfig::default().max_steps, UNBOUNDED_MODEL_STEPS);
+fn ordinary_engine_default_has_a_finite_step_budget() {
+    assert_eq!(
+        DEFAULT_MODEL_STEPS,
+        crate::core::engine::turn_budget::DEFAULT_MAX_MODEL_STEPS
+    );
+    const { assert!(DEFAULT_MODEL_STEPS < u32::MAX) };
+    assert_eq!(EngineConfig::default().max_steps, DEFAULT_MODEL_STEPS);
 }
 
 #[test]
@@ -18907,6 +18914,116 @@ async fn terminal_output_limit_followed_by_stream_error_is_charged_and_not_retri
     run_task.await.expect("engine task");
 }
 
+#[tokio::test]
+async fn midstream_error_frame_stops_the_stream_and_drops_trailing_deltas() {
+    // The reported incident: a provider delivered a chunk-level error
+    // object ("Model not exist.") mid-stream, and the stream kept parsing
+    // later frames as deltas — so reasoning/text rendered *after* the
+    // failure. The `StreamEvent::Error` arm must surface a terminal error
+    // event, stop consuming the stream, and never forward deltas that
+    // arrive after the failure frame.
+    let model = std::sync::Arc::new(crate::llm_client::mock::MockLlmClient::new(vec![vec![
+        crate::llm_client::mock::canned::message_start("midstream-error"),
+        crate::llm_client::mock::canned::text_block_start(0),
+        StreamEvent::Error {
+            error: serde_json::json!({ "message": "Model not exist." }),
+        },
+        // Everything after the error frame must never reach the UI.
+        crate::llm_client::mock::canned::text_delta(0, "TRAILING-DELTA-AFTER-FAILURE"),
+        crate::llm_client::mock::canned::block_stop(0),
+    ]]));
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let config = Config::default();
+    let engine_config = EngineConfig {
+        max_steps: 1,
+        snapshots_enabled: false,
+        subagents_enabled: false,
+        terminal_chrome_enabled: false,
+        ..EngineConfig::default()
+    };
+    let (engine, handle) = Engine::new_with_model_client(engine_config, &config, client);
+    let run_task = tokio::spawn(engine.run());
+
+    handle
+        .send(Op::SendMessage {
+            content: "solve the task".to_string(),
+            mode: AppMode::Agent,
+            route: resolved_route_for_test(&config, crate::config::DEFAULT_TEXT_MODEL),
+            compaction: Box::new(CompactionConfig::default()),
+            goal_objective: None,
+            goal_token_budget: None,
+            goal_status: crate::tools::goal::GoalStatus::Active,
+            reasoning_effort: None,
+            reasoning_effort_auto: false,
+            auto_model: false,
+            allow_shell: false,
+            trust_mode: false,
+            auto_approve: false,
+            approval_mode: crate::tui::approval::ApprovalMode::Suggest,
+            translation_enabled: false,
+            allowed_tools: None,
+            dynamic_tools: Vec::new(),
+            hook_executor: None,
+            verbosity: None,
+            provenance: UserInputProvenance::ExternalUser,
+        })
+        .await
+        .expect("send midstream-error turn");
+
+    let mut events = Vec::new();
+    loop {
+        let event = tokio::time::timeout(model_turn_event_timeout(), async {
+            handle.rx_event.write().await.recv().await
+        })
+        .await
+        .expect("midstream-error event timeout")
+        .expect("midstream-error event");
+        let terminal = matches!(event, Event::TurnComplete { .. });
+        events.push(event);
+        if terminal {
+            break;
+        }
+    }
+
+    // The failure is surfaced as a typed error event at Error severity.
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::Error { envelope, .. }
+            if envelope.message.contains("Model not exist.")
+                && envelope.category == crate::error_taxonomy::ErrorCategory::InvalidInput
+                && envelope.severity == crate::error_taxonomy::ErrorSeverity::Error
+    )));
+    // Deltas after the failure frame never reach the UI.
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            Event::MessageDelta { content, .. } if content.contains("TRAILING-DELTA")
+        )),
+        "deltas after a mid-stream failure must be dropped: {events:?}"
+    );
+    // The turn fails with the provider's message, not a generic truncation.
+    let (status, error) = events
+        .iter()
+        .find_map(|event| match event {
+            Event::TurnComplete { status, error, .. } => Some((status, error)),
+            _ => None,
+        })
+        .expect("midstream-error TurnComplete");
+    assert_eq!(*status, TurnOutcomeStatus::Failed);
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|e| e.contains("Model not exist.")),
+        "{error:?}"
+    );
+    // The stream is consumed exactly once — no re-issue of a terminal
+    // rejection.
+    assert_eq!(model.call_count(), 1);
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run_task.await.expect("engine task");
+}
+
 /// Emits a full billed response, then cancels the engine's own token while
 /// yielding the final stream event — modeling Esc arriving right after the
 /// provider finished charging for the response.
@@ -21101,4 +21218,183 @@ async fn idle_engine_routes_child_approval_decisions_to_the_waiting_child() {
     assert!(!crate::tools::subagent::SubAgentManager::is_child_approval_id("call_123"));
     handle.send(Op::Shutdown).await.expect("shutdown engine");
     run.await.expect("engine task");
+}
+
+// ---------------------------------------------------------------------------
+// R1: finite turn budgets. Each limit must fire, and each must be overridable.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn engine_config_defaults_carry_finite_turn_budgets() {
+    use crate::core::engine::turn_budget;
+
+    let config = EngineConfig::default();
+    assert_eq!(config.max_steps, turn_budget::DEFAULT_MAX_MODEL_STEPS);
+    assert!(
+        config.max_steps < u32::MAX,
+        "the default model-step ceiling must be finite"
+    );
+    assert_eq!(
+        config.turn_wall_clock,
+        std::time::Duration::from_secs(turn_budget::DEFAULT_TURN_WALL_CLOCK_SECS),
+    );
+    assert!(config.turn_wall_clock > std::time::Duration::ZERO);
+    assert_eq!(
+        config.stream_max_content_bytes,
+        turn_budget::DEFAULT_STREAM_MAX_CONTENT_BYTES
+    );
+    assert_eq!(
+        config.stream_max_duration,
+        std::time::Duration::from_secs(turn_budget::DEFAULT_STREAM_MAX_DURATION_SECS),
+    );
+}
+
+/// R1: a spent wall-clock budget stops the turn *before* another billable
+/// request, and reports the stop truthfully rather than as a clean success.
+#[tokio::test]
+async fn turn_wall_clock_budget_stops_the_turn_before_another_model_request() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![canned::simple_text_turn(
+        "this response must never be requested",
+    )]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let engine_config = EngineConfig {
+        // Only tests construct a zero budget; `resolve_turn_wall_clock`
+        // rejects `0` from configuration.
+        turn_wall_clock: std::time::Duration::ZERO,
+        ..deterministic_engine_config(workspace.path())
+    };
+    let (mut engine, _handle) =
+        Engine::new_with_model_client(engine_config, &Config::default(), client);
+    let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+    let registry = crate::tools::ToolRegistry::new(context);
+    let surface = test_tool_surface(&engine, registry, None, AppMode::Agent);
+    let mut turn = crate::core::turn::TurnContext::new(engine.config.max_steps);
+
+    let (status, error) = engine.run_turn(&mut turn, surface, None, None).await;
+
+    assert_eq!(
+        status,
+        TurnOutcomeStatus::Failed,
+        "a budget stop is never a clean success"
+    );
+    let error = error.expect("a budget stop must carry a reason");
+    assert!(
+        error.contains("wall-clock budget exhausted"),
+        "the stop must name the budget: {error}"
+    );
+    assert_eq!(
+        mock.call_count(),
+        0,
+        "no billable request may be authorized once the budget is spent"
+    );
+}
+
+/// R1: the wall-clock budget is overridable — a generous budget lets the same
+/// turn run to a normal completion.
+#[tokio::test]
+async fn turn_wall_clock_budget_is_overridable() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![canned::simple_text_turn(
+        "The requested work is complete.",
+    )]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let engine_config = EngineConfig {
+        turn_wall_clock: std::time::Duration::from_secs(600),
+        ..deterministic_engine_config(workspace.path())
+    };
+    let (mut engine, _handle) =
+        Engine::new_with_model_client(engine_config, &Config::default(), client);
+    let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+    let registry = crate::tools::ToolRegistry::new(context);
+    let surface = test_tool_surface(&engine, registry, None, AppMode::Agent);
+    let mut turn = crate::core::turn::TurnContext::new(engine.config.max_steps);
+
+    let (status, error) = engine.run_turn(&mut turn, surface, None, None).await;
+
+    assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
+    assert_eq!(mock.call_count(), 1);
+}
+
+/// R1: a turn that keeps calling tools past its model-step ceiling ends as a
+/// reported failure naming the limit — never as a silent completion.
+#[tokio::test]
+async fn model_step_ceiling_fires_and_reports_the_limit() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    let mock = std::sync::Arc::new(MockLlmClient::new(
+        (0..8)
+            .map(|index| {
+                canned::tool_call_turn(&format!("call_{index}"), "definitely_not_a_real_tool", "{}")
+            })
+            .collect(),
+    ));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let engine_config = EngineConfig {
+        max_steps: 2,
+        ..deterministic_engine_config(workspace.path())
+    };
+    let (mut engine, _handle) =
+        Engine::new_with_model_client(engine_config, &Config::default(), client);
+    let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+    let registry = crate::tools::ToolRegistry::new(context);
+    let surface = test_tool_surface(&engine, registry, None, AppMode::Agent);
+    let mut turn = crate::core::turn::TurnContext::new(engine.config.max_steps);
+
+    let (status, error) = engine.run_turn(&mut turn, surface, None, None).await;
+
+    assert_eq!(
+        status,
+        TurnOutcomeStatus::Failed,
+        "a model that never stops must not report success: {error:?}"
+    );
+    let error = error.expect("the step ceiling must carry a reason");
+    assert!(
+        error.contains("Maximum model steps reached"),
+        "the stop must name the limit: {error}"
+    );
+    assert!(
+        mock.call_count() <= 4,
+        "the ceiling must bound requests, saw {}",
+        mock.call_count()
+    );
+}
+
+/// R1: the per-step stream cap is overridable, and a tiny cap actually cuts
+/// the stream off instead of accumulating without bound.
+#[tokio::test]
+async fn per_step_stream_content_cap_is_overridable_and_fires() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    let long_answer = "x".repeat(4096);
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![canned::simple_text_turn(
+        &long_answer,
+    )]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let engine_config = EngineConfig {
+        // Only tests set a cap below the configurable minimum; the resolver
+        // clamps configured values into a sane finite range.
+        stream_max_content_bytes: 64,
+        ..deterministic_engine_config(workspace.path())
+    };
+    let (mut engine, _handle) =
+        Engine::new_with_model_client(engine_config, &Config::default(), client);
+    let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+    let registry = crate::tools::ToolRegistry::new(context);
+    let surface = test_tool_surface(&engine, registry, None, AppMode::Agent);
+    let mut turn = crate::core::turn::TurnContext::new(engine.config.max_steps);
+
+    let (status, _error) = engine.run_turn(&mut turn, surface, None, None).await;
+
+    assert_ne!(
+        status,
+        TurnOutcomeStatus::Completed,
+        "a stream cut off by the content cap must not report a clean completion"
+    );
 }

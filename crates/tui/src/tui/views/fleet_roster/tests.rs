@@ -11,6 +11,24 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
+fn mouse(kind: MouseEventKind, area: Rect) -> MouseEvent {
+    MouseEvent {
+        kind,
+        column: area.x,
+        row: area.y,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+fn setup_member_id(action: ViewAction) -> Option<String> {
+    match action {
+        ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenSetupRequested { member_id }) => {
+            Some(member_id)
+        }
+        _ => None,
+    }
+}
+
 fn operator() -> OperatorInfo {
     OperatorInfo {
         provider: "DeepSeek".to_string(),
@@ -48,6 +66,9 @@ fn view_with_overrides() -> FleetRosterView {
         load_error: None,
         selected: 0,
         detail_scroll: 0,
+        row_hitboxes: RefCell::new(Vec::new()),
+        last_mouse_selected: None,
+        surface_bg: palette::UI_THEME.surface_bg,
         locale: Locale::En,
     }
 }
@@ -123,6 +144,11 @@ fn operator_row_is_pinned_first_with_the_session_model() {
     );
     assert!(text.contains("deepseek-v4-pro"), "session model shown");
     assert!(text.contains("full session access"), "{text}");
+    assert!(text.contains("leads the Pod"), "{text}");
+    assert!(
+        !text.contains("Fleet"),
+        "customer-facing operator detail leaked the internal name: {text}"
+    );
 }
 
 #[test]
@@ -186,6 +212,94 @@ fn enter_and_s_open_the_setup_wizard_for_members_only() {
 }
 
 #[test]
+fn mouse_selection_reveals_details_then_activates_the_same_member_as_enter() {
+    let area = Rect::new(0, 0, 100, 30);
+    let mut view = built_in_view();
+    let mut buf = Buffer::empty(area);
+    view.render(area, &mut buf);
+    let manager_row = view
+        .row_hitboxes
+        .borrow()
+        .iter()
+        .find_map(|(rect, action)| (action.row() == 1).then_some(*rect))
+        .expect("manager row hitbox");
+    let click = mouse(MouseEventKind::Down(MouseButton::Left), manager_row);
+
+    view.detail_scroll = 8;
+    assert!(matches!(view.handle_mouse(click), ViewAction::None));
+    assert_eq!(view.selected, 1);
+    assert_eq!(view.detail_scroll, 0);
+
+    // Selection owns the existing detail pane; clicking does not invent a
+    // second details route.
+    let mut selected_buf = Buffer::empty(area);
+    view.render(area, &mut selected_buf);
+    let selected_text = (0..area.height)
+        .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+        .map(|(x, y)| selected_buf[(x, y)].symbol())
+        .collect::<String>();
+    assert!(selected_text.contains("Member"), "{selected_text}");
+    assert!(selected_text.contains("manager"), "{selected_text}");
+
+    let mouse_member = setup_member_id(view.handle_mouse(click)).expect("second click activates");
+    let mut keyboard = built_in_view();
+    keyboard.handle_key(key(KeyCode::Down));
+    let keyboard_member =
+        setup_member_id(keyboard.handle_key(key(KeyCode::Enter))).expect("Enter activates");
+    assert_eq!(mouse_member, keyboard_member);
+}
+
+#[test]
+fn mouse_wheel_and_arrow_keys_share_roster_selection_semantics() {
+    let mut mouse_view = built_in_view();
+    let mut keyboard_view = built_in_view();
+    let anywhere = Rect::new(0, 0, 1, 1);
+
+    mouse_view.handle_mouse(mouse(MouseEventKind::ScrollDown, anywhere));
+    keyboard_view.handle_key(key(KeyCode::Down));
+    assert_eq!(mouse_view.selected, keyboard_view.selected);
+    assert_eq!(mouse_view.detail_scroll, keyboard_view.detail_scroll);
+
+    mouse_view.handle_mouse(mouse(MouseEventKind::ScrollUp, anywhere));
+    keyboard_view.handle_key(key(KeyCode::Up));
+    assert_eq!(mouse_view.selected, keyboard_view.selected);
+    assert_eq!(mouse_view.detail_scroll, keyboard_view.detail_scroll);
+}
+
+#[test]
+fn saved_profile_rows_keep_view_owned_typed_actions() {
+    let area = Rect::new(0, 0, 160, 40);
+    let view = built_in_view();
+    let mut buf = Buffer::empty(area);
+    view.render(area, &mut buf);
+
+    let hitboxes = view.row_hitboxes.borrow();
+    assert_eq!(hitboxes.len(), view.row_count());
+    for (_, action) in hitboxes.iter() {
+        assert!(matches!(
+            action,
+            PodRosterRowAction::SelectOrActivate { .. }
+        ));
+    }
+}
+
+#[test]
+fn match_terminal_roster_surface_uses_reset_background() {
+    let area = Rect::new(0, 0, 100, 30);
+    let mut view = built_in_view();
+    view.surface_bg = palette::TERMINAL_UI_THEME.surface_bg;
+    let mut buf = Buffer::empty(area);
+    for cell in &mut buf.content {
+        cell.set_bg(Color::Red);
+    }
+
+    view.render(area, &mut buf);
+
+    assert_eq!(view.surface_bg, Color::Reset);
+    assert_eq!(buf[(0, 0)].bg, Color::Reset);
+}
+
+#[test]
 fn m_opens_the_selected_member_model_picker_only_for_a_named_fleet() {
     let mut view = built_in_view();
     view.handle_key(key(KeyCode::Down));
@@ -226,6 +340,13 @@ fn selected_named_fleet_member_shows_edit_affordance() {
     assert!(
         text.contains("m model"),
         "footer should advertise the model shortcut: {text}"
+    );
+    assert!(text.contains("Pod `Default`"), "{text}");
+    assert!(text.contains("edit Pod"), "{text}");
+    assert!(text.contains("saved Pods"), "{text}");
+    assert!(
+        !text.contains("Fleet"),
+        "customer-facing /pod roster copy leaked the internal name: {text}"
     );
 }
 
@@ -445,9 +566,9 @@ fn fleet_roster_is_usable_and_opaque_at_blocker_sizes() {
             );
             // Some action label is always visible.
             assert!(text.contains("close"), "{label} {w}x{h}: missing footer");
-            // The first impression names Fleet as the worker/orchestration surface.
+            // The first impression names Pod as the worker/orchestration surface.
             assert!(
-                text.contains("fleet") && text.contains("runs"),
+                text.contains("pod") && text.contains("runs"),
                 "{label} {w}x{h}: missing framing"
             );
             // The selected row's detail is on screen.

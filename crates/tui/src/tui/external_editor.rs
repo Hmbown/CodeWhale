@@ -127,6 +127,10 @@ pub(crate) fn spawn_editor_for_input(
     current: &str,
 ) -> io::Result<EditorOutcome> {
     // 1. Suspend.
+    // Focus reporting is about to be disabled. Fail closed to the quiet state
+    // so a stale FocusLost cannot authorize a surprise notification while an
+    // external editor owns the terminal.
+    crate::tui::notifications::set_terminal_focused(true);
     // #443: pop keyboard enhancement flags first so the editor
     // process doesn't inherit a half-configured input mode. Best-
     // effort — matches the shutdown / panic paths in main.rs.
@@ -155,6 +159,9 @@ pub(crate) fn spawn_editor_for_input(
         use_mouse_capture,
         use_bracketed_paste,
     );
+    // Reporting was unavailable during the handoff. Resume focused and wait
+    // for a fresh FocusLost before background-only delivery is eligible.
+    crate::tui::notifications::set_terminal_focused(true);
     // Force a full repaint so a SIGWINCH during the edit doesn't leave the
     // viewport stale.
     let _ = terminal.clear();

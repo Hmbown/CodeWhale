@@ -183,10 +183,6 @@ pub fn load_workspace_agent_profiles_tolerant(
     load_agent_profiles_from_dir_tolerant(dir, ProfileOrigin::Workspace)
 }
 
-pub fn load_personal_agent_profiles_tolerant() -> Result<(Vec<AgentProfile>, Vec<String>)> {
-    load_agent_profiles_from_dir_tolerant(personal_agent_profile_dir()?, ProfileOrigin::Personal)
-}
-
 pub fn load_agent_profiles_from_dir_tolerant(
     dir: impl AsRef<Path>,
     origin: ProfileOrigin,

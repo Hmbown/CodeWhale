@@ -134,7 +134,7 @@ mod tests {
                 .build(),
             SettingOption::builder("terminal", "Terminal")
                 .summary("Terminal-owned background")
-                .detail("Terminal owns the background; ombre is unavailable.")
+                .detail("Terminal owns the background; Deepsea is unavailable.")
                 .help("No painted ocean field")
                 .values(SettingValues::new(
                     Cow::Borrowed("terminal"),

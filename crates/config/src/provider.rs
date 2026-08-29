@@ -2,7 +2,8 @@
 //!
 //! This module is a metadata foundation for collapsing provider drift over
 //! time. It deliberately does not mutate request bodies or choose fallback
-//! providers; runtime routing remains in `ConfigToml::resolve_runtime_options`.
+//! providers; `ConfigToml::resolve_runtime_options` now mints the executable
+//! route through `RouteResolver` (Phase 1). Auth/key resolution stays here.
 
 use super::{
     DEFAULT_ANTIGRAVITY_BASE_URL, DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_ARCEE_BASE_URL,
