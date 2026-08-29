@@ -9,8 +9,17 @@
 
 use super::*;
 
+/// Resolve the headless `exec` model-step ceiling.
+///
+/// R1: omitting `--max-turns` no longer means `u32::MAX`. A non-interactive
+/// run has nobody watching it, so its default bound is the same finite
+/// ceiling the interactive engine uses. Clap already rejects `--max-turns
+/// 0`, so no "0 means unlimited" sentinel can reach here; an explicit value
+/// is still clamped to the documented finite range.
 pub(crate) fn exec_max_steps(max_turns: Option<u32>) -> u32 {
-    max_turns.unwrap_or(u32::MAX)
+    crate::core::engine::turn_budget::resolve_max_model_steps(max_turns.or(Some(
+        crate::core::engine::turn_budget::DEFAULT_EXEC_MAX_TURNS,
+    )))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -261,6 +270,9 @@ pub(crate) async fn run_exec_agent(
         stream_chunk_timeout: std::time::Duration::from_secs(
             execution_config.stream_chunk_timeout_secs(),
         ),
+        turn_wall_clock: execution_config.turn_wall_clock(),
+        stream_max_content_bytes: execution_config.stream_max_content_bytes(),
+        stream_max_duration: execution_config.stream_max_duration(),
         subagent_heartbeat_timeout: std::time::Duration::from_secs(
             execution_config.subagent_heartbeat_timeout_secs_for_provider(effective_provider),
         ),
@@ -269,7 +281,7 @@ pub(crate) async fn run_exec_agent(
             read_only_roots: execution_config.bwrap_ro_roots.clone(),
             device_roots: execution_config.bwrap_dev_roots.clone(),
         },
-        denied_read_subpaths: execution_config.sandbox_denied_read_paths.clone(),
+        read_denylist: execution_config.read_denylist(),
         memory_enabled: execution_config.memory_enabled(),
         memory_path: execution_config.memory_path(),
         speech_output_dir: execution_config.speech_output_dir(),

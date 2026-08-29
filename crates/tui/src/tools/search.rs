@@ -537,6 +537,20 @@ fn visit_files_recursive(
                 return Ok(WalkControl::Stop);
             }
         } else if effective_type.is_file() {
+            // Sandbox read deny-list (S1). A recursive search is not a directed
+            // read request, so a denied file is skipped rather than failing the
+            // whole search — otherwise one `.env` anywhere in the tree would
+            // make `search` useless. The skip is logged; a directed
+            // `read_file`/`read`/`read_media` on the same path still returns an
+            // explicit refusal rather than an empty result.
+            if let Err(denial) = crate::sandbox::read_guard::active().check(&path) {
+                tracing::debug!(
+                    target: "codewhale::sandbox::read_guard",
+                    requested = %denial.requested.display(),
+                    "sandbox read deny-list skipped a file during search"
+                );
+                continue;
+            }
             // Check inclusions (if any specified)
             if (include_patterns.is_empty() || should_include(&relative_str, include_patterns))
                 && let WalkControl::Stop = visit(&path)?

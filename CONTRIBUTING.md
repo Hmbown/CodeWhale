@@ -188,6 +188,20 @@ Use clear, descriptive commit messages following conventional commits:
 
 Example: `feat: add doctor subcommand for system diagnostics`
 
+**Do not leave AI-assistant co-author trailers on your commits.** Using an
+assistant is welcome and needs no disclosure, but many tools append something
+like `Co-authored-by: Claude <noreply@anthropic.com>` automatically, and the
+`Lint` job rejects it — `scripts/check-coauthor-trailers.py` requires
+contributor trailers to name humans, because those trailers feed the GitHub
+contribution graph. If CI fails on this, drop the line and force-push:
+
+```bash
+git rebase -i origin/main   # reword each commit, delete the Co-authored-by line
+```
+
+Co-author a *person* freely; the address must be their GitHub-linked one
+(`id+login@users.noreply.github.com`) or the credit does not register.
+
 When a commit harvests code from a community PR (see "How Your Contribution
 Lands" below), include a `Harvested from PR #N by @author` line in the commit
 body. An auto-close workflow watches for this pattern and closes the

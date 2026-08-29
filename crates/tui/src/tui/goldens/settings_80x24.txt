@@ -1,0 +1,24 @@
+▸ Appearance      System                                                        
+  Motion          Terminal                                                      
+  Composer        Blue Stage                                                    
+  Notifications [ ✓ Blue Stage Light ]                                          
+  Provider        Grayscale                                                     
+  Keybindings     Catppuccin Mocha                                              
+  Privacy         Tokyo Night                                                   
+  Advanced        Dracula                                                       
+                  Gruvbox Dark                                                  
+                  Claude                                                        
+                  Matrix                                                        
+                  Solarized Light                                               
+                  Uwu                                                           
+                MOTION (OPTIONAL)                                               
+                 ○ low motion                                                   
+                 ◉ ambient life                                                 
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+? help                                                                          
+/ file issue                                                                    
+f feedback                                                                      

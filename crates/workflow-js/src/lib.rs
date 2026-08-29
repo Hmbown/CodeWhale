@@ -22,12 +22,27 @@
 //!   that fails `responseSchema` gets up to
 //!   [`SCHEMA_REPAIR_MAX_ATTEMPTS`] bounded repairs (#5583) before it throws;
 //!   the failed attempts are reported as driver receipts either way.
-//! * `parallel(thunks)` — all-settled fan-out; an ordinary failed slot becomes
-//!   `null`; schema-contract failures and run cancellation still fail the run;
-//!   at most [`PARALLEL_MAX_ITEMS`] items.
+//! * `parallel(thunks, opts)` — fan-out, at most [`PARALLEL_MAX_ITEMS`] items.
+//!   `opts.mode` is `settled` (default), `fail-fast`, or `partial`; an
+//!   unrecognized mode throws. `settled` keeps today's ergonomics — an
+//!   ordinary failed slot resolves to `null` — while schema-contract failures
+//!   and run cancellation still fail the run. `fail-fast` rejects the fan-out
+//!   with the first non-fatal slot error instead of nulling it. `partial`
+//!   resolves every non-cancellation failure to
+//!   `{ __taskError: { index, kind, message } }`.
 //! * `pipeline(items, ...stages)` — per-item stage chains with no barrier
-//!   between stages; an ordinary stage error drops that item to `null`, while
-//!   schema-contract failures and cancellation still fail the run; same cap.
+//!   between stages; same cap and the same three modes via the
+//!   `pipeline(items, { stages, mode })` overload.
+//!
+//! Both fan-outs attach a non-enumerable `errors` array to the resolved
+//! result — `[{ index, kind, message }]`, ordered by index, empty when
+//! nothing failed. The array's own contents, length, and JSON encoding are
+//! unchanged, so a dropped slot is now inspectable instead of erased.
+//!
+//! `kind` is a [`TaskErrorKind`] wire string (`admission`, `budget`,
+//! `cancelled`, `agent`, `schema`, `driver`) assigned by the host where the
+//! failure happened, or `script` for an error the script threw itself. It is
+//! read from the thrown `Error`'s `.kind`, never inferred from message text.
 //! * `log(msg)` / `phase(title)` — progress events forwarded to the driver.
 //! * `budget.total` / `budget.spent()` / `budget.remaining()` — live driver
 //!   snapshots (`total` is `null` and `remaining()` is `Infinity` when no
@@ -55,7 +70,7 @@ pub use driver::{
     BudgetSnapshot, ProgressEvent, SpawnedTask, TaskCompletion, TaskRequest, WorkflowDriver,
     normalize_profile,
 };
-pub use error::{DriverError, WorkflowJsError};
+pub use error::{DriverError, TaskErrorKind, WorkflowJsError};
 pub use schema::{SCHEMA_RAW_CARRY_CHARS, SCHEMA_RAW_PREVIEW_CHARS, SCHEMA_REPAIR_MAX_ATTEMPTS};
 pub use vm::{VmLimits, WorkflowRunCancel, WorkflowVm};
 

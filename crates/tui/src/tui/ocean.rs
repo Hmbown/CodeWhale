@@ -2,8 +2,8 @@
 //!
 //! The field is atmosphere, never content: ordinary shell cells share its
 //! water column while semantic surfaces such as selections, errors, and code
-//! keep their own backgrounds. Reduced motion freezes the field but does not
-//! remove it, so choosing an underwater treatment always has a visible result.
+//! keep their own backgrounds. It is an explicit treatment, rather than a
+//! layer forced onto every terminal.
 
 use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 
@@ -13,34 +13,34 @@ use crate::tui::underwater::ShellPhase;
 /// Appearance treatment for the underwater shell.
 ///
 /// Parsed once from persisted settings so rendering and scheduling code can
-/// branch on typed state instead of scattered string comparisons. Treatment
-/// is appearance only: ambient life belongs to every underwater treatment,
-/// while motion is governed separately by `low_motion`/`fancy_animations`.
+/// branch on typed state instead of scattered string comparisons. `Deepsea` is
+/// the opt-in underwater scene; `Flat` leaves the host/theme surface alone.
+/// Motion inside the selected scene remains governed separately by
+/// `low_motion`/`fancy_animations`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OceanTreatment {
     /// State-reactive water column painted from the theme's [`OceanRamp`].
+    Deepsea,
+    /// Plain theme surface with no atmospheric treatment. This is the
+    /// terminal-respecting default; the host owns the background.
     #[default]
-    Ombre,
-    /// Plain theme surface with the same state grammar and ambient life.
     Flat,
 }
 
 impl OceanTreatment {
     #[must_use]
     pub fn parse(value: &str) -> Self {
-        let value = value.trim();
-        if value.eq_ignore_ascii_case("flat") {
-            Self::Flat
-        } else {
-            // Migration shim: the legacy "classic" shell was removed in 0.9.4;
-            // persisted settings carrying it load as the default ombre.
-            Self::Ombre
+        match value.trim().to_ascii_lowercase().as_str() {
+            "deepsea" | "ombre" | "gradient" | "classic" => Self::Deepsea,
+            // Invalid persisted values must never opt the user into a painted
+            // surface. The settings editor validates new values before save.
+            _ => Self::Flat,
         }
     }
 
     #[must_use]
-    pub fn is_ombre(self) -> bool {
-        self == Self::Ombre
+    pub fn is_deepsea(self) -> bool {
+        self == Self::Deepsea
     }
 
     #[must_use]
@@ -49,14 +49,14 @@ impl OceanTreatment {
     }
 }
 
-/// Minimum empty-water size that earns decorative ambient life. Below this,
-/// content and controls own every cell. Shared by the renderer and the idle
-/// animation scheduler so redraws are never scheduled for invisible life.
-/// Lowered in v0.9.1 so smaller windows still retain some life.
+/// Minimum empty-water size that earns decorative ambient life when the
+/// underwater treatment is selected. Below this, content and controls own
+/// every cell. Shared by the renderer and idle animation scheduler so redraws
+/// are never scheduled for invisible life.
 pub const AMBIENT_MIN_WIDTH: u16 = 40;
 pub const AMBIENT_MIN_HEIGHT: u16 = 10;
 
-/// Ambient-life ink pair, independent of the ombre ramp and shaped by what
+/// Ambient-life ink pair, independent of the Deepsea ramp and shaped by what
 /// the agent is doing so the marks themselves carry the state at a glance:
 /// reasoning dims toward the deep, tool work brightens like a faster current,
 /// and a sub-agent pod swims in seafoam — the hue reserved for orchestration.
@@ -78,7 +78,12 @@ pub fn ambient_inks_for_activity(
         AmbientActivity::Subagents => (0.34, 0.22),
         AmbientActivity::Verifying | AmbientActivity::Baseline => (0.42, 0.28),
     };
-    match rgb(theme.surface_bg) {
+    // The built-in Whale pair deliberately leaves its Flat shell at Reset.
+    // When Deepsea is selected, use the authored column as the color-mixing
+    // base so its ambient life retains depth and activity-specific inks.
+    let mix_base = rgb(theme.surface_bg)
+        .or_else(|| OceanRamp::for_theme(theme).and_then(|ramp| rgb(ramp.middle)));
+    match mix_base {
         Some(base) => (
             color(mix(sky, base, toward_base_a)),
             color(mix(sky, base, toward_base_b)),
@@ -372,7 +377,7 @@ impl OceanRamp {
         // the named palette's contract. Tinting it with the underwater field
         // turns the shell green-grey and no longer renders Solarized Light
         // (#4457). A non-canonical user-supplied background is a separate
-        // contract and must keep the configured ombre treatment.
+        // contract and must keep the configured Deepsea treatment.
         if theme.mode == PaletteMode::SolarizedLight
             && theme.surface_bg == crate::palette::SOLARIZED_LIGHT_UI_THEME.surface_bg
         {

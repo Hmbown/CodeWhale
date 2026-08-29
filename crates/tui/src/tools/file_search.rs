@@ -94,10 +94,19 @@ impl ToolSpec for FileSearchTool {
         }
 
         let limit = optional_u64(&input, "limit", 20)?.clamp(1, 200) as usize;
+        // S1: enumerating names inside a denied tree is a read of that tree —
+        // Seatbelt's `deny file-read*` blocks readdir of denied dirs, so a
+        // denied search root is refused rather than walked. The raw spelling is
+        // checked before `resolve_path` (F2) so the refusal names the caller's
+        // path, never a symlink target it might resolve to.
         let base_path = match optional_str(&input, "path")? {
-            Some(path) if !path.trim().is_empty() => context.resolve_path(path)?,
+            Some(path) if !path.trim().is_empty() => {
+                super::file::enforce_read_denylist(Path::new(path), "file_search")?;
+                context.resolve_path(path)?
+            }
             _ => context.workspace.clone(),
         };
+        super::file::enforce_read_denylist(&base_path, "file_search")?;
 
         let extensions = parse_extensions(&input);
         let exclude_patterns = parse_exclude_patterns(&input);
@@ -271,6 +280,20 @@ fn search_files(
             Ok(entry) => entry,
             Err(_) => continue,
         };
+        // Sandbox read deny-list (S1). A walk rooted above a denied tree —
+        // e.g. `path = "~"` — must not enumerate the names inside it
+        // (`~/.ssh/id_rsa` …), exactly as `search` skips denied files during
+        // its walk. Skipped silently rather than failing the whole search: a
+        // name search is not a directed read, and the explicit refusal for one
+        // lives at the root guard above.
+        if let Err(denial) = crate::sandbox::read_guard::active().check(entry.path()) {
+            tracing::debug!(
+                target: "codewhale::sandbox::read_guard",
+                requested = %denial.requested.display(),
+                "sandbox read deny-list skipped an entry during file_search"
+            );
+            continue;
+        }
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
         }
@@ -590,5 +613,68 @@ mod tests {
 
         assert!(result.success);
         assert!(!result.content.contains("secret.txt"));
+    }
+
+    /// F1: searching a denied directory is enumeration of it — `file_search`
+    /// with its root inside a denied tree must refuse, matching the OS layer
+    /// (Seatbelt `deny file-read*` blocks readdir of denied dirs).
+    #[tokio::test]
+    async fn test_file_search_refuses_a_denied_root() {
+        let holder = tempdir().expect("tempdir");
+        let project = holder.path().join("project");
+        // Deterministic anchor: the `.env` filename rule denies any path whose
+        // file name is `.env`, directory or not.
+        std::fs::create_dir_all(project.join(".env")).expect("mkdir");
+        std::fs::write(project.join(".env").join("token"), "x\n").expect("write");
+
+        let ctx = ToolContext::new(project.clone());
+        let tool = FileSearchTool;
+        let error = tool
+            .execute(
+                json!({"query": "token", "path": project.join(".env")}),
+                &ctx,
+            )
+            .await
+            .expect_err("a denied search root must be refused, not walked");
+
+        assert!(
+            matches!(error, ToolError::PermissionDenied { .. }),
+            "expected a permission refusal, got: {error:?}"
+        );
+    }
+
+    /// F1: a walk rooted *above* a denied path must not enumerate names inside
+    /// it — `path = "~"` must not surface `~/.ssh/id_rsa`, and a project root
+    /// must not surface its `.env` (denied by name under the default list).
+    #[tokio::test]
+    async fn test_file_search_skips_denied_entries_during_the_walk() {
+        let tmp = tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("needle.txt"), "yes\n").expect("write");
+        std::fs::write(root.join(".env"), "SECRET=1\n").expect("write env");
+        std::fs::write(root.join(".env.local"), "SECRET=2\n").expect("write env local");
+
+        let ctx = ToolContext::new(root.to_path_buf());
+        let tool = FileSearchTool;
+        let result = tool
+            .execute(json!({"query": "env"}), &ctx)
+            .await
+            .expect("execute");
+
+        assert!(result.success);
+        assert!(
+            !result.content.contains(".env"),
+            "denied entries must not be enumerated by a name search: {}",
+            result.content
+        );
+
+        // The innocent sibling is still found — the deny-list filters, it does
+        // not blank the search.
+        let result = tool
+            .execute(json!({"query": "needle"}), &ctx)
+            .await
+            .expect("execute");
+        assert!(result.success);
+        assert!(result.content.contains("needle.txt"));
     }
 }

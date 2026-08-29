@@ -617,17 +617,36 @@ impl ColorDepth {
     /// fallback is `Ansi16` so background tints disappear safely.
     #[must_use]
     pub fn detect() -> Self {
-        if let Ok(ct) = std::env::var("COLORTERM") {
-            let ct = ct.to_ascii_lowercase();
+        Self::detect_with(|key| std::env::var_os(key))
+    }
+
+    /// Pure decision core over an injected environment reader, so the
+    /// `NO_COLOR` contract is testable without mutating process env.
+    ///
+    /// `NO_COLOR` (no-color.org): present and non-empty ⇒ suppress color.
+    /// The TUI's contained answer is to force the mono/ascii-safe path —
+    /// ANSI-16 depth, where backgrounds drop to `Color::Reset` and the
+    /// injective role matrix carries meaning in glyph/intensity, never hue.
+    /// TODO(depth): a fully colorless SGR stream would additionally need a
+    /// theme-level Reset override; that is deliberately out of this fix.
+    #[must_use]
+    pub(crate) fn detect_with(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Self {
+        if let Some(no_color) = get("NO_COLOR")
+            && !no_color.is_empty()
+        {
+            return Self::Ansi16;
+        }
+        if let Some(ct) = get("COLORTERM") {
+            let ct = ct.to_string_lossy().to_ascii_lowercase();
             if ct.contains("truecolor") || ct.contains("24bit") {
                 return Self::TrueColor;
             }
         }
-        if std::env::var_os("WT_SESSION").is_some() {
+        if get("WT_SESSION").is_some() {
             return Self::TrueColor;
         }
-        if let Ok(term_program) = std::env::var("TERM_PROGRAM") {
-            let term_program = term_program.to_ascii_lowercase();
+        if let Some(term_program) = get("TERM_PROGRAM") {
+            let term_program = term_program.to_string_lossy().to_ascii_lowercase();
             if term_program.contains("iterm")
                 || term_program.contains("wezterm")
                 || term_program.contains("vscode")
@@ -636,8 +655,9 @@ impl ColorDepth {
                 return Self::TrueColor;
             }
         }
-        let term = std::env::var("TERM").unwrap_or_default();
-        let term = term.to_ascii_lowercase();
+        let term = get("TERM")
+            .map(|t| t.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
         if term.contains("truecolor") || term.contains("24bit") {
             Self::TrueColor
         } else if term.contains("256") {

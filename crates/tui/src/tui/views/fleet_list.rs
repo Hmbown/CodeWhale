@@ -1,6 +1,6 @@
-//! `/fleet fleets` — named saved-Fleet picker (secondary surface).
+//! `/pod fleets` — named saved-Fleet picker (secondary surface).
 //!
-//! Bare `/fleet` opens the roster/setup face for the selected Fleet. This view
+//! Bare `/pod` opens the roster/setup face for the selected Fleet. This view
 //! is only for switching between named configurations. One row per saved Fleet
 //! across both scopes: user-global (`$CODEWHALE_HOME/fleets/`) and folder
 //! (`.codewhale/fleets/`). Rows show name, scope badge, and operator summary —
@@ -119,7 +119,7 @@ impl FleetListView {
     }
 
     /// Select the highlighted Fleet in `scope` and close with a receipt that
-    /// names the exact file written. Editing stays on `/fleet setup` / roster —
+    /// names the exact file written. Editing stays on `/pod setup` / roster —
     /// this surface is a switcher, not a file manager.
     fn select_highlighted(&self, scope: FleetScope) -> Option<FleetListOutcome> {
         let entry = self.selected_entry()?;
@@ -375,8 +375,8 @@ impl FleetListView {
                     Style::default().fg(palette::TEXT_MUTED),
                 ),
                 Span::styled(
-                    "  Select a model with /model and /provider, then /fleet save or \
-                     /fleet save-as. Editing stays on /fleet setup.",
+                    "  Select a model with /model and /provider, then /pod save or \
+                     /pod save-as. Editing stays on /pod setup.",
                     Style::default().fg(palette::TEXT_DIM),
                 ),
             ]))

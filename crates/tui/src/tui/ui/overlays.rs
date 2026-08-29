@@ -69,6 +69,21 @@ pub(crate) fn open_theme_picker(app: &mut App) {
     app.needs_redraw = true;
 }
 
+/// Toggle the one canonical keyboard-oriented Help index.
+///
+/// Launch, onboarding, and the live shell all route here so opening Help from
+/// a startup row cannot drift into a second catalog or ordering policy.
+pub(crate) fn toggle_help_view(app: &mut App) {
+    if app.view_stack.top_kind() == Some(ModalKind::Help) {
+        app.view_stack.pop();
+    } else {
+        let help = HelpView::new_for_shortcuts(app.ui_locale, &app.workspace, &app.cached_skills)
+            .with_groups_expanded(app.help_expand_groups);
+        app.view_stack.push(help);
+    }
+    app.needs_redraw = true;
+}
+
 /// Choose which durable-task summaries should appear in the Work
 /// sidebar's Tasks panel.
 ///
@@ -229,6 +244,33 @@ pub(crate) async fn open_onboarding_provider_picker(
             recover_configured_route.then_some(app.onboarding_provider),
             config,
             runtime_status,
+        )
+        .with_locale(app.ui_locale)
+        .with_provider_health(&app.provider_health),
+    );
+    app.needs_redraw = true;
+}
+
+/// Open the existing provider picker from the post-onboarding launch screen.
+///
+/// The launch row contributes only a `ProviderSetupIntent`; provider catalog,
+/// health, selection memory, and apply semantics remain owned by
+/// `ProviderPickerView` and the normal provider event handlers.
+pub(crate) async fn open_launch_provider_picker(
+    app: &mut App,
+    config: &Config,
+    engine_handle: &EngineHandle,
+) {
+    if app.view_stack.top_kind() == Some(ModalKind::ProviderPicker) {
+        return;
+    }
+    let runtime_status = query_provider_runtime_status(engine_handle).await;
+    app.view_stack.push(
+        crate::tui::provider_picker::ProviderPickerView::new_with_runtime_status_and_memory(
+            app.api_provider,
+            config,
+            runtime_status,
+            app.provider_picker_memory.as_ref(),
         )
         .with_locale(app.ui_locale)
         .with_provider_health(&app.provider_health),

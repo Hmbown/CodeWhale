@@ -8645,7 +8645,7 @@ impl ToolSpec for AgentTool {
                     "total_count": total_count,
                     "truncated": members.len() < total_count,
                     "members": members,
-                    "selector_help": "Use member:<id> for an exact choice. Unique role:<role>, model:<id>, model name, and route:<provider>/<model> selectors are also accepted; ambiguity is refused. If truncated=true, use a known exact member id or inspect /fleet.",
+                    "selector_help": "Use member:<id> for an exact choice. Unique role:<role>, model:<id>, model name, and route:<provider>/<model> selectors are also accepted; ambiguity is refused. If truncated=true, use a known exact member id or inspect /pod.",
                 });
                 let mut result = ToolResult::json(&payload)
                     .map_err(|error| ToolError::execution_failed(error.to_string()))?;
@@ -13176,7 +13176,7 @@ fn apply_spawn_profile(
         };
         return Err(ToolError::invalid_input(format!(
             "Unknown fleet role/profile '{profile_id}'. Available fleet roster members: {available}. \
-             Type aliases: {VALID_ROLE_ALIASES}. See /fleet.{truncation}"
+             Type aliases: {VALID_ROLE_ALIASES}. See /pod.{truncation}"
         )));
     };
     if let Some(authority) = member.plugin_authority.as_ref()

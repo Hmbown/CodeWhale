@@ -12,7 +12,10 @@ use std::collections::BTreeMap;
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 
-use crate::palette::{LIGHT_UI_THEME, UI_THEME, UiTheme, hex_rgb_string};
+use crate::palette::{
+    LIGHT_PANEL, LIGHT_SURFACE, LIGHT_UI_THEME, UI_THEME, UiTheme, WHALE_BG, WHALE_CHROME,
+    WHALE_COMPOSER, WHALE_PANEL, hex_rgb_string,
+};
 
 /// Source id passed to `overrideTokens` and used as the client module id.
 pub(crate) const SKIN_SOURCE: &str = "codewhale-dsh-bundle";
@@ -28,14 +31,37 @@ fn hex(color: Color) -> String {
     hex_rgb_string(color).unwrap_or_else(|| "inherit".to_string())
 }
 
+/// Opaque Blue Stage palettes for the browser-owned DSH surface.
+///
+/// The native TUI's Whale presets deliberately leave ordinary Flat shell
+/// surfaces as `Color::Reset` so the terminal owns them. DSH is a browser
+/// surface with no terminal background to inherit, so its token override and
+/// optional ocean veil must restore the same concrete palette colors instead
+/// of serializing `Reset` as CSS `inherit`.
+pub(super) fn browser_themes() -> (UiTheme, UiTheme) {
+    let mut light = LIGHT_UI_THEME;
+    light.surface_bg = LIGHT_SURFACE;
+    light.panel_bg = LIGHT_PANEL;
+    light.composer_bg = LIGHT_PANEL;
+    light.header_bg = LIGHT_SURFACE;
+    light.footer_bg = LIGHT_SURFACE;
+
+    let mut dark = UI_THEME;
+    dark.surface_bg = WHALE_BG;
+    dark.panel_bg = WHALE_PANEL;
+    dark.composer_bg = WHALE_COMPOSER;
+    dark.header_bg = WHALE_CHROME;
+    dark.footer_bg = WHALE_CHROME;
+    (light, dark)
+}
+
 /// Alias name → (light, dark). Keys are `--dsw-alias-*`; values are palette
 /// hex constants only — no secrets, no user data, no environment.
 pub(crate) fn skin_tokens() -> BTreeMap<String, (String, String)> {
-    let light = &LIGHT_UI_THEME;
-    let dark = &UI_THEME;
+    let (light, dark) = browser_themes();
     let mut map = BTreeMap::new();
     let mut add = |name: &str, pick: fn(&UiTheme) -> Color| {
-        map.insert(name.to_string(), (hex(pick(light)), hex(pick(dark))));
+        map.insert(name.to_string(), (hex(pick(&light)), hex(pick(&dark))));
     };
     // Bounded mapping of DSH `--dsw-alias-*` variables onto Codewhale tokens.
     // Names come from dsh-client-ui-theme/lib/styles/design-platform.css.

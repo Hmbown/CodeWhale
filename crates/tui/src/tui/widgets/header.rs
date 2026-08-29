@@ -10,11 +10,17 @@ use std::time::Instant;
 /// `deepseek_squiggle` (v0.3.5 → v0.8.x) used 420 ms; the dot replacement
 /// used the same cadence. Keep both at 420 ms so the visual rhythm matches
 /// what long-time users remember.
+#[allow(dead_code)] // the echolocation animation family (spec §5e, 420 ms cadence) reuses
+// this picker when its landing slice animates the merged-footer chip;
+// the shell renders the still frame until then (2026-08-29).
 const STATUS_INDICATOR_FRAME_MS: u128 = 420;
 
 /// Geometric replacement frames shipped between v0.8.x and v0.8.29.
 /// Every frame is one cell wide so the provider/model label never shifts
 /// while the animation advances.
+#[allow(dead_code)] // the echolocation animation family (spec §5e, 420 ms cadence) reuses
+// this picker when its landing slice animates the merged-footer chip;
+// the shell renders the still frame until then (2026-08-29).
 const STATUS_INDICATOR_DOT_FRAMES: &[&str] = &["◍", "◉", "◌", "◌", "◉", "◍"];
 
 /// Resolve the current status-indicator frame to render in the header
@@ -24,14 +30,16 @@ const STATUS_INDICATOR_DOT_FRAMES: &[&str] = &["◍", "◉", "◌", "◌", "◉"
 /// chip is *visible* but not animating — it's a chip, not a spinner. As
 /// soon as a turn starts, the elapsed time keys the cycle.
 ///
-/// `mode` accepts the canonical names `"cw"`, `"dots"`, `"off"`. The whale
-/// emoji chip is retired from the header (2026-07-23 product decision): the
-/// whale lives in the terminal window title and the idle water, never
-/// beside the model/mode chips. Legacy `"whale"` values (still present in
-/// persisted settings) normalize to the typographic `cw` mark; unknown
-/// values fall back to `"cw"` as well. `"off"` returns `None` so the
-/// caller can hide the chip outright.
+/// `mode` accepts the canonical names `"cw"`, `"dots"`, `"off"`. The default
+/// is the plain `Codewhale` wordmark: identity is stated once in the chrome,
+/// while live state uses the existing semantic rows and receipts. Legacy
+/// `"whale"` values (still present in persisted settings) normalize to that
+/// wordmark; unknown values do too. `"off"` returns `None` so the caller can
+/// hide the chip outright.
 #[must_use]
+#[allow(dead_code)] // the echolocation animation family (spec §5e, 420 ms cadence) reuses
+// this picker when its landing slice animates the merged-footer chip;
+// the shell renders the still frame until then (2026-08-29).
 pub fn header_status_indicator_frame(
     turn_started_at: Option<Instant>,
     mode: &str,
@@ -40,9 +48,9 @@ pub fn header_status_indicator_frame(
         "off" | "none" | "hidden" | "false" => return None,
         "dots" | "dot" => STATUS_INDICATOR_DOT_FRAMES,
         // Canonical mark, legacy whale opt-ins, and unknown values all land
-        // on the static typographic mark so the header never reintroduces
-        // an emoji chip beside the model/mode cluster.
-        _ => return Some("cw"),
+        // on the static wordmark so the header never reintroduces an emoji
+        // chip beside the operational chrome.
+        _ => return Some("Codewhale"),
     };
     let elapsed_ms = turn_started_at
         .map(|t| t.elapsed().as_millis())
@@ -54,30 +62,33 @@ pub fn header_status_indicator_frame(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn legacy_whale_indicator_settings_normalize_to_the_cw_mark() {
+    fn legacy_whale_indicator_settings_normalize_to_the_wordmark() {
         // The whale emoji chip is retired from the header (2026-07-23):
-        // persisted `status_indicator = "whale"` opt-ins render the static
-        // typographic mark instead, idle or mid-turn.
+        // persisted `status_indicator = "whale"` opt-ins render the plain
+        // wordmark instead, idle or mid-turn.
         for legacy in ["whale", "🐳", "🐋"] {
             assert_eq!(
                 super::header_status_indicator_frame(None, legacy),
-                Some("cw"),
+                Some("Codewhale"),
                 "legacy mode {legacy:?} must normalize to the cw mark"
             );
             assert_eq!(
                 super::header_status_indicator_frame(Some(std::time::Instant::now()), legacy),
-                Some("cw"),
+                Some("Codewhale"),
                 "legacy mode {legacy:?} must stay static mid-turn"
             );
         }
     }
 
     #[test]
-    fn cw_indicator_is_static_and_typographic() {
-        assert_eq!(super::header_status_indicator_frame(None, "cw"), Some("cw"));
+    fn cw_indicator_is_static_wordmark() {
+        assert_eq!(
+            super::header_status_indicator_frame(None, "cw"),
+            Some("Codewhale")
+        );
         assert_eq!(
             super::header_status_indicator_frame(Some(std::time::Instant::now()), "cw"),
-            Some("cw")
+            Some("Codewhale")
         );
     }
 
@@ -99,7 +110,7 @@ mod tests {
     #[test]
     fn unknown_indicator_mode_defaults_to_cw() {
         let frame = super::header_status_indicator_frame(None, "wahel-typo");
-        assert_eq!(frame, Some("cw"));
+        assert_eq!(frame, Some("Codewhale"));
     }
 
     #[test]

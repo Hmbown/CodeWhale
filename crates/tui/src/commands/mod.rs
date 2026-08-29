@@ -325,6 +325,16 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
     groups::config::config::set_config_value(app, key, value, persist)
 }
 
+/// Update the canonical theme + ocean-treatment selection as one operation.
+pub fn set_theme_selection(
+    app: &mut App,
+    theme: &str,
+    ocean_treatment: &str,
+    persist: bool,
+) -> CommandResult {
+    groups::config::config::set_theme_selection(app, theme, ocean_treatment, persist)
+}
+
 pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
     groups::config::config::switch_mode(app, mode)
 }

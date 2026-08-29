@@ -47,7 +47,26 @@ jobs:
       workflow: ${{ steps.detect.outputs.workflow }}
       mobile: ${{ steps.detect.outputs.mobile }}
       actions: ${{ steps.detect.outputs.actions }}
+      trusted: ${{ steps.trust.outputs.trusted }}
     steps:
+      - name: Classify event trust
+        id: trust
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # "trusted" means the code came from this repository, not a fork.
+          # Only trusted events may run on the self-hosted macOS runner: this
+          # repo is public with thousands of forks, and a fork PR on a
+          # self-hosted runner is arbitrary code execution on that machine.
+          if [ "${EVENT_NAME}" != "pull_request" ] || [ "${HEAD_REPO}" = "${THIS_REPO}" ]; then
+            echo "trusted=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "trusted=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -499,7 +518,13 @@ jobs:
     # The ternary is safe: matrix.os is always a non-empty literal, so
     # runs-on can never evaluate to empty.
     timeout-minutes: 90
-    runs-on: ${{ needs.changes.outputs.heavy == 'true' && matrix.os || 'ubuntu-latest' }}
+    # macOS legs go to the self-hosted Mac ONLY when all three hold: the
+    # change is heavy, the event is trusted (not a fork PR), and the
+    # CW_SELF_HOSTED_MAC repo variable is 'true'. That variable is the kill
+    # switch: unset it and every leg falls back to GitHub-hosted runners
+    # immediately, with no commit — important because an offline
+    # self-hosted runner queues jobs forever, which is worse than a slow one.
+    runs-on: ${{ needs.changes.outputs.heavy != 'true' && 'ubuntu-latest' || (matrix.os == 'macos-latest' && needs.changes.outputs.trusted == 'true' && vars.CW_SELF_HOSTED_MAC == 'true' && fromJSON('["self-hosted","macOS","ARM64","codewhale-mac"]')) || matrix.os }}
     strategy:
       # A failure on one desktop platform must not erase evidence from the
       # other one. We need both conclusions to diagnose and release safely.
