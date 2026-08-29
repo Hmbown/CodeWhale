@@ -2194,6 +2194,15 @@ async fn get_fleet_run_receipt(
     Ok(Json(fleet_receipt_json(receipt)))
 }
 
+/// Receipt artifact paths are recorded relative to the workspace; an absolute
+/// path or any `..` component would escape it.
+fn receipt_evidence_path_is_confined(path: &std::path::Path) -> bool {
+    !path.is_absolute()
+        && !path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
 async fn inspect_fleet_run_receipt_evidence(
     State(state): State<RuntimeApiState>,
     Path((run_id, task_id)): Path<(String, String)>,
@@ -2218,6 +2227,13 @@ async fn inspect_fleet_run_receipt_evidence(
                 "no verifier evidence file for run '{run_id}' task '{task_id}'"
             ))
         })?;
+    // Receipt artifacts are workspace-relative paths recorded by the verifier;
+    // reject absolute paths and `..` escapes before joining onto the workspace.
+    if !receipt_evidence_path_is_confined(&receipt_artifact.path) {
+        return Err(ApiError::bad_request(format!(
+            "evidence path for run '{run_id}' task '{task_id}' escapes the workspace"
+        )));
+    }
     let abs_path = state.workspace.join(&receipt_artifact.path);
     let metadata = std::fs::metadata(&abs_path).map_err(|err| {
         ApiError::not_found(format!(
