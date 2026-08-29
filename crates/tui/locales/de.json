@@ -397,6 +397,7 @@
   "CmdLspDescription": "LSP-Diagnosen ein- oder ausschalten",
   "CmdShareDescription": "Aktuelle Sitzung als teilbare Web-URL exportieren",
   "CmdJobsDescription": "Bash-Hintergrundjobs ansehen und steuern",
+  "CmdDispatchDescription": "Codewhale-Cloud-Agenten senden, um einen Branch und PR zu öffnen",
   "CmdLinksDescription": "Codewhale-, Community- und Provider-Links anzeigen",
   "CmdLoadDescription": "Sitzung aus Datei laden",
   "CmdLogoutDescription": "API-Schlüssel löschen und zum Setup zurückkehren",

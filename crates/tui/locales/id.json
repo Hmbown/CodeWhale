@@ -397,6 +397,7 @@
   "CmdLspDescription": "Aktifkan atau nonaktifkan diagnostik LSP",
   "CmdShareDescription": "Ekspor sesi saat ini sebagai URL web yang dapat dibagikan",
   "CmdJobsDescription": "Periksa dan kendalikan job Bash latar belakang",
+  "CmdDispatchDescription": "Kirim agen cloud Codewhale untuk membuat branch dan membuka PR",
   "CmdLinksDescription": "Tampilkan tautan Codewhale, komunitas, dan penyedia",
   "CmdLoadDescription": "Muat sesi dari file",
   "CmdLogoutDescription": "Hapus kunci API dan kembali ke penyiapan",

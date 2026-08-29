@@ -400,6 +400,7 @@
   "CmdLspDescription": "Toggle LSP diagnostics on or off",
   "CmdShareDescription": "Export current session as a shareable web URL",
   "CmdJobsDescription": "Inspect and control background Bash jobs",
+  "CmdDispatchDescription": "Send a Codewhale cloud agent to raise a branch and open a PR",
   "CmdLinksDescription": "Show Codewhale, community, and provider links",
   "CmdLoadDescription": "Load session from file",
   "CmdLogoutDescription": "Clear API key and return to setup",

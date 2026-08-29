@@ -400,6 +400,7 @@
   "CmdLspDescription": "LSP 진단을 켜거나 끕니다",
   "CmdShareDescription": "현재 세션을 공유 가능한 웹 URL로 내보냅니다",
   "CmdJobsDescription": "백그라운드 Bash 작업을 확인하고 제어합니다",
+  "CmdDispatchDescription": "Codewhale 클라우드 에이전트를 보내 브랜치를 만들고 PR을 엽니다",
   "CmdLinksDescription": "Codewhale, 커뮤니티 및 프로바이더 링크를 표시합니다",
   "CmdLoadDescription": "파일에서 세션을 불러옵니다",
   "CmdLogoutDescription": "API 키를 지우고 설정 화면으로 돌아갑니다",

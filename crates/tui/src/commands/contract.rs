@@ -181,6 +181,7 @@ pub(crate) fn key_to_message_id(key: &'static str) -> Option<MessageId> {
         "cmd_hotbar_description" => MessageId::CmdHotbarDescription,
         "cmd_init_description" => MessageId::CmdInitDescription,
         "cmd_jobs_description" => MessageId::CmdJobsDescription,
+        "cmd_dispatch_description" => MessageId::CmdDispatchDescription,
         "cmd_lane_description" => MessageId::CmdLaneDescription,
         "cmd_links_description" => MessageId::CmdLinksDescription,
         "cmd_load_description" => MessageId::CmdLoadDescription,

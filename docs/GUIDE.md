@@ -295,6 +295,9 @@ Operate keeps that direct tool surface and its approval, sandbox, shell,
 ask-rule, and repository protections. Its difference is orchestration emphasis:
 Codewhale prefers Fleet workers for independent, parallel, background, or
 long-running work, while small or tightly coupled work can remain in the parent.
+Heavy work can also be proposed to a Daytona cloud agent with `codewhale
+dispatch` or `/dispatch` (explicit confirmation; remotes are `github` / `cnb` /
+`gitee`). See [DAYTONA_CLOUD_DISPATCH.md](DAYTONA_CLOUD_DISPATCH.md).
 
 For trusted workspaces where you intentionally want actions to proceed without
 approval prompts, select the Full Access permission posture with `Shift+Tab`.

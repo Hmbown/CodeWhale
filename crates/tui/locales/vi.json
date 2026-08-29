@@ -400,6 +400,7 @@
   "CmdLspDescription": "Bật hoặc tắt tính năng chẩn đoán LSP",
   "CmdShareDescription": "Xuất phiên hiện tại thành một liên kết web có thể chia sẻ",
   "CmdJobsDescription": "Kiểm tra và kiểm soát các lệnh chạy ngầm",
+  "CmdDispatchDescription": "Gửi tác nhân đám mây Codewhale để tạo nhánh và mở PR",
   "CmdLinksDescription": "Hiển thị liên kết Codewhale, cộng đồng và nhà cung cấp",
   "CmdLoadDescription": "Tải phiên làm việc từ tệp",
   "CmdLogoutDescription": "Xóa khóa API và quay lại bước thiết lập",

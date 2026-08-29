@@ -397,6 +397,7 @@
   "CmdLspDescription": "Activa o desactiva els diagnòstics LSP",
   "CmdShareDescription": "Exporta la sessió actual com a URL web compartible",
   "CmdJobsDescription": "Inspecciona i controla els treballs Bash en segon pla",
+  "CmdDispatchDescription": "Envia un agent cloud de Codewhale per crear una branca i obrir un PR",
   "CmdLinksDescription": "Mostra enllaços de Codewhale, la comunitat i els proveïdors",
   "CmdLoadDescription": "Carrega una sessió des d'un fitxer",
   "CmdLogoutDescription": "Esborra la clau d'API i torna a la configuració",

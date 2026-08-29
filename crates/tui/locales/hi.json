@@ -397,6 +397,7 @@
   "CmdLspDescription": "LSP डायग्नोस्टिक्स चालू/बंद करें",
   "CmdShareDescription": "वर्तमान सत्र को साझा करने योग्य वेब URL के रूप में एक्सपोर्ट करें",
   "CmdJobsDescription": "बैकग्राउंड Bash जॉब देखें और नियंत्रित करें",
+  "CmdDispatchDescription": "शाखा बनाने और PR खोलने के लिए Codewhale क्लाउड एजेंट भेजें",
   "CmdLinksDescription": "Codewhale, समुदाय और प्रोवाइडर लिंक दिखाएँ",
   "CmdLoadDescription": "फ़ाइल से सत्र लोड करें",
   "CmdLogoutDescription": "API कुंजी साफ़ करें और सेटअप पर लौटें",

@@ -400,6 +400,7 @@
   "CmdLspDescription": "Alternar diagnóstico LSP encendido o apagado",
   "CmdShareDescription": "Exportar la sesión actual como una URL web compartible",
   "CmdJobsDescription": "Inspeccionar y controlar trabajos de shell en segundo plano",
+  "CmdDispatchDescription": "Enviar un agente cloud de Codewhale para crear una rama y abrir un PR",
   "CmdLinksDescription": "Mostrar enlaces de Codewhale, la comunidad y los proveedores",
   "CmdLoadDescription": "Cargar la sesión desde un archivo",
   "CmdLogoutDescription": "Limpiar la clave de API y volver a la configuración",

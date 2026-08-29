@@ -400,6 +400,7 @@
   "CmdLspDescription": "切换 LSP 诊断的开启或关闭",
   "CmdShareDescription": "将当前会话导出为可共享的 Web URL",
   "CmdJobsDescription": "查看并管理后台 shell 作业",
+  "CmdDispatchDescription": "派遣 Codewhale 云端代理以创建分支并打开拉取请求",
   "CmdLinksDescription": "显示 Codewhale、社区与提供商链接",
   "CmdLoadDescription": "从文件加载会话",
   "CmdLogoutDescription": "清除 API 密钥并返回设置",

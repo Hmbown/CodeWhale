@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `codewhale dispatch` / `/dispatch` so a local session can propose a
+  Codewhale cloud agent against an explicit `github`, `cnb`, or `gitee` remote.
+  Confirmation is required; missing credentials fail closed; cloud jobs share
+  the existing `/jobs` surface as `kind=cloud`. See
+  [DAYTONA_CLOUD_DISPATCH.md](docs/DAYTONA_CLOUD_DISPATCH.md).
 - `/login` reports the Codewhale account session and provider-key next
   steps. The internal cloud-agent credential is not user surface: there is
   no `auth set-slot`/`auth clear-slot` command, no hint, and no completion

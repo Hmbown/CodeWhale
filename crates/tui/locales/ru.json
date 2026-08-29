@@ -397,6 +397,7 @@
   "CmdLspDescription": "Включить или выключить диагностику LSP",
   "CmdShareDescription": "Экспортировать текущую сессию как веб-ссылку для общего доступа",
   "CmdJobsDescription": "Просмотр и управление фоновыми заданиями Bash",
+  "CmdDispatchDescription": "Отправить облачного агента Codewhale, чтобы создать ветку и открыть PR",
   "CmdLinksDescription": "Показать ссылки на Codewhale, сообщество и провайдеров",
   "CmdLoadDescription": "Загрузить сессию из файла",
   "CmdLogoutDescription": "Удалить API-ключ и вернуться к настройке",

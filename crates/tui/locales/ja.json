@@ -400,6 +400,7 @@
   "CmdLspDescription": "LSP 診断のオン・オフを切り替え",
   "CmdShareDescription": "現在のセッションを共有可能な Web URL としてエクスポート",
   "CmdJobsDescription": "バックグラウンドのシェルジョブを確認・制御",
+  "CmdDispatchDescription": "Codewhale クラウドエージェントを送り、ブランチと PR を作成",
   "CmdLinksDescription": "Codewhale、コミュニティ、プロバイダーのリンクを表示",
   "CmdLoadDescription": "ファイルからセッションを読み込み",
   "CmdLogoutDescription": "API キーを消去してセットアップに戻る",

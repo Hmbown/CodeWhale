@@ -61,6 +61,16 @@ jobs:
         if: env.HAS_PROVIDER_KEY == 'true'
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install native build deps
+        if: env.HAS_PROVIDER_KEY == 'true'
+        run: |
+          for i in 1 2 3; do
+            sudo apt-get update && break
+            echo "apt-get update failed (attempt $i); retrying in 15s"
+            sleep 15
+          done
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
       - name: Cache cargo build
         if: env.HAS_PROVIDER_KEY == 'true'
         uses: Swatinem/rust-cache@v2
@@ -81,4 +91,19 @@ jobs:
           if [ -n "${CODEWHALE_REVIEW_MODEL:-}" ]; then
             MODEL_ARGS=(--model "$CODEWHALE_REVIEW_MODEL")
           fi
-          ./target/release/codewhale review --pr "$PR_NUMBER" --post "${MODEL_ARGS[@]}"
+          set +e
+          OUTPUT=$(./target/release/codewhale review --pr "$PR_NUMBER" --post "${MODEL_ARGS[@]}" 2>&1)
+          STATUS=$?
+          set -e
+          echo "$OUTPUT"
+          if [ "$STATUS" -eq 0 ]; then
+            exit 0
+          fi
+          # The review is advisory: a provider-side outage (balance, auth,
+          # rate limit, upstream 5xx) must not block the PR. Real review
+          # failures still fail the job with the original exit status.
+          if echo "$OUTPUT" | grep -qE 'LLM error: HTTP (401|402|403|408|429|5[0-9][0-9])'; then
+            echo "::warning::Codewhale review could not run (provider error; see log above). The PR is not blocked — provider funding/config is founder-gated."
+            exit 0
+          fi
+          exit "$STATUS"

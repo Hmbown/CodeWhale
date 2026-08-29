@@ -289,6 +289,7 @@
   "CmdHotbarDescription": "開啟 Hotbar 設定",
   "CmdInitDescription": "為項目生成 AGENTS.md",
   "CmdJobsDescription": "檢視並管理後台 shell 作業",
+  "CmdDispatchDescription": "派遣 Codewhale 雲端代理以建立分支並開啟拉取請求",
   "CmdLaneDescription": "檢視與控制持久化的 Lane（執行中的工作流程）",
   "CmdLinksDescription": "顯示 Codewhale、社群與提供商鏈接",
   "CmdLoadDescription": "從檔案載入工作階段",

@@ -397,6 +397,7 @@
   "CmdLspDescription": "Увімкнути або вимкнути діагностику LSP",
   "CmdShareDescription": "Експортувати поточний сеанс як веб-URL для поширення",
   "CmdJobsDescription": "Переглянути й керувати фоновими завданнями Bash",
+  "CmdDispatchDescription": "Надіслати хмарного агента Codewhale, щоб створити гілку й відкрити PR",
   "CmdLinksDescription": "Показати посилання Codewhale, спільноти та провайдерів",
   "CmdLoadDescription": "Завантажити сеанс з файлу",
   "CmdLogoutDescription": "Очистити ключ API та повернутися до налаштування",
