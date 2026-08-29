@@ -172,10 +172,12 @@ fn generate_policy(
 ) -> String {
     let mut full_policy = SEATBELT_BASE_POLICY.to_string();
 
-    // Add read access policy
-    if SandboxPolicy::has_full_disk_read_access() {
-        full_policy.push_str("\n; Full filesystem read access\n(allow file-read*)");
-    }
+    // Base read grant. Emitted unconditionally, including when a deny-list is
+    // in force: SBPL is last-match-wins, so the `(deny file-read* …)` rules
+    // appended at the end of this profile override it for exactly the denied
+    // subpaths and nothing else. Dropping the broad allow instead would make
+    // every posture unable to read `/usr/bin`, and nothing would run.
+    full_policy.push_str("\n; Full filesystem read access\n(allow file-read*)");
 
     // Add write access policy
     let file_write_policy = generate_write_policy(policy, cwd);

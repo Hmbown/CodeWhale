@@ -265,12 +265,20 @@ pub(crate) async fn execute_read_media(
     }
 
     // 2. Resolve path and protect credentials (including symlink/canonicalization escapes)
+    // S1/F2: the deny-list check on the caller's raw spelling runs BEFORE
+    // `resolve_path` — resolution canonicalizes a workspace symlink to the
+    // secret's real location, and an error raised only afterwards would name
+    // that location. `read_guard::check` canonicalizes internally, so the raw
+    // spelling still matches by target; the resolved check below remains as
+    // defense in depth.
+    crate::tools::file::enforce_read_denylist(std::path::Path::new(path_str), "read_media")?;
     let file_path = context.resolve_path(path_str)?;
     if crate::tools::file::is_codewhale_credential_path(&file_path) {
         return Err(ToolError::permission_denied(
             "read_media cannot read Codewhale configuration or credential-store files; use `codewhale config list` or `codewhale auth status` for safe inspection",
         ));
     }
+    crate::tools::file::enforce_read_denylist(&file_path, "read_media")?;
 
     // Check cancellation immediately before dispatching blocking I/O and decode work
     if context

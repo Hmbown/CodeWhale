@@ -124,10 +124,22 @@ impl SandboxPolicy {
         }
     }
 
-    /// Returns true if the policy allows reading any file on the filesystem.
-    pub fn has_full_disk_read_access() -> bool {
-        // All current policies allow full disk read access
-        true
+    /// Returns true when the sandbox really does grant read of every file on
+    /// disk — i.e. no read deny-list is in force.
+    ///
+    /// Every posture, `read-only` included, grants full-disk *read*: the
+    /// postures differ only in what they may write and whether they may reach
+    /// the network. The read deny-list (S1, `super::read_guard`) is the only
+    /// thing that narrows this, and it is defense-in-depth rather than a
+    /// boundary — a hardlink or an indirect read (`ssh-agent`, `security`)
+    /// walks around it.
+    ///
+    /// Note the Seatbelt profile still emits the broad `(allow file-read*)`
+    /// even when this returns `false`: SBPL is last-match-wins, so the deny
+    /// rules appended after it are what actually narrow the grant. This
+    /// function reports the *posture*, for labels and telemetry.
+    pub fn has_full_disk_read_access(denied_read_subpaths: &[PathBuf]) -> bool {
+        denied_read_subpaths.is_empty()
     }
 
     /// Returns true if the policy allows writing to any file on the filesystem.

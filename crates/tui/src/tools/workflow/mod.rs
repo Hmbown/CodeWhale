@@ -805,6 +805,141 @@ enum WorkflowRunStatus {
     Cancelled,
 }
 
+/// The per-slot outcome ledger a finished run is classified against.
+///
+/// A workflow script can return a perfectly good-looking value while every
+/// task it fanned out died — `parallel()`'s settled default resolves a failed
+/// slot to `null`, so the script never sees a throw. Terminal status is
+/// therefore decided from what actually ran, not from the script's return.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SlotLedger {
+    /// Task records the driver holds for this run (children who were admitted).
+    tasks: usize,
+    /// How many of those records ended in a failed terminal state — a
+    /// subagent failure, a budget-exhausted stop, or a replay divergence.
+    /// A budget-dead child produced no result either; counting only plain
+    /// `Failed` let an all-budget fan-out classify as a clean completion.
+    failed_tasks: usize,
+    /// Requested slots refused before a child existed — driver admission
+    /// refusals plus `ProgressEvent::TaskRejected`.
+    rejected: u64,
+    /// Fan-outs (`parallel()`/`pipeline()`) that resolved with every slot
+    /// failed and nothing surviving, script throws included. Those leave no
+    /// task record at all, so only the structured
+    /// `ProgressEvent::FanoutAllSlotsFailed` count makes them visible here.
+    dead_fanouts: u32,
+    /// Individual slots a settled fan-out dropped to null while other slots
+    /// survived (`ProgressEvent::FanoutSlotDropped`). A partial loss with
+    /// surviving work: Degraded, never a clean Completed.
+    dropped_slots: u32,
+    /// Whether any child agent was ever admitted for this run.
+    any_child_ran: bool,
+    /// First retained dispatch-failure message, for the all-rejected receipt.
+    retained_detail: Option<String>,
+}
+
+impl SlotLedger {
+    /// The terminal status a `Completed` script run should actually record,
+    /// with the receipt line, or `None` when every slot came back clean.
+    fn classify(&self) -> Option<(WorkflowRunStatus, String)> {
+        let dead_fanouts = if self.dead_fanouts > 0 {
+            format!(
+                " and {} fan-out(s) lost every slot (no work survived them)",
+                self.dead_fanouts
+            )
+        } else {
+            String::new()
+        };
+        if !self.any_child_ran && self.rejected > 0 {
+            // #5035: every dispatch was rejected before a child ran.
+            let retained = self
+                .retained_detail
+                .as_ref()
+                .map(|message| format!("; retained detail: {message}"))
+                .unwrap_or_default();
+            return Some((
+                WorkflowRunStatus::Failed,
+                format!(
+                    "no child agents ran: all {} task dispatch(es) were rejected{retained}{dead_fanouts}",
+                    self.rejected
+                ),
+            ));
+        }
+        // R9: a run whose every task failed produced nothing. Reporting that
+        // as a partial success let a workflow that lost all its work read as
+        // "completed with caveats"; it is a failure with a preserved output.
+        // `failed_tasks` counts every failure-ish terminal state, so a
+        // fan-out that died entirely of budget exhaustion lands here too.
+        if self.tasks > 0 && self.failed_tasks == self.tasks {
+            let rejected = if self.rejected > 0 {
+                format!(" and {} dispatch(es) were rejected", self.rejected)
+            } else {
+                String::new()
+            };
+            return Some((
+                WorkflowRunStatus::Failed,
+                format!(
+                    "no task produced a result: all {} task(s) failed{rejected}{dead_fanouts}; \
+                     the recorded result reflects no completed work",
+                    self.tasks
+                ),
+            ));
+        }
+        // R9: a fan-out can die without a single task record — thunks that
+        // throw before (or instead of) calling `task()` resolve to null slots
+        // and leave only the dead-fan-out count behind. When no child
+        // anywhere survived, that run also produced nothing.
+        if self.dead_fanouts > 0 && self.tasks == 0 {
+            let rejected = if self.rejected > 0 {
+                format!(" and {} dispatch(es) were rejected", self.rejected)
+            } else {
+                String::new()
+            };
+            return Some((
+                WorkflowRunStatus::Failed,
+                format!(
+                    "no work survived: {} fan-out(s) lost every slot{rejected}; \
+                     the recorded result reflects no completed work",
+                    self.dead_fanouts
+                ),
+            ));
+        }
+        if self.failed_tasks > 0
+            || self.rejected > 0
+            || self.dead_fanouts > 0
+            || self.dropped_slots > 0
+        {
+            let mut parts = Vec::new();
+            if self.failed_tasks > 0 {
+                parts.push(format!(
+                    "{} of {} task(s) failed",
+                    self.failed_tasks, self.tasks
+                ));
+            }
+            if self.rejected > 0 {
+                parts.push(format!("{} dispatch(es) were rejected", self.rejected));
+            }
+            if self.dead_fanouts > 0 {
+                parts.push(format!("{} fan-out(s) lost every slot", self.dead_fanouts));
+            }
+            if self.dropped_slots > 0 {
+                parts.push(format!(
+                    "{} fan-out slot(s) dropped while others survived",
+                    self.dropped_slots
+                ));
+            }
+            return Some((
+                WorkflowRunStatus::Degraded,
+                format!(
+                    "completed with dropped slots: {}; the recorded result may be partial",
+                    parts.join(" and ")
+                ),
+            ));
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkflowAction {
     Start,
@@ -1774,41 +1909,29 @@ async fn run_workflow_vm(
             // ledger — every requested task either became a child with a
             // terminal record or landed in `dispatch_failures` (driver
             // rejections and, via `ProgressEvent::TaskRejected`, VM-level
-            // rejections that previously vanished into null slots).
+            // rejections that previously vanished into null slots), and a
+            // fan-out whose every slot failed — script throws included —
+            // arrives via the dead-fan-out counter.
             if status == WorkflowRunStatus::Completed {
                 let task_records = driver.task_records_snapshot();
-                let failed_children = task_records
-                    .iter()
-                    .filter(|task| task.status == IrWorkflowRunStatus::Failed)
-                    .count();
-                let rejected = record.dispatch_failure_count;
-                if record.child_ids.is_empty() && rejected > 0 {
-                    // #5035: every dispatch was rejected before a child ran.
-                    status = WorkflowRunStatus::Failed;
-                    let retained_detail = record
+                let ledger = SlotLedger {
+                    tasks: task_records.len(),
+                    failed_tasks: task_records
+                        .iter()
+                        .filter(|task| task.failed_for_ledger())
+                        .count(),
+                    rejected: record.dispatch_failure_count,
+                    dead_fanouts: driver.dead_fanout_count(),
+                    dropped_slots: driver.dropped_slot_count(),
+                    any_child_ran: !record.child_ids.is_empty(),
+                    retained_detail: record
                         .dispatch_failures
                         .first()
-                        .map(|failure| format!("; retained detail: {}", failure.message))
-                        .unwrap_or_default();
-                    error = Some(format!(
-                        "no child agents ran: all {rejected} task dispatch(es) were rejected{retained_detail}"
-                    ));
-                } else if failed_children > 0 || rejected > 0 {
-                    status = WorkflowRunStatus::Degraded;
-                    let mut parts = Vec::new();
-                    if failed_children > 0 {
-                        parts.push(format!(
-                            "{failed_children} of {} task(s) failed",
-                            task_records.len()
-                        ));
-                    }
-                    if rejected > 0 {
-                        parts.push(format!("{rejected} dispatch(es) were rejected"));
-                    }
-                    error = Some(format!(
-                        "completed with dropped slots: {}; the recorded result may be partial",
-                        parts.join(" and ")
-                    ));
+                        .map(|failure| failure.message.clone()),
+                };
+                if let Some((slot_status, slot_error)) = ledger.classify() {
+                    status = slot_status;
+                    error = Some(slot_error);
                 }
             }
             record.status = status;
@@ -3258,6 +3381,26 @@ struct RuntimeTaskRecord {
     usage: Option<WorkflowTaskUsage>,
 }
 
+impl RuntimeTaskRecord {
+    /// Whether this record ended in a terminal state that produced no usable
+    /// result — the states the slot ledger counts as a failed task.
+    ///
+    /// `BudgetExceeded` is the named gap this exists to close: a child that
+    /// dies of budget exhaustion is a failed task for the all-failed rule,
+    /// not an invisible one. `ReplayDiverged` means the leaf's replay did
+    /// not reproduce its recorded result — no output either. `Cancelled` is
+    /// deliberately excluded: it is the run's own stop, not lost work, and
+    /// run-level cancellation is finalized before this ledger is consulted.
+    fn failed_for_ledger(&self) -> bool {
+        matches!(
+            self.status,
+            IrWorkflowRunStatus::Failed
+                | IrWorkflowRunStatus::BudgetExceeded
+                | IrWorkflowRunStatus::ReplayDiverged
+        )
+    }
+}
+
 struct SubAgentWorkflowDriver {
     run_id: String,
     owner_session_id: String,
@@ -3273,6 +3416,11 @@ struct SubAgentWorkflowDriver {
     /// an explicit `phase` option).
     current_phase: Mutex<Option<String>>,
     task_records: Arc<Mutex<HashMap<String, RuntimeTaskRecord>>>,
+    /// Fan-outs that resolved with every slot failed (`ProgressEvent::FanoutAllSlotsFailed`),
+    /// script throws included. Consulted by the terminal slot ledger: those
+    /// fan-outs can leave no task record at all.
+    dead_fanouts: AtomicU32,
+    dropped_slots: AtomicU32,
     total_budget: Option<u64>,
     last_budget_event: Arc<Mutex<Option<BudgetSnapshot>>>,
     /// Workflow-owned gates installed for this run (#4179).
@@ -3323,6 +3471,8 @@ impl SubAgentWorkflowDriver {
             child_counter: AtomicU32::new(0),
             current_phase: Mutex::new(None),
             task_records: Arc::new(Mutex::new(HashMap::new())),
+            dead_fanouts: AtomicU32::new(0),
+            dropped_slots: AtomicU32::new(0),
             total_budget,
             last_budget_event: Arc::new(Mutex::new(None)),
             gate_specs: Arc::new(gate_specs),
@@ -3885,6 +4035,28 @@ impl SubAgentWorkflowDriver {
             .unwrap_or_default()
     }
 
+    /// Count a fan-out that resolved with every slot failed. The prelude's
+    /// run-log breadcrumb already names it for operators; this counter is
+    /// what lets the terminal slot ledger act on it.
+    fn record_dead_fanout(&self) {
+        self.dead_fanouts.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn dead_fanout_count(&self) -> u32 {
+        self.dead_fanouts.load(Ordering::SeqCst)
+    }
+
+    /// Count one slot a settled fan-out dropped while others survived; the
+    /// per-slot breadcrumb already narrates it, this counter makes the loss
+    /// visible to the terminal slot ledger.
+    fn record_dropped_slot(&self) {
+        self.dropped_slots.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn dropped_slot_count(&self) -> u32 {
+        self.dropped_slots.load(Ordering::SeqCst)
+    }
+
     fn add_waiter_or_complete(&self, agent_id: String, waiter: oneshot::Sender<TaskCompletion>) {
         let mut state = self
             .completion_state
@@ -4147,6 +4319,18 @@ impl WorkflowDriver for SubAgentWorkflowDriver {
                 message,
             } => {
                 self.record_dispatch_failure(label, phase, message);
+                return;
+            }
+            // R9: a dead fan-out is a status signal, not a narrated line —
+            // the prelude already logged the operator breadcrumb. Counted on
+            // the driver so the terminal slot ledger can refuse to record a
+            // run where nothing survived as a plain success.
+            ProgressEvent::FanoutAllSlotsFailed { .. } => {
+                self.record_dead_fanout();
+                return;
+            }
+            ProgressEvent::FanoutSlotDropped { .. } => {
+                self.record_dropped_slot();
                 return;
             }
             ProgressEvent::Log { message } => (
@@ -5186,6 +5370,224 @@ mod tests {
     use axum::{Json, Router, routing::post};
     use codewhale_workflow::{IsolationMode, leaf_is_write_capable};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn a_clean_slot_ledger_leaves_the_run_completed() {
+        let ledger = SlotLedger {
+            tasks: 3,
+            failed_tasks: 0,
+            rejected: 0,
+            dead_fanouts: 0,
+            dropped_slots: 0,
+            any_child_ran: true,
+            retained_detail: None,
+        };
+        assert_eq!(ledger.classify(), None);
+    }
+
+    #[test]
+    fn a_run_with_no_tasks_at_all_stays_completed() {
+        // A script that orchestrates nothing is not a dropped-slot failure.
+        assert_eq!(SlotLedger::default().classify(), None);
+    }
+
+    #[test]
+    fn some_failed_slots_degrade_the_run_without_failing_it() {
+        let (status, message) = SlotLedger {
+            tasks: 3,
+            failed_tasks: 1,
+            rejected: 0,
+            dead_fanouts: 0,
+            dropped_slots: 0,
+            any_child_ran: true,
+            retained_detail: None,
+        }
+        .classify()
+        .expect("a dropped slot must be classified");
+        assert_eq!(status, WorkflowRunStatus::Degraded);
+        assert!(message.contains("1 of 3 task(s) failed"), "{message}");
+    }
+
+    #[test]
+    fn a_run_whose_every_task_failed_cannot_report_success() {
+        // R9: `parallel()`'s settled default resolves each dead slot to
+        // `null`, so the script returns cleanly. The run must not.
+        let (status, message) = SlotLedger {
+            tasks: 4,
+            failed_tasks: 4,
+            rejected: 0,
+            dead_fanouts: 0,
+            dropped_slots: 0,
+            any_child_ran: true,
+            retained_detail: None,
+        }
+        .classify()
+        .expect("a fully-failed fan-out must be classified");
+        assert_eq!(status, WorkflowRunStatus::Failed);
+        assert!(
+            message.contains("no task produced a result: all 4 task(s) failed"),
+            "{message}"
+        );
+        assert_ne!(
+            owner_state_for_run_status(status),
+            OwnerState::Completed,
+            "a run that lost every task must never project as completed"
+        );
+    }
+
+    #[test]
+    fn a_fully_failed_fan_out_also_names_its_rejected_dispatches() {
+        let (status, message) = SlotLedger {
+            tasks: 2,
+            failed_tasks: 2,
+            rejected: 1,
+            dead_fanouts: 0,
+            dropped_slots: 0,
+            any_child_ran: true,
+            retained_detail: Some("admission cap".to_string()),
+        }
+        .classify()
+        .expect("a fully-failed fan-out must be classified");
+        assert_eq!(status, WorkflowRunStatus::Failed);
+        assert!(
+            message.contains("all 2 task(s) failed")
+                && message.contains("1 dispatch(es) were rejected"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn every_dispatch_rejected_still_fails_before_any_child_ran() {
+        let (status, message) = SlotLedger {
+            tasks: 0,
+            failed_tasks: 0,
+            rejected: 2,
+            dead_fanouts: 0,
+            dropped_slots: 0,
+            any_child_ran: false,
+            retained_detail: Some("depth ceiling".to_string()),
+        }
+        .classify()
+        .expect("an all-rejected run must be classified");
+        assert_eq!(status, WorkflowRunStatus::Failed);
+        assert!(
+            message.contains("no child agents ran") && message.contains("depth ceiling"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn budget_exhausted_children_count_as_failed_for_the_all_failed_rule() {
+        // R9 blocker: a fan-out whose every child died of budget exhaustion
+        // used to classify as a plain completion because `failed_tasks`
+        // counted only `Failed` records. The records below are built through
+        // the real completion mapping, not hand-set counters.
+        let completions = [
+            TaskCompletion::BudgetExhausted {
+                message: "shared pool drained".to_string(),
+            },
+            TaskCompletion::BudgetExhausted {
+                message: "shared pool drained".to_string(),
+            },
+        ];
+        let task_records: Vec<RuntimeTaskRecord> = completions
+            .iter()
+            .enumerate()
+            .map(|(index, completion)| {
+                let (status, output) = task_completion_status(completion);
+                RuntimeTaskRecord {
+                    agent_id: format!("agent_{index}"),
+                    label: None,
+                    role: None,
+                    status,
+                    output,
+                    schema_error: None,
+                    usage: None,
+                }
+            })
+            .collect();
+        let ledger = SlotLedger {
+            tasks: task_records.len(),
+            failed_tasks: task_records
+                .iter()
+                .filter(|task| task.failed_for_ledger())
+                .count(),
+            rejected: 0,
+            // The fan-out those children died in also reported itself dead.
+            dead_fanouts: 1,
+            dropped_slots: 0,
+            any_child_ran: true,
+            retained_detail: None,
+        };
+        assert_eq!(task_records[0].status, IrWorkflowRunStatus::BudgetExceeded);
+        let (status, message) = ledger
+            .classify()
+            .expect("an all-budget-exhausted run must be classified");
+        assert_eq!(status, WorkflowRunStatus::Failed);
+        assert!(
+            message.contains("all 2 task(s) failed")
+                && message.contains("1 fan-out(s) lost every slot"),
+            "{message}"
+        );
+        assert_ne!(
+            owner_state_for_run_status(status),
+            OwnerState::Completed,
+            "a run that lost every child to budget exhaustion must never project as completed"
+        );
+    }
+
+    #[test]
+    fn a_fan_out_of_script_throws_with_no_task_records_fails_the_run() {
+        // R9 blocker: thunks that throw without calling `task()` leave no
+        // task record and no dispatch failure — only the structured
+        // every-slot-failed count. That run produced nothing.
+        let (status, message) = SlotLedger {
+            tasks: 0,
+            failed_tasks: 0,
+            rejected: 0,
+            dead_fanouts: 1,
+            dropped_slots: 0,
+            any_child_ran: false,
+            retained_detail: None,
+        }
+        .classify()
+        .expect("a dead script-throw fan-out must be classified");
+        assert_eq!(status, WorkflowRunStatus::Failed);
+        assert!(
+            message.contains("no work survived") && message.contains("1 fan-out(s)"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_dead_fan_out_beside_surviving_work_degrades_instead_of_failing() {
+        // Some work survived elsewhere in the run: keep the output, refuse
+        // the plain-success label, but do not claim nothing completed.
+        let (status, message) = SlotLedger {
+            tasks: 1,
+            failed_tasks: 0,
+            rejected: 0,
+            dead_fanouts: 1,
+            dropped_slots: 0,
+            any_child_ran: true,
+            retained_detail: None,
+        }
+        .classify()
+        .expect("a dead fan-out beside surviving work must be classified");
+        assert_eq!(status, WorkflowRunStatus::Degraded);
+        assert!(
+            message.contains("1 fan-out(s) lost every slot")
+                && message.contains("result may be partial"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn an_empty_fan_out_is_not_a_dead_fan_out() {
+        // `parallel([])` declares no slots; a run that orchestrates nothing
+        // stays completed (mirrors `a_run_with_no_tasks_at_all_stays_completed`).
+        assert_eq!(SlotLedger::default().classify(), None);
+    }
 
     #[test]
     fn settled_runs_leave_a_report_artifact_under_codewhale_reports() {
@@ -8059,6 +8461,182 @@ reviewer = "reviewer"
             calls.load(Ordering::SeqCst),
             0,
             "no provider call should be spent on an all-rejected fan-out"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn a_fan_out_where_every_child_died_of_budget_exhaustion_fails_the_run() {
+        // R9 blocker: budget-exhausted children map to `BudgetExceeded` task
+        // records, and the ledger used to count only plain `Failed` records —
+        // so a fan-out that lost every child to the token ceiling read as a
+        // clean completion. This drives the real path end to end: per-task
+        // `tokenBudget` forks an isolated pool, the fake provider reports more
+        // tokens than the cap, the child terminalizes `BudgetExhausted`, and
+        // the completion pump delivers it as a `BudgetExceeded` record.
+        let _retry_guard = workflow_test_retry_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+        let (client, calls) = fake_chat_client("child done").await;
+        let runtime = SubAgentRuntime::new(
+            client,
+            "deepseek-v4-flash".to_string(),
+            ctx.clone(),
+            true,
+            None,
+            manager,
+        );
+        let tool = WorkflowTool::new(runtime.manager.clone(), runtime);
+
+        let result = tool
+            .execute(
+                json!({
+                    "action": "run",
+                    "script": "return await parallel([() => task({ description: 'spendy a', type: 'explore', allowedTools: [], tokenBudget: 1 }), () => task({ description: 'spendy b', type: 'explore', allowedTools: [], tokenBudget: 1 })]);"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("all-budget fan-out still returns the run record");
+        let payload: Value = serde_json::from_str(&result.content).expect("json result");
+
+        assert_eq!(payload["status"], "failed", "{payload}");
+        let error = payload["error"].as_str().expect("error surfaced");
+        assert!(
+            error.contains("all 2 task(s) failed")
+                && error.contains("1 fan-out(s) lost every slot"),
+            "error should name the budget-dead children and the dead fan-out: {error}"
+        );
+        // The output is preserved — a failure with a receipt, not an erasure.
+        let slots = payload["result"].as_array().expect("run kept its output");
+        assert_eq!(slots.len(), 2, "{payload}");
+        assert!(slots.iter().all(|slot| slot.is_null()), "{slots:?}");
+        assert_eq!(payload["child_ids"].as_array().unwrap().len(), 2);
+        assert!(
+            calls.load(Ordering::SeqCst) >= 2,
+            "both children should have run and reported usage"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn a_fan_out_of_script_throws_cannot_report_completed() {
+        // R9 blocker: thunks that throw without calling `task()` produce
+        // kind `script`, drop to null, and previously left no host-visible
+        // trace beyond a log line — no task records, no dispatch failures,
+        // classify() = None, run recorded Completed. The structured
+        // every-slot-failed signal must carry the dead fan-out to the host.
+        let _retry_guard = workflow_test_retry_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+        let (client, calls) = fake_chat_client("unused").await;
+        let runtime = SubAgentRuntime::new(
+            client,
+            "deepseek-v4-flash".to_string(),
+            ctx.clone(),
+            true,
+            None,
+            manager,
+        );
+        let tool = WorkflowTool::new(runtime.manager.clone(), runtime);
+
+        let result = tool
+            .execute(
+                json!({
+                    "action": "run",
+                    "script": r#"
+                    const results = await parallel([
+                        () => { throw new Error("script slot a died"); },
+                        () => { throw new Error("script slot b died"); },
+                    ]);
+                    return { slots: results };
+                    "#
+                }),
+                &ctx,
+            )
+            .await
+            .expect("all-script-throw fan-out still returns the run record");
+        let payload: Value = serde_json::from_str(&result.content).expect("json result");
+
+        assert_eq!(payload["status"], "failed", "{payload}");
+        let error = payload["error"].as_str().expect("error surfaced");
+        assert!(
+            error.contains("no work survived") && error.contains("1 fan-out(s) lost every slot"),
+            "error should name the dead fan-out: {error}"
+        );
+        // The null slots survive on the record; the run refuses the success.
+        assert_eq!(
+            payload["result"]["slots"],
+            json!([null, null]),
+            "the settled array is preserved verbatim: {}",
+            payload["result"]
+        );
+        let progress = payload["progress"]
+            .as_array()
+            .expect("progress array")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            progress.contains("every slot failed (2 of 2)")
+                && progress.contains("no work survived this fan-out"),
+            "the operator breadcrumb must stay in the run log:\n{progress}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "no provider call should be spent on thunks that never call task()"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn a_mixed_fan_out_with_surviving_work_stays_degraded_not_failed() {
+        // One slot runs a real child and survives; one thunk throws. Some
+        // work survived, so the run degrades with its null preserved — it is
+        // not a dead fan-out (1 of 2 failed) and must not record failed.
+        let _retry_guard = workflow_test_retry_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+        let (client, calls) = fake_chat_client("child done").await;
+        let runtime = SubAgentRuntime::new(
+            client,
+            "deepseek-v4-flash".to_string(),
+            ctx.clone(),
+            true,
+            None,
+            manager,
+        );
+        let tool = WorkflowTool::new(runtime.manager.clone(), runtime);
+
+        let result = tool
+            .execute(
+                json!({
+                    "action": "run",
+                    "script": "return await parallel([() => task({ description: 'healthy slot', type: 'explore', allowedTools: [] }), () => { throw new Error('script slot died'); }]);"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("mixed fan-out still returns the run record");
+        let payload: Value = serde_json::from_str(&result.content).expect("json result");
+
+        assert_eq!(payload["status"], "degraded", "{payload}");
+        let error = payload["error"].as_str().expect("degradation surfaced");
+        assert!(
+            error.contains("result may be partial"),
+            "error should keep the partial-output caveat: {error}"
+        );
+        let slots = payload["result"].as_array().expect("run kept its output");
+        assert_eq!(slots.len(), 2, "{payload}");
+        assert!(slots[0].is_string() && slots[1].is_null(), "{slots:?}");
+        assert!(
+            calls.load(Ordering::SeqCst) >= 1,
+            "the healthy slot still ran"
         );
     }
 

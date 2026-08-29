@@ -1775,7 +1775,8 @@ mod tests {
 
         assert!(root_labels.contains(&"/provider"));
         assert!(root_labels.contains(&"/model"));
-        assert!(root_labels.contains(&"/fleet"));
+        assert!(root_labels.contains(&"/pod"));
+        assert!(!root_labels.contains(&"/fleet"));
         assert!(root_labels.contains(&"/config"));
         assert!(root_labels.contains(&"/statusline"));
         assert!(!root_labels.contains(&"/rlm"));

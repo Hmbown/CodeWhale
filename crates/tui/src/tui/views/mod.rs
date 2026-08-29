@@ -680,6 +680,15 @@ pub enum ViewEvent {
         value: String,
         persist: bool,
     },
+    /// The canonical `/theme` picker owns theme and underwater treatment as
+    /// one selection. Keeping the pair in one event lets its command owner
+    /// preview, roll back, and persist both fields without an observable
+    /// half-selected Deepsea state.
+    ThemeSelectionUpdated {
+        theme: String,
+        ocean_treatment: String,
+        persist: bool,
+    },
     SubAgentsRefresh,
     SidebarAgentCancel {
         agent_id: String,
@@ -919,7 +928,7 @@ pub enum ViewEvent {
         reasoning_effort: Option<String>,
         locale: crate::localization::Locale,
     },
-    /// Emitted by the `/fleet` roster view (`s` / Enter) to edit a member.
+    /// Emitted by the `/pod` roster view (`s` / Enter) to edit a member.
     /// The host routes a selected v2 Fleet to its exact editor and uses the
     /// legacy profile wizard only when no named Fleet is selected.
     FleetRosterOpenSetupRequested {
@@ -927,7 +936,7 @@ pub enum ViewEvent {
         /// identify which row the operator selected.
         member_id: String,
     },
-    /// Emitted by the `/fleet` roster `m` shortcut to open the selected
+    /// Emitted by the `/pod` roster `m` shortcut to open the selected
     /// member's exact Fleet editor directly on its model picker.
     FleetRosterOpenModelRequested {
         /// Exact Fleet member id; roles are not unique and therefore cannot
@@ -938,7 +947,7 @@ pub enum ViewEvent {
     FleetRosterOpenWorkersRequested,
 
     /// The roster asks the host to open the secondary named-Fleet switcher
-    /// (`/fleet fleets`). Editing stays on setup; this is pick/select only.
+    /// (`/pod fleets`). Editing stays on setup; this is pick/select only.
     FleetRosterOpenFleetsRequested,
 
     /// The Fleet list view asks the host to open a saved Fleet's detail view.
@@ -2397,7 +2406,7 @@ impl ConfigView {
             "theme" => "Named UI theme. Scope: saved settings.",
             "low_motion" => "Reduce motion: freezes pulses, keeps static highlights.",
             "calm_mode" => "Quieter chrome and denser transcript.",
-            "ocean_treatment" => "Underwater field treatment (ombre / flat / terminal).",
+            "ocean_treatment" => "Underwater field treatment (deepsea / flat / terminal).",
             "locale" => "UI language. Scope: saved settings.",
             "reasoning_effort" => "Default reasoning effort for capable models.",
             "default_mode" => "Startup mode (agent / plan / operate).",
@@ -3185,7 +3194,7 @@ fn config_literal_hint_for_key(key: &str) -> &'static str {
         "calm_mode" => "quietens transcript chrome and tool detail; independent of live motion",
         "low_motion" => "on overrides live-state motion; model output is unchanged",
         "fancy_animations" => "on animates truthful tool, status, and ocean live state",
-        "ocean_treatment" => "ombre | flat (appearance; independent of motion)",
+        "ocean_treatment" => "deepsea | flat (appearance; independent of motion)",
         "show_thinking" => "show or hide model reasoning in chat; task lists stay concise",
         "thinking_default_expanded" => {
             "expand model reasoning by default; Space still toggles each block"
@@ -3222,9 +3231,7 @@ fn config_literal_hint_for_key(key: &str) -> &'static str {
         "fleet.exec.max_spawn_depth" => {
             "0 blocks child agents; 3 default (same axis as sub-agents); capped at 8"
         }
-        "features.subagents" => {
-            "read-only feature flag state; /fleet setup is the user-facing path"
-        }
+        "features.subagents" => "read-only feature flag state; /pod setup is the user-facing path",
         "features.web_search" => "read-only feature flag state for web search tools",
         "features.apply_patch" => "read-only feature flag state for patch editing tools",
         "features.mcp" => "read-only feature flag state for MCP tools",
@@ -3302,7 +3309,7 @@ fn config_choice_values(key: &str, provider: ApiProvider) -> Option<Vec<String>>
         "reasoning_effort" => {
             vec!["default", "auto", "off", "low", "medium", "high", "max"]
         }
-        "ocean_treatment" => vec!["ombre", "flat"],
+        "ocean_treatment" => vec!["deepsea", "flat"],
         "focus_texture" => vec!["off", "scrim", "grain"],
         "work_surface_placement" => vec!["top", "left", "right", "off"],
         "rail_panel" => vec!["tasks", "agents", "context", "pinned"],
@@ -3474,7 +3481,7 @@ fn config_choice_detail(locale: Locale, key: &str, value: &str) -> Cow<'static, 
         ("thinking_highlight", "false") => {
             "Keep the dashed reasoning rail and italic text without a filled background."
         }
-        ("ocean_treatment", "ombre") => "Use one continuous ocean color field.",
+        ("ocean_treatment", "deepsea") => "Use one continuous ocean color field.",
         ("ocean_treatment", "flat") => "Use a single flat background color.",
         _ => "",
     })
@@ -4482,7 +4489,7 @@ impl ModalView for SubAgentsView {
             KeyCode::Char('f') | KeyCode::Char('F') => {
                 ViewAction::Emit(ViewEvent::CommandPaletteSelected {
                     action: CommandPaletteAction::ExecuteCommand {
-                        command: "/fleet".to_string(),
+                        command: "/pod".to_string(),
                     },
                 })
             }
@@ -4568,7 +4575,7 @@ impl ModalView for SubAgentsView {
                 Style::default().fg(palette::TEXT_MUTED),
             )));
             lines.push(Line::from(Span::styled(
-                "Configure roles and launch posture with /fleet.",
+                "Configure roles and launch posture with /pod.",
                 Style::default().fg(palette::TEXT_DIM),
             )));
         } else {
@@ -5532,8 +5539,8 @@ mod tests {
         match action {
             ViewAction::Emit(ViewEvent::CommandPaletteSelected {
                 action: CommandPaletteAction::ExecuteCommand { command },
-            }) => assert_eq!(command, "/fleet"),
-            other => panic!("expected /fleet jump action, got {other:?}"),
+            }) => assert_eq!(command, "/pod"),
+            other => panic!("expected /pod jump action, got {other:?}"),
         }
     }
 
@@ -7652,3 +7659,158 @@ context_window = 262144
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tideline settings rail + settings stage (spec §5a "Settings rail",
+// "Live preview"; §5b 3-pane settings layout). Translation scaffolding in
+// the topbar mold: pure, deterministic widgets; `ConfigView`'s own nav is
+// untouched and takes over these categories at the landing slice (#5698
+// gate).
+
+#[allow(dead_code)] // Tideline settings rail + preview (spec §5a)
+pub mod tideline_preview;
+
+/// The eight settings categories in rail order (Appearance → Advanced).
+#[must_use]
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub fn tideline_settings_categories() -> [&'static str; 8] {
+    [
+        "Appearance",
+        "Motion",
+        "Composer",
+        "Notifications",
+        "Provider",
+        "Keybindings",
+        "Privacy",
+        "Advanced",
+    ]
+}
+
+/// What the caller owes the settings rail.
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub struct TidelineSettingsRail<'a> {
+    pub theme: &'a crate::palette::UiTheme,
+    pub selected: usize,
+    pub ascii_safe: bool,
+}
+
+fn srail_put(buf: &mut Buffer, x: u16, y: u16, text: &str, style: Style) {
+    buf.set_stringn(x, y, text, text.width(), style);
+}
+
+/// Paint the settings rail: 8 categories with the selected `▸`, then the
+/// meta rows (help / file issue / feedback).
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub fn render_tideline_settings_rail(
+    area: Rect,
+    buf: &mut Buffer,
+    rail: &TidelineSettingsRail<'_>,
+) {
+    if area.width < 4 || area.height < 4 {
+        return;
+    }
+    let theme = rail.theme;
+    let categories = tideline_settings_categories();
+    for (index, label) in categories.iter().enumerate() {
+        let y = area.y + index as u16;
+        if y >= area.y + area.height.saturating_sub(3) {
+            break;
+        }
+        let selected = rail.selected == index;
+        let ink = if selected {
+            crate::palette::ChromeInk::Identity
+        } else {
+            crate::palette::ChromeInk::MetadataValue
+        };
+        let mut style = crate::palette::chrome_style(theme, ink);
+        if selected {
+            style = style.add_modifier(Modifier::BOLD);
+            srail_put(
+                buf,
+                area.x,
+                y,
+                "▸",
+                crate::palette::chrome_style(theme, crate::palette::ChromeInk::Identity),
+            );
+        }
+        srail_put(buf, area.x + 2, y, label, style);
+    }
+    // Meta rows pinned near the bottom (the reference's help/file/feedback).
+    let meta_y = area.y + area.height.saturating_sub(3);
+    for (offset, meta) in ["? help", "/ file issue", "f feedback"].iter().enumerate() {
+        let row_y = meta_y + offset as u16;
+        if row_y < area.y + area.height {
+            srail_put(
+                buf,
+                area.x,
+                row_y,
+                meta,
+                crate::palette::chrome_style(theme, crate::palette::ChromeInk::MetadataHint),
+            );
+        }
+    }
+}
+
+/// Category rects for the rail (spec §6: keyboard + mouse parity).
+#[must_use]
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub fn tideline_settings_rail_hitboxes(area: Rect, _rail: &TidelineSettingsRail<'_>) -> Vec<Rect> {
+    let mut out = Vec::new();
+    if area.width < 4 || area.height < 4 {
+        return out;
+    }
+    for index in 0..tideline_settings_categories().len() {
+        let y = area.y + index as u16;
+        if y >= area.y + area.height.saturating_sub(3) {
+            break;
+        }
+        out.push(Rect {
+            x: area.x,
+            y,
+            width: area.width,
+            height: 1,
+        });
+    }
+    out
+}
+
+use ratatui::layout::{Constraint, Layout};
+
+/// The settings stage composite (spec §5b): `nav │ form │ preview` at
+/// ≥100 columns; the preview pane sheds below 100.
+pub struct TidelineSettingsStage<'a> {
+    pub rail: TidelineSettingsRail<'a>,
+    pub theme_list: crate::tui::theme_picker::TidelineThemeList<'a>,
+    pub preview: tideline_preview::TidelineSettingsPreview<'a>,
+}
+
+/// Paint the settings stage.
+#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+pub fn render_tideline_settings_stage(
+    area: Rect,
+    buf: &mut Buffer,
+    stage: &TidelineSettingsStage<'_>,
+) {
+    if area.width < 30 || area.height < 4 {
+        return;
+    }
+    if area.width >= 100 {
+        let [nav, form, preview] = Layout::horizontal([
+            Constraint::Length(18),
+            Constraint::Min(30),
+            Constraint::Percentage(38),
+        ])
+        .areas(area);
+        render_tideline_settings_rail(nav, buf, &stage.rail);
+        crate::tui::theme_picker::render_tideline_theme_list(form, buf, &stage.theme_list);
+        tideline_preview::render_tideline_settings_preview(preview, buf, &stage.preview);
+    } else {
+        let [nav, form] =
+            Layout::horizontal([Constraint::Length(16), Constraint::Min(20)]).areas(area);
+        render_tideline_settings_rail(nav, buf, &stage.rail);
+        crate::tui::theme_picker::render_tideline_theme_list(form, buf, &stage.theme_list);
+    }
+}
+
+#[cfg(test)]
+mod tideline_tests;

@@ -14,6 +14,11 @@ crates/tui/src/prompts/*.txt text eol=lf
 # serde_json::to_string_pretty output, which always emits LF, so Windows CI
 # failed `golden_payload_v1` with a pure \r\n diff.
 crates/telemetry/tests/golden/*.json text eol=lf
+# Tideline component goldens (crates/tui/src/tui/goldens/*.txt) are
+# fs::read_to_string'd and compared byte for byte against buffer dumps that
+# always join rows with LF (golden_harness.rs::render_golden_text), so a
+# CRLF checkout failed all eight Windows golden tests with a pure \r\n diff.
+crates/tui/src/tui/goldens/*.txt text eol=lf
 crates/*/assets/**/*.json text eol=lf
 crates/*/assets/**/*.md text eol=lf
 crates/*/locales/*.json text eol=lf

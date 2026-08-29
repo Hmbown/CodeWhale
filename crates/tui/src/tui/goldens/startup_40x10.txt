@@ -1,0 +1,10 @@
+        What are we working on?         
+welcome back · 4 saved sessions in this 
+                                        
+  ▸ ⌁ New session              Enter ›  
+    ◌ Chat only                    C ›  
+    ↺ Resume last             Ctrl+R ›  
+                                        
+⑂ New worktree      ◌ Chat only         
+Ctrl+N              C                   
+  ❯ Type a message…                  ↑  

@@ -120,18 +120,19 @@ pub(crate) fn rail_row_budget(
     let composer_floor = MIN_COMPOSER_HEIGHT.saturating_add(u16::from(app.composer_border));
     terminal_height
         .saturating_sub(header_height_for(terminal_height))
-        // Both standing bands bracket the composer now: the identity row
-        // below it and the activity row above it.
+        // The merged Tideline footer is one row (spec §3: slots 6+8
+        // collapsed into it) — the shell no longer brackets the composer
+        // with two standing bands.
         .saturating_sub(crate::tui::phase_strip::height())
-        .saturating_sub(crate::tui::phase_strip::activity_height())
         .saturating_sub(composer_floor)
         .saturating_sub(chat_floor)
 }
 
-/// The header collapses to a single row on short terminals. Shared so the
-/// rail budget charges the same chrome the layout actually reserves.
-pub(crate) fn header_height_for(terminal_height: u16) -> u16 {
-    if terminal_height < 16 { 1 } else { 2 }
+/// The header is the one-row Tideline topbar (spec §5b:
+/// `Constraint::Length(1)`), at every terminal height. Shared so the rail
+/// budget charges the same chrome the layout actually reserves.
+pub(crate) fn header_height_for(_terminal_height: u16) -> u16 {
+    1
 }
 
 /// Column-axis twin of [`rail_row_budget`]: the columns a side rail must
@@ -170,23 +171,24 @@ pub(crate) fn underwater_animation_interval_ms(app: &App) -> u64 {
 }
 
 /// Whether any underwater motion owner is actually visible in the transcript
-/// host. This keeps the scheduler honest: ombre needs a non-empty viewport,
-/// fish need their collision-safe water budget, and the smaller idle whale may
-/// independently earn its caustic. Obscured surfaces never request frames.
+/// host. This keeps the scheduler honest: only the explicit underwater
+/// treatment earns a viewport budget, and obscured surfaces never request
+/// frames.
 #[must_use]
 pub(crate) fn underwater_motion_surface_visible(
     area: Option<Rect>,
-    ombre_field_breathes: bool,
+    underwater_atmosphere_enabled: bool,
+    deepsea_field_breathes: bool,
     empty_water_visible: bool,
     obscured: bool,
 ) -> bool {
-    if obscured {
+    if obscured || !underwater_atmosphere_enabled {
         return false;
     }
     area.is_some_and(|area| {
         area.width > 0
             && area.height > 0
-            && (ombre_field_breathes
+            && (deepsea_field_breathes
                 || (area.width >= crate::tui::ocean::AMBIENT_MIN_WIDTH
                     && area.height >= crate::tui::ocean::AMBIENT_MIN_HEIGHT)
                 || (empty_water_visible && crate::tui::underwater::empty_state_mark_visible(area)))

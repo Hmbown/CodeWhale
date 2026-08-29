@@ -422,6 +422,20 @@ pub struct EngineConfig {
     /// Resolved from `[tui].stream_chunk_timeout_secs` (or the legacy
     /// `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS`) and updated live by `/config`.
     pub stream_chunk_timeout: Duration,
+    /// Cumulative wall-clock budget for one turn (R1). Counted across every
+    /// model step of the turn, excluding time blocked on a human approval
+    /// decision. Resolved from `[tui].turn_wall_clock_secs`; always finite —
+    /// see [`turn_budget::resolve_turn_wall_clock`].
+    pub turn_wall_clock: Duration,
+    /// Per-step cap on accumulated streamed content, in bytes (R1). Resolved
+    /// from `[tui].stream_max_content_mb`. Pre-R1 this was the hard-coded
+    /// `STREAM_MAX_CONTENT_BYTES`; it is still finite by default and now
+    /// overridable.
+    pub stream_max_content_bytes: usize,
+    /// Per-step cap on a single stream's wall-clock duration (R1). Resolved
+    /// from `[tui].stream_max_duration_secs`. Pre-R1 this was the hard-coded
+    /// `STREAM_MAX_DURATION_SECS`.
+    pub stream_max_duration: Duration,
     /// No-progress heartbeat timeout for live sub-agents. Used by the manager
     /// and parent wait loop to auto-cancel stuck children before they exhaust
     /// the sub-agent slot pool indefinitely (#2614).
@@ -435,10 +449,13 @@ pub struct EngineConfig {
     /// User-configured bwrap mount extensions (#5410): extra read-only roots
     /// and writable device nodes such as `/dev/null`.
     pub bwrap_extensions: crate::sandbox::BwrapMountExtensions,
-    /// Opt-in sandbox read deny-list (S1, #5568): subpaths sandboxed shell
-    /// commands must not read even under full-disk-read postures. `~` expands
-    /// at the sandbox boundary. Empty keeps today's behavior.
-    pub denied_read_subpaths: Vec<std::path::PathBuf>,
+    /// Sandbox read deny-list (S1). One source of truth for two enforcement
+    /// points: the OS wrappers get its subtree paths, and the in-process
+    /// file-reading tools consult it directly (they run inside the harness
+    /// process and are never wrapped by `sandbox-exec` or `bwrap`).
+    /// Defense-in-depth, not a security boundary — see
+    /// `crate::sandbox::read_guard` for what it does and does not stop.
+    pub read_denylist: crate::sandbox::read_guard::ReadDenylist,
     /// Tool override and plugin configuration (`[tools]` table in config.toml).
     /// Applied to the per-turn tool registry after built-in tools are registered.
     /// When `None`, no overrides or plugin loading occurs.
@@ -460,9 +477,14 @@ pub struct EngineConfig {
     pub advisor_config: crate::tools::subagent::AdvisorConfig,
 }
 
-/// Sentinel used by ordinary interactive hosts: model work has no hidden
-/// step-budget ceiling. Progress/stationarity controls live at the tool loop.
-pub(crate) const UNBOUNDED_MODEL_STEPS: u32 = u32::MAX;
+/// Default model-step ceiling for hosts that do not resolve one from
+/// configuration (R1). Formerly `UNBOUNDED_MODEL_STEPS = u32::MAX`, which
+/// made an unbounded agent loop the default everywhere. It is finite now:
+/// progress/stationarity controls still live at the tool loop, but they are
+/// no longer the *only* thing standing between a stuck loop and unbounded
+/// spend. Overridable via `[tui].max_model_steps`; see
+/// [`turn_budget::resolve_max_model_steps`].
+pub(crate) const DEFAULT_MODEL_STEPS: u32 = turn_budget::DEFAULT_MAX_MODEL_STEPS;
 
 impl Default for EngineConfig {
     fn default() -> Self {
@@ -481,10 +503,11 @@ impl Default for EngineConfig {
             instructions: Vec::new(),
             project_context_pack_enabled: false,
             translation_enabled: false,
-            // Ordinary interactive turns have no hidden model-step budget.
-            // Callers that need a finite safety boundary set one explicitly;
-            // progress-based stationarity belongs at the tool-loop layer.
-            max_steps: UNBOUNDED_MODEL_STEPS,
+            // R1: every turn carries a finite model-step budget. Callers
+            // that need a different boundary set one explicitly; progress-
+            // based stationarity still belongs at the tool-loop layer, but
+            // it is no longer the only bound on spend.
+            max_steps: DEFAULT_MODEL_STEPS,
             max_subagents: DEFAULT_MAX_SUBAGENTS,
             max_admitted_subagents: DEFAULT_MAX_SUBAGENTS,
             launch_concurrency: DEFAULT_MAX_SUBAGENTS,
@@ -530,13 +553,22 @@ impl Default for EngineConfig {
             stream_chunk_timeout: Duration::from_secs(
                 crate::config::DEFAULT_STREAM_CHUNK_TIMEOUT_SECS,
             ),
+            turn_wall_clock: turn_budget::resolve_turn_wall_clock(None),
+            stream_max_content_bytes: turn_budget::DEFAULT_STREAM_MAX_CONTENT_BYTES,
+            stream_max_duration: Duration::from_secs(turn_budget::DEFAULT_STREAM_MAX_DURATION_SECS),
             subagent_heartbeat_timeout: Duration::from_secs(
                 crate::config::DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS,
             ),
             tools_always_load: HashSet::new(),
             prefer_bwrap: false,
             bwrap_extensions: crate::sandbox::BwrapMountExtensions::default(),
-            denied_read_subpaths: Vec::new(),
+            // Fail-closed (F7): `Engine::new` unconditionally installs this
+            // list process-wide via `read_guard::set_active`, so a default
+            // here must be the built-in credential-store defaults — an empty
+            // list would override the safe fallback and fail open. Mirrors
+            // `Config::default`, where `sandbox_read_denylist_defaults`
+            // defaults to true.
+            read_denylist: crate::sandbox::read_guard::ReadDenylist::build(true, &[], &[]),
             verbosity: None,
             tools: None,
             workspace_follow_symlinks: false,
@@ -832,6 +864,13 @@ pub struct Engine {
     pending_lsp_blocks: Vec<crate::lsp::DiagnosticBlock>,
     /// Current operating mode. Updated on `ChangeMode` and `SendMessage`.
     current_mode: AppMode,
+    /// R1: cumulative wall-clock budget for the turn currently running.
+    /// Restarted at the top of every `run_turn`, checked at the
+    /// provider-request boundary, and paused while the turn is blocked on a
+    /// human approval decision. It lives on the engine rather than in
+    /// `TurnContext` so `request_tool_approval` — which never sees the turn
+    /// context — can pause it.
+    turn_wall_clock: turn_budget::TurnWallClock,
     /// The most recent authority narrowing, if any (#3947). Kept on the engine
     /// so doctor and debug surfaces can answer "why is this tool unavailable"
     /// with the same record the user and the model already saw.
@@ -1499,6 +1538,10 @@ impl Engine {
                 .subagent_default_wall_time_secs()
                 .map(std::time::Duration::from_secs),
         );
+        // The OS wrappers below only cover child processes. Codewhale's own
+        // `read_file`/`read`/`read_media` tools read in-process, so the same
+        // deny-list is installed process-wide for them to consult (S1).
+        crate::sandbox::read_guard::set_active(config.read_denylist.clone());
         let shell_manager = config
             .runtime_services
             .shell_manager
@@ -1508,13 +1551,13 @@ impl Engine {
             Ok(mut manager) => {
                 manager.set_prefer_bwrap(config.prefer_bwrap);
                 manager.set_bwrap_extensions(config.bwrap_extensions.clone());
-                manager.set_denied_read_subpaths(config.denied_read_subpaths.clone());
+                manager.set_denied_read_subpaths(config.read_denylist.subtree_paths());
             }
             Err(poisoned) => {
                 let mut manager = poisoned.into_inner();
                 manager.set_prefer_bwrap(config.prefer_bwrap);
                 manager.set_bwrap_extensions(config.bwrap_extensions.clone());
-                manager.set_denied_read_subpaths(config.denied_read_subpaths.clone());
+                manager.set_denied_read_subpaths(config.read_denylist.subtree_paths());
             }
         }
         let file_read_tracker = new_shared_file_read_tracker();
@@ -1562,6 +1605,10 @@ impl Engine {
         let approval_receipt_store = Ok(ApprovalReceiptStore::new(
             std::env::temp_dir().join(format!("codewhale-approval-tests-{}", uuid::Uuid::new_v4())),
         ));
+        // R1: seed the wall clock from the config the engine is built with.
+        // `run_turn` restarts it per turn; this initial value only matters
+        // for hosts that inspect the engine before the first turn.
+        let turn_wall_clock_budget = config.turn_wall_clock;
         let engine = Engine {
             config,
             api_config: api_config.clone(),
@@ -1615,6 +1662,7 @@ impl Engine {
             sandbox_backend,
             sandbox_enforcement,
             current_mode: AppMode::Agent,
+            turn_wall_clock: turn_budget::TurnWallClock::start(turn_wall_clock_budget),
             last_policy_narrowing: None,
             last_turn_meta_git_snapshot: StdMutex::new(None),
             token_estimate_cache: TokenEstimateCache::new(),
@@ -7541,6 +7589,7 @@ pub(crate) mod tool_catalog;
 mod tool_execution;
 mod tool_preparation;
 mod tool_setup;
+pub(crate) mod turn_budget;
 pub(crate) mod turn_loop;
 pub(crate) use token_estimate_cache::TokenEstimateCache;
 
@@ -7569,10 +7618,9 @@ use self::streaming::TOOL_CALL_START_MARKERS;
 use self::streaming::filter_tool_call_delta;
 use self::streaming::{
     ContentBlockKind, FAKE_WRAPPER_NOTICE, MAX_STREAM_ERRORS_BEFORE_FAIL, MAX_STREAM_RETRIES,
-    MAX_TRANSPARENT_STREAM_RETRIES, STREAM_MAX_CONTENT_BYTES, STREAM_MAX_DURATION_SECS,
-    StreamResume, StreamRetryBudget, ToolCallDeltaFilterState, ToolUseState,
-    contains_fake_tool_wrapper, filter_tool_call_delta_with_state, flush_tool_call_delta_state,
-    should_resume_after_network_drop, should_resume_after_sleep,
+    MAX_TRANSPARENT_STREAM_RETRIES, StreamResume, StreamRetryBudget, ToolCallDeltaFilterState,
+    ToolUseState, contains_fake_tool_wrapper, filter_tool_call_delta_with_state,
+    flush_tool_call_delta_state, should_resume_after_network_drop, should_resume_after_sleep,
     should_resume_interactive_after_network_drop, should_transparently_retry_stream,
     sleep_gap_detected, stream_read_error_user_message,
 };

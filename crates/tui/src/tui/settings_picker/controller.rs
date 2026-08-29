@@ -97,6 +97,7 @@ impl SettingsPickerController {
     }
 
     #[must_use]
+    #[allow(dead_code)] // identity accessor for the theme-picker controller test
     pub fn original_id(&self) -> &str {
         &self.original_id
     }

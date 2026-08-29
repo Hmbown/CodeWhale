@@ -1,6 +1,6 @@
 //! Shared Fleet control-plane surface (#1888, #4022).
 //!
-//! `codewhale fleet …` and the `/fleet …` slash command (and therefore its
+//! `codewhale fleet …` and the `/pod …` slash command (and therefore its
 //! hotbar action) run the *same* verbs against the *same* durable ledger and
 //! render the *same* [`ControlReceipt`]. Nothing here formats twice: the CLI's
 //! `print_status` / `print_inspection` delegate to the renderers below.
@@ -424,7 +424,7 @@ fn instant_of(value: &Known<String>) -> Option<chrono::DateTime<chrono::Utc>> {
 }
 
 // ---------------------------------------------------------------------------
-// Executor — the one code path behind `codewhale fleet …` and `/fleet …`
+// Executor — the one code path behind `codewhale fleet …` and `/pod …`
 // ---------------------------------------------------------------------------
 
 /// Run a Fleet control verb against the durable workspace ledger, using a

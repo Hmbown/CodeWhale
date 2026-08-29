@@ -15,7 +15,7 @@ use ratatui::style::Color;
 
 use super::identity::sha256_hex;
 use super::skin::SkinTokens;
-use crate::palette::{LIGHT_UI_THEME, UI_THEME, UiTheme};
+use crate::palette::UiTheme;
 
 /// `localStorage` key that turns the scene off in the browser (`"off"`).
 pub(crate) const OCEAN_STORAGE_KEY: &str = "codewhale.ocean";
@@ -72,9 +72,10 @@ pub(crate) fn ocean_palette() -> BTreeMap<&'static str, BTreeMap<&'static str, S
         m.insert("dim", hex(theme.text_dim));
         m
     }
+    let (light, dark) = super::skin::browser_themes();
     let mut map = BTreeMap::new();
-    map.insert("light", one(&LIGHT_UI_THEME));
-    map.insert("dark", one(&UI_THEME));
+    map.insert("light", one(&light));
+    map.insert("dark", one(&dark));
     map
 }
 
@@ -86,8 +87,7 @@ pub(crate) fn ocean_palette_json() -> String {
 /// Same colours as the skin table (`bg-base` = `surface_bg`; the sidebar
 /// takes `panel_bg`), so with the scene off nothing shifts.
 pub(crate) fn ocean_veil_tokens() -> BTreeMap<String, SkinTokens> {
-    let light = &LIGHT_UI_THEME;
-    let dark = &UI_THEME;
+    let (light, dark) = super::skin::browser_themes();
     let mut map = BTreeMap::new();
     map.insert(
         "--dsw-alias-bg-base".to_string(),
