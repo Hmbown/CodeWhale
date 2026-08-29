@@ -417,7 +417,6 @@ impl RouteResolver {
             // Aggregators, local runtimes, and custom OpenAI-compatible
             // endpoints legitimately accept arbitrary / prefixed ids verbatim.
             ProviderClass::Aggregator | ProviderClass::LocalOrCustom => {
-                let _ = provider_kind;
                 if require_catalog_match {
                     // Opencode Zen serves Muse Spark exclusively over Responses.
                     // Handle any future muse-spark variant (e.g. -free suffix)

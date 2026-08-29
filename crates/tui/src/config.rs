@@ -5458,6 +5458,20 @@ impl Config {
             || (identity_is_literal_custom(identity) && self.uses_legacy_literal_custom_route())
     }
 
+    /// Trimmed, non-empty `wire` dialect preference for `provider`'s config
+    /// table (`[providers.<name>] wire = "responses" | "anthropic" | "chat"`).
+    ///
+    /// Single source for the client wire resolver and the capability reporter
+    /// so the two cannot drift. `None` means "no preference" — the provider's
+    /// static policy applies.
+    pub(crate) fn provider_wire_dialect(&self, provider: ApiProvider) -> Option<&str> {
+        self.provider_config_for(provider)?
+            .wire
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
     pub(crate) fn provider_config_for(&self, provider: ApiProvider) -> Option<&ProviderConfig> {
         let providers = self.providers.as_ref()?;
         // The custom provider's config lives in the flatten map, keyed by the
@@ -9445,7 +9459,7 @@ fn wire_config_prefers_responses(wire: Option<&str>) -> bool {
             | "response-api"
             | "openai-responses-compat"
             | "responses-compat"
-    ) || normalized.contains("responses")
+    )
 }
 
 fn modelstudio_mode_is_coding_plan(provider: ApiProvider, mode: Option<&str>) -> bool {
