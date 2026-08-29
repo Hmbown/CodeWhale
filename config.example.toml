@@ -765,7 +765,7 @@ max_subagents = 10 # optional (default 64, clamped to 1-128)
 # model = "deepseek-v4-pro"
 
 # OpenCode Zen (https://opencode.ai/docs/zen/)
-# Model-aware gateway: GPT models use Responses, Claude/Qwen use Anthropic
+# Model-aware gateway: GPT/Muse Spark use Responses, Claude/Qwen use Anthropic
 # Messages, and DeepSeek/MiniMax/GLM/Kimi/Grok/free models use Chat Completions.
 # Gemini uses a Google-specific protocol that Codewhale does not implement and
 # therefore fails closed instead of being sent with the wrong request shape.
@@ -774,9 +774,17 @@ max_subagents = 10 # optional (default 64, clamped to 1-128)
 [providers.opencode_zen]
 # api_key = "YOUR_OPENCODE_ZEN_API_KEY"
 # base_url = "https://opencode.ai/zen/v1"
-# model = "gpt-5.5"                         # Responses default
+# model = "gpt-5.5"                         # Responses
+# model = "muse-spark-1.2-contributor-free"  # Responses (free tier, auto-routed to Responses — no wire needed)
 # model = "claude-sonnet-4-6"               # Anthropic Messages example
 # model = "deepseek-v4-pro"                 # Chat Completions example
+# Custom gateway equivalent (when not using the opencode_zen provider):
+# [providers.my_opencode]
+# kind = "openai-compatible"
+# base_url = "https://opencode.ai/zen/v1"
+# model = "muse-spark-1.2-contributor-free"
+# wire = "responses"
+# api_key_env = "OPENCODE_ZEN_API_KEY"
 
 # Meta Model API / Muse Spark (https://developer.meta.com/ai/)
 # OpenAI-compatible Chat Completions route.
