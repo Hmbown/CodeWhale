@@ -719,6 +719,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn symlink_pointing_into_a_denied_tree_is_refused_by_its_target() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let secret_dir = tmp.path().join("secrets");
@@ -729,10 +730,7 @@ mod tests {
         std::fs::write(&secret, "KEY").expect("write");
 
         let link = workspace.join("harmless.txt");
-        #[cfg(unix)]
         std::os::unix::fs::symlink(&secret, &link).expect("symlink");
-        #[cfg(not(unix))]
-        return;
 
         let list = denylist_for(std::slice::from_ref(&secret_dir));
         let denial = list.check(&link).expect_err("symlink must not walk around");
@@ -741,6 +739,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn symlinked_parent_directory_is_refused() {
         // The link is on a *directory* in the middle of the path, not the leaf.
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -751,10 +750,7 @@ mod tests {
         std::fs::write(secret_dir.join("token"), "TOKEN").expect("write");
 
         let link_dir = workspace.join("data");
-        #[cfg(unix)]
         std::os::unix::fs::symlink(&secret_dir, &link_dir).expect("symlink");
-        #[cfg(not(unix))]
-        return;
 
         let list = denylist_for(std::slice::from_ref(&secret_dir));
         list.check(&link_dir.join("token"))
@@ -767,6 +763,7 @@ mod tests {
     /// `denied/secret`; the old lexical-first fold produced `pub/secret` and
     /// the check returned Ok while the read sailed through.
     #[test]
+    #[cfg(unix)]
     fn dot_dot_through_a_symlink_is_applied_after_symlink_resolution() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let denied = tmp.path().join("denied");
@@ -774,10 +771,7 @@ mod tests {
         std::fs::write(denied.join("sub").join("secret"), "TOKEN").expect("write");
         let pub_dir = tmp.path().join("pub");
         std::fs::create_dir_all(&pub_dir).expect("mkdir");
-        #[cfg(unix)]
         std::os::unix::fs::symlink(denied.join("sub"), pub_dir.join("link")).expect("symlink");
-        #[cfg(not(unix))]
-        return;
 
         let list = denylist_for(std::slice::from_ref(&denied));
         list.check(&pub_dir.join("link").join("..").join("secret"))
@@ -793,23 +787,19 @@ mod tests {
     /// final target, not just one hop. Integrator defeat attempt: indirection
     /// depth is not a bypass.
     #[test]
+    #[cfg(unix)]
     fn symlink_chains_resolve_to_the_denied_target() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let denied = tmp.path().join("denied");
         std::fs::create_dir_all(&denied).expect("mkdir");
         std::fs::write(denied.join("id_ed25519"), "KEY").expect("write");
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(denied.join("id_ed25519"), tmp.path().join("hop2"))
-                .expect("symlink");
-            std::os::unix::fs::symlink(tmp.path().join("hop2"), tmp.path().join("hop1"))
-                .expect("symlink");
-            let list = denylist_for(std::slice::from_ref(&denied));
-            list.check(&tmp.path().join("hop1"))
-                .expect_err("a symlink chain must resolve to the denied target");
-        }
-        #[cfg(not(unix))]
-        return;
+        std::os::unix::fs::symlink(denied.join("id_ed25519"), tmp.path().join("hop2"))
+            .expect("symlink");
+        std::os::unix::fs::symlink(tmp.path().join("hop2"), tmp.path().join("hop1"))
+            .expect("symlink");
+        let list = denylist_for(std::slice::from_ref(&denied));
+        list.check(&tmp.path().join("hop1"))
+            .expect_err("a symlink chain must resolve to the denied target");
     }
 
     /// A relative read issued with the process cwd INSIDE a denied subtree
@@ -1038,6 +1028,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn denial_message_names_the_rule_without_echoing_the_resolved_secret_path() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let secret_dir = tmp.path().join("secrets");
@@ -1047,10 +1038,7 @@ mod tests {
         std::fs::write(secret_dir.join("id_rsa"), "KEY").expect("write");
 
         let link = workspace.join("notes.txt");
-        #[cfg(unix)]
         std::os::unix::fs::symlink(secret_dir.join("id_rsa"), &link).expect("symlink");
-        #[cfg(not(unix))]
-        return;
 
         let list = denylist_for(std::slice::from_ref(&secret_dir));
         let message = list.check(&link).expect_err("deny").message("read_file");

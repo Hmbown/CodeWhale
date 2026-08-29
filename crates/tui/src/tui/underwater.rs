@@ -2905,7 +2905,7 @@ const FLUKE_BLOCK: [&str; 6] = [
     "  ▝▀▜██▛▀▘",
     "     ▜█",
     "     ██▖",
-    "  ▝▀▜█▙▄▖",
+    "   ▝▀▜█▙▄▖",
 ];
 /// Rows of fluke-mark ink, one `String` per terminal row. `ascii_safe`
 /// projects each cell through the declared fallbacks (spec §2: every
