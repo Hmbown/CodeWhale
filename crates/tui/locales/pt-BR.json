@@ -1744,5 +1744,13 @@
   "ProviderTestConnectionNoEndpoint": "{provider} não tem endpoint /models; a alcançabilidade não foi sondada.",
   "ProviderTemplateOpened": "Modelo de provedor '{id}' aberto. Informe só a API key.",
   "ProviderTemplateUnknown": "Modelo de provedor desconhecido '{id}'.",
-  "ProviderTemplateOpenedEnvOnly": "Modelo embutido '{id}' aberto. Informe o nome da variável de ambiente da API key e salve. Não cole a chave crua."
+  "ProviderTemplateOpenedEnvOnly": "Modelo embutido '{id}' aberto. Informe o nome da variável de ambiente da API key e salve. Não cole a chave crua.",
+  "OperateBoardHeader": "Operate {id}  [{status}]  ritmo={pace}  escritores={writers}",
+  "OperateBoardBurnObserved": "gasto  ${actual}/h observado  vs  ${target}/h alvo",
+  "OperateBoardBurnNoCap": "gasto  Sem limite",
+  "OperateBoardDirectionEmpty": "direção  (vazia — bloqueado por ociosidade)",
+  "OperateBoardDirectionLine": "direção  {line}",
+  "OperateBoardPlanMissing": "planoLíder  (nenhum — trabalhadores não admitidos)",
+  "OperateBoardPlanHeader": "planoLíder  id        dono     início dur   est$   depende  título",
+  "OperateBoardGantt": "gantt  tempo →"
 }

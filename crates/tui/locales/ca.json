@@ -1744,5 +1744,13 @@
   "ProviderTestConnectionNoEndpoint": "{provider} no té un punt final /models; no s'ha sondejat l'accessibilitat.",
   "ProviderTemplateOpened": "S'ha obert la plantilla de proveïdor '{id}'. Introduïu només la clau API.",
   "ProviderTemplateUnknown": "Plantilla de proveïdor desconeguda '{id}'.",
-  "ProviderTemplateOpenedEnvOnly": "S'ha obert la plantilla integrada '{id}'. Introduïu el nom de la variable d'entorn de la clau API i deseu. No enganxeu la clau crua."
+  "ProviderTemplateOpenedEnvOnly": "S'ha obert la plantilla integrada '{id}'. Introduïu el nom de la variable d'entorn de la clau API i deseu. No enganxeu la clau crua.",
+  "OperateBoardHeader": "Operate {id}  [{status}]  ritme={pace}  escriptors={writers}",
+  "OperateBoardBurnObserved": "despesa  ${actual}/h observats  vs  ${target}/h objectiu",
+  "OperateBoardBurnNoCap": "despesa  Sense límit",
+  "OperateBoardDirectionEmpty": "direcció  (buida — blocat en espera)",
+  "OperateBoardDirectionLine": "direcció  {line}",
+  "OperateBoardPlanMissing": "plaLíder  (cap — treballadors no admesos)",
+  "OperateBoardPlanHeader": "plaLíder  id        propietari inici dur   est$   depèn    títol",
+  "OperateBoardGantt": "gantt  temps →"
 }

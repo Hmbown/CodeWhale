@@ -1944,6 +1944,15 @@ pub enum MessageId {
     ToastCouldNotSendIntoTurn,
     ToastHookBlockedFollowUp,
     ToastOfflineQueuedCount,
+    // Operate plan board chrome (contract tokens stay untranslated).
+    OperateBoardHeader,
+    OperateBoardBurnObserved,
+    OperateBoardBurnNoCap,
+    OperateBoardDirectionEmpty,
+    OperateBoardDirectionLine,
+    OperateBoardPlanMissing,
+    OperateBoardPlanHeader,
+    OperateBoardGantt,
 }
 
 #[allow(dead_code)]
@@ -3695,6 +3704,14 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ToastCouldNotSendIntoTurn,
     MessageId::ToastHookBlockedFollowUp,
     MessageId::ToastOfflineQueuedCount,
+    MessageId::OperateBoardHeader,
+    MessageId::OperateBoardBurnObserved,
+    MessageId::OperateBoardBurnNoCap,
+    MessageId::OperateBoardDirectionEmpty,
+    MessageId::OperateBoardDirectionLine,
+    MessageId::OperateBoardPlanMissing,
+    MessageId::OperateBoardPlanHeader,
+    MessageId::OperateBoardGantt,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> Cow<'static, str> {
