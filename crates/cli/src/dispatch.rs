@@ -40,10 +40,10 @@ pub(crate) struct DispatchArgs {
     /// Branch the remote agent will raise (default: codewhale/cloud-<unix>).
     #[arg(long)]
     branch: Option<String>,
-    /// Required to create Daytona spend or push. Without this, only a proposal is written.
+    /// Required to create Codewhale cloud-agent spend or push. Without this, only a proposal is written.
     #[arg(long)]
     confirm: bool,
-    /// Show remotes and whether Daytona credentials are present (never prints secrets).
+    /// Show remotes and whether Codewhale cloud-agent credentials are present (never prints secrets).
     #[arg(long)]
     status: bool,
     /// List first-class cloud jobs (same kind shown by `/jobs`).
@@ -260,5 +260,25 @@ mod tests {
         assert!(!text.contains("Daytona"));
         assert!(!text.contains("sk-"));
         assert!(!text.contains("Bearer"));
+    }
+
+    #[test]
+    fn rendered_help_carries_no_provider_brand() {
+        use clap::CommandFactory;
+        let help = Cli::command()
+            .find_subcommand_mut("dispatch")
+            .expect("dispatch subcommand exists")
+            .render_help()
+            .to_string();
+        // The reworded cloud-agent copy must actually land in --help…
+        assert!(help.contains("cloud-agent"), "{help}");
+        assert!(help.contains("--confirm"), "{help}");
+        // …and no provider brand may leak into it.
+        for banned in ["Daytona", "daytona"] {
+            assert!(
+                !help.contains(banned),
+                "--help must not brand the operator: {banned}"
+            );
+        }
     }
 }

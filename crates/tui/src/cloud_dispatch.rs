@@ -1246,6 +1246,16 @@ impl DaytonaLauncher for LiveDaytonaLauncher {
     fn create_sandbox(&self, job: &CloudJob) -> Result<SandboxReceipt> {
         let api_key = Self::api_key()?;
         let url = Self::control_plane_url("sandbox")?;
+        // TODO(founding decision, deliberately not invented here): the
+        // sandbox image / snapshot / env-vars design is still pending, so
+        // this create body carries no image, snapshot, or envVars and the
+        // created sandbox CANNOT be assumed to provide the `codewhale`
+        // harness (`codewhale exec --auto`). Once that decision lands, the
+        // confirm gate (confirm_job / execute_dispatch) must hard-fail
+        // truthfully — "the cloud agent image cannot run this job" — rather
+        // than take spend for a sandbox that cannot execute the harness
+        // step. No gating flag exists today and none is added here; wire
+        // the warning through whatever config surface that decision picks.
         let body = serde_json::json!({
             "name": format!("cw-{}", job.id.replace('_', "-")),
             "labels": {
@@ -1662,7 +1672,7 @@ fn forge_host(forge: Forge) -> &'static str {
 
 fn proposal_note(plan: &DispatchPlan) -> String {
     format!(
-        "Proposed Daytona offload to {} ({}) raising branch {}.",
+        "Proposed Codewhale cloud-agent offload to {} ({}) raising branch {}.",
         plan.remote.forge.as_str(),
         plan.remote.name,
         plan.branch
@@ -2149,6 +2159,12 @@ mod tests {
         assert!(detail.contains("PR: https://github.com/org/repo/pull/7"));
         assert!(detail.contains("Runtime: 16m"));
         assert!(detail.contains("Agent: Fixed the flake"));
+        for banned in ["Daytona", "daytona"] {
+            assert!(
+                !detail.contains(banned),
+                "the job card must not brand the sandbox operator: {banned}"
+            );
+        }
     }
 
     #[test]
@@ -2239,6 +2255,42 @@ mod tests {
             agent_summary: None,
             finished_unix: None,
             sandbox_pending: false,
+        }
+    }
+
+    #[test]
+    fn proposal_and_job_cards_never_carry_a_provider_brand() {
+        // The proposal note is user copy (it rides `/dispatch show` and the
+        // CLI card from the moment a job is proposed) — it names the
+        // Codewhale cloud agent, never the sandbox operator.
+        let plan = DispatchPlan {
+            prompt: "offload me".to_string(),
+            remote: SelectedRemote {
+                forge: Forge::Github,
+                name: "github".to_string(),
+                url: "https://github.com/org/repo.git".to_string(),
+            },
+            branch: "codewhale/cloud-x".to_string(),
+        };
+        let note = proposal_note(&plan);
+        assert!(note.contains("cloud-agent"), "{note}");
+        let mut job = stored_job(CloudJobStatus::Proposed, 1);
+        job.note = note.clone();
+        let card = format_job(&job);
+        for banned in ["Daytona", "daytona"] {
+            assert!(
+                !card.contains(banned),
+                "the job card must not brand the sandbox operator: {banned}"
+            );
+        }
+        assert!(card.contains("cloud-agent"));
+        // And the list view (format_job_list) over the same record.
+        let listing = format_job_list(&[job]);
+        for banned in ["Daytona", "daytona"] {
+            assert!(
+                !listing.contains(banned),
+                "listing must not brand: {banned}"
+            );
         }
     }
 
