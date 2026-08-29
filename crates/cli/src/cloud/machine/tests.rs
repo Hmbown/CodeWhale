@@ -11,8 +11,7 @@ use serde_json::json;
 use super::*;
 use crate::cloud::{CloudResponse, CloudTransport};
 
-const VALID: &str =
-    "cwc_key_3f2a9c1e4b7d8a0f5c6e2b91_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-xQRST";
+const VALID: &str = "cwc_key_3f2a9c1e4b7d8a0f5c6e2b91_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-xQRST";
 
 fn err_body(code: &str, message: &str) -> serde_json::Value {
     json!({
@@ -92,7 +91,10 @@ fn a_well_formed_token_parses_and_exposes_only_its_non_secret_head() {
 
     // Debug is the accident-prone surface: a `{:?}` in a panic must not leak.
     let debug = format!("{key:?}");
-    assert!(debug.contains("cwc_key_3f2a9c1e4b7d8a0f5c6e2b91"), "{debug}");
+    assert!(
+        debug.contains("cwc_key_3f2a9c1e4b7d8a0f5c6e2b91"),
+        "{debug}"
+    );
     assert!(!debug.contains(&VALID[TOKEN_HEAD_LEN..]), "{debug}");
 }
 
@@ -104,8 +106,9 @@ fn ci_whitespace_and_wrapping_quotes_are_stripped_before_matching() {
         format!("'{VALID}'"),
         format!("  \" {VALID} \"  "),
     ] {
-        let key = MachineKey::parse(&raw)
-            .unwrap_or_else(|err| panic!("secret-paste artifact must be tolerated: {raw:?}: {err}"));
+        let key = MachineKey::parse(&raw).unwrap_or_else(|err| {
+            panic!("secret-paste artifact must be tolerated: {raw:?}: {err}")
+        });
         assert_eq!(key.head(), "cwc_key_3f2a9c1e4b7d8a0f5c6e2b91");
     }
 }
@@ -179,7 +182,12 @@ fn base_url_precedence_is_flag_then_machine_env_then_device_env_then_default() {
         "https://machine.example"
     );
     assert_eq!(
-        resolve_api_base(None, None, Some("https://device.example"), DEFAULT_BASE_FOR_TEST),
+        resolve_api_base(
+            None,
+            None,
+            Some("https://device.example"),
+            DEFAULT_BASE_FOR_TEST
+        ),
         "https://device.example"
     );
     assert_eq!(
@@ -220,28 +228,128 @@ fn every_documented_error_code_maps_to_its_own_actionable_message() {
         retryable: bool,
     }
     let cases = [
-        Case { status: 401, code: "api_key_invalid", expect: "is not valid", exit: EXIT_AUTH, retryable: false },
-        Case { status: 401, code: "api_key_revoked", expect: "was revoked", exit: EXIT_AUTH, retryable: false },
-        Case { status: 401, code: "api_key_expired", expect: "expired", exit: EXIT_AUTH, retryable: false },
-        Case { status: 401, code: "api_key_required", expect: "Codewhale CLI bug", exit: EXIT_AUTH, retryable: false },
-        Case { status: 401, code: "auth_required", expect: "codewhale login", exit: EXIT_AUTH, retryable: false },
-        Case { status: 403, code: "api_key_route_denied", expect: "cannot be used for this command", exit: EXIT_AUTH, retryable: false },
-        Case { status: 403, code: "api_key_scope_denied", expect: "scope", exit: EXIT_AUTH, retryable: false },
-        Case { status: 409, code: "account_agent_model_unconfigured", expect: "no agent model configured", exit: EXIT_AGENT_UNCONFIGURED, retryable: false },
-        Case { status: 409, code: "api_key_limit_reached", expect: "25 active API keys", exit: EXIT_LIMIT, retryable: false },
-        Case { status: 400, code: "api_key_name_invalid", expect: "server prose", exit: EXIT_INPUT, retryable: false },
-        Case { status: 400, code: "api_key_expiry_invalid", expect: "server prose", exit: EXIT_INPUT, retryable: false },
-        Case { status: 400, code: "api_key_scopes_invalid", expect: "server prose", exit: EXIT_INPUT, retryable: false },
-        Case { status: 400, code: "api_key_body_invalid", expect: "server prose", exit: EXIT_INPUT, retryable: false },
-        Case { status: 404, code: "api_key_not_found", expect: "No such Codewhale API key", exit: EXIT_INPUT, retryable: false },
-        Case { status: 503, code: "api_key_unavailable", expect: "does not support API keys yet", exit: EXIT_UNAVAILABLE, retryable: false },
-        Case { status: 503, code: "control_plane_not_attached", expect: "attached to the account control plane", exit: EXIT_UNAVAILABLE, retryable: false },
+        Case {
+            status: 401,
+            code: "api_key_invalid",
+            expect: "is not valid",
+            exit: EXIT_AUTH,
+            retryable: false,
+        },
+        Case {
+            status: 401,
+            code: "api_key_revoked",
+            expect: "was revoked",
+            exit: EXIT_AUTH,
+            retryable: false,
+        },
+        Case {
+            status: 401,
+            code: "api_key_expired",
+            expect: "expired",
+            exit: EXIT_AUTH,
+            retryable: false,
+        },
+        Case {
+            status: 401,
+            code: "api_key_required",
+            expect: "Codewhale CLI bug",
+            exit: EXIT_AUTH,
+            retryable: false,
+        },
+        Case {
+            status: 401,
+            code: "auth_required",
+            expect: "codewhale login",
+            exit: EXIT_AUTH,
+            retryable: false,
+        },
+        Case {
+            status: 403,
+            code: "api_key_route_denied",
+            expect: "cannot be used for this command",
+            exit: EXIT_AUTH,
+            retryable: false,
+        },
+        Case {
+            status: 403,
+            code: "api_key_scope_denied",
+            expect: "scope",
+            exit: EXIT_AUTH,
+            retryable: false,
+        },
+        Case {
+            status: 409,
+            code: "account_agent_model_unconfigured",
+            expect: "no agent model configured",
+            exit: EXIT_AGENT_UNCONFIGURED,
+            retryable: false,
+        },
+        Case {
+            status: 409,
+            code: "api_key_limit_reached",
+            expect: "25 active API keys",
+            exit: EXIT_LIMIT,
+            retryable: false,
+        },
+        Case {
+            status: 400,
+            code: "api_key_name_invalid",
+            expect: "server prose",
+            exit: EXIT_INPUT,
+            retryable: false,
+        },
+        Case {
+            status: 400,
+            code: "api_key_expiry_invalid",
+            expect: "server prose",
+            exit: EXIT_INPUT,
+            retryable: false,
+        },
+        Case {
+            status: 400,
+            code: "api_key_scopes_invalid",
+            expect: "server prose",
+            exit: EXIT_INPUT,
+            retryable: false,
+        },
+        Case {
+            status: 400,
+            code: "api_key_body_invalid",
+            expect: "server prose",
+            exit: EXIT_INPUT,
+            retryable: false,
+        },
+        Case {
+            status: 404,
+            code: "api_key_not_found",
+            expect: "No such Codewhale API key",
+            exit: EXIT_INPUT,
+            retryable: false,
+        },
+        Case {
+            status: 503,
+            code: "api_key_unavailable",
+            expect: "does not support API keys yet",
+            exit: EXIT_UNAVAILABLE,
+            retryable: false,
+        },
+        Case {
+            status: 503,
+            code: "control_plane_not_attached",
+            expect: "attached to the account control plane",
+            exit: EXIT_UNAVAILABLE,
+            retryable: false,
+        },
     ];
     for case in cases {
         let error = classify(&err_response(case.status, case.code, "server prose"));
         assert_eq!(error.code, case.code);
         assert_eq!(error.exit_code, case.exit, "exit code for {}", case.code);
-        assert_eq!(error.retryable, case.retryable, "retryability for {}", case.code);
+        assert_eq!(
+            error.retryable, case.retryable,
+            "retryability for {}",
+            case.code
+        );
         assert!(
             error.message.contains(case.expect),
             "{} message was {:?}",
@@ -268,7 +376,11 @@ fn the_two_503_codes_do_not_read_as_the_same_problem() {
     let unavailable = classify(&err_response(503, "api_key_unavailable", ""));
     let detached = classify(&err_response(503, "control_plane_not_attached", ""));
     assert_ne!(unavailable.message, detached.message);
-    assert!(detached.message.contains("routing/deployment"), "{}", detached.message);
+    assert!(
+        detached.message.contains("routing/deployment"),
+        "{}",
+        detached.message
+    );
     assert!(!unavailable.message.contains("routing/deployment"));
 }
 
@@ -278,7 +390,12 @@ fn api_key_not_found_does_not_pretend_to_distinguish_the_three_causes() {
     let text = error.message.to_lowercase();
     // Unknown, malformed, and another account's id answer identically, so
     // revoke cannot be used to probe for foreign key ids.
-    for leak in ["another account", "belongs to", "malformed", "does not exist"] {
+    for leak in [
+        "another account",
+        "belongs to",
+        "malformed",
+        "does not exist",
+    ] {
         assert!(!text.contains(leak), "{text}");
     }
 }
@@ -313,14 +430,22 @@ fn classification_reads_the_code_not_the_status() {
 
 #[test]
 fn server_prose_cannot_rewrite_the_terminal() {
-    let error = classify(&err_response(400, "api_key_name_invalid", "bad\u{1b}[2Jname\n\rmore"));
+    let error = classify(&err_response(
+        400,
+        "api_key_name_invalid",
+        "bad\u{1b}[2Jname\n\rmore",
+    ));
     assert!(!error.message.contains('\u{1b}'), "{}", error.message);
     assert!(!error.message.contains('\n'), "{}", error.message);
 }
 
 #[test]
 fn an_unrecognized_body_still_classifies_by_status() {
-    let response = CloudResponse { status: 500, body: b"<html>oops</html>".to_vec(), retry_after: None };
+    let response = CloudResponse {
+        status: 500,
+        body: b"<html>oops</html>".to_vec(),
+        retry_after: None,
+    };
     let error = classify(&response);
     assert!(error.retryable);
     assert_eq!(error.exit_code, EXIT_TRANSPORT);
@@ -334,7 +459,10 @@ fn retry_after_wins_over_exponential_backoff_and_is_capped() {
     assert_eq!(backoff_delay(1, Some(7)), Duration::from_secs(7));
     assert_eq!(backoff_delay(3, Some(2)), Duration::from_secs(2));
     // A hostile or broken Retry-After cannot park CI for a day.
-    assert_eq!(backoff_delay(1, Some(86_400)), Duration::from_millis(MAX_BACKOFF_MS));
+    assert_eq!(
+        backoff_delay(1, Some(86_400)),
+        Duration::from_millis(MAX_BACKOFF_MS)
+    );
     // Without a header the delay still grows.
     assert!(backoff_delay(2, None) > backoff_delay(1, None));
 }
@@ -374,7 +502,9 @@ fn a_transport_failure_on_a_get_is_retried_up_to_three_attempts() {
     ]);
     let mut sleeper = |_: Duration| {};
     let client = MachineClient::new(&transport, MachineKey::parse(VALID).unwrap());
-    let err = client.whoami(&mut sleeper).expect_err("exhausted retries must fail");
+    let err = client
+        .whoami(&mut sleeper)
+        .expect_err("exhausted retries must fail");
     assert_eq!(transport.calls(), MAX_ATTEMPTS as usize);
     let machine_error = err
         .downcast_ref::<MachineError>()
@@ -454,11 +584,20 @@ fn whoami_fixture(configured: bool) -> WhoamiResponse {
 fn whoami_prints_the_account_and_only_the_key_head() {
     let mut out = Vec::new();
     let key = MachineKey::parse(VALID).unwrap();
-    write_whoami(&mut out, &whoami_fixture(true), "https://api.codewhale.net", key.head()).unwrap();
+    write_whoami(
+        &mut out,
+        &whoami_fixture(true),
+        "https://api.codewhale.net",
+        key.head(),
+    )
+    .unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(text.contains("user_1"), "{text}");
     assert!(text.contains("cwc_key_3f2a9c1e4b7d8a0f5c6e2b91"), "{text}");
-    assert!(!text.contains(&VALID[TOKEN_HEAD_LEN..]), "the secret half leaked: {text}");
+    assert!(
+        !text.contains(&VALID[TOKEN_HEAD_LEN..]),
+        "the secret half leaked: {text}"
+    );
 }
 
 #[test]
@@ -467,9 +606,18 @@ fn an_unconfigured_agent_is_a_distinct_line_on_a_successful_whoami() {
     // surface that failed on unrelated configuration would tell the operator
     // nothing about the credential they came to check.
     let mut out = Vec::new();
-    write_whoami(&mut out, &whoami_fixture(false), "https://api.codewhale.net", "cwc_key_x").unwrap();
+    write_whoami(
+        &mut out,
+        &whoami_fixture(false),
+        "https://api.codewhale.net",
+        "cwc_key_x",
+    )
+    .unwrap();
     let text = String::from_utf8(out).unwrap();
-    assert!(text.contains("user_1"), "the account must still print: {text}");
+    assert!(
+        text.contains("user_1"),
+        "the account must still print: {text}"
+    );
     assert!(text.contains("not configured"), "{text}");
     assert!(text.contains("codewhale account keys set"), "{text}");
 }
@@ -478,10 +626,24 @@ fn an_unconfigured_agent_is_a_distinct_line_on_a_successful_whoami() {
 
 #[test]
 fn key_names_are_checked_locally_against_the_server_pattern() {
-    for good in ["github-actions", "a", "CI runner 2", "team/ci", "a.b_c:d@e-f", &"n".repeat(64)] {
+    for good in [
+        "github-actions",
+        "a",
+        "CI runner 2",
+        "team/ci",
+        "a.b_c:d@e-f",
+        &"n".repeat(64),
+    ] {
         validate_key_name(good).unwrap_or_else(|err| panic!("{good:?}: {err}"));
     }
-    for bad in ["", " leading-space", "-leading-dash", "bad\nname", "bad*name", &"n".repeat(65)] {
+    for bad in [
+        "",
+        " leading-space",
+        "-leading-dash",
+        "bad\nname",
+        "bad*name",
+        &"n".repeat(65),
+    ] {
         assert!(validate_key_name(bad).is_err(), "{bad:?} must be rejected");
     }
 }
@@ -490,7 +652,12 @@ fn key_names_are_checked_locally_against_the_server_pattern() {
 fn scopes_are_normalized_against_the_closed_set() {
     assert_eq!(validate_scopes(&[]).unwrap(), None);
     assert_eq!(
-        validate_scopes(&["agent:run".into(), "account:read".into(), "agent:run".into()]).unwrap(),
+        validate_scopes(&[
+            "agent:run".into(),
+            "account:read".into(),
+            "agent:run".into()
+        ])
+        .unwrap(),
         Some(vec!["agent:run".to_string(), "account:read".to_string()])
     );
     let err = validate_scopes(&["billing:write".into()]).expect_err("closed set");
@@ -501,7 +668,11 @@ fn scopes_are_normalized_against_the_closed_set() {
 fn key_ids_are_checked_as_a_paste_check_not_an_existence_check() {
     validate_key_id("3f2a9c1e4b7d8a0f5c6e2b91").unwrap();
     validate_key_id("  3f2a9c1e4b7d8a0f5c6e2b91 ").unwrap();
-    for bad in ["3f2a", "3F2A9C1E4B7D8A0F5C6E2B91", "3f2a9c1e4b7d8a0f5c6e2b9z"] {
+    for bad in [
+        "3f2a",
+        "3F2A9C1E4B7D8A0F5C6E2B91",
+        "3f2a9c1e4b7d8a0f5c6e2b9z",
+    ] {
         assert!(validate_key_id(bad).is_err(), "{bad}");
     }
 }
@@ -514,7 +685,10 @@ fn a_machine_key_alone_cannot_manage_keys_and_is_refused_before_the_wire() {
     let err = reject_machine_key_for_management(&env, false)
         .expect_err("a key must not be able to mint a successor");
     let text = err.to_string();
-    assert!(text.contains("Managing API keys needs an interactive login."), "{text}");
+    assert!(
+        text.contains("Managing API keys needs an interactive login."),
+        "{text}"
+    );
     assert!(text.contains("codewhale login"), "{text}");
     // The refusal must explain *why*, not just refuse.
     assert!(text.contains("minting a replacement"), "{text}");
@@ -550,8 +724,15 @@ fn a_created_secret_is_printed_once_with_an_unmissable_notice() {
     let mut out = Vec::new();
     write_created_key(&mut out, &created).unwrap();
     let text = String::from_utf8(out).unwrap();
-    assert_eq!(text.matches(VALID).count(), 1, "printed more than once: {text}");
-    assert!(text.contains("ONLY TIME YOU WILL SEE THIS SECRET"), "{text}");
+    assert_eq!(
+        text.matches(VALID).count(),
+        1,
+        "printed more than once: {text}"
+    );
+    assert!(
+        text.contains("ONLY TIME YOU WILL SEE THIS SECRET"),
+        "{text}"
+    );
     assert!(text.contains("CODEWHALE_API_KEY"), "{text}");
     assert!(text.contains("cannot show it again"), "{text}");
 }
@@ -600,12 +781,19 @@ fn review_resolves_the_route_from_the_accounts_configured_provider() {
 
 #[test]
 fn review_refuses_with_the_configuration_exit_code_when_no_model_is_set() {
-    let agent = AgentState { configured: false, model_provider: String::new(), account_id: None };
+    let agent = AgentState {
+        configured: false,
+        model_provider: String::new(),
+        account_id: None,
+    };
     let err = review_provider_from_agent(&agent).expect_err("machine work needs a model");
     let machine_error = err.downcast_ref::<MachineError>().expect("typed error");
     assert_eq!(machine_error.exit_code, EXIT_AGENT_UNCONFIGURED);
     assert_ne!(machine_error.exit_code, EXIT_AUTH);
-    assert!(machine_error.message.contains("codewhale account keys set"), "{machine_error}");
+    assert!(
+        machine_error.message.contains("codewhale account keys set"),
+        "{machine_error}"
+    );
 }
 
 #[test]

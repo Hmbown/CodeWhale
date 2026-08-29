@@ -676,11 +676,8 @@ impl<'a, T: CloudTransport> MachineClient<'a, T> {
         path: &str,
         sleeper: &mut dyn FnMut(Duration),
     ) -> Result<R> {
-        let response = send_with_retry(
-            self.transport,
-            Retry::Idempotent,
-            sleeper,
-            || CloudRequest {
+        let response = send_with_retry(self.transport, Retry::Idempotent, sleeper, || {
+            CloudRequest {
                 method: HttpMethod::Get,
                 path: path.to_string(),
                 // Exactly one credential per request. The transport carries a
@@ -688,8 +685,8 @@ impl<'a, T: CloudTransport> MachineClient<'a, T> {
                 // bearer cannot both be presented.
                 bearer: Some(self.key.expose()),
                 body: None,
-            },
-        )?;
+            }
+        })?;
         decode_json(response)
     }
 }
@@ -957,7 +954,11 @@ pub(crate) fn run_api_keys<T: CloudTransport, W: Write>(
 /// stream that is far more likely to be archived and shared.
 fn write_created_key<W: Write>(out: &mut W, created: &ApiKeyCreateResponse) -> Result<()> {
     let metadata = &created.api_key;
-    writeln!(out, "Created Codewhale API key {}.", printable(&metadata.id))?;
+    writeln!(
+        out,
+        "Created Codewhale API key {}.",
+        printable(&metadata.id)
+    )?;
     writeln!(out, "Name: {}", printable(&metadata.name))?;
     writeln!(out, "Scopes: {}", printable(&metadata.scopes.join(", ")))?;
     writeln!(
@@ -1076,11 +1077,7 @@ pub(crate) fn write_whoami<W: Write>(
         writeln!(out, "Key expires: {}", printable(expires_at))?;
     }
     if who.agent.configured {
-        writeln!(
-            out,
-            "Agent model: {}",
-            printable(&who.agent.model_provider)
-        )?;
+        writeln!(out, "Agent model: {}", printable(&who.agent.model_provider))?;
     } else {
         writeln!(
             out,

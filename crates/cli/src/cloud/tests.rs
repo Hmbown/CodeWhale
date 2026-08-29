@@ -1111,8 +1111,14 @@ fn whoami_with_a_machine_key_uses_the_key_route_and_never_the_session_route() {
     // Exactly one credential on the wire, and it is the machine key.
     assert_eq!(requests[0].bearer.as_deref(), Some(MACHINE_TOKEN));
     assert!(output.contains("user_1"), "{output}");
-    assert!(output.contains("cwc_key_3f2a9c1e4b7d8a0f5c6e2b91"), "{output}");
-    assert!(!output.contains(&MACHINE_TOKEN[32..]), "secret half leaked: {output}");
+    assert!(
+        output.contains("cwc_key_3f2a9c1e4b7d8a0f5c6e2b91"),
+        "{output}"
+    );
+    assert!(
+        !output.contains(&MACHINE_TOKEN[32..]),
+        "secret half leaked: {output}"
+    );
 }
 
 /// The load-bearing failure mode: a machine credential that fails must not
@@ -1139,7 +1145,11 @@ fn a_rejected_machine_key_never_falls_back_to_the_stored_session() {
         &transport,
     );
     let err = result.expect_err("an invalid machine key must fail the command");
-    assert_eq!(transport.requests().len(), 1, "there must be no second attempt");
+    assert_eq!(
+        transport.requests().len(),
+        1,
+        "there must be no second attempt"
+    );
     assert!(output.is_empty(), "nothing should be printed: {output}");
     let machine_error = err
         .downcast_ref::<machine::MachineError>()
@@ -1218,7 +1228,10 @@ fn creating_a_key_prints_the_secret_exactly_once_and_saves_it_nowhere() {
     );
     result.unwrap();
     assert_eq!(output.matches(MACHINE_TOKEN).count(), 1, "{output}");
-    assert!(output.contains("ONLY TIME YOU WILL SEE THIS SECRET"), "{output}");
+    assert!(
+        output.contains("ONLY TIME YOU WILL SEE THIS SECRET"),
+        "{output}"
+    );
 
     let requests = transport.requests();
     assert_eq!(requests.len(), 1);
@@ -1236,7 +1249,10 @@ fn creating_a_key_prints_the_secret_exactly_once_and_saves_it_nowhere() {
         .get(&cloud_auth_slot("default", "https://api.codewhale.net"))
         .unwrap()
         .expect("the session record is still there");
-    assert!(!stored.contains(MACHINE_TOKEN), "the secret reached storage");
+    assert!(
+        !stored.contains(MACHINE_TOKEN),
+        "the secret reached storage"
+    );
 }
 
 #[test]
@@ -1247,7 +1263,14 @@ fn a_bad_key_name_is_rejected_locally_without_a_round_trip() {
         .save_auth(auth("access-secret", "refresh-secret", "acct-human"))
         .unwrap();
     let (result, _) = run_account(
-        &["codewhale", "account", "api-keys", "create", "--name", "bad*name"],
+        &[
+            "codewhale",
+            "account",
+            "api-keys",
+            "create",
+            "--name",
+            "bad*name",
+        ],
         &machine::MachineKeyEnv::default(),
         &secrets,
         &transport,
@@ -1284,7 +1307,10 @@ fn the_agent_precondition_surfaces_the_409_with_its_own_exit_class() {
     assert_eq!(machine_error.exit_code, machine::EXIT_AGENT_UNCONFIGURED);
     assert_ne!(machine_error.exit_code, machine::EXIT_AUTH);
     assert_eq!(transport.requests().len(), 1, "409 must not be retried");
-    assert!(err.to_string().contains("codewhale account keys set"), "{err}");
+    assert!(
+        err.to_string().contains("codewhale account keys set"),
+        "{err}"
+    );
 }
 
 #[test]
