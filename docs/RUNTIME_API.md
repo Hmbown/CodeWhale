@@ -762,9 +762,21 @@ runtime's default task model.
 - `PATCH /v1/operate` — steer direction, `burnRate`, or `leadPlan`
 - `PUT /v1/operate/plan` — set `leadPlan` (`{ slices: [...] }`)
 - `POST /v1/operate/keepalive` — observe spend / burn; never stops
-- `POST /v1/operate/cancel` — explicit cancel (`/v1/operate/stop` aliases)
+- `POST /v1/operate/cancel` — explicit cancel (`/v1/operate/stop` aliases);
+  also pauses the `cw-operate` keepalive so nothing keeps spending after cancel
 - `POST /v1/operate/auto-merge/check` — call landed
   `scripts/check-auto-merge.py --repo --pr --agent` (does not merge)
+
+The operation record (`current.json`) is persisted under a cross-process
+file lock with atomic temp+rename writes; every PATCH / keepalive / plan
+save reloads the latest state inside the lock, so concurrent saves merge
+instead of losing writes. A `PATCH` that changes `direction` invalidates
+the recorded `leadPlan` (workers stop executing superseded slices) and
+pulls the keepalive lead run forward to re-plan. `POST /v1/operate`
+installs the hourly `cw-operate` keepalive and kicks its first lead-plan
+run immediately instead of waiting out the first recurrence; credentials
+resolve through the normal Z.ai provider resolution (config, `api_key_env`,
+secret store, or provider env vars — blank values count as missing).
 
 `burnRate` is `{ "kind": "usd_per_hour", "amountUsdPerHour": number }`,
 a positive number, or `null` (unbounded). Status is
