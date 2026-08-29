@@ -41,6 +41,21 @@ pub const SANDBOX_WORKSPACE: &str = "/workspace";
 const MAX_HARNESS_OUTPUT_CHARS: usize = 200_000;
 const READY_POLL_ATTEMPTS: u32 = 40;
 const READY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+/// Sandbox label key carrying the cloud job id (see
+/// [`LiveDaytonaLauncher::create_sandbox`]); the reconciler joins sandbox
+/// labels back to job records through it.
+pub const SANDBOX_JOB_LABEL: &str = "codewhale.job";
+/// Sandbox label marking Codewhale dispatch sandboxes — the product tag the
+/// label reconciler filters the provider's sandbox list on.
+pub const SANDBOX_PRODUCT_LABEL: &str = "codewhale.product";
+pub const SANDBOX_PRODUCT_VALUE: &str = "dispatch";
+/// Active jobs older than this are stale. The declared harness budget for
+/// one cloud-agent turn is an hour (`HARNESS_TIMEOUT_SECS`), so an active
+/// record with no terminal state after 90 minutes (harness budget plus
+/// control-plane slack) cannot be a healthy run — its runner is gone (TUI
+/// quit, crash, killed process) and the record is the only witness. The
+/// sweep fails such records and tears their sandboxes down.
+pub const STALE_ACTIVE_JOB_SECS: u64 = 90 * 60;
 
 /// Explicit PR forge. Never inferred from a generic "origin means GitHub" rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +169,13 @@ pub struct CloudJob {
     /// When the job reached a terminal state (`done`/`failed`/`canceled`).
     #[serde(default)]
     pub finished_unix: Option<u64>,
+    /// Intent record: a sandbox create POST is in flight for this job. Set
+    /// and persisted *before* the POST so that a create whose response is
+    /// slow (client timeout, process death) is still reconcilable by
+    /// sandbox label even though the sandbox id never arrived. Cleared once
+    /// the id is recorded.
+    #[serde(default)]
+    pub sandbox_pending: bool,
 }
 
 /// Validated plan that still requires an explicit confirm to spend or push.
@@ -493,6 +515,7 @@ pub fn execute_dispatch(
         head_sha: None,
         agent_summary: None,
         finished_unix: None,
+        sandbox_pending: false,
     };
 
     if !confirm {
@@ -572,9 +595,10 @@ pub fn cancel_job(
         return Ok(job);
     }
     let had_sandbox = job.sandbox_id.is_some();
+    let sandbox_may_exist = had_sandbox || job.sandbox_pending;
     job.status = CloudJobStatus::Canceled;
     job.finished_unix = Some(unix_now());
-    job.note = if had_sandbox {
+    job.note = if sandbox_may_exist {
         "Canceled locally; the cloud agent sandbox is being torn down.".to_string()
     } else {
         "Canceled locally before a sandbox was created.".to_string()
@@ -598,7 +622,175 @@ pub fn cancel_job(
         }
         store.save(&job)?;
     }
+    // A create whose POST landed but whose response never arrived leaves no
+    // recorded id (`sandbox_pending` with no `sandbox_id`). Best-effort
+    // label pass: delete any sandbox the provider still holds for this job.
+    if job.sandbox_pending && job.sandbox_id.is_none() {
+        match reconcile_job_sandboxes(launcher, &job.id) {
+            Ok(0) => {}
+            Ok(count) => {
+                job.note = format!(
+                    "Canceled locally; {count} unrecorded cloud agent sandbox(es) labeled for this job were torn down."
+                );
+                let _ = store.save(&job);
+            }
+            Err(error) => {
+                job.note = format!(
+                    "{} Unrecorded sandbox reconcile failed and may need a retry: {}",
+                    job.note,
+                    sanitize_error(&error.to_string())
+                );
+                let _ = store.save(&job);
+            }
+        }
+    }
     Ok(job)
+}
+
+/// Outcome of one label-reconcile pass.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReconcileReport {
+    /// Sandboxes deleted because their job is terminal or unknown.
+    pub deleted: Vec<String>,
+    /// Sandboxes left running because their job is still active.
+    pub live: usize,
+}
+
+/// Delete dispatch-labeled sandboxes whose job no longer needs them.
+///
+/// Every sandbox [`LiveDaytonaLauncher::create_sandbox`] makes is labeled
+/// with its job id and the dispatch product tag, so the provider's sandbox
+/// list can be joined back to the store even when a record died mid-create.
+/// A sandbox is deletable when its job label is missing or invalid, its job
+/// record is absent from the store, or that job is terminal (`refused`,
+/// `failed`, `canceled`, `done`). Sandboxes for active jobs are left alone —
+/// their runner owns them. One sandbox failing to delete never stops the
+/// rest; the report records what actually happened.
+pub fn reconcile_sandboxes(
+    store: &CloudJobStore,
+    launcher: &dyn DaytonaLauncher,
+) -> Result<ReconcileReport> {
+    let mut report = ReconcileReport::default();
+    for sandbox in launcher.list_job_sandboxes()? {
+        let deletable = match sandbox
+            .job_id
+            .as_deref()
+            .filter(|job_id| valid_job_id(job_id))
+        {
+            None => true,
+            Some(job_id) => match store.load(job_id) {
+                Err(_) => true,
+                Ok(job) => !job_is_active(job.status),
+            },
+        };
+        if !deletable {
+            report.live += 1;
+            continue;
+        }
+        let receipt = SandboxReceipt {
+            sandbox_id: sandbox.sandbox_id.clone(),
+            toolbox_url: None,
+        };
+        if launcher.teardown(&receipt).is_ok() {
+            report.deleted.push(sandbox.sandbox_id);
+        }
+    }
+    Ok(report)
+}
+
+/// Best-effort: delete every dispatch sandbox labeled for one job id. Used
+/// by cancel when the create POST may have landed without a receipt. Same
+/// failure rule as [`reconcile_sandboxes`]: a sandbox that cannot be
+/// deleted is skipped, not fatal.
+pub fn reconcile_job_sandboxes(launcher: &dyn DaytonaLauncher, job_id: &str) -> Result<usize> {
+    let mut deleted = 0;
+    for sandbox in launcher.list_job_sandboxes()? {
+        if sandbox.job_id.as_deref() != Some(job_id) {
+            continue;
+        }
+        let receipt = SandboxReceipt {
+            sandbox_id: sandbox.sandbox_id.clone(),
+            toolbox_url: None,
+        };
+        if launcher.teardown(&receipt).is_ok() {
+            deleted += 1;
+        }
+    }
+    Ok(deleted)
+}
+
+/// Startup sweep: fail stale active jobs and tear their sandboxes down.
+///
+/// The TUI spawns the runner detached, so quitting the TUI (or crashing)
+/// leaves a `launching`/`running`/`openingpr` record whose runner is gone —
+/// nothing else reconciles it, and any sandbox it made bills forever. On
+/// startup, every active job older than [`STALE_ACTIVE_JOB_SECS`] is marked
+/// `failed` with a truthful note, its recorded sandbox is torn down, and the
+/// record is saved *before* teardown so a crash mid-sweep still leaves a
+/// terminal record the label reconciler will clean up after. Returns the
+/// swept records (empty when the store is unreadable — never fatal).
+pub fn sweep_stale_jobs(
+    store: &CloudJobStore,
+    launcher: &dyn DaytonaLauncher,
+    now_unix: u64,
+) -> Vec<CloudJob> {
+    let Ok(jobs) = store.list() else {
+        return Vec::new();
+    };
+    let mut swept = Vec::new();
+    for mut job in jobs {
+        if !job_is_active(job.status) {
+            continue;
+        }
+        let age_secs = now_unix.saturating_sub(job.created_unix);
+        if age_secs < STALE_ACTIVE_JOB_SECS {
+            continue;
+        }
+        let sandbox_note = if job.sandbox_id.is_some() || job.sandbox_pending {
+            "Sandbox teardown was attempted; any sandbox left behind is deleted by the label reconciler on this startup."
+        } else {
+            "No sandbox was recorded for this job."
+        };
+        job.status = CloudJobStatus::Failed;
+        job.finished_unix = Some(now_unix);
+        job.refusal =
+            Some("stale: the runner stopped without recording a terminal state".to_string());
+        job.note = format!(
+            "Marked stale by the startup sweep: no terminal state for {} minutes and the declared harness budget is 60. {sandbox_note}",
+            age_secs / 60,
+        );
+        if let Some(sandbox_id) = job.sandbox_id.clone() {
+            let receipt = SandboxReceipt {
+                sandbox_id,
+                toolbox_url: None,
+            };
+            let _ = launcher.teardown(&receipt);
+        }
+        if store.save(&job).is_ok() {
+            swept.push(job);
+        }
+    }
+    swept
+}
+
+/// Quit-path warning for the TUI: names live cloud jobs that quitting would
+/// leave behind. `None` when no job is `launching`/`running`/`openingpr` or
+/// the store cannot be read (a warning must never block the quit path).
+pub fn live_job_quit_warning(store: &CloudJobStore) -> Option<String> {
+    let jobs = store.list().ok()?;
+    let live: Vec<&str> = jobs
+        .iter()
+        .filter(|job| job_is_active(job.status))
+        .map(|job| job.id.as_str())
+        .take(3)
+        .collect();
+    if live.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Cloud job(s) {} still running: quitting now leaves the sandbox up until the next startup sweep reconciles it; /dispatch cancel <id> tears it down immediately.",
+        live.join(", ")
+    ))
 }
 
 /// Human list used by `/jobs` (cloud kind) and `codewhale dispatch --list`.
@@ -789,6 +981,19 @@ pub trait DaytonaLauncher {
     fn teardown(&self, _receipt: &SandboxReceipt) -> Result<()> {
         bail!("this launcher does not support teardown")
     }
+    /// List Codewhale-dispatch sandboxes with their job labels. Used by the
+    /// reconciler (startup sweep and cancel); not part of the run protocol.
+    fn list_job_sandboxes(&self) -> Result<Vec<LabeledSandbox>> {
+        bail!("this launcher does not support sandbox listing")
+    }
+}
+
+/// One dispatch-labeled sandbox discovered by the reconciler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabeledSandbox {
+    pub sandbox_id: String,
+    /// Job id from the `codewhale.job` label, when the label is present.
+    pub job_id: Option<String>,
 }
 
 /// Provider receipt for a created sandbox. `toolbox_url` is the validated
@@ -964,9 +1169,9 @@ impl DaytonaLauncher for LiveDaytonaLauncher {
         let body = serde_json::json!({
             "name": format!("cw-{}", job.id.replace('_', "-")),
             "labels": {
-                "codewhale.job": job.id,
+                SANDBOX_JOB_LABEL: job.id,
                 "codewhale.forge": job.forge.as_str(),
-                "codewhale.product": "dispatch",
+                SANDBOX_PRODUCT_LABEL: SANDBOX_PRODUCT_VALUE,
             }
         });
         let response = Self::send_json(reqwest::Method::POST, &url, &api_key, body)?;
@@ -1185,6 +1390,54 @@ impl DaytonaLauncher for LiveDaytonaLauncher {
         } else {
             bail!("Cloud agent sandbox teardown failed (HTTP {status}).");
         }
+    }
+
+    fn list_job_sandboxes(&self) -> Result<Vec<LabeledSandbox>> {
+        let api_key = Self::api_key()?;
+        // The provider's list call takes a JSON-encoded exact-match labels
+        // filter (same OpenAPI family as create/get/delete above); filtering
+        // on the product tag keeps the response to Codewhale dispatch
+        // sandboxes only — never the user's own sandboxes on a shared key.
+        let mut url = Self::control_plane_url("sandbox")?;
+        url.query_pairs_mut().append_pair(
+            "labels",
+            &format!("{{\"{SANDBOX_PRODUCT_LABEL}\":\"{SANDBOX_PRODUCT_VALUE}\"}}"),
+        );
+        let response = Self::send_json(
+            reqwest::Method::GET,
+            &url,
+            &api_key,
+            serde_json::Value::Null,
+        )?;
+        let status = response.status();
+        let text = response.text().unwrap_or_default();
+        if !status.is_success() {
+            bail!("Cloud agent sandbox listing failed (HTTP {status}).");
+        }
+        let parsed: serde_json::Value = serde_json::from_str(&text)
+            .context("the cloud agent service returned an unreadable sandbox list")?;
+        let rows = parsed.as_array().cloned().unwrap_or_default();
+        let mut sandboxes = Vec::new();
+        for row in rows {
+            let sandbox_id = row
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !valid_sandbox_id(&sandbox_id) {
+                continue;
+            }
+            let job_id = row
+                .get("labels")
+                .and_then(|labels| labels.get(SANDBOX_JOB_LABEL))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            sandboxes.push(LabeledSandbox { sandbox_id, job_id });
+        }
+        Ok(sandboxes)
     }
 }
 
@@ -1696,6 +1949,7 @@ mod tests {
             head_sha: Some("abc1234def".to_string()),
             agent_summary: Some("Fixed the flake".to_string()),
             finished_unix: Some(1_960),
+            sandbox_pending: false,
         }];
         let card = format_status(
             &rows,
@@ -1744,5 +1998,206 @@ mod tests {
         assert!(!message.contains("DAYTONA"));
         assert!(!message.contains("sk-"));
         assert!(!message.contains("Bearer"));
+    }
+
+    /// Launcher fixture for sweep/reconcile tests: records teardowns and
+    /// lists a configurable sandbox set; never touches a network.
+    struct SweepLauncher {
+        torn_down: std::sync::Mutex<Vec<String>>,
+        listed: Vec<LabeledSandbox>,
+    }
+
+    impl SweepLauncher {
+        fn new(listed: Vec<LabeledSandbox>) -> Self {
+            Self {
+                torn_down: std::sync::Mutex::new(Vec::new()),
+                listed,
+            }
+        }
+
+        fn torn_down(&self) -> Vec<String> {
+            self.torn_down
+                .lock()
+                .map(|ids| ids.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    impl DaytonaLauncher for SweepLauncher {
+        fn create_sandbox(&self, _job: &CloudJob) -> Result<SandboxReceipt> {
+            bail!("no sandbox create in this fixture")
+        }
+        fn teardown(&self, receipt: &SandboxReceipt) -> Result<()> {
+            if let Ok(mut ids) = self.torn_down.lock() {
+                ids.push(receipt.sandbox_id.clone());
+            }
+            Ok(())
+        }
+        fn list_job_sandboxes(&self) -> Result<Vec<LabeledSandbox>> {
+            Ok(self.listed.clone())
+        }
+    }
+
+    fn stored_job(status: CloudJobStatus, created_unix: u64) -> CloudJob {
+        CloudJob {
+            id: "cloud_00000000000000e1".to_string(),
+            kind: "cloud".to_string(),
+            status,
+            prompt: "fix the flake".to_string(),
+            forge: Forge::Github,
+            remote_name: "github".to_string(),
+            remote_url: "https://github.com/org/repo.git".to_string(),
+            branch: "codewhale/cloud-1".to_string(),
+            confirmed: true,
+            sandbox_id: None,
+            pr_url: None,
+            refusal: None,
+            note: "n".to_string(),
+            created_unix,
+            base_branch: None,
+            head_sha: None,
+            agent_summary: None,
+            finished_unix: None,
+            sandbox_pending: false,
+        }
+    }
+
+    #[test]
+    fn sweep_fails_stale_active_jobs_and_tears_down_their_sandboxes() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        let now = 10_000_000_u64;
+        // Stale: active well past the harness budget plus slack.
+        let mut stale = stored_job(CloudJobStatus::Running, now - STALE_ACTIVE_JOB_SECS - 60);
+        stale.sandbox_id = Some("sandbox_stale".to_string());
+        store.save(&stale).unwrap();
+        // Fresh: active but young; must be left exactly as it is.
+        let mut fresh = stored_job(CloudJobStatus::Launching, now - 60);
+        fresh.id = "cloud_00000000000000e2".to_string();
+        fresh.sandbox_id = Some("sandbox_fresh".to_string());
+        store.save(&fresh).unwrap();
+        // Terminal: old but already done; never touched.
+        let mut done = stored_job(CloudJobStatus::Done, now - STALE_ACTIVE_JOB_SECS * 2);
+        done.id = "cloud_00000000000000e3".to_string();
+        store.save(&done).unwrap();
+
+        let launcher = SweepLauncher::new(Vec::new());
+        let swept = sweep_stale_jobs(&store, &launcher, now);
+        assert_eq!(swept.len(), 1, "only the stale active job is swept");
+        assert_eq!(swept[0].id, "cloud_00000000000000e1");
+        let record = store.load("cloud_00000000000000e1").unwrap();
+        assert_eq!(record.status, CloudJobStatus::Failed);
+        assert_eq!(record.finished_unix, Some(now));
+        assert!(record.note.contains("startup sweep"));
+        assert!(record.note.contains("teardown was attempted"));
+        assert_eq!(launcher.torn_down(), vec!["sandbox_stale".to_string()]);
+        // The untouched records keep their state.
+        assert_eq!(
+            store.load("cloud_00000000000000e2").unwrap().status,
+            CloudJobStatus::Launching
+        );
+        assert_eq!(
+            store.load("cloud_00000000000000e3").unwrap().status,
+            CloudJobStatus::Done
+        );
+    }
+
+    #[test]
+    fn reconcile_deletes_sandboxes_for_terminal_or_absent_jobs_and_keeps_active() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        let now = 10_000_000_u64;
+        // Terminal job: its sandbox must go.
+        let mut terminal = stored_job(CloudJobStatus::Canceled, now - 600);
+        terminal.id = "cloud_00000000000000f1".to_string();
+        terminal.sandbox_id = Some("sandbox_terminal".to_string());
+        store.save(&terminal).unwrap();
+        // Active job: its sandbox must stay.
+        let mut active = stored_job(CloudJobStatus::Running, now - 60);
+        active.id = "cloud_00000000000000f2".to_string();
+        store.save(&active).unwrap();
+
+        let launcher = SweepLauncher::new(vec![
+            LabeledSandbox {
+                sandbox_id: "sandbox_terminal".to_string(),
+                job_id: Some("cloud_00000000000000f1".to_string()),
+            },
+            LabeledSandbox {
+                sandbox_id: "sandbox_active".to_string(),
+                job_id: Some("cloud_00000000000000f2".to_string()),
+            },
+            // Labeled for a job that no longer exists in the store.
+            LabeledSandbox {
+                sandbox_id: "sandbox_ghost".to_string(),
+                job_id: Some("cloud_0000000000000bad".to_string()),
+            },
+            // No usable job label at all.
+            LabeledSandbox {
+                sandbox_id: "sandbox_unlabeled".to_string(),
+                job_id: None,
+            },
+        ]);
+        let report = reconcile_sandboxes(&store, &launcher).unwrap();
+        assert_eq!(report.deleted.len(), 3);
+        assert!(report.deleted.contains(&"sandbox_terminal".to_string()));
+        assert!(report.deleted.contains(&"sandbox_ghost".to_string()));
+        assert!(report.deleted.contains(&"sandbox_unlabeled".to_string()));
+        assert_eq!(report.live, 1);
+        assert!(!launcher.torn_down().contains(&"sandbox_active".to_string()));
+    }
+
+    #[test]
+    fn cancel_deletes_an_unrecorded_sandbox_by_label() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        let mut pending = stored_job(CloudJobStatus::Running, 10_000_000);
+        // The create POST landed but its response never arrived: the intent
+        // is persisted and the id is unknowable — only the label can find it.
+        pending.sandbox_pending = true;
+        store.save(&pending).unwrap();
+        let launcher = SweepLauncher::new(vec![
+            LabeledSandbox {
+                sandbox_id: "sandbox_lost".to_string(),
+                job_id: Some(pending.id.clone()),
+            },
+            LabeledSandbox {
+                sandbox_id: "sandbox_other".to_string(),
+                job_id: Some("cloud_00000000000000f9".to_string()),
+            },
+        ]);
+        let canceled = cancel_job(&store, &pending.id, &launcher).unwrap();
+        assert_eq!(canceled.status, CloudJobStatus::Canceled);
+        assert!(canceled.note.contains("unrecorded"));
+        assert!(canceled.note.contains("torn down"));
+        assert_eq!(
+            launcher.torn_down(),
+            vec!["sandbox_lost".to_string()],
+            "cancel deletes only this job's labeled sandbox"
+        );
+    }
+
+    #[test]
+    fn quit_warning_names_live_jobs_and_stays_quiet_otherwise() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        assert_eq!(live_job_quit_warning(&store), None);
+        let mut live = stored_job(CloudJobStatus::OpeningPr, 10_000_000);
+        live.id = "cloud_00000000000000aa".to_string();
+        store.save(&live).unwrap();
+        let warning = live_job_quit_warning(&store).expect("live job must warn");
+        assert!(warning.contains("cloud_00000000000000aa"));
+        assert!(warning.contains("/dispatch cancel"));
+        assert!(!warning.contains("Daytona"));
+        let mut done = stored_job(CloudJobStatus::Done, 10_000_000);
+        done.id = "cloud_00000000000000ab".to_string();
+        store.save(&done).unwrap();
+        let mut dead = stored_job(CloudJobStatus::Failed, 10_000_000);
+        dead.id = "cloud_00000000000000ac".to_string();
+        store.save(&dead).unwrap();
+        // Still exactly one live job after adding terminal siblings.
+        let warning = live_job_quit_warning(&store).expect("live job must warn");
+        assert!(warning.contains("cloud_00000000000000aa"));
+        assert!(!warning.contains("cloud_00000000000000ab"));
+        assert!(!warning.contains("cloud_00000000000000ac"));
     }
 }

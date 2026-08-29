@@ -10457,6 +10457,23 @@ async fn run_interactive_with_notice(
         {
             let _ = manager.cleanup_old_sessions_keeping(janitor_resume_id.as_deref());
         }
+
+        // Cloud-dispatch orphan reconciliation: a previous TUI could quit
+        // (or crash) with a detached cloud-agent runner in flight, leaving
+        // an active job record — and possibly a billing sandbox — behind.
+        // Stale active jobs are failed and torn down, then any
+        // dispatch-labeled sandbox whose job no longer needs it is deleted
+        // by label. Best effort: one bounded listing call when credentials
+        // exist, fail-closed quiet otherwise, never fatal.
+        if let Ok(store) = crate::cloud_dispatch::CloudJobStore::from_env() {
+            let receipt = crate::dispatch_runner::startup_reconcile(
+                &store,
+                &crate::cloud_dispatch::LiveDaytonaLauncher,
+            );
+            if !receipt.is_empty() {
+                logging::info(receipt);
+            }
+        }
     });
 
     // The `deepseek` launcher forwards `--yolo` to this binary via the

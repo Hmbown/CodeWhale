@@ -22,6 +22,11 @@
 //!   never invented.
 //! - teardown always runs: cancel, failure, and success all attempt sandbox
 //!   teardown; the job note records whether it succeeded.
+//! - orphans reconcile: the TUI detaches this runner, so quitting the TUI
+//!   can orphan a live sandbox. The job record persists a create intent
+//!   before the POST, every sandbox is labeled with its job id, and
+//!   [`startup_reconcile`] fails stale active jobs and deletes labeled
+//!   sandboxes whose job no longer needs them.
 
 use std::path::Path;
 use std::process::Command;
@@ -113,15 +118,63 @@ pub fn spawn_confirmed_runner(
         .ok()
 }
 
+/// Best-effort startup reconciliation for the detached runner.
+///
+/// The TUI spawns [`spawn_confirmed_runner`] detached, so quitting the TUI
+/// or crashing mid-run orphans the record (and possibly a billing sandbox)
+/// with nothing to reconcile it. Two passes, in order:
+///
+/// 1. [`cloud_dispatch::sweep_stale_jobs`] — active records older than the
+///    declared harness budget plus slack are failed and their recorded
+///    sandboxes torn down;
+/// 2. [`cloud_dispatch::reconcile_sandboxes`] — any dispatch-labeled
+///    sandbox whose job is terminal or absent from the store is deleted by
+///    label, covering creates whose id was never recorded.
+///
+/// Never fatal and never blocks the caller's critical path beyond the
+/// launcher's own bounded HTTP budget; returns a human receipt for the log
+/// (empty when there was nothing to do).
+pub fn startup_reconcile(store: &CloudJobStore, launcher: &dyn DaytonaLauncher) -> String {
+    let swept = cloud_dispatch::sweep_stale_jobs(store, launcher, cloud_dispatch::unix_timestamp());
+    let mut lines = Vec::new();
+    for job in &swept {
+        lines.push(format!(
+            "cloud dispatch startup sweep: job {} marked stale (failed) and its sandbox teardown attempted",
+            job.id
+        ));
+    }
+    match cloud_dispatch::reconcile_sandboxes(store, launcher) {
+        Ok(report) if !report.deleted.is_empty() => {
+            lines.push(format!(
+                "cloud dispatch label reconcile: deleted orphaned sandbox(es) {}",
+                report.deleted.join(", ")
+            ));
+        }
+        Ok(_) => {}
+        Err(error) => lines.push(format!(
+            "cloud dispatch label reconcile skipped: {}",
+            sanitize_error(&error.to_string())
+        )),
+    }
+    lines.join("\n")
+}
+
 fn drive(
     store: &CloudJobStore,
     job: &mut CloudJob,
     launcher: &dyn DaytonaLauncher,
     forge: &dyn ForgePr,
 ) -> Result<()> {
-    // Launching → Running: create the sandbox.
+    // Launching → Running: create the sandbox. The intent record goes down
+    // BEFORE the POST: if the create response is slow and the client gives
+    // up (or the process dies), the sandbox may still come into being with
+    // no recorded id — `sandbox_pending` is what cancel and the label
+    // reconciler use to find and delete it by label.
+    job.sandbox_pending = true;
+    store.save(job)?;
     let receipt = launcher.create_sandbox(job)?;
     job.status = CloudJobStatus::Running;
+    job.sandbox_pending = false;
     job.sandbox_id = Some(receipt.sandbox_id.clone());
     job.note = format!(
         "Sandbox {} created; the Codewhale cloud agent turn is running.",
@@ -621,6 +674,8 @@ pub struct RecordingLauncher {
     patch: PatchReceipt,
     calls: Mutex<Vec<String>>,
     pub hook: Option<PhaseHook>,
+    /// Sandboxes reported by `list_job_sandboxes` (the reconciler seam).
+    pub listed: Mutex<Vec<crate::cloud_dispatch::LabeledSandbox>>,
 }
 
 impl RecordingLauncher {
@@ -630,6 +685,7 @@ impl RecordingLauncher {
             patch,
             calls: Mutex::new(Vec::new()),
             hook: None,
+            listed: Mutex::new(Vec::new()),
         }
     }
 
@@ -687,6 +743,15 @@ impl DaytonaLauncher for RecordingLauncher {
     fn teardown(&self, _receipt: &SandboxReceipt) -> Result<()> {
         self.record("teardown");
         Ok(())
+    }
+
+    fn list_job_sandboxes(&self) -> Result<Vec<crate::cloud_dispatch::LabeledSandbox>> {
+        self.record("list");
+        Ok(self
+            .listed
+            .lock()
+            .map(|listed| listed.clone())
+            .unwrap_or_default())
     }
 }
 
@@ -843,6 +908,74 @@ mod tests {
         );
         assert!(forge.opened().is_empty());
         assert!(canceled_seen.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn sandbox_intent_is_persisted_before_the_create_post() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("jobs");
+        let store = CloudJobStore::from_path(root.clone());
+        let job = confirmed_job(&store);
+        // Observed from inside the create phase: the intent must already be
+        // on disk, so a create whose response never arrives is still
+        // reconcilable by label.
+        let intent_root = root.clone();
+        let intent_id = job.id.clone();
+        let seen_pending = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = seen_pending.clone();
+        let mut launcher = RecordingLauncher::new("sandbox_intent_1", fixture_patch());
+        launcher.hook = Some(Box::new(move |phase| {
+            if phase == "create" {
+                let store = CloudJobStore::from_path(intent_root.clone());
+                let current = store.load(&intent_id).unwrap();
+                assert!(current.sandbox_pending, "intent must precede the POST");
+                seen.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }));
+        let forge = RecordingForgePr::new("https://github.com/org/repo/pull/11");
+        let finished = run_confirmed_job(&store, &job.id, &launcher, &forge).unwrap();
+
+        assert!(seen_pending.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(finished.status, CloudJobStatus::Done);
+        assert!(!finished.sandbox_pending, "intent clears once the id lands");
+        let persisted = store.load(&job.id).unwrap();
+        assert!(!persisted.sandbox_pending);
+        assert_eq!(persisted.sandbox_id.as_deref(), Some("sandbox_intent_1"));
+    }
+
+    #[test]
+    fn startup_reconcile_sweeps_stale_jobs_and_deletes_orphan_sandboxes() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        let job = confirmed_job(&store);
+        // Age the record past the stale threshold and park it mid-run, the
+        // state a quit/crash would leave behind.
+        let mut stale = store.load(&job.id).unwrap();
+        stale.status = CloudJobStatus::Running;
+        stale.sandbox_id = Some("sandbox_orphan".to_string());
+        stale.created_unix = stale.created_unix.saturating_sub(
+            u64::try_from(crate::cloud_dispatch::STALE_ACTIVE_JOB_SECS).unwrap() + 120,
+        );
+        store.save(&stale).unwrap();
+        // A sandbox labeled for a job that is not in the store at all.
+        let launcher = RecordingLauncher::new("unused", fixture_patch());
+        *launcher.listed.lock().unwrap() = vec![crate::cloud_dispatch::LabeledSandbox {
+            sandbox_id: "sandbox_ghost".to_string(),
+            job_id: Some("cloud_0000000000000bad".to_string()),
+        }];
+
+        let receipt = startup_reconcile(&store, &launcher);
+        assert!(
+            receipt.contains(&job.id),
+            "receipt names the swept job: {receipt}"
+        );
+        assert!(
+            receipt.contains("sandbox_ghost"),
+            "receipt names deletions: {receipt}"
+        );
+        assert_eq!(store.load(&job.id).unwrap().status, CloudJobStatus::Failed);
+        assert!(launcher.calls().contains(&"teardown".to_string()));
+        assert!(launcher.calls().contains(&"list".to_string()));
     }
 
     #[test]
@@ -1151,6 +1284,7 @@ mod tests {
             head_sha: None,
             agent_summary: None,
             finished_unix: None,
+            sandbox_pending: false,
         };
         let body = compose_pr_body(&job, &fixture_patch());
         assert!(body.chars().count() <= MAX_BODY_CHARS);

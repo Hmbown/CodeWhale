@@ -4821,8 +4821,20 @@ impl App {
     /// [`Self::QUIT_CONFIRMATION_WINDOW`] should exit the app cleanly. Call this only
     /// from idle state — while a turn is in flight or a modal is open Ctrl+C
     /// retains its existing "interrupt this turn" / "close modal" semantics.
+    ///
+    /// A live cloud job survives the quit by design (its runner is
+    /// detached), but its sandbox keeps billing until the next startup
+    /// sweep reconciles it — so arming the quit prompt also surfaces that
+    /// cost in the status line. Ctrl+D exits without arming and therefore
+    /// without this warning.
     pub fn arm_quit(&mut self) {
         self.quit_armed_until = Some(Instant::now() + Self::QUIT_CONFIRMATION_WINDOW);
+        if let Some(warning) = crate::cloud_dispatch::CloudJobStore::from_env()
+            .ok()
+            .and_then(|store| crate::cloud_dispatch::live_job_quit_warning(&store))
+        {
+            self.status_message = Some(warning);
+        }
         self.needs_redraw = true;
     }
 
