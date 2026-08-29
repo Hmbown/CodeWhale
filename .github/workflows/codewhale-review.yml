@@ -5,7 +5,7 @@ name: Codewhale PR Review
 # line comments, anchored to the PR head SHA. CODEOWNERS (@Hmbown) stays the
 # human owner — this review posts alongside it and never approves.
 #
-# Setup:
+# Setup — full step-by-step guide in docs/GITHUB_APP.md. Summary:
 #   1. Provider key: Settings -> Secrets and variables -> Actions ->
 #      New repository secret `DEEPSEEK_API_KEY` (or the env var matching a
 #      different provider, see crates/secrets `env_for`).
