@@ -621,18 +621,9 @@ fn present_operate_board(app: &mut App) {
         }
     };
     let credentials = crate::operate::glm_credentials_present(|name| std::env::var(name).is_ok());
-    match crate::operate::start_operation(
-        &store,
-        &app.workspace,
-        None,
-        None,
-        credentials,
-    ) {
+    match crate::operate::start_operation(&store, &app.workspace, None, None, credentials) {
         Ok(mut operation) => {
-            if credentials
-                && !operation.direction.is_empty()
-                && operation.lead_plan.is_none()
-            {
+            if credentials && !operation.direction.is_empty() && operation.lead_plan.is_none() {
                 operation.plan_from_direction();
                 if let Err(error) = store.save(&operation) {
                     app.add_message(crate::tui::history::HistoryCell::System {

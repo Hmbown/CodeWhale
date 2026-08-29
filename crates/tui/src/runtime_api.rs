@@ -1164,12 +1164,18 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/automations/{id}/pause", post(pause_automation))
         .route("/v1/automations/{id}/resume", post(resume_automation))
         .route("/v1/automations/{id}/runs", get(list_automation_runs))
-        .route("/v1/operate", get(get_operate).post(start_operate).patch(patch_operate))
+        .route(
+            "/v1/operate",
+            get(get_operate).post(start_operate).patch(patch_operate),
+        )
         .route("/v1/operate/keepalive", post(keepalive_operate))
         .route("/v1/operate/plan", put(put_operate_plan))
         .route("/v1/operate/cancel", post(cancel_operate))
         .route("/v1/operate/stop", post(cancel_operate))
-        .route("/v1/operate/auto-merge/check", post(check_operate_auto_merge))
+        .route(
+            "/v1/operate/auto-merge/check",
+            post(check_operate_auto_merge),
+        )
         .route("/v1/usage", get(get_usage))
         .route("/v1/snapshots", get(list_snapshots))
         .route("/v1/snapshots/{id}/restore", post(restore_snapshot))
@@ -3829,13 +3835,17 @@ fn operate_view(operation: crate::operate::Operation) -> Json<OperateView> {
     })
 }
 
-fn load_operate(store: &crate::operate::OperationStore) -> Result<Option<crate::operate::Operation>, ApiError> {
+fn load_operate(
+    store: &crate::operate::OperationStore,
+) -> Result<Option<crate::operate::Operation>, ApiError> {
     store
         .load()
         .map_err(|e| ApiError::internal(format!("Failed to load operate: {e}")))
 }
 
-fn require_operate(store: &crate::operate::OperationStore) -> Result<crate::operate::Operation, ApiError> {
+fn require_operate(
+    store: &crate::operate::OperationStore,
+) -> Result<crate::operate::Operation, ApiError> {
     load_operate(store)?.ok_or_else(|| ApiError::not_found("Unknown Operation."))
 }
 
@@ -3878,17 +3888,18 @@ async fn start_operate(
     Ok(operate_view(operation))
 }
 
-async fn patch_operate(Json(patch): Json<serde_json::Value>) -> Result<Json<OperateView>, ApiError> {
+async fn patch_operate(
+    Json(patch): Json<serde_json::Value>,
+) -> Result<Json<OperateView>, ApiError> {
     let store = operate_store()?;
     let mut operation = require_operate(&store)?;
-    crate::operate::apply_operate_patch(&mut operation, &patch)
-        .map_err(|e| {
-            if e.to_string().contains("cancelled") {
-                ApiError::conflict(e.to_string())
-            } else {
-                ApiError::bad_request(e.to_string())
-            }
-        })?;
+    crate::operate::apply_operate_patch(&mut operation, &patch).map_err(|e| {
+        if e.to_string().contains("cancelled") {
+            ApiError::conflict(e.to_string())
+        } else {
+            ApiError::bad_request(e.to_string())
+        }
+    })?;
     operation.credentials_present = operate_credentials_present();
     operation.project();
     store
@@ -3906,7 +3917,10 @@ async fn keepalive_operate(
         &mut operation,
         req.observed_burn_usd_per_hour,
         req.spent_usd,
-        Some(req.credentials_present.unwrap_or_else(operate_credentials_present)),
+        Some(
+            req.credentials_present
+                .unwrap_or_else(operate_credentials_present),
+        ),
         req.human_gated,
     );
     store
@@ -3915,7 +3929,9 @@ async fn keepalive_operate(
     Ok(operate_view(operation))
 }
 
-async fn put_operate_plan(Json(plan): Json<serde_json::Value>) -> Result<Json<OperateView>, ApiError> {
+async fn put_operate_plan(
+    Json(plan): Json<serde_json::Value>,
+) -> Result<Json<OperateView>, ApiError> {
     let store = operate_store()?;
     let mut operation = require_operate(&store)?;
     let patch = serde_json::json!({ "leadPlan": plan });

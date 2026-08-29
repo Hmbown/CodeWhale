@@ -294,9 +294,16 @@ fn derive_status(op: &Operation) -> (OperateStatus, Option<OperateIdleReason>) {
         );
     }
     if op.human_gated {
-        return (OperateStatus::IdleBlocked, Some(OperateIdleReason::HumanGated));
+        return (
+            OperateStatus::IdleBlocked,
+            Some(OperateIdleReason::HumanGated),
+        );
     }
-    if op.lead_plan.as_ref().is_none_or(|plan| plan.slices.is_empty()) {
+    if op
+        .lead_plan
+        .as_ref()
+        .is_none_or(|plan| plan.slices.is_empty())
+    {
         return (
             OperateStatus::IdleBlocked,
             Some(OperateIdleReason::AwaitingLeadPlan),
@@ -309,7 +316,10 @@ fn workers_admitted(op: &Operation) -> bool {
     op.status != OperateStatus::Cancelled
         && op.credentials_present
         && !op.direction.is_empty()
-        && op.lead_plan.as_ref().is_some_and(|plan| !plan.slices.is_empty())
+        && op
+            .lead_plan
+            .as_ref()
+            .is_some_and(|plan| !plan.slices.is_empty())
         && !op.human_gated
 }
 
@@ -337,7 +347,10 @@ fn derive_pace(op: &Operation) -> OperatePace {
 fn live_roster(op: &mut Operation) {
     let admitted = op.workers_admitted;
     let cancelled = op.status == OperateStatus::Cancelled;
-    let has_plan = op.lead_plan.as_ref().is_some_and(|plan| !plan.slices.is_empty());
+    let has_plan = op
+        .lead_plan
+        .as_ref()
+        .is_some_and(|plan| !plan.slices.is_empty());
     for member in &mut op.roster {
         if cancelled {
             member.state = "idle".to_string();
@@ -446,9 +459,7 @@ pub fn render_plan_board(op: &Operation) -> String {
         out.push_str("leadPlan  (none — workers not admitted)\n");
         return out;
     };
-    out.push_str(
-        "leadPlan  id        owner    start  dur   est$   depends  title\n",
-    );
+    out.push_str("leadPlan  id        owner    start  dur   est$   depends  title\n");
     for slice in &plan.slices {
         out.push_str(&format!(
             "          {:<9} {:<8} {:>5} {:>5} {:>6.2}  {:<7} {}\n",
@@ -599,7 +610,10 @@ pub fn auto_merge_pr_args(repo: &str, pr: &str, agent: &str) -> Vec<String> {
     ]
 }
 
-pub fn evaluate_auto_merge(request: AutoMergeRequest<'_>, checker: Option<&Path>) -> AutoMergeDecision {
+pub fn evaluate_auto_merge(
+    request: AutoMergeRequest<'_>,
+    checker: Option<&Path>,
+) -> AutoMergeDecision {
     let Some(checker) = checker else {
         return AutoMergeDecision::Deny {
             reason: "auto-merge checker missing; fail-closed".to_string(),
@@ -687,12 +701,13 @@ pub fn materialize_ops_origin_main() -> Result<PathBuf> {
         .join("ops-main")
         .join(&sha[..12.min(sha.len())]);
     let marker = dest.join(CHECK_AUTO_MERGE_SCRIPT);
-    if marker.is_file() && dest.join("DIRECTION.md").is_file() && dest.join(AUTO_MERGE_SCRIPT).is_file()
+    if marker.is_file()
+        && dest.join("DIRECTION.md").is_file()
+        && dest.join(AUTO_MERGE_SCRIPT).is_file()
     {
         return Ok(dest);
     }
-    fs::create_dir_all(&dest)
-        .with_context(|| format!("Failed to create {}", dest.display()))?;
+    fs::create_dir_all(&dest).with_context(|| format!("Failed to create {}", dest.display()))?;
     let archive = Command::new("git")
         .arg("-C")
         .arg(&repo)
@@ -758,8 +773,7 @@ pub struct OperationStore {
 impl OperationStore {
     pub fn open(dir: impl Into<PathBuf>) -> Result<Self> {
         let dir = dir.into();
-        fs::create_dir_all(&dir)
-            .with_context(|| format!("Failed to create {}", dir.display()))?;
+        fs::create_dir_all(&dir).with_context(|| format!("Failed to create {}", dir.display()))?;
         Ok(Self {
             path: dir.join("current.json"),
         })
@@ -819,12 +833,8 @@ pub fn apply_operate_patch(op: &mut Operation, patch: &serde_json::Value) -> Res
         anyhow::bail!("A cancelled Operation cannot be edited.");
     }
     if let Some(direction) = patch.get("direction") {
-        op.direction = normalize_direction(
-            direction
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_default(),
-        );
+        op.direction =
+            normalize_direction(direction.as_str().map(str::to_string).unwrap_or_default());
     }
     if patch.get("burnRate").is_some() {
         op.burn_rate = parse_burn_rate(patch.get("burnRate"))?;
@@ -1010,8 +1020,14 @@ mod tests {
     fn missing_credentials_fail_closed() {
         let dir = TempDir::new().expect("temp");
         let store = OperationStore::open(dir.path()).expect("store");
-        let op = start_operation(&store, dir.path(), Some("Do not spend silently".into()), None, false)
-            .expect("start");
+        let op = start_operation(
+            &store,
+            dir.path(),
+            Some("Do not spend silently".into()),
+            None,
+            false,
+        )
+        .expect("start");
         assert_eq!(op.status, OperateStatus::IdleBlocked);
         assert_eq!(
             op.idle_blocked_reason,
