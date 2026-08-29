@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- A confirmed `codewhale dispatch` / `/dispatch` now actually runs the cloud
-  agent: sandbox → one `codewhale exec --auto` turn (the same single-turn
+- Follow-up to #5701: a confirmed `codewhale dispatch` / `/dispatch` now
+  actually runs the cloud agent: sandbox → one `codewhale exec --auto` turn (the same single-turn
   harness, no second engine) → branch push → PR on `github` (gh), `gitee`, or
   `cnb` → sandbox teardown on done/failed/canceled. The job card and
   `/dispatch --status` surface real receipts (sandbox id, PR URL, head sha,
