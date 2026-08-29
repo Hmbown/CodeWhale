@@ -568,13 +568,20 @@ pub fn execute_dispatch(
     Ok(DispatchOutcome::Accepted(job))
 }
 
-/// Confirm a previously proposed job.
+/// Confirm a previously proposed job — in place, under the SAME id.
+///
+/// The record is mutated (`proposed` → `launching`, `confirmed = true`) and
+/// saved as itself; a second confirm finds `launching` and refuses. Routing
+/// through `execute_dispatch` instead would allocate a fresh job id (its ids
+/// hash the plan plus `unix_now()` at second granularity), leaving the
+/// proposal re-confirmable without limit — every confirm another sandbox
+/// and another PR.
 pub fn confirm_job(
     store: &CloudJobStore,
     id: &str,
     credentials: &CredentialState,
 ) -> Result<DispatchOutcome> {
-    let job = store.load(id)?;
+    let mut job = store.load(id)?;
     if job.status != CloudJobStatus::Proposed {
         bail!(
             "Cloud job {} is {} and cannot be confirmed.",
@@ -582,16 +589,20 @@ pub fn confirm_job(
             status_label(job.status)
         );
     }
-    let plan = DispatchPlan {
-        prompt: job.prompt,
-        remote: SelectedRemote {
-            forge: job.forge,
-            name: job.remote_name,
-            url: job.remote_url,
-        },
-        branch: job.branch,
-    };
-    execute_dispatch(store, plan, true, credentials)
+    job.confirmed = true;
+    if matches!(credentials, CredentialState::Missing) {
+        job.status = CloudJobStatus::Refused;
+        job.refusal = Some(missing_credentials_message());
+        job.note = missing_credentials_message();
+        job.finished_unix = Some(unix_now());
+        store.save(&job)?;
+        return Ok(DispatchOutcome::Refused(job));
+    }
+
+    job.status = CloudJobStatus::Launching;
+    job.note = "Cloud agent confirmed; the sandbox is launching and the runner will raise the branch and open the PR. Watch `codewhale dispatch --show` or `/dispatch show`.".to_string();
+    store.save(&job)?;
+    Ok(DispatchOutcome::Accepted(job))
 }
 
 /// True while the job may still hold a live sandbox.
@@ -1839,6 +1850,102 @@ mod tests {
         let canceled = cancel_job(&store, &job.id, &NoopLauncher).unwrap();
         assert_eq!(canceled.status, CloudJobStatus::Canceled);
         assert!(canceled.note.contains("before a sandbox"));
+    }
+
+    #[test]
+    fn confirm_job_confirms_in_place_under_the_same_id_and_is_not_reconfirmable() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        let plan = plan_dispatch(
+            &remotes(&[("github", "https://github.com/org/repo.git")]),
+            "open a PR for the flake",
+            Some(Forge::Github),
+            Some("codewhale/cloud-confirm"),
+        )
+        .unwrap();
+        let DispatchOutcome::Proposal(job) = execute_dispatch(
+            &store,
+            plan,
+            false,
+            &CredentialState::Present {
+                source: CredentialSource::Env,
+            },
+        )
+        .unwrap() else {
+            panic!("expected proposal");
+        };
+        let id = job.id.clone();
+
+        let confirmed = match confirm_job(
+            &store,
+            &id,
+            &CredentialState::Present {
+                source: CredentialSource::Env,
+            },
+        )
+        .unwrap()
+        {
+            DispatchOutcome::Accepted(job) => job,
+            other => panic!("expected accept, got {other:?}"),
+        };
+        // Same id, one record, launching: the proposal became the run.
+        assert_eq!(confirmed.id, id);
+        assert_eq!(confirmed.status, CloudJobStatus::Launching);
+        assert!(confirmed.confirmed);
+        let listed = store.list().unwrap();
+        assert_eq!(listed.len(), 1, "confirm must not mint a second record");
+        assert_eq!(listed[0].id, id);
+
+        // A second confirm is refused — the status gate, not the id, is the
+        // guard (ids hash unix_now() at second granularity and can collide
+        // across confirms).
+        let again = confirm_job(
+            &store,
+            &id,
+            &CredentialState::Present {
+                source: CredentialSource::Env,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(again.contains("cannot be confirmed"), "{again}");
+        assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn confirm_job_without_credentials_refuses_in_place_under_the_same_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        let plan = plan_dispatch(
+            &remotes(&[("github", "https://github.com/org/repo.git")]),
+            "refuse me in place",
+            Some(Forge::Github),
+            Some("codewhale/cloud-refuse"),
+        )
+        .unwrap();
+        let DispatchOutcome::Proposal(job) = execute_dispatch(
+            &store,
+            plan,
+            false,
+            &CredentialState::Present {
+                source: CredentialSource::Env,
+            },
+        )
+        .unwrap() else {
+            panic!("expected proposal");
+        };
+        let id = job.id.clone();
+        let refused = match confirm_job(&store, &id, &CredentialState::Missing).unwrap() {
+            DispatchOutcome::Refused(job) => job,
+            other => panic!("expected refuse, got {other:?}"),
+        };
+        assert_eq!(refused.id, id);
+        assert_eq!(refused.status, CloudJobStatus::Refused);
+        assert!(refused.confirmed);
+        assert!(refused.finished_unix.is_some());
+        assert_eq!(store.list().unwrap().len(), 1);
+        // And it cannot be confirmed again either.
+        assert!(confirm_job(&store, &id, &CredentialState::Missing).is_err());
     }
 
     /// Launcher that can create but never tear down; used to pin the
