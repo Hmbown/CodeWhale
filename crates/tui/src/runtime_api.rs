@@ -2195,12 +2195,17 @@ async fn get_fleet_run_receipt(
 }
 
 /// Receipt artifact paths are recorded relative to the workspace; an absolute
-/// path or any `..` component would escape it.
+/// path (including Windows drive prefixes and root-relative paths) or any `..`
+/// component would escape it.
 fn receipt_evidence_path_is_confined(path: &std::path::Path) -> bool {
+    use std::path::Component;
     !path.is_absolute()
-        && !path
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
+        && !path.components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
 }
 
 async fn inspect_fleet_run_receipt_evidence(
