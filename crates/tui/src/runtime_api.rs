@@ -17,7 +17,7 @@ use axum::middleware;
 use axum::response::Html;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
 use codewhale_protocol::agent_mail::{
@@ -1164,6 +1164,12 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/automations/{id}/pause", post(pause_automation))
         .route("/v1/automations/{id}/resume", post(resume_automation))
         .route("/v1/automations/{id}/runs", get(list_automation_runs))
+        .route("/v1/operate", get(get_operate).post(start_operate).patch(patch_operate))
+        .route("/v1/operate/keepalive", post(keepalive_operate))
+        .route("/v1/operate/plan", put(put_operate_plan))
+        .route("/v1/operate/cancel", post(cancel_operate))
+        .route("/v1/operate/stop", post(cancel_operate))
+        .route("/v1/operate/auto-merge/check", post(check_operate_auto_merge))
         .route("/v1/usage", get(get_usage))
         .route("/v1/snapshots", get(list_snapshots))
         .route("/v1/snapshots/{id}/restore", post(restore_snapshot))
@@ -3776,6 +3782,200 @@ async fn list_automation_runs(
         .list_runs(&id, query.limit)
         .map_err(map_automation_err)?;
     Ok(Json(runs))
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct StartOperateRequest {
+    #[serde(default)]
+    direction: Option<String>,
+    /// CWC `OperateBurnRate` object, positive $/hr number, or null (unbounded).
+    #[serde(default)]
+    burn_rate: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct KeepAliveOperateRequest {
+    #[serde(default)]
+    spent_usd: Option<f64>,
+    #[serde(default)]
+    observed_burn_usd_per_hour: Option<f64>,
+    #[serde(default)]
+    credentials_present: Option<bool>,
+    #[serde(default)]
+    human_gated: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct OperateView {
+    operation: crate::operate::Operation,
+    board: String,
+}
+
+fn operate_store() -> Result<crate::operate::OperationStore, ApiError> {
+    crate::operate::OperationStore::open(crate::operate::default_operate_dir())
+        .map_err(|e| ApiError::internal(format!("Failed to open operate store: {e}")))
+}
+
+fn operate_credentials_present() -> bool {
+    crate::operate::glm_credentials_present(|name| std::env::var(name).is_ok())
+}
+
+fn operate_view(operation: crate::operate::Operation) -> Json<OperateView> {
+    Json(OperateView {
+        board: crate::operate::render_plan_board(&operation),
+        operation,
+    })
+}
+
+fn load_operate(store: &crate::operate::OperationStore) -> Result<Option<crate::operate::Operation>, ApiError> {
+    store
+        .load()
+        .map_err(|e| ApiError::internal(format!("Failed to load operate: {e}")))
+}
+
+fn require_operate(store: &crate::operate::OperationStore) -> Result<crate::operate::Operation, ApiError> {
+    load_operate(store)?.ok_or_else(|| ApiError::not_found("Unknown Operation."))
+}
+
+fn parse_request_burn_rate(value: Option<&serde_json::Value>) -> Result<Option<f64>, ApiError> {
+    Ok(crate::operate::parse_burn_rate(value)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?
+        .map(|rate| rate.amount_usd_per_hour))
+}
+
+async fn get_operate() -> Result<Json<OperateView>, ApiError> {
+    let store = operate_store()?;
+    let operation = match load_operate(&store)? {
+        Some(operation) => operation,
+        None => {
+            let mut operation = crate::operate::Operation::new(String::new(), None);
+            operation.credentials_present = operate_credentials_present();
+            operation.project();
+            operation
+        }
+    };
+    Ok(operate_view(operation))
+}
+
+async fn start_operate(
+    State(state): State<RuntimeApiState>,
+    Json(req): Json<StartOperateRequest>,
+) -> Result<Json<OperateView>, ApiError> {
+    let store = operate_store()?;
+    let operation = crate::operate::start_operation(
+        &store,
+        &state.workspace,
+        req.direction,
+        parse_request_burn_rate(req.burn_rate.as_ref())?,
+        operate_credentials_present(),
+    )
+    .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let manager = state.automations.lock().await;
+    crate::operate::upsert_keepalive(&manager, &state.workspace)
+        .map_err(|e| ApiError::internal(format!("Failed to keep operate alive: {e}")))?;
+    Ok(operate_view(operation))
+}
+
+async fn patch_operate(Json(patch): Json<serde_json::Value>) -> Result<Json<OperateView>, ApiError> {
+    let store = operate_store()?;
+    let mut operation = require_operate(&store)?;
+    crate::operate::apply_operate_patch(&mut operation, &patch)
+        .map_err(|e| {
+            if e.to_string().contains("cancelled") {
+                ApiError::conflict(e.to_string())
+            } else {
+                ApiError::bad_request(e.to_string())
+            }
+        })?;
+    operation.credentials_present = operate_credentials_present();
+    operation.project();
+    store
+        .save(&operation)
+        .map_err(|e| ApiError::internal(format!("Failed to save operate: {e}")))?;
+    Ok(operate_view(operation))
+}
+
+async fn keepalive_operate(
+    Json(req): Json<KeepAliveOperateRequest>,
+) -> Result<Json<OperateView>, ApiError> {
+    let store = operate_store()?;
+    let mut operation = require_operate(&store)?;
+    crate::operate::keep_alive_observation(
+        &mut operation,
+        req.observed_burn_usd_per_hour,
+        req.spent_usd,
+        Some(req.credentials_present.unwrap_or_else(operate_credentials_present)),
+        req.human_gated,
+    );
+    store
+        .save(&operation)
+        .map_err(|e| ApiError::internal(format!("Failed to keep operate alive: {e}")))?;
+    Ok(operate_view(operation))
+}
+
+async fn put_operate_plan(Json(plan): Json<serde_json::Value>) -> Result<Json<OperateView>, ApiError> {
+    let store = operate_store()?;
+    let mut operation = require_operate(&store)?;
+    let patch = serde_json::json!({ "leadPlan": plan });
+    crate::operate::apply_operate_patch(&mut operation, &patch)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    store
+        .save(&operation)
+        .map_err(|e| ApiError::internal(format!("Failed to save operate plan: {e}")))?;
+    Ok(operate_view(operation))
+}
+
+async fn cancel_operate() -> Result<Json<OperateView>, ApiError> {
+    let store = operate_store()?;
+    let operation = crate::operate::cancel_operation(&store)
+        .map_err(|e| ApiError::internal(format!("Failed to cancel operate: {e}")))?
+        .ok_or_else(|| ApiError::not_found("Unknown Operation."))?;
+    Ok(operate_view(operation))
+}
+
+#[derive(Debug, Deserialize)]
+struct OperateAutoMergeCheckRequest {
+    repo: String,
+    pr: String,
+    agent: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OperateAutoMergeCheckView {
+    allow: bool,
+    reason: Option<String>,
+    checker: Option<String>,
+    check_args: Vec<String>,
+    merge_args: Vec<String>,
+}
+
+async fn check_operate_auto_merge(
+    State(state): State<RuntimeApiState>,
+    Json(req): Json<OperateAutoMergeCheckRequest>,
+) -> Result<Json<OperateAutoMergeCheckView>, ApiError> {
+    let checker = crate::operate::discover_auto_merge_checker(&state.workspace);
+    let decision = crate::operate::evaluate_auto_merge(
+        crate::operate::AutoMergeRequest {
+            repo: &req.repo,
+            pr: &req.pr,
+            role: &req.agent,
+        },
+        checker.as_deref(),
+    );
+    let (allow, reason) = match decision {
+        crate::operate::AutoMergeDecision::Allow => (true, None),
+        crate::operate::AutoMergeDecision::Deny { reason } => (false, Some(reason)),
+    };
+    Ok(Json(OperateAutoMergeCheckView {
+        allow,
+        reason,
+        checker: checker.as_ref().map(|path| path.display().to_string()),
+        check_args: crate::operate::check_auto_merge_args(&req.repo, &req.pr, &req.agent),
+        merge_args: crate::operate::auto_merge_pr_args(&req.repo, &req.pr, &req.agent),
+    }))
 }
 
 async fn get_thread(

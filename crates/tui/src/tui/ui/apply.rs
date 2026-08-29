@@ -597,11 +597,58 @@ pub(crate) async fn apply_mode_update(
 ) -> bool {
     let outcome = app.select_mode(mode);
     app.report_mode_selection(mode, outcome);
+    if mode == AppMode::Operate {
+        present_operate_board(app);
+    }
     if outcome.changed_live_state() {
         sync_mode_update(app, engine_handle).await;
         true
     } else {
         false
+    }
+}
+
+/// Entering Operate starts (or resumes) the named operation and shows the
+/// lead plan. Burn rate is optional; default is unbounded.
+fn present_operate_board(app: &mut App) {
+    let store = match crate::operate::OperationStore::open(crate::operate::default_operate_dir()) {
+        Ok(store) => store,
+        Err(error) => {
+            app.add_message(crate::tui::history::HistoryCell::System {
+                content: format!("Operate store unavailable: {error}"),
+            });
+            return;
+        }
+    };
+    let credentials = crate::operate::glm_credentials_present(|name| std::env::var(name).is_ok());
+    match crate::operate::start_operation(
+        &store,
+        &app.workspace,
+        None,
+        None,
+        credentials,
+    ) {
+        Ok(mut operation) => {
+            if credentials
+                && !operation.direction.is_empty()
+                && operation.lead_plan.is_none()
+            {
+                operation.plan_from_direction();
+                if let Err(error) = store.save(&operation) {
+                    app.add_message(crate::tui::history::HistoryCell::System {
+                        content: format!("Operate plan not saved: {error}"),
+                    });
+                }
+            }
+            app.add_message(crate::tui::history::HistoryCell::System {
+                content: crate::operate::render_plan_board(&operation),
+            });
+        }
+        Err(error) => {
+            app.add_message(crate::tui::history::HistoryCell::System {
+                content: format!("Operate did not start: {error}"),
+            });
+        }
     }
 }
 

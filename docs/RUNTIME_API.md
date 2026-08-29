@@ -754,6 +754,28 @@ Create and update requests accept an optional `model`. When present, each
 scheduled or manually triggered run uses that model; omitting it keeps the
 runtime's default task model.
 
+**Operate** (always-on named operation; same `OperateRecord` as CWC
+`20de981` / PR #284)
+
+- `GET /v1/operate` — current operation + plan board
+- `POST /v1/operate` — create (`direction`, optional `burnRate`)
+- `PATCH /v1/operate` — steer direction, `burnRate`, or `leadPlan`
+- `PUT /v1/operate/plan` — set `leadPlan` (`{ slices: [...] }`)
+- `POST /v1/operate/keepalive` — observe spend / burn; never stops
+- `POST /v1/operate/cancel` — explicit cancel (`/v1/operate/stop` aliases)
+- `POST /v1/operate/auto-merge/check` — call landed
+  `scripts/check-auto-merge.py --repo --pr --agent` (does not merge)
+
+`burnRate` is `{ "kind": "usd_per_hour", "amountUsdPerHour": number }`,
+a positive number, or `null` (unbounded). Status is
+`planning | running | idle_blocked | cancelled`. Pace
+(`unbounded | hold | throttle | widen`) is not a status: over-target
+throttles, under-target widens, no wallet-cap stop. Idle-blocked only
+for empty direction, awaiting lead plan, missing credentials, or a
+human gate. Auto-merge is `scripts/check-auto-merge.py --repo … --pr …
+--agent …` from codewhale-ops `origin/main` (exit 0), then
+`scripts/auto-merge-pr.py`. Do not invent a second checker.
+
 **Introspection**
 - `GET /v1/workspace/status`
 - `GET /v1/skills`

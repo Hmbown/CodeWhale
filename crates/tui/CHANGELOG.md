@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Operate is an always-on pod operation: a lead plans ordered slices
+  (the Gantt model) before workers run, with GLM-5.3 lead / GLM-5.3-Flash
+  workers by default. Burn rate is optional `$/hour`; unset means unbounded
+  continuous. Exceeding the rate throttles (fewer writers, prefer Flash)
+  instead of stopping. Runtime API `/v1/operate` shares CWC's landed
+  `OperateRecord` (`20de981`, PR #284): camelCase `burnRate`, `leadPlan`,
+  `pace`, and `cancelled` — not a wallet-cap stop.
+  Auto-merge calls landed `scripts/check-auto-merge.py` /
+  `scripts/auto-merge-pr.py` from codewhale-ops `origin/main` (`c7549e2`).
 - Add provider-native web search for documented Xiaomi MiMo 2.5 Pro and 2.5
   chat routes while keeping neighboring models and custom gateways fail-closed.
 - Add structured provider-native web search for exact Z.AI global and Zhipu
