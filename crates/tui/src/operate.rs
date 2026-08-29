@@ -232,10 +232,8 @@ pub fn parse_burn_rate(value: Option<&serde_json::Value>) -> Result<Option<Opera
     {
         return Ok(None);
     }
-    if let Some(kind) = value.get("kind").and_then(|kind| kind.as_str()) {
-        if kind == "unbounded" {
-            return Ok(None);
-        }
+    if let Some("unbounded") = value.get("kind").and_then(|kind| kind.as_str()) {
+        return Ok(None);
     }
     let amount = if value.is_number() || value.is_string() {
         json_number(value)
@@ -816,10 +814,10 @@ pub fn start_operation(
         Some(text) if !text.trim().is_empty() => text,
         _ => read_direction(workspace)?,
     };
-    if direction.trim().is_empty() {
-        if let Some(existing) = store.load()? {
-            direction = existing.direction;
-        }
+    if direction.trim().is_empty()
+        && let Some(existing) = store.load()?
+    {
+        direction = existing.direction;
     }
     let mut op = Operation::new(direction, burn_usd_per_hour);
     op.credentials_present = credentials_present;
