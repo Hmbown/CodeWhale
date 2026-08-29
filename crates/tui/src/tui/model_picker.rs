@@ -2316,9 +2316,13 @@ fn render_picker_model_hint(
         PickerPricing::Unknown => parts.push("price unknown".to_string()),
     }
     match metadata.source.as_ref() {
-        Some(CatalogSource::Live { .. }) => parts.push("live".to_string()),
+        Some(CatalogSource::Live { .. } | CatalogSource::ModelsDevLive { .. }) => {
+            parts.push("live".to_string())
+        }
         Some(CatalogSource::Bundled) => parts.push("bundled".to_string()),
-        Some(CatalogSource::UserOverride) => parts.push("override".to_string()),
+        Some(CatalogSource::ConfigOverride | CatalogSource::UserOverride) => {
+            parts.push("override".to_string())
+        }
         None => {}
     }
     if provider == Some(ApiProvider::OpenaiCodex) {

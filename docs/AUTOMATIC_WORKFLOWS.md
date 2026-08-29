@@ -122,6 +122,21 @@ approval policy. See [Sandbox](SANDBOX.md).
   before synthesizing one operator-facing summary. A `responseSchema` mismatch
   is a contract failure and intentionally fails the run instead of being
   silently converted to `null`.
+- A `null` slot is no longer anonymous. `parallel()` and `pipeline()` attach a
+  non-enumerable `errors` array to the result — `[{ index, kind, message }]`,
+  ordered by index — so a synthesizer can say *why* a slot is missing. The
+  array's own contents and JSON encoding are unchanged.
+- `kind` is one of `admission`, `budget`, `cancelled`, `agent`, `schema`,
+  `driver` (assigned by the host where the failure happened) or `script` (the
+  script threw it). Read it from the thrown `Error`'s `.kind`; it is never
+  inferred from message text, so a child's own prose cannot forge a kind.
+- `opts.mode` selects the contract: `settled` (default — today's behavior),
+  `fail-fast` (reject the whole fan-out with the first non-fatal slot error),
+  or `partial` (resolve every non-cancellation failure to
+  `{ __taskError: { index, kind, message } }`). An unrecognized mode throws
+  rather than quietly reading as `settled`.
+- A run whose every task failed is recorded as **failed**, not as a partial
+  success, even when the script itself returned a value.
 - Workflow token budgets govern admission and aggregate accounting. Once
   exhausted they reject later or descendant spawns, but children already
   running in parallel can reconcile aggregate usage above the hint because

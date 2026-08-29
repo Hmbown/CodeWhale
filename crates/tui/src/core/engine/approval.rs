@@ -116,7 +116,17 @@ impl Engine {
                     .to_string(),
             ));
         }
-        self.await_tool_approval(tool_id).await
+        // R1: the per-turn wall-clock budget bounds what the agent spends on
+        // its own, not how long a person takes to answer. Pause it across the
+        // human decision — otherwise an approval prompt left open would fail
+        // the turn (and discard the work just approved) the moment the user
+        // came back. Every non-unwinding exit of `await_tool_approval` runs
+        // through the resume below; a panic unwinds out of `run_turn`, which
+        // restarts the clock on its next turn anyway.
+        self.turn_wall_clock.begin_human_wait();
+        let decision = self.await_tool_approval(tool_id).await;
+        self.turn_wall_clock.end_human_wait();
+        decision
     }
 
     /// Format a cancellation suffix when the engine knows the cause.

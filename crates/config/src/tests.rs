@@ -512,6 +512,36 @@ action = "session.compact"
 }
 
 #[test]
+fn legacy_fleet_hotbar_action_resolves_to_canonical_pod_without_rewriting_disk() {
+    let config: ConfigToml = toml::from_str(
+        r#"
+[[hotbar]]
+slot = 3
+action = "slash.fleet"
+label = "Pod"
+"#,
+    )
+    .expect("parse legacy hotbar binding");
+
+    let resolved = config.resolve_hotbar_bindings(&["slash.pod"]);
+
+    assert_eq!(resolved.warnings, Vec::new());
+    assert_eq!(
+        resolved.bindings,
+        vec![HotbarBinding {
+            slot: 3,
+            action: "slash.pod".to_string(),
+            label: Some("Pod".to_string()),
+        }]
+    );
+    assert_eq!(
+        config.hotbar.as_ref().unwrap()[0].action,
+        "slash.fleet",
+        "read-time compatibility must not mutate the parsed on-disk value"
+    );
+}
+
+#[test]
 fn hotbar_validation_warns_without_dropping_unknown_actions() {
     let config: ConfigToml = toml::from_str(
         r#"
@@ -8774,6 +8804,17 @@ fn telemetry_consent_names_its_source() {
     let (on, source) = resolved_telemetry_consent(None);
     assert!(on);
     assert_eq!(source, TelemetrySource::Env);
+}
+
+#[test]
+fn resolved_runtime_options_mints_a_route_candidate() {
+    let resolved = ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+    let route = resolved
+        .route
+        .as_ref()
+        .expect("RouteResolver is the runtime path");
+    assert_eq!(route.provider_kind(), resolved.provider);
+    assert_eq!(route.endpoint().base_url, resolved.base_url);
 }
 
 /// #5441: the runtime receipt carries the same source the surfaces print.

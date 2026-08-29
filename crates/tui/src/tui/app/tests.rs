@@ -107,7 +107,7 @@ fn feature_intro_shows_once_persists_then_is_idempotent() {
     assert!(
         app.status_message
             .as_deref()
-            .is_some_and(|message| message.contains("Fleet") && message.contains("/fleet setup"))
+            .is_some_and(|message| message.contains("Pod") && message.contains("/pod setup"))
     );
 
     // Persisted flag now set → a second call is a no-op.

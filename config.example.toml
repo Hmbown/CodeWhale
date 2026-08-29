@@ -1051,6 +1051,15 @@ alternate_screen = "auto"   # auto/always use the TUI screen; never uses termina
 mouse_capture = true        # true copies only transcript user/assistant text; false uses raw terminal selection/copy
 terminal_probe_timeout_ms = 500 # optional startup terminal-mode timeout (100-5000ms)
 stream_chunk_timeout_secs = 900 # optional SSE idle timeout per chunk (0 = default, 1-3600)
+# R1 turn budgets. An agent loop with no finite bound can spend real money
+# forever, so every one of these is finite by default and finite at its
+# maximum. `0` is an invalid value that falls back to the default — it is
+# never a "0 means unlimited" sentinel.
+max_model_steps = 200        # model steps one turn may take (0 = default, 1-100000)
+turn_wall_clock_secs = 3600  # cumulative wall clock for one turn, excluding time
+                             # blocked on a human approval (0 = default, 30-86400)
+stream_max_content_mb = 10   # per-step cap on streamed content (0 = default, 1-512)
+stream_max_duration_secs = 1800 # per-step cap on one stream's duration (0 = default, 10-86400)
 osc8_links = true            # emit OSC 8 escapes around URLs (Cmd+click in iTerm2/Ghostty/Kitty/WezTerm/Terminal.app 13+); set false for terminals that misrender
 # Ordered footer chips shown in the TUI status line. Omit the key to use the
 # built-in default; set [] to hide all configurable chips. You can also edit

@@ -1217,6 +1217,13 @@ struct ReviewArgs {
     /// Override model for this review
     #[arg(long)]
     model: Option<String>,
+    /// Override the provider route for this review (e.g. `zai`, `openrouter`,
+    /// `deepseek`). Non-secret identifier only — credentials still resolve
+    /// from the environment/config. Use it to disambiguate a `--model` that
+    /// more than one configured route offers (which otherwise hard-errors
+    /// with "available from configured provider route(s): ...").
+    #[arg(long)]
+    provider: Option<String>,
     /// Maximum diff characters to include
     #[arg(long, default_value_t = 200_000)]
     max_chars: usize,
@@ -3013,7 +3020,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
     use codewhale_protocol::fleet::{FleetAlertEventClass, FleetArtifactKind, FleetRunId};
 
     // Every label and every row below comes from the shared Fleet control
-    // surface, so `codewhale fleet …` and `/fleet …` cannot drift in how they
+    // surface, so `codewhale fleet …` and `/pod …` cannot drift in how they
     // describe the same durable ledger (#1888, #4022).
     fn print_status(status: &FleetStatusSnapshot) {
         println!("{}", fleet_control::render_fleet_status_snapshot(status));
@@ -3141,7 +3148,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
     // "no_fleet_ledger" while simultaneously creating the file it said was
     // missing — and the next invocation then reported an empty ledger as if a
     // Fleet had existed all along. Refuse the control verbs here, before the
-    // manager exists, so the CLI and `/fleet` agree and neither surface
+    // manager exists, so the CLI and `/pod` agree and neither surface
     // conjures the store it is reporting on (#4022).
     if let Some(operation) = match &args.command {
         FleetCommand::List => Some(ControlOperation::FleetList),
@@ -5990,7 +5997,7 @@ fn print_doctor_setup_report(
         );
     }
     println!(
-        "  · next actions: /constitution (standing law), /setup report (readiness), /setup provider or /provider setup <name> (provider credentials), /model (route), /config (runtime posture), /setup fleet (Operate/Fleet readiness), /fleet setup (explicit profile authoring), /setup hotbar (optional shortcuts), /setup tools (Tools/MCP readiness), /setup remote (remote runtime on-ramp), /setup persistence (path review)"
+        "  · next actions: /constitution (standing law), /setup report (readiness), /setup provider or /provider setup <name> (provider credentials), /model (route), /config (runtime posture), /setup fleet (Operate/Fleet readiness), /pod setup (explicit profile authoring), /setup hotbar (optional shortcuts), /setup tools (Tools/MCP readiness), /setup remote (remote runtime on-ramp), /setup persistence (path review)"
     );
     for step in codewhale_config::SetupStep::ALL {
         let entry = state.steps.get(&step);
@@ -6010,7 +6017,7 @@ fn print_doctor_setup_report(
 
 /// #5098: print every profile id that exists in more than one roster layer
 /// so a personal/config edit that loses to project is visible without
-/// opening `/fleet`.
+/// opening `/pod`.
 fn print_doctor_fleet_roster_layers(config: &Config, workspace: &Path) {
     use colored::Colorize;
 
@@ -6593,7 +6600,7 @@ fn doctor_setup_report_json(config: &Config, workspace: &Path) -> serde_json::Va
             "setup_report": "/setup report",
             "provider_model": "/setup provider, /provider setup <name>, or /model",
             "runtime_posture": "/config",
-            "operate_fleet": "/setup fleet (readiness), /fleet setup (explicit profile authoring)",
+            "operate_fleet": "/setup fleet (readiness), /pod setup (explicit profile authoring)",
             "hotbar": "/setup hotbar",
             "tools_mcp": "/setup tools",
             "remote_runtime": "/setup remote",
@@ -7905,7 +7912,7 @@ fn apply_selected_fleet_operator_for_launch(
     }
     let Some(selected) = crate::fleet::store::resolve_selected_fleet(workspace).map_err(|_| {
         anyhow!(
-            "Selected Fleet is missing or unreadable; inspect /fleet and repair or clear the selection."
+            "Selected Fleet is missing or unreadable; inspect /pod and repair or clear the selection."
         )
     })?
     else {
@@ -7914,7 +7921,7 @@ fn apply_selected_fleet_operator_for_launch(
     let fleet_name = crate::safe_label::SafeLabel::phrase(&selected.name);
     let (fleet, _) = crate::fleet::store::load_fleet_at(&selected.path).map_err(|_| {
         anyhow!(
-            "selected Fleet '{}' ({}) is invalid or unreadable; inspect /fleet and repair or clear the selection.",
+            "selected Fleet '{}' ({}) is invalid or unreadable; inspect /pod and repair or clear the selection.",
             fleet_name,
             selected.scope.label()
         )
@@ -8171,6 +8178,11 @@ fn pick_session_id() -> Result<String> {
 async fn run_review(config: &Config, args: ReviewArgs) -> Result<()> {
     use crate::client::DeepSeekClient;
 
+    // Resolved before anything is fetched or billed so an unknown
+    // `--provider` fails fast with the provider vocabulary hint.
+    let (config, force_configured_route) = review_execution_route(config, &args)?;
+    let config = &config;
+
     if args.pr.is_some() && !is_command_available("gh") {
         bail!(
             "`gh` CLI not found on PATH. Install GitHub CLI \
@@ -8194,7 +8206,7 @@ async fn run_review(config: &Config, args: ReviewArgs) -> Result<()> {
     }
 
     let model = resolve_review_model(config, args.model.as_deref());
-    let route = resolve_cli_exec_route(config, &model, &diff, args.model.is_none()).await?;
+    let route = resolve_cli_exec_route(config, &model, &diff, force_configured_route).await?;
     let execution_config = config_for_cli_route(config, &route);
     let route_provider = execution_config.provider_identity_for(route.provider);
     let model = route.model.clone();
@@ -8339,6 +8351,29 @@ Provide findings ordered by severity with file references, then open questions, 
         }
     }
     Ok(())
+}
+
+/// Apply `codewhale review --provider <name>` and decide whether the route is
+/// authoritative (no cross-provider inventory inference).
+///
+/// This mirrors `codewhale exec --provider` (#4093): the flag sets ONLY the
+/// non-secret provider identity, and pinning the route is what lets a model
+/// offered by more than one configured route resolve instead of hard-erroring
+/// in `resolve_cli_auto_route`.
+fn review_execution_route(config: &Config, args: &ReviewArgs) -> Result<(Config, bool)> {
+    let explicit_provider = non_empty_flag(args.provider.as_deref());
+    let explicit_model = non_empty_flag(args.model.as_deref());
+    let mut resolved = config.clone();
+    if let Some(provider_arg) = explicit_provider {
+        apply_exec_provider_override(&mut resolved, provider_arg)?;
+    }
+    let force_configured_route =
+        should_force_configured_exec_route(false, explicit_provider, explicit_model);
+    Ok((resolved, force_configured_route))
+}
+
+fn non_empty_flag(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 fn resolve_review_model(config: &Config, explicit_model: Option<&str>) -> String {
@@ -8631,40 +8666,275 @@ fn run_gh_repo_name() -> Result<String> {
     Ok(name)
 }
 
-/// True when `path` appears as a file touched by the unified diff. Guards the
-/// inline-comment payload: GitHub rejects the whole review with a 422 when a
-/// comment's path is not part of the diff.
-fn diff_touches_path(diff: &str, path: &str) -> bool {
-    diff.contains(&format!("+++ b/{path}")) || diff.contains(&format!("--- a/{path}"))
+/// Pick a fence long enough to wrap `replacement` without the replacement's
+/// own backticks closing the block early.
+fn suggestion_fence(replacement: &str) -> String {
+    let mut longest = 0usize;
+    let mut run = 0usize;
+    for ch in replacement.chars() {
+        if ch == '`' {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    "`".repeat(longest.saturating_add(1).max(3))
+}
+
+/// GitHub turns any fenced `suggestion` block in a review comment into a
+/// one-click commit. Model prose is not vetted for that, so a fence the model
+/// wrote inside its own explanation is downgraded to a plain code block:
+/// only the `replacement` this function validated against the diff hunks may
+/// ever be committable.
+fn neutralize_model_suggestion_fences(prose: &str) -> String {
+    prose
+        .split('\n')
+        .map(neutralize_suggestion_fence_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Neutralize one line's fence if it opens a `suggestion` block.
+///
+/// The fence may sit behind leading whitespace or behind a blockquote cue or
+/// list marker (`- ```suggestion`, `> ```suggestion`, `1. ```suggestion`).
+/// Whether GitHub renders those container-nested blocks applicable is
+/// unverified, so all of those shapes are treated as live and rewritten.
+fn neutralize_suggestion_fence_line(line: &str) -> String {
+    let trimmed = line.trim_start();
+    let indent = &line[..line.len() - trimmed.len()];
+    let (prefix, fence) = split_container_prefix(trimmed);
+    let fence_char = match fence.chars().next() {
+        Some(ch @ ('`' | '~')) => ch,
+        _ => return line.to_string(),
+    };
+    let ticks = fence.chars().take_while(|ch| *ch == fence_char).count();
+    if ticks < 3 {
+        return line.to_string();
+    }
+    let info = fence[ticks..].trim();
+    if info.to_ascii_lowercase().starts_with("suggestion") {
+        let fence: String = std::iter::repeat_n(fence_char, ticks).collect();
+        format!("{indent}{prefix}{fence}text")
+    } else {
+        line.to_string()
+    }
+}
+
+/// Split the blockquote cues and list markers off the front of a line,
+/// returning `(prefix_to_preserve, rest)`. Nesting is followed (`> - `),
+/// but a line of ordinary prose is left untouched — the prefix only matters
+/// when what follows it is a fence.
+fn split_container_prefix(trimmed: &str) -> (&str, &str) {
+    let mut rest = trimmed;
+    while let Some(after) = strip_container_token(rest) {
+        rest = after;
+    }
+    let split = trimmed.len() - rest.len();
+    trimmed.split_at(split)
+}
+
+/// Strip one container token (`> ` blockquote cue, `-`/`*`/`+` bullet, or an
+/// ordered-list marker) plus its trailing whitespace, or `None` when the
+/// line does not start with one.
+fn strip_container_token(rest: &str) -> Option<&str> {
+    if let Some(after) = rest.strip_prefix('>') {
+        return Some(after.trim_start_matches([' ', '\t']));
+    }
+    if let Some(after) = rest
+        .strip_prefix(['-', '*', '+'])
+        .filter(|after| after.starts_with([' ', '\t']))
+    {
+        return Some(after.trim_start_matches([' ', '\t']));
+    }
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    if digits > 0 {
+        let after_marker = &rest[digits..];
+        if let Some(after) = after_marker
+            .strip_prefix(['.', ')'])
+            .filter(|after| after.starts_with([' ', '\t']))
+        {
+            return Some(after.trim_start_matches([' ', '\t']));
+        }
+    }
+    None
 }
 
 /// Map structured review issues to GitHub inline-review-comment payloads.
+///
+/// Anchors are checked against the diff's actual hunks, not just its file
+/// lists: GitHub 422s the *entire* review when one comment lands outside a
+/// hunk, so a model-estimated line that misses now drops a single comment.
 /// Issues without a locatable position stay in the summary body instead.
-fn inline_review_comments(
+///
+/// SAFETY: `title` and `description` are raw model text interpolated into a
+/// comment body. A model-written ```suggestion fence there would become a
+/// one-click-mergeable block that bypasses every span and size check, so
+/// both fields pass through `neutralize_model_suggestion_fences` — only a
+/// replacement validated against the diff hunks may ever be committable.
+/// (`severity` is safe unneutralized: it is normalized to a fixed
+/// error/warning/info vocabulary before it reaches here.)
+fn inline_issue_comments(
     review: &crate::tools::review::ReviewOutput,
-    diff: &str,
+    hunks: &crate::tools::review_hunks::DiffHunks,
+    plan: &mut InlineReviewPlan,
 ) -> Vec<serde_json::Value> {
     review
         .issues
         .iter()
         .filter_map(|issue| {
-            let path = issue.path.as_deref()?.trim().trim_start_matches("./");
-            if path.is_empty() || !diff_touches_path(diff, path) {
+            let (Some(path), Some(line)) = (
+                crate::tools::review::normalize_review_path(issue.path.as_deref()),
+                issue.line,
+            ) else {
+                // No position at all: the summary body is the only home.
+                return None;
+            };
+            if !hunks.contains_line(&path, line) {
+                plan.note_unanchorable(hunks, &path);
                 return None;
             }
-            let line = issue.line?;
             Some(serde_json::json!({
                 "path": path,
                 "line": line,
+                "side": "RIGHT",
                 "body": format!(
                     "**[{}] {}**\n\n{}",
                     issue.severity.to_uppercase(),
-                    issue.title,
-                    issue.description
+                    neutralize_model_suggestion_fences(&issue.title),
+                    neutralize_model_suggestion_fences(&issue.description)
                 ),
             }))
         })
         .collect()
+}
+
+/// Render one structured suggestion as an inline review comment.
+///
+/// A committable ```` ```suggestion ```` block is emitted only when **both**
+/// safety conditions hold:
+///
+/// 1. the model supplied literal `replacement` code (not prose), and
+/// 2. every line of the replaced span is a RIGHT-side line inside a diff hunk
+///    (never a deleted LEFT-side line, which GitHub rejects), and the span is
+///    small enough to be a mechanical fix.
+///
+/// Otherwise the comment degrades to prose at the same anchor — a wrong
+/// committable suggestion is worse than prose because it is one click from
+/// being merged. With no valid anchor at all the suggestion stays in the
+/// summary body and `None` is returned.
+fn inline_suggestion_comment(
+    suggestion: &crate::tools::review::ReviewSuggestion,
+    hunks: &crate::tools::review_hunks::DiffHunks,
+    plan: &mut InlineReviewPlan,
+) -> Option<serde_json::Value> {
+    // The committable decision lives in `resolve_suggestion_anchor` so the
+    // review receipt records exactly what this path emits for the same diff.
+    let (path, start, end, committable) =
+        match crate::tools::review::resolve_suggestion_anchor(suggestion, hunks) {
+            crate::tools::review::SuggestionAnchor::Anchored {
+                path,
+                start,
+                end,
+                committable,
+            } => (path, start, end, committable),
+            crate::tools::review::SuggestionAnchor::Unanchorable { path } => {
+                plan.note_unanchorable(hunks, &path);
+                return None;
+            }
+            crate::tools::review::SuggestionAnchor::NoPosition => return None,
+        };
+    let prose = if suggestion.suggestion.is_empty() {
+        "Suggested change.".to_string()
+    } else {
+        neutralize_model_suggestion_fences(&suggestion.suggestion)
+    };
+
+    let Some(replacement) = suggestion.replacement.as_deref().filter(|_| committable) else {
+        // Degradation path: keep the finding, drop the one-click apply.
+        plan.degraded_to_prose += 1;
+        return Some(serde_json::json!({
+            "path": path,
+            "line": end,
+            "side": "RIGHT",
+            "body": prose,
+        }));
+    };
+
+    let fence = suggestion_fence(replacement);
+    let body = format!("{prose}\n\n{fence}suggestion\n{replacement}\n{fence}");
+    let mut comment = serde_json::json!({
+        "path": path,
+        "line": end,
+        "side": "RIGHT",
+        "body": body,
+    });
+    if start < end {
+        comment["start_line"] = serde_json::json!(start);
+        comment["start_side"] = serde_json::json!("RIGHT");
+    }
+    Some(comment)
+}
+
+/// The inline-comment payload for one review, plus a truthful count of what
+/// did not survive anchoring. Findings are never silently discarded: the
+/// counts are reported on stderr next to the posted review.
+#[derive(Debug, Default)]
+struct InlineReviewPlan {
+    comments: Vec<serde_json::Value>,
+    /// Findings whose file is in the diff but whose line is not inside any
+    /// hunk — a model-estimated line number that missed.
+    dropped_out_of_hunk: usize,
+    /// Findings pointing at a file this diff does not touch at all.
+    dropped_untouched_file: usize,
+    /// Suggestions posted as prose because committing them was not safe.
+    degraded_to_prose: usize,
+}
+
+impl InlineReviewPlan {
+    fn note_unanchorable(&mut self, hunks: &crate::tools::review_hunks::DiffHunks, path: &str) {
+        if hunks.touches_path(path) {
+            self.dropped_out_of_hunk += 1;
+        } else {
+            self.dropped_untouched_file += 1;
+        }
+    }
+
+    /// One-line receipt, or `None` when every finding landed as intended.
+    fn receipt(&self) -> Option<String> {
+        if self.dropped_out_of_hunk == 0
+            && self.dropped_untouched_file == 0
+            && self.degraded_to_prose == 0
+        {
+            return None;
+        }
+        Some(format!(
+            "note: {} finding(s) had no line inside a diff hunk, {} pointed at a file \
+             outside the diff (both stay in the summary body), and {} suggestion(s) \
+             posted as prose instead of a committable block",
+            self.dropped_out_of_hunk, self.dropped_untouched_file, self.degraded_to_prose
+        ))
+    }
+}
+
+/// Every inline comment for a review: issues first, then suggestions (which
+/// carry the committable ```` ```suggestion ```` blocks).
+fn plan_inline_review_comments(
+    review: &crate::tools::review::ReviewOutput,
+    diff: &str,
+) -> InlineReviewPlan {
+    let hunks = crate::tools::review_hunks::DiffHunks::parse(diff);
+    let mut plan = InlineReviewPlan::default();
+    let mut comments = inline_issue_comments(review, &hunks, &mut plan);
+    comments.extend(
+        review
+            .suggestions
+            .iter()
+            .filter_map(|suggestion| inline_suggestion_comment(suggestion, &hunks, &mut plan)),
+    );
+    plan.comments = comments;
+    plan
 }
 
 /// Render a structured review as the markdown body printed for — and, with
@@ -8721,6 +8991,29 @@ fn render_pr_review_markdown(
             } else {
                 body.push_str(&format!("- {location} — {}\n", suggestion.suggestion));
             }
+            // The replacement is the computed fix itself; rendering only the
+            // prose used to compute and validate it, then throw it away.
+            // Show it as a fenced block indented into the list item. In the
+            // local report the fence is live — the user asked for the fix and
+            // this block is the artifact to apply. In a *posted* PR body it
+            // degrades to a plain code block: GitHub must only ever be handed
+            // a one-click suggestion block this pipeline validated against
+            // the diff hunks (the inline suggestion comments), never one the
+            // summary duplicated from a suggestion that failed anchoring or
+            // the span gates.
+            if let Some(replacement) = suggestion
+                .replacement
+                .as_deref()
+                .filter(|replacement| !replacement.trim().is_empty())
+            {
+                let fence = suggestion_fence(replacement);
+                let info = if posted { "text" } else { "suggestion" };
+                body.push_str(&format!("\n  {fence}{info}\n"));
+                for line in replacement.split('\n') {
+                    body.push_str(&format!("  {line}\n"));
+                }
+                body.push_str(&format!("  {fence}\n"));
+            }
         }
         body.push('\n');
     }
@@ -8733,7 +9026,8 @@ fn render_pr_review_markdown(
         body.push_str(&format!(
             "---\n*Advisory review by Codewhale (`codewhale review --pr {number} --post`, \
              head `{head}`). Line-specific findings are also posted as inline review \
-             comments. CODEOWNERS approval still governs merge.*\n",
+             comments; mechanical fixes arrive as committable suggestions you can \
+             apply from the Files tab. CODEOWNERS approval still governs merge.*\n",
             head = if view.head_sha.is_empty() {
                 "unknown"
             } else {
@@ -8807,16 +9101,27 @@ fn post_pr_review(
         Some(repo) => repo.to_string(),
         None => run_gh_repo_name()?,
     };
-    let inline = inline_review_comments(review, diff);
+    let plan = plan_inline_review_comments(review, diff);
+    if let Some(receipt) = plan.receipt() {
+        eprintln!("{receipt}");
+    }
+    let inline = plan.comments;
     let body = render_pr_review_markdown(number, view, review, true);
     if inline.is_empty() {
         run_gh_post_pr_review(&repo_name, number, &body, &view.head_sha, &[])?;
     } else if let Err(err) =
         run_gh_post_pr_review(&repo_name, number, &body, &view.head_sha, &inline)
     {
-        // One model-estimated line outside the diff hunks makes GitHub reject
-        // the whole review; retry summary-only rather than lose the review.
-        eprintln!("warning: inline review comments rejected ({err}); retrying summary-only");
+        // Anchors are pre-filtered against the parsed diff hunks, so this
+        // path should now be unreachable in the common case. It stays as a
+        // last resort for anchors GitHub rejects for reasons the diff cannot
+        // show (a stale head SHA, a suppressed large file), and it announces
+        // exactly how many inline comments were lost rather than failing
+        // silently.
+        eprintln!(
+            "warning: {} inline review comment(s) rejected ({err}); retrying summary-only",
+            inline.len()
+        );
         run_gh_post_pr_review(&repo_name, number, &body, &view.head_sha, &[])?;
     }
     Ok(())
@@ -12583,7 +12888,7 @@ mod doctor_setup_state_tests {
         assert_eq!(report["next_actions"]["runtime_posture"], "/config");
         assert_eq!(
             report["next_actions"]["operate_fleet"],
-            "/setup fleet (readiness), /fleet setup (explicit profile authoring)"
+            "/setup fleet (readiness), /pod setup (explicit profile authoring)"
         );
         assert_eq!(report["next_actions"]["hotbar"], "/setup hotbar");
         assert_eq!(report["next_actions"]["tools_mcp"], "/setup tools");
@@ -14714,38 +15019,614 @@ reasoning = "high"
         assert!(!serialized.contains("local-test-key"));
     }
 
+    fn review_args(argv: &[&str]) -> ReviewArgs {
+        let cli = parse_cli(argv);
+        let Some(Commands::Review(args)) = cli.command else {
+            panic!("expected review command");
+        };
+        args
+    }
+
     #[test]
-    fn inline_review_comments_keep_only_diff_locatable_issues() {
-        let issue = |severity: &str, path: Option<&str>, line: Option<u32>| {
-            crate::tools::review::ReviewIssue {
-                severity: severity.to_string(),
-                title: format!("{severity} finding"),
-                description: "detail".to_string(),
-                path: path.map(str::to_string),
-                line,
+    fn review_parses_provider_flag_alongside_model() {
+        let args = review_args(&[
+            "codewhale",
+            "review",
+            "--pr",
+            "5709",
+            "--provider",
+            "zai",
+            "--model",
+            "GLM-5.3",
+        ]);
+
+        assert_eq!(args.provider.as_deref(), Some("zai"));
+        assert_eq!(args.model.as_deref(), Some("GLM-5.3"));
+        assert_eq!(args.pr, Some(5709));
+        // The threaded id round-trips through the provider vocabulary the
+        // override validates against — never a model-id sniff.
+        assert_eq!(
+            crate::config::ApiProvider::parse(args.provider.as_deref().unwrap()),
+            Some(crate::config::ApiProvider::Zai)
+        );
+    }
+
+    #[tokio::test]
+    async fn review_provider_flag_pins_route_for_multi_route_model() {
+        // A genuinely multi-route model: `shared-review-model` is the
+        // configured model of BOTH named routes below, while the active route
+        // (custom-a) does not offer it. (Two custom providers can never be
+        // ambiguous — the route inventory resolves only the active custom
+        // entry — so the multi-route pair has to be named providers.)
+        // Without `--provider`, an explicit `--model` lets cross-provider
+        // inventory inference run, and a model offered by more than one
+        // configured route hard-errors in `resolve_cli_auto_route`
+        // ("available from configured provider route(s): ..."). That error
+        // already tells the user to "Pass `--provider <provider>`" — until
+        // now `codewhale review` had no such flag to pass.
+        let mut config = custom_exec_config("custom-a");
+        {
+            let providers = config.providers.as_mut().expect("providers");
+            for entry in [&mut providers.deepseek, &mut providers.openrouter] {
+                *entry = crate::config::ProviderConfig {
+                    model: Some("shared-review-model".to_string()),
+                    api_key: Some("local-test-key".to_string()),
+                    ..Default::default()
+                };
             }
-        };
-        let review = crate::tools::review::ReviewOutput {
+        }
+
+        let inferred = review_args(&["codewhale", "review", "--model", "shared-review-model"]);
+        let (inferred_config, inferred_force) =
+            review_execution_route(&config, &inferred).expect("model-only route");
+        assert!(
+            !inferred_force,
+            "an explicit model with no provider stays open to inventory inference"
+        );
+        assert_eq!(inferred_config.provider.as_deref(), Some("custom-a"));
+
+        // Without the flag the multi-route model must refuse to guess.
+        let err = resolve_cli_exec_route(
+            &inferred_config,
+            &resolve_review_model(&inferred_config, inferred.model.as_deref()),
+            "review diff",
+            inferred_force,
+        )
+        .await
+        .expect_err("a model offered by two configured routes must hard-error");
+        let message = err.to_string();
+        assert!(
+            message.contains("available from configured provider route(s)"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains("deepseek") && message.contains("openrouter"),
+            "both candidate routes must be named: {message}"
+        );
+
+        // With the flag the same model pins to the named route and resolves.
+        let pinned = review_args(&[
+            "codewhale",
+            "review",
+            "--provider",
+            "deepseek",
+            "--model",
+            "shared-review-model",
+        ]);
+        let (pinned_config, pinned_force) =
+            review_execution_route(&config, &pinned).expect("pinned route");
+        assert!(pinned_force, "--provider makes the route authoritative");
+        assert_eq!(pinned_config.provider.as_deref(), Some("deepseek"));
+
+        let route = resolve_cli_exec_route(
+            &pinned_config,
+            &resolve_review_model(&pinned_config, pinned.model.as_deref()),
+            "review diff",
+            pinned_force,
+        )
+        .await
+        .expect("pinned review route");
+        let execution = config_for_cli_route(&pinned_config, &route);
+
+        assert_eq!(route.provider, crate::config::ApiProvider::Deepseek);
+        assert_eq!(route.model, "shared-review-model");
+        assert_eq!(
+            execution.provider_identity_for(route.provider),
+            "deepseek",
+            "the review runs on the provider the flag named"
+        );
+
+        // Pinning a configured custom provider (the workflow's
+        // CODEWHALE_REVIEW_PROVIDER="my-proxy" case) is equally authoritative
+        // for the same multi-route model.
+        let pinned_custom = review_args(&[
+            "codewhale",
+            "review",
+            "--provider",
+            "custom-b",
+            "--model",
+            "shared-review-model",
+        ]);
+        let (custom_config, custom_force) =
+            review_execution_route(&config, &pinned_custom).expect("pinned custom route");
+        assert!(custom_force);
+        let custom_route = resolve_cli_exec_route(
+            &custom_config,
+            &resolve_review_model(&custom_config, pinned_custom.model.as_deref()),
+            "review diff",
+            custom_force,
+        )
+        .await
+        .expect("pinned custom review route");
+        let custom_execution = config_for_cli_route(&custom_config, &custom_route);
+
+        assert_eq!(custom_route.provider, crate::config::ApiProvider::Custom);
+        assert_eq!(custom_route.model, "shared-review-model");
+        assert_eq!(
+            custom_execution.provider_identity_for(custom_route.provider),
+            "custom-b",
+            "the review runs on the custom provider the flag named"
+        );
+    }
+
+    #[test]
+    fn review_provider_flag_rejects_unknown_provider() {
+        let config = custom_exec_config("custom-a");
+        let args = review_args(&["codewhale", "review", "--provider", "not-a-provider"]);
+
+        let err = review_execution_route(&config, &args)
+            .expect_err("unknown provider must fail before any diff is fetched");
+        assert!(
+            err.to_string().contains("Unrecognized --provider"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn review_without_provider_flag_keeps_configured_route_authoritative() {
+        let config = custom_exec_config("custom-a");
+        let args = review_args(&["codewhale", "review"]);
+
+        let (resolved, force) = review_execution_route(&config, &args).expect("default route");
+        assert!(
+            force,
+            "the configured/default review route is authoritative"
+        );
+        assert_eq!(resolved.provider.as_deref(), Some("custom-a"));
+    }
+
+    fn review_issue(
+        severity: &str,
+        path: Option<&str>,
+        line: Option<u32>,
+    ) -> crate::tools::review::ReviewIssue {
+        crate::tools::review::ReviewIssue {
+            severity: severity.to_string(),
+            title: format!("{severity} finding"),
+            description: "detail".to_string(),
+            path: path.map(str::to_string),
+            line,
+        }
+    }
+
+    fn review_suggestion(
+        path: Option<&str>,
+        line: Option<u32>,
+        replacement: Option<&str>,
+    ) -> crate::tools::review::ReviewSuggestion {
+        crate::tools::review::ReviewSuggestion {
+            path: path.map(str::to_string),
+            line,
+            start_line: None,
+            end_line: None,
+            suggestion: "Use the checked variant".to_string(),
+            replacement: replacement.map(str::to_string),
+        }
+    }
+
+    fn review_with(
+        issues: Vec<crate::tools::review::ReviewIssue>,
+        suggestions: Vec<crate::tools::review::ReviewSuggestion>,
+    ) -> crate::tools::review::ReviewOutput {
+        crate::tools::review::ReviewOutput {
             summary: "summary".to_string(),
-            issues: vec![
-                issue("error", Some("./crates/tui/src/lib.rs"), Some(10)),
-                issue("warning", Some("docs/NOT_IN_DIFF.md"), Some(3)),
-                issue("info", Some("crates/tui/src/lib.rs"), None),
-                issue("error", None, Some(7)),
-            ],
-            suggestions: Vec::new(),
+            issues,
+            suggestions,
             overall_assessment: String::new(),
-        };
-        let diff = "diff --git a/crates/tui/src/lib.rs b/crates/tui/src/lib.rs\n\
-                    index 111..222 100644\n\
-                    --- a/crates/tui/src/lib.rs\n\
-                    +++ b/crates/tui/src/lib.rs\n";
-        let comments = inline_review_comments(&review, diff);
+        }
+    }
+
+    /// Two hunks in one file: right lines 10..=12 and 40..=41.
+    ///
+    /// Built from a slice, not one string literal: a `\` continuation strips
+    /// the leading space that marks a context line.
+    fn review_test_diff() -> String {
+        [
+            "diff --git a/crates/tui/src/lib.rs b/crates/tui/src/lib.rs",
+            "index 1111111..2222222 100644",
+            "--- a/crates/tui/src/lib.rs",
+            "+++ b/crates/tui/src/lib.rs",
+            "@@ -10,2 +10,3 @@ fn head() {",
+            " let a = 1;",
+            "+let b = a.unwrap();",
+            " let c = 2;",
+            "@@ -40,2 +40,2 @@ fn tail() {",
+            " let d = 3;",
+            "-let e = d;",
+            "+let e = d + 1;",
+            "",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn inline_review_comments_keep_only_hunk_locatable_issues() {
+        let review = review_with(
+            vec![
+                review_issue("error", Some("./crates/tui/src/lib.rs"), Some(11)),
+                review_issue("warning", Some("docs/NOT_IN_DIFF.md"), Some(3)),
+                review_issue("info", Some("crates/tui/src/lib.rs"), None),
+                review_issue("error", None, Some(7)),
+            ],
+            Vec::new(),
+        );
+        let comments = plan_inline_review_comments(&review, &review_test_diff()).comments;
         // GitHub rejects the entire review (422) when a comment's path is not
         // part of the diff, and inline comments need a line to anchor to.
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0]["path"], "crates/tui/src/lib.rs");
-        assert_eq!(comments[0]["line"], 10);
+        assert_eq!(comments[0]["line"], 11);
+        assert_eq!(comments[0]["side"], "RIGHT");
+    }
+
+    #[test]
+    fn inline_review_comments_drop_one_out_of_hunk_anchor_not_the_whole_review() {
+        // Line 25 is inside the file but between the two hunks. Before the
+        // hunk filter this single bad anchor 422'd the review and every inline
+        // comment was lost to the summary-only retry.
+        let review = review_with(
+            vec![
+                review_issue("error", Some("crates/tui/src/lib.rs"), Some(11)),
+                review_issue("error", Some("crates/tui/src/lib.rs"), Some(25)),
+                review_issue("warning", Some("crates/tui/src/lib.rs"), Some(41)),
+            ],
+            Vec::new(),
+        );
+        let plan = plan_inline_review_comments(&review, &review_test_diff());
+        let lines: Vec<_> = plan.comments.iter().map(|c| c["line"].clone()).collect();
+        assert_eq!(lines, vec![serde_json::json!(11), serde_json::json!(41)]);
+        // The loss is counted and reported, never silent.
+        assert_eq!(plan.dropped_out_of_hunk, 1);
+        assert_eq!(plan.dropped_untouched_file, 0);
+        assert!(
+            plan.receipt()
+                .expect("receipt")
+                .contains("no line inside a diff hunk")
+        );
+    }
+
+    #[test]
+    fn review_suggestion_with_replacement_posts_a_committable_block() {
+        let review = review_with(
+            Vec::new(),
+            vec![review_suggestion(
+                Some("crates/tui/src/lib.rs"),
+                Some(11),
+                Some("let b = a.unwrap_or_default();"),
+            )],
+        );
+        let comments = plan_inline_review_comments(&review, &review_test_diff()).comments;
+        assert_eq!(comments.len(), 1);
+        let body = comments[0]["body"].as_str().expect("body");
+        assert!(body.starts_with("Use the checked variant"), "{body}");
+        assert!(
+            body.contains("```suggestion\nlet b = a.unwrap_or_default();\n```"),
+            "{body}"
+        );
+        assert_eq!(comments[0]["side"], "RIGHT");
+        // Single-line suggestions must not carry start_line.
+        assert!(comments[0].get("start_line").is_none());
+    }
+
+    #[test]
+    fn multi_line_review_suggestion_spans_start_line_to_line() {
+        let mut suggestion = review_suggestion(
+            Some("crates/tui/src/lib.rs"),
+            Some(12),
+            Some("let b = a.unwrap_or_default();\nlet c = 2;"),
+        );
+        suggestion.start_line = Some(11);
+        suggestion.end_line = Some(12);
+        let review = review_with(Vec::new(), vec![suggestion]);
+        let comments = plan_inline_review_comments(&review, &review_test_diff()).comments;
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0]["start_line"], 11);
+        assert_eq!(comments[0]["start_side"], "RIGHT");
+        assert_eq!(comments[0]["line"], 12);
+        assert_eq!(comments[0]["side"], "RIGHT");
+    }
+
+    #[test]
+    fn review_suggestion_without_replacement_degrades_to_prose() {
+        // SAFETY: a committable suggestion is one click from being merged, so
+        // a suggestion the model did not back with literal code must never
+        // render as an applicable block.
+        let review = review_with(
+            Vec::new(),
+            vec![review_suggestion(
+                Some("crates/tui/src/lib.rs"),
+                Some(11),
+                None,
+            )],
+        );
+        let plan = plan_inline_review_comments(&review, &review_test_diff());
+        assert_eq!(plan.comments.len(), 1);
+        let body = plan.comments[0]["body"].as_str().expect("body");
+        assert_eq!(body, "Use the checked variant");
+        assert!(!body.contains("```suggestion"), "{body}");
+        assert_eq!(plan.degraded_to_prose, 1);
+    }
+
+    #[test]
+    fn review_suggestion_spanning_outside_a_hunk_degrades_to_prose() {
+        // Line 12 is in a hunk but line 13 is not, so the span cannot be
+        // committed. Keep the finding, drop the one-click apply.
+        let mut suggestion = review_suggestion(
+            Some("crates/tui/src/lib.rs"),
+            Some(12),
+            Some("let c = 2;\nlet d = 3;"),
+        );
+        suggestion.start_line = Some(12);
+        suggestion.end_line = Some(13);
+        let review = review_with(Vec::new(), vec![suggestion]);
+        let comments = plan_inline_review_comments(&review, &review_test_diff()).comments;
+        // end_line 13 is outside every hunk, so there is no anchor at all.
+        assert!(comments.is_empty());
+
+        // Same replacement anchored at an in-hunk end line but with a start
+        // line outside the hunk: anchor is valid, span is not -> prose.
+        let mut suggestion = review_suggestion(
+            Some("crates/tui/src/lib.rs"),
+            Some(11),
+            Some("let a = 1;\nlet b = a.unwrap_or_default();"),
+        );
+        suggestion.start_line = Some(9);
+        suggestion.end_line = Some(11);
+        let review = review_with(Vec::new(), vec![suggestion]);
+        let comments = plan_inline_review_comments(&review, &review_test_diff()).comments;
+        assert_eq!(comments.len(), 1);
+        let body = comments[0]["body"].as_str().expect("body");
+        assert!(!body.contains("```suggestion"), "{body}");
+        assert!(comments[0].get("start_line").is_none());
+    }
+
+    #[test]
+    fn review_suggestion_anchored_to_a_deleted_line_is_not_committable() {
+        // Right line 41 is `+let e = d + 1;`; the deleted `-let e = d;` has no
+        // RIGHT-side number, so a model that anchors at the pre-image line 42
+        // gets nothing rather than a suggestion on the wrong line.
+        let review = review_with(
+            Vec::new(),
+            vec![review_suggestion(
+                Some("crates/tui/src/lib.rs"),
+                Some(42),
+                Some("let e = d + 2;"),
+            )],
+        );
+        assert!(
+            plan_inline_review_comments(&review, &review_test_diff())
+                .comments
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn review_suggestion_replacement_containing_backticks_is_fenced_safely() {
+        let review = review_with(
+            Vec::new(),
+            vec![review_suggestion(
+                Some("crates/tui/src/lib.rs"),
+                Some(11),
+                Some("let b = \"```\";"),
+            )],
+        );
+        let comments = plan_inline_review_comments(&review, &review_test_diff()).comments;
+        let body = comments[0]["body"].as_str().expect("body");
+        assert!(body.contains("````suggestion\n"), "{body}");
+        assert!(body.ends_with("\n````"), "{body}");
+    }
+
+    #[test]
+    fn review_suggestion_multi_line_replacement_without_span_degrades_to_prose() {
+        // SAFETY: with no start_line/end_line, GitHub would insert these two
+        // lines at line 11 and leave the original line 11 duplicated below.
+        let review = review_with(
+            Vec::new(),
+            vec![review_suggestion(
+                Some("crates/tui/src/lib.rs"),
+                Some(11),
+                Some("let b = a.unwrap_or_default();\nlet c = 2;"),
+            )],
+        );
+        let plan = plan_inline_review_comments(&review, &review_test_diff());
+        assert_eq!(plan.comments.len(), 1);
+        assert!(
+            !plan.comments[0]["body"]
+                .as_str()
+                .expect("body")
+                .contains("```suggestion")
+        );
+        assert_eq!(plan.degraded_to_prose, 1);
+    }
+
+    #[test]
+    fn review_suggestion_prose_fence_is_never_committable() {
+        // SAFETY: only the replacement this reviewer validated against the
+        // diff may be one click from merging. A fence the model wrote inside
+        // its explanation is downgraded to a plain code block.
+        let mut suggestion = review_suggestion(Some("crates/tui/src/lib.rs"), Some(11), None);
+        suggestion.suggestion =
+            "Try this:\n\n```suggestion\nlet b = a.unwrap_or_default();\n```".to_string();
+        let review = review_with(Vec::new(), vec![suggestion]);
+        let comments = plan_inline_review_comments(&review, &review_test_diff()).comments;
+        let body = comments[0]["body"].as_str().expect("body");
+        assert!(!body.contains("```suggestion"), "{body}");
+        assert!(body.contains("```text"), "{body}");
+        assert!(body.contains("let b = a.unwrap_or_default();"), "{body}");
+    }
+
+    #[test]
+    fn review_suggestion_tilde_prose_fence_is_neutralized() {
+        let mut suggestion = review_suggestion(Some("crates/tui/src/lib.rs"), Some(11), None);
+        suggestion.suggestion = "  ~~~suggestion\n  x\n  ~~~".to_string();
+        let review = review_with(Vec::new(), vec![suggestion]);
+        let comments = plan_inline_review_comments(&review, &review_test_diff()).comments;
+        let body = comments[0]["body"].as_str().expect("body");
+        assert!(body.contains("  ~~~text"), "{body}");
+    }
+
+    #[test]
+    fn suggestion_fence_behind_list_marker_or_blockquote_is_neutralized() {
+        // Whether GitHub renders a fence nested behind a list marker,
+        // blockquote cue, or ordered-list marker applicable is unverified,
+        // so those shapes are treated as live and downgraded too. Ordinary
+        // prose lines that merely start with a marker stay untouched.
+        let neutralized = neutralize_model_suggestion_fences(
+            "```suggestion\n- ```suggestion\n  rm -rf /\n> ```suggestion\n1. ```suggestion\n> - ~~~suggestion\n- fix the `foo` call",
+        );
+        assert_eq!(
+            neutralized,
+            "```text\n- ```text\n  rm -rf /\n> ```text\n1. ```text\n> - ~~~text\n- fix the `foo` call"
+        );
+    }
+
+    #[test]
+    fn inline_issue_comment_neutralizes_model_suggestion_fences_in_issue_text() {
+        // SAFETY: regression for a proven hole — the issue title and
+        // description are raw model text, and a ```suggestion fence in
+        // either used to reach the inline comment body verbatim: a
+        // one-click mergeable block that bypassed every span and size
+        // check. Only a replacement validated against the diff hunks may
+        // ever be committable.
+        let mut fenced_description = review_issue("error", Some("crates/tui/src/lib.rs"), Some(11));
+        fenced_description.title = "Cleanup script".to_string();
+        fenced_description.description = "Run this:\n\n```suggestion\nrm -rf /\n```\n".to_string();
+        let mut fenced_title = review_issue("warning", Some("crates/tui/src/lib.rs"), Some(12));
+        fenced_title.title = "Fix all\n```suggestion\nrm -rf ~\n```".to_string();
+        fenced_title.description = "detail".to_string();
+        let review = review_with(vec![fenced_description, fenced_title], Vec::new());
+
+        let comments = plan_inline_review_comments(&review, &review_test_diff()).comments;
+        assert_eq!(comments.len(), 2);
+        for comment in &comments {
+            let body = comment["body"].as_str().expect("body");
+            assert!(!body.contains("```suggestion"), "{body}");
+        }
+        let description_body = comments[0]["body"].as_str().expect("body");
+        assert!(
+            description_body.contains("```text\nrm -rf /"),
+            "{description_body}"
+        );
+        let title_body = comments[1]["body"].as_str().expect("body");
+        assert!(title_body.contains("```text\nrm -rf ~"), "{title_body}");
+    }
+
+    #[test]
+    fn pr_review_markdown_shows_the_computed_replacement() {
+        // A plain `codewhale review --pr` (no --post) computes and validates
+        // the literal fix; the local report must show it, not just the prose.
+        let view = GhPullRequest {
+            title: "T".to_string(),
+            body: String::new(),
+            base: "main".to_string(),
+            head: "feature".to_string(),
+            url: "https://example.invalid/pr/1".to_string(),
+            head_sha: "abc123".to_string(),
+        };
+        let mut single = review_suggestion(
+            Some("crates/tui/src/lib.rs"),
+            Some(11),
+            Some("let b = a.unwrap_or_default();"),
+        );
+        single.suggestion = "Use the checked variant".to_string();
+        let mut multi = review_suggestion(
+            Some("crates/tui/src/lib.rs"),
+            Some(11),
+            Some("let b = a.unwrap_or_default();\nlet c = 2;"),
+        );
+        multi.suggestion = "Replace both lines".to_string();
+        multi.start_line = Some(11);
+        multi.end_line = Some(12);
+        let review = review_with(Vec::new(), vec![single, multi]);
+
+        let local = render_pr_review_markdown(1, &view, &review, false);
+        assert!(local.contains("### Suggestions"), "{local}");
+        assert!(
+            local.contains("\n  ```suggestion\n  let b = a.unwrap_or_default();\n  ```\n"),
+            "{local}"
+        );
+        assert!(
+            local.contains(
+                "\n  ```suggestion\n  let b = a.unwrap_or_default();\n  let c = 2;\n  ```\n"
+            ),
+            "{local}"
+        );
+
+        // The posted body keeps the fix visible but never as a live
+        // one-click block: only diff-validated inline suggestion comments
+        // may carry those to GitHub.
+        let posted = render_pr_review_markdown(1, &view, &review, true);
+        assert!(
+            posted.contains("let b = a.unwrap_or_default();"),
+            "{posted}"
+        );
+        assert!(!posted.contains("```suggestion"), "{posted}");
+        assert!(posted.contains("```text"), "{posted}");
+    }
+
+    #[test]
+    fn oversized_review_suggestion_degrades_to_prose() {
+        use crate::tools::review::MAX_COMMITTABLE_SUGGESTION_LINES;
+
+        // A whole-hunk rewrite is not a mechanical fix, so it must not be
+        // committable even though every line is inside the diff.
+        let span = MAX_COMMITTABLE_SUGGESTION_LINES + 5;
+        let added: String = (1..=span).map(|i| format!("+line {i}\n")).collect();
+        let diff = format!(
+            "diff --git a/big.rs b/big.rs\nnew file mode 100644\n--- /dev/null\n\
+             +++ b/big.rs\n@@ -0,0 +1,{span} @@\n{added}"
+        );
+        let replacement: String = (1..=span)
+            .map(|i| format!("line {i} fixed"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let mut suggestion = review_suggestion(Some("big.rs"), Some(span), Some(&replacement));
+        suggestion.start_line = Some(1);
+        suggestion.end_line = Some(span);
+        let review = review_with(Vec::new(), vec![suggestion]);
+        let comments = plan_inline_review_comments(&review, &diff).comments;
+        assert_eq!(comments.len(), 1);
+        let body = comments[0]["body"].as_str().expect("body");
+        assert!(!body.contains("```suggestion"), "{body}");
+
+        // The same shape, trimmed to the budget, stays committable.
+        let mut suggestion = review_suggestion(
+            Some("big.rs"),
+            Some(MAX_COMMITTABLE_SUGGESTION_LINES),
+            Some("line 1 fixed"),
+        );
+        suggestion.start_line = Some(1);
+        suggestion.end_line = Some(MAX_COMMITTABLE_SUGGESTION_LINES);
+        let review = review_with(Vec::new(), vec![suggestion]);
+        let comments = plan_inline_review_comments(&review, &diff).comments;
+        assert!(
+            comments[0]["body"]
+                .as_str()
+                .expect("body")
+                .contains("```suggestion"),
+            "a span at the budget limit stays committable"
+        );
     }
 
     #[tokio::test]
@@ -15298,16 +16179,29 @@ reasoning = "high"
         assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
     }
 
+    /// R1: omitting `--max-turns` used to resolve to `u32::MAX`, i.e. a
+    /// headless run with no bound at all. It now resolves to the finite
+    /// default, and an explicit value still wins.
     #[test]
-    fn exec_omits_the_headless_turn_cap_by_default() {
+    fn exec_defaults_to_a_finite_headless_turn_cap() {
         let cli = parse_cli(&["codewhale", "exec", "--auto", "benchmark this"]);
         let Some(Commands::Exec(args)) = cli.command else {
             panic!("expected exec command");
         };
 
         assert_eq!(args.max_turns, None);
-        assert_eq!(exec_max_steps(args.max_turns), u32::MAX);
+        let defaulted = exec_max_steps(args.max_turns);
+        assert_eq!(
+            defaulted,
+            crate::core::engine::turn_budget::DEFAULT_EXEC_MAX_TURNS
+        );
+        assert!(defaulted < u32::MAX, "the headless default must be finite");
         assert_eq!(exec_max_steps(Some(7)), 7);
+        assert_eq!(
+            exec_max_steps(Some(u32::MAX)),
+            crate::core::engine::turn_budget::MAX_MAX_MODEL_STEPS,
+            "even the largest override stays finite"
+        );
     }
 
     #[test]
@@ -16105,6 +16999,10 @@ reasoning = "high"
                 mouse_capture: None,
                 terminal_probe_timeout_ms: None,
                 stream_chunk_timeout_secs: None,
+                max_model_steps: None,
+                turn_wall_clock_secs: None,
+                stream_max_content_mb: None,
+                stream_max_duration_secs: None,
                 status_items: None,
                 osc8_links: None,
                 composer_arrows_scroll: None,
@@ -16200,6 +17098,10 @@ reasoning = "high"
                 mouse_capture: Some(false),
                 terminal_probe_timeout_ms: None,
                 stream_chunk_timeout_secs: None,
+                max_model_steps: None,
+                turn_wall_clock_secs: None,
+                stream_max_content_mb: None,
+                stream_max_duration_secs: None,
                 status_items: None,
                 osc8_links: None,
                 composer_arrows_scroll: None,
@@ -16233,6 +17135,10 @@ reasoning = "high"
                 mouse_capture: Some(true),
                 terminal_probe_timeout_ms: None,
                 stream_chunk_timeout_secs: None,
+                max_model_steps: None,
+                turn_wall_clock_secs: None,
+                stream_max_content_mb: None,
+                stream_max_duration_secs: None,
                 status_items: None,
                 osc8_links: None,
                 composer_arrows_scroll: None,
@@ -16320,6 +17226,10 @@ reasoning = "high"
                 mouse_capture: Some(true),
                 terminal_probe_timeout_ms: None,
                 stream_chunk_timeout_secs: None,
+                max_model_steps: None,
+                turn_wall_clock_secs: None,
+                stream_max_content_mb: None,
+                stream_max_duration_secs: None,
                 status_items: None,
                 osc8_links: None,
                 composer_arrows_scroll: None,

@@ -38,6 +38,15 @@ fn every_provider_kind_has_a_wellformed_descriptor() {
             ProviderId::from_kind(kind),
             "{kind:?}: descriptor id disagrees with ProviderId::from_kind"
         );
+        assert!(
+            !descriptor.auth_methods().is_empty(),
+            "{kind:?}: every route declares at least one auth method"
+        );
+        assert_eq!(
+            descriptor.route_id().as_str(),
+            descriptor.id().as_str(),
+            "{kind:?}: route id must be the descriptor id"
+        );
 
         // Transport facts route resolution depends on must be present.
         assert!(

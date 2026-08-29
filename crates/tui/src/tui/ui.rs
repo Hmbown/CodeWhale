@@ -777,7 +777,7 @@ fn open_fleet_setup_target(app: &mut App, config: &Config, member_id: Option<&st
                 app, config, &name, scope, member_id,
             ) else {
                 app.set_sticky_status(
-                    "Selected Fleet is invalid or unreadable; open /fleet fleets to repair or clear the selection. Legacy profiles were not opened."
+                    "Selected Fleet is invalid or unreadable; open /pod fleets to repair or clear the selection. Legacy profiles were not opened."
                         .to_string(),
                     StatusToastLevel::Error,
                     None,
@@ -826,7 +826,7 @@ fn open_fleet_model_target(app: &mut App, config: &Config, member_id: &str) {
                 Some(member_id),
             ) else {
                 app.set_sticky_status(
-                    "Selected Fleet is invalid or unreadable; open /fleet fleets to repair or clear the selection."
+                    "Selected Fleet is invalid or unreadable; open /pod fleets to repair or clear the selection."
                         .to_string(),
                     StatusToastLevel::Error,
                     None,
@@ -895,7 +895,9 @@ pub(crate) use motion::*;
 pub(crate) use release_check::*;
 pub(crate) use terminal::*;
 
-mod frame;
+// `frame` is `pub(crate)` so sibling modules (e.g. the widgets ASCII-safety
+// test) can reach the topbar builders that project `App` state.
+pub(crate) mod frame;
 mod overlays;
 mod provider_routes;
 mod session_state;

@@ -111,6 +111,7 @@ use crate::tui::context_menu::{ContextMenuEntry, ContextMenuView};
 use crate::tui::history::HistoryCell;
 use crate::tui::scrolling::{ScrollDirection, TranscriptScroll};
 use crate::tui::selection::{SelectionAutoscroll, TranscriptSelectionPoint};
+use crate::tui::tideline::InteractionAction;
 use crate::tui::ui_text::{
     history_cell_to_text, line_to_plain, slice_text, text_display_width, truncate_line_to_width,
 };
@@ -463,40 +464,101 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
     // transcript or composer behind the splash.
     if app.launch.visible {
         match mouse.kind {
-            MouseEventKind::ScrollUp => {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                // Wheeling away from the composer returns focus to the menu.
+                app.launch.composer_focus = false;
+                let key = if matches!(mouse.kind, MouseEventKind::ScrollUp) {
+                    KeyCode::Up
+                } else {
+                    KeyCode::Down
+                };
                 crate::tui::underwater::handle_launch_key(
                     &mut app.launch,
-                    KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
-                    app.ui_locale,
-                );
-            }
-            MouseEventKind::ScrollDown => {
-                crate::tui::underwater::handle_launch_key(
-                    &mut app.launch,
-                    KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                    KeyEvent::new(key, KeyModifiers::NONE),
                     app.ui_locale,
                 );
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some((index, _)) = app
+                // Send glyph first: it sits inside the composer row.
+                let send_hit = app
                     .launch
-                    .row_areas
-                    .iter()
-                    .enumerate()
-                    .find(|(_, area)| mouse_hits_rect(mouse, Some(**area)))
-                {
-                    app.launch.selected = index;
-                    app.pending_launch_action = Some(crate::tui::underwater::handle_launch_key(
-                        &mut app.launch,
-                        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-                        app.ui_locale,
-                    ));
+                    .send_area
+                    .is_some_and(|area| mouse_hits_rect(mouse, Some(area)));
+                let composer_hit = app
+                    .launch
+                    .composer_area
+                    .is_some_and(|area| mouse_hits_rect(mouse, Some(area)));
+                if send_hit && !app.input.trim().is_empty() {
+                    // Same submit path as the composer's Enter key.
+                    app.pending_launch_action =
+                        Some(crate::tui::underwater::LaunchAction::SendComposer);
+                } else if composer_hit || send_hit {
+                    // Clicking the composer — or its send glyph with nothing
+                    // to send — focuses it, exactly like the Tab key.
+                    app.launch.composer_focus = true;
+                } else {
+                    // Clicking anywhere else hands focus back to the menu.
+                    app.launch.composer_focus = false;
+                    // Option-strip tiles (below the quick-action rows, never
+                    // overlapping them): every tile dispatches through the
+                    // launch table — the same code its printed key takes
+                    // (spec §6 parity).
+                    if let Some((action, _)) = app
+                        .launch
+                        .option_areas
+                        .iter()
+                        .find(|(_, area)| mouse_hits_rect(mouse, Some(*area)))
+                        .map(|(action, area)| (*action, *area))
+                    {
+                        app.launch.selected = action.launch_row();
+                        app.pending_launch_action =
+                            Some(crate::tui::underwater::handle_launch_key(
+                                &mut app.launch,
+                                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                                app.ui_locale,
+                            ));
+                    } else if let Some((index, _)) = app
+                        .launch
+                        .row_areas
+                        .iter()
+                        .enumerate()
+                        .find(|(_, area)| mouse_hits_rect(mouse, Some(**area)))
+                    {
+                        // `row_areas` is the launch table's seven slots, so
+                        // the clicked slot IS the table row.
+                        app.launch.selected = index;
+                        app.pending_launch_action =
+                            Some(crate::tui::underwater::handle_launch_key(
+                                &mut app.launch,
+                                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                                app.ui_locale,
+                            ));
+                    }
                 }
             }
             _ => {}
         }
         app.needs_redraw = true;
         return Vec::new();
+    }
+
+    // Header facts are inspectable targets, not decorative text. The context
+    // meter shares its destination with the existing Alt+C shortcut; use the
+    // typed target recorded by the renderer instead of guessing from a label
+    // or rebuilding chrome geometry in input handling.
+    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        let action = app
+            .viewport
+            .interaction_targets
+            .target_at(mouse.column, mouse.row)
+            .and_then(|target| target.mouse_action);
+        if let Some(action) = action {
+            match action {
+                InteractionAction::InspectContext => open_context_inspector(app),
+            }
+            app.needs_redraw = true;
+            return Vec::new();
+        }
     }
 
     // Ocean work surface owns its rect, scrolling, focus, and row actions.
@@ -1764,8 +1826,14 @@ mod tests {
     use crate::tui::app::{
         App, SidebarHoverRow, SidebarHoverSection, SidebarRowAction, TuiOptions,
     };
-    use crate::tui::views::ContextMenuAction;
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use crate::tui::tideline::{
+        ContextBudgetSnapshot, InspectDetail, InteractionAction, InteractionFocus,
+        InteractionTarget, InteractionTargetId,
+    };
+    use crate::tui::views::{ContextMenuAction, ModalKind};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use ratatui::layout::Rect;
     use serde_json::json;
     use std::path::PathBuf;
@@ -1873,24 +1941,209 @@ mod tests {
     }
 
     #[test]
-    fn launch_mouse_rows_dispatch_the_same_work_and_chat_actions_as_keyboard() {
+    fn every_visible_launch_row_dispatches_the_same_action_as_keyboard() {
+        // `row_areas` is the launch table's seven slots; the stage shows the
+        // three quick actions at slots [2, 4, 1] (New session, Chat only,
+        // Resume last). Clicking a row selects its TABLE row, so mouse and
+        // keyboard (select the row, Enter) dispatch identically.
+        for index in [2usize, 4, 1] {
+            let mut app = create_test_app();
+            app.launch.visible = true;
+            app.launch.worktree_available = true;
+            let stage = Rect::new(0, 1, 80, 22); // the frame's stage slot at 80x24
+            let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
+            crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
+
+            let mut keyboard = app.launch.clone();
+            keyboard.selected = index;
+            let keyboard_action = crate::tui::underwater::handle_launch_key(
+                &mut keyboard,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                app.ui_locale,
+            );
+
+            let row = app.launch.row_areas[index];
+            assert!(row.width > 0, "slot {index} must own a painted row");
+            handle_mouse_event(&mut app, left_click(row.x, row.y));
+            assert_eq!(app.launch.selected, index);
+            assert_eq!(app.pending_launch_action.take(), Some(keyboard_action));
+            assert_eq!(app.launch.worktree_input, keyboard.worktree_input);
+            assert_eq!(app.launch.status, keyboard.status);
+        }
+    }
+
+    #[test]
+    fn composer_click_focuses_and_send_click_matches_the_keyboard_submit() {
         let mut app = create_test_app();
         app.launch.visible = true;
         app.launch.worktree_available = true;
-        crate::tui::underwater::record_launch_row_areas(Rect::new(0, 0, 80, 24), &mut app.launch);
+        let stage = Rect::new(0, 1, 80, 22); // the frame's stage slot at 80x24
+        let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
+        crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
+        assert_eq!(
+            app.launch.row_areas.len(),
+            7,
+            "one slot per launch-table row"
+        );
+        let composer = app.launch.composer_area.expect("composer hitbox");
+        let send = app.launch.send_area.expect("send hitbox");
 
-        handle_mouse_event(&mut app, left_click(10, 10));
-        assert_eq!(app.launch.selected, 1);
+        // Clicking the composer focuses it — the mouse equivalent of Tab.
+        handle_mouse_event(&mut app, left_click(composer.x + 4, composer.y));
+        assert!(app.launch.composer_focus);
+        assert_eq!(app.pending_launch_action, None);
+
+        // Clicking the send glyph produces the same action the event loop
+        // consumes for the composer's Enter key, from the same input state.
+        app.input = "ship it".to_string();
+        handle_mouse_event(&mut app, left_click(send.x, send.y));
+        assert_eq!(
+            app.pending_launch_action.take(),
+            Some(crate::tui::underwater::LaunchAction::SendComposer)
+        );
+        assert_eq!(app.input, "ship it");
+        assert!(app.launch.composer_focus);
+
+        // Nothing to send: the send glyph focuses the composer instead.
+        app.input.clear();
+        handle_mouse_event(&mut app, left_click(send.x, send.y));
+        assert_eq!(app.pending_launch_action, None);
+        assert!(app.launch.composer_focus);
+
+        // Clicking a startup row hands focus back to the menu.
+        let row = app.launch.row_areas[2];
+        handle_mouse_event(&mut app, left_click(row.x, row.y));
+        assert!(!app.launch.composer_focus);
+        assert_eq!(app.launch.selected, 2);
+
+        // Wheeling away from the composer also returns focus to the menu.
+        app.launch.composer_focus = true;
+        handle_mouse_event(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: composer.x + 4,
+                row: composer.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert!(!app.launch.composer_focus);
+    }
+
+    #[test]
+    fn context_meter_click_uses_the_same_inspector_as_the_keyboard_shortcut() {
+        let mut app = create_test_app();
+        app.launch.visible = false;
+        app.viewport
+            .interaction_targets
+            .register(InteractionTarget {
+                id: InteractionTargetId::HEADER_CONTEXT,
+                area: Rect::new(52, 0, 20, 1),
+                focus: InteractionFocus::Direct,
+                keyboard_action: Some(InteractionAction::InspectContext),
+                mouse_action: Some(InteractionAction::InspectContext),
+                inspect_detail: InspectDetail::ContextBudget(ContextBudgetSnapshot {
+                    used_tokens: 3_000,
+                    max_tokens: 10_000,
+                    percent_basis_points: 3_000,
+                }),
+            });
+
+        handle_mouse_event(&mut app, left_click(60, 0));
+
+        assert_eq!(app.view_stack.top_kind(), Some(ModalKind::ContextInspector));
+        assert!(
+            crate::tui::shell_key_routing::is_context_inspector_shortcut(&KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::ALT
+            ))
+        );
+    }
+
+    #[test]
+    fn quick_action_row_clicks_select_their_launch_table_rows() {
+        let mut app = create_test_app();
+        app.launch.visible = true;
+        app.launch.worktree_available = true;
+        let stage = Rect::new(0, 1, 80, 22); // the frame's stage slot at 80x24
+        let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
+        crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
+
+        // The Chat only quick action is launch-table row 4 (its `C` direct
+        // key), not the strip position: clicking it selects row 4 and Enter
+        // dispatches NewChat through the same table.
+        let chat = app.launch.row_areas[4];
+        handle_mouse_event(&mut app, left_click(chat.x + 2, chat.y));
+        assert_eq!(app.launch.selected, 4);
         assert_eq!(
             app.pending_launch_action.take(),
             Some(crate::tui::underwater::LaunchAction::NewChat)
         );
 
-        handle_mouse_event(&mut app, left_click(10, 7));
-        assert_eq!(app.launch.selected, 0);
+        // The New session quick action is table row 2 (its `W` direct key).
+        let work = app.launch.row_areas[2];
+        handle_mouse_event(&mut app, left_click(work.x + 2, work.y));
+        assert_eq!(app.launch.selected, 2);
         assert_eq!(
             app.pending_launch_action.take(),
             Some(crate::tui::underwater::LaunchAction::NewSession)
+        );
+    }
+
+    #[test]
+    fn launch_option_tiles_dispatch_the_same_actions_as_their_keys() {
+        let mut app = create_test_app();
+        app.launch.visible = true;
+        app.launch.worktree_available = true;
+        let stage = Rect::new(0, 1, 80, 22);
+        let startup = crate::tui::underwater::tideline_startup_from_app(&app);
+        drop(startup);
+        let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
+        crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
+        assert_eq!(app.launch.option_areas.len(), 4, "four tiles at 80 cols");
+
+        // Worktree tile: same path as Ctrl+N — the name prompt opens.
+        let (worktree, area) = app.launch.option_areas[0];
+        assert_eq!(
+            worktree,
+            crate::tui::underwater::LaunchOptionAction::Worktree
+        );
+        handle_mouse_event(&mut app, left_click(area.x + 1, area.y + 1));
+        assert!(
+            app.launch.worktree_input.is_some(),
+            "worktree tile opens the name prompt"
+        );
+        app.launch.worktree_input = None;
+
+        // Chat tile: same path as C.
+        let (chat, area) = app.launch.option_areas[1];
+        assert_eq!(chat, crate::tui::underwater::LaunchOptionAction::Chat);
+        handle_mouse_event(&mut app, left_click(area.x + 1, area.y + 1));
+        assert_eq!(
+            app.pending_launch_action.take(),
+            Some(crate::tui::underwater::LaunchAction::NewChat)
+        );
+
+        // Theme tile: launch-table row 5 — the same LaunchAction::Theme its
+        // printed `T` key and the event loop's table dispatch take (the
+        // picker itself opens when the pending action is consumed).
+        let (theme, area) = app.launch.option_areas[2];
+        assert_eq!(theme, crate::tui::underwater::LaunchOptionAction::Theme);
+        handle_mouse_event(&mut app, left_click(area.x + 1, area.y + 1));
+        assert_eq!(app.launch.selected, 5);
+        assert_eq!(
+            app.pending_launch_action.take(),
+            Some(crate::tui::underwater::LaunchAction::Theme)
+        );
+
+        // Help tile: launch-table row 6 (`F1`).
+        let (help, area) = app.launch.option_areas[3];
+        assert_eq!(help, crate::tui::underwater::LaunchOptionAction::Help);
+        handle_mouse_event(&mut app, left_click(area.x + 1, area.y + 1));
+        assert_eq!(app.launch.selected, 6);
+        assert_eq!(
+            app.pending_launch_action.take(),
+            Some(crate::tui::underwater::LaunchAction::Help)
         );
     }
 

@@ -498,16 +498,24 @@ pub fn catalog_cost_is_valid(cost: &ModelsDevCost) -> bool {
 
 fn provenance_from_source(source: &CatalogSource) -> PricingProvenance {
     match source {
-        CatalogSource::Bundled => PricingProvenance::ModelsDevBundled,
+        CatalogSource::Bundled | CatalogSource::ModelsDevLive { .. } => {
+            PricingProvenance::ModelsDevBundled
+        }
         CatalogSource::Live { .. } => PricingProvenance::ProviderLive,
-        CatalogSource::UserOverride => PricingProvenance::UserOverride,
+        CatalogSource::ConfigOverride | CatalogSource::UserOverride => {
+            PricingProvenance::UserOverride
+        }
     }
 }
 
 fn effective_at_from_source(source: &CatalogSource) -> Option<u64> {
     match source {
-        CatalogSource::Live { fetched_at, .. } => Some(*fetched_at),
-        CatalogSource::Bundled | CatalogSource::UserOverride => None,
+        CatalogSource::Live { fetched_at, .. } | CatalogSource::ModelsDevLive { fetched_at } => {
+            Some(*fetched_at)
+        }
+        CatalogSource::Bundled | CatalogSource::ConfigOverride | CatalogSource::UserOverride => {
+            None
+        }
     }
 }
 
@@ -517,7 +525,10 @@ fn endpoint_fingerprint_from_source(source: &CatalogSource) -> Option<String> {
             base_url_fingerprint,
             ..
         } => Some(base_url_fingerprint.clone()),
-        CatalogSource::Bundled | CatalogSource::UserOverride => None,
+        CatalogSource::Bundled
+        | CatalogSource::ModelsDevLive { .. }
+        | CatalogSource::ConfigOverride
+        | CatalogSource::UserOverride => None,
     }
 }
 

@@ -205,6 +205,57 @@ fn compiler_merges_layers_with_override_precedence() {
 }
 
 #[test]
+fn compiler_layer_order_and_policy_deny_never_overridden() {
+    let row = |source: CatalogSource, model: &str, family: &str| CatalogOffering {
+        provider: "zai-coding-cn".into(),
+        wire_model_id: model.into(),
+        endpoint_key: "chat".into(),
+        family: Some(family.into()),
+        source,
+        ..Default::default()
+    };
+    let policy = crate::route::CatalogPolicy {
+        rules: vec![crate::route::PolicyRule {
+            effect: crate::route::PolicyEffect::Deny,
+            action: crate::route::PolicyAction::ModelUse,
+            resource: "*-cn/*".to_string(),
+        }],
+    };
+    let snapshot = CatalogCompiler::new()
+        .with_bundled(vec![row(CatalogSource::Bundled, "glm-5", "bundled")])
+        .with_models_dev_live(vec![row(
+            CatalogSource::ModelsDevLive { fetched_at: 1 },
+            "glm-5",
+            "models-dev",
+        )])
+        .with_provider_live(vec![row(
+            CatalogSource::Live {
+                base_url_fingerprint: "fp".into(),
+                fetched_at: 2,
+            },
+            "glm-5",
+            "provider",
+        )])
+        .with_config(vec![row(CatalogSource::ConfigOverride, "glm-5", "config")])
+        .with_overrides(vec![row(CatalogSource::UserOverride, "glm-5", "user")])
+        .with_policy(policy)
+        .compile();
+
+    assert!(
+        snapshot.offerings.is_empty(),
+        "policy DENY after every layer must drop the row; layers cannot override it"
+    );
+
+    let allowed = CatalogCompiler::new()
+        .with_bundled(vec![row(CatalogSource::Bundled, "glm-5", "bundled")])
+        .with_overrides(vec![row(CatalogSource::UserOverride, "glm-5", "user")])
+        .compile();
+    let kept = find(&allowed.offerings, "zai-coding-cn", "glm-5");
+    assert_eq!(kept.source, CatalogSource::UserOverride);
+    assert_eq!(kept.family.as_deref(), Some("user"));
+}
+
+#[test]
 fn cache_scopes_by_provider_and_base_url_fingerprint() {
     let fp_a = base_url_fingerprint("https://api.example.com/v1");
     let fp_b = base_url_fingerprint("https://other.example.com/v1");

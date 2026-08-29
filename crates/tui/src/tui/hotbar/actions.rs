@@ -765,7 +765,9 @@ impl HotbarActionSource for ConfiguredRouteHotbarActionSource<'_> {
 impl HotbarActionRegistry {
     #[must_use]
     pub fn get(&self, id: &str) -> Option<Arc<dyn HotbarAction>> {
-        self.actions.get(id).cloned()
+        self.actions
+            .get(codewhale_config::normalize_hotbar_action_id(id))
+            .cloned()
     }
 
     #[must_use]
@@ -2166,9 +2168,25 @@ mod tests {
         }
 
         // Both control domains are bound.
-        for id in ["slash.lane", "slash.fleet"] {
+        for id in ["slash.lane", "slash.pod"] {
             assert!(registry.get(id).is_some(), "{id} must be bindable");
         }
+    }
+
+    #[test]
+    fn persisted_slash_fleet_binding_dispatches_the_canonical_pod_action() {
+        let registry = HotbarActionRegistry::with_builtins();
+        let legacy = registry
+            .get("slash.fleet")
+            .expect("legacy persisted id resolves through the compatibility boundary");
+        assert_eq!(legacy.id(), "slash.pod");
+        assert_eq!(legacy.metadata(Locale::En).display_name, "/pod");
+
+        let mut app = test_app();
+        assert_eq!(
+            legacy.dispatch(&mut app).expect("dispatch legacy binding"),
+            HotbarDispatch::AppAction(AppAction::OpenFleetRoster)
+        );
     }
 
     #[test]

@@ -179,10 +179,10 @@ fn frame_cursor_is_hidden_during_diff_then_positioned_before_reveal() {
 
 #[test]
 fn composer_rows_stay_pinned_across_turn_state_transitions() {
-    // The two bands bracketing the composer are reserved in every frame:
-    // activity above, identity below. Sending a prompt must not relocate
-    // the route identity, displace the composer, or duplicate the route
-    // into the activity row.
+    // The Tideline shell: a one-row topbar, the stage, and one merged
+    // footer row (slots 6+8 collapsed, spec §3). Sending a prompt must not
+    // displace the composer, relocate the route into the footer, or drop
+    // the phase verb from the footer's left half.
     fn frame_app() -> App {
         let mut app = crate::test_support::test_app_with_options(crate::tui::app::TuiOptions {
             model: "deepseek-v4-flash".to_string(),
@@ -217,27 +217,27 @@ fn composer_rows_stay_pinned_across_turn_state_transitions() {
             .last_composer_area
             .expect("idle frame records the composer area");
 
-        // The identity row is the screen's bottom row and owns the route.
-        // Its route prefix (everything through the model name) is the part
-        // that must never move; right-aligned key hints may differ by phase.
+        // The topbar is the screen's first row and now owns the route; the
+        // merged footer is the bottom row and carries the phase verb plus
+        // cost, never the route.
         let (_, model) = idle.effective_route_identity_display();
-        let route_prefix = |row: &str| -> String {
-            let end = row
-                .find(model.as_str())
-                .map(|start| start + model.len())
-                .unwrap_or(0);
-            row[..end].to_string()
-        };
-        let identity_row = idle_rows.last().expect("identity row");
-        let identity_route = route_prefix(identity_row);
+        let topbar_row = idle_rows.first().expect("topbar row");
         assert!(
-            !identity_route.is_empty(),
-            "{width}x{height} idle identity row lost the route {model:?}: {identity_row:?}"
+            topbar_row.contains(model.as_str()),
+            "{width}x{height} topbar lost the route {model:?}: {topbar_row:?}"
+        );
+        assert!(
+            topbar_row.contains("CODEWHALE"),
+            "{width}x{height} topbar lost the brand: {topbar_row:?}"
+        );
+        let footer_row = idle_rows.last().expect("merged footer row");
+        assert!(
+            !footer_row.contains(model.as_str()),
+            "{width}x{height} footer duplicated the route: {footer_row:?}"
         );
 
-        // A live turn: the composer keeps its exact rows, the identity row
-        // keeps the route, and the activity row above the composer carries
-        // the phase verb without duplicating the route.
+        // A live turn: the composer keeps its exact rows, the topbar keeps
+        // the route, and the merged footer carries the phase verb.
         let mut working = frame_app();
         working.is_loading = true;
         working.turn_started_at = Some(std::time::Instant::now());
@@ -247,20 +247,21 @@ fn composer_rows_stay_pinned_across_turn_state_transitions() {
             Some(composer),
             "{width}x{height}: sending a prompt displaced the composer"
         );
-        let working_identity = working_rows.last().expect("identity row");
-        assert_eq!(
-            route_prefix(working_identity),
-            identity_route,
-            "{width}x{height}: sending a prompt rewrote the identity row"
-        );
-        let activity_row = &working_rows[usize::from(composer.y.saturating_sub(1))];
         assert!(
-            !activity_row.contains(model.as_str()),
-            "{width}x{height} activity row duplicated the route: {activity_row:?}"
+            working_rows
+                .first()
+                .expect("topbar row")
+                .contains(model.as_str()),
+            "{width}x{height}: sending a prompt dropped the route from the topbar"
+        );
+        let working_footer = working_rows.last().expect("merged footer row");
+        assert!(
+            !working_footer.contains(model.as_str()),
+            "{width}x{height} working footer duplicated the route: {working_footer:?}"
         );
         assert!(
-            !activity_row.contains("DeepSeek"),
-            "{width}x{height} activity row duplicated the provider: {activity_row:?}"
+            !working_footer.contains("DeepSeek"),
+            "{width}x{height} working footer duplicated the provider: {working_footer:?}"
         );
 
         // A settled turn keeps the same geometry.
@@ -272,10 +273,19 @@ fn composer_rows_stay_pinned_across_turn_state_transitions() {
             Some(composer),
             "{width}x{height}: completion displaced the composer"
         );
-        assert_eq!(
-            route_prefix(done_rows.last().expect("identity row")),
-            identity_route,
-            "{width}x{height}: completion rewrote the identity row"
+        assert!(
+            done_rows
+                .first()
+                .expect("topbar row")
+                .contains(model.as_str()),
+            "{width}x{height}: completion dropped the route from the topbar"
+        );
+        assert!(
+            !done_rows
+                .last()
+                .expect("merged footer row")
+                .contains(model.as_str()),
+            "{width}x{height}: completion leaked the route into the footer"
         );
     }
 }
@@ -577,6 +587,19 @@ fn settings_toggle_opens_and_closes_without_stacking_duplicates() {
     toggle_settings_view(&mut app);
     assert_eq!(app.view_stack.top_kind(), Some(ModalKind::Config));
     toggle_settings_view(&mut app);
+    assert!(app.view_stack.is_empty());
+}
+
+#[test]
+fn launch_help_uses_the_same_toggle_and_shortcut_ordering_as_the_live_shell() {
+    let _lock = crate::test_support::lock_test_env();
+    let mut app = create_test_app();
+    app.launch.visible = true;
+
+    toggle_help_view(&mut app);
+    assert_eq!(app.view_stack.top_kind(), Some(ModalKind::Help));
+
+    toggle_help_view(&mut app);
     assert!(app.view_stack.is_empty());
 }
 
@@ -1057,9 +1080,12 @@ fn canonical_completion_refreshes_workspace_only_for_semantic_mutations() {
 
 #[test]
 fn underwater_motion_ticks_only_for_visible_unobscured_owners() {
-    assert!(!underwater_motion_surface_visible(None, true, true, false));
+    assert!(!underwater_motion_surface_visible(
+        None, true, true, true, false
+    ));
     assert!(!underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 0, 24)),
+        true,
         true,
         true,
         false,
@@ -1067,29 +1093,41 @@ fn underwater_motion_ticks_only_for_visible_unobscured_owners() {
     assert!(underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 40, 12)),
         true,
+        true,
         false,
         false,
     ));
     assert!(underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 60, 16)),
+        true,
         false,
         true,
         false,
     ));
     assert!(underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 60, 16)),
+        true,
         false,
         false,
         false,
     ));
     assert!(underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 80, 24)),
+        true,
         false,
         false,
         false,
     ));
     assert!(!underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 100, 32)),
+        false,
+        false,
+        true,
+        false,
+    ));
+    assert!(!underwater_motion_surface_visible(
+        Some(Rect::new(0, 0, 100, 32)),
+        true,
         true,
         true,
         true,
@@ -2665,6 +2703,9 @@ fn loading_mouse_filter_keeps_hover_and_active_drags() {
     assert!(!should_drop_loading_mouse_motion(&app, drag));
 
     app.viewport.transcript_scrollbar_dragging = false;
+    app.work_surface = crate::tui::work_surface::WorkSurfaceState::with_placement(
+        crate::tui::work_surface::WorkSurfacePlacement::Top,
+    );
     app.work_surface.last_area = Some(Rect::new(0, 0, 80, 3));
     let started = crate::tui::work_surface::handle_mouse(
         &mut app,
@@ -4096,6 +4137,8 @@ fn wide_underwater_shell_aligns_transcript_and_composer_on_the_shared_canvas() {
 #[test]
 fn wide_underwater_canvas_carries_the_ocean_to_both_terminal_edges() {
     let mut app = create_test_app();
+    app.ui_theme = crate::palette::UI_THEME;
+    app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
     app.onboarding_workspace_trust_gate = false;
     app.onboarding = OnboardingState::None;
     let surface_bg = app.ui_theme.surface_bg;
@@ -4109,7 +4152,7 @@ fn wide_underwater_canvas_carries_the_ocean_to_both_terminal_edges() {
     let buffer = terminal.backend().buffer();
 
     // Full-width shell (#5322): both terminal edges stay in the water column.
-    // Ombre may tint left and right differently; what must not happen is a flat
+    // Deepsea may tint left and right differently; what must not happen is a flat
     // surface-bg dead margin on either side.
     let mut left_ocean = false;
     let mut right_ocean = false;
@@ -5281,7 +5324,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
     let mut app = create_test_app();
     app.onboarding = OnboardingState::None;
     app.launch.visible = false;
-    app.ocean_treatment = OceanTreatment::Ombre;
+    app.ocean_treatment = OceanTreatment::Deepsea;
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
 
@@ -7171,6 +7214,10 @@ fn terminal_probe_timeout_uses_tui_config_and_clamps() {
             mouse_capture: None,
             terminal_probe_timeout_ms: Some(750),
             stream_chunk_timeout_secs: None,
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             status_items: None,
             header_items: None,
             osc8_links: None,
@@ -23051,9 +23098,16 @@ mod work_surface {
         app
     }
 
-    /// The whale's belly: a run of upper-block glyphs no other chrome draws.
-    fn has_idle_whale(rendered: &str) -> bool {
-        rendered.contains("▀▀▀▀▀▀▀▀")
+    /// Whether the ambient ocean actually got its floor this frame, measured
+    /// from the empty state's transcript area. The hand-drawn idle whale that
+    /// used to be the on-screen evidence here was deleted per the 2026-08-29
+    /// founder directive; the whale drew exactly when this predicate held, so
+    /// `empty_state_mark_visible` over the recorded transcript area is the
+    /// same visibility, asserted without the deleted art.
+    fn idle_ocean_visible(app: &App) -> bool {
+        app.viewport
+            .last_transcript_area
+            .is_some_and(crate::tui::underwater::empty_state_mark_visible)
     }
 
     /// The strip height for this frame, measured the way the shell measures it:
@@ -23086,7 +23140,7 @@ mod work_surface {
     }
 
     #[test]
-    fn rail_strip_yields_its_rows_so_the_idle_whale_survives_at_24_rows() {
+    fn rail_strip_yields_its_rows_so_the_idle_ocean_survives_at_24_rows() {
         let panel = RailPanel::Agents;
         let natural = natural_strip_rows(panel);
         assert!(
@@ -23098,7 +23152,7 @@ mod work_surface {
         // Below the threshold the rail hands rows back to the water: it renders
         // shorter than it wants, or not at all, and the ocean keeps its floor.
         // 24 rows is the release-evidence size the rail regression took the
-        // whale away from.
+        // ambient ocean away from.
         for rows in [22_u16, 23, 24, 25] {
             let mut app = busy_rail_app(panel);
             let budget = rail_row_budget(&app, 80, rows, true);
@@ -23123,16 +23177,17 @@ mod work_surface {
             );
             let rendered = render_underwater_test_app(&mut app, 80, rows);
             assert!(
-                has_idle_whale(&rendered),
-                "the idle whale must survive at 80x{rows}: decorative water \
-                 outranks a panel nobody is watching\n{rendered}"
+                idle_ocean_visible(&app),
+                "the ambient ocean floor must survive at 80x{rows}: decorative \
+                 water outranks a panel nobody is watching\n{rendered}"
             );
         }
 
         // At and above the threshold the rows are genuinely spare, so the rail
         // takes its full auto-fit height over an intact 16-row ocean. The
-        // two standing bands bracketing the composer cost one more row than
-        // the single legacy strip did, so the threshold sits one row higher.
+        // Tideline shell charges one row less than the classic shell did
+        // (one-row topbar, merged footer instead of two standing bands), so
+        // the threshold sits one row lower again.
         for rows in [29_u16, 30, 32] {
             let mut app = busy_rail_app(panel);
             let strip = strip_height(&mut app, 80, rows);
@@ -23143,8 +23198,8 @@ mod work_surface {
             );
             let rendered = render_underwater_test_app(&mut app, 80, rows);
             assert!(
-                has_idle_whale(&rendered),
-                "the idle whale must still be earned at 80x{rows}\n{rendered}"
+                idle_ocean_visible(&app),
+                "the ambient ocean floor must still be earned at 80x{rows}\n{rendered}"
             );
             assert!(
                 rendered.contains(AGENT_MARK),
@@ -23153,18 +23208,32 @@ mod work_surface {
             );
         }
 
-        // 21 rows cannot seat the ocean at any strip height. That is pre-rail
+        // 21 rows now seats the ocean floor exactly — the merged footer
+        // returned the activity band's row to the stage (topbar 1 + footer 1
+        // + composer floor 3 + the 16-row ambient floor = 21). 20 rows
+        // cannot seat the ocean at any strip height. That is pre-rail
         // behavior and the yield rule must not pretend otherwise.
         let mut app = busy_rail_app(panel);
         assert_eq!(
             strip_height(&mut app, 80, 21),
             0,
-            "80x21 has no spare rows for a strip at all"
+            "80x21 seats the ocean floor but has no spare rows for a strip"
         );
         let rendered = render_underwater_test_app(&mut app, 80, 21);
         assert!(
-            !has_idle_whale(&rendered),
-            "80x21 has no room for the ocean even with no strip at all\n{rendered}"
+            idle_ocean_visible(&app),
+            "80x21 is exactly the ocean floor under the Tideline shell:\n{rendered}"
+        );
+        let mut app = busy_rail_app(panel);
+        assert_eq!(
+            strip_height(&mut app, 80, 20),
+            0,
+            "80x20 has no spare rows for a strip at all"
+        );
+        let rendered = render_underwater_test_app(&mut app, 80, 20);
+        assert!(
+            !idle_ocean_visible(&app),
+            "80x20 has no room for the ocean even with no strip at all\n{rendered}"
         );
     }
 
@@ -23189,11 +23258,13 @@ mod work_surface {
 
         for rows in 18_u16..=40 {
             let mut with_rail = busy_rail_app(RailPanel::Agents);
-            let with = has_idle_whale(&render_underwater_test_app(&mut with_rail, 80, rows));
+            let _ = render_underwater_test_app(&mut with_rail, 80, rows);
+            let with = idle_ocean_visible(&with_rail);
 
             let mut without_rail = busy_rail_app(RailPanel::Agents);
             without_rail.work_surface.placement = WorkSurfacePlacement::Off;
-            let without = has_idle_whale(&render_underwater_test_app(&mut without_rail, 80, rows));
+            let _ = render_underwater_test_app(&mut without_rail, 80, rows);
+            let without = idle_ocean_visible(&without_rail);
 
             assert_eq!(
                 with, without,
@@ -23205,7 +23276,7 @@ mod work_surface {
     }
 
     #[test]
-    fn rail_strip_and_idle_whale_never_thrash_across_a_resize() {
+    fn rail_strip_and_idle_ocean_never_thrash_across_a_resize() {
         // A threshold that is not monotonic in terminal height reads as flicker:
         // drag a terminal edge and the strip blinks in and out. Growing the
         // terminal may only ever *add* chrome, never take it away, and the same
@@ -23249,25 +23320,28 @@ mod work_surface {
             }
         }
 
-        // The whale is monotone too: once the ocean is earned, growing the
-        // terminal never takes it back.
-        let mut seen_whale = false;
+        // The ocean floor is monotone too: once the ocean is earned, growing
+        // the terminal never takes it back.
+        let mut seen_ocean = false;
         for rows in 16_u16..=34 {
             let mut app = busy_rail_app(RailPanel::Agents);
             let rendered = render_underwater_test_app(&mut app, 80, rows);
-            let whale = has_idle_whale(&rendered);
+            let ocean = idle_ocean_visible(&app);
             assert!(
-                whale || !seen_whale,
-                "the idle whale disappeared again at 80x{rows} after being earned at a \
+                ocean || !seen_ocean,
+                "the ambient ocean floor disappeared again at 80x{rows} after being earned at a \
                  smaller size\n{rendered}"
             );
-            seen_whale |= whale;
+            seen_ocean |= ocean;
         }
-        assert!(seen_whale, "the sweep never rendered an idle whale at all");
+        assert!(
+            seen_ocean,
+            "the sweep never earned the ambient ocean at all"
+        );
     }
 
     #[test]
-    fn rail_strip_and_whale_swap_at_the_ambient_width() {
+    fn rail_strip_and_ocean_swap_at_the_ambient_width() {
         // The width gate is a real trade and this test exists so it stays a
         // decision rather than drifting into an accident.
         //
@@ -23299,7 +23373,7 @@ mod work_surface {
         let mut app = busy_rail_app(panel);
         let rendered = render_underwater_test_app(&mut app, width_floor, rows);
         assert!(
-            has_idle_whale(&rendered),
+            idle_ocean_visible(&app),
             "yielding the strip at {width_floor}x{rows} must actually buy the ocean\n{rendered}"
         );
     }
@@ -23419,8 +23493,8 @@ mod work_surface {
         );
         let rendered = render_underwater_test_app(&mut app, 80, 24);
         assert!(
-            has_idle_whale(&rendered),
-            "a yielded strip must leave the whale intact at 80x24\n{rendered}"
+            idle_ocean_visible(&app),
+            "a yielded strip must leave the ambient ocean intact at 80x24\n{rendered}"
         );
         assert!(app.work_surface.last_area.is_none());
         assert!(!app.work_surface.focused);
@@ -23448,9 +23522,18 @@ mod work_surface {
         let short = strip_height(&mut app, 80, 22);
         assert_eq!(short, 0, "80x22 has no spare rows for a strip");
         let rendered = render_underwater_test_app(&mut app, 80, 22);
+        // Probe the strip's own rows — directly under the one-row topbar —
+        // not the whole frame: the background-work chip (slot 4) is a
+        // different surface and may legitimately spend its spare row on the
+        // same agent's name now that the merged footer freed one.
+        let strip_slot_row = rendered
+            .lines()
+            .nth(1)
+            .expect("a body row under the topbar");
         assert!(
-            !rendered.contains(AGENT_MARK),
-            "strip_height says 0 rows at 80x22, but the panel painted anyway\n{rendered}"
+            !strip_slot_row.contains(AGENT_MARK),
+            "strip_height says {short} rows at 80x22, but the panel painted \
+             anyway: {strip_slot_row:?}"
         );
     }
 

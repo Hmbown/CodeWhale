@@ -1876,6 +1876,55 @@ reasoning contract, and all four membership ids omit generic sampling fields.
   requirements, typed rules, auto-review, repo law, human approval, and the
   execution sandbox is defined in
   [Authorization order](AUTHORIZATION_ORDER.md).
+- **Read deny-list.** Every sandbox posture — `read-only` included — grants
+  read access to the whole filesystem; the postures differ in what they may
+  *write* and whether they may reach the network. The read deny-list narrows
+  that:
+  - `sandbox_read_denylist_defaults` (bool, default `true`): apply the built-in
+    credential-store set — `~/.ssh`, `~/.gnupg`, cloud credential directories
+    (`~/.aws`, `~/.config/gcloud`, `~/.azure`, `~/.kube`, …), `~/.netrc`,
+    `~/.npmrc`, `~/.git-credentials`, macOS keychains, browser profiles,
+    Codewhale's own secret stores, and `.env` files (but not `.env.example`
+    and friends). Ordinary source, `Cargo.toml`, `~/.gitconfig`, `~/.cargo`,
+    and `~/.npm` stay readable so builds and tests still work. Set `false` to
+    restore the pre-0.9.12 full-disk-read behavior.
+  - `sandbox_denied_read_paths` (list of paths): additional denied subpaths.
+    `~` expands. These can never be exempted.
+  - `sandbox_read_denylist_exempt` (list of paths): subtract a path from the
+    *built-in defaults* when a project genuinely needs it. Deny wins over
+    allow: this never reopens anything in `sandbox_denied_read_paths`.
+
+    Exemption granularity is **whole-rule**, not per-file. An exempt path
+    removes a built-in rule only when the rule's own path is at or below it,
+    so exempting `~/.ssh/config` does nothing: the `~/.ssh` rule still denies
+    it, because `~/.ssh` does not lie within `~/.ssh/config`. To reopen that
+    one file you must exempt `~/.ssh` itself — which also reopens the private
+    keys next to it. That is the documented tradeoff: there is no shipped way
+    to narrow a built-in rule to "everything except one file"; copy what you
+    need out of the denied tree instead. The one name-shaped rule, `.env`
+    files, is exempted by *name* rather than by path: any exempt entry whose
+    file name is exactly `.env` — bare `.env`, `~/.env`,
+    `some/project/.env` — disables the entire `.env` filename rule, i.e.
+    every `.env` and `.env.<name>` on disk rather than one project's.
+    (`.env.example` and friends are never denied, so they need no exemption.)
+
+  Enforced at two points: sandboxed shell commands (Seatbelt last-match-wins
+  `deny file-read*` rules; bubblewrap masks each path) and Codewhale's own
+  in-process tools, which the OS sandbox never wraps — `read_file` / `read` /
+  `read_media` for contents, `list_dir` / `file_search` for *enumeration*
+  (listing a denied directory, or searching one, is refused just as Seatbelt
+  blocks its readdir; a name search rooted above a denied tree skips entries
+  inside it). A refused read is always an explicit error, never an empty
+  result, and the error names the path as the caller spelled it rather than a
+  symlink target's real location.
+
+  **This is defense-in-depth, not a security boundary.** It does not stop a
+  hardlink to a denied file, a secret already copied into the workspace, an
+  indirect read (`ssh-agent`, `security find-generic-password`, `aws sts …`),
+  reads under `danger-full-access` shell commands, reads by MCP servers or
+  other unwrapped child processes, or exfiltration of anything that *was*
+  read. Keep least-privilege credentials and short-lived tokens doing the real
+  work.
 - `permissions.toml` (sibling file, optional): typed permission rule records
   loaded next to `config.toml`, for example `~/.codewhale/permissions.toml`.
   This active user file is the only permission-rule source today; project
