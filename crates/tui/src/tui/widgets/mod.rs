@@ -1109,6 +1109,45 @@ fn render_jump_to_latest_button(
 const COMPOSER_PROMPT_GUTTER_WIDTH: u16 = 2;
 const COMPOSER_PANEL_MIN_WIDTH: u16 = 12;
 
+/// Whether the active composer should use its full rounded enclosure.
+///
+/// `composer_border` is a legacy configuration name, but its compatibility
+/// policy is deliberate: the default `true` means the Tideline enclosure;
+/// `false` is an explicit compact/quiet opt-out. Keep every layout consumer
+/// behind this helper so the reserved floor, measured height, and rendered
+/// geometry cannot drift apart.
+#[must_use]
+pub(crate) fn composer_enclosure_enabled(app: &App) -> bool {
+    app.composer_border
+}
+
+/// Restore the rounded corners after the semantic top/bottom passes.
+///
+/// Ratatui renders a `TOP`-only (or `BOTTOM`-only) block through the corner
+/// cells as horizontal line glyphs. The live composer needs those passes for
+/// its localized titles and independent permission/mode color ramps, so put
+/// the four rounded joins back afterward rather than replacing its mature
+/// input widget with the unfinished translation scaffold.
+fn render_composer_panel_corners(
+    area: Rect,
+    buf: &mut Buffer,
+    background: Style,
+    permission_color: Color,
+    mode_color: Color,
+) {
+    let top_style = background.fg(permission_color);
+    let bottom_style = background.fg(mode_color);
+    let left = area.left();
+    let right = area.right().saturating_sub(1);
+    let top = area.top();
+    let bottom = area.bottom().saturating_sub(1);
+
+    buf[(left, top)].set_symbol("╭").set_style(top_style);
+    buf[(right, top)].set_symbol("╮").set_style(top_style);
+    buf[(left, bottom)].set_symbol("╰").set_style(bottom_style);
+    buf[(right, bottom)].set_symbol("╯").set_style(bottom_style);
+}
+
 /// Whether the outer composer rect can carry both semantic border rows.
 ///
 /// Keep this policy in outer-area coordinates. Input wrapping subtracts the
@@ -1239,17 +1278,20 @@ impl<'a> ComposerWidget<'a> {
     }
 
     fn wants_enclosed_panel(&self) -> bool {
-        self.app.composer_border
+        composer_enclosure_enabled(self.app)
     }
 
     pub(crate) fn has_panel(&self, area: Rect) -> bool {
         enclosed_composer_panel_fits(self.wants_enclosed_panel(), area.width, area.height)
     }
 
-    fn inner_area(&self, area: Rect) -> Rect {
+    /// The border-aware content rectangle shared by rendering, cursor mapping,
+    /// and the frame's persistent mouse geometry.
+    pub(crate) fn inner_area(&self, area: Rect) -> Rect {
         if self.has_panel(area) {
             Block::default()
-                .borders(Borders::TOP | Borders::BOTTOM)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .inner(area)
         } else if area.height >= 2 {
             Block::default().borders(Borders::TOP).inner(area)
@@ -1357,14 +1399,28 @@ impl Renderable for ComposerWidget<'_> {
                 ApprovalMode::Auto => self.app.ui_theme.permission_auto_review,
                 ApprovalMode::Bypass => self.app.ui_theme.permission_full_access,
             };
+            // Paint the enclosure first so the live composer gets actual
+            // rounded side rails. The semantic top/bottom blocks below keep
+            // their existing permission/mode color ramps and titles while the
+            // neutral rails stay legible on every supported theme.
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(self.app.ui_theme.border))
+                .style(background)
+                .render(area, buf);
             let mut top_border = Block::default()
                 .borders(Borders::TOP)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(permission_color))
                 .style(background);
             if self.app.is_history_search_active() {
                 top_border = top_border.title(Line::from(Span::styled(
-                    self.app
-                        .tr(crate::localization::MessageId::HistorySearchTitle),
+                    format!(
+                        " {} ",
+                        self.app
+                            .tr(crate::localization::MessageId::HistorySearchTitle)
+                    ),
                     Style::default().fg(palette::TEXT_MUTED),
                 )));
             }
@@ -1385,12 +1441,20 @@ impl Renderable for ComposerWidget<'_> {
 
             let mut bottom_border = Block::default()
                 .borders(Borders::BOTTOM)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(self.mode_color()))
                 .style(background);
             if let Some(hint_line) = hint_line {
                 bottom_border = bottom_border.title_bottom(hint_line);
             }
             bottom_border.render(area, buf);
+            render_composer_panel_corners(
+                area,
+                buf,
+                background,
+                permission_color,
+                self.mode_color(),
+            );
         } else if area.height >= 2 {
             let mut block = Block::default()
                 .borders(Borders::TOP)
@@ -3422,8 +3486,13 @@ fn composer_height(
     show_panel: bool,
 ) -> u16 {
     let has_panel = enclosed_composer_panel_fits(show_panel, area_width, available_height);
+    // A full enclosure spends one column on each side before the prompt
+    // gutter. Use the same width as `inner_area` + `composer_content_geometry`
+    // so measured height and rendered wrapping agree at every boundary.
+    let panel_side_inset = u16::from(has_panel).saturating_mul(2);
     let content_width = usize::from(
         area_width
+            .saturating_sub(panel_side_inset)
             .saturating_sub(COMPOSER_PROMPT_GUTTER_WIDTH)
             .max(1),
     );
@@ -5799,7 +5868,13 @@ mod tests {
         } else {
             1
         };
-        let content_width = usize::from(width.saturating_sub(COMPOSER_PROMPT_GUTTER_WIDTH).max(1));
+        let horizontal_enclosure = u16::from(has_panel).saturating_mul(2);
+        let content_width = usize::from(
+            width
+                .saturating_sub(horizontal_enclosure)
+                .saturating_sub(COMPOSER_PROMPT_GUTTER_WIDTH)
+                .max(1),
+        );
         let input_height_budget = usize::from(height)
             .saturating_sub(menu_lines)
             .saturating_sub(chrome_height)
@@ -5855,7 +5930,62 @@ mod tests {
                 expected_panel,
                 "width={width} bottom border disagrees with height policy"
             );
+            if expected_panel {
+                assert_eq!(
+                    widget.inner_area(area),
+                    Rect::new(1, 1, width.saturating_sub(2), 1),
+                    "width={width} panel inner area must reserve both side rails"
+                );
+                assert_eq!(buf[(area.left(), area.top())].symbol(), "\u{256d}");
+                assert_eq!(
+                    buf[(area.right().saturating_sub(1), area.top())].symbol(),
+                    "\u{256e}"
+                );
+                assert_eq!(
+                    buf[(area.left(), area.bottom().saturating_sub(1))].symbol(),
+                    "\u{2570}"
+                );
+                assert_eq!(
+                    buf[(
+                        area.right().saturating_sub(1),
+                        area.bottom().saturating_sub(1)
+                    )]
+                        .symbol(),
+                    "\u{256f}"
+                );
+                assert_eq!(
+                    buf[(area.left(), area.y.saturating_add(1))].symbol(),
+                    "\u{2502}"
+                );
+                assert_eq!(
+                    buf[(area.right().saturating_sub(1), area.y.saturating_add(1))].symbol(),
+                    "\u{2502}"
+                );
+            } else {
+                assert_eq!(
+                    widget.inner_area(area),
+                    Rect::new(area.x, area.y.saturating_add(1), area.width, 1),
+                    "width={width} compact fallback must keep its full input width"
+                );
+                assert_ne!(buf[(area.left(), area.top())].symbol(), "\u{256d}");
+            }
         }
+    }
+
+    #[test]
+    fn composer_height_wraps_to_the_rounded_panel_content_width() {
+        // At the minimum viable panel width, the two side rails and prompt
+        // gutter leave eight text columns. Measuring against the old ten
+        // columns would render a second line without allocating its row.
+        let height = composer_height(
+            "123456789",
+            super::COMPOSER_PANEL_MIN_WIDTH,
+            8,
+            0,
+            ComposerDensity::Comfortable,
+            true,
+        );
+        assert_eq!(height, 4);
     }
 
     #[test]
@@ -6006,14 +6136,14 @@ mod tests {
         };
 
         // The two border rows carry independent permission/mode signals.
-        // inner_area: {x:0, y:1, w:40, h:3}
+        // inner_area: {x:1, y:1, w:38, h:3}
         // input_rows_budget = 3
         // The prompt and hint share one quiet row.
         assert_eq!(
             empty_composer_visual_rows(Some(COMPOSER_PLACEHOLDER), 40, 3),
             1
         );
-        assert_eq!(widget.cursor_pos(area), Some((2, 2)));
+        assert_eq!(widget.cursor_pos(area), Some((3, 2)));
     }
 
     #[test]
@@ -6032,17 +6162,17 @@ mod tests {
             height: 5,
         };
 
-        // inner_area: {x:0, y:1, w:14, h:3}
+        // inner_area: {x:1, y:1, w:12, h:3}
         // input_rows_budget = 3
-        // placeholder_visual_lines(14) = 2
+        // placeholder_visual_lines(12) = 3
         // The narrow fallback still reserves one composer row; Paragraph
         // clipping keeps it from growing the shell.
-        assert_eq!(placeholder_visual_lines(14), 2);
+        assert_eq!(placeholder_visual_lines(12), 3);
         assert_eq!(
             empty_composer_visual_rows(Some(COMPOSER_PLACEHOLDER), 14, 3),
             1
         );
-        assert_eq!(widget.cursor_pos(area), Some((2, 2)));
+        assert_eq!(widget.cursor_pos(area), Some((3, 2)));
     }
 
     #[test]
@@ -6092,11 +6222,12 @@ mod tests {
             row_text(&buf, area, cursor_y).contains(&placeholder),
             "prompt and hint should share one row: {rendered}"
         );
+        let inner = widget.inner_area(area);
+        let quiet_row = cursor_y.saturating_add(1);
         assert!(
-            row_text(&buf, area, cursor_y.saturating_add(1))
-                .trim()
-                .is_empty(),
-            "comfortable composer should keep a quiet row before the footer: {rendered}"
+            quiet_row < inner.bottom()
+                && (inner.x..inner.right()).all(|x| buf[(x, quiet_row)].symbol() == " "),
+            "comfortable composer should keep a quiet content row before the footer: {rendered}"
         );
     }
 
@@ -6117,9 +6248,9 @@ mod tests {
             .cursor_pos(area)
             .expect("composer with input should expose a cursor");
 
-        assert_eq!(buf[(0, cursor_y)].symbol(), "❯");
-        assert_eq!(buf[(2, cursor_y)].symbol(), "h");
-        assert_eq!(cursor_x, 7, "cursor keeps the prompt gutter reserved");
+        assert_eq!(buf[(1, cursor_y)].symbol(), "❯");
+        assert_eq!(buf[(3, cursor_y)].symbol(), "h");
+        assert_eq!(cursor_x, 8, "cursor keeps the prompt gutter reserved");
     }
 
     fn render_composer(app: &App, width: u16, height: u16) -> String {

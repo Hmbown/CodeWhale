@@ -1063,7 +1063,9 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     // shed chat/composer space. Mini mode hides it with the rest of the
     // chrome.
     let pending_work = crate::tui::background_indicator::pending_work_from_app(app);
-    let composer_floor = MIN_COMPOSER_HEIGHT.saturating_add(u16::from(app.composer_border));
+    let composer_floor = MIN_COMPOSER_HEIGHT.saturating_add(u16::from(
+        crate::tui::widgets::composer_enclosure_enabled(app),
+    ));
     let indicator_height = if mini {
         0
     } else {
@@ -1348,17 +1350,7 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             &slash_menu_entries,
             &mention_menu_entries,
         );
-        let inner = if composer_widget.has_panel(area) {
-            ratatui::widgets::Block::default()
-                .borders(ratatui::widgets::Borders::TOP | ratatui::widgets::Borders::BOTTOM)
-                .inner(area)
-        } else if area.height >= 2 {
-            ratatui::widgets::Block::default()
-                .borders(ratatui::widgets::Borders::TOP)
-                .inner(area)
-        } else {
-            area
-        };
+        let inner = composer_widget.inner_area(area);
         app.viewport.last_composer_content = Some(inner);
 
         // Compute scroll offset and top padding for mouse coordinate mapping.
