@@ -11508,6 +11508,257 @@ fn shared_claim_shell_gate_normalizes_only_the_run_action() {
     }
 }
 
+/// Build one registry per contended child, both bound to the same shared
+/// manager and workspace — the two-builder shared-checkout topology.
+fn contended_builder_registry(
+    manager: &SharedSubAgentManager,
+    workspace: &Path,
+    owner: &str,
+) -> SubAgentToolRegistry {
+    let mut runtime = stub_runtime();
+    runtime.manager = Arc::clone(manager);
+    runtime.context = ToolContext::new(workspace);
+    runtime.context.auto_approve = true;
+    runtime.worker_profile = WorkerRuntimeProfile::for_role(FleetRole::Builder);
+    SubAgentToolRegistry::new_with_owner(
+        runtime,
+        FleetRole::Builder,
+        owner.to_string(),
+        "implementer".into(),
+        Some(vec!["File".into(), "Bash".into()]),
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    )
+}
+
+/// Two live write-capable children with disjoint `exact_files` claims in one
+/// shared checkout: a bash call the read-only classifier proves mutation-free
+/// must still run on both. The contention gate used to re-test
+/// `is_unbounded_shell_run` unconditionally, so a provably read-only `ls` was
+/// refused whenever a peer held a claim — even though the ledger had already
+/// proven the two claims disjoint at admission.
+#[tokio::test]
+async fn contended_shared_writers_keep_proven_readonly_shell() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
+    {
+        let mut guard = manager.write().await;
+        assert_eq!(guard.insert_test_running_agent("a", tmp.path()), "agent_a");
+        assert_eq!(guard.insert_test_running_agent("b", tmp.path()), "agent_b");
+        let live: HashSet<String> = ["agent_a".to_string(), "agent_b".to_string()]
+            .into_iter()
+            .collect();
+        for (owner, file) in [("agent_a", "src/a.txt"), ("agent_b", "src/b.txt")] {
+            guard
+                .coordination
+                .register_claim(
+                    WriteScopeClaim {
+                        owner: owner.into(),
+                        roots: vec![],
+                        exact_files: vec![file.into()],
+                        contracts: vec![],
+                    },
+                    false,
+                    |candidate| live.contains(candidate),
+                )
+                .expect("disjoint exact-file claims admit both live writers");
+        }
+    }
+    for owner in ["agent_a", "agent_b"] {
+        let registry = contended_builder_registry(&manager, tmp.path(), owner);
+        registry
+            .execute(owner, "Bash", json!({"action": "run", "command": "ls src"}))
+            .await
+            .unwrap_or_else(|err| {
+                panic!("proven read-only shell must survive contention for {owner}: {err}")
+            });
+    }
+}
+
+/// The same contention still refuses a shell call the classifier cannot prove
+/// read-only — and the refusal names the blocking peer and its remediation so
+/// the child can recover instead of retrying blindly.
+#[tokio::test]
+async fn contended_shared_writer_refusal_names_blocking_peer_and_remediation() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
+    {
+        let mut guard = manager.write().await;
+        assert_eq!(guard.insert_test_running_agent("a", tmp.path()), "agent_a");
+        assert_eq!(guard.insert_test_running_agent("b", tmp.path()), "agent_b");
+        let live: HashSet<String> = ["agent_a".to_string(), "agent_b".to_string()]
+            .into_iter()
+            .collect();
+        for (owner, file) in [("agent_a", "src/a.txt"), ("agent_b", "src/b.txt")] {
+            guard
+                .coordination
+                .register_claim(
+                    WriteScopeClaim {
+                        owner: owner.into(),
+                        roots: vec![],
+                        exact_files: vec![file.into()],
+                        contracts: vec![],
+                    },
+                    false,
+                    |candidate| live.contains(candidate),
+                )
+                .expect("disjoint exact-file claims admit both live writers");
+        }
+    }
+    let registry = contended_builder_registry(&manager, tmp.path(), "agent_a");
+    let err = registry
+        .execute(
+            "agent_a",
+            "Bash",
+            json!({"action": "run", "command": "touch src/a2.txt"}),
+        )
+        .await
+        .expect_err("mutating shell under contention must stay refused")
+        .to_string();
+    assert!(
+        err.contains("cannot prove a bounded file target"),
+        "refusal kind: {err}"
+    );
+    assert!(
+        err.contains("agent_b"),
+        "refusal must name the blocking peer: {err}"
+    );
+    assert!(
+        err.contains("agents/coordinate action=release") && err.contains("worktree isolation"),
+        "refusal must state concrete remediation: {err}"
+    );
+    assert!(
+        !tmp.path().join("src/a2.txt").exists(),
+        "the refused command must not have run"
+    );
+}
+
+/// A child whose task body panics must still reach a terminal state.
+/// `spawn_supervised` catches the panic to keep the parent alive; without the
+/// guard committing a crash result the child stayed `Running` and its write
+/// claim kept gating live peers until heartbeat auto-cancel — or forever while
+/// a lingering shell kept the heartbeat fresh.
+#[tokio::test]
+async fn panicked_child_task_terminalizes_and_stops_gating_peers() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
+    let agent_id = {
+        let mut guard = manager.write().await;
+        let agent_id = guard.insert_test_running_agent("panicked", tmp.path());
+        guard
+            .coordination
+            .register_claim(
+                WriteScopeClaim {
+                    owner: agent_id.clone(),
+                    roots: vec!["src".into()],
+                    exact_files: vec![],
+                    contracts: vec![],
+                },
+                false,
+                |_| false,
+            )
+            .expect("panicked child's claim");
+        assert!(guard.is_live_coordination_owner(&agent_id));
+        agent_id
+    };
+
+    // Drive a panic through the same guard the production spawn path wraps
+    // around the task body.
+    let handle = tokio::spawn(supervise_subagent_task_body(
+        Arc::clone(&manager),
+        agent_id.clone(),
+        async { panic!("intentional test panic") },
+    ));
+    let join_error = handle
+        .await
+        .expect_err("the panic must still reach the task supervisor");
+    assert!(join_error.is_panic());
+
+    let guard = manager.read().await;
+    let result = guard.get_result(&agent_id).expect("agent record survives");
+    assert!(
+        matches!(&result.status, SubAgentStatus::Failed(message) if message.contains("panicked")),
+        "panicked child must commit a crash terminal result, got {:?}",
+        result.status
+    );
+    assert!(
+        guard
+            .get_worker_record(&agent_id)
+            .expect("worker record")
+            .status
+            .is_terminal(),
+        "the paired worker record terminalizes with the agent"
+    );
+    assert!(
+        !guard.is_live_coordination_owner(&agent_id),
+        "a panicked child must not keep gating peers as a live writer"
+    );
+}
+
+/// A headless fleet worker (a worker record with no paired agent entry) that
+/// reaches `WaitingForUser` can never be answered — nothing will resume or
+/// finalize it — so it must not count as a live coordination owner, and the
+/// `agents/coordinate action=release` remediation the gate names must be able
+/// to clear its claim. A *paired* child waiting on the user is untouched.
+#[test]
+fn waiting_for_user_headless_worker_is_not_a_live_coordination_owner() {
+    let tmp = tempdir().expect("tempdir");
+    let workspace = tmp.path().canonicalize().expect("canonical workspace");
+    let mut manager = SubAgentManager::new(workspace.clone(), 8);
+
+    manager
+        .register_worker_with_coordination(make_write_worker_spec(
+            "worker-waiting",
+            workspace.clone(),
+            "src/waiting",
+        ))
+        .expect("headless worker registration");
+    assert!(manager.is_live_coordination_owner("worker-waiting"));
+    manager
+        .worker_records
+        .get_mut("worker-waiting")
+        .expect("worker record")
+        .status = AgentWorkerStatus::WaitingForUser;
+    assert!(
+        !manager.is_live_coordination_owner("worker-waiting"),
+        "a headless worker can never answer WaitingForUser"
+    );
+    assert!(
+        !manager
+            .active_coordination_owners()
+            .contains("worker-waiting"),
+        "admission and stale-claim release share the same liveness answer"
+    );
+    let released = manager
+        .release_stale_write_claims(Some("worker-waiting".to_string()))
+        .expect("release sweep");
+    assert_eq!(
+        released,
+        vec!["worker-waiting".to_string()],
+        "the remediation the gate names must actually clear the leaked claim"
+    );
+
+    // The interactive case is preserved: a paired child waiting on the user
+    // keeps its claim — the user can still answer and the child will write.
+    let paired = manager.insert_test_running_agent("paired", &workspace);
+    manager
+        .agents
+        .get_mut(&paired)
+        .expect("paired agent")
+        .status = SubAgentStatus::Interrupted("awaiting user input".to_string());
+    manager
+        .worker_records
+        .get_mut(&paired)
+        .expect("paired worker record")
+        .status = AgentWorkerStatus::WaitingForUser;
+    assert!(
+        manager.is_live_coordination_owner(&paired),
+        "an interactive child waiting on the user stays live"
+    );
+}
+
 #[tokio::test]
 async fn subagent_blocks_mcp_action_without_parent_auto_approve() {
     let registry = subagent_registry_with_mcp_action(false);
