@@ -976,6 +976,31 @@ fn resolve_exec_resume_route(
     Ok(saved.metadata.model.clone())
 }
 
+/// Fold the dispatcher-forwarded launch overrides (`CODEWHALE_PROVIDER` /
+/// `CODEWHALE_MODEL`, set by `codewhale --provider X --model Y exec ...`)
+/// into the explicit route signals `exec --resume`/`--continue` honour.
+///
+/// Exec-level flags win when both are present; either source counts as
+/// "the user named a route for this run", so a resume must not silently
+/// restore the saved provider/model over it.
+fn exec_resume_route_overrides(
+    exec_provider: Option<&str>,
+    exec_model: Option<&str>,
+    launch_provider: Option<&str>,
+    launch_model: Option<&str>,
+) -> (bool, Option<String>) {
+    let non_empty = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let explicit_provider =
+        non_empty(exec_provider).is_some() || non_empty(launch_provider).is_some();
+    let explicit_model = non_empty(exec_model).or_else(|| non_empty(launch_model));
+    (explicit_provider, explicit_model)
+}
+
 #[derive(Args, Debug, Clone, Default)]
 struct SetupArgs {
     /// Initialize MCP configuration at the configured path
@@ -2277,12 +2302,24 @@ async fn run_async_main_dispatch(
                         explicit_reasoning.is_some(),
                     )?;
                 }
+                // The `codewhale` dispatcher refuses `--provider`/`--model`
+                // after `exec` and forwards the top-level flags as
+                // `CODEWHALE_PROVIDER` / `CODEWHALE_MODEL` instead, so a
+                // resume must treat those launch overrides as explicit or it
+                // silently restores the saved route (cloud-agent e2e,
+                // 2026-08-30).
+                let (resume_explicit_provider, resume_explicit_model) = exec_resume_route_overrides(
+                    explicit_provider,
+                    explicit_model,
+                    crate::config::explicit_launch_provider_override().as_deref(),
+                    crate::config::explicit_launch_model_override().as_deref(),
+                );
                 let model = if let Some(saved) = resume_session.as_ref() {
                     resolve_exec_resume_route(
                         &mut config,
                         saved,
-                        explicit_provider.is_some(),
-                        explicit_model,
+                        resume_explicit_provider,
+                        resume_explicit_model.as_deref(),
                     )?
                 } else {
                     resolve_exec_model(&config, explicit_model)
@@ -14920,6 +14957,77 @@ reasoning = "high"
             .expect_err("removed saved provider must fail closed");
         assert!(err.to_string().contains("will not fall back"), "{err}");
         assert_eq!(missing.provider, before);
+    }
+
+    #[test]
+    fn exec_resume_honours_dispatcher_forwarded_launch_overrides() {
+        // `codewhale --provider X --model Y exec --resume ID ...` reaches this
+        // binary with X/Y only in CODEWHALE_PROVIDER / CODEWHALE_MODEL; a
+        // resume must treat them as explicit instead of restoring the saved
+        // route.
+        assert_eq!(
+            exec_resume_route_overrides(None, None, None, None),
+            (false, None)
+        );
+        assert_eq!(
+            exec_resume_route_overrides(None, None, Some("modelstudio-token-plan"), None),
+            (true, None)
+        );
+        assert_eq!(
+            exec_resume_route_overrides(None, None, None, Some("qwen3.8-flash")),
+            (false, Some("qwen3.8-flash".to_string()))
+        );
+        assert_eq!(
+            exec_resume_route_overrides(
+                None,
+                None,
+                Some("modelstudio-token-plan"),
+                Some(" qwen3.8-flash ")
+            ),
+            (true, Some("qwen3.8-flash".to_string()))
+        );
+        // Exec-level flags still win over the forwarded launch env.
+        assert_eq!(
+            exec_resume_route_overrides(
+                Some("deepseek"),
+                Some("deepseek-v4-pro"),
+                Some("x"),
+                Some("y")
+            ),
+            (true, Some("deepseek-v4-pro".to_string()))
+        );
+        // Blank values are not overrides.
+        assert_eq!(
+            exec_resume_route_overrides(None, None, Some("  "), Some("")),
+            (false, None)
+        );
+
+        let saved = saved_exec_session("custom-a", crate::config::ZAI_GLM_5_2_MODEL);
+        let mut launch_model_only = custom_exec_config("custom-b");
+        let (explicit_provider, explicit_model) =
+            exec_resume_route_overrides(None, None, None, Some("override-model"));
+        let model = resolve_exec_resume_route(
+            &mut launch_model_only,
+            &saved,
+            explicit_provider,
+            explicit_model.as_deref(),
+        )
+        .expect("launch model override keeps saved provider");
+        assert_eq!(launch_model_only.provider.as_deref(), Some("custom-a"));
+        assert_eq!(model, "override-model");
+
+        let mut launch_provider = custom_exec_config("custom-b");
+        let (explicit_provider, explicit_model) =
+            exec_resume_route_overrides(None, None, Some("custom-b"), None);
+        let model = resolve_exec_resume_route(
+            &mut launch_provider,
+            &saved,
+            explicit_provider,
+            explicit_model.as_deref(),
+        )
+        .expect("launch provider override keeps the launched route");
+        assert_eq!(launch_provider.provider.as_deref(), Some("custom-b"));
+        assert_eq!(model, "model-b");
     }
 
     #[test]
