@@ -1118,10 +1118,14 @@ the `CODEWHALE_*` value wins.
 - `CODEWHALE_NO_NEW_PRIVS` (`0`/`false`/`no`/`off`/`disabled` opts out) — Linux only. The
   TUI process sets the kernel's irreversible no-new-privileges flag at startup
   as defense-in-depth, which blocks `sudo`/`su`/setuid helpers for Codewhale's
-  whole process tree. Set this variable to a falsey value before launching if
-  you administer through Codewhale as a wheel-group user and need escalation
-  to work (#5413); the other startup hardening (no ptrace, no core dumps)
-  stays on. Any other value keeps the default hardened posture.
+  whole process tree. The flag is already skipped when the startup sandbox
+  mode resolves to `danger-full-access` (#5723), so this variable is the
+  explicit override in the remaining cases: set it to a falsey value before
+  launching if you administer through Codewhale as a wheel-group user under a
+  narrower posture and need escalation to work (#5413), or set a truthy value
+  to force the flag on even under `danger-full-access`. Unset, the posture
+  decides; the other startup hardening (no ptrace, no core dumps) always
+  stays on.
 - `CODEWHALE_MANAGED_CONFIG_PATH`
 - `CODEWHALE_REQUIREMENTS_PATH`
 - `CODEWHALE_MAX_SUBAGENTS` (clamped to `1..=128`)

@@ -256,9 +256,19 @@ impl RuntimeChatRelayHost {
                 .map_err(|_| "Runtime Chat could not protect private local state.".to_string())?;
         }
         let scope_lock =
-            RelayScopeLock::acquire(&private_dir.join(SCOPE_LOCK_FILE)).map_err(|_| {
-                "Another Codewhale process already owns this Runtime Chat account session."
-                    .to_string()
+            RelayScopeLock::acquire(&private_dir.join(SCOPE_LOCK_FILE)).map_err(|error| {
+                // Only WouldBlock is genuine contention. Any other lock
+                // failure is a local IO fault, and misreporting it as
+                // ownership hides the cause (#5735's flake evidence).
+                let contention = error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::WouldBlock);
+                if contention {
+                    "Another Codewhale process already owns this Runtime Chat account session."
+                        .to_string()
+                } else {
+                    format!("Runtime Chat could not take its owner lock: {error:#}")
+                }
             })?;
         let state_path = private_dir.join(STATE_FILE);
         let state = load_state(&state_path).map_err(|_| {

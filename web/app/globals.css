@@ -2,44 +2,51 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ---------- root tokens — Codewhale ocean ---------- */
+/* ---------- root tokens — Codewhale Tideline ---------- */
+/*
+ * The site is the deep-ocean stage the Tideline TUI redesign paints: one dark
+ * field everywhere, with the whale palette's semantic inks on top. The token
+ * NAMES below keep their historical shape (`--paper`, `--ink`, `--indigo`) so
+ * component rules and the docs light theme stay diffable, but the values are
+ * the WHALE_* dark tokens from crates/tui/src/palette/tokens.rs — the same
+ * field, chrome, and ink the product renders.
+ */
 :root {
   /* RGB channel triples backing the Tailwind surface/ink tokens (see
-     tailwind.config.ts). These carry the same light values as the hex vars
-     below; the docs routes override them for dark mode. */
-  --c-paper: 244 247 251;
-  --c-paper-deep: 232 238 248;
-  --c-paper-edge: 203 211 223;
-  --c-ink: 20 33 58;
-  --c-ink-soft: 69 81 104;
-  --c-ink-mute: 91 103 128;
+     tailwind.config.ts). The docs light theme overrides them for its
+     opt-in light sheet. */
+  --c-paper: 3 7 13;          /* WHALE_BG — deep field */
+  --c-paper-deep: 14 23 41;   /* WHALE_PANEL */
+  --c-paper-edge: 38 62 92;   /* WHALE_BORDER — blue at 25% on stage */
+  --c-ink: 246 242 232;       /* WHALE_TEXT_BODY — whale ivory */
+  --c-ink-soft: 182 192 212;  /* WHALE_TEXT_SOFT */
+  --c-ink-mute: 147 160 184;  /* WHALE_TEXT_MUTED */
+  --c-indigo: 106 174 242;    /* WHALE_ACTION — interaction blue */
+  --c-indigo-deep: 143 196 248; /* lifted action blue — hover on dark */
   --c-stage-soft: 182 192 212;
 
-  /* Paper-newspaper baseline (issue #4934) uses Blue Stage light tokens so
-     the editorial sheet stays in lockstep with the TUI palette. Ocean deep
-     values below power the terminal chrome accents only. */
-  --paper: #f4f7fb;
-  --paper-deep: #e8eef8;
-  --paper-edge: #cbd3df;
-  /* Blue Stage Light's LIGHT_PANEL — cwc's `--surface`. This is the product's
-     *card* value, not its page value: the desktop capture is ivory cards on a
-     blue-grey page. Raising the sheet itself to ivory would break lockstep in
-     the other direction, so warmth arrives only where the product puts it. */
-  --paper-card: #fffdf8;
-  --paper-line: #1b2230;
-  --paper-line-soft: #cbd3df;
-  --ink: #14213a;
-  --ink-soft: #455168;
-  --ink-mute: #5b6780;
-  --indigo: #315fd8;
-  --indigo-deep: #2448a6;
-  --indigo-pale: #e8eef8;
+  --paper: #03070d;
+  --paper-deep: #0e1729;
+  --paper-edge: #263e5c;
+  /* Cards are the TUI's panel plate resting on the deep field. */
+  --paper-card: #101d33;
+  --paper-line: #263e5c;
+  --paper-line-soft: #263e5c;
+  --ink: #f6f2e8;
+  --ink-soft: #b6c0d4;
+  --ink-mute: #93a0b8;
+  --indigo: #6aaef2;
+  --indigo-deep: #8fc4f8;
+  --indigo-pale: rgba(106, 174, 242, 0.16);
   --action-on-dark: #6aaef2;
-  --ochre: #7a5500;
-  --jade: #08766d;
+  /* Semantic state inks, straight from the status-bar grammar: green is
+     outcome, coral is cognition/attention, gold is the human mark. */
+  --ochre: #f6c453;
+  --jade: #9bd66f;
   --seafoam: #4fd1c5;
-  --cobalt: #315fd8;
-  --settings-state-active: var(--indigo-deep);
+  --cobalt: #6aaef2;
+  --cyan: #48d7ff; /* bounded accents only — eyebrow chrome, composer prompt */
+  --settings-state-active: var(--indigo);
   --settings-state-ready: var(--jade);
   --settings-state-muted: var(--ink-mute);
   --ocean-deep: #03070d;
@@ -48,15 +55,15 @@
   --ocean-mist: #b6c0d4;
   --ocean-coral: #ff7a59;
   --signal-gold: #f6c453;
+  /* The whale mark is white ink on the deep-blue tile; off the tile it is a
+     white silhouette on the field. Gold stays reserved for human moments. */
+  --mark-ink: #ffffff;
   --stage-text: #f6f2e8;
   --stage-soft: #b6c0d4;
   --stage-muted: #93a0b8;
 
-  /* Blue Stage field, verbatim from crates/tui/src/palette/tokens.rs. These
-     back the single water column below the waterline: one gradient sampled by
-     absolute page position across four DOM bands, exactly as the TUI samples
-     one column across header / transcript / phase / composer. No widget
-     restarts its own gradient. */
+  /* Blue Stage field, verbatim from crates/tui/src/palette/tokens.rs — the
+     same gradient the TUI samples down its water column. */
   --stage-field-top: #0e1729; /* WHALE_PANEL — surface */
   --stage-field-mid: #08111c; /* WHALE_CHROME — the authored 42% break */
   --stage-field-deep: #03070d; /* WHALE_BG — deep field, and the footer seabed */
@@ -68,10 +75,18 @@
   --stage-dim: #697791;
   --violet: #ad88ff; /* WHALE_MODE_OPERATE — 1px rules only, never text */
 
-  /* Hairline + code surfaces routed through vars so the docs dark theme can
-     lighten hairlines and raise the code panel without touching every rule. */
-  --hairline: rgba(20, 35, 70, 0.14);
-  --code-bg: #03070d;
+  /* Type stacks. Display and body are one instrument voice — Tideline sets
+     its headings in the same sans as its copy, separated by weight and
+     tracking, not by a second family. --font-body/--font-mono arrive from
+     next/font in app/[locale]/layout.tsx. */
+  --font-display: var(--font-body);
+  --font-cjk: "PingFang SC", "Hiragino Sans GB", "Source Han Serif SC",
+    "Noto Serif CJK SC", serif;
+
+  /* Hairline + code surfaces routed through vars so the docs light theme can
+     re-ink them without touching every rule. */
+  --hairline: rgba(106, 174, 242, 0.2);
+  --code-bg: #08111c;
   --code-fg: #f6f2e8;
 
   /* One site container and one vertical rhythm. Every page gutter aligns
@@ -79,6 +94,7 @@
   --container: min(100% - 2rem, 76rem);
   --hero-pad: clamp(3rem, 6vw, 4.75rem);
   --section-pad: clamp(2.75rem, 5vw, 4rem);
+  color-scheme: dark;
 }
 
 /* ---------- base ---------- */
@@ -90,7 +106,14 @@ html {
 }
 
 body {
-  background: var(--paper);
+  /* The Tideline deepsea stage: one cool glow high on the field, then the
+     authored panel → chrome → deep descent. Fixed so the page scrolls over
+     the water instead of dragging a second gradient with it. */
+  background:
+    radial-gradient(1100px 460px at 68% -6%, rgba(33, 149, 214, 0.13), transparent 67%),
+    linear-gradient(174deg, var(--stage-field-top) 0%, var(--stage-field-mid) 42%, var(--stage-field-deep) 82%);
+  background-attachment: fixed;
+  background-color: var(--paper);
   color: var(--ink);
   font-family: var(--font-body), "IBM Plex Sans", "Noto Sans SC", system-ui, sans-serif;
   font-feature-settings: "ss01", "cv11", "tnum";
@@ -99,14 +122,13 @@ body {
   position: relative;
 }
 
-.codewhale-mark-primary { fill: var(--signal-gold); }
-.codewhale-mark-current { fill: #48d7ff; }
+.codewhale-mark-primary { fill: var(--mark-ink); }
 
 main, header, footer, nav { position: relative; z-index: 1; }
 
 /* ---------- type ---------- */
-.font-display { font-family: var(--font-display), "Fraunces", "Noto Serif SC", Georgia, serif; }
-.font-cjk { font-family: var(--font-cjk), "Noto Serif SC", "Source Han Serif SC", serif; }
+.font-display { font-family: var(--font-display), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.font-cjk { font-family: var(--font-cjk), "PingFang SC", "Source Han Serif SC", serif; }
 
 /* CJK paragraph rhythm — looser leading, wider tracking for body; tighter for headings */
 .cjk-body {
@@ -160,7 +182,7 @@ html[lang="ko"] .dotline {
 }
 
 h1, h2, h3, h4 {
-  font-family: var(--font-display), "Fraunces", "Noto Serif SC", Georgia, serif;
+  font-family: var(--font-display), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   font-weight: 600;
   letter-spacing: -0.03em;
   color: var(--ink);
@@ -202,8 +224,8 @@ html[lang="ko"] h3 {
 }
 
 /* ---------- structural primitives ---------- */
-/* Hairlines stay charcoal but softened with a touch of opacity so a pure-white
-   background doesn't read as harsh black-on-white office stationery. */
+/* One hairline everywhere: action blue at low alpha, visible on the deep
+   field without ever becoming a border wall. */
 .hairline { border-color: var(--hairline); }
 .hairline-t { border-top: 1px solid var(--hairline); }
 .hairline-b { border-bottom: 1px solid var(--hairline); }
@@ -217,14 +239,16 @@ html[lang="ko"] h3 {
   margin-inline: auto;
 }
 
-/* The single hero band shared by home, docs, and the community portals. */
+/* The single hero band shared by home, docs, and the community portals: the
+   stage surface lightening out of the deep field, with the one cool glow the
+   body field already carries. */
 .hero {
   position: relative;
   overflow: hidden;
   border-bottom: 1px solid var(--hairline);
   background:
-    radial-gradient(circle at 82% 0%, rgba(125, 177, 197, 0.16), transparent 28rem),
-    linear-gradient(180deg, color-mix(in srgb, var(--paper) 72%, white) 0%, var(--paper-deep) 100%);
+    radial-gradient(circle at 82% 0%, rgba(72, 215, 255, 0.1), transparent 28rem),
+    linear-gradient(180deg, color-mix(in srgb, var(--paper-deep) 88%, transparent) 0%, transparent 100%);
   color: var(--ink);
   padding-block: var(--hero-pad);
 }
@@ -252,42 +276,46 @@ html[lang="ko"] h3 {
   .col-rule > * + * { border-left: 0; border-top: 1px solid var(--hairline); }
 }
 
-/* small-caps eyebrow */
+/* small-caps eyebrow — mono chrome, cyan: the bounded accent the Tideline
+   topbar spends on labels */
 .eyebrow {
   font-family: var(--font-mono), "JetBrains Mono", monospace;
   font-size: 0.66rem;
   font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--ink-mute);
+  color: var(--cyan);
 }
 
-/* ---------- compact section marker retained on legacy routes ---------- */
+/* ---------- compact section marker ---------- */
+/* The seal keeps its Han glyph but speaks as Tideline chrome now: a bordered
+   stage plate with cyan ink, not an ink block on paper. */
 .seal {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--ink);
-  color: var(--paper);
-  font-family: "Noto Serif SC", serif;
+  background: var(--paper-deep);
+  border: 1px solid var(--stage-line);
+  color: var(--cyan);
+  font-family: var(--font-cjk), "PingFang SC", serif;
   font-weight: 700;
   width: 2.6rem;
   height: 2.6rem;
-  border-radius: 4px;
+  border-radius: 6px;
   letter-spacing: -0.04em;
 }
 
-/* Indigo variant for the few routes that need a stronger section marker. */
+/* Action-blue variant for the few routes that need a stronger section marker. */
 .seal-indigo {
-  background: var(--indigo);
+  color: var(--indigo);
+  border-color: color-mix(in srgb, var(--indigo) 55%, transparent);
 }
 
-/* Below the waterline the seal inverts. An ink block on the field reads as a
-   hole punched in the water; ivory-on-deep reads as the last editorial device
-   before the seabed. */
+/* Below the waterline the seal stays the same plate — the whole page is water
+   now, so there is nothing left to invert. */
 .ocean-column .seal {
-  background: var(--stage-text);
-  color: var(--ocean-deep);
+  background: var(--stage-elevated);
+  color: var(--cyan);
 }
 
 /* ---------- pills / status ---------- */
@@ -302,11 +330,11 @@ html[lang="ko"] h3 {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   border: 1px solid var(--paper-line);
-  background: var(--paper);
+  background: var(--paper-deep);
   color: var(--ink);
 }
 .pill-hot { background: var(--indigo); color: var(--paper); border-color: var(--indigo); }
-.pill-new { background: var(--paper); color: var(--ink); border-color: var(--ink); }
+.pill-new { background: var(--paper-deep); color: var(--ink); border-color: var(--ink-mute); }
 .pill-jade { background: var(--jade); color: var(--paper); border-color: var(--jade); }
 .pill-ochre { background: var(--ochre); color: var(--paper); border-color: var(--ochre); }
 .pill-ghost { background: transparent; color: var(--ink-mute); border-color: var(--ink-mute); }
@@ -332,7 +360,8 @@ pre.code-block {
   font-family: var(--font-mono), monospace;
   font-size: 0.82rem;
   line-height: 1.55;
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
   overflow-x: auto;
   position: relative;
   white-space: pre;
@@ -342,7 +371,8 @@ pre.code-block::before {
   content: "";
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: 3px;
+  height: 2px;
+  border-radius: 6px 6px 0 0;
   background: linear-gradient(90deg, var(--action-on-dark) 0 70%, var(--seafoam) 70% 100%);
 }
 pre.code-block .prompt { color: var(--action-on-dark); }
@@ -393,7 +423,7 @@ mark.search-highlight {
   z-index: 30;
   top: 0;
   border-bottom: 1px solid var(--hairline);
-  background: rgba(244, 247, 251, 0.94);
+  background: rgba(8, 17, 28, 0.88);
   backdrop-filter: blur(10px);
 }
 
@@ -413,7 +443,7 @@ mark.search-highlight {
   align-items: center;
   gap: 0.7rem;
   color: var(--ink);
-  font-family: var(--font-display), "Fraunces", Georgia, serif;
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
   font-size: 1.15rem;
   font-weight: 600;
   letter-spacing: -0.03em;
@@ -485,14 +515,13 @@ mark.search-highlight {
   letter-spacing: -0.03em;
 }
 
-.paper-wordmark-whale {
-  color: var(--indigo);
+.paper-wordmark-mark {
   flex-shrink: 0;
 }
 
 .paper-wordmark-tag {
   margin-top: 0.18rem;
-  font-family: "Noto Serif SC", "Source Han Serif SC", serif;
+  font-family: var(--font-cjk), "PingFang SC", "Source Han Serif SC", serif;
   font-size: 0.66rem;
   font-weight: 400;
   letter-spacing: 0.12em;
@@ -520,6 +549,7 @@ mark.search-highlight {
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+  border-radius: 5px;
   transition: background-color 150ms ease;
 }
 
@@ -558,6 +588,7 @@ mark.search-highlight {
 .paper-auth-register {
   color: var(--indigo);
   border: 1px solid var(--indigo);
+  border-radius: 5px;
 }
 
 .paper-auth-register:hover {
@@ -806,8 +837,8 @@ mark.search-highlight {
    sine in-out, i.e. the raised cosine it is meant to be. */
 @keyframes cw-caustic {
   0% { transform: translateX(0); }
-  32.5% { transform: translateX(160px); }
-  100% { transform: translateX(160px); }
+  32.5% { transform: translateX(1560px); }
+  100% { transform: translateX(1560px); }
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -1002,7 +1033,7 @@ mark.search-highlight {
 
 /* ---------- decorative big CJK in margin ---------- */
 .margin-glyph {
-  font-family: "Noto Serif SC", serif;
+  font-family: var(--font-cjk), "PingFang SC", "Source Han Serif SC", serif;
   font-weight: 700;
   color: var(--ink);
   opacity: 0.04;
@@ -1106,10 +1137,6 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   font-weight: 600;
 }
 
-.portal-mark svg {
-  color: var(--signal-gold);
-}
-
 .portal-hero h1 {
   max-width: 41rem;
   font-size: clamp(2.4rem, 5vw, 3.7rem);
@@ -1145,24 +1172,25 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 }
 
 .portal-button-primary {
-  border-color: var(--indigo-deep);
-  background: var(--indigo-deep);
-  color: #fff;
+  border-color: var(--indigo);
+  background: var(--indigo);
+  color: var(--paper);
 }
 
 .portal-button-primary:hover {
-  background: var(--ocean-deep);
+  background: var(--indigo-deep);
+  border-color: var(--indigo-deep);
 }
 
 .portal-button-secondary {
-  border-color: var(--paper-line-soft);
-  background: rgba(255, 255, 255, 0.72);
+  border-color: var(--paper-edge);
+  background: var(--paper-deep);
   color: var(--ink);
 }
 
 .portal-button-secondary:hover {
-  border-color: var(--ink-soft);
-  background: #fff;
+  border-color: var(--indigo);
+  color: var(--indigo);
 }
 
 .portal-meta {
@@ -1178,7 +1206,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   border: 1px solid rgba(209, 235, 244, 0.22);
   border-radius: 8px;
   background: var(--ocean-deep);
-  box-shadow: 0 1.25rem 3rem rgba(5, 12, 24, 0.16);
+  box-shadow: 0 1.25rem 3rem rgba(0, 0, 0, 0.45);
   color: var(--stage-soft);
 }
 
@@ -1347,7 +1375,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   border: 1px solid var(--hairline);
   border-radius: 8px;
   background: var(--paper-card);
-  box-shadow: 0 16px 40px rgba(5, 12, 24, 0.08);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
 }
 
 .settings-rail {
@@ -1360,7 +1388,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .settings-rail-title {
   padding: 0 8px 16px;
   color: var(--ink);
-  font-family: var(--font-display), "Fraunces", "Noto Serif SC", Georgia, serif;
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
   font-size: 1rem;
   font-weight: 600;
 }
@@ -1656,8 +1684,8 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 }
 
 .portal-topic-list > a:hover {
-  color: var(--indigo-deep);
-  background: rgba(255, 255, 255, 0.52);
+  color: var(--indigo);
+  background: color-mix(in srgb, var(--indigo) 7%, transparent);
 }
 
 .portal-topic-list strong {
@@ -1955,8 +1983,8 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 }
 
 /* ------------------------------------------------------------------ */
-/*  Product home — newspaper baseline + ocean terminal accents        */
-/*  (issue #4934: restore crisp editorial sheet; fit underwater to it) */
+/*  Product home — the Tideline stage: one dark field, terminal chrome,     */
+/*  and the whale mark.                                                       */
 /* ------------------------------------------------------------------ */
 
 .product-home {
@@ -2058,8 +2086,8 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   align-items: center;
   justify-content: center;
   padding: 0.65rem 1rem;
-  border: 1px solid var(--ink);
-  border-radius: 2px;
+  border: 1px solid var(--stage-line);
+  border-radius: 5px;
   color: var(--ink);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
   font-size: 0.74rem;
@@ -2076,14 +2104,14 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 }
 
 .product-button-primary {
-  border-color: var(--ink);
-  background: var(--ink);
+  border-color: var(--indigo);
+  background: var(--indigo);
   color: var(--paper);
 }
 
 .product-button-primary:hover {
-  border-color: var(--indigo);
-  background: var(--indigo);
+  border-color: var(--indigo-deep);
+  background: var(--indigo-deep);
   color: var(--paper);
 }
 
@@ -2204,24 +2232,8 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 }
 
 /* Paper home keeps light sticky nav (no dark ocean override). */
-body:has(.product-home) .site-nav {
-  border-color: var(--hairline);
-  background: rgba(244, 247, 251, 0.94);
-}
-
-body:has(.product-home) .site-wordmark,
-body:has(.product-home) .nav-link,
-body:has(.product-home) .site-github-link,
-body:has(.product-home) .site-nav-actions button,
-body:has(.product-home) .site-nav-actions select {
-  color: var(--ink);
-}
-
-body:has(.product-home) .site-nav-actions button,
-body:has(.product-home) .site-nav-actions select,
-body:has(.product-home) .site-github-link {
-  border-color: var(--hairline);
-}
+/* The sticky nav is the same Tideline chrome on every route — no per-page
+   overrides. */
 
 /* Constitution trace pane */
 .paper-decides {
@@ -2244,16 +2256,14 @@ body:has(.product-home) .site-github-link {
   line-height: 1.7;
 }
 
-/* The trace plate lifts off the paper-deep band the way the hero capture
-   lifts off the sheet. Depth as hierarchy: ocean objects cast, paper objects
-   stay flat — the ivory cards keep their no-shadow rule. */
+/* The trace plate lifts off the panel band: on the deep field, depth as
+   hierarchy is a cast shadow, never a lighter sheet. */
 .terminal-frame {
-  box-shadow: 0 14px 36px rgba(3, 7, 13, 0.16);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
 }
 
 .paper-start {
   border-bottom: 1px solid var(--hairline);
-  background: var(--paper);
   padding-block: clamp(2.75rem, 5vw, 4.5rem);
 }
 
@@ -2261,8 +2271,7 @@ body:has(.product-home) .site-github-link {
   margin-bottom: 1.5rem;
 }
 
-/* The one pull-quote on the page: a raised editorial sheet, so it takes the
-   ivory card value rather than the raw white it used to bypass tokens with. */
+/* The pull-quote band: one raised panel plate on the field. */
 .product-proof {
   border-bottom: 1px solid var(--hairline);
   background: var(--paper-card);
@@ -2287,15 +2296,14 @@ body:has(.product-home) .site-github-link {
   line-height: 1.75;
 }
 
-/* Workflow is paper. It is four numbered editorial steps that happen to quote
-   a receipt; making the whole band ocean is what stopped the receipt reading
-   as evidence. The receipt below stays an ocean plate ON paper. */
+/* Workflow: four numbered steps and a quoted receipt. The steps are panel
+   plates on the field; the receipt below is the composer-dark plate that
+   carries the evidence. */
 .product-workflow {
   position: relative;
   overflow: hidden;
   padding-block: clamp(4rem, 8vw, 7rem);
   border-bottom: 1px solid var(--hairline);
-  background: var(--paper);
 }
 
 .product-workflow h2 {
@@ -2304,9 +2312,8 @@ body:has(.product-home) .site-github-link {
   font-size: clamp(1.8rem, 3.3vw, 3rem);
 }
 
-/* Hairline-ruled ivory cards on the cool page — cwc's exact card grammar, and
-   the only place the warmth the sheet is asking for actually belongs. No
-   shadow: paper stays flat, and the hairline stays sharp because it is. */
+/* Hairline-ruled panel plates on the field. No shadow on the plates
+   themselves: the hairline carries the separation. */
 .product-workflow-steps {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2318,7 +2325,7 @@ body:has(.product-home) .site-github-link {
   position: relative;
   min-height: 12rem;
   padding: 1.35rem 1.5rem 1.5rem;
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--stage-line);
   border-radius: 6px;
   background: var(--paper-card);
 }
@@ -2354,8 +2361,9 @@ body:has(.product-home) .site-github-link {
   font-family: var(--font-mono), "JetBrains Mono", monospace;
   font-size: clamp(0.68rem, 1.2vw, 0.8rem);
   line-height: 1.45;
-  /* An ocean plate resting on the sheet — the same lift as the trace pane. */
-  box-shadow: 0 14px 34px rgba(3, 7, 13, 0.12);
+  /* The receipt plate lifts off the field — the same cast depth as the
+     trace pane. */
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
 }
 
 .product-receipt span:first-child {
@@ -2563,11 +2571,9 @@ body:has(.product-home) .site-github-link {
   color: var(--indigo-deep);
 }
 
-/* Last band above the waterline. It ends with no rule: a hairline here would be
-   an editorial rule trespassing into water. The transition is the transition. */
+/* The boundaries band carries no field of its own — the water is the page. */
 .product-boundaries {
   padding-block: clamp(4rem, 8vw, 7rem);
-  background: var(--paper);
 }
 
 .product-boundaries-grid {
@@ -2602,7 +2608,7 @@ body:has(.product-home) .site-github-link {
   align-items: baseline;
   gap: 1.5rem;
   padding: 1.25rem 1.4rem;
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--stage-line);
   border-radius: 6px;
   background: var(--paper-card);
 }
@@ -2616,29 +2622,17 @@ body:has(.product-home) .site-github-link {
   font-size: 0.88rem;
 }
 
-/* ---------- the waterline ---------- */
+/* ---------- one water column ---------- */
 /*                                                                            */
-/*  Paper is the editorial voice ABOUT the machine. Ocean is the machine       */
-/*  speaking in its own voice. The page dives exactly once, between            */
-/*  Boundaries and Surfaces — where it stops describing and starts handing     */
-/*  over — and never comes back up.                                           */
-/*                                                                            */
-/*  One column, one gradient, sampled by absolute page position across the     */
-/*  three bands it wraps. The footer's --ocean-deep is the same value as the   */
-/*  column's deep stop, so the seabed continues without a seam and            */
-/*  `.site-footer` needs no change. There is no rule at the waterline.         */
+/*  Tideline: the whole page is the deep-ocean stage. The field gradient      */
+/*  lives on <body> (fixed), so the column wrapper is transparent — bands      */
+/*  keep their own spacing and stage-line rules, but no band restarts the      */
+/*  gradient. The footer's --ocean-deep is the field's deep stop, so the       */
+/*  seabed continues without a seam and `.site-footer` needs no change.        */
 /* -------------------------------------------------------------------------- */
 .ocean-column {
   position: relative;
   isolation: isolate;
-  background:
-    radial-gradient(120% 60% at 50% 0%, rgba(38, 72, 102, 0.35), transparent),
-    linear-gradient(
-      180deg,
-      var(--stage-field-top) 0%,
-      var(--stage-field-mid) 42%,
-      var(--stage-field-deep) 100%
-    );
 }
 
 /* Bands inside the column carry no field of their own. */
@@ -2647,9 +2641,7 @@ body:has(.product-home) .site-github-link {
   background: transparent;
 }
 
-/* One line weight below the waterline. The ink hairline is invisible on the
-   field, and the three ad-hoc action-blue alphas it replaced were three
-   different answers to a question the product settled once. */
+/* One line weight on the field. */
 .ocean-column .hairline,
 .ocean-column .hairline-t,
 .ocean-column .hairline-b,
@@ -2657,9 +2649,7 @@ body:has(.product-home) .site-github-link {
   border-color: var(--stage-line);
 }
 
-/* Below the waterline, hierarchy comes the TUI way — colour weight and ` · `
-   chains, not scale. A 4rem high-contrast serif on deep field was the loudest
-   object on the page and the least like either product. */
+/* Hierarchy comes the TUI way — colour weight and ` · ` chains, not scale. */
 .ocean-column h2 {
   max-width: 54rem;
   color: var(--stage-text);
@@ -2669,9 +2659,8 @@ body:has(.product-home) .site-github-link {
   line-height: 1.12;
 }
 
-/* Tight tracking flatters Fraunces and collides Han; Noto Serif SC also wants
-   the extra leading at this optical size. Extend the existing zh overrides
-   rather than routing around them. */
+/* Tight tracking collides with Han; extend the existing zh overrides rather
+   than routing around them. */
 html[lang="zh"] .ocean-column h2,
 html[lang="ja"] .ocean-column h2,
 html[lang="ko"] .ocean-column h2 {
@@ -2751,7 +2740,8 @@ html[lang="ko"] .ocean-column h2 {
   padding-left: 2.6rem;
 }
 
-/* The copy control sits on `--paper` and must not inherit the band's ivory. */
+/* The copy control sits on the field plate and must not inherit the band's
+   text ink. */
 .product-composer button {
   color: var(--ink);
 }
@@ -2827,7 +2817,7 @@ html[lang="ko"] .ocean-column h2 {
   max-width: 100%;
 }
 
-/* The editorial full stop stays, in Ice rather than Signal Gold. Gold's budget
+/* The closing full stop stays, in Ice rather than Signal Gold. Gold's budget
    on this page is three marks — the whale, the composer's upper hairline, the
    receipt's `report` line — and a decorative period is not one of them. */
 .product-community h2::after {
@@ -3390,25 +3380,21 @@ html[lang="ko"] .ocean-column h2 {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Dark mode — scoped to the /docs routes                            */
+/*  Docs theme — Tideline dark is the site default                     */
 /*                                                                    */
-/*  A full site-wide inversion is unsafe here: several marketing      */
-/*  surfaces are intentionally dark (`bg-ink text-paper` — the hero   */
-/*  closer, the terminal player, the LIVE ticker badge) and would     */
-/*  invert into light blocks. The reference-site minimum is dark      */
-/*  docs, so the dark token overrides are set ON the `.docs-theme`    */
-/*  wrapper only. Because the Tailwind surface/ink utilities resolve  */
-/*  through these vars, everything inside the docs subtree re-themes  */
-/*  while the rest of the site (and the shared nav/footer) stays      */
-/*  light. Default follows prefers-color-scheme; an explicit          */
-/*  data-theme on <html> wins.                                        */
+/*  The site is dark everywhere. The docs theme toggle (docs routes     */
+/*  only) offers the Blue Stage light sheet as an opt-in, exactly the   */
+/*  way the TUI keeps Light as a preset beside the dark default. The    */
+/*  light override is set on `html[data-theme="light"] .docs-theme`;    */
+/*  the attribute is applied before paint by the inline script in the   */
+/*  locale layout, so there is no theme flash.                          */
 /* ------------------------------------------------------------------ */
 
 .docs-theme {
-  --docs-accent: #315fd8;
-  --docs-button-bg: #fff;
-  --docs-button-border: #aeb8c6;
-  --docs-button-text: #1b2230;
+  --docs-accent: #6aaef2;
+  --docs-button-bg: #0e1729;
+  --docs-button-border: #263e5c;
+  --docs-button-text: #f6f2e8;
   background: var(--paper);
   color: var(--ink);
 }
@@ -3431,52 +3417,41 @@ html[lang="ko"] .ocean-column h2 {
   outline-offset: 2px;
 }
 
-@media (prefers-color-scheme: dark) {
-  html:not([data-theme="light"]) .docs-theme {
-    color-scheme: dark;
-    --c-paper: 3 7 13;
-    --c-paper-deep: 14 23 41;
-    --c-paper-edge: 38 62 92;
-    --c-ink: 246 242 232;
-    --c-ink-soft: 182 192 212;
-    --c-ink-mute: 147 160 184;
-    --paper: #03070d;
-    --paper-deep: #0e1729;
-    --paper-edge: #263e5c;
-    --paper-card: #182742;
-    --ink: #f6f2e8;
-    --ink-soft: #b6c0d4;
-    --ink-mute: #93a0b8;
-    --hairline: rgba(106, 174, 242, 0.22);
-    --code-bg: #08111c;
-    --code-fg: #f6f2e8;
-    --docs-accent: #6aaef2;
-    --docs-button-bg: #182742;
-    --docs-button-border: #263e5c;
-    --docs-button-text: #f6f2e8;
-  }
-}
-
-[data-theme="dark"] .docs-theme {
-  color-scheme: dark;
-  --c-paper: 3 7 13;
-  --c-paper-deep: 14 23 41;
-  --c-paper-edge: 38 62 92;
-  --c-ink: 246 242 232;
-  --c-ink-soft: 182 192 212;
-  --c-ink-mute: 147 160 184;
-  --paper: #03070d;
-  --paper-deep: #0e1729;
-  --paper-edge: #263e5c;
-  --paper-card: #182742;
-  --ink: #f6f2e8;
-  --ink-soft: #b6c0d4;
-  --ink-mute: #93a0b8;
-  --hairline: rgba(106, 174, 242, 0.22);
-  --code-bg: #08111c;
+/* The opt-in light sheet: Blue Stage light tokens, scoped to the docs
+   subtree so the shared nav/footer keep the Tideline field. */
+html[data-theme="light"] .docs-theme {
+  color-scheme: light;
+  --c-paper: 244 247 251;
+  --c-paper-deep: 232 238 248;
+  --c-paper-edge: 203 211 223;
+  --c-ink: 20 33 58;
+  --c-ink-soft: 69 81 104;
+  --c-ink-mute: 91 103 128;
+  --c-indigo: 49 95 216;
+  --c-indigo-deep: 36 72 166;
+  --paper: #f4f7fb;
+  --paper-deep: #e8eef8;
+  --paper-edge: #cbd3df;
+  --paper-card: #fffdf8;
+  --paper-line: #1b2230;
+  --paper-line-soft: #cbd3df;
+  --ink: #14213a;
+  --ink-soft: #455168;
+  --ink-mute: #5b6780;
+  --indigo: #315fd8;
+  --indigo-deep: #2448a6;
+  --indigo-pale: #e8eef8;
+  --ochre: #7a5500;
+  --jade: #08766d;
+  --cobalt: #315fd8;
+  --cyan: #0f7f9f;
+  /* The whale silhouette re-inks to the light sheet's body navy. */
+  --mark-ink: #14213a;
+  --hairline: rgba(20, 35, 70, 0.14);
+  --code-bg: #03070d;
   --code-fg: #f6f2e8;
-  --docs-accent: #6aaef2;
-  --docs-button-bg: #182742;
-  --docs-button-border: #263e5c;
-  --docs-button-text: #f6f2e8;
+  --docs-accent: #315fd8;
+  --docs-button-bg: #fff;
+  --docs-button-border: #aeb8c6;
+  --docs-button-text: #1b2230;
 }

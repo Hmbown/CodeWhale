@@ -89,6 +89,7 @@ pub(crate) const ARCEE_TRINITY_MINI_MODEL: &str = "trinity-mini";
 pub(crate) const DEFAULT_MOONSHOT_MODEL: &str = "kimi-k2.7-code";
 pub(crate) const MOONSHOT_KIMI_K2_6_MODEL: &str = "kimi-k2.6";
 pub(crate) const DEFAULT_MOONSHOT_BASE_URL: &str = "https://api.moonshot.ai/v1";
+pub(crate) const MOONSHOT_CN_BASE_URL: &str = "https://api.moonshot.cn/v1";
 pub(crate) const DEFAULT_KIMI_CODE_MODEL: &str = "kimi-for-coding";
 pub(crate) const DEFAULT_KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 pub(crate) const DEFAULT_SGLANG_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
