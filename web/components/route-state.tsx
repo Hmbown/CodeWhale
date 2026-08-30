@@ -29,6 +29,7 @@ export function ErrorRoute({ reset, digest }: { reset: () => void; digest?: stri
   return (
     <ErrorState
       locale={locale}
+      titleAs="h1"
       body={digest ? `${t.errorBody} (${digest})` : t.errorBody}
       action={
         <>
@@ -45,15 +46,22 @@ export function ErrorRoute({ reset, digest }: { reset: () => void; digest?: stri
 export function NotFoundRoute() {
   const locale = useRouteLocale();
   const t = getStates(locale);
+  // The plate is the whole page, so its title is the page's <h1>. The body
+  // names the documentation index; the primary action is that index, and
+  // the home link is the secondary way out.
   return (
     <EmptyState
       locale={locale}
       title={t.notFoundTitle}
       body={t.notFoundBody}
+      titleAs="h1"
       action={
         <>
           <Link href={`/${locale}/docs`} className="portal-button portal-button-primary">
-            {t.homeLink.replace(/\.$/, "")}
+            {t.docsIndexLink}
+          </Link>
+          <Link href={`/${locale}`} className="portal-button portal-button-secondary">
+            {t.homeLink}
           </Link>
         </>
       }

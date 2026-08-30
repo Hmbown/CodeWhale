@@ -399,8 +399,17 @@ export interface StatesDict {
   retry: string;
   reload: string;
   homeLink: string;
+  /** The 404 plate's primary action: the docs index, which the body names. */
+  docsIndexLink: string;
   notFoundTitle: string;
   notFoundBody: string;
+  /**
+   * A data-bearing page whose source was not asked (build-time prerender)
+   * or refused (rate limit, outage). Distinct from `empty`, which asserts
+   * that nothing exists, and from `error`, which means the render threw.
+   */
+  unavailableTitle: string;
+  unavailableBody: string;
   /** Connection banner (typed state in lib/connection-state.ts). */
   offlineTitle: string;
   offlineBody: string;
@@ -539,6 +548,8 @@ export interface ChangelogDict {
   /** "{shown} of {total} entries" */
   moreEntries: string;
   fullNotes: string;
+  /** "Full notes for {version}" — per-release deep link into CHANGELOG.md. */
+  releaseNotesLink: string;
   emptyTitle: string;
   emptyBody: string;
 }

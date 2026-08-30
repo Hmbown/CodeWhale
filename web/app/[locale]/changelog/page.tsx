@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { EmptyState } from "@/components/surface-state";
 import { CHANGELOG, type ChangelogRelease } from "@/lib/changelog.generated";
+import { changelogAnchor } from "@/scripts/changelog-lib.mjs";
 import { getFacts } from "@/lib/facts";
 import { fill, getChangelog, getChrome } from "@/lib/i18n/dictionaries";
 import { REPO_RELEASES_URL, REPO_URL } from "@/lib/i18n/links";
@@ -141,6 +142,9 @@ function Release({
   const chrome = getChrome(locale);
   const heading = release.unreleased ? t.unreleasedHeading : `v${release.version}`;
   const anchor = release.unreleased ? "unreleased" : `v${release.version}`;
+  // Every entry here is clipped or capped for the web; this is the in-page
+  // path to the unabridged notes for exactly this version.
+  const notesUrl = `${REPO_URL}/blob/main/CHANGELOG.md#${changelogAnchor(release)}`;
 
   return (
     <article id={anchor} className="changelog-release scroll-mt-32">
@@ -158,6 +162,9 @@ function Release({
               {t.compareLink}
             </a>
           )}
+          <a href={notesUrl} target="_blank" rel="noreferrer">
+            {fill(t.releaseNotesLink, { version: heading })}
+          </a>
         </div>
       </div>
       {release.unreleased && <p className="changelog-unreleased-note">{t.unreleasedNote}</p>}
@@ -167,9 +174,9 @@ function Release({
             <h3>
               {section.heading}
               {section.itemCount > section.items.length && (
-                <span>
+                <a href={notesUrl} target="_blank" rel="noreferrer">
                   {fill(t.moreEntries, { shown: section.items.length, total: section.itemCount })}
-                </span>
+                </a>
               )}
             </h3>
             <ul>

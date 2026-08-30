@@ -176,7 +176,30 @@ function isBot(login: string): boolean {
  * unauthenticated that is ~13 requests/hour against GitHub's 60/hour/IP.
  */
 export async function fetchFeed(token?: string, limit = 30): Promise<FeedItem[]> {
-  if (isProductionBuild()) return [];
+  return (await loadFeed(token, limit)).items;
+}
+
+/**
+ * Why the feed is what it is. `fetchFeed` flattens this to a list, which is
+ * right for optional chrome (the homepage ticker) but wrong for a page whose
+ * whole body is the feed: there, "GitHub had nothing" and "GitHub was not
+ * asked" or "GitHub refused" must render differently, or a rate limit and a
+ * build-time prerender both masquerade as an honest empty record.
+ *
+ *  - `ok`          — every list endpoint answered; an empty list is real.
+ *  - `skipped`     — static generation; nothing was fetched.
+ *  - `unavailable` — an issues/pulls call came back non-ok (rate limit,
+ *                    outage); `items` holds whatever did arrive.
+ */
+export type FeedLoadStatus = "ok" | "skipped" | "unavailable";
+
+export interface FeedLoad {
+  items: FeedItem[];
+  status: FeedLoadStatus;
+}
+
+export async function loadFeed(token?: string, limit = 30): Promise<FeedLoad> {
+  if (isProductionBuild()) return { items: [], status: "skipped" };
 
   const [issuesRes, pullsRes, releasesRes] = await Promise.all([
     fetch(
@@ -193,6 +216,8 @@ export async function fetchFeed(token?: string, limit = 30): Promise<FeedItem[]>
     }),
   ]);
 
+  // Releases are a garnish on the feed; the two list calls are the record.
+  const status: FeedLoadStatus = issuesRes.ok && pullsRes.ok ? "ok" : "unavailable";
   const issues = await responseArray<RawIssue>(issuesRes);
   const pulls = await responseArray<RawIssue & { merged_at?: string | null }>(pullsRes);
   const releases = await responseArray<RawRelease>(releasesRes);
@@ -290,7 +315,7 @@ export async function fetchFeed(token?: string, limit = 30): Promise<FeedItem[]>
     kept[kept.length - 1] = newestRelease;
   }
 
-  return kept;
+  return { items: kept, status };
 }
 
 async function responseArray<T>(res: Response): Promise<T[]> {

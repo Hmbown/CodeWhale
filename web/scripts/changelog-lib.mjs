@@ -11,8 +11,11 @@
  */
 
 const DEFAULT_LIMIT = 6;
-const DEFAULT_ITEMS_PER_SECTION = 8;
-const DEFAULT_ITEM_CHARS = 240;
+// Most Keep-a-Changelog bullets in this repository run one to three
+// sentences; 480 chars keeps the great majority readable in place, and the
+// per-release "Full notes" link on /changelog carries the rest.
+const DEFAULT_ITEMS_PER_SECTION = 12;
+const DEFAULT_ITEM_CHARS = 480;
 
 /** Collapse Markdown emphasis and links to plain text for a one-line summary. */
 export function plainText(markdown) {
@@ -120,6 +123,24 @@ export function parseChangelog(markdown, options = {}) {
         })),
     })),
   };
+}
+
+/**
+ * The fragment GitHub's Markdown renderer assigns to a release heading such
+ * as `## [0.9.11] - 2026-08-22`: lower-cased, punctuation other than hyphens
+ * dropped, spaces turned to hyphens — so `0911---2026-08-22`. Lets the site
+ * deep-link a version's full notes instead of the top of a 470 KB file.
+ */
+export function changelogAnchor(release) {
+  const heading = release.unreleased
+    ? "Unreleased"
+    : release.date
+      ? `[${release.version}] - ${release.date}`
+      : `[${release.version}]`;
+  return heading
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N} _-]/gu, "")
+    .replace(/ /g, "-");
 }
 
 /** Render the generated TypeScript module from a parse result. */

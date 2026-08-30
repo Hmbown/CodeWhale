@@ -26,6 +26,7 @@ export const changelog: ChangelogDict = {
   releasePageLink: "Release page ↗",
   moreEntries: "{shown} of {total} entries shown",
   fullNotes: "Full notes in CHANGELOG.md ↗",
+  releaseNotesLink: "Full notes for {version} ↗",
   emptyTitle: "No release notes were derived",
   emptyBody:
     "The build did not find a parsable CHANGELOG.md. The GitHub release list is still the record.",

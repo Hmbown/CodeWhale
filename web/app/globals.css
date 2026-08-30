@@ -3298,7 +3298,15 @@ html[lang="ko"] .ocean-column h2 {
       "sidebar";
   }
 
-  .docs-sidebar nav { display: none; }
+  /* The one docs nav stays reachable below the article: the groups reflow
+     into columns so 23 topics read as an index, not a scroll of links. */
+  .docs-sidebar nav {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+    column-gap: 2rem;
+  }
+
+  .docs-sidebar-group:last-child { border-bottom: 0; }
 }
 
 @media (max-width: 640px) {
@@ -3444,7 +3452,9 @@ html[data-theme="light"] .docs-theme {
   --ochre: #7a5500;
   --jade: #08766d;
   --cobalt: #315fd8;
-  --cyan: #0f7f9f;
+  /* 5.3:1 on --paper and 4.9:1 on --paper-deep, so the 0.62rem release-truth
+     label clears body-text contrast on the light sheet too. */
+  --cyan: #0b6f8c;
   /* The whale silhouette re-inks to the light sheet's body navy. */
   --mark-ink: #14213a;
   --hairline: rgba(20, 35, 70, 0.14);
@@ -3903,12 +3913,18 @@ html[data-theme="light"] .docs-theme {
   color: var(--cyan);
 }
 
-.changelog-sections h3 span {
+.changelog-sections h3 a {
   color: var(--ink-mute);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
   font-size: 0.64rem;
   letter-spacing: 0.04em;
   text-transform: none;
+}
+
+.changelog-sections h3 a:hover {
+  color: var(--indigo);
+  text-decoration: underline;
+  text-underline-offset: 0.2rem;
 }
 
 .changelog-sections ul {

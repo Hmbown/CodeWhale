@@ -16,9 +16,13 @@ export const states: StatesDict = {
   retry: "Try again",
   reload: "Reload the page",
   homeLink: "Back to the home page",
+  docsIndexLink: "Open the documentation index",
   notFoundTitle: "There is no page at this address",
   notFoundBody:
     "The link may be old, or the page may have moved. The documentation index lists every current page.",
+  unavailableTitle: "The live record has not loaded",
+  unavailableBody:
+    "The source did not answer the last refresh, or this page has not refreshed since it was built. Nothing is shown in its place.",
 
   offlineTitle: "You are offline",
   offlineBody: "Actions are paused until the connection returns. Nothing shown here is refreshing.",

@@ -15,6 +15,7 @@ import { getStates } from "@/lib/i18n/dictionaries";
  */
 
 type Tone = "empty" | "loading" | "error";
+type TitleTag = "p" | "h1" | "h2";
 
 function Block({
   tone,
@@ -24,6 +25,7 @@ function Block({
   compact,
   role,
   live,
+  titleAs: Title = "p",
 }: {
   tone: Tone;
   title: string;
@@ -32,6 +34,8 @@ function Block({
   compact?: boolean;
   role?: "status" | "alert";
   live?: "polite" | "assertive";
+  /** A route-level plate that is the whole page owns its `<h1>`. */
+  titleAs?: TitleTag;
 }) {
   return (
     <div
@@ -42,7 +46,7 @@ function Block({
     >
       <span className="state-mark" aria-hidden="true" />
       <div className="state-copy">
-        <p className="state-title">{title}</p>
+        <Title className="state-title">{title}</Title>
         {body && <p className="state-body">{body}</p>}
         {action && <div className="state-actions">{action}</div>}
       </div>
@@ -56,12 +60,14 @@ export function EmptyState({
   body,
   action,
   compact,
+  titleAs,
 }: {
   locale: string;
   title?: string;
   body?: string;
   action?: ReactNode;
   compact?: boolean;
+  titleAs?: TitleTag;
 }) {
   const t = getStates(locale);
   return (
@@ -71,6 +77,35 @@ export function EmptyState({
       body={body ?? t.emptyBody}
       action={action}
       compact={compact}
+      titleAs={titleAs}
+    />
+  );
+}
+
+/**
+ * The source was not asked or did not answer. Same plate as an error, same
+ * single retry, but the copy says "not loaded" rather than "broken": on an
+ * ISR page the next refresh is the honest fix, and nothing is shown in place
+ * of the missing record.
+ */
+export function UnavailableState({
+  locale,
+  action,
+  compact,
+}: {
+  locale: string;
+  action?: ReactNode;
+  compact?: boolean;
+}) {
+  const t = getStates(locale);
+  return (
+    <Block
+      tone="error"
+      title={t.unavailableTitle}
+      body={t.unavailableBody}
+      action={action}
+      compact={compact}
+      role="status"
     />
   );
 }
@@ -114,12 +149,14 @@ export function ErrorState({
   body,
   action,
   compact,
+  titleAs,
 }: {
   locale: string;
   title?: string;
   body?: string;
   action?: ReactNode;
   compact?: boolean;
+  titleAs?: TitleTag;
 }) {
   const t = getStates(locale);
   return (
@@ -130,6 +167,7 @@ export function ErrorState({
       action={action}
       compact={compact}
       role="alert"
+      titleAs={titleAs}
     />
   );
 }

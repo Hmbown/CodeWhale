@@ -29,4 +29,9 @@ export interface ParseChangelogOptions {
 export function plainText(markdown: string): string;
 export function clip(text: string, max?: number): string;
 export function parseChangelog(markdown: string, options?: ParseChangelogOptions): ParsedChangelog;
+export function changelogAnchor(release: {
+  version: string;
+  date: string | null;
+  unreleased: boolean;
+}): string;
 export function renderChangelogModule(parsed: ParsedChangelog, sourcePath?: string): string;

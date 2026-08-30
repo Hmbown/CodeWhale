@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchFeed, fetchRepoStats, lastPageFromLink, relativeAge, relativeTime } from "./github";
+import { fetchFeed, fetchRepoStats, lastPageFromLink, loadFeed, relativeAge, relativeTime } from "./github";
 
 // We test the pure helper functions directly.
 // The async fetch functions require mocking the global fetch.
@@ -13,6 +13,9 @@ describe("production-build fallback", () => {
 
     try {
       expect(await fetchFeed(undefined, 10)).toEqual([]);
+      // A page that is the feed needs to know nothing was asked for, so
+      // the prerender does not pass as an honest empty record.
+      expect(await loadFeed(undefined, 10)).toEqual({ items: [], status: "skipped" });
       expect(await fetchRepoStats()).toMatchObject({
         stars: 0,
         forks: 0,
@@ -327,6 +330,33 @@ describe("fetchFeed", () => {
       vi.fn(async () => new Response("rate limited", { status: 403 })),
     );
     expect(await fetchFeed(undefined, 10)).toEqual([]);
+  });
+
+  it("reports a refused list call as unavailable, not as an empty record", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("rate limited", { status: 403 })),
+    );
+    expect(await loadFeed(undefined, 10)).toEqual({ items: [], status: "unavailable" });
+  });
+
+  it("keeps what arrived and still flags the load when one list call fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/pulls?")) return new Response("rate limited", { status: 403 });
+        if (url.includes("/issues?")) return json(ISSUES);
+        return json([]);
+      }),
+    );
+    const load = await loadFeed(undefined, 10);
+    expect(load.status).toBe("unavailable");
+    expect(load.items.map((i) => i.number)).toEqual([4901, 4880]);
+  });
+
+  it("reports ok — so an empty list means empty — when every list call answered", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json([])));
+    expect(await loadFeed(undefined, 10)).toEqual({ items: [], status: "ok" });
   });
 });
 

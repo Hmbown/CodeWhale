@@ -766,8 +766,11 @@
     "retry": "重试",
     "reload": "重新加载页面",
     "homeLink": "返回首页",
+    "docsIndexLink": "打开文档目录",
     "notFoundTitle": "这个地址没有页面",
     "notFoundBody": "链接可能已过期，或页面已迁移。文档目录列出了当前所有页面。",
+    "unavailableTitle": "实时记录尚未加载",
+    "unavailableBody": "数据源没有响应上一次刷新，或者此页面自构建以来尚未刷新。这里不会用编造的内容填充。",
     "offlineTitle": "你已离线",
     "offlineBody": "操作已暂停，直到网络恢复。此处显示的内容不会刷新。",
     "reconnectingTitle": "正在重新连接…",
@@ -798,6 +801,7 @@
     "releasePageLink": "发布页 ↗",
     "moreEntries": "显示 {shown} / {total} 条",
     "fullNotes": "完整说明见 CHANGELOG.md ↗",
+    "releaseNotesLink": "{version} 完整说明 ↗",
     "emptyTitle": "没有解析出发布说明",
     "emptyBody": "构建时没有找到可解析的 CHANGELOG.md。GitHub 的发布列表仍然是权威记录。"
   }

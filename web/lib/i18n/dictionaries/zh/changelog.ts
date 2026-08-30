@@ -24,6 +24,7 @@ export const changelog: ChangelogDict = {
   releasePageLink: "发布页 ↗",
   moreEntries: "显示 {shown} / {total} 条",
   fullNotes: "完整说明见 CHANGELOG.md ↗",
+  releaseNotesLink: "{version} 完整说明 ↗",
   emptyTitle: "没有解析出发布说明",
   emptyBody: "构建时没有找到可解析的 CHANGELOG.md。GitHub 的发布列表仍然是权威记录。",
 };

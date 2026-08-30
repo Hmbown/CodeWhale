@@ -30,42 +30,54 @@ export const CHANGELOG: ChangelogRelease[] = [
       {
         "heading": "Added",
         "items": [
-          "Website: the public site moves to the Tideline deep-ocean design language (dark by default with an opt-in light documentation sheet, palette grounded in the TUI's WHALE_* tokens) and the new whale brand mark across the favicon, app icons,…",
-          "Add codewhale dispatch / /dispatch so a local session can propose a Codewhale cloud agent against an explicit github, cnb, or gitee remote. Confirmation is required; missing credentials fail closed; cloud jobs share the existing /jobs…",
-          "/login reports the Codewhale account session and provider-key next steps. The internal cloud-agent credential is not user surface: there is no auth set-slot/auth clear-slot command, no hint, and no completion entry for it — membership…",
-          "Add the Tideline component family from the ratatui translation spec (#5698's screens, riding the #5699 work-strip layout): hero startup surface with quick actions and option strip, composer restyle with the fluke cap, notifications inbox,…",
-          "Route Contract Phase 1: RouteResolver is the runtime path for resolve_runtime_options; codewhale providers export --json ships the owned descriptor catalog; CLI --provider accepts any catalog route id (the closed ProviderArg enum is…",
+          "Website: the public site moves to the Tideline deep-ocean design language (dark by default with an opt-in light documentation sheet, palette grounded in the TUI's WHALE_* tokens) and the new whale brand mark across the favicon, app icons, web manifest, nav wordmark, and social card (#5573).",
+          "Add codewhale dispatch / /dispatch so a local session can propose a Codewhale cloud agent against an explicit github, cnb, or gitee remote. Confirmation is required; missing credentials fail closed; cloud jobs share the existing /jobs surface as kind=cloud. See DAYTONA_CLOUD_DISPATCH.md.",
+          "/login reports the Codewhale account session and provider-key next steps. The internal cloud-agent credential is not user surface: there is no auth set-slot/auth clear-slot command, no hint, and no completion entry for it — membership (codewhale login) is the only door.",
+          "Add the Tideline component family from the ratatui translation spec (#5698's screens, riding the #5699 work-strip layout): hero startup surface with quick actions and option strip, composer restyle with the fluke cap, notifications inbox, merged footer band, pod ledger, receipt stream, theme list with motion toggles, live preview, settings rail, and the left rail — each a standalone render module pinned by 28 new byte-exact golden buffers. Frame wiring follows the Tideline…",
+          "Route Contract Phase 1: RouteResolver is the runtime path for resolve_runtime_options; codewhale providers export --json ships the owned descriptor catalog; CLI --provider accepts any catalog route id (the closed ProviderArg enum is deleted). Catalog layers are bundled → models.dev → provider /v1/models → config.toml → user, with policy DENY last and never overridden.",
           "Add provider-native web search for documented Xiaomi MiMo 2.5 Pro and 2.5 chat routes while keeping neighboring models and custom gateways fail-closed.",
-          "Add structured provider-native web search for exact Z.AI global and Zhipu China general API routes, using each site's documented search engine value. Existing open.bigmodel.cn configurations now share Z.AI's official model namespace and…",
-          "Add provider-native web search for documented Qwen models on ModelStudio Token Plan's Responses Harness, without enabling Coding Plan or Anthropic routes."
+          "Add structured provider-native web search for exact Z.AI global and Zhipu China general API routes, using each site's documented search engine value. Existing open.bigmodel.cn configurations now share Z.AI's official model namespace and credential scope; unknown model IDs still pass through.",
+          "Add provider-native web search for documented Qwen models on ModelStudio Token Plan's Responses Harness, without enabling Coding Plan or Anthropic routes.",
+          "Added /copy to place the latest completed assistant response on the clipboard without copying tools, system messages, hidden reasoning, or active partial output (#5668).",
+          "Add provider-native web search for documented DeepSeek V4 routes through the Responses API, with fail-closed capability gating for compatible custom endpoints.",
+          "Add provider-native search for exact Moonshot K3 Formula, legacy K2.6 built-in search, and Kimi Code membership /search routes. Treat the exact Moonshot China endpoint as a first-party direct route.",
+          "Z.ai GLM-5.3-Flash and OpenRouter z-ai/glm-5.3-flash are first-class picker rows (/model GLM-5.3-Flash). Flash is the faster/explore sibling of GLM-5.3; the Z.ai default stays GLM-5.3. List price is $0.15/$0.50 per 1M (durable; the 50% promo through 2026-09-09 is not the catalog row)."
         ],
         "itemCount": 28
       },
       {
         "heading": "Changed",
         "items": [
-          "Provider-native web search now applies domain constraints before accepting an attempt, discards generated answers when returned citations violate those constraints, and preserves the caller's configured/local timeout as an independent…",
+          "Provider-native web search now applies domain constraints before accepting an attempt, discards generated answers when returned citations violate those constraints, and preserves the caller's configured/local timeout as an independent fallback budget (#5681).",
           "Idle session metrics omit zero facts (0 turns, LLM 0s) until the runtime has evidence. Working chrome says in the current instead of a generic working.",
           "Deleted nine uncompiled runtime_contract/ staging files. Live contracts remain model.rs and termination.rs.",
           "The first #5587 dead-code sweep converts audited test-only helpers to #[cfg(test)], keeping production builds free of test-only APIs without changing runtime behavior.",
-          "/plugin reload is now discoverable when on-disk plugin bundles change: the next send and /plugin list nudge once with Run /plugin reload to apply instead of silently keeping the stale catalog (#5579). Trust is unchanged; this does not…",
+          "/plugin reload is now discoverable when on-disk plugin bundles change: the next send and /plugin list nudge once with Run /plugin reload to apply instead of silently keeping the stale catalog (#5579). Trust is unchanged; this does not auto-reload.",
           "Context-pressure warnings and critical alerts now remain visible in sticky UI status until compaction or explicit dismissal, instead of disappearing into scrolling turn metadata (#5620).",
-          "The Runtime thread store defaults to a per-session root ($CODEWHALE_HOME/sessions/<id>/runtime) so multiple Codewhale processes on one machine no longer share one owner lock (#5630). The exclusive lock is unchanged; CODEWHALE_RUNTIME_DIR…",
-          "Session token totals now include display-only per-model-call deltas while a turn is running, including input/output and cache-class counters; the authoritative TurnComplete totals still reconcile exactly once (#5581)."
+          "The Runtime thread store defaults to a per-session root ($CODEWHALE_HOME/sessions/<id>/runtime) so multiple Codewhale processes on one machine no longer share one owner lock (#5630). The exclusive lock is unchanged; CODEWHALE_RUNTIME_DIR still selects a shared root when that is intended.",
+          "Session token totals now include display-only per-model-call deltas while a turn is running, including input/output and cache-class counters; the authoritative TurnComplete totals still reconcile exactly once (#5581).",
+          "Transcript focus now exposes per-block actions: y copies content, Y copies the rendered metadata view, Enter opens a fullscreen block pager, and r opens raw detail; the existing Tasks rail shortcuts remain unchanged (#5551).",
+          "Provider neutrality (#5588): model resolution of omitted/aliased models is now provider-relative, OpenAI-native defaults no longer route through another provider's table, CLI credentials stay provider-scoped, and NVIDIA credentials no longer leak into the DeepSeek keychain. Neutrality test matrices exercise several providers instead of standing in with one.",
+          "The workflow engine module was decomposed out of its 3k-line mega-file into journal, usage, and report modules plus a module directory (#5586 slices 1a/B/C/D), a semantic-free move verified by normalized-content hash.",
+          "Compaction refusals are now always named (#5577): silent holds under context pressure are gone, the context meter honors the same provider-billed prompt the trigger uses (T1), and prune outcomes are projected without cloning the transcript."
         ],
         "itemCount": 14
       },
       {
         "heading": "Fixed",
         "items": [
-          "The sandbox read deny-list matches a rule's resolved path as well as its literal spelling. On macOS /etc and /var are symlinks into /private, so a read of /private/etc/sudoers walked around the /etc/sudoers rule, and a rule written against…",
-          "Background shells are first-class work-strip rows (▾ Shells N) you can open, watch, and cancel by the shell_* id on the row. /jobs cancel all cancels running shells; it no longer looks up a task named all. The composer hourglass crumb no…",
+          "The sandbox read deny-list matches a rule's resolved path as well as its literal spelling. On macOS /etc and /var are symlinks into /private, so a read of /private/etc/sudoers walked around the /etc/sudoers rule, and a rule written against a symlinked directory never fired for the real path that canonicalize and the process cwd hand back.",
+          "Background shells are first-class work-strip rows (▾ Shells N) you can open, watch, and cancel by the shell_* id on the row. /jobs cancel all cancels running shells; it no longer looks up a task named all. The composer hourglass crumb no longer stands in for a shell surface.",
           "codewhale logout and /logout now clear the Codewhale account session and the Daytona secret slot, not only provider API keys. The TUI crate's leftover login --api-key path no longer claims to save a key.",
-          "Account sessions no longer read the macOS Keychain. Unsigned or rebuilt codewhale binaries were a new Keychain ACL principal every time, so codewhale web and the TUI popped a password dialog on start. Sessions now use…",
-          "Hardened the dispatcher-side config parse the same way: ConfigStore loads and project-config parsing now deserialize ConfigToml on a dedicated 16 MiB-stack thread (the guided-setup save path could overflow a 2 MiB worker stack the same way…",
-          "Fixed detached interactive agents reporting worker usage after the parent turn ends with the usage missing from the session/live /cost total (#5597): interactive turns acquire an owner-scoped runtime usage lease, late usage enters the…",
-          "Fixed the sub-agent fiasco class: in-workspace absolute git -C no longer trips the read-only child shell gate with a coherent bounded gate (#5595), turn end parks turn-owned children resumably instead of silently cancelling them (#5596),…",
-          "Fixed workflow responseSchema failure handling (#5583): bounded repair with typed receipts (kind + attempt), raw-output receipts persisted as artifacts that survive reload, and failures surfaced instead of null success (#5528). Degraded…"
+          "Account sessions no longer read the macOS Keychain. Unsigned or rebuilt codewhale binaries were a new Keychain ACL principal every time, so codewhale web and the TUI popped a password dialog on start. Sessions now use ~/.codewhale/secrets/secrets.json (mode 0600), the same store as provider keys. Extracted from the Keychain-retirement half of #5632.",
+          "Hardened the dispatcher-side config parse the same way: ConfigStore loads and project-config parsing now deserialize ConfigToml on a dedicated 16 MiB-stack thread (the guided-setup save path could overflow a 2 MiB worker stack the same way the TUI's ConfigFile parse did), and the #5585 setup-confirm toast test runs its runtime on an equally sized thread instead of overflowing the default libtest stack.",
+          "Fixed detached interactive agents reporting worker usage after the parent turn ends with the usage missing from the session/live /cost total (#5597): interactive turns acquire an owner-scoped runtime usage lease, late usage enters the session cost pool without reopening the sealed mailbox, and worker/session/reload accounting share one hashed response identity so retried deliveries stay exactly-once.",
+          "Fixed the sub-agent fiasco class: in-workspace absolute git -C no longer trips the read-only child shell gate with a coherent bounded gate (#5595), turn end parks turn-owned children resumably instead of silently cancelling them (#5596), stale write-claims are released by liveness with coordinate release (#5562), and the verifier role description matches its real surface (#5562).",
+          "Fixed workflow responseSchema failure handling (#5583): bounded repair with typed receipts (kind + attempt), raw-output receipts persisted as artifacts that survive reload, and failures surfaced instead of null success (#5528). Degraded owner snapshots no longer project as ordinary Completed runs (#5582), typed task error kinds enable fail-fast parallel/pipeline (R9), and /workflow confirm finds the draft despite interleaved messages.",
+          "Fixed the DeepSeek session that never auto-compacted at 842k/1M (#5577): the exact billed_842k_on_a_1m_window_compacts_despite_a_small_estimate regression pins the trigger.",
+          "Fixed sandbox escapes and authority gaps: workspace-write tools resolve hard-linked files before writing (S2, #5569), an opt-in read deny-list bounds full-disk reads in any posture (S1, #5568), and session grants match the command family instead of widening the whole tool (R2).",
+          "Fixed provider-transport robustness: non-streaming HTTP requests are bounded by a read timeout (R4), and Chat-Completions mid-stream error frames surface instead of hanging (R3). MCP OAuth expiry now reacts to 401/403 with a named recovery path and login hint instead of looking like a broken server (T4, #5572).",
+          "Fixed Fleet lifecycle gaps: detached workers are reaped when their manager dies (R7) and the per-task wall-clock timeout is enforced (R5); the local Fleet host compiles on non-Unix targets; detached schema repair stays within the runtime budget."
         ],
         "itemCount": 20
       }
@@ -80,8 +92,8 @@ export const CHANGELOG: ChangelogRelease[] = [
       {
         "heading": "Added",
         "items": [
-          "Added first-party deepseek-v4-flash-vision-exp discovery and selection for DeepSeek, including the flash-vision alias, bundled offline metadata, registry and picker entries, and image-input capability on the chat route. Context and output…",
-          "Added a provider-controlled Codewhale-versus-Pi parity harness with three hermetic coding tasks, route and reasoning-effort receipts, doctor/dry-run modes, and bounded result artifacts. The repository ships the harness, not a benchmark…",
+          "Added first-party deepseek-v4-flash-vision-exp discovery and selection for DeepSeek, including the flash-vision alias, bundled offline metadata, registry and picker entries, and image-input capability on the chat route. Context and output limits inherit from V4 Flash until DeepSeek publishes distinct values; pricing remains unknown rather than guessed.",
+          "Added a provider-controlled Codewhale-versus-Pi parity harness with three hermetic coding tasks, route and reasoning-effort receipts, doctor/dry-run modes, and bounded result artifacts. The repository ships the harness, not a benchmark verdict; comparable real runs remain an acceptance gate.",
           "Added portable, secret-free config export/import with a reviewable plan, explicit headless consent, backup and rollback, and idempotent re-import.",
           "Added bounded multi-file diagnostics through the existing model-facing lsp tool without increasing the tool-catalog count. Thanks to Isabel Wu (@wuisabel-gif) for PR #5524.",
           "Added portable presentation, media-attachment, and operation-digest facets to the command contract, then moved all seven utility handlers onto the contract-backed dispatch path. Thanks to Paulo Aboim Pinto (@aboimpinto) for PR #5525."
@@ -91,25 +103,29 @@ export const CHANGELOG: ChangelogRelease[] = [
       {
         "heading": "Changed",
         "items": [
-          "Sub-agent, Fleet-worker, workflow-task, and thread-runtime model turns no longer inherit a hidden role-based step ceiling. An omitted or zero max_steps is unbounded; a positive user/config value remains an explicit cap and is still clamped…",
+          "Sub-agent, Fleet-worker, workflow-task, and thread-runtime model turns no longer inherit a hidden role-based step ceiling. An omitted or zero max_steps is unbounded; a positive user/config value remains an explicit cap and is still clamped to the runtime safety ceiling. Wall-clock, provider, heartbeat, cancellation, and admission safeguards are unchanged.",
           "/rc now mirrors one shared session rather than transferring terminal ownership: local and web prompts remain available while idle, approvals use first-decision-wins semantics, and transport/integrity failures remain fail-closed.",
-          "The terminal status rows around the composer are now two stable bands: provider · model · thinking level is the persistent identity row below the composer in every phase, and a separate activity row above the composer carries the live…",
-          "The embedded local Web client now uses the current CWC Ocean hierarchy and readable control sizing, follows the shared Enter/Shift+Enter composer grammar, and chooses a provider plus model per new thread without mutating Runtime defaults.…",
-          "The runtime now has one authoritative model-turn loop. The placeholder crates/core engine tree is gone, while the active TUI loop and its extracted tool-call stages retain existing policy, hook, cancellation, and budget behavior. Thanks to…"
+          "The terminal status rows around the composer are now two stable bands: provider · model · thinking level is the persistent identity row below the composer in every phase, and a separate activity row above the composer carries the live phase, notices, and cost/metrics. Sending a prompt no longer relocates the route identity above the composer, and neither row ever duplicates it.",
+          "The embedded local Web client now uses the current CWC Ocean hierarchy and readable control sizing, follows the shared Enter/Shift+Enter composer grammar, and chooses a provider plus model per new thread without mutating Runtime defaults. Exact image-input capability is labelled honestly; a vision-capable route does not imply that browser attachments exist.",
+          "The runtime now has one authoritative model-turn loop. The placeholder crates/core engine tree is gone, while the active TUI loop and its extracted tool-call stages retain existing policy, hook, cancellation, and budget behavior. Thanks to Sun Zhenyuan (@bistack) for PR #5523."
         ],
         "itemCount": 5
       },
       {
         "heading": "Fixed",
         "items": [
-          "Chat Completions streams now require terminal proof from [DONE] or a non-empty finish_reason. Protocol-only frames no longer count as answer content or time-to-first-token, and a provider continuation that ends after tool results with no…",
-          "A selected v2 Fleet now drives one bounded, deterministic Agent roster across terminal and runtime surfaces. Fleet operator/member/explicit-route precedence, resolved member identity, and exact vision requirement admission now fail visibly…",
-          "A workflow whose task() dispatch was rejected no longer loses that failure inside a parallel() null slot or presents a successful-looking run. Rejected dispatches now fail the run, persist as typed bounded receipts with an exact count, and…",
+          "Chat Completions streams now require terminal proof from [DONE] or a non-empty finish_reason. Protocol-only frames no longer count as answer content or time-to-first-token, and a provider continuation that ends after tool results with no answer or tool call fails durably instead of producing a false Completed receipt.",
+          "A selected v2 Fleet now drives one bounded, deterministic Agent roster across terminal and runtime surfaces. Fleet operator/member/explicit-route precedence, resolved member identity, and exact vision requirement admission now fail visibly instead of silently falling back, first-matching, or rerouting.",
+          "A workflow whose task() dispatch was rejected no longer loses that failure inside a parallel() null slot or presents a successful-looking run. Rejected dispatches now fail the run, persist as typed bounded receipts with an exact count, and appear in transcript, activity detail, and workflow-panel views.",
           "Provider readiness, credential-source explanations, focused-agent scrolling, compact /status and /help rendering, shell/web output bounds, MCP lifecycle reporting, and narrow-terminal onboarding received the detailed fixes recorded below.",
-          "Portable config import/export now preserves typed tables, arrays, numbers, booleans, and datetimes without stringifying them, while refusing machine-bound trust overlays, credential readers, automatically executable hooks/LSP definitions,…",
-          "codewhale login now means Codewhale account sign-in (the same browser device flow as codewhale account login, with --no-open and --timeout-seconds); provider API keys are configured exclusively through codewhale auth set --provider…",
-          "Account sessions prefer the OS credential manager and now fall back automatically to the private 0600 Codewhale secrets file on headless hosts, SSH boxes, and containers; the CODEWHALE_CLOUD_ALLOW_FILE_SESSION_STORE opt-in is deprecated…",
-          "/update gained a Ctrl+Shift+U install chord (catalogued in docs/KEYBINDINGS.md, localized in all 15 packs) and a startup hint that names the previous and current version on the first launch of a newer build, pointing at /change."
+          "Portable config import/export now preserves typed tables, arrays, numbers, booleans, and datetimes without stringifying them, while refusing machine-bound trust overlays, credential readers, automatically executable hooks/LSP definitions, local-path authority, machine-local network proxy routes, cookies, redaction placeholders, and nested or camel/dotted credential keys. Project and global bundle operations now load and validate the document for their actual scope in both…",
+          "codewhale login now means Codewhale account sign-in (the same browser device flow as codewhale account login, with --no-open and --timeout-seconds); provider API keys are configured exclusively through codewhale auth set --provider <provider>, and the hidden legacy --api-key/--provider flags redirect loudly instead of silently writing a key.",
+          "Account sessions prefer the OS credential manager and now fall back automatically to the private 0600 Codewhale secrets file on headless hosts, SSH boxes, and containers; the CODEWHALE_CLOUD_ALLOW_FILE_SESSION_STORE opt-in is deprecated and ignored.",
+          "/update gained a Ctrl+Shift+U install chord (catalogued in docs/KEYBINDINGS.md, localized in all 15 packs) and a startup hint that names the previous and current version on the first launch of a newer build, pointing at /change.",
+          "Fleet product-model copy pass: the TUI, docs, and locale packs now use Fleet / Member / Role / Model / Access / Saved consistently so a user can say \"scout\", \"DeepSeek V4 Flash\", or the member name and mean the same thing.",
+          "A reasoning model that returns only hidden reasoning and a clean stop (no answer, no tool call) is now re-requested automatically up to twice before the turn fails, instead of dead-ending with \"the provider response was incomplete.\" The retry reuses the cached prefix so it is cheap; an output-length stop (length/max_tokens) is never retried, and a persistently answerless model still fails honestly after the bound.",
+          "Model-bound tool results now use a credential-shaped redaction policy: only values that look like secrets (known prefixes, JWTs, bearer tokens, PEM private-key blocks, long opaque strings) are masked before a read or shell result reaches the model, so code such as password: credentials?.password or \"password-validator\": \"^5.3.0\" stays byte-exact for edits and read-back. Exact configured credential values are still always replaced, and logs/previews/exports keep the broad…",
+          "Terminal input shutdown no longer waits forever on a wedged TTY read, Windows launch receipts can atomically replace an existing record, and the complete /status report now follows the active locale without rewriting exact custom-provider identities that contain brace-like text."
         ],
         "itemCount": 13
       },
@@ -135,14 +151,18 @@ export const CHANGELOG: ChangelogRelease[] = [
       {
         "heading": "Detailed change record",
         "items": [
-          "Provider completion is now evidence-based. A Chat Completions stream reaches MessageStop only after [DONE] or a non-empty finish_reason; raw EOF without either is a typed failure. Message-start, ping, usage/terminal deltas, block-stop, and…",
-          "A selected v2 Fleet is the single effective Agent roster across terminal, Runtime threads, direct Workflow, Fleet execution, doctor, and setup/readiness; legacy profile layers are consulted only when no Fleet is selected, and invalid…",
-          "Breaking (app-server): /prompt, prompt/request and prompt/run now execute a real model turn instead of reporting success for work they never did. Runtime::handle_prompt called no model: it resolved config, ran a local ModelRegistry lookup,…",
-          "Breaking (app-server): a failed prompt is now a typed failure rather than a success-shaped body. POST /prompt returns {\"error\":{\"code\":...,\"message\":...}} with 400 (invalid request), 404 (thread not found), 503 (runtime_unavailable) or…",
-          "Breaking (app-server): POST /thread with a Message body runs the turn. It previously replied status: \"accepted\" with a ResponseDelta(\"queued\") frame while starting no worker and calling no bridge — the stdio path for the same request has…",
-          "Breaking (app-server): AppRequest::SubmitUserInput now refuses explicitly (ok: false, error: \"user_input_reply_unsupported\") instead of returning resolved: true and filing the answers in a map that had no reader anywhere in the crate —…",
-          "Split the coordination ledger out of tools/subagent/coord.rs into tools/subagent/coord/ledger.rs. The file held two unrelated things: the model-facing agents/* tool wrappers, and the durable decision/claim/ contention records those…",
-          "agent is now the only sub-agent tool the model can see. AGENTS.md has said \"the model-facing sub-agent surface is agent only\" since the lifecycle tools were removed, but six more were reachable: agents/list, agents/message,…"
+          "Provider completion is now evidence-based. A Chat Completions stream reaches MessageStop only after [DONE] or a non-empty finish_reason; raw EOF without either is a typed failure. Message-start, ping, usage/terminal deltas, block-stop, and message-stop frames do not count as productive content or mint time-to-first-token. After tool results, a terminal provider step with no answer or tool call now emits a durable failed turn and never fabricates an empty assistant message.",
+          "A selected v2 Fleet is the single effective Agent roster across terminal, Runtime threads, direct Workflow, Fleet execution, doctor, and setup/readiness; legacy profile layers are consulted only when no Fleet is selected, and invalid selections fail visibly with bounded, redacted errors. Member references resolve exact id first and otherwise require a unique display name, role, pinned model, offline model name, or provider/model route; agent action=roster exposes that same…",
+          "Breaking (app-server): /prompt, prompt/request and prompt/run now execute a real model turn instead of reporting success for work they never did. Runtime::handle_prompt called no model: it resolved config, ran a local ModelRegistry lookup, emitted three canned hook events (ResponseDelta was literally the string model-selected), and returned HTTP 200 with output set to a stringified JSON echo of the caller's own routing metadata — the prompt included. Worse, when a thread_id…",
+          "Breaking (app-server): a failed prompt is now a typed failure rather than a success-shaped body. POST /prompt returns {\"error\":{\"code\":...,\"message\":...}} with 400 (invalid request), 404 (thread not found), 503 (runtime_unavailable) or 500, instead of HTTP 500 carrying a PromptResponse with the error text stuffed into output where model text belongs. The stdio surface gained JSON-RPC -32005 runtime_unavailable for \"the turn engine could not be reached, so nothing ran\" —…",
+          "Breaking (app-server): POST /thread with a Message body runs the turn. It previously replied status: \"accepted\" with a ResponseDelta(\"queued\") frame while starting no worker and calling no bridge — the stdio path for the same request has always done real work, so the two transports disagreed about what accepted meant. HTTP now replies status: \"completed\" once the turn reaches a terminal state, with the streamed frames in events and the turn id in data. Runtime::handle_thread…",
+          "Breaking (app-server): AppRequest::SubmitUserInput now refuses explicitly (ok: false, error: \"user_input_reply_unsupported\") instead of returning resolved: true and filing the answers in a map that had no reader anywhere in the crate — every answer submitted was silently discarded. It cannot be made to work on this transport: while a turn streams, the stdio loop executes only thread/interrupt and queues everything else, so an answer sent there would wait on the very turn…",
+          "Split the coordination ledger out of tools/subagent/coord.rs into tools/subagent/coord/ledger.rs. The file held two unrelated things: the model-facing agents/* tool wrappers, and the durable decision/claim/ contention records those wrappers happen to write — records whose consumers are mostly *not* in the tool layer (tui::coordination_detail, tui::work_surface, tui::ui::tests, core::engine::tests all name these types). At 3.8k lines, reading either one started by scrolling…",
+          "agent is now the only sub-agent tool the model can see. AGENTS.md has said \"the model-facing sub-agent surface is agent only\" since the lifecycle tools were removed, but six more were reachable: agents/list, agents/message, agents/followup, agents/interrupt, agents/coordinate, and agents/wait all defaulted to model-visible, so they shipped in the catalog and tool_search could load any of them — and the agent description told the model they existed. They now declare…",
+          "One placement table now decides which wire channel a message role belongs in, and unrepresentable role/dialect pairs are refused at the outbound seam (DeepSeekClient::prepare_outbound_request) instead of at the provider. Chat Completions and OpenAI Responses used to drop an unfamiliar role silently, Anthropic Messages forwarded message.role verbatim and took an opaque provider 400 for it, and Google cloud-code was alone in failing closed. Positioned system and developer…",
+          "Message roles are a closed Role enum (crates/core/src/role.rs) instead of a free-form String on Message. Four wire adapters each decided independently what an unfamiliar role meant, and a typo in a role string was a silent transcript edit rather than a compile error. Role keeps an Unrecognized(String) variant and serializes via as_str(), so a saved session's bytes are unchanged, a transcript written by a newer build still loads here, and assistant_interrupted stays a…",
+          "Portable config bundles: codewhale config export --portable writes a deterministic, secret-free bundle (credential and machine-specific keys dropped), and codewhale config import <FILE|URL|-> applies one with a strict versioned envelope, a printed added/changed/skipped/conflicting/ rejected plan, consent gating (--yes required headless), a timestamped backup with rollback, and idempotent re-import. Credential-shaped entries are rejected by key name and value shape —…",
+          "/rc is now a shared-session mirror instead of a terminal takeover. Attaching the web app no longer locks the local composer or hides approvals: both surfaces can prompt while idle (one turn runs at a time), approval cards stay visible in the terminal and are shared with the web with first-decision-wins semantics (the losing side is told, a web decision dismisses the local card), and structured questions are answered locally instead of cancelled. Fail-closed behavior survives…"
         ],
         "itemCount": 60
       }
@@ -157,14 +177,18 @@ export const CHANGELOG: ChangelogRelease[] = [
       {
         "heading": "Fixed",
         "items": [
-          "First run starts on the welcome screen again. A missing key no longer skips Welcome and auto-opens the local-provider list: Enter walks to the calm provider explanation, then Enter opens the picker so a first API key can be set. Returning…",
-          "A foreground bash command that named no timeout is bounded again. The model-facing bash tool left an omitted timeout_ms at the internal ceiling (~24.8 days) instead of the 120 s default its own schema advertises, so a CLI that blocked on…",
-          "The Extensions (/plugin) Marketplace is no longer a read-only list. Every recommendation and stored candidate names its truthful state and primary action — Add, Enable, Configured, or Unavailable — and Enter or a mouse click runs that…",
-          "The Extensions MCP tab now renders one honest inventory: the header count and the visible rows derive from the same configured-server set, so MCP (6) can no longer sit above two rendered rows. Disabled servers stay visible and labeled…",
-          "Installed plugin rows now act on their real state: Enter opens an active bundle (/plugin show), offers Enable for a trusted-but-disabled bundle, or routes an untrusted bundle to the existing trust review — through the same confirmation and…",
-          "Sub-agent handoffs and rosters, background shell jobs, durable tasks, delayed continuations, and workflow controls are now scoped to the session that owns them. Records carry immutable root-session ownership, stale completion-channel…",
-          "The resolved route envelope now reaches every outbound model call: all wire dialects and auxiliary calls clamp at the shared transport seam under one wire/reservation budget, provider input limits are honored, and switching models on the…",
-          "First-run continuity: the chosen onboarding provider persists across restarts, a missing first-run config no longer interrupts the flow, and the automatic working-agreement checkpoint renders as a standalone setup handoff instead of…"
+          "First run starts on the welcome screen again. A missing key no longer skips Welcome and auto-opens the local-provider list: Enter walks to the calm provider explanation, then Enter opens the picker so a first API key can be set. Returning missing-key recovery still opens the picker on launch.",
+          "A foreground bash command that named no timeout is bounded again. The model-facing bash tool left an omitted timeout_ms at the internal ceiling (~24.8 days) instead of the 120 s default its own schema advertises, so a CLI that blocked on an interactive prompt or a hung network call held the turn open indefinitely — one report sat on a single unauthenticated CLI call for over two hours with the tool row simply counting seconds. The advertised default now applies, which arms…",
+          "The Extensions (/plugin) Marketplace is no longer a read-only list. Every recommendation and stored candidate names its truthful state and primary action — Add, Enable, Configured, or Unavailable — and Enter or a mouse click runs that action through the existing reviewed /mcp add recommended, /mcp enable, and /plugin install/trust controllers, so no second trust path exists. Browser Use and Sandbox Runtime stay honestly Unavailable with their real setup routing instead of…",
+          "The Extensions MCP tab now renders one honest inventory: the header count and the visible rows derive from the same configured-server set, so MCP (6) can no longer sit above two rendered rows. Disabled servers stay visible and labeled disabled instead of silently disappearing, and configured servers absent from the live snapshot list as not-yet-inspected with their own explicit reload affordance through the MCP command controller.",
+          "Installed plugin rows now act on their real state: Enter opens an active bundle (/plugin show), offers Enable for a trusted-but-disabled bundle, or routes an untrusted bundle to the existing trust review — through the same confirmation and persistence controllers as the slash commands.",
+          "Sub-agent handoffs and rosters, background shell jobs, durable tasks, delayed continuations, and workflow controls are now scoped to the session that owns them. Records carry immutable root-session ownership, stale completion-channel payloads are rejected before deduplication, background work drains and reports only to its owning session, and legacy ownerless jobs fail closed (#5518 failure class reported by @hxfhd; the report's exact JavaScript provenance was not claimed as…",
+          "The resolved route envelope now reaches every outbound model call: all wire dialects and auxiliary calls clamp at the shared transport seam under one wire/reservation budget, provider input limits are honored, and switching models on the same protocol no longer inherits the previous model's limits (#5516, #5518).",
+          "First-run continuity: the chosen onboarding provider persists across restarts, a missing first-run config no longer interrupts the flow, and the automatic working-agreement checkpoint renders as a standalone setup handoff instead of regressing the onboarding rail to the full wizard's 4/10 progress.",
+          "Explicitly worded natural-language /goal declarations now create a durable goal in the provider-neutral engine before model dispatch, while ordinary tasks and quoted transcripts stay out of goal mode and prose acknowledgement alone can no longer stand in for goal creation.",
+          "/model now keeps the current Z.ai default (GLM-5.3) visible when an older installation has an explicit GLM-5.2 route saved. The saved 5.2 route remains exact; choosing 5.3 sends and remembers the distinct 5.3 ID.",
+          "The constitution checkpoint now leads with the bundled balanced agreement; the default path writes no custom constitution. The startup launch surface distinguishes read-only Chat from folder-bound, approval-gated Work.",
+          "Tabby and other IME bridges no longer observe a stale visible caret while a frame diff is being painted; Codewhale hides the cursor during the diff, restores the canonical composer cell, and only then reveals it again (BrathonBai, #5023)."
         ],
         "itemCount": 35
       },
@@ -172,13 +196,17 @@ export const CHANGELOG: ChangelogRelease[] = [
         "heading": "Added",
         "items": [
           "/workflows opens a live run dashboard over this workspace's durable workflow journal: every retained run with status, phases, child roster, progress, and host-side cancel — observation only, it never launches a run.",
-          "Repository instructions now assemble from the actual containing checkout: applicable AGENTS.md files resolve repository-root to current-directory in order under one aggregate budget, a linked worktree is its own root, and scope is never…",
-          "/goal is a codex-style control plane: setting an objective dispatches it to the engine, which owns the goal and starts the first goal turn itself — the objective is never echoed back as the user's own message, pause/resume are real control…",
-          "/extensions and /plugins open one localized inventory for Hooks, Plugins, local Marketplace catalogs, Skills, and MCP. Reviewed suggestions include Playwright, Chrome DevTools, Cua Computer Use, Browser Use, and the sandbox runtime without…",
+          "Repository instructions now assemble from the actual containing checkout: applicable AGENTS.md files resolve repository-root to current-directory in order under one aggregate budget, a linked worktree is its own root, and scope is never inferred from path mentions or whichever branch is named main.",
+          "/goal is a codex-style control plane: setting an objective dispatches it to the engine, which owns the goal and starts the first goal turn itself — the objective is never echoed back as the user's own message, pause/resume are real control ops, and the hunt-era vocabulary and trophy cards are gone.",
+          "/extensions and /plugins open one localized inventory for Hooks, Plugins, local Marketplace catalogs, Skills, and MCP. Reviewed suggestions include Playwright, Chrome DevTools, Cua Computer Use, Browser Use, and the sandbox runtime without granting trust or installing anything on open.",
           "Turn Inspector now opens the newest turn and pages across complete recorded user, reasoning, tool/subagent, and assistant output with page-scoped search, copy, and export (sky-sun-moon, #1682).",
           "Background tasks have bounded incremental persistence, durable terminal reasons, truthful timeout/cancellation receipts, restart recovery, and interruptible continuous-goal delays (#5497, #5508).",
           "/title once again controls the terminal window title independently from /rename, survives session save/load, and sanitizes control, bidi, and zero-width characters (PR #5509 by @SparkofSpike).",
-          "MCP snapshots preserve whether capabilities were advertised by the server, discovered through the bounded legacy fallback, or not observed (#4170)."
+          "MCP snapshots preserve whether capabilities were advertised by the server, discovered through the bounded legacy fallback, or not observed (#4170).",
+          "codewhale auth status --diagnostic reports canonical paths, isolation source, backend class, and value-free provider-source presence without opening credential stores or creating/migrating state (#2369).",
+          "codewhale doctor --probe-search performs an explicit credential-free, policy-checked transport probe for the selected search provider; ordinary doctor and JSON output remain offline (#5442).",
+          "The safe deferred read_media tool is available to supported read-only roles, and history receipts distinguish localized tool execution outcomes without exposing raw payloads (#5102).",
+          "npm Linux x64 first-party source selection. The wrapper concurrently fetches the GitHub Releases and CNB checksum manifests for the exact package version, locks the first source whose HTTP response and manifest validate, and downloads binaries only from that source. Explicit CODEWHALE_RELEASE_BASE_URL / CODEWHALE_USE_CNB_MIRROR=1 still skip the race; other targets stay on GitHub."
         ],
         "itemCount": 23
       },
@@ -192,7 +220,11 @@ export const CHANGELOG: ChangelogRelease[] = [
           "DingYong4223 (@DingYong4223) — reported the narrow-terminal completion truncation closed by the bounded hover reveal (#998). Thanks also to @AiurArtanis and @formp3 for identifying the affected completion surfaces.",
           "sky-sun-moon (@sky-sun-moon) — reported the missing full per-turn input, reasoning, tool, and assistant pages that shaped Turn Inspector navigation (#1682).",
           "cy2311 (@cy2311) — reported the Windows launch path that now ships and installs a Windows Terminal-aware batch launcher (#1854).",
-          "demian-welt (@demian-welt) — provided the reproducible pre-header SSE transport failure behind the bounded HTTP/1.1 retry (#4683)."
+          "demian-welt (@demian-welt) — provided the reproducible pre-header SSE transport failure behind the bounded HTTP/1.1 retry (#4683).",
+          "BrathonBai (@BrathonBai) — reported the Tabby/CJK IME candidate-window jump that led to the hide-diff-position-show cursor transaction (#5023).",
+          "M-Maciej (@M-Maciej) — the real-world organization-coordinator use case and 5–30 minute cadence requirement behind cancellable cross-turn goal delays (#5508).",
+          "cyq1017 (@cyq1017) — approval outcomes are persisted before execution can proceed: receipts commit to a session-owned log first, unpersistable evidence blocks the tool, stale decisions are rejected, and resume reconstructs closed and interrupted approvals (#5491, closes #5360).",
+          "aboimpinto (@aboimpinto) — the TUI-owned dependency-injection and migration infrastructure that makes slash-command extraction safe: seven capability facets, a dual-path dispatch seam, and source-aware CI enforcement so a command slice cannot claim migration while it still accepts concrete App (#5506, EPIC-005/FEAT-015 under #5316, which they also filed)."
         ],
         "itemCount": 19
       }
@@ -207,23 +239,27 @@ export const CHANGELOG: ChangelogRelease[] = [
       {
         "heading": "Fixed",
         "items": [
-          "The lowercase bash tool no longer wedges when its complete-output spill file cannot be created: a full temp volume or exhausted descriptor table used to fail *every* call — echo ok included — with the harness-internal \"Failed to create…",
-          "A concrete route/offering output limit now outranks the conservative 8,192-token compatibility guess for an uncatalogued model. Routes that publish no output limit remain fail-closed, documented model ceilings stay authoritative, and a…",
-          "Context-window honesty at every surface (#5239, #5441): the model-name hint and fallback rungs of the context-window ladder are guesses, and every surface that renders one now says so — the status line, /status, /config, the…",
-          "Output-ceiling honesty (#5440): an Anthropic-family model the catalog does not describe keeps the 64K Messages floor as its clamp and the ChatGPT/ Codex OAuth route keeps its 4K policy, but OutputCeilingSource gained an unverified rung for…",
-          "Telemetry default-on is visible (#5441): codewhale doctor's runtime-posture section gained a telemetry=on (default)-style row with the source that decided it (cli | env | config | default), and codewhale config get telemetry reports the…",
-          "Fleet: a scout's read-only shell carve-out (#5428) is now honored by both the posture gate and the execution envelope, so git log, find | head, npm view and the other bounded read-only commands run in-place instead of being refused as…",
-          "/rename and /title now apply mid-first-turn: the session file does not exist until the first autosave, so the rename fell through with NotFound; the shared path now prefers the per-session checkpoint and rebuilds from App state, with a PTY…",
-          "integrations dsh plan no longer refuses DeepSeek's default Responses-dialect route (deepseek-v4-flash); Responses and Anthropic-Messages routes are carried through pi-ai openai-responses / anthropic-messages instead of being approximated…"
+          "The lowercase bash tool no longer wedges when its complete-output spill file cannot be created: a full temp volume or exhausted descriptor table used to fail *every* call — echo ok included — with the harness-internal \"Failed to create streaming shell output\" and never recover until the host was cleaned up. The spill is now best-effort (the bounded tail is still returned and the truncation notice says why the full-output path is missing), and any remaining spawn/stream…",
+          "A concrete route/offering output limit now outranks the conservative 8,192-token compatibility guess for an uncatalogued model. Routes that publish no output limit remain fail-closed, documented model ceilings stay authoritative, and a route limit can never raise the requested cap (#5460).",
+          "Context-window honesty at every surface (#5239, #5441): the model-name hint and fallback rungs of the context-window ladder are guesses, and every surface that renders one now says so — the status line, /status, /config, the context-pressure message, the model picker chips, and the auto-router inventory. Unverified windows still drive real budgets (compaction trigger, context meter, output reservation); they just stop reading as capabilities anyone checked. A window parsed…",
+          "Output-ceiling honesty (#5440): an Anthropic-family model the catalog does not describe keeps the 64K Messages floor as its clamp and the ChatGPT/ Codex OAuth route keeps its 4K policy, but OutputCeilingSource gained an unverified rung for both, so exec-stream receipts and the model picker label them unverified/\"assumed floor\" instead of documented. Clamp values are unchanged.",
+          "Telemetry default-on is visible (#5441): codewhale doctor's runtime-posture section gained a telemetry=on (default)-style row with the source that decided it (cli | env | config | default), and codewhale config get telemetry reports the resolved consent with its source instead of key not found on a machine whose batches ship. Truth change only; resolution and behavior are untouched.",
+          "Fleet: a scout's read-only shell carve-out (#5428) is now honored by both the posture gate and the execution envelope, so git log, find | head, npm view and the other bounded read-only commands run in-place instead of being refused as \"Executes\" (#5426). Delegation still never widens authority: the role-isolation test and docs/SUBAGENTS.md pin that a child cannot exceed its parent's posture (#5426, #5435).",
+          "/rename and /title now apply mid-first-turn: the session file does not exist until the first autosave, so the rename fell through with NotFound; the shared path now prefers the per-session checkpoint and rebuilds from App state, with a PTY regression test through the live event loop (#5430).",
+          "integrations dsh plan no longer refuses DeepSeek's default Responses-dialect route (deepseek-v4-flash); Responses and Anthropic-Messages routes are carried through pi-ai openai-responses / anthropic-messages instead of being approximated or refused; only credentialed base URLs are still refused, with an error that names provider and model (#5434).",
+          "Session cost no longer sits at unverified_live_pricing when live pricing cannot be verified (control-plane 503, Models.dev capabilities-only overlays): provider-docs bundled fallback rates for the DeepSeek V4 family on Fireworks / OpenCode Zen restore a usable figure, live per-provider rows still win, and kimi-k3 stays unpriced until a published rate exists (#5241; harvested from #5402).",
+          "Release assets: release.yml asset-freshness checks compare against the release job's own started_at, so job-level reruns of the npm step are no longer poisoned by earlier uploads (#5429).",
+          "macOS CI: the agent_focus_pty auto-review receipt test waited on a worker that had already completed and raced the rail's focus; it now holds the child's wrap-up and waits for a settled live row (refs #5056, #5403).",
+          "DeepSeek V4 pricing follows the published peak/off-peak tiers (peak 01:00–04:00 and 06:00–10:00 UTC; off-peak is half of peak) for deepseek-v4-flash and deepseek-v4-pro in USD and CNY, resolved from each turn's recorded time; the stale single-tier rows understated cost up to ~4×. Because every direct DeepSeek first-party rate is now time-windowed, the scorecard fails closed (missing_recorded_time) on an undated DeepSeek turn instead of guessing a tier (#5470; #5241…"
         ],
         "itemCount": 23
       },
       {
         "heading": "Changed",
         "items": [
-          "The model-facing agent tool advertises exactly 12 fields — action, prompt, type, profile, name, agent_id, message, until, detached, worktree, write_roots, resume_from — down from 33 (#5324, refs #5123). Budgets (max_steps, wall_time_secs,…",
-          "TUI prose — user messages, assistant answers, and reasoning/thinking — now wraps at the full content width on wide terminals, matching tool/status cells, instead of stopping at a 105-column rail that left a dead right margin on ultrawide…",
-          "Configured skill prompts are stable across session roots and operating systems: only custom configured roots hide their physical path, ordinary workspace/global skills keep a discoverable privacy-safe path, warning replacements are…",
+          "The model-facing agent tool advertises exactly 12 fields — action, prompt, type, profile, name, agent_id, message, until, detached, worktree, write_roots, resume_from — down from 33 (#5324, refs #5123). Budgets (max_steps, wall_time_secs, max_depth), routing overrides (model, model_strength, thinking), worktree-path knobs, the deliberate/spawn-contract fields and the wait/status/interrupt extras moved off the advertised schema. Every removed field stays parse-accepted and…",
+          "TUI prose — user messages, assistant answers, and reasoning/thinking — now wraps at the full content width on wide terminals, matching tool/status cells, instead of stopping at a 105-column rail that left a dead right margin on ultrawide displays (#5436).",
+          "Configured skill prompts are stable across session roots and operating systems: only custom configured roots hide their physical path, ordinary workspace/global skills keep a discoverable privacy-safe path, warning replacements are boundary-aware (including non-UTF-8 Unix paths), and Windows separators render as /. The skills prompt is also 50 bytes leaner without raising a runtime-contract ceiling (#5492, #5473).",
           "Auto-router classifier requests accept [auto.router] timeout_secs, while preserving the existing default when the key is absent (#5494).",
           "Every ci.yml job now has an explicit 10–90 minute timeout appropriate to its workload, bounding stale assigned runners instead of inheriting GitHub's six-hour default (#5495).",
           "The docs shell and shared web components now route localized copy through the typed dictionary spine; these are two incremental phases of #5337, not completion of the full epic (#5488, #5490).",
@@ -235,14 +271,16 @@ export const CHANGELOG: ChangelogRelease[] = [
       {
         "heading": "Added",
         "items": [
-          "[transcript] prose_measure (positive integer, optional): caps prose wrap at N columns for owners who want a bounded reading measure on ultrawide terminals. 0 or absent keeps the full width; negative or non-integer values are rejected with…",
-          "Localization: README translations for Français, Deutsch, 繁體中文, हिन्दी, Türkçe, Italiano, Polski, العربية and Català join the existing nine (#5451); codewhale.net routes fr, de, ca, hi, tr, it, pl and ar (with dir=\"rtl\" plumbing) as partial…",
-          "Docs: README Integrations section (incl. the DeepSeek Harness dsh plugin path, docs/INTEGRATIONS_DSH.md) localized across all READMEs; RFC keeping the deterministic-first auto-review hybrid (#5427); Claude Code parity reference for…",
-          "dsh integration: the Codewhale palette is applied through the bundle profile via dsh's documented overrideTokens (on by default; codewhale integrations dsh update --skin false turns it off), replacing the 0.9.8 exported-CSS skin that dsh's…",
-          "dsh integration: an ambient ocean scene behind the DSH web UI — slow whale silhouettes, a school of ><> glyph fish, bubbles — drawn on a canvas under a translucent veil of the Codewhale palette, plus an explicit responsive WHALE BROTHERS /…",
-          "Fleet: agent shadowing is visible — a roster-row badge, a Layers block in agent detail, and a doctor \"Fleet roster layers\" section (JSON operate_fleet.roster.multi_layer), in all 15 TUI locales. Layer collapse and [fleet.profiles]…",
+          "[transcript] prose_measure (positive integer, optional): caps prose wrap at N columns for owners who want a bounded reading measure on ultrawide terminals. 0 or absent keeps the full width; negative or non-integer values are rejected with a clear config error. Tool, diff, and status cells never inherit the cap (#5436).",
+          "Localization: README translations for Français, Deutsch, 繁體中文, हिन्दी, Türkçe, Italiano, Polski, العربية and Català join the existing nine (#5451); codewhale.net routes fr, de, ca, hi, tr, it, pl and ar (with dir=\"rtl\" plumbing) as partial locales (#5453).",
+          "Docs: README Integrations section (incl. the DeepSeek Harness dsh plugin path, docs/INTEGRATIONS_DSH.md) localized across all READMEs; RFC keeping the deterministic-first auto-review hybrid (#5427); Claude Code parity reference for agents/workflows/plugins/skills (docs/design/CLAUDE_CODE_PARITY.md); config.example.toml / SUBAGENTS.md / TOOL_LIFECYCLE.md brought back in line with the code (#5447).",
+          "dsh integration: the Codewhale palette is applied through the bundle profile via dsh's documented overrideTokens (on by default; codewhale integrations dsh update --skin false turns it off), replacing the 0.9.8 exported-CSS skin that dsh's inline body variables overrode (docs/design/DSH_BUNDLE_SKIN.md, docs/INTEGRATIONS_DSH.md) (#5469).",
+          "dsh integration: an ambient ocean scene behind the DSH web UI — slow whale silhouettes, a school of ><> glyph fish, bubbles — drawn on a canvas under a translucent veil of the Codewhale palette, plus an explicit responsive WHALE BROTHERS / CODEWHALE × DEEPSEEK HARNESS lockup; light and dark, ~30 fps capped, paused when hidden, a static frame under prefers-reduced-motion; on by default with the skin, codewhale integrations dsh update --ocean false turns it off (#5484).",
+          "Fleet: agent shadowing is visible — a roster-row badge, a Layers block in agent detail, and a doctor \"Fleet roster layers\" section (JSON operate_fleet.roster.multi_layer), in all 15 TUI locales. Layer collapse and [fleet.profiles] migration stay for 0.9.10 (#5098).",
           "Sandbox: bwrap containers get the --dev/--proc/--tmpfs essentials plus configurable extra roots (bwrap_ro_roots / bwrap_dev_roots) so toolchains that live outside the workspace stay reachable read-only (#5410).",
-          "Tests: crates/tui/tests/README.md states the keyless assembled-journey rule and maps the Auto-Review guardian acceptance items to the engine journeys that exercise them (#5361)."
+          "Tests: crates/tui/tests/README.md states the keyless assembled-journey rule and maps the Auto-Review guardian acceptance items to the engine journeys that exercise them (#5361).",
+          "OrcaRouter's default endpoint is classified as an aggregator billing surface, so pricing and session-cost reporting use the correct billing posture instead of treating it as a first-party provider (#5493).",
+          "Dependencies: ratatui 0.30.2, thiserror 2.0.20."
         ],
         "itemCount": 10
       },
@@ -256,10 +294,10 @@ export const CHANGELOG: ChangelogRelease[] = [
       {
         "heading": "Contributors",
         "items": [
-          "hexin (@h3c-hexin) — a concrete route/offering output limit outranks the 8,192-token compatibility guess for an uncatalogued model (#5461, closes #5460); web tool results use the noisy soft limit (#5474); owned direct model casing resolves…",
+          "hexin (@h3c-hexin) — a concrete route/offering output limit outranks the 8,192-token compatibility guess for an uncatalogued model (#5461, closes #5460); web tool results use the noisy soft limit (#5474); owned direct model casing resolves safely (#5475); and configured-skill prompts stay stable across ephemeral roots and operating systems (#5492, #5473).",
           "Gabriel-Degret (@Gabriel-Degret) — configurable auto-router classifier timeout (#5494; first contribution).",
           "@asto18089 — diagnosed the Z.ai glm-5.2 casing collision and wrote the first provider-scoped fix in Pinvou/CodeWhale#14 (carried upstream in #5475).",
-          "Reports and reproductions that shaped this release: @hardy922 (context- window honesty, #5239), @redstar (bwrap extra roots, #5410), @all-lopezg (SSE UTF-8 garbling on DeepSeek Flash, #5374), @alitvak69 (unverified live pricing, #5241),…"
+          "Reports and reproductions that shaped this release: @hardy922 (context- window honesty, #5239), @redstar (bwrap extra roots, #5410), @all-lopezg (SSE UTF-8 garbling on DeepSeek Flash, #5374), @alitvak69 (unverified live pricing, #5241), and @wuisabel-gif (the macOS filtered-suite hang investigation on #5056)."
         ],
         "itemCount": 4
       }
@@ -274,16 +312,16 @@ export const CHANGELOG: ChangelogRelease[] = [
       {
         "heading": "Fixed",
         "items": [
-          "sudo (and su/setuid helpers) work again for wheel-group administrators who want Codewhale to be able to escalate: the Linux startup hardening's irreversible PR_SET_NO_NEW_PRIVS flag — inherited by every child process — is now skippable…",
-          "Abort-class process deaths no longer poison the terminal (#5424). A stack overflow, allocation failure, or double panic skips the panic hook and every cleanup guard, which is how a v0.9.7 user's mid-turn exit left mouse capture leaking SGR…"
+          "sudo (and su/setuid helpers) work again for wheel-group administrators who want Codewhale to be able to escalate: the Linux startup hardening's irreversible PR_SET_NO_NEW_PRIVS flag — inherited by every child process — is now skippable with CODEWHALE_NO_NEW_PRIVS=0 (#5413). The flag stays on by default; the no-ptrace and no-core-dump measures are never skipped.",
+          "Abort-class process deaths no longer poison the terminal (#5424). A stack overflow, allocation failure, or double panic skips the panic hook and every cleanup guard, which is how a v0.9.7 user's mid-turn exit left mouse capture leaking SGR sequences into their shell. An async-signal-safe handler now restores the terminal modes and appends a one-line cause marker to ~/.codewhale/crashes/last-fatal-signal.log before re-raising, keeping the honest 128+signal wait status. A…"
         ],
         "itemCount": 2
       },
       {
         "heading": "Changed",
         "items": [
-          "Prompt-cache prefix is pinned for the session. The tool loop no longer recomposes the system prompt from disk on every model step, so an agent writing a file no longer busts the provider KV prefix cache mid-turn. The system prompt and tool…",
-          "Plugin compatibility is now per-component. A reviewed, trusted, enabled bundle that mixes Skills or MCP with unsupported commands, agents, hooks, LSP, native, filesystem-roots, or lifecycle-mutation declarations keeps the supported…"
+          "Prompt-cache prefix is pinned for the session. The tool loop no longer recomposes the system prompt from disk on every model step, so an agent writing a file no longer busts the provider KV prefix cache mid-turn. The system prompt and tool catalog are re-composed only on a declared header change (/model, mode, goal, session resume), which re-pins under a logged reason; an undeclared change is reported as drift and the original pin is kept instead of silently becoming the new…",
+          "Plugin compatibility is now per-component. A reviewed, trusted, enabled bundle that mixes Skills or MCP with unsupported commands, agents, hooks, LSP, native, filesystem-roots, or lifecycle-mutation declarations keeps the supported adapters active and reports the rest as inactive (full / partial / unsupported). All-unsupported bundles still cannot be enabled. The capability hash is now v2 and binds this build's activation policy, so older v1 receipts and any later…"
         ],
         "itemCount": 2
       },
@@ -291,41 +329,50 @@ export const CHANGELOG: ChangelogRelease[] = [
         "heading": "Added",
         "items": [
           "Opt-in multiline composer mode (composer_multiline_mode = true) makes Enter insert a newline and Shift+Enter send. Alt+Enter, Ctrl+J, and supported Ctrl+Enter/Cmd+Enter behavior stays unchanged (#5345, @AiurArtanis).",
-          "/plugin marketplace add|list|show|remove|install completes the federated marketplace journey (#5311). add reads one LOCAL catalog document in the real published schemas (Kimi, Claude, Codex, or Codewhale native) — no network, regular files…",
-          "/rc attach now includes an observed owner/name git remote when the folder has a GitHub, CNB, or Gitee origin, so CWC can label the paired session. Paths stay off the wire. Reconnect after both this client and CWC #202 land to backfill…",
+          "/plugin marketplace add|list|show|remove|install completes the federated marketplace journey (#5311). add reads one LOCAL catalog document in the real published schemas (Kimi, Claude, Codex, or Codewhale native) — no network, regular files only — and persists it beside the plugin state with the same hardened, fail-closed store. list/show render every candidate with per-entry diagnostics, display-only tiers, and honest install plans that say when Codewhale cannot fetch a…",
+          "/rc attach now includes an observed owner/name git remote when the folder has a GitHub, CNB, or Gitee origin, so CWC can label the paired session. Paths stay off the wire. Reconnect after both this client and CWC #202 land to backfill existing empty rows.",
           "The local Runtime web client keeps the thread rail clipped so New thread cannot paint over the session fact chips. Chips wrap instead of sliding under the rail.",
-          "Z.ai GLM-5.3 is live on the Coding Plan and is now the default direct Z.ai model: DEFAULT_ZAI_MODEL resolves to GLM-5.3 in both codewhale-tui and codewhale-config, and it is the first /model row after /provider zai. Explicit GLM-5.2…",
+          "Z.ai GLM-5.3 is live on the Coding Plan and is now the default direct Z.ai model: DEFAULT_ZAI_MODEL resolves to GLM-5.3 in both codewhale-tui and codewhale-config, and it is the first /model row after /provider zai. Explicit GLM-5.2 selections (model = \"GLM-5.2\" and its glm-5.2 aliases) keep their own id — only the default moved. Limits and reasoning options still inherit from GLM-5.2 until Z.ai publishes distinct 5.3 numbers. No USD price is claimed. A live call can still…",
           "The TUI transcript renders Markdown blockquotes (> lines) with a quote rail — nested quotes, inline bold/code/links, wrapped continuation rows, and selection copy that keeps the quote text and skips the rail chrome.",
           "Sub-agent details show the resolved model, fleet role, and type. Labels use the session/role name instead of a generic Agent N (#5371, #5287).",
-          "Documented catalogue output ceilings (including DeepSeek V4's 384K maximum) remain authoritative bounds, while ordinary requests start at a safe 64K cap and explicit overrides can raise it within the resolved route window. A clean…"
+          "Documented catalogue output ceilings (including DeepSeek V4's 384K maximum) remain authoritative bounds, while ordinary requests start at a safe 64K cap and explicit overrides can raise it within the resolved route window. A clean output-limit stop continues the turn instead of killing it (#5373, #5516, #5518). Thanks @sfdzhmr and @hxfhd for the route evidence.",
+          "Ollama Cloud is a first-class hosted provider (/provider ollama-cloud) on the official OpenAI-compatible https://ollama.com/v1 route. Local Ollama stays keyless. The exact released ollama + Cloud URL tuple keeps a bounded compatibility path across saved sessions, Fleet, and nested subagents; neighboring remotes stay custom and fail closed against inherited official credentials.",
+          "Homebrew ships a codewhale formula. brew tap Hmbown/deepseek-tui && brew install codewhale is the install path; brew upgrade codewhale updates it. The legacy deepseek-tui formula remains a deprecated alias for one overlap release.",
+          "/title [name|off] sets a per-session tab/window title, shown as [title] … in front of the terminal window title (Codewhale / reasoning… / using tool… / done). The title config key supplies the default (/config title … --save persists it); multi-window workflows can tell parallel sessions apart at a glance. /title is independent of /rename, which keeps naming the session in the picker and composer. Control, bidi, and zero-width format characters are stripped from both the…",
+          "Eden AI is a named OpenAI-compatible Chat Completions provider (edenai, aliases eden-ai / eden_ai) with EDENAI_API_KEY, global and EU base-URL overrides, a live provider-scoped model catalog, and deepseek/deepseek-v4-pro as the verified default. Generic reasoning fields stay omitted because Eden AI routes multiple upstream model families (#5422, Kai Nacke)."
         ],
         "itemCount": 20
       },
       {
         "heading": "Fixed",
         "items": [
-          "Selecting the google provider kind resolved to the antigravity TUI identity (and vice versa): the agy provider entry was inserted at different positions in the config-level enum and the TUI's discriminant-indexed lookup table. The table…",
+          "Selecting the google provider kind resolved to the antigravity TUI identity (and vice versa): the agy provider entry was inserted at different positions in the config-level enum and the TUI's discriminant-indexed lookup table. The table now matches the enum, so provider pickers, sorted display, and kind round-trips are correct.",
           "The provider picker's key-entry stage accepted typed input and pastes for OAuth-only providers after antigravity declared OAuth acquisition; those gates now key off the OAuth acquisition class instead of a hard-coded provider identity.",
           "The webhook hook sink no longer panics when its HTTP client fails to build; it falls back to a default client (#5381, EvanProgramming).",
           "Session-index JSONL writes are serialized behind a process-wide mutex so concurrent state stores cannot drop an append during compaction (#5382, EvanProgramming; complements the cross-process file lock).",
-          "A billed max_tokens stop followed by a transport error fails the turn instead of continuing into a second request. A clean output-limit stop still continues. Mid-size context windows keep the ordinary 65K internal reservation so compaction…",
-          "Thinking cycle, /effort, and Settings now walk each model's real ladder instead of the DeepSeek off/high/max shortcut. Grok 4.6 is auto/low/medium/high/xhigh (cannot disable); Grok 4.5 is auto/low/medium/high; first-party DeepSeek keeps a…",
-          "Google Gemini is its own backend (/provider google) on the official OpenAI-compatible route with thought-signature capture/replay and fail-closed replay for thinking models. Antigravity (agy 1.1.13) is a separate provider: consent-gated…",
-          "DeepSeek Flash SSE on macOS no longer turns mid-character HTTP/2 flushes into U+FFFD replacement characters (#5374). Invalid UTF-8 fails the line instead of using lossy decode."
+          "A billed max_tokens stop followed by a transport error fails the turn instead of continuing into a second request. A clean output-limit stop still continues. Mid-size context windows keep the ordinary 65K internal reservation so compaction does not collapse to the 1K headroom floor when the catalogue documents a matching output ceiling.",
+          "Thinking cycle, /effort, and Settings now walk each model's real ladder instead of the DeepSeek off/high/max shortcut. Grok 4.6 is auto/low/medium/high/xhigh (cannot disable); Grok 4.5 is auto/low/medium/high; first-party DeepSeek keeps a documented low tier. /effort persists and receipts through the same path as Ctrl+T.",
+          "Google Gemini is its own backend (/provider google) on the official OpenAI-compatible route with thought-signature capture/replay and fail-closed replay for thinking models. Antigravity (agy 1.1.13) is a separate provider: consent-gated read-only import of the official CLI's login, then a text-only cloud-code stream (/v1internal:streamGenerateContent). Tools, images, and unknown SSE shapes fail closed. Gemini 3.7 Flash is not advertised until a live turn succeeds on this…",
+          "DeepSeek Flash SSE on macOS no longer turns mid-character HTTP/2 flushes into U+FFFD replacement characters (#5374). Invalid UTF-8 fails the line instead of using lossy decode.",
+          "[workshop] read_result_max_bytes and tool_result_max_bytes raise the model-visible read/tool-result floor; they never lower the compile-time defaults and cap at 2MiB (#5367).",
+          "Fireworks and OpenCode Zen DeepSeek V4 Flash/Pro keep a bundled family rate when the live control plane is down, so session cost is not stuck on unverified_live_pricing (#5241). kimi-k3 stays unpriced until a published rate exists.",
+          "Provider setup ships a typed beginner template catalog (#5350). OpenCode Zen/Go stay first-class key-only rows with their documented hosts and curated models. SenseNova fills a named OpenAI-compatible table on the published https://token.sensenova.cn/v1 host (S or /provider setup sensenova). Agnes is listed as unpublished because this repository has no published URL. /provider P and Settings → beginner templates open the list; T tests /models and refreshes status without…",
+          "Privileged release workflows no longer restore rust-cache, sccache, or npm caches after checking out a caller-supplied SHA (CodeQL cache-poisoning #88–#106). Catalog drift no longer prints raw bundled/upstream blobs (#107)."
         ],
         "itemCount": 24
       },
       {
         "heading": "Removed",
         "items": [
-          "The source-structure budget ratchet (CI step, checker, baseline JSON). It measured line counts, not quality: every legitimate feature required a hand-edited ceiling and the accompanying \"review\" was self-review, so it bought ceremony, not…",
-          "DeepSeek can reuse a key already stored by official DeepSeek Harness (dsh) after codewhale auth external-consent --provider deepseek --mode read-only. Codewhale reads only DEEPSEEK_API_KEY from the exact granted $DSH_HOME/.credentials.yaml…",
+          "The source-structure budget ratchet (CI step, checker, baseline JSON). It measured line counts, not quality: every legitimate feature required a hand-edited ceiling and the accompanying \"review\" was self-review, so it bought ceremony, not protection. Behavior-measuring gates (dead-code, runtime-contract, persistence-backlog) stay enforced.",
+          "DeepSeek can reuse a key already stored by official DeepSeek Harness (dsh) after codewhale auth external-consent --provider deepseek --mode read-only. Codewhale reads only DEEPSEEK_API_KEY from the exact granted $DSH_HOME/.credentials.yaml and never writes or refreshes that file.",
           "The TUI markdown parser now honors CommonMark fence-length rules: a opener is not closed by a shorter line, so >` content inside a longer fence stays literal code instead of escaping into a quote.",
           "Sub-agents finalize when the parent session id changes, so a closed session cannot block new children as a live owner (#5372).",
           "Child spawn-route receipts stay live and usage is deduped by response (#5366).",
           "Doctor keeps persisted setup readiness across first-run / update checkpoints (#5340).",
           "Approval default selection is applied and explained; agents are told when approvals are disabled (#5293).",
-          "A /models 2xx probe is a connection check, not model readiness."
+          "A /models 2xx probe is a connection check, not model readiness.",
+          "Site layout uses one container, the ticker no longer implies false provider readiness, and install links stay in the active locale."
         ],
         "itemCount": 9
       },
@@ -333,7 +380,7 @@ export const CHANGELOG: ChangelogRelease[] = [
         "heading": "Contributors",
         "items": [
           "EvanProgramming (@EvanProgramming) — webhook client panic fallback (#5381); session-index JSONL mutex (#5382).",
-          "Lstarsky0 (@Lstarsky0) — session peek hides internal runtime events (#5376); thinking-ladder test re-pin (#5378); provider-count follow-ups (#5383/#5384); macOS agy fixture canonicalization (#5392); zh-Hans 宪章 terminology (#5397);…",
+          "Lstarsky0 (@Lstarsky0) — session peek hides internal runtime events (#5376); thinking-ladder test re-pin (#5378); provider-count follow-ups (#5383/#5384); macOS agy fixture canonicalization (#5392); zh-Hans 宪章 terminology (#5397); regenerated website facts harvested and corrected from #5398.",
           "Matt Van Horn (@mvanhorn) — read-only models settings preview on the website (#5411, fixes #5370).",
           "Nhat Bui (@buiducnhat) — canonical ultra reasoning effort mapped across provider effort tables (#5409); session titles truncated by character count, not byte offset (#5415).",
           "Sh1Zuku (@SparkofSpike) — /title and the session name in the terminal tab/window title, plus the mid-turn title deadlock fix (#5419).",
@@ -353,7 +400,7 @@ export const CHANGELOG: ChangelogRelease[] = [
       {
         "heading": "Added",
         "items": [
-          "Grok 4.6 is the direct xAI default, with the grok alias moving onto it and grok-4.5 still explicitly selectable. Its 500K context, text/image input, tool and structured-output support, low/medium/high/xhigh reasoning efforts (default…",
+          "Grok 4.6 is the direct xAI default, with the grok alias moving onto it and grok-4.5 still explicitly selectable. Its 500K context, text/image input, tool and structured-output support, low/medium/high/xhigh reasoning efforts (default high), and server-side web search all come from the Models.dev-shaped catalog rather than model-specific code. reasoning_effort reaches the wire only on the exact first-party https://api.x.ai/v1 route, and the usage-aware 200K-token pricing…",
           "OrcaRouter is a first-class named provider: ORCAROUTER_API_KEY, default base URL https://api.orcarouter.ai/v1, deepseek/deepseek-v4-pro default, orcarouter/auto routing, CLI --provider selector, and TUI picker entries (#5321)."
         ],
         "itemCount": 2
@@ -361,7 +408,7 @@ export const CHANGELOG: ChangelogRelease[] = [
       {
         "heading": "Changed",
         "items": [
-          "Reasoning-effort normalization and the model picker read a model's published reasoning_options list from the catalog instead of collapsing every route to the historic Low/Medium ladder. Any catalog row that publishes an effort list keeps…",
+          "Reasoning-effort normalization and the model picker read a model's published reasoning_options list from the catalog instead of collapsing every route to the historic Low/Medium ladder. Any catalog row that publishes an effort list keeps its own vocabulary.",
           "Docs record DeepSeek's live DeepSeek-V4-Pro-0813 backend label while the callable API ID stays deepseek-v4-pro. No aliases are remapped and no deepseek-v4-pro[1m] selector is sent."
         ],
         "itemCount": 2
@@ -369,16 +416,16 @@ export const CHANGELOG: ChangelogRelease[] = [
       {
         "heading": "Fixed",
         "items": [
-          "Auto-Review once again executes proven read/build/test shell commands and bounded workspace writes without opening an approval modal. Explicit policy blocks, unknown tools, publish operations, secret actions, MCP mutations, and shell…",
-          "Copying a user or assistant message takes its canonical content instead of reserialized transcript lines, keeping role glyphs, continuation rails, and visual wrapping out of the clipboard while preserving authored Unicode, Markdown, and…",
-          "load_session no longer runs crash recovery on every read. Snapshot reads go through a side-effect-free load_session_snapshot and recovery is explicit via recover_session_for_resume, so an embedding host inspecting a durable session while a…"
+          "Auto-Review once again executes proven read/build/test shell commands and bounded workspace writes without opening an approval modal. Explicit policy blocks, unknown tools, publish operations, secret actions, MCP mutations, and shell commands requiring approval still fail closed (#5323; reported by USTHzhanglu and root-caused by Lstarsky0).",
+          "Copying a user or assistant message takes its canonical content instead of reserialized transcript lines, keeping role glyphs, continuation rails, and visual wrapping out of the clipboard while preserving authored Unicode, Markdown, and hard line breaks. Tool and Thinking cells stay on the existing full-transcript path (#5319).",
+          "load_session no longer runs crash recovery on every read. Snapshot reads go through a side-effect-free load_session_snapshot and recovery is explicit via recover_session_for_resume, so an embedding host inspecting a durable session while a tool is still running no longer gets a spurious crash repair (#5320)."
         ],
         "itemCount": 3
       },
       {
         "heading": "Security",
         "items": [
-          "lru moves to 0.18 to clear RUSTSEC-2026-0253, where LruCache::pop() was not panic-safe and could leave dangling list pointers. The ratatui-core =0.1.0 pin that transitively forced lru ^0.16 is lifted, so ColorCompatBackend now answers…"
+          "lru moves to 0.18 to clear RUSTSEC-2026-0253, where LruCache::pop() was not panic-safe and could leave dangling list pointers. The ratatui-core =0.1.0 pin that transitively forced lru ^0.16 is lifted, so ColorCompatBackend now answers get_cursor_position() from tracked cursor state — the upstream-recommended workaround for the startup CPR race (ratatui/ratatui#2483, ratatui/ratatui#2640) that the pin originally worked around. ratatui itself stays pinned at =0.30.0, so the…"
         ],
         "itemCount": 1
       },
