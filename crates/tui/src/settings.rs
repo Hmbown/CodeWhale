@@ -425,6 +425,7 @@ pub struct Settings {
     /// `launch_screen` values keep parsing. Fresh interactive launches now
     /// always start at Tideline Startup; an intentional resume or explicit
     /// initial prompt is the only direct-session route.
+    #[allow(dead_code)] // persisted compatibility only; clean launches no longer branch on it
     #[serde(default, skip_serializing)]
     pub launch_screen: bool,
     /// Default mode: "agent" (Act), "plan", or "operate". Legacy permission
