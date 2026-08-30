@@ -198,6 +198,7 @@ pub(crate) async fn run_exec_agent(
     let runtime_services = crate::tools::spec::RuntimeToolServices {
         shell_manager: Some(exec_shell_manager.clone()),
         persist_services_enabled,
+        media_originals_dir: crate::media_originals::default_store_dir(),
         ..crate::tools::spec::RuntimeToolServices::default()
     };
 

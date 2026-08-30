@@ -72,6 +72,7 @@ mod logging;
 mod lsp;
 mod mcp;
 mod mcp_server;
+mod media_originals;
 mod model_catalog;
 mod model_context;
 mod model_inventory;
