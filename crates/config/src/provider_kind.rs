@@ -301,14 +301,11 @@ impl ProviderKind {
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         let trimmed = value.trim();
-        Self::all()
-            .iter()
-            .copied()
-            .find(|kind| {
-                let p = kind.provider();
-                trimmed.eq_ignore_ascii_case(p.id())
-                    || p.aliases().iter().any(|a| trimmed.eq_ignore_ascii_case(a))
-            })
+        Self::all().iter().copied().find(|kind| {
+            let p = kind.provider();
+            trimmed.eq_ignore_ascii_case(p.id())
+                || p.aliases().iter().any(|a| trimmed.eq_ignore_ascii_case(a))
+        })
     }
 
     /// Parse a provider identifier for **config-table identity** — the kind
@@ -329,6 +326,12 @@ impl ProviderKind {
     /// alias collapse; everything else falls back to [`parse`](Self::parse).
     /// Wire-endpoint selection is unaffected: it keys off the resolved kind's
     /// `wire` config, not this parse.
+    ///
+    /// Retired tombstone kinds (absent from [`ALL`](Self::ALL), so never
+    /// returned by [`parse`](Self::parse)) still resolve here through their
+    /// registry aliases (`agy` -> `Antigravity`), so every selection surface
+    /// can name the tombstone and refuse it instead of minting a custom
+    /// `[providers.agy]` table that serde would fold back onto the legacy one.
     #[must_use]
     pub fn parse_config_identity(value: &str) -> Option<Self> {
         let trimmed = value.trim();
@@ -340,6 +343,18 @@ impl ProviderKind {
             })
             .map(|p| p.kind())
             .or_else(|| Self::parse(trimmed))
+            .or_else(|| Self::parse_retired_alias(trimmed))
+    }
+
+    /// Alias lookup restricted to registry entries that are *not* in the
+    /// selectable catalog. Catalog aliases are handled by [`parse`](Self::parse)
+    /// and always take precedence.
+    fn parse_retired_alias(trimmed: &str) -> Option<Self> {
+        provider::all_providers()
+            .iter()
+            .filter(|p| !Self::all().contains(&p.kind()))
+            .find(|p| p.aliases().iter().any(|a| trimmed.eq_ignore_ascii_case(a)))
+            .map(|p| p.kind())
     }
 
     #[must_use]

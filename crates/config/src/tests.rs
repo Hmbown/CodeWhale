@@ -5739,6 +5739,15 @@ fn antigravity_legacy_config_loads_but_new_selection_and_fields_are_rejected() {
         ProviderKind::parse_config_identity("agy"),
         Some(ProviderKind::Antigravity)
     );
+    assert_eq!(
+        ProviderKind::parse_config_identity(" AGY "),
+        Some(ProviderKind::Antigravity)
+    );
+    // The tombstone is absent from every selectable surface.
+    assert!(!ProviderKind::all().contains(&ProviderKind::Antigravity));
+    assert!(!ProviderKind::names_hint().contains("antigravity"));
+    assert!(crate::route::descriptor::auth_methods_for(ProviderKind::Antigravity).is_empty());
+    assert!(ProviderKind::Antigravity.provider().env_vars().is_empty());
 
     let loaded: ConfigToml = toml::from_str(
         r#"
@@ -5755,6 +5764,23 @@ model = "legacy-model"
         Some("legacy-model")
     );
 
+    // The historical `agy` table spelling folds onto the same tombstone slot
+    // instead of surviving as an anonymous custom table.
+    let loaded_alias: ConfigToml = toml::from_str(
+        r#"
+provider = "agy"
+[providers.agy]
+api_key = "legacy-literal"
+"#,
+    )
+    .expect("legacy agy spelling remains readable for clearing");
+    assert_eq!(loaded_alias.provider, ProviderKind::Antigravity);
+    assert_eq!(
+        loaded_alias.providers.antigravity.api_key.as_deref(),
+        Some("legacy-literal")
+    );
+    assert!(loaded_alias.providers.extras.is_empty());
+
     for (key, value) in [
         ("provider", "antigravity"),
         ("provider", "agy"),
@@ -5768,6 +5794,12 @@ model = "legacy-model"
             .to_string();
         assert!(error.contains("non-runnable"), "{key}: {error}");
         assert!(error.contains("GEMINI_API_KEY"), "{key}: {error}");
+        assert!(error.contains("provider `google`"), "{key}: {error}");
+        // Refusal is total: no tombstone field is written and no custom
+        // `[providers.agy]` table is minted as a side door.
+        assert!(config.providers.antigravity.is_empty(), "{key}");
+        assert!(config.providers.extras.is_empty(), "{key}");
+        assert_eq!(config.provider, ProviderKind::default(), "{key}");
     }
 }
 
