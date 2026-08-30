@@ -2148,7 +2148,7 @@ reasoning contract, and all four membership ids omit generic sampling fields.
   `~/.claude/skills`. First launch installs versioned bundled skills for common
   workflows including skill creation, delegation, MCP/plugin scaffolding,
   documents, presentations, spreadsheets, PDFs, and Feishu/Lark. Only
-  CodeWhale-owned roots (`<workspace>/.codewhale/skills` and
+  Codewhale-owned roots (`<workspace>/.codewhale/skills` and
   `~/.codewhale/skills`) are writable install/import targets; compatible harness
   roots stay read-only. Bare `/skills` opens the Skills Manager (owned-only,
   zero network). See [SKILLS.md](SKILLS.md) for the manager, audit statuses,

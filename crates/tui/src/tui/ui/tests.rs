@@ -1374,7 +1374,7 @@ fn coordination_handover_within_this_process_does_not_toast() {
     assert!(
         toast
             .text
-            .starts_with("Another CodeWhale session in this workspace"),
+            .starts_with("Another Codewhale session in this workspace"),
         "the toast must lead with the fact that explains the state: {}",
         toast.text
     );
@@ -5032,8 +5032,8 @@ async fn session_denied_cache_auto_deny_explains_the_cached_rejection() {
     assert_eq!(toast.level, StatusToastLevel::Warning);
     assert_eq!(toast.ttl_ms, Some(12_000));
     assert!(toast.text.contains("matching request was denied earlier"));
-    assert!(toast.text.contains("during this CodeWhale run"));
-    assert!(toast.text.contains("Restart CodeWhale"));
+    assert!(toast.text.contains("during this Codewhale run"));
+    assert!(toast.text.contains("Restart Codewhale"));
     assert!(toast.text.contains("exec_shell"));
     let history_notice = app
         .history
@@ -5059,7 +5059,7 @@ async fn session_denied_cache_auto_deny_explains_the_cached_rejection() {
     let rendered = render_underwater_test_app(&mut app, 40, 12);
     assert!(rendered.contains("Auto-denied"), "{rendered:?}");
     assert!(
-        rendered.contains("Restart") && rendered.contains("CodeWhale"),
+        rendered.contains("Restart") && rendered.contains("Codewhale"),
         "{rendered:?}"
     );
 }
@@ -5286,7 +5286,7 @@ async fn session_denied_cache_notice_renders_host_scope_in_zh_hans() {
             _ => None,
         })
         .expect("localized persistent auto-deny explanation");
-    assert!(notice.contains("本次 CodeWhale 运行期间"));
+    assert!(notice.contains("本次 Codewhale 运行期间"));
     assert!(notice.contains("匹配请求"));
     assert!(!notice.contains("example.com"));
 
@@ -5298,7 +5298,7 @@ async fn session_denied_cache_notice_renders_host_scope_in_zh_hans() {
     assert!(rendered_compact.contains("已自动拒绝"), "{rendered:?}");
     assert!(rendered_compact.contains("匹配请求"), "{rendered:?}");
     assert!(
-        rendered_compact.contains("重启") && rendered_compact.contains("CodeWhale"),
+        rendered_compact.contains("重启") && rendered_compact.contains("Codewhale"),
         "{rendered:?}"
     );
 }
@@ -5310,8 +5310,8 @@ fn session_denied_notice_explains_cached_decision_and_recovery() {
 
     assert!(notice.contains("exec_shell"));
     assert!(notice.contains("matching request was denied earlier"));
-    assert!(notice.contains("during this CodeWhale run"));
-    assert!(notice.contains("Restart CodeWhale"));
+    assert!(notice.contains("during this Codewhale run"));
+    assert!(notice.contains("Restart Codewhale"));
 }
 
 #[tokio::test]
@@ -5380,7 +5380,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
                 cell,
                 HistoryCell::System { content }
                     if content.contains("Auto-denied exec_shell")
-                        && content.contains("Restart CodeWhale")
+                        && content.contains("Restart Codewhale")
             )
         })
         .expect("cached denial must leave a durable recovery receipt");
@@ -5417,7 +5417,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
         "cached-decision explanation disappeared after completion:\n{rendered}"
     );
     assert!(
-        rendered.contains("Restart CodeWhale"),
+        rendered.contains("Restart Codewhale"),
         "cached-denial recovery path disappeared after completion:\n{rendered}"
     );
     assert_eq!(

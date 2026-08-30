@@ -147,12 +147,12 @@ fn checked_real_directory(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => {
             bail!(
-                "refusing to mutate symlinked CodeWhale skills path component {}",
+                "refusing to mutate symlinked Codewhale skills path component {}",
                 path.display()
             )
         }
         Ok(meta) if !meta.is_dir() => bail!(
-            "refusing to mutate through non-directory CodeWhale skills path component {}",
+            "refusing to mutate through non-directory Codewhale skills path component {}",
             path.display()
         ),
         Ok(_) => Ok(true),
@@ -171,7 +171,7 @@ fn validate_owned_target_chain(
     let expected = anchor.join(".codewhale").join("skills");
     if skills_dir != expected {
         bail!(
-            "refusing to mutate non-canonical CodeWhale skills root {}",
+            "refusing to mutate non-canonical Codewhale skills root {}",
             skills_dir.display()
         );
     }
@@ -495,7 +495,7 @@ fn resolve_owned_skill_by_name(
                      import it with /skills (refusing to write external harness directories)"
                 );
             }
-            bail!("skill '{name}' not found in CodeWhale-owned project/global roots");
+            bail!("skill '{name}' not found in Codewhale-owned project/global roots");
         }
         [only] => {
             let DigestState::Known(digest) = &only.digest else {
@@ -507,7 +507,7 @@ fn resolve_owned_skill_by_name(
             })
         }
         _ => bail!(
-            "skill '{name}' exists in both project and global CodeWhale roots; \
+            "skill '{name}' exists in both project and global Codewhale roots; \
              specify --project or --global"
         ),
     }
@@ -861,10 +861,10 @@ async fn update_skill(
 ) -> Result<SkillMutationReceipt> {
     let (skill, path) = find_audited_skill(ctx, &skill_id)?;
     if !skill.root.is_writable_owned() {
-        bail!("refusing to update skill outside CodeWhale-owned roots");
+        bail!("refusing to update skill outside Codewhale-owned roots");
     }
     if skill.source_kind != SkillSourceKind::CodeWhaleManaged {
-        bail!("only CodeWhale managed skills can be updated");
+        bail!("only Codewhale managed skills can be updated");
     }
     let skills_dir = validate_owned_skill_path(ctx, &skill, &path)?;
     // Imported skills carry `import:…` provenance and must not hit the registry.
@@ -939,10 +939,10 @@ fn remove_skill(
 ) -> Result<SkillMutationReceipt> {
     let (skill, path) = find_audited_skill(ctx, &skill_id)?;
     if !skill.root.is_writable_owned() {
-        bail!("refusing to remove skill outside CodeWhale-owned roots");
+        bail!("refusing to remove skill outside Codewhale-owned roots");
     }
     if skill.source_kind != SkillSourceKind::CodeWhaleManaged {
-        bail!("only CodeWhale managed skills can be removed");
+        bail!("only Codewhale managed skills can be removed");
     }
     let skills_dir = validate_owned_skill_path(ctx, &skill, &path)?;
     let before = verify_expected_digest(&path, expected_digest.as_deref())?;
@@ -972,10 +972,10 @@ fn trust_skill(
 ) -> Result<SkillMutationReceipt> {
     let (skill, path) = find_audited_skill(ctx, &skill_id)?;
     if !skill.root.is_writable_owned() {
-        bail!("refusing to trust skill outside CodeWhale-owned roots");
+        bail!("refusing to trust skill outside Codewhale-owned roots");
     }
     if skill.source_kind != SkillSourceKind::CodeWhaleManaged {
-        bail!("only CodeWhale managed skills can be trusted");
+        bail!("only Codewhale managed skills can be trusted");
     }
     validate_owned_skill_path(ctx, &skill, &path)?;
     let before = verify_expected_digest(&path, Some(&expected_digest))?;

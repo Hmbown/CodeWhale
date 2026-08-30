@@ -1248,11 +1248,11 @@ impl UpdateNotice {
     /// on disk, and the next upgrade silently reverts the user.
     fn notice_block(&self, install: InstallMethod) -> String {
         let action = if install.supports_self_update() {
-            "Run `/update install` here (preview it with a bare `/update`), or `codewhale update` in a shell, then restart CodeWhale."
+            "Run `/update install` here (preview it with a bare `/update`), or `codewhale update` in a shell, then restart Codewhale."
                 .to_string()
         } else {
             format!(
-                "Installed via {label}. Run `{command}`, then restart CodeWhale.\n\
+                "Installed via {label}. Run `{command}`, then restart Codewhale.\n\
                  Do not use `codewhale update` here — it would replace a binary {label} manages.",
                 label = install.label(),
                 command = install.update_command()

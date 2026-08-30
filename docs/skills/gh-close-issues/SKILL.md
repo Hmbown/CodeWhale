@@ -1,6 +1,6 @@
 ---
 name: gh-close-issues
-description: "Close resolved CodeWhale issues only after verifying the landed commit/behavior, with a positive crediting comment; never from title alone."
+description: "Close resolved Codewhale issues only after verifying the landed commit/behavior, with a positive crediting comment; never from title alone."
 ---
 
 # gh-close-issues
