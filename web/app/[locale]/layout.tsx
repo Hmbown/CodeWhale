@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Fraunces, IBM_Plex_Sans, JetBrains_Mono, Noto_Serif_SC } from "next/font/google";
+import { IBM_Plex_Sans, JetBrains_Mono } from "next/font/google";
 import { Nav } from "@/components/nav";
 import { Footer } from "@/components/footer";
 import { localeDirection, locales, type Locale } from "@/lib/i18n/config";
@@ -9,15 +9,9 @@ import { buildPageMetadata } from "@/lib/page-meta";
 import { buildSiteJsonLd } from "@/lib/site-schema";
 import "../globals.css";
 
-// Fraunces is the newspaper-era display face the community asked to keep —
-// crisp, editorial, a little futuristic. Body stays IBM Plex for instrument feel.
-const display = Fraunces({
-  subsets: ["latin", "vietnamese"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-display",
-  display: "swap",
-});
-
+// Tideline typography: one sans voice for display and body (weight and
+// tracking separate them, not a second family), JetBrains Mono for the
+// terminal chrome. Display/CJK stacks resolve in globals.css.
 const body = IBM_Plex_Sans({
   subsets: ["latin", "cyrillic", "vietnamese"],
   weight: ["400", "500", "600"],
@@ -30,15 +24,6 @@ const mono = JetBrains_Mono({
   weight: ["400", "500", "600"],
   variable: "--font-mono",
   display: "swap",
-});
-
-// Noto Serif SC is heavy; load only what we need for decorative anchors.
-const cjk = Noto_Serif_SC({
-  subsets: ["latin"],
-  weight: ["400", "700"],
-  variable: "--font-cjk",
-  display: "swap",
-  preload: false,
 });
 
 export function generateStaticParams() {
@@ -74,7 +59,7 @@ export default async function LocaleLayout({
     <html
       lang={locale}
       dir={dir}
-      className={`${display.variable} ${body.variable} ${mono.variable} ${cjk.variable}`}
+      className={`${body.variable} ${mono.variable}`}
       suppressHydrationWarning
     >
       <body>
@@ -83,7 +68,8 @@ export default async function LocaleLayout({
           dangerouslySetInnerHTML={{ __html: serializeJsonLd(siteJsonLd) }}
         />
         {/* Apply the persisted docs theme before paint so there is no flash.
-            "auto" leaves data-theme unset and defers to prefers-color-scheme. */}
+            The site default is the Tideline dark field; only an explicit
+            "light" choice re-themes the docs sheet. */}
         <script
           dangerouslySetInnerHTML={{
             __html:

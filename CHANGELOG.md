@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   teardown-undo if the apply fails, so a labels outage can never leave
   spend the orphan reconciler cannot find. `CODEWHALE_DISPATCH_SNAPSHOT`
   overrides the snapshot name for operators.
+- Website: the public site moves to the Tideline deep-ocean design language
+  (dark by default with an opt-in light documentation sheet, palette grounded
+  in the TUI's WHALE_* tokens) and the new whale brand mark across the favicon,
+  app icons, web manifest, nav wordmark, and social card (#5573).
+
 - Add `codewhale dispatch` / `/dispatch` so a local session can propose a
   Codewhale cloud agent against an explicit `github`, `cnb`, or `gitee` remote.
   Confirmation is required; missing credentials fail closed; cloud jobs share
@@ -69,6 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add provider-native web search for documented DeepSeek V4 routes through the
   Responses API, with fail-closed capability gating for compatible custom
   endpoints.
+- Add provider-native search for exact Moonshot K3 Formula, legacy K2.6
+  built-in search, and Kimi Code membership `/search` routes. Treat the exact
+  Moonshot China endpoint as a first-party direct route.
 - Z.ai `GLM-5.3-Flash` and OpenRouter `z-ai/glm-5.3-flash` are first-class
   picker rows (`/model GLM-5.3-Flash`). Flash is the faster/explore sibling
   of `GLM-5.3`; the Z.ai default stays `GLM-5.3`. List price is $0.15/$0.50
