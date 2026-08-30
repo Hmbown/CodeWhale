@@ -65,8 +65,10 @@ jobs:
             echo "::error::Could not parse workspace version from Cargo.toml" >&2
             exit 1
           fi
-          if ! echo "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::Workspace version '$v' is not valid semver (expected X.Y.Z)" >&2
+          # shellcheck source=scripts/release/release-version.sh
+          . ./scripts/release/release-version.sh
+          if ! release_version_is_valid "$v"; then
+            echo "::error::Workspace version '$v' is not a release version (expected X.Y.Z or X.Y.Z-rc.N)" >&2
             exit 1
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"

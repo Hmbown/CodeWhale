@@ -22,6 +22,8 @@ make_fixture() {
 
   cp "${repo_root}/scripts/release/prepare-release.sh" \
     "${root}/scripts/release/prepare-release.sh"
+  cp "${repo_root}/scripts/release/release-version.sh" \
+    "${root}/scripts/release/release-version.sh"
 
   cat >"${root}/Cargo.toml" <<'EOF'
 [workspace]

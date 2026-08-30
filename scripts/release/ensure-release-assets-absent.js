@@ -10,7 +10,8 @@ function validateTarget(repo, tag) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
     throw new Error(`Invalid GitHub repository: ${repo}`);
   }
-  if (!/^v[0-9]+\.[0-9]+\.[0-9]+$/.test(tag)) {
+  // Same grammar as scripts/release/release-version.sh: vX.Y.Z or vX.Y.Z-rc.N.
+  if (!/^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$/.test(tag)) {
     throw new Error(`Invalid release tag: ${tag}`);
   }
 }

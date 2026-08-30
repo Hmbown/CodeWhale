@@ -46,6 +46,36 @@ Current packaging note:
   - leave `codewhaleBinaryVersion` pinned to the previously released Rust binaries
   - rerun `npm pack` smoke checks before `npm publish`
 
+### Release candidates
+
+`X.Y.Z-rc.N` (tag `vX.Y.Z-rc.N`, `N >= 1`) is the only accepted prerelease
+shape. The grammar lives in `scripts/release/release-version.sh` and is
+pinned by `scripts/release/release-version.test.sh`; every gate on the
+publish path (`prepare-release.sh`, `check-versions.sh`,
+`verify-remote-tag.sh`, `require-release-tag-checkout.sh`,
+`ensure-release-assets-absent.js`, `auto-tag.yml`, `release.yml`) sources
+or mirrors it.
+
+A candidate rides the same chain as a stable release — bump with
+`./scripts/release/prepare-release.sh X.Y.Z-rc.N`, give the CHANGELOG a dated
+`## [X.Y.Z-rc.N] - YYYY-MM-DD` section with a
+`compare/vPREV...vX.Y.Z-rc.N` link, dispatch `auto-tag.yml`, let
+`release.yml` build the same 34 assets — but never moves a stable pointer:
+
+- the GitHub Release is flagged **prerelease**, so `/releases/latest`, the
+  website's published-release fact, and the self-updater ignore it;
+- npm publishes under dist-tag **`next`** (`npm install -g codewhale@next`);
+  `latest` is untouched;
+- GHCR receives the version and tag images without **`latest`**;
+- the Homebrew tap job is skipped, `packaging/aur/render.sh` renders nothing
+  (AUR `pkgver` cannot carry a hyphen), winget is stable-only, and
+  `release-republish.yml` refuses candidates;
+- crates.io receives ordinary prerelease versions that `cargo install` only
+  selects with an explicit `--version`.
+
+The stable `X.Y.Z` that follows is a separate bump commit and tag from the
+frozen `main`; never re-tag the candidate SHA.
+
 ## Release Source Timing
 
 Freeze the source before creating a public `vX.Y.Z` tag. The version bump is

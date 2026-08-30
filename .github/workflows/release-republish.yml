@@ -57,8 +57,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Republish recovers the stable channels (GHCR `latest`, the Homebrew
+          # tap); a vX.Y.Z-rc.N candidate never owns those, so it is refused here.
           if ! [[ "${INPUT_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Version '${INPUT_VERSION}' must use X.Y.Z." >&2
+            echo "::error::Version '${INPUT_VERSION}' must use X.Y.Z (release candidates are not republished)." >&2
             exit 1
           fi
           tag="v${INPUT_VERSION}"

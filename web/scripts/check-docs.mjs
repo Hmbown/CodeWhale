@@ -94,7 +94,8 @@ function checkInstallSnippets() {
   if (!existsSync(installPath)) return { ok: true, note: "install page not found" };
 
   const src = readFileSync(installPath, "utf-8");
-  const versionRefs = [...src.matchAll(/codewhale.*?([\d]+\.[\d]+\.[\d]+)/g)];
+  // Same grammar as scripts/release/release-version.sh: X.Y.Z or X.Y.Z-rc.N.
+  const versionRefs = [...src.matchAll(/codewhale.*?([\d]+\.[\d]+\.[\d]+(?:-rc\.[1-9]\d*)?)/g)];
   const stale = [];
   for (const ref of versionRefs) {
     const v = ref[1];

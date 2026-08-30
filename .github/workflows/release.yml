@@ -30,6 +30,10 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       sha: ${{ steps.release.outputs.sha }}
       version: ${{ steps.release.outputs.version }}
+      # A vX.Y.Z-rc.N tag is a prerelease: GitHub Release flagged
+      # prerelease, npm dist-tag `next`, no GHCR `latest`, no Homebrew tap.
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      npm_dist_tag: ${{ steps.release.outputs.npm_dist_tag }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -41,10 +45,12 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          # shellcheck source=scripts/release/release-version.sh
+          source ./scripts/release/release-version.sh
 
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            if ! [[ "${INPUT_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error::Release version '${INPUT_VERSION}' must use X.Y.Z." >&2
+            if ! release_version_is_valid "${INPUT_VERSION}"; then
+              echo "::error::Release version '${INPUT_VERSION}' must use X.Y.Z or X.Y.Z-rc.N." >&2
               exit 1
             fi
             tag="v${INPUT_VERSION}"
@@ -56,8 +62,8 @@ jobs:
             tag="${GITHUB_REF_NAME}"
           fi
 
-          if ! [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Release tag '${tag}' must use vX.Y.Z." >&2
+          if ! release_tag_is_valid "${tag}"; then
+            echo "::error::Release tag '${tag}' must use vX.Y.Z or vX.Y.Z-rc.N." >&2
             exit 1
           fi
           if ! git rev-parse --verify "refs/tags/${tag}^{commit}" >/dev/null 2>&1; then
@@ -72,10 +78,17 @@ jobs:
             exit 1
           fi
 
+          if release_version_is_prerelease "${tag#v}"; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
           {
             echo "tag=${tag}"
             echo "sha=${sha}"
             echo "version=${tag#v}"
+            echo "prerelease=${prerelease}"
+            echo "npm_dist_tag=$(release_version_npm_dist_tag "${tag#v}")"
           } >> "${GITHUB_OUTPUT}"
       - name: Validate tagged release metadata
         shell: bash
@@ -366,7 +379,7 @@ jobs:
             type=semver,pattern=v{{major}},value=${{ needs.resolve.outputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=raw,value=${{ inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=raw,value=v${{ inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ needs.resolve.outputs.prerelease != 'true' }}
       - name: Revalidate release tag before container publish
         env:
           EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
@@ -468,7 +481,7 @@ jobs:
         with:
           tag_name: ${{ needs.resolve.outputs.tag }}
           files: artifacts/*
-          prerelease: false
+          prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
           body_path: release-body.md
           overwrite_files: false
           fail_on_unmatched_files: true
@@ -516,12 +529,16 @@ jobs:
           # public GitHub Release and therefore needs the same read token as
           # the explicit asset gate above.
           GH_TOKEN: ${{ github.token }}
-        run: npm publish --access public
+          # `latest` for a stable release; `next` for a vX.Y.Z-rc.N candidate
+          # so `npm install -g codewhale` never resolves to a prerelease.
+          NPM_DIST_TAG: ${{ needs.resolve.outputs.npm_dist_tag }}
+        run: npm publish --access public --tag "${NPM_DIST_TAG}"
 
   homebrew:
     timeout-minutes: 20
     needs: [release, resolve]
-    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    # The tap tracks stable releases only; a release candidate never moves it.
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.resolve.outputs.prerelease != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -16,13 +16,16 @@
 # let check-versions.sh (run at the end here) confirm everything agrees.
 set -euo pipefail
 
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=scripts/release/release-version.sh
+source "${repo}/scripts/release/release-version.sh"
+
 new="${1:?usage: $0 <new-version>}"
-if ! [[ "${new}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "error: '${new}' is not a plain X.Y.Z version" >&2
+if ! release_version_is_valid "${new}"; then
+  echo "error: '${new}' is not a plain X.Y.Z or X.Y.Z-rc.N version" >&2
   exit 1
 fi
 
-repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo}"
 
 # Release preparation spans generated files and two package managers. Preserve
@@ -120,7 +123,7 @@ def bump(path, pattern, repl, minimum):
 # Validate every versioned README install tag before writing any file. A README
 # with no pinned tag is valid; if a tag exists, it must match the workspace so
 # the release helper cannot silently preserve stale public install instructions.
-release_tag_pattern = re.compile(r"--tag v([0-9]+\.[0-9]+\.[0-9]+)\b")
+release_tag_pattern = re.compile(r"--tag v([0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?)\b")
 for readme in readmes:
     versions = sorted(set(release_tag_pattern.findall(pathlib.Path(readme).read_text())))
     stale = [version for version in versions if version != old]
@@ -197,7 +200,7 @@ version_doc_files = [
 for doc in version_doc_files:
     p = pathlib.Path(doc)
     text = p.read_text()
-    versions = sorted(set(re.findall(r"codewhale --version\s+#\s*([0-9]+\.[0-9]+\.[0-9]+)\b", text)))
+    versions = sorted(set(re.findall(r"codewhale --version\s+#\s*([0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?)\b", text)))
     stale = [version for version in versions if version != old]
     if stale:
         sys.exit(
@@ -212,7 +215,7 @@ for doc in version_doc_files:
 
 install = pathlib.Path("docs/INSTALL.md")
 install_text = install.read_text()
-pointer_versions = sorted(set(re.findall(r"wrapper is published at\s+v([0-9]+\.[0-9]+\.[0-9]+)\b", install_text)))
+pointer_versions = sorted(set(re.findall(r"wrapper is published at\s+v([0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?)\b", install_text)))
 stale_pointers = [version for version in pointer_versions if version != old]
 if stale_pointers:
     sys.exit(

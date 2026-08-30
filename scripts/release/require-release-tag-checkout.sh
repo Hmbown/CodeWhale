@@ -5,14 +5,16 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
+# shellcheck source=scripts/release/release-version.sh
+source "${repo_root}/scripts/release/release-version.sh"
 
 version="${1:-}"
 if [[ -z "${version}" ]]; then
   version="$(grep -E '^version = "' Cargo.toml | head -n1 | sed -E 's/^version = "([^"]+)".*/\1/')"
 fi
 version="${version#v}"
-if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "error: release version '${version}' must use X.Y.Z" >&2
+if ! release_version_is_valid "${version}"; then
+  echo "error: release version '${version}' must use X.Y.Z or X.Y.Z-rc.N" >&2
   exit 2
 fi
 

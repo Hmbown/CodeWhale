@@ -209,6 +209,7 @@ jobs:
           bash scripts/release/require-release-tag-checkout.test.sh
           bash scripts/release/validate-crate-publish-order.test.sh
           bash scripts/release/verify-remote-tag.test.sh
+          bash scripts/release/release-version.test.sh
           bash packaging/aur/render.test.sh
           sh scripts/dev-cache.test.sh
           bash .github/scripts/update-homebrew-tap.test.sh

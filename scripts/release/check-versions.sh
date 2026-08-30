@@ -38,6 +38,8 @@ if [[ "$#" -ne 0 ]]; then
 fi
 
 cd "$(dirname "$0")/../.."
+# shellcheck source=scripts/release/release-version.sh
+source ./scripts/release/release-version.sh
 
 fail=0
 
@@ -168,7 +170,7 @@ if [[ -z "${compare_line}" ]]; then
   echo "::error::CHANGELOG.md must include a compare link for ${workspace_version}." >&2
   fail=1
 elif [[ "${require_dated_release}" == "1" ]] &&
-  ! grep -qE "^\\[${workspace_version}\\]: https://github.com/Hmbown/CodeWhale/compare/v[0-9]+\\.[0-9]+\\.[0-9]+\\.\\.\\.v${workspace_version}$" <<<"${compare_line}"; then
+  ! grep -qE "^\\[${workspace_version}\\]: https://github.com/Hmbown/CodeWhale/compare/v${RELEASE_VERSION_GREP}\\.\\.\\.v${workspace_version}$" <<<"${compare_line}"; then
   echo "::error::Publication requires the ${workspace_version} compare link to end at v${workspace_version}." >&2
   fail=1
 fi
@@ -191,7 +193,7 @@ ${unreleased_section}"
 # surface.
 previous_tag=""
 current_tag="v${workspace_version}"
-if [[ "${compare_line}" =~ compare/(v[0-9]+\.[0-9]+\.[0-9]+)\.\.\.${current_tag} ]]; then
+if [[ "${compare_line}" =~ compare/(v${RELEASE_VERSION_GREP})\.\.\.${current_tag} ]]; then
   previous_tag="${BASH_REMATCH[1]}"
 fi
 if [[ -n "${previous_tag}" ]]; then
@@ -247,10 +249,10 @@ fi
 if [[ ! -f web/lib/facts.generated.ts ]]; then
   node web/scripts/derive-facts.mjs
 fi
-facts_version="$(grep -oE '"version": "[0-9]+\.[0-9]+\.[0-9]+"' web/lib/facts.generated.ts | head -n1 | sed -E 's/.*"([0-9.]+)".*/\1/')"
+facts_version="$(grep -oE "\"version\": \"${RELEASE_VERSION_GREP}\"" web/lib/facts.generated.ts | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
 if [[ "${facts_version}" != "${workspace_version}" ]]; then
   node web/scripts/derive-facts.mjs
-  facts_version="$(grep -oE '"version": "[0-9]+\.[0-9]+\.[0-9]+"' web/lib/facts.generated.ts | head -n1 | sed -E 's/.*"([0-9.]+)".*/\1/')"
+  facts_version="$(grep -oE "\"version\": \"${RELEASE_VERSION_GREP}\"" web/lib/facts.generated.ts | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
   if [[ "${facts_version}" != "${workspace_version}" ]]; then
     echo "::error::web/lib/facts.generated.ts version (${facts_version}) does not match workspace (${workspace_version}). Run: node web/scripts/derive-facts.mjs" >&2
     fail=1
@@ -284,13 +286,13 @@ for doc in README.md README.zh-CN.md README.ja-JP.md README.vi.md README.ko-KR.m
 done
 
 # The publish pointer can wrap onto the next line; also scan the line after the lead-in.
-wrapper_pointer_version="$(grep -A1 -E -- "wrapper is published at" docs/INSTALL.md | grep -oE -- "v[0-9]+\.[0-9]+\.[0-9]+" | head -n1 || true)"
+wrapper_pointer_version="$(grep -A1 -E -- "wrapper is published at" docs/INSTALL.md | grep -oE -- "v${RELEASE_VERSION_GREP}" | head -n1 || true)"
 if [[ -n "${wrapper_pointer_version}" && "${wrapper_pointer_version}" != "v${workspace_version}" ]]; then
   echo "::error::docs/INSTALL.md npm-wrapper publish pointer is ${wrapper_pointer_version}, want v${workspace_version}." >&2
   fail=1
 fi
 
-remote_smoke_tag="$(grep -oE 'RELEASE_TAG:-v[0-9]+\.[0-9]+\.[0-9]+' scripts/remote-smoke/setup-vm.sh | head -n1 | sed 's/.*:-//' || true)"
+remote_smoke_tag="$(grep -oE "RELEASE_TAG:-v${RELEASE_VERSION_GREP}" scripts/remote-smoke/setup-vm.sh | head -n1 | sed 's/.*:-//' || true)"
 if [[ "${remote_smoke_tag}" != "v${workspace_version}" ]]; then
   echo "::error::scripts/remote-smoke/setup-vm.sh defaults to ${remote_smoke_tag:-<missing>}, want v${workspace_version}." >&2
   fail=1

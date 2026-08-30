@@ -74,6 +74,9 @@ test("release lookup parses the exact tag endpoint and validates targets", () =>
   assert.equal(invocation[0], "/fake/gh");
   assert.deepEqual(invocation[1], ["api", "repos/Hmbown/CodeWhale/releases/tags/v0.9.1"]);
   assert.doesNotThrow(() => validateTarget("Hmbown/CodeWhale", "v0.9.1"));
+  assert.doesNotThrow(() => validateTarget("Hmbown/CodeWhale", "v0.9.12-rc.1"));
+  assert.throws(() => validateTarget("Hmbown/CodeWhale", "v0.9.12-rc.0"), /Invalid release tag/);
+  assert.throws(() => validateTarget("Hmbown/CodeWhale", "v0.9.12-beta.1"), /Invalid release tag/);
   assert.throws(() => validateTarget("bad repo", "v0.9.1"), /Invalid GitHub repository/);
   assert.throws(() => validateTarget("Hmbown/CodeWhale", "main"), /Invalid release tag/);
 });

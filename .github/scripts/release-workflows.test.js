@@ -397,6 +397,36 @@ assert.match(npmPublish, /working-directory: npm\/codewhale/);
 assert.match(npmPublish, /GH_TOKEN: \$\{\{ github\.token \}\}/);
 assert.match(npmPublish, /npm publish --access public/);
 assert.doesNotMatch(npmJob[1], /NPM_TOKEN|NODE_AUTH_TOKEN|secrets\./);
+
+// A vX.Y.Z-rc.N candidate rides the same chain but never moves a stable
+// pointer: prerelease-flagged GitHub Release, npm dist-tag `next`, no GHCR
+// `latest`, no Homebrew tap write. The grammar lives in
+// scripts/release/release-version.sh.
+assert.match(release, /^      prerelease: \$\{\{ steps\.release\.outputs\.prerelease \}\}$/m);
+assert.match(release, /^      npm_dist_tag: \$\{\{ steps\.release\.outputs\.npm_dist_tag \}\}$/m);
+assert.match(release, /source \.\/scripts\/release\/release-version\.sh/);
+assert.match(
+  release,
+  /prerelease: \$\{\{ needs\.resolve\.outputs\.prerelease == 'true' \}\}/,
+  "the GitHub Release must be flagged prerelease for a release candidate",
+);
+assert.doesNotMatch(release, /prerelease: false/);
+assert.match(npmPublish, /NPM_DIST_TAG: \$\{\{ needs\.resolve\.outputs\.npm_dist_tag \}\}/);
+assert.match(npmPublish, /npm publish --access public --tag "\$\{NPM_DIST_TAG\}"/);
+assert.match(
+  release,
+  /type=raw,value=latest,enable=\$\{\{ needs\.resolve\.outputs\.prerelease != 'true' \}\}/,
+  "GHCR latest must be gated off for a release candidate",
+);
+assert.doesNotMatch(release, /type=raw,value=latest\n/);
+const homebrewJob = release.match(/\n  homebrew:\n([\s\S]*?)\n    steps:\n/);
+assert.ok(homebrewJob, "public release must retain a dedicated Homebrew job");
+assert.match(homebrewJob[1], /needs\.resolve\.outputs\.prerelease != 'true'/);
+assert.match(
+  republish,
+  /release candidates are not republished/,
+  "republish must refuse release candidates because it rewrites stable channels",
+);
 assert.ok(
   release.indexOf("Revalidate public release assets") <
     release.indexOf("Publish npm wrapper with trusted publishing"),

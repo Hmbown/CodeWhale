@@ -37,9 +37,17 @@ workspace_version="$(
     | head -n 1 \
     | sed -E 's/^version = "([^"]+)".*/\1/'
 )"
-if [[ ! "${workspace_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "workspace version must be X.Y.Z, got: ${workspace_version:-<missing>}" >&2
+# shellcheck source=scripts/release/release-version.sh
+source "${repo_root}/scripts/release/release-version.sh"
+if ! release_version_is_valid "${workspace_version}"; then
+  echo "workspace version must be X.Y.Z or X.Y.Z-rc.N, got: ${workspace_version:-<missing>}" >&2
   exit 1
+fi
+if release_version_is_prerelease "${workspace_version}"; then
+  # AUR pkgver cannot carry a hyphen and the package tracks stable
+  # releases only, so a release candidate renders nothing on purpose.
+  echo "AUR is a stable-only channel; skipping PKGBUILD render for release candidate ${workspace_version}."
+  exit 0
 fi
 if [[ ! "${pkgrel}" =~ ^[1-9][0-9]*(\.[1-9][0-9]*)?$ ]]; then
   echo "PKGREL must be a positive integer or positive x.y value, got: ${pkgrel}" >&2
