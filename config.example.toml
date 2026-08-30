@@ -814,6 +814,16 @@ max_subagents = 10 # optional (default 64, clamped to 1-128)
 # base_url = "https://api.mistral.ai/v1"
 # model = "mistral-code-latest"            # or mistral-medium-latest, mistral-small-latest, mistral-large-latest
 
+# Google Gemini — Google AI Studio (https://aistudio.google.com/apikey)
+# OpenAI-compatible Chat Completions route on the official Gemini endpoint;
+# this is the supported Gemini path (see docs/PROVIDERS.md).
+# Provider aliases: google, gemini, google-gemini, ai-studio
+# Env var aliases: GEMINI_API_KEY, GOOGLE_API_KEY, GEMINI_BASE_URL, GOOGLE_BASE_URL
+[providers.google]
+# api_key = "YOUR_GEMINI_API_KEY"
+# base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+# model = "gemini-3.1-pro-preview"
+
 # ─────────────────────────────────────────────────────────────────────────────────
 # Alibaba Cloud Model Studio — Token Plan
 # (https://bailian.console.aliyun.com/)

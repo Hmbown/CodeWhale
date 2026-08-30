@@ -142,6 +142,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Antigravity is retired to a non-runnable legacy tombstone: it is no longer
+  selectable from the provider picker, `--provider`, `/provider`,
+  `CODEWHALE_PROVIDER`, `config set provider`, or route ids; the private
+  Antigravity OAuth-token import, `AGY_ADC_AUTH`, `ANTIGRAVITY_API_KEY`, and
+  the cloud-code transport are removed; the catalog export and public docs
+  omit it (`scripts/check-provider-registry.py` fails if it reappears).
+  Existing `[providers.antigravity]` / `[providers.agy]` tables still parse
+  so `codewhale auth clear --provider antigravity` can forget only
+  Codewhale-owned state (config table, fallback entries, top-level selection,
+  Codewhale's own secret slot, and the sibling `config.toml.bak`); it never
+  reads, revokes, or alters a Google or Antigravity session. Gemini routes
+  through the supported `google` provider with `GEMINI_API_KEY`.
 - Provider-native web search now applies domain constraints before accepting an
   attempt, discards generated answers when returned citations violate those
   constraints, and preserves the caller's configured/local timeout as an

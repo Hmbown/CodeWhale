@@ -34,6 +34,10 @@ CONFIGURATION_MD = ROOT / "docs" / "CONFIGURATION.md"
 WEB_FACTS_LIB = ROOT / "web" / "scripts" / "facts-lib.mjs"
 WEB_FACTS_DRIFT = ROOT / "web" / "lib" / "facts-drift.ts"
 WEB_FACTS_GENERATED = ROOT / "web" / "lib" / "facts.generated.ts"
+README_MD = ROOT / "README.md"
+CONFIG_EXAMPLE_TOML = ROOT / "config.example.toml"
+TUI_PROVIDER_READINESS_RS = ROOT / "crates" / "tui" / "src" / "provider_readiness.rs"
+TUI_LIB_RS = ROOT / "crates" / "tui" / "src" / "lib.rs"
 
 
 API_PROVIDER_ONLY_IDS = {"deepseek-cn"}
@@ -296,12 +300,55 @@ def report_tui_catalog_contract(tui_config_rs: str) -> list[str]:
     return errors
 
 
+def report_tombstone_runtime_contract(
+    provider_kind_rs: str, tui_provider_readiness_rs: str, tui_lib_rs: str
+) -> list[str]:
+    """The tombstone must resolve under every legacy spelling and never read
+    as a credentialed or advertised slot on a running-product surface."""
+
+    errors: list[str] = []
+    start = require_index(
+        provider_kind_rs,
+        "pub fn parse_config_identity(value: &str) -> Option<Self>",
+        "ProviderKind::parse_config_identity",
+    )
+    end = require_index(
+        provider_kind_rs, "pub fn is_siliconflow", "ProviderKind::parse_config_identity", start
+    )
+    config_identity = provider_kind_rs[start:end]
+    if "parse_retired_alias" not in config_identity:
+        errors.append(
+            "ProviderKind::parse_config_identity must resolve retired registry aliases "
+            "(`agy`) so every selection surface can name the tombstone"
+        )
+
+    if (
+        "provider == ApiProvider::Antigravity || provider.kind().is_none()"
+        not in tui_provider_readiness_rs
+    ):
+        errors.append(
+            "provider_readiness::credential_state_for_provider must classify "
+            "ApiProvider::Antigravity as CredentialState::Legacy"
+        )
+
+    if "for provider in doctor_api_key_providers()" not in tui_lib_rs or (
+        "*provider != crate::config::ApiProvider::Antigravity" not in tui_lib_rs
+    ):
+        errors.append(
+            "`codewhale doctor` API Keys rows must iterate doctor_api_key_providers() "
+            "with the retired Antigravity slot filtered out"
+        )
+    return errors
+
+
 def report_antigravity_public_contract(
     providers_md: str,
     configuration_md: str,
     web_facts_lib: str,
     web_facts_drift: str,
     web_facts_generated: str,
+    readme_md: str,
+    config_example_toml: str,
 ) -> list[str]:
     """Keep the retired provider as one safe, non-runnable docs tombstone."""
 
@@ -380,6 +427,17 @@ def report_antigravity_public_contract(
         )
     if re.search(r"\b(?:antigravity|agy)\b", configuration_md, flags=re.IGNORECASE):
         errors.append("docs/CONFIGURATION.md advertises retired Antigravity state")
+    if re.search(r"\b(?:antigravity|agy)\b", readme_md, flags=re.IGNORECASE):
+        errors.append("README.md advertises retired Antigravity state")
+    if re.search(r"\b(?:antigravity|agy)\b", config_example_toml, flags=re.IGNORECASE):
+        errors.append("config.example.toml advertises retired Antigravity state")
+    if "[providers.google]" not in config_example_toml or not re.search(
+        r"GEMINI_API_KEY", config_example_toml
+    ):
+        errors.append(
+            "config.example.toml must document the supported `google` Gemini route "
+            "with GEMINI_API_KEY"
+        )
 
     forbidden_markers = {
         "Antigravity API-key environment guidance": "ANTIGRAVITY_API_KEY",
@@ -399,6 +457,8 @@ def report_antigravity_public_contract(
         "web/scripts/facts-lib.mjs": web_facts_lib,
         "web/lib/facts-drift.ts": web_facts_drift,
         "web/lib/facts.generated.ts": web_facts_generated,
+        "README.md": readme_md,
+        "config.example.toml": config_example_toml,
     }
     for context, source in public_sources.items():
         for description, marker in forbidden_markers.items():
@@ -609,6 +669,10 @@ def main() -> int:
         web_facts_lib = read(WEB_FACTS_LIB)
         web_facts_drift = read(WEB_FACTS_DRIFT)
         web_facts_generated = read(WEB_FACTS_GENERATED)
+        readme_md = read(README_MD)
+        config_example_toml = read(CONFIG_EXAMPLE_TOML)
+        tui_provider_readiness_rs = read(TUI_PROVIDER_READINESS_RS)
+        tui_lib_rs = read(TUI_LIB_RS)
 
         variant_to_id = provider_kind_ids(config_rs)
         canonical_ids = set(variant_to_id.values())
@@ -626,6 +690,9 @@ def main() -> int:
         errors += report_provider_enum_drift(canonical_ids, live_api_provider_ids)
         errors += report_provider_kind_selector_contract(provider_kind_rs)
         errors += report_tui_catalog_contract(tui_config_rs)
+        errors += report_tombstone_runtime_contract(
+            provider_kind_rs, tui_provider_readiness_rs, tui_lib_rs
+        )
         errors += report_set(
             "legacy provider identities in ProviderKind::ALL",
             set(),
@@ -643,6 +710,8 @@ def main() -> int:
             web_facts_lib,
             web_facts_drift,
             web_facts_generated,
+            readme_md,
+            config_example_toml,
         )
         errors += report_set(
             "shipped provider rows",
