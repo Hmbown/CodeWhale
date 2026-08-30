@@ -1716,28 +1716,7 @@ pub(crate) async fn apply_command_result(
                 }
             }
             AppAction::OpenProviderPicker => {
-                if app.onboarding == OnboardingState::Provider {
-                    let recover_configured_route = app.onboarding_missing_key_recovery;
-                    open_onboarding_provider_picker(
-                        app,
-                        config,
-                        engine_handle,
-                        recover_configured_route,
-                    )
-                    .await;
-                } else if app.view_stack.top_kind() != Some(ModalKind::ProviderPicker) {
-                    let runtime_status = query_provider_runtime_status(engine_handle).await;
-                    app.view_stack.push(
-                        crate::tui::provider_picker::ProviderPickerView::new_with_runtime_status_and_memory(
-                            app.api_provider,
-                            config,
-                            runtime_status,
-                            app.provider_picker_memory.as_ref(),
-                        )
-                        .with_locale(app.ui_locale)
-                        .with_provider_health(&app.provider_health),
-                    );
-                }
+                open_provider_picker(app, config, engine_handle).await;
             }
             AppAction::OpenProviderSetup { provider } => {
                 if app.view_stack.top_kind() != Some(ModalKind::ProviderPicker) {

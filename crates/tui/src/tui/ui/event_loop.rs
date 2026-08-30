@@ -4407,6 +4407,29 @@ pub(crate) async fn run_event_loop(
                 continue;
             }
 
+            // F3 is the non-printable keyboard counterpart to the clickable
+            // route segment in the shared topbar. Route it through the same
+            // typed event as mouse input; `/provider` remains the portable
+            // direct command path for terminals that do not forward F-keys.
+            if crate::tui::shell_key_routing::is_provider_route_shortcut(&key)
+                && app.view_stack.is_empty()
+            {
+                if handle_view_events_boxed(
+                    terminal,
+                    app,
+                    config,
+                    &task_manager,
+                    &mut engine_handle,
+                    &mut web_config_session,
+                    vec![ViewEvent::TopbarRoutePickerRequested],
+                )
+                .await?
+                {
+                    return Ok(());
+                }
+                continue;
+            }
+
             // The pre-session launch menu owns every key until the user has
             // chosen a real session/worktree action. Resume and changelog may
             // place a shared surface above it; those views keep their normal

@@ -786,6 +786,10 @@ pub enum ViewEvent {
     StatusMessage {
         message: String,
     },
+    /// The Tideline topbar's route segment requested the normal `/provider`
+    /// surface. It carries no catalog, readiness, or selected-route payload:
+    /// those facts remain owned by the provider picker and its apply path.
+    TopbarRoutePickerRequested,
     /// Emitted by the `/provider` picker on Esc so the next open can restore
     /// the browsing context — view mode and highlighted row.
     ProviderPickerDismissed {

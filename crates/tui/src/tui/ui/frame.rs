@@ -127,22 +127,29 @@ pub(crate) fn topbar_segments(app: &App, width: u16) -> Vec<TopbarSegment> {
     segments
 }
 
+/// The topbar controls that actually painted in this frame.
+///
+/// The route target intentionally contains no copied route metadata. The
+/// provider picker retains catalog, readiness, credential, and apply
+/// authority; chrome only exposes its entry point.
+#[derive(Debug, Clone, Copy, Default)]
+struct TopbarInteractionHitboxes {
+    context: Option<Rect>,
+    route: Option<Rect>,
+}
+
 /// Render the Tideline topbar into one header row and record its segment
 /// hitboxes (spec §5b `Constraint::Length(1)`). The ONE header on every
 /// screen: the session shell and the launch screen both call this, so the
 /// brand lockup, contextual segments, and the pinned meter + clock never
 /// change identity between pre- and post-session states. Segment rects are
 /// recorded for hover (this frame's highlight resolves against the previous
-/// frame's rects, the standard one-frame-lag registry pattern) and for click
-/// routing in a follow-up slice.
-/// Render the Tideline topbar row and record its segment hitboxes. Returns
-/// the pinned context meter's hitbox — the chrome row's one always-present
-/// inspector target (`Alt+C`'s mouse route) — or `None` when the meter could
-/// not paint whole and clear of the brand at this width.
-pub(crate) fn render_topbar_row(f: &mut Frame, app: &mut App, area: Rect) -> Option<Rect> {
+/// frame's rects, the standard one-frame-lag registry pattern) and for typed
+/// click routing.
+fn render_topbar_row(f: &mut Frame, app: &mut App, area: Rect) -> TopbarInteractionHitboxes {
     if area.height == 0 {
         app.viewport.last_topbar_hitboxes.clear();
-        return None;
+        return TopbarInteractionHitboxes::default();
     }
     let segments = topbar_segments(app, area.width);
     let clock = topbar_clock();
@@ -162,7 +169,13 @@ pub(crate) fn render_topbar_row(f: &mut Frame, app: &mut App, area: Rect) -> Opt
     .ascii_safe(crate::tui::color_compat::ascii_safe_enabled())
     .hovered(hovered);
     let hitboxes = topbar_hitboxes(&topbar, area);
-    let context_hitbox = crate::tui::topbar::context_meter_hitbox(&topbar, area);
+    let interaction_hitboxes = TopbarInteractionHitboxes {
+        context: crate::tui::topbar::context_meter_hitbox(&topbar, area),
+        route: hitboxes
+            .iter()
+            .find(|hitbox| hitbox.id == TopbarSegmentId::Model)
+            .map(|hitbox| hitbox.area),
+    };
     // Keep the header row's quiet background under the widget itself.
     let buf = f.buffer_mut();
     Block::default()
@@ -170,7 +183,75 @@ pub(crate) fn render_topbar_row(f: &mut Frame, app: &mut App, area: Rect) -> Opt
         .render(area, buf);
     ratatui::widgets::Widget::render(topbar, area, buf);
     app.viewport.last_topbar_hitboxes = hitboxes;
-    context_hitbox
+    interaction_hitboxes
+}
+
+/// Register the topbar's drawn controls as one typed input surface.
+///
+/// Both the launch stage and a live session use this exact registration, so
+/// mouse routing cannot advertise a header segment on only one shell state.
+fn register_topbar_interaction_targets(app: &mut App, hitboxes: TopbarInteractionHitboxes) {
+    if let (Some(hitbox), Some(context_budget)) = (
+        hitboxes.context,
+        crate::tui::tideline::ContextBudgetSnapshot::from_app(app),
+    ) {
+        app.viewport
+            .interaction_targets
+            .register(crate::tui::tideline::InteractionTarget {
+                id: crate::tui::tideline::InteractionTargetId::HEADER_CONTEXT,
+                area: hitbox,
+                focus: crate::tui::tideline::InteractionFocus::Direct,
+                keyboard_action: Some(crate::tui::tideline::InteractionAction::InspectContext),
+                mouse_action: Some(crate::tui::tideline::InteractionAction::InspectContext),
+                inspect_detail: crate::tui::tideline::InspectDetail::ContextBudget(context_budget),
+            });
+    }
+    if let Some(hitbox) = hitboxes.route {
+        app.viewport
+            .interaction_targets
+            .register(crate::tui::tideline::InteractionTarget {
+                id: crate::tui::tideline::InteractionTargetId::HEADER_ROUTE,
+                area: hitbox,
+                focus: crate::tui::tideline::InteractionFocus::Direct,
+                keyboard_action: Some(crate::tui::tideline::InteractionAction::OpenProviderPicker),
+                mouse_action: Some(crate::tui::tideline::InteractionAction::OpenProviderPicker),
+                inspect_detail: crate::tui::tideline::InspectDetail::Route,
+            });
+    }
+
+    for target in app.viewport.interaction_targets.iter() {
+        let label = match target.mouse_action {
+            Some(crate::tui::tideline::InteractionAction::InspectContext) => format!(
+                "{} · {}",
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::CtxMenuContextInspector,
+                ),
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::CtxMenuContextInspectorDesc,
+                ),
+            ),
+            Some(crate::tui::tideline::InteractionAction::OpenProviderPicker) => format!(
+                "{} · {}",
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::RoutePanelHeader,
+                ),
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::CmdProviderDescription,
+                ),
+            ),
+            None => continue,
+        };
+        crate::tui::hover_layer::register_rect(
+            crate::tui::hover_hit::HoverTargetKind::Link,
+            target.area,
+            label,
+            false,
+        );
+    }
 }
 
 /// Map the host terminal rect onto the session shell canvas.
@@ -917,7 +998,8 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
                 Constraint::Length(1), // merged footer (slots 6+8)
             ])
             .areas(size);
-        render_topbar_row(f, app, topbar_area);
+        let topbar_interactions = render_topbar_row(f, app, topbar_area);
+        register_topbar_interaction_targets(app, topbar_interactions);
         let startup = crate::tui::underwater::tideline_startup_from_app(app);
         let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage_area);
         crate::tui::underwater::render_tideline_startup(stage_area, f.buffer_mut(), &startup);
@@ -1168,49 +1250,13 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     // segments, then the pinned context meter + clock. The route identity
     // the old identity band carried below the composer now lives here as
     // the Model segment — its new permanent home.
-    let mut topbar_context_hitbox = None;
+    let mut topbar_interactions = TopbarInteractionHitboxes::default();
     if header_height > 0 {
-        topbar_context_hitbox = render_topbar_row(f, app, header_area);
+        topbar_interactions = render_topbar_row(f, app, header_area);
     } else {
         app.viewport.last_topbar_hitboxes.clear();
     }
-    if let (Some(hitbox), Some(context_budget)) = (
-        topbar_context_hitbox,
-        crate::tui::tideline::ContextBudgetSnapshot::from_app(app),
-    ) {
-        app.viewport
-            .interaction_targets
-            .register(crate::tui::tideline::InteractionTarget {
-                id: crate::tui::tideline::InteractionTargetId::HEADER_CONTEXT,
-                area: hitbox,
-                focus: crate::tui::tideline::InteractionFocus::Direct,
-                keyboard_action: Some(crate::tui::app::HeaderActionTarget::InspectContext),
-                mouse_action: Some(crate::tui::app::HeaderActionTarget::InspectContext),
-                inspect_detail: crate::tui::tideline::InspectDetail::ContextBudget(context_budget),
-            });
-    }
-    for target in app.viewport.interaction_targets.iter() {
-        let label = match target.mouse_action {
-            Some(crate::tui::tideline::InteractionAction::InspectContext) => format!(
-                "{} · {}",
-                crate::localization::tr(
-                    app.ui_locale,
-                    crate::localization::MessageId::CtxMenuContextInspector,
-                ),
-                crate::localization::tr(
-                    app.ui_locale,
-                    crate::localization::MessageId::CtxMenuContextInspectorDesc,
-                ),
-            ),
-            None => continue,
-        };
-        crate::tui::hover_layer::register_rect(
-            crate::tui::hover_hit::HoverTargetKind::Link,
-            target.area,
-            label,
-            false,
-        );
-    }
+    register_topbar_interaction_targets(app, topbar_interactions);
 
     // Render the transcript and optional file-tree sidecar. The underwater
     // default deliberately has no legacy right sidebar: Tasks and To-do own
@@ -1745,7 +1791,48 @@ pub(crate) fn workflow_tool_is_running(app: &App) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::short_title_truncate;
+    use super::{register_topbar_interaction_targets, render_topbar_row, short_title_truncate};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn topbar_route_segment_registers_interaction_target() {
+        let mut app =
+            crate::test_support::test_app_with_options(crate::test_support::test_tui_options("."));
+        let mut terminal =
+            Terminal::new(TestBackend::new(160, 1)).expect("topbar test terminal should build");
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let hitboxes = render_topbar_row(frame, &mut app, area);
+                register_topbar_interaction_targets(&mut app, hitboxes);
+            })
+            .expect("topbar should render");
+
+        let segment = app
+            .viewport
+            .last_topbar_hitboxes
+            .iter()
+            .find(|hitbox| hitbox.id == crate::tui::topbar::TopbarSegmentId::Model)
+            .expect("wide topbar should paint its model segment");
+        let target = app
+            .viewport
+            .interaction_targets
+            .iter()
+            .find(|target| target.id == crate::tui::tideline::InteractionTargetId::HEADER_ROUTE)
+            .expect("painted route segment should have a typed target");
+
+        assert_eq!(target.area, segment.area);
+        assert_eq!(
+            target.keyboard_action,
+            Some(crate::tui::tideline::InteractionAction::OpenProviderPicker)
+        );
+        assert_eq!(target.mouse_action, target.keyboard_action);
+        assert_eq!(
+            target.inspect_detail,
+            crate::tui::tideline::InspectDetail::Route
+        );
+    }
 
     #[test]
     fn truncates_at_ascii_word_boundary() {

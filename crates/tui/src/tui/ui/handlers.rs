@@ -1909,6 +1909,9 @@ pub(crate) async fn handle_view_events(
                 app.status_message = Some(message);
                 app.needs_redraw = true;
             }
+            ViewEvent::TopbarRoutePickerRequested => {
+                open_provider_picker(app, config, engine_handle).await;
+            }
             ViewEvent::ProviderPickerDismissed {
                 catalog_view,
                 selected_provider_id,

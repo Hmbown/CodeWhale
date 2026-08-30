@@ -459,6 +459,29 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
         return app.view_stack.handle_mouse(mouse);
     }
 
+    // Topbar facts are typed controls, not decorative text. Route this before
+    // either launch or session content so a segment painted in the one shared
+    // header has identical mouse behavior in both shell states.
+    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        let action = app
+            .viewport
+            .interaction_targets
+            .target_at(mouse.column, mouse.row)
+            .and_then(|target| target.mouse_action);
+        if let Some(action) = action {
+            app.needs_redraw = true;
+            return match action {
+                InteractionAction::InspectContext => {
+                    open_context_inspector(app);
+                    Vec::new()
+                }
+                InteractionAction::OpenProviderPicker => {
+                    vec![ViewEvent::TopbarRoutePickerRequested]
+                }
+            };
+        }
+    }
+
     // The launch surface owns the whole frame until a session is chosen.
     // Consume every mouse event here so wheel input cannot leak into the
     // transcript or composer behind the splash.
@@ -540,25 +563,6 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
         }
         app.needs_redraw = true;
         return Vec::new();
-    }
-
-    // Header facts are inspectable targets, not decorative text. The context
-    // meter shares its destination with the existing Alt+C shortcut; use the
-    // typed target recorded by the renderer instead of guessing from a label
-    // or rebuilding chrome geometry in input handling.
-    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-        let action = app
-            .viewport
-            .interaction_targets
-            .target_at(mouse.column, mouse.row)
-            .and_then(|target| target.mouse_action);
-        if let Some(action) = action {
-            match action {
-                InteractionAction::InspectContext => open_context_inspector(app),
-            }
-            app.needs_redraw = true;
-            return Vec::new();
-        }
     }
 
     // Ocean work surface owns its rect, scrolling, focus, and row actions.
@@ -1830,7 +1834,7 @@ mod tests {
         ContextBudgetSnapshot, InspectDetail, InteractionAction, InteractionFocus,
         InteractionTarget, InteractionTargetId,
     };
-    use crate::tui::views::{ContextMenuAction, ModalKind};
+    use crate::tui::views::{ContextMenuAction, ModalKind, ViewEvent};
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
@@ -2058,6 +2062,33 @@ mod tests {
                 KeyModifiers::ALT
             ))
         );
+    }
+
+    #[test]
+    fn topbar_route_click_emits_provider_picker_request() {
+        let mut app = create_test_app();
+        // The launch screen shares the same header, so this specifically
+        // protects against its old catch-all mouse route swallowing the
+        // topbar affordance before it reached the event handler.
+        app.launch.visible = true;
+        app.viewport
+            .interaction_targets
+            .register(InteractionTarget {
+                id: InteractionTargetId::HEADER_ROUTE,
+                area: Rect::new(20, 0, 24, 1),
+                focus: InteractionFocus::Direct,
+                keyboard_action: Some(InteractionAction::OpenProviderPicker),
+                mouse_action: Some(InteractionAction::OpenProviderPicker),
+                inspect_detail: InspectDetail::Route,
+            });
+
+        let events = handle_mouse_event(&mut app, left_click(24, 0));
+
+        assert!(matches!(
+            events.as_slice(),
+            [ViewEvent::TopbarRoutePickerRequested]
+        ));
+        assert!(app.view_stack.is_empty());
     }
 
     #[test]
