@@ -58,6 +58,7 @@
     "footerPricing": "Pricing",
     "footerTerms": "Terms",
     "footerPrivacy": "Privacy",
+    "footerChangelog": "Changelog",
     "footerCanonicalSource": "Canonical source: ",
     "footerReleases": " · Releases: ",
     "footerReleasesLink": "GitHub Releases",
@@ -181,12 +182,43 @@
   },
   "docs-shell": {
     "metaTitle": "Docs · Codewhale",
-    "metaDescription": "Codewhale documentation: install, user guide, configuration, providers, core concepts, tools, MCP, skills, sandbox, runtime API, troubleshooting.",
+    "metaDescription": "Codewhale documentation: install, user guide, configuration, providers, account and keys, cloud computers, security and trust, core concepts, tools, MCP, skills, sandbox, runtime API, troubleshooting.",
     "portalMark": "Codewhale documentation",
     "heroTitle": "Find the guidance you need.",
-    "heroLead": "Start with the guide and install pages, or go straight to vocabulary, modes, permissions, tools, providers, Fleet, hooks, MCP, and the Runtime API. Each page links to its source document in the repository.",
+    "heroLead": "Start from a task or a topic. Every page states which repository document it is drawn from and which release it describes.",
     "installCta": "Install Codewhale",
-    "sourceDocsCta": "Browse source docs ↗"
+    "sourceDocsCta": "Browse source docs ↗",
+    "releaseLabel": "Release truth",
+    "releasePublished": "Latest release {tag} · {date}",
+    "releaseCandidate": "These pages describe the {version} source candidate, which is not published yet.",
+    "releaseMatches": "These pages describe {tag}, the published release.",
+    "releaseChangelog": "Changelog →",
+    "searchLabel": "Search the documentation",
+    "searchPlaceholder": "Search by task or topic… (press / to focus)",
+    "searchClear": "Clear",
+    "searchMatches": "{matched} of {total} entries match “{query}”",
+    "searchNoMatches": "Nothing matches “{query}”",
+    "tasksHeading": "By task",
+    "tasksLead": "Start from what you are trying to do.",
+    "topicsHeading": "By topic",
+    "webGuideTag": "Web guide",
+    "sourceDocTag": "Source doc",
+    "emptyTitle": "No matching entry",
+    "emptyBody": "Try a different word — searches match English and Chinese — or browse the complete docs directory on GitHub.",
+    "emptyCta": "GitHub docs directory ↗",
+    "indexNote": "Web guides stay on codewhale.net. Source docs open the complete reference in the GitHub repository. Tasks come from docs-tasks.ts and topics from docs-map.ts; both registries live in the repository.",
+    "sidebarHeading": "Documentation",
+    "sidebarAria": "Documentation index",
+    "breadcrumbAria": "Breadcrumb",
+    "breadcrumbHome": "Home",
+    "breadcrumbDocs": "Docs",
+    "helpTitle": "Need more than this page?",
+    "helpLead": "Every guide is drawn from a repository document. If it is wrong or missing something, the fastest fix is to say so where the maintainer will see it.",
+    "helpSource": "Source: {name}",
+    "helpTroubleshooting": "Troubleshooting",
+    "helpFaq": "FAQ",
+    "helpDiscord": "Ask on Discord ↗",
+    "helpIssue": "Report a docs problem ↗"
   },
   "docs-hooks": {
     "metaTitle": "Hooks · Codewhale Docs",
@@ -503,5 +535,270 @@
     "troubleshootingTitle": "Troubleshooting",
     "troubleshootingLead": "If port 7878 is occupied, pass an unused --port. If the browser cannot be opened, the command exits with an error rather than leaving a reusable bootstrap capability behind; check the OS default-browser setup and start again. If the page loads but a provider is unavailable, inspect codewhale doctor and /provider — the web command does not configure or move provider credentials. If a session expired, restart codewhale web to mint a new process-local session; reusing an old bootstrap URL is expected to fail.",
     "sourceNote": "Source document: docs/WEB.md · Update docs-map.ts when changing."
+  },
+  "docs-computers": {
+    "metaTitle": "Cloud computers · Codewhale Docs",
+    "metaDescription": "How a local Codewhale session proposes, confirms, and tracks a cloud agent on a Daytona computer — explicit forges, fail-closed credentials, and what is not built yet.",
+    "bodyClassName": "text-ink-soft leading-relaxed",
+    "overviewTitle": "Cloud computers",
+    "overviewLead": "A local session can offload a coding task to a cloud computer the way an editor sends a cloud agent: the remote job raises a branch and is meant to open a pull request against an explicit forge. Local stays responsive. Spend and push never happen silently — a proposal is written first, and nothing creates a sandbox or pushes a branch until you confirm it.",
+    "proposeTitle": "Propose, then confirm",
+    "proposeLead": "The first command writes a proposal and exits. The second confirms it by id. The TUI has the same two steps as slash commands, and the {cloudAgent} spelling is an alias of {dispatch}.",
+    "jobsLead": "Cloud jobs are first-class on the existing jobs surface as {kind}. List, show, and cancel them from the TUI or the CLI:",
+    "remotesTitle": "Explicit forges",
+    "remotesLead": "A remote is never assumed to be GitHub. A remote named after a forge is that forge; any other remote is classified by its URL host. If more than one forge is present, pass {remoteFlag}.",
+    "remotes": [
+      [
+        "github · cnb · gitee (by remote name)",
+        "that forge, whatever the URL"
+      ],
+      [
+        "origin or other → github.com",
+        "github"
+      ],
+      [
+        "origin or other → cnb.cool",
+        "cnb"
+      ],
+      [
+        "origin or other → gitee.com",
+        "gitee"
+      ]
+    ],
+    "enableTitle": "Enable a Daytona computer",
+    "enableLead": "Credentials live in the process environment or in the Codewhale secret store — never in config.toml or models.toml, and never committed.",
+    "enableSteps": [
+      [
+        "Create an API key",
+        "In the Daytona dashboard under API keys."
+      ],
+      [
+        "Export it for the session",
+        "{apiKey}, optionally {apiUrl} for a non-default endpoint."
+      ],
+      [
+        "Or store it once",
+        "In the Codewhale secret slot {slot} (OS keyring or the $CODEWHALE_HOME secrets file). The {alias} alias is also accepted."
+      ]
+    ],
+    "cliNote": "An installed daytona CLI is not a credential. {status} and a bare {bare} report CLI presence separately from credential presence.",
+    "rulesTitle": "Fail-closed rules",
+    "rules": [
+      [
+        "No confirm",
+        "A {proposed} job is written; the command exits success; Daytona is not called; nothing is pushed."
+      ],
+      [
+        "Confirm, no credentials",
+        "A {refused} job is written; the command exits failure; no sandbox exists."
+      ],
+      [
+        "Confirm with credentials",
+        "A Daytona sandbox is created, labelled with the job id and forge. This slice does not claim a GitHub, CNB, or Gitee PR URL, and a missing forge token fails closed the same way."
+      ]
+    ],
+    "membershipTitle": "Who can dispatch",
+    "membershipLead": "Every Codewhale Agent surface authenticates to the same Codewhale membership — the {login} account session. Membership gates cloud agents; provider brands stay internal. Installing and running the local runtime needs no account at all.",
+    "leftoverTitle": "Not built yet",
+    "leftover": [
+      [
+        "Live watch",
+        "A log tail of a running sandbox."
+      ],
+      [
+        "Cancel that tears down",
+        "Cancelling a paid Daytona sandbox from the job surface."
+      ],
+      [
+        "Auto-decide",
+        "Codewhale may propose a dispatch; it must not confirm its own proposal."
+      ],
+      [
+        "The remote runner",
+        "The agent that actually raises the branch and opens the pull request."
+      ]
+    ],
+    "sourceNote": "Source documents: docs/DAYTONA_CLOUD_DISPATCH.md, docs/CODEWHALE_AGENT.md · Update docs-map.ts when changing."
+  },
+  "docs-auth": {
+    "metaTitle": "Account & keys · Codewhale Docs",
+    "metaDescription": "Provider keys versus the optional Codewhale account: how each is set, where each is stored, and what needs no account at all.",
+    "bodyClassName": "text-ink-soft leading-relaxed",
+    "overviewTitle": "Account & keys",
+    "overviewLead": "Codewhale holds two unrelated kinds of credential, and it helps to keep them apart. A provider key lets a model answer. A Codewhale account is optional and gates the managed surfaces — cloud agents and chat channels. Installing and running the local runtime needs neither an account nor a key.",
+    "credentials": [
+      [
+        "Provider key (BYOK)",
+        "Your own key for DeepSeek, OpenAI, Anthropic, OpenRouter, a local runtime, or any other route. Set with {authSet}. Required for model replies."
+      ],
+      [
+        "Codewhale account",
+        "A browser device-flow session started by {login}. Optional. Gates cloud agents and the Codewhale Agent surfaces; never required locally."
+      ]
+    ],
+    "providerTitle": "Provider keys",
+    "providerLead": "{authSet} saves the key for one provider. A process-level {apiKeyFlag} still wins for a single run. {login} is not a provider-key command: provider credentials are configured exclusively through {authSet}.",
+    "accountTitle": "The account session",
+    "accountLead": "{login} is the same browser device flow as {accountLogin}. The session is scoped to the selected {profile}, and the older {cloud} spelling remains an alias.",
+    "accountCommands": [
+      [
+        "codewhale login",
+        "Sign in through the browser device flow."
+      ],
+      [
+        "codewhale account status",
+        "Show the session for the selected profile."
+      ],
+      [
+        "codewhale account logout",
+        "Remove that session."
+      ]
+    ],
+    "storageTitle": "Where sessions live",
+    "storageLead": "Account sessions prefer the operating system's credential manager and fall back automatically to the private, 0600 Codewhale secrets file when no credential manager is available — headless hosts, SSH, containers. The former {fileStoreEnv} opt-in is deprecated and ignored.",
+    "vaultTitle": "The account's own key vault",
+    "vaultLead": "{keys} manages the signed-in account's bring-your-own-key vault without ever displaying a secret value.",
+    "portableTitle": "Moving to another machine",
+    "portableLead": "{portable} writes a secret-free bundle: credential and machine-specific keys are dropped, never replaced with a redacted placeholder, so the file is safe to carry and nothing in it can sign in as you.",
+    "appTitle": "Sign in on the web",
+    "appLead": "The hosted Codewhale app carries the same account. Sign in or register there; the local runtime keeps working without it.",
+    "appSignIn": "Sign in →",
+    "appRegister": "Register →",
+    "sourceNote": "Source documents: docs/CONFIGURATION.md, docs/CODEWHALE_AGENT.md, docs/PROVIDERS.md · Update docs-map.ts when changing."
+  },
+  "docs-trust": {
+    "metaTitle": "Security & trust · Codewhale Docs",
+    "metaDescription": "What stays on your machine, what a hosted provider receives, how approvals and the OS sandbox differ, what telemetry sends and how to turn it off, and where to report a vulnerability.",
+    "bodyClassName": "text-ink-soft leading-relaxed",
+    "overviewTitle": "Security & trust",
+    "overviewLead": "This page says what Codewhale does with your code, your commands, and your data — as implemented, not as intended. Each claim is drawn from a repository document that the facts gate checks on every build.",
+    "boundaryTitle": "Where your data goes",
+    "boundaries": [
+      [
+        "Local runtime",
+        "The runtime, workspace state, and audit log stay on your machine."
+      ],
+      [
+        "Hosted provider",
+        "The hosted provider you select receives the turn context required for inference. There is no mandatory Codewhale relay in between."
+      ],
+      [
+        "Local inference",
+        "A loopback local-model route (vLLM, Ollama, SGLang) can keep inference on your machine entirely."
+      ],
+      [
+        "Account",
+        "No account is required for the local runtime."
+      ],
+      [
+        "Plan mode",
+        "Plan is read-only."
+      ]
+    ],
+    "approvalTitle": "Approvals are not a sandbox",
+    "approvalLead": "Approval posture — Ask, Auto-Review, Full Access — decides whether a proposed command is shown to you before it runs. An approval from one layer is never a universal bypass: a later layer can still require review or block the call, and an approval is not an operating-system sandbox grant. The full model tool-call pipeline is nine ordered layers, from effective configuration through hooks, typed permission rules, repository law, and human approval to the execution sandbox.",
+    "sandboxTitle": "The OS sandbox, per platform",
+    "sandboxLead": "Only behaviour wired into the command execution path is described here, and Codewhale reports the mechanism it actually selected.",
+    "sandboxes": [
+      [
+        "macOS — Seatbelt",
+        "Automatic when the runtime probe of sandbox-exec succeeds. Reported as {seatbelt}."
+      ],
+      [
+        "Linux — bubblewrap",
+        "Opt-in: {preferBwrap} and an executable /usr/bin/bwrap. Reported as {bwrap}."
+      ],
+      [
+        "Linux without bwrap",
+        "No OS wrapper by default. Reported as {none}."
+      ],
+      [
+        "Windows",
+        "No OS wrapper in the current implementation. Reported as {none}."
+      ],
+      [
+        "External service",
+        "{opensandbox} routes execution to an OpenSandbox-compatible service."
+      ]
+    ],
+    "sandboxNote": "The repository also contains a seccomp module and a future Windows helper contract. Neither is wired into child-command launch, so Codewhale does not advertise them: source-only sandbox code is not evidence that a command was restricted.",
+    "telemetryTitle": "Telemetry, exactly",
+    "telemetryLead": "Anonymous usage counting is on by default, announced once by a non-blocking first-run notice, and can be turned off immediately and durably.",
+    "telemetry": [
+      [
+        "Never collected",
+        "Conversations, code, prompts, files, file/repo/branch names, model content, credentials, or any per-turn or per-tool timeline."
+      ],
+      [
+        "Sent",
+        "Version and platform classes, session duration and outcome, feature and error counters, closed enums, and a random install id that rotates every 90 days."
+      ],
+      [
+        "Endpoint",
+        "{endpoint} — a first-party Cloudflare Worker whose source is in the repository under telemetry-ingest/."
+      ],
+      [
+        "Storage",
+        "No IP, country, or geo column — structurally, not as a setting. Nothing is logged. Retention is a fixed three months."
+      ],
+      [
+        "Audit it yourself",
+        "Set {dryRun}: batches are appended to {dryRunFile} on your machine, byte for byte what the server would have received, and no HTTP client is constructed."
+      ],
+      [
+        "Turn it off",
+        "{configOff} or {envOff}."
+      ]
+    ],
+    "auditTitle": "Local audit log",
+    "auditLead": "Sensitive events — credential, approval, and elevation events — append best-effort to {auditLog}. Write failures are logged rather than hidden. Provider token and cache usage is shown locally when available.",
+    "reportTitle": "Report a vulnerability",
+    "reportLead": "Send security reports by email to the maintainer rather than filing a public issue. Include the version from the masthead and a reproduction if you have one.",
+    "reportCta": "Email the maintainer",
+    "sourceNote": "Source documents: docs/SANDBOX.md, docs/AUTHORIZATION_ORDER.md, docs/TELEMETRY.md, docs/public-surface-facts.json · Update docs-map.ts when changing."
+  },
+  "states": {
+    "loadingLabel": "Loading…",
+    "emptyTitle": "Nothing here yet",
+    "emptyBody": "There is no record to show. Nothing has been invented to fill the space.",
+    "errorTitle": "This page did not finish loading",
+    "errorBody": "Something failed on the way here. Nothing you did was lost; try again, and if it keeps failing, report it.",
+    "retry": "Try again",
+    "reload": "Reload the page",
+    "homeLink": "Back to the home page",
+    "notFoundTitle": "There is no page at this address",
+    "notFoundBody": "The link may be old, or the page may have moved. The documentation index lists every current page.",
+    "offlineTitle": "You are offline",
+    "offlineBody": "Actions are paused until the connection returns. Nothing shown here is refreshing.",
+    "reconnectingTitle": "Reconnecting…",
+    "reconnectingBody": "Checking the connection (attempt {attempt}).",
+    "degradedTitle": "The connection is unstable",
+    "degradedBody": "The server did not answer the last check. What you see may be stale.",
+    "onlineTitle": "Back online",
+    "onlineBody": "The connection is restored.",
+    "retryNow": "Retry now",
+    "dismiss": "Dismiss",
+    "lastChecked": "Last checked {time}"
+  },
+  "changelog": {
+    "metaTitle": "Changelog · Codewhale",
+    "metaDescription": "Codewhale release record: the latest published release, the unreleased source candidate, and the notes for each version, drawn from CHANGELOG.md in the repository.",
+    "kicker": "Release record",
+    "title": "What changed, and in which version.",
+    "lead": "Two facts sit at the top of this page: the newest published release, and the version the source tree currently declares. Everything below is the repository's own CHANGELOG.md, section by section.",
+    "publishedLabel": "Latest published release",
+    "publishedValue": "{tag} · published {date}",
+    "candidateLabel": "Source candidate",
+    "candidateValue": "{version} · unreleased",
+    "candidateMatches": "{version} · matches the published release",
+    "releasesLink": "GitHub Releases ↗",
+    "unreleasedHeading": "Unreleased",
+    "unreleasedNote": "Changes merged to the main branch since the last tag. They are part of the source candidate, not of any published package.",
+    "compareLink": "Compare on GitHub ↗",
+    "releasePageLink": "Release page ↗",
+    "moreEntries": "{shown} of {total} entries shown",
+    "fullNotes": "Full notes in CHANGELOG.md ↗",
+    "emptyTitle": "No release notes were derived",
+    "emptyBody": "The build did not find a parsable CHANGELOG.md. The GitHub release list is still the record."
   }
 }

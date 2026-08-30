@@ -1,13 +1,22 @@
 import Link from "next/link";
 import { DocsBreadcrumb } from "@/components/docs-breadcrumb";
+import { DocsHelp } from "@/components/docs-help";
 import { DocsSidebar } from "@/components/docs-sidebar";
+import { ReleaseTruth } from "@/components/release-truth";
 import { Whale } from "@/components/whale";
+import { getFacts } from "@/lib/facts";
 import { getDocsShell } from "@/lib/i18n/dictionaries";
 
 /* ------------------------------------------------------------------ */
 /*  Layout (Next.js App Router)                                        */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The docs shell every documentation URL shares: the portal hero with the
+ * version-aware release-truth line, the breadcrumb + content + sidebar
+ * grid, and the contextual help band that closes each page. All copy is
+ * dictionary-driven; the release line reads the facts layer.
+ */
 export default async function DocsLayout({
   children,
   params,
@@ -17,6 +26,7 @@ export default async function DocsLayout({
 }) {
   const { locale } = await params;
   const t = getDocsShell(locale);
+  const facts = await getFacts();
 
   return (
     <div className="docs-theme docs-portal min-h-screen">
@@ -28,7 +38,7 @@ export default async function DocsLayout({
             <span>{t.portalMark}</span>
           </div>
           {/* Shell chrome, not the page heading: this line is identical on all
-              16 docs URLs, so each page owns its own <h1> (its topic) and this
+              docs URLs, so each page owns its own <h1> (its topic) and this
               keeps the hero's display size without claiming the heading rank. */}
           <p className="docs-hero-title">{t.heroTitle}</p>
           <p>{t.heroLead}</p>
@@ -45,6 +55,7 @@ export default async function DocsLayout({
               {t.sourceDocsCta}
             </Link>
           </div>
+          <ReleaseTruth locale={locale} facts={facts} />
         </div>
       </section>
 
@@ -52,6 +63,7 @@ export default async function DocsLayout({
         <article className="docs-content min-w-0">
           <DocsBreadcrumb locale={locale} />
           {children}
+          <DocsHelp locale={locale} />
         </article>
         <DocsSidebar locale={locale} />
       </div>

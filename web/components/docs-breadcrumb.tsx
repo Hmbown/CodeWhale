@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { buildBreadcrumbListJsonLd, resolveDocsBreadcrumbs } from "@/lib/docs-breadcrumbs";
+import { getDocsShell } from "@/lib/i18n/dictionaries";
 import { serializeJsonLd } from "@/lib/json-ld";
 
 export function DocsBreadcrumb({ locale }: { locale: string }) {
   const pathname = usePathname() ?? `/${locale}/docs`;
   const crumbs = resolveDocsBreadcrumbs(locale, pathname);
   const jsonLd = buildBreadcrumbListJsonLd(locale, pathname);
-  const isZh = locale === "zh";
+  const t = getDocsShell(locale);
 
   return (
     <>
@@ -17,7 +18,7 @@ export function DocsBreadcrumb({ locale }: { locale: string }) {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }}
       />
-      <nav className="docs-breadcrumb" aria-label={isZh ? "面包屑导航" : "Breadcrumb"}>
+      <nav className="docs-breadcrumb" aria-label={t.breadcrumbAria}>
         <ol>
           {crumbs.map((crumb, index) => {
             const current = index === crumbs.length - 1;

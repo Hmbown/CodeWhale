@@ -43,6 +43,11 @@ const STEMS = {
   "docs-sandbox": { exportName: "docsSandbox", typeName: "DocsSandboxDict" },
   "docs-subagents": { exportName: "docsSubagents", typeName: "DocsSubagentsDict" },
   "docs-web": { exportName: "docsWeb", typeName: "DocsWebDict" },
+  "docs-computers": { exportName: "docsComputers", typeName: "DocsComputersDict" },
+  "docs-auth": { exportName: "docsAuth", typeName: "DocsAuthDict" },
+  "docs-trust": { exportName: "docsTrust", typeName: "DocsTrustDict" },
+  states: { exportName: "states", typeName: "StatesDict" },
+  changelog: { exportName: "changelog", typeName: "ChangelogDict" },
 };
 
 const REQUIRED_STEMS = ["chrome", "home"];

@@ -21,7 +21,10 @@ function runGtSite(command: string, extraEnv: Record<string, string> = {}) {
 }
 
 describe("website GT catalog pipeline", () => {
-  it("keeps local catalogs in sync with the dictionary runtime", () => {
+  // `check` spawns node and transpiles every dictionary stem through the
+  // TypeScript compiler; with the per-page stems that now exceeds vitest's
+  // default 5 s on a loaded host, so give the subprocess a real budget.
+  it("keeps local catalogs in sync with the dictionary runtime", { timeout: 30_000 }, () => {
     const check = runGtSite("check");
     expect(check.status, check.stderr || check.stdout).toBe(0);
     expect(check.stdout).toContain("TUI packs untouched");

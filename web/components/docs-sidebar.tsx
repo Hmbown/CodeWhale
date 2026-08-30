@@ -9,9 +9,15 @@ import {
   docTopicIsExternal,
   getTopicsByCategory,
 } from "@/lib/docs-map";
+import { getDocsShell, pickText } from "@/lib/i18n/dictionaries";
 
+/**
+ * The one docs navigation: every registered topic, grouped by category,
+ * with the current route marked. Chrome strings come from the docs-shell
+ * dictionary; topic names are docs-map pairs resolved through `pickText`.
+ */
 export function DocsSidebar({ locale }: { locale: string }) {
-  const isZh = locale === "zh";
+  const t = getDocsShell(locale);
   const pathname = usePathname();
   const byCategory = getTopicsByCategory();
 
@@ -20,15 +26,15 @@ export function DocsSidebar({ locale }: { locale: string }) {
       <div className="lg:sticky lg:top-24">
         <div className="docs-sidebar-heading">
           <Link href={`/${locale}/docs`}>
-            <span>{isZh ? "文档目录" : "Documentation"}</span>
+            <span>{t.sidebarHeading}</span>
             <span aria-hidden="true">→</span>
           </Link>
         </div>
-        <nav aria-label={isZh ? "文档目录" : "Documentation index"}>
+        <nav aria-label={t.sidebarAria}>
           {[...byCategory.entries()].map(([category, topics]) => (
             <div key={category} className="docs-sidebar-group">
               <div className="docs-sidebar-category">
-                {isZh ? DOC_CATEGORY_LABELS[category].zh : DOC_CATEGORY_LABELS[category].en}
+                {pickText(DOC_CATEGORY_LABELS[category], locale)}
               </div>
               <ul>
                 {topics.map((topic) => {
@@ -47,7 +53,7 @@ export function DocsSidebar({ locale }: { locale: string }) {
                             : "docs-sidebar-link"
                         }
                       >
-                        <span>{isZh ? topic.label.zh : topic.label.en}</span>
+                        <span>{pickText(topic.label, locale)}</span>
                         {isExternal && <span aria-hidden="true">↗</span>}
                       </Link>
                     </li>

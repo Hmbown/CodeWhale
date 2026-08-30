@@ -66,6 +66,7 @@ export function footerProductLinks(locale: string, chrome: ChromeDict): ChromeLi
     { href: `/${locale}/models`, label: chrome.footerModels },
     { href: `/${locale}/runtime`, label: chrome.footerRuntime },
     { href: `/${locale}/faq`, label: chrome.footerFaq },
+    { href: `/${locale}/changelog`, label: chrome.footerChangelog },
   ];
 }
 

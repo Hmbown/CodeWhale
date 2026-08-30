@@ -39,6 +39,11 @@ const OPTIONAL_FILES = [
   "docs-sandbox.ts",
   "docs-subagents.ts",
   "docs-web.ts",
+  "docs-computers.ts",
+  "docs-auth.ts",
+  "docs-trust.ts",
+  "states.ts",
+  "changelog.ts",
 ];
 
 /** Top-level keys of the exported object literal (two-space indented `key:`). */

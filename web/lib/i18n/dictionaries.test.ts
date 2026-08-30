@@ -10,6 +10,10 @@ import {
   EN_DOCS_SANDBOX,
   EN_DOCS_SUBAGENTS,
   EN_DOCS_WEB,
+  EN_DOCS_COMPUTERS,
+  EN_DOCS_AUTH,
+  EN_DOCS_TRUST,
+  EN_CHANGELOG,
   EN_DOCS_SHELL,
   EN_DOCS_TROUBLESHOOTING,
   EN_HOME,
@@ -23,6 +27,10 @@ import {
   getDocsSandbox,
   getDocsSubagents,
   getDocsWeb,
+  getDocsComputers,
+  getDocsAuth,
+  getDocsTrust,
+  getChangelog,
   getDocsShell,
   getDocsTroubleshooting,
   getHome,
@@ -259,6 +267,10 @@ describe("website dictionaries", () => {
       ["docs-subagents", getDocsSubagents, EN_DOCS_SUBAGENTS],
       ["docs-mcp", getDocsMcp, EN_DOCS_MCP],
       ["docs-web", getDocsWeb, EN_DOCS_WEB],
+      ["docs-computers", getDocsComputers, EN_DOCS_COMPUTERS],
+      ["docs-auth", getDocsAuth, EN_DOCS_AUTH],
+      ["docs-trust", getDocsTrust, EN_DOCS_TRUST],
+      ["changelog", getChangelog, EN_CHANGELOG],
     ] as const) {
       const enKeys = Object.keys(reference).sort();
       for (const locale of [...DICTIONARY_LOCALES, "fr", "und"]) {

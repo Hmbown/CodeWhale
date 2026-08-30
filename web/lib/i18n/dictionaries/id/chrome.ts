@@ -89,6 +89,7 @@ export const chrome: ChromeDict = {
   footerPricing: "Harga",
   footerTerms: "Ketentuan layanan",
   footerPrivacy: "Privasi",
+  footerChangelog: "Catatan perubahan",
   footerCanonicalSource: "Sumber kanonis: ",
   footerReleases: " · Rilis: ",
   footerReleasesLink: "Rilis GitHub",

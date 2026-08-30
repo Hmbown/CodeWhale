@@ -1,8 +1,11 @@
 import Link from "next/link";
 import { Seal } from "@/components/seal";
 import { FeedCard } from "@/components/feed-card";
+import { RetryAction } from "@/components/retry-action";
+import { EmptyState, ErrorState } from "@/components/surface-state";
 import { fetchFeed } from "@/lib/github";
 import { getEnv } from "@/lib/kv";
+import { getStates } from "@/lib/i18n/dictionaries";
 import { buildPageMetadata } from "@/lib/page-meta";
 import type { FeedItem } from "@/lib/types";
 
@@ -27,16 +30,25 @@ export default async function FeedPage({ params }: { params: Promise<{ locale: s
 
   const env = await getEnv();
   let feed: FeedItem[] = [];
+  let feedFailed = false;
   try {
     feed = await fetchFeed(env.GITHUB_TOKEN, 50);
   } catch (e) {
+    feedFailed = true;
     console.error("feed fetch failed", e);
   }
 
   const issues = feed.filter((f) => f.kind === "issue");
   const pulls = feed.filter((f) => f.kind === "pull");
   const eyebrow = isZh ? "动态" : "Activity";
-  const emptyLabel = isZh ? "暂无数据 · 动态加载失败" : "No data · feed not loaded";
+  // One shared state for an empty column: an error plate with a real retry
+  // when the fetch failed, an empty plate when GitHub simply had nothing.
+  const states = getStates(locale);
+  const feedState = feedFailed ? (
+    <ErrorState locale={locale} compact action={<RetryAction label={states.retry} />} />
+  ) : (
+    <EmptyState locale={locale} compact />
+  );
 
   return (
     <>
@@ -68,7 +80,7 @@ export default async function FeedPage({ params }: { params: Promise<{ locale: s
                   {pulls.length > 0 ? (
                     pulls.map((p) => <FeedCard key={p.url} item={p} />)
                   ) : (
-                    <div className="py-10 text-center text-sm font-mono text-ink-mute">{emptyLabel}</div>
+                    <div className="py-4">{feedState}</div>
                   )}
                 </div>
               </div>
@@ -84,7 +96,7 @@ export default async function FeedPage({ params }: { params: Promise<{ locale: s
                   {issues.length > 0 ? (
                     issues.map((i) => <FeedCard key={i.url} item={i} />)
                   ) : (
-                    <div className="py-10 text-center text-sm font-mono text-ink-mute">{emptyLabel}</div>
+                    <div className="py-4">{feedState}</div>
                   )}
                 </div>
               </div>
@@ -136,7 +148,7 @@ export default async function FeedPage({ params }: { params: Promise<{ locale: s
                   {pulls.length > 0 ? (
                     pulls.map((p) => <FeedCard key={p.url} item={p} />)
                   ) : (
-                    <div className="py-10 text-center text-sm font-mono text-ink-mute">{emptyLabel}</div>
+                    <div className="py-4">{feedState}</div>
                   )}
                 </div>
               </div>
@@ -152,7 +164,7 @@ export default async function FeedPage({ params }: { params: Promise<{ locale: s
                   {issues.length > 0 ? (
                     issues.map((i) => <FeedCard key={i.url} item={i} />)
                   ) : (
-                    <div className="py-10 text-center text-sm font-mono text-ink-mute">{emptyLabel}</div>
+                    <div className="py-4">{feedState}</div>
                   )}
                 </div>
               </div>

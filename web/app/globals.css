@@ -3455,3 +3455,485 @@ html[data-theme="light"] .docs-theme {
   --docs-button-border: #aeb8c6;
   --docs-button-text: #1b2230;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Shared surface states — empty / loading / error (surface-state.tsx) */
+/* ------------------------------------------------------------------ */
+/*
+ * One plate for every data-bearing page's non-data moments. The mark on the
+ * left carries the state in colour AND the copy carries it in words, so no
+ * state is conveyed by colour alone: mute for empty, action blue for loading,
+ * coral for error — the status-bar grammar the product already speaks.
+ */
+.state-block {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+  padding: clamp(1.5rem, 4vw, 2.25rem) clamp(1.25rem, 3vw, 1.75rem);
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--paper-card);
+  color: var(--ink);
+}
+
+.state-block-compact {
+  padding: 1rem 1.15rem;
+  gap: 0.8rem;
+}
+
+.state-mark {
+  width: 0.6rem;
+  height: 0.6rem;
+  margin-top: 0.42rem;
+  border-radius: 999px;
+  background: var(--ink-mute);
+  flex: none;
+}
+
+.state-block-loading .state-mark { background: var(--indigo); }
+.state-block-error .state-mark { background: var(--ocean-coral); }
+.state-block-error { border-color: color-mix(in srgb, var(--ocean-coral) 45%, var(--stage-line)); }
+
+.state-copy { min-width: 0; }
+
+.state-title {
+  color: var(--ink);
+  font-size: 0.98rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.state-body {
+  max-width: 44rem;
+  margin-top: 0.4rem;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.65;
+}
+
+.state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.state-retry[aria-busy="true"] { opacity: 0.7; cursor: progress; }
+
+/* Skeleton lines: neutral bars, never fake words. The shimmer is opt-in
+   under no-preference; reduced motion sees still bars. */
+.state-skeleton {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.state-skeleton > span {
+  display: block;
+  height: 0.7rem;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ink-mute) 22%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .state-skeleton > span {
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--ink-mute) 18%, transparent) 0%,
+      color-mix(in srgb, var(--ink-mute) 34%, transparent) 50%,
+      color-mix(in srgb, var(--ink-mute) 18%, transparent) 100%
+    );
+    background-size: 200% 100%;
+    animation: state-shimmer 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes state-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+/* Route-level boundaries (loading.tsx / error.tsx / not-found.tsx) sit in
+   the site container with the page rhythm so a boundary never looks like a
+   different site. */
+.route-state {
+  width: var(--container);
+  margin-inline: auto;
+  padding-block: clamp(3rem, 6vw, 4.75rem);
+  max-width: 52rem;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Connection banner — offline / reconnecting / degraded / restored    */
+/* ------------------------------------------------------------------ */
+.connection-banner {
+  position: sticky;
+  top: 0;
+  z-index: 35;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.9rem;
+  align-items: center;
+  width: var(--container);
+  margin: 0.75rem auto 0;
+  padding: 0.7rem 1rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--paper-card) 92%, transparent);
+  backdrop-filter: blur(8px);
+  color: var(--ink);
+}
+
+.connection-mark {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 999px;
+  background: var(--ink-mute);
+}
+
+.connection-banner-offline { border-color: color-mix(in srgb, var(--ocean-coral) 50%, var(--stage-line)); }
+.connection-banner-offline .connection-mark { background: var(--ocean-coral); }
+.connection-banner-reconnecting .connection-mark { background: var(--indigo); }
+.connection-banner-degraded .connection-mark { background: var(--ochre); }
+.connection-banner-restored { border-color: color-mix(in srgb, var(--jade) 50%, var(--stage-line)); }
+.connection-banner-restored .connection-mark { background: var(--jade); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .connection-banner-reconnecting .connection-mark {
+    animation: connection-pulse 1.2s ease-in-out infinite;
+  }
+  .connection-banner {
+    animation: mm-in 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+  }
+}
+
+@keyframes connection-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.connection-copy { min-width: 0; }
+.connection-title { font-size: 0.86rem; font-weight: 600; }
+.connection-body { margin-top: 0.15rem; color: var(--ink-soft); font-size: 0.78rem; line-height: 1.5; }
+.connection-checked { color: var(--ink-mute); font-family: var(--font-mono), "JetBrains Mono", monospace; font-size: 0.68rem; }
+
+.connection-actions { display: flex; gap: 0.5rem; }
+
+.connection-button {
+  display: inline-flex;
+  min-height: 2.25rem;
+  align-items: center;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 5px;
+  color: var(--ink);
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease;
+}
+
+.connection-button:hover { border-color: var(--indigo); color: var(--indigo); }
+.connection-button-primary { border-color: var(--indigo); background: var(--indigo); color: var(--paper); }
+.connection-button-primary:hover { background: var(--indigo-deep); border-color: var(--indigo-deep); color: var(--paper); }
+.connection-button:disabled { opacity: 0.55; cursor: not-allowed; }
+.connection-button[aria-busy="true"] { cursor: progress; }
+
+@media (max-width: 560px) {
+  .connection-banner {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .connection-actions {
+    grid-column: 2;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Docs: release truth, task index, contextual help                   */
+/* ------------------------------------------------------------------ */
+.release-truth {
+  margin-top: 1.4rem;
+  color: var(--ink-mute);
+}
+
+.release-truth-label {
+  color: var(--cyan);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.62rem;
+}
+
+.release-truth a {
+  color: var(--indigo);
+}
+
+.release-truth a:hover {
+  color: var(--indigo-deep);
+  text-decoration: underline;
+  text-underline-offset: 0.2rem;
+}
+
+.release-truth[data-release-state="published"] > span:not(.release-truth-label) {
+  color: var(--jade);
+}
+
+.docs-result-lead {
+  margin: -0.2rem 0 0.9rem;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.docs-result-heading h3 {
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+}
+
+.docs-result-heading-topics {
+  margin-bottom: 0;
+  padding-bottom: 0.75rem;
+}
+
+.docs-result-topics {
+  display: grid;
+  gap: 2rem;
+}
+
+.docs-task-group .docs-topic-list {
+  border-top: 1px solid var(--stage-line);
+}
+
+.docs-task-row .docs-topic-source {
+  font-size: 0.66rem;
+}
+
+.docs-help {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(12rem, 0.7fr);
+  gap: clamp(1.5rem, 4vw, 3rem);
+  margin-top: 3rem;
+  padding: clamp(1.4rem, 3vw, 2rem);
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--paper-card);
+}
+
+.docs-help-copy h2 {
+  font-size: 1.15rem;
+  letter-spacing: -0.015em;
+}
+
+.docs-help-copy p {
+  margin-top: 0.55rem;
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  line-height: 1.65;
+}
+
+.docs-help-source {
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.7rem !important;
+  color: var(--ink-mute) !important;
+}
+
+.docs-help-source a {
+  color: var(--indigo);
+}
+
+.docs-help-source a:hover { text-decoration: underline; text-underline-offset: 0.2rem; }
+
+.docs-help-links {
+  display: grid;
+  gap: 0.35rem;
+  align-content: start;
+  border-top: 1px solid var(--stage-line);
+  padding-top: 0.6rem;
+}
+
+.docs-help-links a {
+  display: inline-flex;
+  min-height: 2.5rem;
+  align-items: center;
+  color: var(--indigo);
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.74rem;
+}
+
+.docs-help-links a:hover { color: var(--indigo-deep); text-decoration: underline; text-underline-offset: 0.2rem; }
+
+@media (max-width: 760px) {
+  .docs-help { grid-template-columns: 1fr; }
+}
+
+/* ---------- reference tables on docs pages ---------- */
+.docs-ref-rows {
+  display: grid;
+  border-top: 1px solid var(--hairline);
+}
+
+.docs-ref-rows > div {
+  display: grid;
+  grid-template-columns: minmax(10rem, 0.42fr) minmax(0, 1fr);
+  gap: 1.25rem;
+  padding: 0.9rem 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.docs-ref-rows dt {
+  color: var(--ink);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.docs-ref-rows dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.6;
+}
+
+.docs-ref-rows code.inline { white-space: nowrap; }
+
+@media (max-width: 560px) {
+  .docs-ref-rows > div { grid-template-columns: 1fr; gap: 0.3rem; }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Changelog                                                          */
+/* ------------------------------------------------------------------ */
+.changelog-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1.75rem;
+}
+
+.changelog-facts > div {
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--paper-card);
+}
+
+.changelog-facts span {
+  display: block;
+  color: var(--ink-mute);
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.changelog-facts > div { min-width: 0; }
+
+.changelog-facts strong {
+  display: block;
+  overflow-wrap: anywhere;
+  margin-top: 0.45rem;
+  color: var(--ink);
+  font-size: 1.05rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.changelog-facts a {
+  display: inline-block;
+  margin-top: 0.55rem;
+  color: var(--indigo);
+  font-size: 0.76rem;
+}
+
+.changelog-facts a:hover { text-decoration: underline; text-underline-offset: 0.2rem; }
+
+.changelog-facts [data-published="true"] strong { color: var(--jade); }
+.changelog-facts [data-candidate="unreleased"] strong { color: var(--ochre); }
+
+.changelog-release {
+  padding-block: 2.25rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.changelog-release-head {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+}
+
+.changelog-release-head h2 {
+  font-size: clamp(1.4rem, 2.6vw, 1.9rem);
+  font-variant-numeric: tabular-nums;
+}
+
+.changelog-release-head .dotline {
+  color: var(--ink-mute);
+}
+
+.changelog-release-head .dotline a { color: var(--indigo); }
+.changelog-release-head .dotline a:hover { text-decoration: underline; text-underline-offset: 0.2rem; }
+
+.changelog-unreleased-note {
+  max-width: 44rem;
+  margin-top: 0.6rem;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.6;
+}
+
+.changelog-sections {
+  display: grid;
+  gap: 1.35rem;
+  margin-top: 1.4rem;
+}
+
+.changelog-sections h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--cyan);
+}
+
+.changelog-sections h3 span {
+  color: var(--ink-mute);
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.64rem;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.changelog-sections ul {
+  margin-top: 0.55rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.changelog-sections li {
+  min-width: 0;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.6;
+  /* Release notes quote commands, env names, and URLs verbatim; a long
+     unbroken token must wrap inside the column, never widen the page. */
+  overflow-wrap: anywhere;
+}
+
+.changelog-sections li::before {
+  content: "·";
+  margin-right: 0.6rem;
+  color: var(--stage-dim);
+}
+
+@media (max-width: 640px) {
+  .changelog-facts { grid-template-columns: 1fr; }
+}

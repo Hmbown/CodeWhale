@@ -5,6 +5,7 @@ import {
   type DocTopic,
 } from "./docs-map";
 import { docsTopicIsCurrent } from "./docs-navigation";
+import { getDocsShell, pickText } from "./i18n/dictionaries";
 import { SITE_URL } from "./page-meta";
 
 export type DocsCrumb = {
@@ -17,30 +18,28 @@ export function resolveDocsTopic(locale: string, pathname: string): DocTopic | u
   return DOC_TOPICS.find((topic) => docsTopicIsCurrent(topic, locale, pathname));
 }
 
-function localizedName(pair: { en: string; zh: string }, locale: string): string {
-  return locale === "zh" ? pair.zh : pair.en;
-}
-
-/** Visible trail: Home → Docs → category → topic. The hub stops at Docs. */
+/**
+ * Visible trail: Home → Docs → category → topic. The hub stops at Docs.
+ * Chrome names come from the docs-shell dictionary; topic and category
+ * names are the docs-map pairs resolved through `pickText`, so no locale
+ * branch lives here.
+ */
 export function resolveDocsBreadcrumbs(locale: string, pathname: string): DocsCrumb[] {
-  const home: DocsCrumb = {
-    name: locale === "zh" ? "首页" : "Home",
-    href: `/${locale}`,
-  };
-  const docsName = locale === "zh" ? "文档" : "Docs";
+  const t = getDocsShell(locale);
+  const home: DocsCrumb = { name: t.breadcrumbHome, href: `/${locale}` };
   const docsHref = `/${locale}/docs`;
   const topic = resolveDocsTopic(locale, pathname);
   const normalized = pathname.split(/[?#]/)[0].replace(/\/+$/, "");
 
   if (!topic || normalized === docsHref) {
-    return [home, { name: docsName }];
+    return [home, { name: t.breadcrumbDocs }];
   }
 
   return [
     home,
-    { name: docsName, href: docsHref },
-    { name: localizedName(DOC_CATEGORY_LABELS[topic.category], locale) },
-    { name: localizedName(topic.label, locale) },
+    { name: t.breadcrumbDocs, href: docsHref },
+    { name: pickText(DOC_CATEGORY_LABELS[topic.category], locale) },
+    { name: pickText(topic.label, locale) },
   ];
 }
 
@@ -49,20 +48,15 @@ export function resolveDocsBreadcrumbs(locale: string, pathname: string): DocsCr
  * Category groupings have no unique URL, so the machine trail is Home → Docs → topic.
  */
 export function buildBreadcrumbListJsonLd(locale: string, pathname: string) {
+  const t = getDocsShell(locale);
   const topic = resolveDocsTopic(locale, pathname);
   const elements: { name: string; item: string }[] = [
-    {
-      name: locale === "zh" ? "首页" : "Home",
-      item: `${SITE_URL}/${locale}`,
-    },
-    {
-      name: locale === "zh" ? "文档" : "Docs",
-      item: `${SITE_URL}/${locale}/docs`,
-    },
+    { name: t.breadcrumbHome, item: `${SITE_URL}/${locale}` },
+    { name: t.breadcrumbDocs, item: `${SITE_URL}/${locale}/docs` },
   ];
   if (topic) {
     elements.push({
-      name: localizedName(topic.label, locale),
+      name: pickText(topic.label, locale),
       item: `${SITE_URL}${docTopicHref(topic, locale)}`,
     });
   }

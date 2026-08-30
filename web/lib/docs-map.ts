@@ -90,6 +90,18 @@ export const DOC_TOPICS: DocTopic[] = [
     category: "getting-started",
   },
   {
+    id: "auth",
+    slug: "auth",
+    label: { en: "Account & Keys", zh: "账户与密钥" },
+    description: {
+      en: "Provider keys versus the optional Codewhale account: how each is set, where each is stored, and what needs no account.",
+      zh: "提供商密钥与可选的 Codewhale 账户：各自如何设置、存放在哪里，以及哪些操作不需要账户。",
+    },
+    repoSource: ["docs/CONFIGURATION.md", "docs/CODEWHALE_AGENT.md"],
+    hasPage: true,
+    category: "getting-started",
+  },
+  {
     id: "providers",
     slug: "providers",
     label: { en: "Providers & Models", zh: "提供商与模型" },
@@ -223,6 +235,18 @@ export const DOC_TOPICS: DocTopic[] = [
     category: "core-concepts",
   },
   {
+    id: "trust",
+    slug: "trust",
+    label: { en: "Security & Trust", zh: "安全与信任" },
+    description: {
+      en: "What stays local, what a hosted provider receives, approvals versus the OS sandbox, telemetry field by field, and where to report a vulnerability.",
+      zh: "哪些留在本地、托管提供商收到什么、审批与 OS 沙箱的区别、逐项说明的遥测，以及在哪里报告漏洞。",
+    },
+    repoSource: ["docs/SANDBOX.md", "docs/AUTHORIZATION_ORDER.md", "docs/TELEMETRY.md"],
+    hasPage: true,
+    category: "reference",
+  },
+  {
     id: "runtime-api",
     slug: "runtime-api",
     label: { en: "Runtime API", zh: "运行时 API" },
@@ -245,6 +269,18 @@ export const DOC_TOPICS: DocTopic[] = [
     repoSource: "docs/WEB.md",
     hasPage: true,
     category: "extending",
+  },
+  {
+    id: "computers",
+    slug: "computers",
+    label: { en: "Cloud Computers", zh: "云端计算机" },
+    description: {
+      en: "Propose, confirm, and track a Daytona cloud agent against an explicit forge — fail-closed credentials and what is not built yet.",
+      zh: "向明确指定的代码托管平台提议、确认并跟踪 Daytona 云端 Agent——凭证缺失即拒绝，以及尚未实现的部分。",
+    },
+    repoSource: ["docs/DAYTONA_CLOUD_DISPATCH.md", "docs/CODEWHALE_AGENT.md"],
+    hasPage: true,
+    category: "operations",
   },
   {
     id: "fleet",

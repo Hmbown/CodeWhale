@@ -4,8 +4,8 @@
   "private": true,
   "description": "Community site for Codewhale — codewhale.net",
   "scripts": {
-    "dev": "node scripts/derive-facts.mjs && next dev",
-    "prebuild": "node scripts/derive-facts.mjs",
+    "dev": "node scripts/derive-facts.mjs && node scripts/derive-changelog.mjs && next dev",
+    "prebuild": "node scripts/derive-facts.mjs && node scripts/derive-changelog.mjs",
     "build": "next build",
     "start": "next start",
     "test": "vitest run",

@@ -90,6 +90,7 @@ export const chrome: ChromeDict = {
   footerPricing: "Preus",
   footerTerms: "Termes del servei",
   footerPrivacy: "Privadesa",
+  footerChangelog: "Registre de canvis",
   footerCanonicalSource: "Font canònica: ",
   footerReleases: " · Versions: ",
   footerReleasesLink: "Versions de GitHub",

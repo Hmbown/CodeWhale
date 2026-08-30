@@ -1,4 +1,5 @@
 // Bypassing the '@' alias to force TypeScript to find the file
+import { EmptyState } from "../../../components/surface-state";
 import { getEnv } from "../../../lib/kv";
 import { buildPageMetadata } from "../../../lib/page-meta";
 
@@ -81,15 +82,18 @@ export default async function DigestArchivePage({ params }: { params: Promise<{ 
   // Handle empty state gracefully
   if (digests.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-center max-w-xl mx-auto px-4">
-        <h1 className="font-display text-3xl mb-4 tracking-crisp text-ink">
+      <div className="route-state">
+        <h1 className="font-display text-3xl mb-6 tracking-crisp text-ink">
           {isZh ? "社区摘要" : "Community Digest"}
         </h1>
-        <p className="text-ink-mute">
-          {isZh
-            ? "本周社区动态整理中，请稍后再来！"
-            : "We are gathering this week's community updates. Check back soon!"}
-        </p>
+        <EmptyState
+          locale={locale}
+          body={
+            isZh
+              ? "还没有经维护者审核的每周摘要。摘要在 cron 生成并审核后才会出现在这里。"
+              : "No maintainer-approved weekly digest exists yet. One appears here only after the cron draft has been reviewed."
+          }
+        />
       </div>
     );
   }

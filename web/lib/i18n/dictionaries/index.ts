@@ -13,7 +13,10 @@
  * non-reference locale directories that `check-locales.mjs` walks.
  */
 import type {
+  ChangelogDict,
   ChromeDict,
+  DocsAuthDict,
+  DocsComputersDict,
   DocsConfigurationDict,
   DocsConstitutionDict,
   DocsFleetDict,
@@ -26,8 +29,10 @@ import type {
   DocsModesDict,
   DocsSubagentsDict,
   DocsTroubleshootingDict,
+  DocsTrustDict,
   DocsWebDict,
   HomeDict,
+  StatesDict,
 } from "./types";
 import { chrome as enChrome } from "./en/chrome";
 import { home as enHome } from "./en/home";
@@ -57,6 +62,16 @@ import { docsSubagents as enDocsSubagents } from "./en/docs-subagents";
 import { docsSubagents as zhDocsSubagents } from "./zh/docs-subagents";
 import { docsWeb as enDocsWeb } from "./en/docs-web";
 import { docsWeb as zhDocsWeb } from "./zh/docs-web";
+import { docsComputers as enDocsComputers } from "./en/docs-computers";
+import { docsComputers as zhDocsComputers } from "./zh/docs-computers";
+import { docsAuth as enDocsAuth } from "./en/docs-auth";
+import { docsAuth as zhDocsAuth } from "./zh/docs-auth";
+import { docsTrust as enDocsTrust } from "./en/docs-trust";
+import { docsTrust as zhDocsTrust } from "./zh/docs-trust";
+import { states as enStates } from "./en/states";
+import { states as zhStates } from "./zh/states";
+import { changelog as enChangelog } from "./en/changelog";
+import { changelog as zhChangelog } from "./zh/changelog";
 import { chrome as zhChrome } from "./zh/chrome";
 import { home as zhHome } from "./zh/home";
 import { chrome as jaChrome } from "./ja/chrome";
@@ -210,6 +225,31 @@ const DOCS_WEB: Record<string, DocsWebDict> = {
   zh: zhDocsWeb,
 };
 
+const DOCS_COMPUTERS: Record<string, DocsComputersDict> = {
+  zh: zhDocsComputers,
+};
+
+const DOCS_AUTH: Record<string, DocsAuthDict> = {
+  zh: zhDocsAuth,
+};
+
+const DOCS_TRUST: Record<string, DocsTrustDict> = {
+  zh: zhDocsTrust,
+};
+
+/**
+ * Shared surface states and the changelog page follow the same optional
+ * per-locale rule as the docs page dictionaries: English is the reference,
+ * every other locale falls back to it at lookup time.
+ */
+const STATES: Record<string, StatesDict> = {
+  zh: zhStates,
+};
+
+const CHANGELOG: Record<string, ChangelogDict> = {
+  zh: zhChangelog,
+};
+
 export function getChrome(locale: string): ChromeDict {
   return CHROME[locale] ?? enChrome;
 }
@@ -270,6 +310,26 @@ export function getDocsWeb(locale: string): DocsWebDict {
   return DOCS_WEB[locale] ?? enDocsWeb;
 }
 
+export function getDocsComputers(locale: string): DocsComputersDict {
+  return DOCS_COMPUTERS[locale] ?? enDocsComputers;
+}
+
+export function getDocsAuth(locale: string): DocsAuthDict {
+  return DOCS_AUTH[locale] ?? enDocsAuth;
+}
+
+export function getDocsTrust(locale: string): DocsTrustDict {
+  return DOCS_TRUST[locale] ?? enDocsTrust;
+}
+
+export function getStates(locale: string): StatesDict {
+  return STATES[locale] ?? enStates;
+}
+
+export function getChangelog(locale: string): ChangelogDict {
+  return CHANGELOG[locale] ?? enChangelog;
+}
+
 /**
  * Select one side of a legacy `{ en, zh }` content pair by locale. This is
  * the transitional bridge for `web/lib/content/` modules that still carry
@@ -297,6 +357,11 @@ export const EN_DOCS_RUNTIME_API = enDocsRuntimeApi;
 export const EN_DOCS_SANDBOX = enDocsSandbox;
 export const EN_DOCS_SUBAGENTS = enDocsSubagents;
 export const EN_DOCS_WEB = enDocsWeb;
+export const EN_DOCS_COMPUTERS = enDocsComputers;
+export const EN_DOCS_AUTH = enDocsAuth;
+export const EN_DOCS_TRUST = enDocsTrust;
+export const EN_STATES = enStates;
+export const EN_CHANGELOG = enChangelog;
 
 /** Interpolate `{name}` tokens in a dictionary template. Unknown tokens are
  * left intact so a template/variable drift is visible in review, not silent. */

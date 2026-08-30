@@ -95,6 +95,7 @@ export const chrome: ChromeDict = {
   footerPricing: "가격",
   footerTerms: "이용약관",
   footerPrivacy: "개인정보처리방침",
+  footerChangelog: "변경 로그",
   footerCanonicalSource: "공식 소스: ",
   footerReleases: " · 릴리스: ",
   footerReleasesLink: "GitHub 릴리스",

@@ -58,6 +58,7 @@
     "footerPricing": "价格",
     "footerTerms": "服务条款",
     "footerPrivacy": "隐私政策",
+    "footerChangelog": "更新日志",
     "footerCanonicalSource": "官方源码：",
     "footerReleases": " · 发布：",
     "footerReleasesLink": "GitHub 发布页",
@@ -181,12 +182,43 @@
   },
   "docs-shell": {
     "metaTitle": "文档 · Codewhale",
-    "metaDescription": "Codewhale 文档：安装、使用指南、配置、提供商、核心概念、工具、MCP、技能、沙箱、运行时 API、排障。",
+    "metaDescription": "Codewhale 文档：安装、使用指南、配置、提供商、账户与密钥、云端计算机、安全与信任、核心概念、工具、MCP、技能、沙箱、运行时 API、排障。",
     "portalMark": "Codewhale 文档",
     "heroTitle": "查找准确的使用说明。",
-    "heroLead": "从新手指引和安装开始，或直接查看名词、模式、权限、工具、提供商、Fleet、钩子、MCP 与运行时 API。每页都链接到仓库中的源文档。",
+    "heroLead": "从一个任务或一个主题开始。每一页都说明它取自仓库中的哪份文档、描述的是哪个版本。",
     "installCta": "安装 Codewhale",
-    "sourceDocsCta": "浏览源文档 ↗"
+    "sourceDocsCta": "浏览源文档 ↗",
+    "releaseLabel": "版本事实",
+    "releasePublished": "最新发布 {tag} · {date}",
+    "releaseCandidate": "本站文档描述的是尚未发布的 {version} 源码候选版。",
+    "releaseMatches": "本站文档描述的是已发布的 {tag}。",
+    "releaseChangelog": "更新日志 →",
+    "searchLabel": "搜索文档",
+    "searchPlaceholder": "按任务或主题搜索…（按 / 快速聚焦）",
+    "searchClear": "清除",
+    "searchMatches": "{matched} / {total} 条匹配 “{query}”",
+    "searchNoMatches": "没有条目匹配 “{query}”",
+    "tasksHeading": "按任务",
+    "tasksLead": "从你想完成的事情开始。",
+    "topicsHeading": "按主题",
+    "webGuideTag": "网页",
+    "sourceDocTag": "源文档",
+    "emptyTitle": "没有匹配的条目",
+    "emptyBody": "换一个关键词试试——中英文都可以搜索——或浏览 GitHub 上的完整文档目录。",
+    "emptyCta": "GitHub 文档目录 ↗",
+    "indexNote": "“网页”条目提供站内指南；“源文档”条目直接打开 GitHub 仓库中的完整参考资料。任务来自 docs-tasks.ts，主题来自 docs-map.ts，两份注册表都在仓库中维护。",
+    "sidebarHeading": "文档目录",
+    "sidebarAria": "文档目录",
+    "breadcrumbAria": "面包屑导航",
+    "breadcrumbHome": "首页",
+    "breadcrumbDocs": "文档",
+    "helpTitle": "这一页还不够？",
+    "helpLead": "每份指南都取自仓库中的一份文档。如果它写错了或缺了什么，最快的办法是在维护者能看到的地方说出来。",
+    "helpSource": "来源：{name}",
+    "helpTroubleshooting": "排障",
+    "helpFaq": "常见问题",
+    "helpDiscord": "到 Discord 提问 ↗",
+    "helpIssue": "报告文档问题 ↗"
   },
   "docs-hooks": {
     "metaTitle": "钩子 · Codewhale 文档",
@@ -503,5 +535,270 @@
     "troubleshootingTitle": "常见问题",
     "troubleshootingLead": "端口 7878 被占用时用 --port 换一个。浏览器无法打开时命令会报错退出，而不会留下可重用的引导凭证；检查系统默认浏览器设置后重新启动。页面能打开但 provider 不可用时，查 codewhale doctor 和 /provider——web 命令不配置也不迁移 provider 凭据。会话过期后重启 codewhale web 以签发新的进程本地会话；重用旧的引导 URL 本来就会失败。",
     "sourceNote": "来源文档：docs/WEB.md · 更新时请同步修改 docs-map.ts。"
+  },
+  "docs-computers": {
+    "metaTitle": "云端计算机 · Codewhale 文档",
+    "metaDescription": "本地 Codewhale 会话如何在 Daytona 计算机上提议、确认并跟踪一个云端 Agent——显式指定代码托管平台、凭证缺失即拒绝，以及哪些部分尚未实现。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "云端计算机",
+    "overviewLead": "本地会话可以把一项编码任务卸载到云端计算机，就像编辑器派出一个云端 Agent：远程任务创建分支，并计划向明确指定的代码托管平台发起 pull request。本地保持响应。花费与推送不会悄悄发生——先写入提议，在你确认之前不会创建沙箱，也不会推送分支。",
+    "proposeTitle": "先提议，再确认",
+    "proposeLead": "第一条命令写入提议并退出。第二条按 id 确认。TUI 中有同样的两步斜杠命令，{cloudAgent} 是 {dispatch} 的别名。",
+    "jobsLead": "云端任务作为 {kind} 在现有的任务面板上是一等公民。可以在 TUI 或 CLI 中列出、查看和取消：",
+    "remotesTitle": "显式指定托管平台",
+    "remotesLead": "远程仓库不会被默认当作 GitHub。以平台命名的远程就是该平台；其他远程按 URL 主机判定。如果存在多个平台，请传入 {remoteFlag}。",
+    "remotes": [
+      [
+        "github · cnb · gitee（按远程名）",
+        "对应平台，与 URL 无关"
+      ],
+      [
+        "origin 或其他 → github.com",
+        "github"
+      ],
+      [
+        "origin 或其他 → cnb.cool",
+        "cnb"
+      ],
+      [
+        "origin 或其他 → gitee.com",
+        "gitee"
+      ]
+    ],
+    "enableTitle": "启用 Daytona 计算机",
+    "enableLead": "凭证只存在于进程环境或 Codewhale 密钥存储中——绝不写进 config.toml 或 models.toml，也绝不提交到仓库。",
+    "enableSteps": [
+      [
+        "创建 API 密钥",
+        "在 Daytona 控制台的 API keys 页面。"
+      ],
+      [
+        "为本次会话导出",
+        "{apiKey}；如需非默认端点，可选设置 {apiUrl}。"
+      ],
+      [
+        "或一次性保存",
+        "存入 Codewhale 密钥槽 {slot}（OS 钥匙串或 $CODEWHALE_HOME 密钥文件）。也接受 {alias} 别名。"
+      ]
+    ],
+    "cliNote": "安装了 daytona CLI 并不等于有凭证。{status} 和不带参数的 {bare} 会分别报告 CLI 是否存在与凭证是否存在。",
+    "rulesTitle": "缺失即拒绝的规则",
+    "rules": [
+      [
+        "未确认",
+        "写入 {proposed} 任务；命令成功退出；不调用 Daytona；不推送任何内容。"
+      ],
+      [
+        "已确认但无凭证",
+        "写入 {refused} 任务；命令失败退出；不存在沙箱。"
+      ],
+      [
+        "已确认且有凭证",
+        "创建 Daytona 沙箱，并以任务 id 和平台打标签。此版本不会声称任何 GitHub、CNB 或 Gitee 的 PR 地址；缺少平台令牌时同样拒绝。"
+      ]
+    ],
+    "membershipTitle": "谁可以派发",
+    "membershipLead": "Codewhale Agent 的每个界面都使用同一个 Codewhale 会员身份认证——即 {login} 的账户会话。会员资格决定能否使用云端 Agent；提供商品牌保持内部不可见。安装和运行本地 Runtime 完全不需要账户。",
+    "leftoverTitle": "尚未实现",
+    "leftover": [
+      [
+        "实时查看",
+        "正在运行的沙箱的日志跟随。"
+      ],
+      [
+        "真正的取消",
+        "从任务面板销毁付费的 Daytona 沙箱。"
+      ],
+      [
+        "自动决定",
+        "Codewhale 可以提议派发，但不能自己确认自己的提议。"
+      ],
+      [
+        "远程执行器",
+        "真正创建分支并发起 pull request 的 Agent。"
+      ]
+    ],
+    "sourceNote": "源文档：docs/DAYTONA_CLOUD_DISPATCH.md、docs/CODEWHALE_AGENT.md · 修改时请同步更新 docs-map.ts。"
+  },
+  "docs-auth": {
+    "metaTitle": "账户与密钥 · Codewhale 文档",
+    "metaDescription": "提供商密钥与可选的 Codewhale 账户：各自如何设置、存放在哪里，以及哪些操作完全不需要账户。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "账户与密钥",
+    "overviewLead": "Codewhale 持有两种互不相关的凭证，把它们分开会更清楚。提供商密钥让模型能够回答。Codewhale 账户是可选的，它决定能否使用托管界面——云端 Agent 和聊天渠道。安装和运行本地 Runtime 既不需要账户，也不需要密钥。",
+    "credentials": [
+      [
+        "提供商密钥（BYOK）",
+        "你自己的 DeepSeek、OpenAI、Anthropic、OpenRouter、本地运行时或任何其他路由的密钥。用 {authSet} 设置。模型回复需要它。"
+      ],
+      [
+        "Codewhale 账户",
+        "由 {login} 发起的浏览器设备授权会话。可选。决定能否使用云端 Agent 与 Codewhale Agent 界面；本地从不需要。"
+      ]
+    ],
+    "providerTitle": "提供商密钥",
+    "providerLead": "{authSet} 保存某一个提供商的密钥。进程级的 {apiKeyFlag} 仍然在单次运行中优先。{login} 不是提供商密钥命令：提供商凭证只能通过 {authSet} 配置。",
+    "accountTitle": "账户会话",
+    "accountLead": "{login} 与 {accountLogin} 是同一个浏览器设备授权流程。会话按所选的 {profile} 区分，旧的 {cloud} 写法仍然是别名。",
+    "accountCommands": [
+      [
+        "codewhale login",
+        "通过浏览器设备授权流程登录。"
+      ],
+      [
+        "codewhale account status",
+        "显示所选 profile 的会话。"
+      ],
+      [
+        "codewhale account logout",
+        "移除该会话。"
+      ]
+    ],
+    "storageTitle": "会话存放在哪里",
+    "storageLead": "账户会话优先使用操作系统的凭证管理器；在没有凭证管理器的环境（无头主机、SSH、容器）中自动回退到权限为 0600 的私有 Codewhale 密钥文件。旧的 {fileStoreEnv} 显式开关已弃用并被忽略。",
+    "vaultTitle": "账户自己的密钥库",
+    "vaultLead": "{keys} 管理已登录账户的自带密钥（BYOK）库，且永远不会显示密钥内容。",
+    "portableTitle": "迁移到另一台机器",
+    "portableLead": "{portable} 输出一个不含密钥的配置包：凭证和机器相关的键会被直接删除，而不是用打码占位符替代，因此这个文件可以安全携带，里面没有任何内容能以你的身份登录。",
+    "appTitle": "在网页上登录",
+    "appLead": "托管的 Codewhale 应用使用同一个账户。可以在那里登录或注册；本地 Runtime 没有它也照常工作。",
+    "appSignIn": "登录 →",
+    "appRegister": "注册 →",
+    "sourceNote": "源文档：docs/CONFIGURATION.md、docs/CODEWHALE_AGENT.md、docs/PROVIDERS.md · 修改时请同步更新 docs-map.ts。"
+  },
+  "docs-trust": {
+    "metaTitle": "安全与信任 · Codewhale 文档",
+    "metaDescription": "哪些内容留在你的机器上、托管提供商会收到什么、审批与 OS 沙箱有何区别、遥测发送什么以及如何关闭，以及在哪里报告安全漏洞。",
+    "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
+    "overviewTitle": "安全与信任",
+    "overviewLead": "这一页说明 Codewhale 如何处理你的代码、命令和数据——按实际实现来写，而不是按意图来写。每一条都取自仓库中的文档，事实门禁会在每次构建时核对。",
+    "boundaryTitle": "你的数据去了哪里",
+    "boundaries": [
+      [
+        "本地 Runtime",
+        "Runtime、工作区状态和审计日志都留在你的机器上。"
+      ],
+      [
+        "托管提供商",
+        "你选择的托管提供商会收到本轮推理所需的上下文。中间没有强制经过 Codewhale 的中继。"
+      ],
+      [
+        "本地推理",
+        "回环地址的本地模型路由（vLLM、Ollama、SGLang）可以让推理完全留在本机。"
+      ],
+      [
+        "账户",
+        "本地 Runtime 不需要账户。"
+      ],
+      [
+        "Plan 模式",
+        "Plan 是只读的。"
+      ]
+    ],
+    "approvalTitle": "审批不是沙箱",
+    "approvalLead": "审批姿态——Ask、Auto-Review、Full Access——决定一条被提议的命令在执行前是否先展示给你。某一层的批准从来不是全局放行：后面的层仍然可以要求审查或阻止调用，而且批准也不等于操作系统级的沙箱授权。完整的模型工具调用流水线有九个有序的层，从有效配置、钩子、类型化权限规则、仓库法则、人工审批，直到执行沙箱。",
+    "sandboxTitle": "各平台的 OS 沙箱",
+    "sandboxLead": "这里只描述已接入命令执行路径的行为，Codewhale 会报告它实际选用的机制。",
+    "sandboxes": [
+      [
+        "macOS — Seatbelt",
+        "sandbox-exec 的运行时探测成功时自动启用。报告为 {seatbelt}。"
+      ],
+      [
+        "Linux — bubblewrap",
+        "需显式启用：{preferBwrap} 且 /usr/bin/bwrap 可执行。报告为 {bwrap}。"
+      ],
+      [
+        "没有 bwrap 的 Linux",
+        "默认没有 OS 包装层。报告为 {none}。"
+      ],
+      [
+        "Windows",
+        "当前实现没有 OS 包装层。报告为 {none}。"
+      ],
+      [
+        "外部服务",
+        "{opensandbox} 会把执行路由到兼容 OpenSandbox 的服务。"
+      ]
+    ],
+    "sandboxNote": "仓库中还有一个 seccomp 模块和一份未来的 Windows 辅助程序契约。两者都没有接入子命令启动，所以 Codewhale 不会宣传它们：只存在于源码中的沙箱代码不能证明某条命令受到了限制。",
+    "telemetryTitle": "遥测，精确到每一项",
+    "telemetryLead": "匿名使用计数默认开启，由一次不阻塞的首次运行提示告知，可以立即并永久关闭。",
+    "telemetry": [
+      [
+        "永远不收集",
+        "对话、代码、prompt、文件、文件/仓库/分支名、模型内容、凭据，以及任何逐轮或逐工具的时间线。"
+      ],
+      [
+        "会发送",
+        "版本与平台类别、会话时长与结果、功能与错误计数、封闭枚举，以及一个每 90 天轮换的随机安装 id。"
+      ],
+      [
+        "端点",
+        "{endpoint}——第一方 Cloudflare Worker，源码在仓库的 telemetry-ingest/ 目录下。"
+      ],
+      [
+        "存储",
+        "没有 IP、国家或地理位置列——这是结构上的，不是一个设置。不写日志。保留期固定为三个月。"
+      ],
+      [
+        "自己审计",
+        "设置 {dryRun}：批次会追加写入你机器上的 {dryRunFile}，与服务器本应收到的内容逐字节一致，且不会构造任何 HTTP 客户端。"
+      ],
+      [
+        "关闭",
+        "{configOff} 或 {envOff}。"
+      ]
+    ],
+    "auditTitle": "本地审计日志",
+    "auditLead": "敏感事件——凭证、审批和提权事件——会尽力追加写入 {auditLog}。写入失败会被记录而不是隐藏。提供商的 token 与缓存用量在可用时会在本地显示。",
+    "reportTitle": "报告安全漏洞",
+    "reportLead": "安全报告请通过邮件发给维护者，而不是提交公开 issue。请附上页眉中的版本号，如有复现步骤也请一并提供。",
+    "reportCta": "给维护者发邮件",
+    "sourceNote": "源文档：docs/SANDBOX.md、docs/AUTHORIZATION_ORDER.md、docs/TELEMETRY.md、docs/public-surface-facts.json · 修改时请同步更新 docs-map.ts。"
+  },
+  "states": {
+    "loadingLabel": "加载中…",
+    "emptyTitle": "这里还没有内容",
+    "emptyBody": "暂时没有可显示的记录。这里不会用编造的内容填充。",
+    "errorTitle": "页面没有加载完成",
+    "errorBody": "中途出了问题。你的操作没有丢失；请重试，如果持续失败，请报告给我们。",
+    "retry": "重试",
+    "reload": "重新加载页面",
+    "homeLink": "返回首页",
+    "notFoundTitle": "这个地址没有页面",
+    "notFoundBody": "链接可能已过期，或页面已迁移。文档目录列出了当前所有页面。",
+    "offlineTitle": "你已离线",
+    "offlineBody": "操作已暂停，直到网络恢复。此处显示的内容不会刷新。",
+    "reconnectingTitle": "正在重新连接…",
+    "reconnectingBody": "正在检查连接（第 {attempt} 次）。",
+    "degradedTitle": "连接不稳定",
+    "degradedBody": "服务器没有响应上一次检查。你看到的内容可能已过时。",
+    "onlineTitle": "已恢复在线",
+    "onlineBody": "连接已恢复。",
+    "retryNow": "立即重试",
+    "dismiss": "关闭",
+    "lastChecked": "上次检查 {time}"
+  },
+  "changelog": {
+    "metaTitle": "更新日志 · Codewhale",
+    "metaDescription": "Codewhale 发布记录：最新已发布版本、尚未发布的源码候选版，以及每个版本的说明，均取自仓库中的 CHANGELOG.md。",
+    "kicker": "发布记录",
+    "title": "改了什么，在哪个版本。",
+    "lead": "页面顶部是两个事实：最新发布的版本，以及源码树当前声明的版本。下面的内容逐节来自仓库自己的 CHANGELOG.md。",
+    "publishedLabel": "最新已发布版本",
+    "publishedValue": "{tag} · 发布于 {date}",
+    "candidateLabel": "源码候选版",
+    "candidateValue": "{version} · 未发布",
+    "candidateMatches": "{version} · 与已发布版本一致",
+    "releasesLink": "GitHub Releases ↗",
+    "unreleasedHeading": "未发布",
+    "unreleasedNote": "自上一个标签以来合并到主分支的改动。它们属于源码候选版，不属于任何已发布的包。",
+    "compareLink": "在 GitHub 上比较 ↗",
+    "releasePageLink": "发布页 ↗",
+    "moreEntries": "显示 {shown} / {total} 条",
+    "fullNotes": "完整说明见 CHANGELOG.md ↗",
+    "emptyTitle": "没有解析出发布说明",
+    "emptyBody": "构建时没有找到可解析的 CHANGELOG.md。GitHub 的发布列表仍然是权威记录。"
   }
 }

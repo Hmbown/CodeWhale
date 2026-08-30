@@ -159,6 +159,8 @@ export interface ChromeDict {
   footerTerms: string;
   /** Footer link to the privacy route, e.g. "Privacy". */
   footerPrivacy: string;
+  /** Footer Product-column link to the release record, e.g. "Changelog". */
+  footerChangelog: string;
   /** Prefix before the canonical-source link, e.g. "Canonical source: ". */
   footerCanonicalSource: string;
   /** Separator + label before the releases link, e.g. " · Releases: ". */
@@ -331,6 +333,214 @@ export interface DocsShellDict {
   heroLead: string;
   installCta: string;
   sourceDocsCta: string;
+
+  // --- release truth band (docs layout; facts + CHANGELOG.md) ---
+  /** Eyebrow over the band, e.g. "Release truth". */
+  releaseLabel: string;
+  /** "Latest release {tag} · {date}" — date already formatted per locale. */
+  releasePublished: string;
+  /** Shown while the source candidate is ahead of the published release. */
+  releaseCandidate: string;
+  /** Shown when the pages describe exactly the published release. */
+  releaseMatches: string;
+  /** Link to the /changelog route. */
+  releaseChangelog: string;
+
+  // --- task/topic search (components/docs-search.tsx) ---
+  searchLabel: string;
+  searchPlaceholder: string;
+  searchClear: string;
+  /** "{matched} of {total} entries match “{query}”". */
+  searchMatches: string;
+  /** "Nothing matches “{query}”". */
+  searchNoMatches: string;
+  tasksHeading: string;
+  tasksLead: string;
+  topicsHeading: string;
+  /** Row tag for a first-party page. */
+  webGuideTag: string;
+  /** Row tag for a GitHub source document. */
+  sourceDocTag: string;
+  emptyTitle: string;
+  emptyBody: string;
+  emptyCta: string;
+  indexNote: string;
+
+  // --- sidebar and breadcrumb (components/docs-sidebar.tsx, docs-breadcrumb.tsx) ---
+  sidebarHeading: string;
+  sidebarAria: string;
+  breadcrumbAria: string;
+  breadcrumbHome: string;
+  breadcrumbDocs: string;
+
+  // --- contextual help band under every docs page ---
+  helpTitle: string;
+  helpLead: string;
+  /** "Source: {name}" — the topic's repository document(s). */
+  helpSource: string;
+  helpTroubleshooting: string;
+  helpFaq: string;
+  helpDiscord: string;
+  helpIssue: string;
+}
+
+/**
+ * Shared surface states (`components/surface-state.tsx`,
+ * `components/connection-banner.tsx`, the `loading.tsx` / `error.tsx` /
+ * `not-found.tsx` boundaries). One dictionary for every empty, loading,
+ * error, retry, recovery, and connection state so no page invents its own.
+ */
+export interface StatesDict {
+  loadingLabel: string;
+  emptyTitle: string;
+  emptyBody: string;
+  errorTitle: string;
+  errorBody: string;
+  retry: string;
+  reload: string;
+  homeLink: string;
+  notFoundTitle: string;
+  notFoundBody: string;
+  /** Connection banner (typed state in lib/connection-state.ts). */
+  offlineTitle: string;
+  offlineBody: string;
+  reconnectingTitle: string;
+  /** "Checking the connection (attempt {attempt})." */
+  reconnectingBody: string;
+  degradedTitle: string;
+  degradedBody: string;
+  onlineTitle: string;
+  onlineBody: string;
+  retryNow: string;
+  dismiss: string;
+  /** "Last checked {time}". */
+  lastChecked: string;
+}
+
+/**
+ * `app/[locale]/docs/computers/page.tsx` — cloud computers and dispatch.
+ * Every claim traces to docs/DAYTONA_CLOUD_DISPATCH.md and
+ * docs/CODEWHALE_AGENT.md; commands stay code-owned literals in the page.
+ */
+export interface DocsComputersDict {
+  metaTitle: string;
+  metaDescription: string;
+  bodyClassName: string;
+  overviewTitle: string;
+  overviewLead: string;
+  proposeTitle: string;
+  proposeLead: string;
+  jobsLead: string;
+  remotesTitle: string;
+  remotesLead: string;
+  /** `[remote name, forge]` rows of the explicit-forge table. */
+  remotes: [string, string][];
+  enableTitle: string;
+  enableLead: string;
+  /** `[step, detail]` rows. */
+  enableSteps: [string, string][];
+  cliNote: string;
+  rulesTitle: string;
+  /** `[situation, outcome]` rows of the fail-closed table. */
+  rules: [string, string][];
+  membershipTitle: string;
+  membershipLead: string;
+  leftoverTitle: string;
+  /** `[item, note]` rows. */
+  leftover: [string, string][];
+  sourceNote: string;
+}
+
+/**
+ * `app/[locale]/docs/auth/page.tsx` — account, sign-in, and key storage.
+ * Claims trace to docs/CONFIGURATION.md, docs/CODEWHALE_AGENT.md, and
+ * docs/PROVIDERS.md.
+ */
+export interface DocsAuthDict {
+  metaTitle: string;
+  metaDescription: string;
+  bodyClassName: string;
+  overviewTitle: string;
+  overviewLead: string;
+  /** `[credential, role]` rows. */
+  credentials: [string, string][];
+  providerTitle: string;
+  providerLead: string;
+  accountTitle: string;
+  accountLead: string;
+  /** `[command, effect]` rows. */
+  accountCommands: [string, string][];
+  storageTitle: string;
+  storageLead: string;
+  vaultTitle: string;
+  vaultLead: string;
+  portableTitle: string;
+  portableLead: string;
+  appTitle: string;
+  appLead: string;
+  appSignIn: string;
+  appRegister: string;
+  sourceNote: string;
+}
+
+/**
+ * `app/[locale]/docs/trust/page.tsx` — security and trust reference.
+ * Claims trace to docs/SANDBOX.md, docs/AUTHORIZATION_ORDER.md,
+ * docs/TELEMETRY.md, and docs/public-surface-facts.json.
+ */
+export interface DocsTrustDict {
+  metaTitle: string;
+  metaDescription: string;
+  bodyClassName: string;
+  overviewTitle: string;
+  overviewLead: string;
+  boundaryTitle: string;
+  /** `[boundary, statement]` rows. */
+  boundaries: [string, string][];
+  approvalTitle: string;
+  approvalLead: string;
+  sandboxTitle: string;
+  sandboxLead: string;
+  /** `[platform, behaviour]` rows. */
+  sandboxes: [string, string][];
+  sandboxNote: string;
+  telemetryTitle: string;
+  telemetryLead: string;
+  /** `[fact, detail]` rows. */
+  telemetry: [string, string][];
+  auditTitle: string;
+  auditLead: string;
+  reportTitle: string;
+  reportLead: string;
+  reportCta: string;
+  sourceNote: string;
+}
+
+/** `app/[locale]/changelog/page.tsx` — version-aware release record. */
+export interface ChangelogDict {
+  metaTitle: string;
+  metaDescription: string;
+  kicker: string;
+  title: string;
+  lead: string;
+  publishedLabel: string;
+  /** "{tag} · published {date}" */
+  publishedValue: string;
+  candidateLabel: string;
+  /** "{version} · unreleased" */
+  candidateValue: string;
+  /** Shown when the candidate equals the published release. */
+  candidateMatches: string;
+  releasesLink: string;
+  unreleasedHeading: string;
+  unreleasedNote: string;
+  compareLink: string;
+  releasePageLink: string;
+  /** "{shown} of {total} entries" */
+  moreEntries: string;
+  fullNotes: string;
+  emptyTitle: string;
+  emptyBody: string;
 }
 
 /**
