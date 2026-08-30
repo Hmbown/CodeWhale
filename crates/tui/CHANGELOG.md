@@ -187,6 +187,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The sandbox read deny-list matches a rule's resolved path as well as its
+  literal spelling. On macOS `/etc` and `/var` are symlinks into `/private`,
+  so a read of `/private/etc/sudoers` walked around the `/etc/sudoers` rule,
+  and a rule written against a symlinked directory never fired for the real
+  path that `canonicalize` and the process cwd hand back.
 - Background shells are first-class work-strip rows (`▾ Shells N`) you can
   open, watch, and cancel by the `shell_*` id on the row. `/jobs cancel all`
   cancels running shells; it no longer looks up a task named `all`. The
