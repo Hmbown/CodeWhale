@@ -4160,13 +4160,9 @@ impl SubAgentManager {
             .find(|record| record.claim.owner == owner && !record.isolated_worktree)
     }
 
-    /// Is another *live* child writing in the shared checkout?
-    ///
-    /// This is the question the unbounded-write gate actually needs. A claim
-    /// bounds a child so concurrent children cannot overwrite each other's
-    /// files; with no second writer in the shared tree there is nothing to
-    /// collide with, and a shell redirect is no more dangerous than the `File`
-    /// write the same child is already allowed to perform.
+    /// The live peers whose shared-checkout write claims gate `owner` — the
+    /// names the contention refusal must surface so a refused child knows
+    /// what it is waiting on and what to cancel or release.
     ///
     /// Liveness is the load-bearing part. Claims outlive the agents that
     /// registered them, so a workspace accumulates one per builder that ever
@@ -4183,12 +4179,14 @@ impl SubAgentManager {
     ///
     /// Worktree-isolated peers are excluded too: they write into their own
     /// checkout and can never contend for these paths.
-    fn has_peer_shared_write_claim(&self, owner: &str) -> bool {
+    fn live_peer_shared_write_claim_owners(&self, owner: &str) -> Vec<String> {
         self.coordination
             .write_claims
             .iter()
             .filter(|record| record.claim.owner != owner && !record.isolated_worktree)
-            .any(|record| self.is_live_coordination_owner(&record.claim.owner))
+            .filter(|record| self.is_live_coordination_owner(&record.claim.owner))
+            .map(|record| record.claim.owner.clone())
+            .collect()
     }
 
     /// Classify an agent by its `session_boot_id`: `true` when the
@@ -4916,20 +4914,29 @@ impl SubAgentManager {
 
     /// The single definition of a live coordination claimant.
     ///
-    /// One predicate, two callers: claim admission (`active_coordination_owners`)
-    /// and the shared-checkout peer gate (`has_peer_shared_write_claim`). They
-    /// used to disagree, which let a claim from a crashed prior session (an
-    /// agent record restored as `Running` with a different boot id, or an owner
-    /// whose record was never loaded at all) keep looking like a live writer
-    /// forever — every later builder/worker was then denied all command
-    /// execution (issue #5562: "stale write-claims persist forever and
-    /// cascade-lock other agents"). A claim cannot contend for an owner that
-    /// cannot write.
+    /// One predicate, evaluated per owner id by every caller: claim admission
+    /// (`active_coordination_owners` delegates below), the shared-checkout peer
+    /// gate (`live_peer_shared_write_claim_owners`), and stale-claim release.
+    /// The admission and gate sides used to disagree, which let a claim from a
+    /// crashed prior session (an agent record restored as `Running` with a
+    /// different boot id, or an owner whose record was never loaded at all)
+    /// keep looking like a live writer forever — every later builder/worker
+    /// was then denied all command execution (issue #5562: "stale write-claims
+    /// persist forever and cascade-lock other agents"). A claim cannot contend
+    /// for an owner that cannot write.
     fn is_live_coordination_owner(&self, id: &str) -> bool {
         self.agents.get(id).is_some_and(|agent| {
             agent.status == SubAgentStatus::Running && !self.is_from_prior_session(agent)
         }) || self.worker_records.get(id).is_some_and(|record| {
             !record.status.is_terminal()
+                // A headless worker (no paired agent entry) that reaches
+                // WaitingForUser can never be answered: no user path will
+                // resume or finalize it, so counting it live leaks its claim
+                // as a permanent gate on every later writer. A *paired*
+                // waiting child keeps its claim — the user can still answer
+                // and the child will write again.
+                && !(record.status == AgentWorkerStatus::WaitingForUser
+                    && !self.agents.contains_key(id))
                 && !self
                     .agents
                     .get(id)
@@ -4937,33 +4944,16 @@ impl SubAgentManager {
         })
     }
 
+    // Worker records carry no boot id of their own, so the per-id predicate
+    // consults the paired agent when one exists; delegating keeps admission,
+    // the peer gate, and stale-claim release on one liveness definition.
     fn active_coordination_owners(&self) -> std::collections::HashSet<String> {
-        let mut owners = std::collections::HashSet::new();
-        for (id, agent) in &self.agents {
-            // A prior-session agent (mismatched/empty boot id) is not a live
-            // claimant even if its restored status still reads Running.
-            if agent.status == SubAgentStatus::Running && !self.is_from_prior_session(agent) {
-                owners.insert(id.clone());
-            }
-        }
-        for (id, record) in &self.worker_records {
-            if record.status.is_terminal() {
-                continue;
-            }
-            // Worker records don't carry their own boot id, so consult the
-            // paired agent when one exists. A headless worker (no agent
-            // entry) is a live current-session owner by virtue of its
-            // non-terminal record; a paired agent from a prior session means
-            // the worker is an orphan that must never gate a new writer.
-            let prior_session = self
-                .agents
-                .get(id)
-                .is_some_and(|agent| self.is_from_prior_session(agent));
-            if !prior_session {
-                owners.insert(id.clone());
-            }
-        }
-        owners
+        self.agents
+            .keys()
+            .chain(self.worker_records.keys())
+            .filter(|id| self.is_live_coordination_owner(id))
+            .cloned()
+            .collect()
     }
 
     fn namespace_write_claim(
@@ -10261,8 +10251,62 @@ struct SubAgentTask {
     _foreground_child_registration: Option<ForegroundChildRegistration>,
 }
 
-#[allow(clippy::too_many_lines)]
+/// Spawn the child task body under a panic guard.
+///
+/// Children run under `spawn_supervised`, which catch_unwinds a panic so the
+/// parent process survives — and that used to be where the story ended: the
+/// terminal commit at the end of `run_subagent_task_inner` never ran, so the
+/// panicked child stayed `Running` and its write claim kept gating live peers
+/// until heartbeat auto-cancel (indefinitely, while a lingering shell kept
+/// the heartbeat fresh). The guard catches the panic first, commits a crash
+/// terminal result through the same `finish_terminal_result` arbitration every
+/// other terminal path uses, then resumes unwinding so the supervisor still
+/// logs the panic and writes its crash dump.
 async fn run_subagent_task(task: SubAgentTask) {
+    let agent_id = task.agent_id.clone();
+    let manager_handle = task.manager_handle.clone();
+    supervise_subagent_task_body(manager_handle, agent_id, run_subagent_task_inner(task)).await;
+}
+
+async fn supervise_subagent_task_body(
+    manager_handle: SharedSubAgentManager,
+    agent_id: String,
+    body: impl std::future::Future<Output = ()> + Send,
+) {
+    use futures_util::FutureExt;
+    let panicked = std::panic::AssertUnwindSafe(body).catch_unwind().await;
+    let Err(panic) = panicked else {
+        return;
+    };
+    let message = crate::utils::panic_message(&*panic);
+    {
+        let mut manager = manager_handle.write().await;
+        match manager.get_result(&agent_id) {
+            Ok(mut result) => {
+                result.status =
+                    SubAgentStatus::Failed(format!("sub-agent task panicked: {message}"));
+                result.result = None;
+                result.needs_input = None;
+                // Arbitrated exactly like the natural terminal commit: when a
+                // cancel or another terminal outcome already won, this is a
+                // no-op rather than a second result.
+                manager.finish_terminal_result(&agent_id, result, false, true);
+            }
+            Err(err) => {
+                tracing::error!(
+                    target: "subagent",
+                    agent_id = %agent_id,
+                    ?err,
+                    "panicked task no longer has a manager record"
+                );
+            }
+        }
+    }
+    std::panic::resume_unwind(panic);
+}
+
+#[allow(clippy::too_many_lines)]
+async fn run_subagent_task_inner(task: SubAgentTask) {
     // `spawn_background_with_assignment_options` installs this before the task
     // is scheduled. Keep this fallback for internal/test task launchers so a
     // manually-created worker still owns the same terminal fan-in contract.
@@ -15357,6 +15401,10 @@ impl SubAgentToolRegistry {
                 .map_err(anyhow::Error::msg)?;
         } else if self.enforce_write_claim
             && !is_internal_coordination_state_tool(name)
+            // A shell run the read-only classifier proves mutation-free cannot
+            // collide with the peer's writes no matter how contended the
+            // checkout is, so the gate below does not apply to it.
+            && !proven_readonly_shell_run(name, &input)
             && (is_unbounded_shell_run(name, &input)
                 || self.registry.get(name).is_some_and(|spec| {
                     let canonical = canonical_action_alias(name, &input);
@@ -15385,12 +15433,15 @@ impl SubAgentToolRegistry {
             // no safety while making a builder unable to run ordinary shell
             // work in the workspace the operator actually watches — worktree
             // isolation "fixes" that by writing somewhere they never see.
-            if manager.shared_write_claim(&self.owner_agent_id).is_some()
-                && manager.has_peer_shared_write_claim(&self.owner_agent_id)
-            {
-                return Err(anyhow!(
-                    "Tool {name} cannot prove a bounded file target, and another child is writing in this shared checkout. Use scope-aware file tools, or launch the children with worktree isolation."
-                ));
+            if manager.shared_write_claim(&self.owner_agent_id).is_some() {
+                let blocking_peers =
+                    manager.live_peer_shared_write_claim_owners(&self.owner_agent_id);
+                if !blocking_peers.is_empty() {
+                    return Err(anyhow!(
+                        "Tool {name} cannot prove a bounded file target, and another child is writing in this shared checkout (blocking peers: {}). Wait for the peer to finish, ask the parent to cancel it, run agents/coordinate action=release to clear a stale claim, or relaunch the children with worktree isolation.",
+                        blocking_peers.join(", ")
+                    ));
+                }
             }
         }
         let context = self
@@ -15462,6 +15513,20 @@ impl SubAgentToolRegistry {
 
 fn is_unbounded_shell_run(name: &str, input: &Value) -> bool {
     canonical_action_alias(name, input) == "exec_shell"
+}
+
+/// Whether this exact call is a shell run the agent read-only classifier
+/// proves mutation-free — the contention gate's carve-out.
+///
+/// This shares its classifier with `bounded_readonly_bash_evidence` but not
+/// its role restriction, deliberately: the envelope helper's carve-out
+/// *grants* shell to inspection roles that otherwise lack it, so it is scoped
+/// to them; the contention gate grants nothing — shell authority, posture, and
+/// the envelope have already settled by the time it runs — and asks only
+/// whether this call can collide with a live peer's writes. A proven
+/// read-only `ls` cannot, whichever role runs it.
+fn proven_readonly_shell_run(name: &str, input: &Value) -> bool {
+    is_unbounded_shell_run(name, input) && crate::tools::shell::agent_readonly_bash_input(input)
 }
 
 /// Parameter names whose *value* is a location to reach, rather than content.

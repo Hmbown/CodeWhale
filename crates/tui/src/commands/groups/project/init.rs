@@ -10,16 +10,21 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use codewhale_command_contract::handler::CommandContexts;
+
 use crate::project_context;
-use crate::tui::app::{App, AppAction};
+use crate::tui::app::AppAction;
 
 use crate::commands::CommandResult;
 
 /// Generate an AGENTS.md file for the current project by gathering context and
 /// delegating content generation to the LLM agent.
-fn init(app: &mut App) -> CommandResult {
-    let workspace = &app.workspace;
-
+///
+/// FEAT-021 portable dispatch: consumes only the workspace path (supplied
+/// through the `WORKSPACE` facet); the workspace scan and prompt composition
+/// stay handler-owned (D2). `crate::utils`/`crate::project_context` are leaf,
+/// path-parameterized helpers (no App/service state), consistent with D8.
+fn init(workspace: &Path) -> CommandResult {
     // Ensure .deepseek/ is gitignored if we're inside a git repo.
     ensure_deepseek_gitignored(workspace);
 
@@ -797,27 +802,43 @@ fn build_init_prompt(
     prompt
 }
 
-pub(in crate::commands) const COMMAND_INFO: crate::commands::traits::CommandInfo =
-    crate::commands::traits::CommandInfo {
+pub(in crate::commands) const INIT_INFO: codewhale_command_contract::metadata::CommandInfo =
+    codewhale_command_contract::metadata::CommandInfo {
         name: "init",
         aliases: &[],
         usage: "/init",
-        description_id: crate::localization::MessageId::CmdInitDescription,
+        description_key: "cmd_init_description",
     };
 
 pub(in crate::commands) struct InitCmd;
 
-impl crate::commands::traits::RegisterCommand for InitCmd {
-    fn info() -> &'static crate::commands::traits::CommandInfo {
-        &COMMAND_INFO
+impl codewhale_command_contract::metadata::RegisterCommand<crate::commands::CommandResult>
+    for InitCmd
+{
+    fn info() -> &'static codewhale_command_contract::metadata::CommandInfo {
+        &INIT_INFO
     }
 
-    fn execute(
-        app: &mut crate::tui::app::App,
-        _arg: Option<&str>,
-    ) -> crate::commands::CommandResult {
-        init(app)
+    fn handler()
+    -> codewhale_command_contract::handler::CommandHandler<crate::commands::CommandResult> {
+        codewhale_command_contract::handler::CommandHandler::Contextual(init_contextual)
     }
+}
+
+/// Contextual `/init` dispatch (FEAT-021 Phase 4).
+///
+/// Destructures the declared `WORKSPACE` facet with a safe missing-facet
+/// error. The workspace path is consumed via the `WORKSPACE` facet (D2);
+/// `/init` consumes no project-facet method, so it destructures exactly
+/// `WORKSPACE` (D4, least-capability — the initial PROJECT|WORKSPACE
+/// declaration was amended after the critical audit; main's model expresses
+/// the declaration as exact facet destructuring rather than a bitmask).
+fn init_contextual(contexts: CommandContexts<'_>, _arg: Option<&str>) -> CommandResult {
+    let parts = contexts.into_parts();
+    let Some(workspace) = parts.workspace.as_deref() else {
+        return crate::commands::CommandResult::error("Command capability unavailable: workspace");
+    };
+    init(&workspace.workspace())
 }
 
 // ---------------------------------------------------------------------------
@@ -827,28 +848,14 @@ impl crate::commands::traits::RegisterCommand for InitCmd {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::tui::app::{App, TuiOptions};
     use tempfile::TempDir;
-
-    fn create_test_app_with_tmpdir(tmpdir: &TempDir) -> App {
-        let options = TuiOptions {
-            skills_dir: tmpdir.path().join("skills"),
-            memory_path: tmpdir.path().join("memory.md"),
-            notes_path: tmpdir.path().join("notes.txt"),
-            mcp_config_path: tmpdir.path().join("mcp.json"),
-            ..crate::test_support::test_tui_options(tmpdir.path())
-        };
-        App::new(options, &Config::default())
-    }
 
     // --- init() integration tests ---
 
     #[test]
     fn init_returns_send_message_action() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = init(&mut app);
+        let result = init(tmpdir.path());
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
         assert!(msg.contains("Creating AGENTS.md"));
@@ -861,9 +868,8 @@ mod tests {
     #[test]
     fn init_says_updating_when_agents_md_exists() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
         std::fs::write(tmpdir.path().join("AGENTS.md"), "existing content").unwrap();
-        let result = init(&mut app);
+        let result = init(tmpdir.path());
         assert!(result.message.unwrap().contains("Updating AGENTS.md"));
         assert!(matches!(result.action, Some(AppAction::SendMessage(_))));
     }
@@ -871,9 +877,8 @@ mod tests {
     #[test]
     fn init_includes_gitignore_handling() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
         std::fs::create_dir_all(tmpdir.path().join(".git")).unwrap();
-        let result = init(&mut app);
+        let result = init(tmpdir.path());
         assert!(!result.is_error);
         // Should have added .deepseek/ to .gitignore.
         let gi = std::fs::read_to_string(tmpdir.path().join(".gitignore")).unwrap();
@@ -883,13 +888,12 @@ mod tests {
     #[test]
     fn init_prompt_includes_context_for_rust_project() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
         std::fs::write(
             tmpdir.path().join("Cargo.toml"),
             "[package]\nname = \"test-crate\"\nversion = \"0.1.0\"\n",
         )
         .unwrap();
-        let result = init(&mut app);
+        let result = init(tmpdir.path());
         let Some(AppAction::SendMessage(prompt)) = result.action else {
             panic!("expected SendMessage action");
         };
@@ -910,18 +914,32 @@ mod tests {
     #[test]
     fn init_prompt_includes_existing_content() {
         let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
         std::fs::write(
             tmpdir.path().join("AGENTS.md"),
             "# My Project\n\nCustom instructions here.",
         )
         .unwrap();
-        let result = init(&mut app);
+        let result = init(tmpdir.path());
         let Some(AppAction::SendMessage(prompt)) = result.action else {
             panic!("expected SendMessage action");
         };
         assert!(prompt.contains("Custom instructions here"));
         assert!(prompt.contains("update it in place"));
+    }
+
+    #[test]
+    fn missing_workspace_facet_fails_safely() {
+        // An empty envelope must fail safely — never panic and never perform a
+        // partial workspace mutation.
+        let result = init_contextual(CommandContexts::empty(), None);
+        assert!(result.is_error);
+        assert!(
+            result
+                .message
+                .unwrap()
+                .contains("Command capability unavailable: workspace"),
+            "missing workspace facet must fail safely"
+        );
     }
 
     // --- parse_cargo_toml tests ---

@@ -4843,7 +4843,10 @@ pub fn provider_base_url_is_official(provider: ProviderKind, base_url: &str) -> 
             "https://api.siliconflow.com/v1" | "https://api.siliconflow.cn/v1"
         ),
         ProviderKind::Moonshot => {
-            normalized == DEFAULT_MOONSHOT_BASE_URL || moonshot_base_url_uses_kimi_code(base_url)
+            matches!(
+                normalized.as_str(),
+                DEFAULT_MOONSHOT_BASE_URL | MOONSHOT_CN_BASE_URL
+            ) || moonshot_base_url_uses_kimi_code(base_url)
         }
         ProviderKind::Zai => matches!(
             normalized.as_str(),

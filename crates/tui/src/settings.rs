@@ -309,6 +309,11 @@ pub struct Settings {
     /// Reduce decorative motion. This must never synthesize model text speed;
     /// streaming follows upstream deltas in both modes.
     pub low_motion: bool,
+    /// Set when the persisted file existed but could not be parsed and the
+    /// values above are defaults. Never serialized; surfaces must not present
+    /// these defaults as saved.
+    #[serde(skip)]
+    pub load_error: Option<String>,
     /// Enable expressive live-state motion. This affects chrome and state
     /// affordances only; model text always follows upstream stream deltas.
     pub fancy_animations: bool,
@@ -562,6 +567,7 @@ impl Default for Settings {
             calm_mode: true,
             tool_collapse_mode: "compact".to_string(),
             low_motion: false,
+            load_error: None,
             fancy_animations: true,
             // A fresh terminal follows the host surface. Deep/ocean treatment
             // remains an explicit appearance choice rather than a backdrop
@@ -875,7 +881,12 @@ impl Settings {
                         "Failed to parse {} (using defaults): {e:#}",
                         read_path.display()
                     );
-                    Self::default()
+                    // Keep the app running on defaults, but carry the failure
+                    // so a settings surface never labels them as saved.
+                    Self {
+                        load_error: Some(format!("{}: {e}", read_path.display())),
+                        ..Self::default()
+                    }
                 }
             };
             // A persisted threshold is itself an explicit request for
@@ -1009,6 +1020,69 @@ fn auto_compact_explicitly_configured_in_document(value: &toml::Value) -> bool {
             || table.contains_key("auto_compact_threshold")
             || table.contains_key("auto_compact_threshold_percent")
     })
+}
+
+/// The runtime overlay that forces `low_motion` on, when one wins over the
+/// persisted value. Mirrors the precedence of
+/// [`Settings::apply_env_overrides`] so a settings surface can name the real
+/// owner instead of calling a forced value "saved".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionOverride {
+    NoAnimationsEnv,
+    VsCodeTerminal,
+    TermiusTerminal,
+    SshSession,
+    TabbyTerminal,
+    LegacyWindowsConsole,
+}
+
+impl MotionOverride {
+    /// The literal token a person can look for in their environment.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NoAnimationsEnv => "NO_ANIMATIONS",
+            Self::VsCodeTerminal => "TERM_PROGRAM=vscode",
+            Self::TermiusTerminal => "TERM_PROGRAM=Termius",
+            Self::SshSession => "SSH_CLIENT/SSH_TTY",
+            Self::TabbyTerminal => "TERM_PROGRAM=tabby",
+            Self::LegacyWindowsConsole => "legacy Windows console",
+        }
+    }
+
+    /// Whether the override comes from the environment (a variable or an
+    /// SSH session) rather than from the terminal program itself.
+    #[must_use]
+    pub fn is_environment(self) -> bool {
+        matches!(self, Self::NoAnimationsEnv | Self::SshSession)
+    }
+}
+
+/// Detect which runtime overlay forces `low_motion`, in the order
+/// [`Settings::apply_env_overrides`] applies them.
+#[must_use]
+pub fn detect_low_motion_override() -> Option<MotionOverride> {
+    let env_nonempty = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+    if env_truthy("NO_ANIMATIONS") {
+        return Some(MotionOverride::NoAnimationsEnv);
+    }
+    let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+    if term_program.eq_ignore_ascii_case("vscode") {
+        return Some(MotionOverride::VsCodeTerminal);
+    }
+    if term_program == "Termius" {
+        return Some(MotionOverride::TermiusTerminal);
+    }
+    if env_nonempty("SSH_CLIENT") || env_nonempty("SSH_TTY") {
+        return Some(MotionOverride::SshSession);
+    }
+    if term_program.to_ascii_lowercase().contains("tabby") {
+        return Some(MotionOverride::TabbyTerminal);
+    }
+    if detected_legacy_windows_console_host() {
+        return Some(MotionOverride::LegacyWindowsConsole);
+    }
+    None
 }
 
 impl Settings {
@@ -2819,6 +2893,26 @@ fn env_truthy(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// The override detector names the same winner `apply_env_overrides`
+    /// applies: `NO_ANIMATIONS` is first in precedence and is environment,
+    /// not terminal, authority.
+    #[test]
+    fn low_motion_override_detector_agrees_with_env_overlay() {
+        let _lock = crate::test_support::lock_test_env();
+        let _no_animations = crate::test_support::EnvVarGuard::set("NO_ANIMATIONS", "1");
+
+        let detected = detect_low_motion_override();
+        assert_eq!(detected, Some(MotionOverride::NoAnimationsEnv));
+        assert!(detected.is_some_and(MotionOverride::is_environment));
+        assert_eq!(detected.map(MotionOverride::label), Some("NO_ANIMATIONS"));
+
+        let mut settings = Settings::default();
+        assert!(!settings.low_motion);
+        settings.apply_env_overrides();
+        assert!(settings.low_motion, "the overlay forces low motion on");
+        assert!(!settings.fancy_animations);
+    }
+
     // -----------------------------------------------------------------------
     // Cross-process settings integrity
     // -----------------------------------------------------------------------
@@ -3292,6 +3386,7 @@ mod tests {
         Settings {
             calm_mode: false,
             low_motion: false,
+            load_error: None,
             fancy_animations: true,
             show_tool_details: true,
             transcript_spacing: "comfortable".to_string(),

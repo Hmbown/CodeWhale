@@ -969,6 +969,7 @@ impl App {
             runtime_services: RuntimeToolServices {
                 shell_manager: Some(shell_manager),
                 work: Some(work_runtime),
+                media_originals_dir: crate::media_originals::default_store_dir(),
                 ..RuntimeToolServices::default()
             },
             coordination_detail: None,

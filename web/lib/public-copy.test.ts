@@ -139,7 +139,7 @@ describe("public website copy contracts", () => {
     expect(models).not.toContain('className="settings-status-dot"');
     expect(models).not.toMatch(/Save settings|Save changes|Apply changes|Create account|Sign up/);
 
-    expect(styles).toContain("--settings-state-active: var(--indigo-deep);");
+    expect(styles).toContain("--settings-state-active: var(--indigo);");
     expect(styles).toContain("--settings-state-ready: var(--jade);");
     expect(styles).toContain("--settings-state-muted: var(--ink-mute);");
     expect(styles).toMatch(/\.settings-shell\s*\{[^}]*width: min\(100%, 800px\);/s);

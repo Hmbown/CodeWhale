@@ -9,15 +9,18 @@ function selectorBlock(selector: string): string {
   return match[1];
 }
 
-function customProperty(block: string, name: string): string {
-  const match = block.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "i"));
-  if (!match) throw new Error(`Missing custom property: --${name}`);
-  return match[1];
+function selectorVars(selector: string): Record<string, string> {
+  const block = selectorBlock(selector);
+  const vars: Record<string, string> = {};
+  for (const match of block.matchAll(/--([\w-]+):\s*(#[0-9a-f]{6}|#[0-9a-f]{3})/gi)) {
+    vars[match[1]] = match[2];
+  }
+  return vars;
 }
 
 function relativeLuminance(hex: string): number {
-  const channels = hex
-    .slice(1)
+  const full = hex.length === 4 ? hex.slice(1).split("").map((c) => c + c).join("") : hex.slice(1);
+  const channels = full
     .match(/.{2}/g)!
     .map((value) => Number.parseInt(value, 16) / 255)
     .map((value) => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4));
@@ -31,30 +34,28 @@ function contrastRatio(foreground: string, background: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-describe("docs dark-theme contrast contract", () => {
-  it("keeps current and hover sidebar text at WCAG AA contrast", () => {
-    const darkThemes = [
-      selectorBlock('html:not([data-theme="light"]) .docs-theme'),
-      selectorBlock('[data-theme="dark"] .docs-theme'),
-    ];
+describe("docs theme contrast contract", () => {
+  // Tideline: dark is the site default (the bare `.docs-theme` block inherits
+  // the dark surface tokens from `:root`), and the light sheet is the opt-in
+  // override. Both are checked.
+  const themes = () => [
+    { ...selectorVars(":root"), ...selectorVars(".docs-theme") },
+    { ...selectorVars(":root"), ...selectorVars('html[data-theme="light"] .docs-theme') },
+  ];
 
-    for (const dark of darkThemes) {
-      const accent = customProperty(dark, "docs-accent");
-      const background = customProperty(dark, "paper");
+  it("keeps current and hover sidebar text at WCAG AA contrast", () => {
+    for (const theme of themes()) {
+      const accent = theme["docs-accent"];
+      const background = theme["paper"];
       expect(contrastRatio(accent, background)).toBeGreaterThanOrEqual(4.5);
     }
     expect(CSS).toMatch(/\.docs-sidebar-link:hover,\s*\.docs-sidebar-link-current\s*{[^}]*color:\s*var\(--docs-accent\)/s);
   });
 
   it("keeps secondary button text at WCAG AA contrast", () => {
-    const darkThemes = [
-      selectorBlock('html:not([data-theme="light"]) .docs-theme'),
-      selectorBlock('[data-theme="dark"] .docs-theme'),
-    ];
-
-    for (const dark of darkThemes) {
-      const text = customProperty(dark, "docs-button-text");
-      const background = customProperty(dark, "docs-button-bg");
+    for (const theme of themes()) {
+      const text = theme["docs-button-text"];
+      const background = theme["docs-button-bg"];
       expect(contrastRatio(text, background)).toBeGreaterThanOrEqual(4.5);
     }
     expect(selectorBlock(".docs-theme .portal-button-secondary")).toContain(

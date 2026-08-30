@@ -11,18 +11,20 @@
 use std::io::Write;
 use std::path::Path;
 
+use codewhale_command_contract::facets::CommandProjectContext;
+use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
+
 use crate::commands::CommandResult;
-use crate::commands::traits::{CommandInfo, RegisterCommand};
 use crate::dependencies::ExternalTool;
-use crate::localization::MessageId;
-use crate::tui::app::{App, AppAction};
+use crate::tui::app::AppAction;
 
 /// Share the current session as a web URL.
-fn share(app: &mut App, arg: Option<&str>) -> CommandResult {
+fn share(project: &dyn CommandProjectContext, arg: Option<&str>) -> CommandResult {
     let raw = arg.map(str::trim).unwrap_or("");
 
     match raw {
-        "" => do_share(app),
+        "" => do_share(project),
         "help" | "--help" | "-h" => CommandResult::message(
             "/share — Export the current session as a shareable web URL.\n\
              \n\
@@ -41,29 +43,26 @@ fn share(app: &mut App, arg: Option<&str>) -> CommandResult {
 }
 
 /// Export the session as HTML, upload to a Gist, and show the URL.
-fn do_share(app: &mut App) -> CommandResult {
+fn do_share(project: &dyn CommandProjectContext) -> CommandResult {
+    let share = project.share_projection();
+
     // Check if there's any session content to share
-    if app.history.is_empty() {
+    if share.history_is_empty {
         return CommandResult::error("Nothing to share. The current session is empty.");
     }
-
-    // Sanity-check: the extra info block is optional; the session itself
-    // is what we share.
-    let history_len = app.history.len();
-    let model = &app.model;
-    let mode = app.mode.label();
 
     // Use an AppAction to signal the engine to perform the async work.
     CommandResult::with_message_and_action(
         format!(
-            "Exporting {history_len} cell(s) from {model} ({mode}) session...\n\n\
+            "Exporting {} cell(s) from {} ({}) session...\n\n\
              The session will be rendered as static HTML and uploaded to a GitHub Gist.\n\
-             This requires the `gh` CLI to be installed and authenticated."
+             This requires the `gh` CLI to be installed and authenticated.",
+            share.history_len, share.model, share.mode_label
         ),
         AppAction::ShareSession {
-            history_len,
-            model: model.clone(),
-            mode: mode.to_string(),
+            history_len: share.history_len,
+            model: share.model,
+            mode: share.mode_label,
         },
     )
 }
@@ -191,28 +190,168 @@ async fn upload_gist(path: &Path) -> Result<String, String> {
     Ok(stdout)
 }
 
-pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
+pub(in crate::commands) const SHARE_INFO: CommandInfo = CommandInfo {
     name: "share",
     aliases: &[],
     usage: "/share",
-    description_id: MessageId::CmdShareDescription,
+    description_key: "cmd_share_description",
 };
 
 pub(in crate::commands) struct ShareCmd;
 
-impl RegisterCommand for ShareCmd {
+impl RegisterCommand<CommandResult> for ShareCmd {
     fn info() -> &'static CommandInfo {
-        &COMMAND_INFO
+        &SHARE_INFO
     }
 
-    fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
-        share(app, arg)
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Contextual(share_contextual)
     }
+}
+
+/// Contextual `/share` dispatch (FEAT-021 Phase 4).
+///
+/// Destructures the declared `PROJECT` facet with a safe missing-facet error.
+fn share_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
+    let mut parts = contexts.into_parts();
+    let Some(project) = parts.project.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: project");
+    };
+    share(project, arg)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codewhale_command_contract::facets::{
+        ProjectGoalState, ProjectGoalStatus, ProjectShareProjection,
+    };
+
+    /// Deterministic fake project facet over portable values only.
+    struct FakeProject {
+        share: ProjectShareProjection,
+    }
+
+    impl CommandProjectContext for FakeProject {
+        fn lsp_enabled(&self) -> bool {
+            false
+        }
+
+        fn lsp_set(&mut self, _enabled: bool) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn share_projection(&self) -> ProjectShareProjection {
+            self.share.clone()
+        }
+
+        fn goal_state(&self) -> ProjectGoalState {
+            ProjectGoalState {
+                objective: None,
+                status: ProjectGoalStatus::Active,
+                pause_reason: None,
+                started_at_elapsed_seconds: None,
+                time_used_seconds: 0,
+                token_budget: None,
+                tokens_used: 0,
+                session_total_tokens: 0,
+                continuation_count: 0,
+                pending_controls: false,
+                last_known_objective: None,
+                last_known_status: None,
+                conversation_present: false,
+                is_loading: false,
+                goal_continuation_waiting: false,
+            }
+        }
+    }
+
+    fn project_with_history() -> FakeProject {
+        FakeProject {
+            share: ProjectShareProjection {
+                history_is_empty: false,
+                history_len: 3,
+                model: "deepseek-v4-pro".to_string(),
+                mode_label: "ACT".to_string(),
+            },
+        }
+    }
+
+    fn project_empty() -> FakeProject {
+        FakeProject {
+            share: ProjectShareProjection {
+                history_is_empty: true,
+                history_len: 0,
+                model: String::new(),
+                mode_label: String::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn share_empty_session_errors() {
+        let project = project_empty();
+        let result = share(&project, Some(""));
+        assert!(result.is_error);
+        assert!(
+            result.message.unwrap().contains("Nothing to share"),
+            "empty share must error"
+        );
+    }
+
+    #[test]
+    fn share_populated_session_emits_exact_action_and_message() {
+        let project = project_with_history();
+        let result = share(&project, Some(""));
+        assert!(!result.is_error);
+        let msg = result.message.unwrap();
+        assert!(
+            msg.contains("Exporting 3 cell(s) from deepseek-v4-pro (ACT) session..."),
+            "message was: {msg}"
+        );
+        assert!(
+            matches!(
+                result.action,
+                Some(AppAction::ShareSession {
+                    history_len: 3,
+                    ref model,
+                    ref mode,
+                }) if model == "deepseek-v4-pro" && mode == "ACT"
+            ),
+            "action was: {:?}",
+            result.action
+        );
+    }
+
+    #[test]
+    fn share_help_and_unknown_routes() {
+        let project = project_with_history();
+        for arg in ["help", "--help", "-h"] {
+            let result = share(&project, Some(arg));
+            assert!(!result.is_error);
+            assert!(result.message.unwrap().contains("/share"));
+        }
+        let result = share(&project, Some("bogus"));
+        assert!(result.is_error);
+        assert!(
+            result
+                .message
+                .unwrap()
+                .contains("Unknown /share argument `bogus`")
+        );
+    }
+
+    #[test]
+    fn missing_project_facet_fails_safely() {
+        let result = share_contextual(CommandContexts::empty(), Some(""));
+        assert!(result.is_error);
+        assert!(
+            result
+                .message
+                .unwrap()
+                .contains("Command capability unavailable: project")
+        );
+    }
 
     #[test]
     fn test_render_session_html_basic_structure() {

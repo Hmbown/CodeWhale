@@ -163,14 +163,14 @@ impl Frame {
         if usize::from(col) >= usize::from(self.cols()) {
             return None;
         }
-        let styles = self.term.grid.style_set.styles();
+        let styles = self.term.grid.styles();
         Some(square_colors(grid_row[Column(usize::from(col))], styles))
     }
 
     /// Colors on the first cell whose terminal contents equal `symbol`.
     pub fn first_symbol_colors(&self, symbol: &str) -> Option<(Color, Color)> {
         let rows = self.term.visible_rows();
-        let styles = self.term.grid.style_set.styles();
+        let styles = self.term.grid.styles();
         let cols = usize::from(self.cols());
         for grid_row in &rows {
             for col in 0..cols {
@@ -189,7 +189,7 @@ impl Frame {
     /// that the capability tier was honored.
     pub fn any_truecolor_cell(&self) -> bool {
         let rows = self.term.visible_rows();
-        let styles = self.term.grid.style_set.styles();
+        let styles = self.term.grid.styles();
         let cols = usize::from(self.cols());
         for grid_row in &rows {
             for col in 0..cols {
