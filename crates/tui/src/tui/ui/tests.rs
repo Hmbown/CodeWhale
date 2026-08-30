@@ -53,6 +53,42 @@ use crate::tui::selection::{SelectionAutoscroll, TranscriptSelectionPoint};
 use tempfile::TempDir;
 
 #[test]
+fn failed_engine_channel_settles_classifier_batch_once() {
+    let _cost_scope = crate::cost_status::test_scope();
+    let route = crate::cost_status::EffectiveRouteEnvelope::capture(
+        None,
+        ApiProvider::Deepseek,
+        "deepseek",
+        "classifier-model",
+        Some(ApiProvider::Deepseek.default_base_url()),
+        chrono::Utc::now(),
+    );
+    let batch = crate::cost_status::RuntimeUsageBatch {
+        records: vec![crate::cost_status::RuntimeUsageRecord {
+            source_id: "auto-router:dispatch-usage".to_string(),
+            usage: crate::cost_status::EffectiveRouteUsage {
+                route: route.clone(),
+                usage: crate::models::Usage {
+                    input_tokens: 6,
+                    output_tokens: 2,
+                    ..Default::default()
+                },
+            },
+        }],
+        drop_records: vec![crate::cost_status::RuntimeUsageDropRecord {
+            source_id: "auto-router:dispatch-drop".to_string(),
+            route,
+        }],
+        dropped_records: 1,
+    };
+
+    super::dispatch::settle_failed_dispatch_routed_usage(&batch);
+    super::dispatch::settle_failed_dispatch_routed_usage(&batch);
+    let pending = crate::cost_status::drain();
+    assert_eq!(pending.usage_source_fingerprints.len(), 2);
+}
+
+#[test]
 fn session_shell_area_fills_the_host_terminal_at_every_width() {
     // #5322: transcript / composer share the full host width — no wide-terminal
     // side gutters. Shrinking and expanding must both rematerialize at `area`.
@@ -520,6 +556,7 @@ fn completed_turn_cost_receipt_uses_the_captured_effective_route() {
                 // receipt fails closed on anything that is not one, so a
                 // hand-written placeholder here would have tested nothing.
                 endpoint_fingerprint: served_endpoint_fingerprint(),
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Metered,
                 dispatched_at: chrono::Utc::now(),
             }),
@@ -10939,6 +10976,7 @@ fn turn_liveness_recovers_stalled_in_progress_turn() {
             billing: Some(crate::core::events::RouteBillingEnvelope {
                 billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
                 endpoint_fingerprint: Some("openai-endpoint".to_string()),
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Metered,
                 dispatched_at: chrono::Utc::now(),
             }),
@@ -10990,6 +11028,7 @@ fn engine_event_disconnect_recovers_live_turn_immediately() {
             billing: Some(crate::core::events::RouteBillingEnvelope {
                 billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
                 endpoint_fingerprint: Some("openai-endpoint".to_string()),
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Metered,
                 dispatched_at: chrono::Utc::now(),
             }),
@@ -11065,6 +11104,7 @@ fn engine_event_disconnect_cleans_cancelled_turn_metadata() {
             billing: Some(crate::core::events::RouteBillingEnvelope {
                 billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
                 endpoint_fingerprint: Some("openai-endpoint".to_string()),
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Metered,
                 dispatched_at: chrono::Utc::now(),
             }),
@@ -13196,6 +13236,8 @@ fn local_cancel_marks_late_stream_events_for_suppression() {
     assert!(!suppress_engine_event_after_local_cancel(
         &EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: crate::core::events::TurnOutcomeStatus::Interrupted,
             error: None,
             tool_catalog: None,
@@ -13240,6 +13282,7 @@ fn turn_started_route_is_captured_before_cancel_suppression() {
             billing: Some(crate::core::events::RouteBillingEnvelope {
                 billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
                 endpoint_fingerprint: Some("openai-endpoint".to_string()),
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Metered,
                 dispatched_at: created_at,
             }),
@@ -13304,6 +13347,7 @@ fn turn_started_suggestion_authority_comes_from_the_route_receipt_not_config() {
             billing: Some(crate::core::events::RouteBillingEnvelope {
                 billing_surface: None,
                 endpoint_fingerprint: None,
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Unknown,
                 dispatched_at: chrono::Utc::now(),
             }),
@@ -13346,6 +13390,7 @@ fn turn_started_without_a_route_receipt_captures_no_suggestion_authority() {
             billing: Some(crate::core::events::RouteBillingEnvelope {
                 billing_surface: None,
                 endpoint_fingerprint: None,
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Unknown,
                 dispatched_at: chrono::Utc::now(),
             }),
@@ -13382,6 +13427,7 @@ fn engine_error_health_accounting_uses_active_turn_route() {
             billing: Some(crate::core::events::RouteBillingEnvelope {
                 billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
                 endpoint_fingerprint: Some("openai-endpoint".to_string()),
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Metered,
                 dispatched_at: chrono::Utc::now(),
             }),
@@ -16366,6 +16412,7 @@ fn legacy_child_usage_metadata_fails_closed_without_parent_route_fallback() {
                 endpoint_fingerprint: crate::cost_status::endpoint_fingerprint(
                     crate::config::DEFAULT_DEEPSEEK_BASE_URL,
                 ),
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Metered,
                 dispatched_at: chrono::Utc::now(),
             }),
@@ -16429,6 +16476,7 @@ fn child_usage_metadata_carries_cache_write_and_reasoning_end_to_end() {
         endpoint_fingerprint: crate::cost_status::endpoint_fingerprint(
             "https://api.anthropic.com/v1",
         ),
+        provider_live_pricing: None,
         billing_mode: crate::cost_status::RouteBillingMode::Metered,
         dispatched_at: chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).expect("epoch"),
     };
@@ -16482,6 +16530,7 @@ fn child_usage_metadata_carries_cache_write_and_reasoning_end_to_end() {
         model: "kimi-k2.7-code".to_string(),
         billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
         endpoint_fingerprint: Some("test-moonshot-endpoint".to_string()),
+        provider_live_pricing: None,
         billing_mode: crate::cost_status::RouteBillingMode::Metered,
         dispatched_at: chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).expect("epoch"),
     };
@@ -16556,6 +16605,53 @@ fn zero_usage_model_child_still_records_priced_receipt() {
     assert_eq!(app.session.cost_priced_turns, 1);
     assert_eq!(app.session.cost_unpriced_turns, 0);
     assert_eq!(app.session.cost_route_receipts.len(), 1);
+}
+
+#[test]
+fn routed_missing_usage_batch_prices_exact_routes_and_only_residual_as_generic() {
+    let mut app = create_test_app();
+    let mut metered_route = test_mailbox_route(ApiProvider::Deepseek, "deepseek-v4-flash");
+    metered_route.billing_mode = crate::cost_status::RouteBillingMode::Metered;
+    let mut local_route = metered_route.clone();
+    local_route.provider_identity = "local-computer".to_string();
+    local_route.billing_mode = crate::cost_status::RouteBillingMode::Local;
+    let batch = crate::cost_status::RuntimeUsageBatch {
+        records: Vec::new(),
+        drop_records: vec![
+            crate::cost_status::RuntimeUsageDropRecord {
+                source_id: "rlm:missing:metered".to_string(),
+                route: metered_route,
+            },
+            crate::cost_status::RuntimeUsageDropRecord {
+                source_id: "rlm:missing:local".to_string(),
+                route: local_route,
+            },
+        ],
+        // Two exact routes plus one overflowed/route-less residual.
+        dropped_records: 3,
+    };
+    let mut metadata = serde_json::json!({});
+    crate::cost_status::attach_child_usage_batch_metadata(&mut metadata, &batch);
+    let result = Ok(crate::tools::spec::ToolResult::success("ok").with_metadata(metadata));
+
+    handle_tool_call_complete(&mut app, "rlm-missing", "rlm", &result);
+
+    assert_eq!(app.session.cost_priced_turns, 0);
+    assert_eq!(
+        app.session.cost_unpriced_turns, 2,
+        "metered exact drop and one residual gap count; local exact drop does not"
+    );
+    assert!(
+        app.session
+            .cost_unpriced_reasons
+            .contains("provider_success_missing_usage")
+    );
+    assert!(
+        app.session
+            .cost_unpriced_reasons
+            .contains("routed_usage_receipt_missing")
+    );
+    assert_eq!(app.session.subagent_usage_sources.len(), 2);
 }
 
 #[test]

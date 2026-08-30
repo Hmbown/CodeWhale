@@ -396,6 +396,7 @@ pub(crate) async fn run_exec_agent(
             mode,
             route: Box::new(validated_route.into_resolved()),
             compaction: Box::new(compaction.clone()),
+            initial_routed_usage: Box::default(),
             goal_objective: None,
             goal_token_budget: None,
             goal_status: crate::tools::goal::GoalStatus::Active,

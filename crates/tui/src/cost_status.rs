@@ -96,6 +96,15 @@ pub struct EffectiveRouteEnvelope {
     pub model: String,
     pub billing_surface: Option<String>,
     pub endpoint_fingerprint: Option<String>,
+    /// Frozen provider-live rates captured from the exact fresh catalog scope
+    /// at CodeWhale's pre-permit application-dispatch boundary. Legacy
+    /// receipts omit this and therefore cannot meter a reviewed custom route
+    /// retroactively.
+    #[serde(
+        default,
+        deserialize_with = "crate::provider_catalog_live::deserialize_optional_provider_live_pricing"
+    )]
+    pub provider_live_pricing: Option<crate::provider_catalog_live::ProviderLivePricingQuote>,
     #[serde(default)]
     pub billing_mode: RouteBillingMode,
     pub dispatched_at: DateTime<Utc>,
@@ -109,12 +118,13 @@ impl serde::Serialize for EffectiveRouteEnvelope {
         use serde::ser::SerializeStruct as _;
 
         let route = self.sanitized_for_persistence();
-        let mut state = serializer.serialize_struct("EffectiveRouteEnvelope", 7)?;
+        let mut state = serializer.serialize_struct("EffectiveRouteEnvelope", 8)?;
         state.serialize_field("provider", &route.provider)?;
         state.serialize_field("provider_identity", &route.provider_identity)?;
         state.serialize_field("model", &route.model)?;
         state.serialize_field("billing_surface", &route.billing_surface)?;
         state.serialize_field("endpoint_fingerprint", &route.endpoint_fingerprint)?;
+        state.serialize_field("provider_live_pricing", &route.provider_live_pricing)?;
         state.serialize_field("billing_mode", &route.billing_mode)?;
         state.serialize_field("dispatched_at", &route.dispatched_at)?;
         state.end()
@@ -170,6 +180,21 @@ impl EffectiveRouteEnvelope {
             || crate::route_billing::for_endpoint_without_config(provider, base_url),
             |config| crate::route_billing::for_route(config, provider),
         );
+        let endpoint_fingerprint = base_url.and_then(endpoint_fingerprint);
+        let provider_live_pricing =
+            u64::try_from(dispatched_at.timestamp())
+                .ok()
+                .and_then(|dispatched_at_unix| {
+                    endpoint_fingerprint.as_deref().and_then(|fingerprint| {
+                        crate::provider_catalog_live::fresh_provider_live_pricing_quote_at(
+                            provider,
+                            &provider_identity,
+                            &model,
+                            fingerprint,
+                            dispatched_at_unix,
+                        )
+                    })
+                });
         Self {
             provider,
             provider_identity: sanitize_persisted_route_label(&provider_identity),
@@ -178,7 +203,8 @@ impl EffectiveRouteEnvelope {
                 config, provider, base_url,
             )
             .map(str::to_string),
-            endpoint_fingerprint: base_url.and_then(endpoint_fingerprint),
+            endpoint_fingerprint,
+            provider_live_pricing,
             billing_mode: billing.into(),
             dispatched_at,
         }
@@ -186,22 +212,29 @@ impl EffectiveRouteEnvelope {
 
     #[must_use]
     pub fn audit(&self, usage: &Usage) -> TurnCostAudit {
+        let reviewed_custom_metered = crate::pricing::reviewed_custom_route_is_metered(
+            self.provider,
+            Some(&self.provider_identity),
+            self.endpoint_fingerprint.as_deref(),
+        );
         match self.billing_mode {
             RouteBillingMode::Subscription | RouteBillingMode::Local => {
                 return TurnCostAudit::unpriced(crate::pricing::UnpricedReason::NotMoneyMetered);
             }
-            RouteBillingMode::Unknown => {
+            RouteBillingMode::Unknown if !reviewed_custom_metered => {
                 return TurnCostAudit::unpriced(
                     crate::pricing::UnpricedReason::UnknownBillingBasis,
                 );
             }
-            RouteBillingMode::Metered => {}
+            RouteBillingMode::Metered | RouteBillingMode::Unknown => {}
         }
-        crate::pricing::audit_turn_cost_for_route_on_endpoint_at(
+        crate::pricing::audit_turn_cost_for_route_on_endpoint_for_identity_at(
             self.provider,
+            Some(&self.provider_identity),
             &self.model,
             self.billing_surface.as_deref(),
             self.endpoint_fingerprint.as_deref(),
+            self.provider_live_pricing.as_ref(),
             usage,
             self.dispatched_at,
         )
@@ -243,6 +276,27 @@ impl EffectiveRouteEnvelope {
                         && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()))
                     .then(|| fingerprint.to_ascii_lowercase())
                 });
+        let quote_is_valid = route
+            .provider_live_pricing
+            .as_ref()
+            .zip(route.endpoint_fingerprint.as_deref())
+            .and_then(|(quote, fingerprint)| {
+                u64::try_from(route.dispatched_at.timestamp())
+                    .ok()
+                    .and_then(|dispatched_at_unix| {
+                        quote.pricing_for_route(
+                            route.provider,
+                            &route.provider_identity,
+                            &route.model,
+                            fingerprint,
+                            dispatched_at_unix,
+                        )
+                    })
+            })
+            .is_some();
+        if !quote_is_valid {
+            route.provider_live_pricing = None;
+        }
         route
     }
 }
@@ -291,6 +345,10 @@ pub fn child_usage_metadata_fields(
     fields.insert(
         "child_endpoint_fingerprint".into(),
         serde_json::json!(route.endpoint_fingerprint),
+    );
+    fields.insert(
+        "child_provider_live_pricing".into(),
+        serde_json::json!(route.provider_live_pricing),
     );
     fields.insert(
         "child_billing_mode".into(),
@@ -347,6 +405,163 @@ pub fn attach_child_usage_metadata(
     }
 }
 
+/// Maximum number of distinct routed-usage segments accepted from one tool
+/// result. RLM reserves against the same bound before dispatch, so a valid
+/// producer never has to discard a provider receipt after doing the work.
+pub const MAX_CHILD_USAGE_RECORDS: usize = 64;
+
+const CHILD_USAGE_RECORDS_KEY: &str = "child_usage_records";
+const CHILD_USAGE_DROP_RECORDS_KEY: &str = "child_usage_drop_records";
+const CHILD_USAGE_DROPPED_RECORDS_KEY: &str = "child_usage_dropped_records";
+
+/// Attach a bounded batch of routed child usage to tool metadata.
+///
+/// The source identity is reduced to a one-way fingerprint before metadata
+/// can enter a transcript. Routes pass through their persistence sanitizer,
+/// so neither a raw response id nor an endpoint/credential can hitch a ride.
+/// New consumers prefer this batch over the legacy single `child_*` fields.
+/// Attach a bounded batch containing both exact usage receipts and exact
+/// provider-success/missing-usage route receipts.
+pub fn attach_child_usage_batch_metadata(
+    metadata: &mut serde_json::Value,
+    batch: &RuntimeUsageBatch,
+) {
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    let retained_records = batch
+        .records
+        .iter()
+        .take(MAX_CHILD_USAGE_RECORDS)
+        .map(|record| {
+            serde_json::json!({
+                "source_id": format!(
+                    "routed:{}",
+                    usage_source_fingerprint(&record.source_id)
+                ),
+                "route": record.usage.route.sanitized_for_persistence(),
+                "usage": record.usage.usage,
+            })
+        })
+        .collect::<Vec<_>>();
+    let remaining = MAX_CHILD_USAGE_RECORDS.saturating_sub(retained_records.len());
+    let retained_drops = batch
+        .drop_records
+        .iter()
+        .take(remaining)
+        .map(|record| {
+            serde_json::json!({
+                "source_id": format!(
+                    "routed:{}",
+                    usage_source_fingerprint(&record.source_id)
+                ),
+                "route": record.route.sanitized_for_persistence(),
+            })
+        })
+        .collect::<Vec<_>>();
+    object.insert(
+        CHILD_USAGE_RECORDS_KEY.into(),
+        serde_json::json!(retained_records),
+    );
+    object.insert(
+        CHILD_USAGE_DROP_RECORDS_KEY.into(),
+        serde_json::json!(retained_drops),
+    );
+    let usage_overflow = batch.records.len().saturating_sub(MAX_CHILD_USAGE_RECORDS);
+    let dropped_records = batch
+        .dropped_records
+        .max(u64::try_from(batch.drop_records.len()).unwrap_or(u64::MAX))
+        .saturating_add(u64::try_from(usage_overflow).unwrap_or(u64::MAX));
+    if dropped_records > 0 {
+        object.insert(
+            CHILD_USAGE_DROPPED_RECORDS_KEY.into(),
+            serde_json::json!(dropped_records),
+        );
+    } else {
+        object.remove(CHILD_USAGE_DROPPED_RECORDS_KEY);
+    }
+}
+
+/// Parse the preferred routed child-usage batch.
+///
+/// `None` means the batch key was absent and callers may use the legacy
+/// single-record parser. Once the key is present, malformed/overflow entries
+/// are represented by `dropped_records` instead of falling back and risking a
+/// partial subtotal being presented as complete.
+#[must_use]
+pub fn child_usage_records_from_metadata(
+    metadata: &serde_json::Value,
+) -> Option<RuntimeUsageBatch> {
+    let value = metadata.get(CHILD_USAGE_RECORDS_KEY)?;
+    let drop_values = metadata
+        .get(CHILD_USAGE_DROP_RECORDS_KEY)
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let declared_dropped = metadata
+        .get(CHILD_USAGE_DROPPED_RECORDS_KEY)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let Some(values) = value.as_array() else {
+        return Some(RuntimeUsageBatch {
+            records: Vec::new(),
+            drop_records: Vec::new(),
+            dropped_records: declared_dropped.saturating_add(1),
+        });
+    };
+
+    let overflow = values.len().saturating_sub(MAX_CHILD_USAGE_RECORDS);
+    let mut batch = RuntimeUsageBatch {
+        records: Vec::with_capacity(values.len().min(MAX_CHILD_USAGE_RECORDS)),
+        drop_records: Vec::with_capacity(drop_values.len().min(MAX_CHILD_USAGE_RECORDS)),
+        dropped_records: declared_dropped
+            .max(u64::try_from(drop_values.len()).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(overflow).unwrap_or(u64::MAX)),
+    };
+    for value in values.iter().take(MAX_CHILD_USAGE_RECORDS) {
+        let parsed = (|| {
+            let source_id = value.get("source_id")?.as_str()?;
+            let route =
+                serde_json::from_value::<EffectiveRouteEnvelope>(value.get("route")?.clone())
+                    .ok()?
+                    .sanitized_for_persistence();
+            let usage = serde_json::from_value::<Usage>(value.get("usage")?.clone()).ok()?;
+            Some(RuntimeUsageRecord {
+                // Treat metadata as an untrusted persistence boundary. A
+                // stable hash preserves idempotence without retaining the
+                // producer's raw identifier.
+                source_id: format!("metadata:{}", usage_source_fingerprint(source_id)),
+                usage: EffectiveRouteUsage { route, usage },
+            })
+        })();
+        if let Some(record) = parsed {
+            batch.records.push(record);
+        } else {
+            batch.dropped_records = batch.dropped_records.saturating_add(1);
+        }
+    }
+    let remaining = MAX_CHILD_USAGE_RECORDS.saturating_sub(batch.records.len());
+    for value in drop_values.iter().take(remaining) {
+        let parsed = (|| {
+            let source_id = value.get("source_id")?.as_str()?;
+            let route =
+                serde_json::from_value::<EffectiveRouteEnvelope>(value.get("route")?.clone())
+                    .ok()?
+                    .sanitized_for_persistence();
+            Some(RuntimeUsageDropRecord {
+                source_id: format!("metadata:{}", usage_source_fingerprint(source_id)),
+                route,
+            })
+        })();
+        if let Some(record) = parsed {
+            batch.drop_records.push(record);
+        } else if declared_dropped < u64::try_from(drop_values.len()).unwrap_or(u64::MAX) {
+            batch.dropped_records = batch.dropped_records.saturating_add(1);
+        }
+    }
+    Some(batch)
+}
+
 /// Rehydrate the immutable route envelope emitted with child usage. Legacy or
 /// incomplete metadata becomes an explicitly unknown route and never borrows
 /// mutable parent-session facts.
@@ -389,6 +604,10 @@ pub fn child_route_envelope_from_metadata(
                 .get("child_endpoint_fingerprint")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string),
+            provider_live_pricing: metadata
+                .get("child_provider_live_pricing")
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok()),
             billing_mode: billing_mode
                 .filter(|_| complete)
                 .unwrap_or(RouteBillingMode::Unknown),
@@ -507,7 +726,10 @@ const MAX_RUNTIME_USAGE_RECORDS_PER_OWNER: usize = 64;
 #[derive(Default)]
 struct OwnerRuntimeUsageJournal {
     records: VecDeque<RuntimeUsageRecord>,
+    drop_records: VecDeque<RuntimeUsageDropRecord>,
     dropped_records: u64,
+    dropped_source_fingerprints: HashSet<String>,
+    dropped_fingerprint_overflowed: bool,
 }
 
 type RuntimeUsageJournal = HashMap<String, OwnerRuntimeUsageJournal>;
@@ -518,6 +740,10 @@ type RuntimeUsageJournal = HashMap<String, OwnerRuntimeUsageJournal>;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuntimeUsageBatch {
     pub records: Vec<RuntimeUsageRecord>,
+    /// Exact provider-success calls whose usage payload was absent. The
+    /// bounded records retain route billing truth; `dropped_records` remains
+    /// the authoritative total and may exceed this vector after overflow.
+    pub drop_records: Vec<RuntimeUsageDropRecord>,
     pub dropped_records: u64,
 }
 
@@ -529,10 +755,22 @@ pub struct RuntimeUsageRecord {
     pub usage: EffectiveRouteUsage,
 }
 
+/// One provider-success response that omitted usage metadata.
+///
+/// The frozen route is required to distinguish money-metered calls from
+/// subscription/local calls without consulting mutable completion-time config.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RuntimeUsageDropRecord {
+    pub source_id: String,
+    pub route: EffectiveRouteEnvelope,
+}
+
 pub(crate) type RuntimeUsageSink = Arc<dyn Fn(RuntimeUsageRecord) -> bool + Send + Sync>;
+pub(crate) type RuntimeUsageDropSink = Arc<dyn Fn(RuntimeUsageDropRecord) -> bool + Send + Sync>;
 
 struct RuntimeUsageSinkEntry {
     sink: RuntimeUsageSink,
+    dropped_sink: Option<RuntimeUsageDropSink>,
     leases: usize,
     terminal: bool,
 }
@@ -665,10 +903,87 @@ fn record_runtime_usage(
     });
 }
 
+fn record_runtime_usage_drop(owner: &str, source_id: &str, route: &EffectiveRouteEnvelope) {
+    let owner = owner.trim();
+    if owner.is_empty() {
+        return;
+    }
+    let fingerprint = usage_source_fingerprint(source_id);
+    let sink = with_runtime_usage_sinks(|sinks| {
+        sinks
+            .get(owner)
+            .and_then(|entry| entry.dropped_sink.as_ref().map(Arc::clone))
+    });
+    let record = RuntimeUsageDropRecord {
+        source_id: source_id.to_string(),
+        route: route.sanitized_for_persistence(),
+    };
+    if sink.is_some_and(|sink| sink(record.clone())) {
+        return;
+    }
+    with_runtime_usage_journal_mut(|journal| {
+        let owner_journal = journal.entry(owner.to_string()).or_default();
+        if owner_journal
+            .dropped_source_fingerprints
+            .contains(&fingerprint)
+        {
+            return;
+        }
+        if owner_journal.dropped_source_fingerprints.len() < MAX_RUNTIME_USAGE_RECORDS_PER_OWNER {
+            owner_journal
+                .dropped_source_fingerprints
+                .insert(fingerprint);
+            owner_journal.drop_records.push_back(record);
+            owner_journal.dropped_records = owner_journal.dropped_records.saturating_add(1);
+        } else if !owner_journal.dropped_fingerprint_overflowed {
+            // Preserve a bounded fail-closed overflow marker. Once the exact
+            // identity ledger is full, further unknown ids share this one
+            // marker so replays cannot grow the count without bound.
+            owner_journal.dropped_fingerprint_overflowed = true;
+            owner_journal.dropped_records = owner_journal.dropped_records.saturating_add(1);
+        }
+    });
+}
+
+fn record_runtime_usage_drop_count(owner: &str, source_id: &str, count: u64) {
+    let owner = owner.trim();
+    if owner.is_empty() || count == 0 {
+        return;
+    }
+    let fingerprint = usage_source_fingerprint(source_id);
+    with_runtime_usage_journal_mut(|journal| {
+        let owner_journal = journal.entry(owner.to_string()).or_default();
+        if owner_journal
+            .dropped_source_fingerprints
+            .contains(&fingerprint)
+        {
+            return;
+        }
+        if owner_journal.dropped_source_fingerprints.len() < MAX_RUNTIME_USAGE_RECORDS_PER_OWNER {
+            owner_journal
+                .dropped_source_fingerprints
+                .insert(fingerprint);
+            owner_journal.dropped_records = owner_journal.dropped_records.saturating_add(count);
+        } else if !owner_journal.dropped_fingerprint_overflowed {
+            owner_journal.dropped_fingerprint_overflowed = true;
+            owner_journal.dropped_records = owner_journal.dropped_records.saturating_add(1);
+        }
+    });
+}
+
 /// Install a synchronous durability sink for one active runtime turn.
 /// Compaction calls invoke this before they return to the engine, so a process
 /// crash cannot erase already-reported usage from an in-memory journal.
+#[cfg(test)]
 pub(crate) fn register_runtime_usage_sink(owner: &str, sink: RuntimeUsageSink) {
+    register_runtime_usage_sink_with_drop(owner, sink, None);
+}
+
+pub(crate) fn register_runtime_usage_sink_with_drop(
+    owner: &str,
+    sink: RuntimeUsageSink,
+    dropped_sink: Option<RuntimeUsageDropSink>,
+) {
     let owner = owner.trim();
     if owner.is_empty() {
         return;
@@ -678,6 +993,7 @@ pub(crate) fn register_runtime_usage_sink(owner: &str, sink: RuntimeUsageSink) {
             owner.to_string(),
             RuntimeUsageSinkEntry {
                 sink,
+                dropped_sink,
                 leases: 0,
                 terminal: false,
             },
@@ -697,13 +1013,80 @@ pub(crate) fn usage_source_fingerprint(source_id: &str) -> String {
 /// child may report after the parent mailbox has sealed; its owner lease keeps
 /// this sink alive, while the captured scope prevents a later session from
 /// inheriting the spend.
+#[cfg(test)]
 pub(crate) fn register_interactive_runtime_usage_sink(owner: &str, scope: CostScopeToken) {
-    register_runtime_usage_sink(
+    register_runtime_usage_sink_with_drop(
+        owner,
+        Arc::new(move |record| record_interactive_runtime_usage(scope, record)),
+        Some(Arc::new(move |record| {
+            record_interactive_runtime_usage_drop(scope, record)
+        })),
+    );
+}
+
+/// Install an interactive sink whose stale-scope fallback is an origin-session
+/// sidecar. `/new` may close the foreground pool while a detached provider call
+/// is still running; the sidecar keeps that exact response with the old saved
+/// session instead of either dropping it or contaminating the new one.
+pub(crate) fn register_persistent_interactive_runtime_usage_sink(
+    owner: &str,
+    scope: CostScopeToken,
+    session_id: &str,
+    turn_id: &str,
+) {
+    let Ok(manager) = crate::session_manager::SessionManager::default_location() else {
+        register_runtime_usage_sink_with_drop(
+            owner,
+            Arc::new(move |record| record_interactive_runtime_usage(scope, record)),
+            Some(Arc::new(move |record| {
+                record_interactive_runtime_usage_drop(scope, record)
+            })),
+        );
+        return;
+    };
+    register_persistent_interactive_runtime_usage_sink_at(
+        owner,
+        scope,
+        session_id,
+        turn_id,
+        manager.sessions_dir().to_path_buf(),
+    );
+}
+
+fn register_persistent_interactive_runtime_usage_sink_at(
+    owner: &str,
+    scope: CostScopeToken,
+    session_id: &str,
+    turn_id: &str,
+    sessions_dir: std::path::PathBuf,
+) {
+    let usage_session_id = session_id.to_string();
+    let usage_turn_id = turn_id.to_string();
+    let drop_session_id = usage_session_id.clone();
+    let drop_turn_id = usage_turn_id.clone();
+    let usage_sessions_dir = sessions_dir.clone();
+    register_runtime_usage_sink_with_drop(
         owner,
         Arc::new(move |record| {
-            record_interactive_runtime_usage(scope, record);
-            true
+            if record_interactive_runtime_usage(scope, record.clone()) {
+                return true;
+            }
+            crate::session_manager::SessionManager::new(usage_sessions_dir.clone())
+                .and_then(|manager| {
+                    manager.persist_late_runtime_usage(&usage_session_id, &usage_turn_id, &record)
+                })
+                .unwrap_or(false)
         }),
+        Some(Arc::new(move |record| {
+            if record_interactive_runtime_usage_drop(scope, record.clone()) {
+                return true;
+            }
+            crate::session_manager::SessionManager::new(sessions_dir.clone())
+                .and_then(|manager| {
+                    manager.persist_late_runtime_drop(&drop_session_id, &drop_turn_id, &record)
+                })
+                .unwrap_or(false)
+        })),
     );
 }
 
@@ -794,6 +1177,7 @@ pub fn take_runtime_usage(owner: &str) -> RuntimeUsageBatch {
             .remove(owner)
             .map_or_else(RuntimeUsageBatch::default, |entry| RuntimeUsageBatch {
                 records: entry.records.into_iter().collect(),
+                drop_records: entry.drop_records.into_iter().collect(),
                 dropped_records: entry.dropped_records,
             })
     })
@@ -825,7 +1209,7 @@ pub fn close_current_scope() -> PendingBackgroundCost {
 pub(crate) fn restore_usage_source_fingerprints(fingerprints: impl IntoIterator<Item = String>) {
     with_pending_state_mut(|state| {
         state.seen_usage_source_fingerprints = fingerprints.into_iter().collect();
-    });
+    })
 }
 
 /// Whether this session generation already accepted a provider response.
@@ -1208,8 +1592,244 @@ pub fn report_effective_route_for_runtime(
     if let Some(owner) = runtime_owner {
         record_runtime_usage(owner, source_id, route, usage);
     } else {
-        report_effective_route(scope, route, usage);
+        record_interactive_runtime_usage(
+            scope,
+            RuntimeUsageRecord {
+                source_id: source_id.to_string(),
+                usage: EffectiveRouteUsage {
+                    route: route.sanitized_for_persistence(),
+                    usage: usage.clone(),
+                },
+            },
+        );
     }
+}
+
+/// Report an interactive auxiliary response against its immutable origin.
+/// A stale foreground scope is not an error: it means `/new` or session load
+/// already moved on, so the exact receipt is appended to the old session's
+/// durable sidecar instead of being redirected to the active session.
+pub(crate) fn report_effective_route_for_interactive_origin(
+    scope: CostScopeToken,
+    session_id: &str,
+    turn_id: &str,
+    source_id: &str,
+    route: &EffectiveRouteEnvelope,
+    usage: &Usage,
+) {
+    let record = RuntimeUsageRecord {
+        source_id: source_id.to_string(),
+        usage: EffectiveRouteUsage {
+            route: route.sanitized_for_persistence(),
+            usage: usage.clone(),
+        },
+    };
+    if record_interactive_runtime_usage(scope, record.clone()) {
+        return;
+    }
+    let persisted =
+        crate::session_manager::SessionManager::default_location().is_ok_and(|manager| {
+            manager
+                .persist_late_runtime_usage(session_id, turn_id, &record)
+                .unwrap_or(false)
+        });
+    if !persisted {
+        tracing::warn!("late interactive usage could not be persisted for its origin session");
+    }
+}
+
+#[cfg(test)]
+fn report_effective_route_for_interactive_origin_with_manager(
+    scope: CostScopeToken,
+    session_id: &str,
+    turn_id: &str,
+    source_id: &str,
+    route: &EffectiveRouteEnvelope,
+    usage: &Usage,
+    manager: &crate::session_manager::SessionManager,
+) -> bool {
+    let record = RuntimeUsageRecord {
+        source_id: source_id.to_string(),
+        usage: EffectiveRouteUsage {
+            route: route.sanitized_for_persistence(),
+            usage: usage.clone(),
+        },
+    };
+    if record_interactive_runtime_usage(scope, record.clone()) {
+        return true;
+    }
+    manager
+        .persist_late_runtime_usage(session_id, turn_id, &record)
+        .unwrap_or(false)
+}
+
+pub(crate) fn report_unreceipted_for_interactive_origin(
+    scope: CostScopeToken,
+    session_id: &str,
+    turn_id: &str,
+    source_id: &str,
+    route: &EffectiveRouteEnvelope,
+) {
+    let record = RuntimeUsageDropRecord {
+        source_id: source_id.to_string(),
+        route: route.sanitized_for_persistence(),
+    };
+    if record_interactive_runtime_usage_drop(scope, record.clone()) {
+        return;
+    }
+    let persisted =
+        crate::session_manager::SessionManager::default_location().is_ok_and(|manager| {
+            manager
+                .persist_late_runtime_drop(session_id, turn_id, &record)
+                .unwrap_or(false)
+        });
+    if !persisted {
+        tracing::warn!(
+            "late interactive missing-usage receipt could not be persisted for its origin session"
+        );
+    }
+}
+
+#[cfg(test)]
+fn report_unreceipted_for_interactive_origin_with_manager(
+    scope: CostScopeToken,
+    session_id: &str,
+    turn_id: &str,
+    source_id: &str,
+    route: &EffectiveRouteEnvelope,
+    manager: &crate::session_manager::SessionManager,
+) -> bool {
+    let record = RuntimeUsageDropRecord {
+        source_id: source_id.to_string(),
+        route: route.sanitized_for_persistence(),
+    };
+    if record_interactive_runtime_usage_drop(scope, record.clone()) {
+        return true;
+    }
+    manager
+        .persist_late_runtime_drop(session_id, turn_id, &record)
+        .unwrap_or(false)
+}
+
+/// Record one provider-success response whose usage payload was absent.
+///
+/// Callers must supply the same fixed-length, non-secret source identity they
+/// would use for a normal routed usage receipt. Runtime owners persist one
+/// bounded dropped-coverage marker; ownerless/interactive calls add one
+/// unpriced coverage turn to the captured session scope. Replays are
+/// idempotent, and a stale scope cannot contaminate a later session.
+pub(crate) fn report_unreceipted_provider_success(
+    scope: CostScopeToken,
+    runtime_owner: Option<&str>,
+    source_id: &str,
+    route: &EffectiveRouteEnvelope,
+) {
+    if let Some(owner) = runtime_owner {
+        record_runtime_usage_drop(owner, source_id, route);
+    } else {
+        record_interactive_runtime_usage_drop(
+            scope,
+            RuntimeUsageDropRecord {
+                source_id: source_id.to_string(),
+                route: route.sanitized_for_persistence(),
+            },
+        );
+    }
+}
+
+/// Settle one bounded routed-usage batch without repricing or losing exact
+/// missing-usage route evidence. Replaying the same batch is idempotent by the
+/// stable per-response source ids. Any residual count whose exact record was
+/// truncated remains an explicit fail-closed coverage gap.
+pub(crate) fn report_runtime_usage_batch(
+    scope: CostScopeToken,
+    runtime_owner: Option<&str>,
+    batch: &RuntimeUsageBatch,
+) {
+    for record in &batch.records {
+        report_effective_route_for_runtime(
+            scope,
+            runtime_owner,
+            &record.source_id,
+            &record.usage.route,
+            &record.usage.usage,
+        );
+    }
+    for record in &batch.drop_records {
+        report_unreceipted_provider_success(scope, runtime_owner, &record.source_id, &record.route);
+    }
+
+    let residual = batch
+        .dropped_records
+        .saturating_sub(u64::try_from(batch.drop_records.len()).unwrap_or(u64::MAX));
+    if residual == 0 {
+        return;
+    }
+    let mut identities = batch
+        .records
+        .iter()
+        .map(|record| usage_source_fingerprint(&record.source_id))
+        .chain(
+            batch
+                .drop_records
+                .iter()
+                .map(|record| usage_source_fingerprint(&record.source_id)),
+        )
+        .take(MAX_RUNTIME_USAGE_RECORDS_PER_OWNER)
+        .collect::<Vec<_>>();
+    identities.sort_unstable();
+    let residual_source = format!(
+        "runtime-usage-batch-residual:{}",
+        usage_source_fingerprint(&format!(
+            "{}:{}:{}:{}",
+            batch.records.len(),
+            batch.drop_records.len(),
+            batch.dropped_records,
+            identities.join(":")
+        ))
+    );
+    if let Some(owner) = runtime_owner {
+        record_runtime_usage_drop_count(owner, &residual_source, residual);
+    } else {
+        record_interactive_runtime_usage_drop_count(scope, &residual_source, residual);
+    }
+}
+
+#[must_use]
+pub(crate) fn background_cost_for_runtime_usage(
+    record: &RuntimeUsageRecord,
+) -> PendingBackgroundCost {
+    let mut pending = PendingBackgroundCost::default();
+    let fingerprint = usage_source_fingerprint(&record.source_id);
+    let audit = record.usage.route.audit(&record.usage.usage);
+    let receipt = record.usage.route.receipt(&audit);
+    pending.usage_source_fingerprints.insert(fingerprint);
+    fold_audit_into_pending(&mut pending, receipt, &audit, &record.usage.usage);
+    pending
+}
+
+#[must_use]
+pub(crate) fn background_cost_for_runtime_drop(
+    record: &RuntimeUsageDropRecord,
+) -> PendingBackgroundCost {
+    let mut pending = PendingBackgroundCost::default();
+    pending
+        .usage_source_fingerprints
+        .insert(usage_source_fingerprint(&record.source_id));
+    if !matches!(
+        record.route.billing_mode,
+        RouteBillingMode::Subscription | RouteBillingMode::Local
+    ) {
+        pending.unpriced_turns = 1;
+        pending.cny_unpriced_turns = 1;
+        pending
+            .unpriced_reasons
+            .insert("provider_success_missing_usage");
+        pending
+            .cny_unpriced_reasons
+            .insert("provider_success_missing_usage");
+    }
+    pending
 }
 
 /// Fold one already-computed audit into the pending pool.
@@ -1222,23 +1842,92 @@ fn record(scope: CostScopeToken, route_receipt: String, audit: &TurnCostAudit, u
     });
 }
 
-fn record_interactive_runtime_usage(scope: CostScopeToken, record: RuntimeUsageRecord) {
+fn record_interactive_runtime_usage(scope: CostScopeToken, record: RuntimeUsageRecord) -> bool {
     with_pending_state_mut(|state| {
         if state.generation != scope.0 {
-            return;
+            return false;
         }
         let fingerprint = usage_source_fingerprint(&record.source_id);
         if !state
             .seen_usage_source_fingerprints
             .insert(fingerprint.clone())
         {
-            return;
+            return true;
         }
         let audit = record.usage.route.audit(&record.usage.usage);
         let receipt = record.usage.route.receipt(&audit);
         state.pending.usage_source_fingerprints.insert(fingerprint);
         fold_audit_into_pending(&mut state.pending, receipt, &audit, &record.usage.usage);
-    });
+        true
+    })
+}
+
+fn record_interactive_runtime_usage_drop(
+    scope: CostScopeToken,
+    record: RuntimeUsageDropRecord,
+) -> bool {
+    with_pending_state_mut(|state| {
+        if state.generation != scope.0 {
+            return false;
+        }
+        let fingerprint = usage_source_fingerprint(&record.source_id);
+        if !state
+            .seen_usage_source_fingerprints
+            .insert(fingerprint.clone())
+        {
+            return true;
+        }
+        state.pending.usage_source_fingerprints.insert(fingerprint);
+        if matches!(
+            record.route.billing_mode,
+            RouteBillingMode::Subscription | RouteBillingMode::Local
+        ) {
+            return true;
+        }
+        state.pending.unpriced_turns = state.pending.unpriced_turns.saturating_add(1);
+        state.pending.cny_unpriced_turns = state.pending.cny_unpriced_turns.saturating_add(1);
+        state
+            .pending
+            .unpriced_reasons
+            .insert("provider_success_missing_usage");
+        state
+            .pending
+            .cny_unpriced_reasons
+            .insert("provider_success_missing_usage");
+        true
+    })
+}
+
+fn record_interactive_runtime_usage_drop_count(
+    scope: CostScopeToken,
+    source_id: &str,
+    count: u64,
+) -> bool {
+    with_pending_state_mut(|state| {
+        if state.generation != scope.0 {
+            return false;
+        }
+        let fingerprint = usage_source_fingerprint(source_id);
+        if !state
+            .seen_usage_source_fingerprints
+            .insert(fingerprint.clone())
+        {
+            return true;
+        }
+        state.pending.usage_source_fingerprints.insert(fingerprint);
+        let count = u32::try_from(count).unwrap_or(u32::MAX);
+        state.pending.unpriced_turns = state.pending.unpriced_turns.saturating_add(count);
+        state.pending.cny_unpriced_turns = state.pending.cny_unpriced_turns.saturating_add(count);
+        state
+            .pending
+            .unpriced_reasons
+            .insert("routed_usage_receipt_missing");
+        state
+            .pending
+            .cny_unpriced_reasons
+            .insert("routed_usage_receipt_missing");
+        true
+    })
 }
 
 fn fold_audit_into_pending(
@@ -1340,12 +2029,776 @@ pub(crate) fn test_scope() -> TestCostScope {
 mod tests {
     use super::*;
 
+    struct ProviderCatalogTestReset;
+
+    impl Drop for ProviderCatalogTestReset {
+        fn drop(&mut self) {
+            crate::provider_catalog_live::reset_cache_for_test();
+            crate::provider_lake::clear_live_snapshot();
+        }
+    }
+
+    fn priced_provider_delta(
+        provider: &str,
+        model: &str,
+        fingerprint: &str,
+        fetched_at: u64,
+    ) -> codewhale_config::catalog::ProviderCatalogDelta {
+        priced_provider_delta_with_rates(provider, model, fingerprint, fetched_at, 1.25, 5.0)
+    }
+
+    fn priced_provider_delta_with_rates(
+        provider: &str,
+        model: &str,
+        fingerprint: &str,
+        fetched_at: u64,
+        input: f64,
+        output: f64,
+    ) -> codewhale_config::catalog::ProviderCatalogDelta {
+        codewhale_config::catalog::ProviderCatalogDelta {
+            provider: provider.to_string(),
+            base_url_fingerprint: fingerprint.to_string(),
+            fetched_at,
+            offerings: vec![codewhale_config::catalog::CatalogOffering {
+                provider: provider.to_string(),
+                wire_model_id: model.to_string(),
+                endpoint_key: "chat".to_string(),
+                cost: Some(codewhale_config::models_dev::ModelsDevCost {
+                    input: Some(input),
+                    output: Some(output),
+                    cache_read: Some(0.25),
+                    cache_write: None,
+                }),
+                ..Default::default()
+            }],
+        }
+    }
+
+    fn custom_usage_envelope(
+        identity: &str,
+        model: &str,
+        fingerprint: &str,
+        billing_mode: RouteBillingMode,
+        dispatched_at: DateTime<Utc>,
+    ) -> EffectiveRouteEnvelope {
+        provider_live_usage_envelope(
+            ApiProvider::Custom,
+            identity,
+            model,
+            fingerprint,
+            Some(crate::pricing::UNCLASSIFIED_BILLING_SURFACE),
+            billing_mode,
+            dispatched_at,
+        )
+    }
+
+    fn provider_live_usage_envelope(
+        provider: ApiProvider,
+        identity: &str,
+        model: &str,
+        fingerprint: &str,
+        billing_surface: Option<&str>,
+        billing_mode: RouteBillingMode,
+        dispatched_at: DateTime<Utc>,
+    ) -> EffectiveRouteEnvelope {
+        let provider_live_pricing =
+            u64::try_from(dispatched_at.timestamp())
+                .ok()
+                .and_then(|dispatched_at_unix| {
+                    crate::provider_catalog_live::fresh_provider_live_pricing_quote_at(
+                        provider,
+                        identity,
+                        model,
+                        fingerprint,
+                        dispatched_at_unix,
+                    )
+                });
+        EffectiveRouteEnvelope {
+            provider,
+            provider_identity: identity.to_string(),
+            model: model.to_string(),
+            billing_surface: billing_surface.map(str::to_string),
+            endpoint_fingerprint: Some(fingerprint.to_string()),
+            provider_live_pricing,
+            billing_mode,
+            dispatched_at,
+        }
+    }
+
     fn small_usage() -> Usage {
         Usage {
             input_tokens: 1_000,
             output_tokens: 500,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn baseten_usage_prices_only_the_reviewed_identity_on_the_official_endpoint() {
+        let _env = crate::test_support::lock_test_env();
+        let _live = crate::provider_lake::lock_live_snapshot();
+        let home = tempfile::tempdir().expect("test home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let _reset = ProviderCatalogTestReset;
+        crate::provider_catalog_live::reset_cache_for_test();
+        crate::provider_lake::clear_live_snapshot();
+
+        let now = Utc::now();
+        let fetched_at = u64::try_from(now.timestamp()).expect("nonnegative timestamp");
+        let model = "synthetic-baseten-priced-model";
+        let fingerprint =
+            codewhale_config::catalog::base_url_fingerprint(codewhale_config::BASETEN_BASE_URL);
+        crate::provider_catalog_live::record_success(priced_provider_delta(
+            codewhale_config::BASETEN_TEMPLATE_ID,
+            model,
+            &fingerprint,
+            fetched_at,
+        ));
+        let usage = Usage {
+            input_tokens: 1_000_000,
+            ..Usage::default()
+        };
+
+        let exact = custom_usage_envelope(
+            codewhale_config::BASETEN_TEMPLATE_ID,
+            model,
+            &fingerprint,
+            RouteBillingMode::Unknown,
+            now,
+        )
+        .audit(&usage);
+        assert!(exact.is_priced(), "{exact:?}");
+        assert_eq!(
+            exact.provenance,
+            Some(codewhale_config::pricing::PricingProvenance::ProviderLive)
+        );
+        assert_eq!(exact.estimate.expect("priced").usd, 1.25);
+
+        // A reviewed schema alias remains a distinct custom ownership scope.
+        // It becomes billable only after that exact identity refreshed its own
+        // catalog; it cannot borrow the canonical `baseten` partition above.
+        let alias = "base-ten";
+        crate::provider_catalog_live::record_success(priced_provider_delta(
+            alias,
+            model,
+            &fingerprint,
+            fetched_at,
+        ));
+        let alias_audit =
+            custom_usage_envelope(alias, model, &fingerprint, RouteBillingMode::Unknown, now)
+                .audit(&usage);
+        assert!(alias_audit.is_priced(), "{alias_audit:?}");
+        assert_eq!(
+            alias_audit.provenance,
+            Some(codewhale_config::pricing::PricingProvenance::ProviderLive)
+        );
+        assert_eq!(alias_audit.estimate.expect("priced").usd, 1.25);
+
+        let generic = custom_usage_envelope(
+            "custom-lab",
+            model,
+            &fingerprint,
+            RouteBillingMode::Metered,
+            now,
+        )
+        .audit(&usage);
+        assert!(!generic.is_priced(), "{generic:?}");
+        assert_eq!(
+            generic.unpriced_reason,
+            Some(crate::pricing::UnpricedReason::UnknownBillingBasis)
+        );
+
+        let wrong_fingerprint =
+            codewhale_config::catalog::base_url_fingerprint("https://proxy.example/v1");
+        let wrong_endpoint = custom_usage_envelope(
+            codewhale_config::BASETEN_TEMPLATE_ID,
+            model,
+            &wrong_fingerprint,
+            RouteBillingMode::Metered,
+            now,
+        )
+        .audit(&usage);
+        assert!(!wrong_endpoint.is_priced(), "{wrong_endpoint:?}");
+        assert_eq!(
+            wrong_endpoint.unpriced_reason,
+            Some(crate::pricing::UnpricedReason::UnknownBillingBasis)
+        );
+    }
+
+    #[test]
+    fn baseten_usage_rejects_unknown_stale_and_failed_live_catalogs() {
+        let _env = crate::test_support::lock_test_env();
+        let _live = crate::provider_lake::lock_live_snapshot();
+        let home = tempfile::tempdir().expect("test home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let _reset = ProviderCatalogTestReset;
+        crate::provider_catalog_live::reset_cache_for_test();
+        crate::provider_lake::clear_live_snapshot();
+
+        let now = Utc::now();
+        let now_unix = u64::try_from(now.timestamp()).expect("nonnegative timestamp");
+        let model = "synthetic-baseten-status-model";
+        let fingerprint =
+            codewhale_config::catalog::base_url_fingerprint(codewhale_config::BASETEN_BASE_URL);
+        let unknown_route = custom_usage_envelope(
+            codewhale_config::BASETEN_TEMPLATE_ID,
+            model,
+            &fingerprint,
+            RouteBillingMode::Unknown,
+            now,
+        );
+        assert!(unknown_route.provider_live_pricing.is_none());
+        let usage = Usage {
+            input_tokens: 1_000_000,
+            ..Usage::default()
+        };
+
+        // A same-model price owned by another custom partition cannot price a
+        // Baseten receipt whose exact catalog was never refreshed.
+        crate::provider_catalog_live::record_success(priced_provider_delta(
+            "other-custom",
+            model,
+            &fingerprint,
+            now_unix,
+        ));
+        let unknown = unknown_route.audit(&usage);
+        assert!(!unknown.is_priced(), "{unknown:?}");
+        assert_eq!(
+            unknown.unpriced_reason,
+            Some(crate::pricing::UnpricedReason::UnverifiedLivePricing)
+        );
+
+        let stale_at = now_unix
+            .saturating_sub(crate::provider_catalog_live::DEFAULT_PROVIDER_CATALOG_TTL_SECS)
+            .saturating_sub(1);
+        crate::provider_catalog_live::record_success(priced_provider_delta(
+            codewhale_config::BASETEN_TEMPLATE_ID,
+            model,
+            &fingerprint,
+            stale_at,
+        ));
+        let stale_route = custom_usage_envelope(
+            codewhale_config::BASETEN_TEMPLATE_ID,
+            model,
+            &fingerprint,
+            RouteBillingMode::Unknown,
+            now,
+        );
+        assert!(stale_route.provider_live_pricing.is_none());
+        let stale = stale_route.audit(&usage);
+        assert!(!stale.is_priced(), "{stale:?}");
+        assert_eq!(
+            stale.unpriced_reason,
+            Some(crate::pricing::UnpricedReason::UnverifiedLivePricing)
+        );
+
+        crate::provider_catalog_live::record_success(priced_provider_delta(
+            codewhale_config::BASETEN_TEMPLATE_ID,
+            model,
+            &fingerprint,
+            now_unix,
+        ));
+        crate::provider_catalog_live::record_failure(
+            codewhale_config::BASETEN_TEMPLATE_ID,
+            &fingerprint,
+            codewhale_config::catalog::CatalogRefreshError::Network,
+        );
+        let failed_route = custom_usage_envelope(
+            codewhale_config::BASETEN_TEMPLATE_ID,
+            model,
+            &fingerprint,
+            RouteBillingMode::Unknown,
+            now,
+        );
+        assert!(failed_route.provider_live_pricing.is_none());
+        let failed = failed_route.audit(&usage);
+        assert!(!failed.is_priced(), "{failed:?}");
+        assert_eq!(
+            failed.unpriced_reason,
+            Some(crate::pricing::UnpricedReason::UnverifiedLivePricing)
+        );
+    }
+
+    #[test]
+    fn reviewed_provider_live_quotes_survive_same_second_refresh_and_key_state_changes() {
+        let _env = crate::test_support::lock_test_env();
+        let _live = crate::provider_lake::lock_live_snapshot();
+        let home = tempfile::tempdir().expect("test home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let _reset = ProviderCatalogTestReset;
+        crate::provider_catalog_live::reset_cache_for_test();
+        crate::provider_lake::clear_live_snapshot();
+
+        let now = Utc::now();
+        let fetched_at = u64::try_from(now.timestamp()).expect("nonnegative timestamp");
+        let cases = [
+            (
+                ApiProvider::Openrouter,
+                ApiProvider::Openrouter.as_str(),
+                "synthetic-openrouter-frozen-price",
+                codewhale_config::catalog::base_url_fingerprint(
+                    crate::config::DEFAULT_OPENROUTER_BASE_URL,
+                ),
+                crate::pricing::AGGREGATOR_BILLING_SURFACE,
+                RouteBillingMode::Metered,
+            ),
+            (
+                ApiProvider::Custom,
+                codewhale_config::BASETEN_TEMPLATE_ID,
+                "synthetic-baseten-frozen-price",
+                codewhale_config::catalog::base_url_fingerprint(codewhale_config::BASETEN_BASE_URL),
+                crate::pricing::UNCLASSIFIED_BILLING_SURFACE,
+                RouteBillingMode::Unknown,
+            ),
+        ];
+        let usage = Usage {
+            input_tokens: 1_000_000,
+            ..Usage::default()
+        };
+
+        for (provider, identity, model, fingerprint, surface, mode) in cases {
+            crate::provider_catalog_live::record_success(priced_provider_delta_with_rates(
+                identity,
+                model,
+                &fingerprint,
+                fetched_at,
+                1.25,
+                5.0,
+            ));
+            let first = provider_live_usage_envelope(
+                provider,
+                identity,
+                model,
+                &fingerprint,
+                Some(surface),
+                mode,
+                now,
+            );
+            let first_quote = first
+                .provider_live_pricing
+                .as_ref()
+                .expect("fresh exact scope freezes a quote");
+
+            // A second refresh in the same Unix second must still be a distinct
+            // catalog revision and must not retroactively change `first`.
+            crate::provider_catalog_live::record_success(priced_provider_delta_with_rates(
+                identity,
+                model,
+                &fingerprint,
+                fetched_at,
+                9.5,
+                19.0,
+            ));
+            let second = provider_live_usage_envelope(
+                provider,
+                identity,
+                model,
+                &fingerprint,
+                Some(surface),
+                mode,
+                now,
+            );
+            let second_quote = second
+                .provider_live_pricing
+                .as_ref()
+                .expect("replacement fresh scope freezes a quote");
+            assert_ne!(
+                first_quote.catalog_revision, second_quote.catalog_revision,
+                "same-second price changes need distinct revisions"
+            );
+
+            crate::provider_catalog_live::record_failure(
+                identity,
+                &fingerprint,
+                codewhale_config::catalog::CatalogRefreshError::Unauthorized,
+            );
+            if provider == ApiProvider::Custom {
+                // Baseten's same URL can represent another account after a key
+                // switch. Starting that refresh clears the mutable old scope.
+                let _new_key_refresh = crate::provider_catalog_live::begin_refresh(identity);
+            }
+
+            let first_audit = first.audit(&usage);
+            let second_audit = second.audit(&usage);
+            assert_eq!(first_audit.estimate.expect("first quote priced").usd, 1.25);
+            assert_eq!(second_audit.estimate.expect("second quote priced").usd, 9.5);
+
+            let after_mutation = provider_live_usage_envelope(
+                provider,
+                identity,
+                model,
+                &fingerprint,
+                Some(surface),
+                mode,
+                now,
+            );
+            assert!(
+                after_mutation.provider_live_pricing.is_none(),
+                "failed or cleared mutable state cannot mint a new quote"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_no_quote_receipts_cannot_be_retro_priced_by_a_later_refresh() {
+        let _env = crate::test_support::lock_test_env();
+        let _live = crate::provider_lake::lock_live_snapshot();
+        let home = tempfile::tempdir().expect("test home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let _reset = ProviderCatalogTestReset;
+        crate::provider_catalog_live::reset_cache_for_test();
+        crate::provider_lake::clear_live_snapshot();
+
+        let now = Utc::now();
+        let fetched_at = u64::try_from(now.timestamp()).expect("nonnegative timestamp");
+        let routes = [
+            provider_live_usage_envelope(
+                ApiProvider::Openrouter,
+                ApiProvider::Openrouter.as_str(),
+                "synthetic-openrouter-legacy",
+                &codewhale_config::catalog::base_url_fingerprint(
+                    crate::config::DEFAULT_OPENROUTER_BASE_URL,
+                ),
+                Some(crate::pricing::AGGREGATOR_BILLING_SURFACE),
+                RouteBillingMode::Metered,
+                now,
+            ),
+            custom_usage_envelope(
+                codewhale_config::BASETEN_TEMPLATE_ID,
+                "synthetic-baseten-legacy",
+                &codewhale_config::catalog::base_url_fingerprint(
+                    codewhale_config::BASETEN_BASE_URL,
+                ),
+                RouteBillingMode::Unknown,
+                now,
+            ),
+        ];
+        assert!(
+            routes
+                .iter()
+                .all(|route| route.provider_live_pricing.is_none())
+        );
+
+        for route in &routes {
+            crate::provider_catalog_live::record_success(priced_provider_delta(
+                &route.provider_identity,
+                &route.model,
+                route.endpoint_fingerprint.as_deref().expect("fingerprint"),
+                fetched_at,
+            ));
+            let audit = route.audit(&Usage {
+                input_tokens: 1_000_000,
+                ..Usage::default()
+            });
+            assert_eq!(
+                audit.unpriced_reason,
+                Some(if route.provider == ApiProvider::Openrouter {
+                    crate::pricing::UnpricedReason::NoPricingRow
+                } else {
+                    crate::pricing::UnpricedReason::UnverifiedLivePricing
+                }),
+                "a completion-time refresh must not price {route:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn openrouter_offline_bundled_price_is_immutable_after_dispatch() {
+        let _env = crate::test_support::lock_test_env();
+        let _live = crate::provider_lake::lock_live_snapshot();
+        let home = tempfile::tempdir().expect("test home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let _reset = ProviderCatalogTestReset;
+        crate::provider_catalog_live::reset_cache_for_test();
+        crate::provider_lake::clear_live_snapshot();
+
+        let dispatched_at = Utc::now();
+        let fetched_at = u64::try_from(dispatched_at.timestamp()).expect("timestamp");
+        let model = "qwen/qwen3.8-flash";
+        let fingerprint = codewhale_config::catalog::base_url_fingerprint(
+            crate::config::DEFAULT_OPENROUTER_BASE_URL,
+        );
+        let route = provider_live_usage_envelope(
+            ApiProvider::Openrouter,
+            ApiProvider::Openrouter.as_str(),
+            model,
+            &fingerprint,
+            Some(crate::pricing::AGGREGATOR_BILLING_SURFACE),
+            RouteBillingMode::Metered,
+            dispatched_at,
+        );
+        assert!(route.provider_live_pricing.is_none());
+
+        let usage = Usage {
+            input_tokens: 1_000_000,
+            ..Usage::default()
+        };
+        let offline = route.audit(&usage);
+        assert_eq!(
+            offline.estimate.expect("bundled OpenRouter price").usd,
+            0.16
+        );
+        assert_eq!(
+            offline.provenance,
+            Some(codewhale_config::pricing::PricingProvenance::ModelsDevBundled)
+        );
+
+        // A later mutable refresh cannot change a turn that had no quote at
+        // the application-dispatch boundary.
+        crate::provider_catalog_live::record_success(priced_provider_delta_with_rates(
+            ApiProvider::Openrouter.as_str(),
+            model,
+            &fingerprint,
+            fetched_at,
+            19.0,
+            29.0,
+        ));
+        let after_refresh = route.audit(&usage);
+        assert_eq!(after_refresh, offline);
+
+        // Admission without provider usage does not create a charge.
+        let no_usage = route.audit(&Usage::default());
+        let no_usage_estimate = no_usage.estimate.expect("known zero usage is priced");
+        assert_eq!(no_usage_estimate.usd, 0.0);
+        assert_eq!(no_usage_estimate.cny, 0.0);
+    }
+
+    #[test]
+    fn provider_live_quotes_reject_future_prices_and_every_route_binding_mismatch() {
+        let _env = crate::test_support::lock_test_env();
+        let _live = crate::provider_lake::lock_live_snapshot();
+        let home = tempfile::tempdir().expect("test home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let _reset = ProviderCatalogTestReset;
+        crate::provider_catalog_live::reset_cache_for_test();
+        crate::provider_lake::clear_live_snapshot();
+
+        let dispatched_at = Utc::now();
+        let dispatch_unix = u64::try_from(dispatched_at.timestamp()).expect("timestamp");
+        let future_at = dispatched_at + chrono::Duration::seconds(1);
+        let future_unix = dispatch_unix.saturating_add(1);
+        let cases = [
+            (
+                ApiProvider::Openrouter,
+                ApiProvider::Openrouter.as_str(),
+                "synthetic-openrouter-future",
+                codewhale_config::catalog::base_url_fingerprint(
+                    crate::config::DEFAULT_OPENROUTER_BASE_URL,
+                ),
+                crate::pricing::AGGREGATOR_BILLING_SURFACE,
+                RouteBillingMode::Metered,
+            ),
+            (
+                ApiProvider::Custom,
+                codewhale_config::BASETEN_TEMPLATE_ID,
+                "synthetic-baseten-future",
+                codewhale_config::catalog::base_url_fingerprint(codewhale_config::BASETEN_BASE_URL),
+                crate::pricing::UNCLASSIFIED_BILLING_SURFACE,
+                RouteBillingMode::Unknown,
+            ),
+        ];
+        let usage = Usage {
+            input_tokens: 1_000_000,
+            ..Usage::default()
+        };
+
+        for (provider, identity, model, fingerprint, surface, mode) in cases {
+            crate::provider_catalog_live::record_success(priced_provider_delta(
+                identity,
+                model,
+                &fingerprint,
+                future_unix,
+            ));
+            let no_future_quote = provider_live_usage_envelope(
+                provider,
+                identity,
+                model,
+                &fingerprint,
+                Some(surface),
+                mode,
+                dispatched_at,
+            );
+            assert!(no_future_quote.provider_live_pricing.is_none());
+            assert_eq!(
+                no_future_quote.audit(&usage).unpriced_reason,
+                Some(if provider == ApiProvider::Openrouter {
+                    crate::pricing::UnpricedReason::NoPricingRow
+                } else {
+                    crate::pricing::UnpricedReason::UnverifiedLivePricing
+                })
+            );
+
+            let captured = provider_live_usage_envelope(
+                provider,
+                identity,
+                model,
+                &fingerprint,
+                Some(surface),
+                mode,
+                future_at,
+            );
+            assert!(captured.provider_live_pricing.is_some());
+
+            let mut future_relative_to_dispatch = captured.clone();
+            future_relative_to_dispatch.dispatched_at = dispatched_at;
+            assert_eq!(
+                future_relative_to_dispatch.audit(&usage).unpriced_reason,
+                Some(crate::pricing::UnpricedReason::UnverifiedLivePricing)
+            );
+            let persisted = serde_json::to_value(&future_relative_to_dispatch)
+                .expect("invalid future quote serializes only as absent");
+            assert!(persisted["provider_live_pricing"].is_null());
+
+            let mut wrong_model = captured.clone();
+            wrong_model.model.push_str("-other");
+            assert_eq!(
+                wrong_model.audit(&usage).unpriced_reason,
+                Some(crate::pricing::UnpricedReason::UnverifiedLivePricing)
+            );
+
+            let mut wrong_identity = captured.clone();
+            wrong_identity.provider_identity.push_str("-other");
+            assert_eq!(
+                wrong_identity.audit(&usage).unpriced_reason,
+                Some(if provider == ApiProvider::Custom {
+                    crate::pricing::UnpricedReason::UnknownBillingBasis
+                } else {
+                    crate::pricing::UnpricedReason::UnverifiedLivePricing
+                })
+            );
+
+            let mut wrong_endpoint = captured;
+            wrong_endpoint.endpoint_fingerprint = Some(
+                codewhale_config::catalog::base_url_fingerprint("https://proxy.example/v1"),
+            );
+            assert_eq!(
+                wrong_endpoint.audit(&usage).unpriced_reason,
+                Some(if provider == ApiProvider::Custom {
+                    crate::pricing::UnpricedReason::UnknownBillingBasis
+                } else {
+                    crate::pricing::UnpricedReason::UnverifiedLivePricing
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn provider_live_quote_serialization_is_secret_free_and_legacy_compatible() {
+        let _env = crate::test_support::lock_test_env();
+        let _live = crate::provider_lake::lock_live_snapshot();
+        let home = tempfile::tempdir().expect("test home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let _reset = ProviderCatalogTestReset;
+        crate::provider_catalog_live::reset_cache_for_test();
+        crate::provider_lake::clear_live_snapshot();
+
+        let now = Utc::now();
+        let fetched_at = u64::try_from(now.timestamp()).expect("nonnegative timestamp");
+        let model = "synthetic-baseten-serialized-quote";
+        let fingerprint =
+            codewhale_config::catalog::base_url_fingerprint(codewhale_config::BASETEN_BASE_URL);
+        crate::provider_catalog_live::record_success(priced_provider_delta(
+            codewhale_config::BASETEN_TEMPLATE_ID,
+            model,
+            &fingerprint,
+            fetched_at,
+        ));
+        let route = custom_usage_envelope(
+            codewhale_config::BASETEN_TEMPLATE_ID,
+            model,
+            &fingerprint,
+            RouteBillingMode::Unknown,
+            now,
+        );
+        assert!(route.provider_live_pricing.is_some());
+
+        let serialized = serde_json::to_string(&route).expect("serialize frozen route");
+        assert!(serialized.contains("provider_live_pricing"));
+        assert!(serialized.contains("catalog_revision"));
+        assert!(serialized.contains("input_per_million"));
+        for secret in [codewhale_config::BASETEN_BASE_URL, "api_key", "Bearer "] {
+            assert!(!serialized.contains(secret), "quote leaked {secret:?}");
+        }
+
+        let mut child = serde_json::json!({});
+        attach_child_usage_metadata(&mut child, &route, &Usage::default());
+        let child_route = child_route_envelope_from_metadata(&child).expect("child route");
+        assert_eq!(child_route, route.sanitized_for_persistence());
+
+        let mut legacy: serde_json::Value =
+            serde_json::from_str(&serialized).expect("route JSON value");
+        legacy
+            .as_object_mut()
+            .expect("route object")
+            .remove("provider_live_pricing");
+        let legacy: EffectiveRouteEnvelope =
+            serde_json::from_value(legacy).expect("legacy route remains readable");
+        assert!(legacy.provider_live_pricing.is_none());
+        let audit = legacy.audit(&Usage {
+            input_tokens: 1_000_000,
+            ..Usage::default()
+        });
+        assert_eq!(
+            audit.unpriced_reason,
+            Some(crate::pricing::UnpricedReason::UnverifiedLivePricing)
+        );
+
+        let mut wrong_model = route.clone();
+        wrong_model.model.push_str("-other");
+        assert_eq!(
+            wrong_model.audit(&Usage::default()).unpriced_reason,
+            Some(crate::pricing::UnpricedReason::UnverifiedLivePricing)
+        );
+    }
+
+    #[test]
+    fn routed_child_batch_is_preferred_bounded_and_sanitized() {
+        let route = deepseek_envelope();
+        let records = vec![
+            RuntimeUsageRecord {
+                source_id: "raw-provider-response-id-one".to_string(),
+                usage: EffectiveRouteUsage {
+                    route: route.clone(),
+                    usage: Usage {
+                        input_tokens: 11,
+                        ..Usage::default()
+                    },
+                },
+            },
+            RuntimeUsageRecord {
+                source_id: "raw-provider-response-id-two".to_string(),
+                usage: EffectiveRouteUsage {
+                    route: route.clone(),
+                    usage: Usage {
+                        output_tokens: 7,
+                        ..Usage::default()
+                    },
+                },
+            },
+        ];
+        let mut metadata = serde_json::json!({});
+        attach_child_usage_metadata(&mut metadata, &route, &Usage::default());
+        attach_child_usage_batch_metadata(
+            &mut metadata,
+            &RuntimeUsageBatch {
+                records,
+                drop_records: Vec::new(),
+                dropped_records: 0,
+            },
+        );
+
+        let serialized = serde_json::to_string(&metadata).expect("batch metadata");
+        assert!(!serialized.contains("raw-provider-response-id"));
+        let batch = child_usage_records_from_metadata(&metadata).expect("preferred batch");
+        assert_eq!(batch.records.len(), 2);
+        assert_eq!(batch.records[0].usage.usage.input_tokens, 11);
+        assert_eq!(batch.records[1].usage.usage.output_tokens, 7);
+        assert_eq!(batch.dropped_records, 0);
+
+        metadata[CHILD_USAGE_RECORDS_KEY] = serde_json::json!([{"bad": true}]);
+        let malformed = child_usage_records_from_metadata(&metadata).expect("batch key wins");
+        assert!(malformed.records.is_empty());
+        assert_eq!(malformed.dropped_records, 1);
     }
 
     fn deepseek() -> BackgroundRoute<'static> {
@@ -1520,6 +2973,7 @@ mod tests {
             model: "/Volumes/private/checkpoints/model.gguf".to_string(),
             billing_surface: None,
             endpoint_fingerprint: None,
+            provider_live_pricing: None,
             billing_mode: RouteBillingMode::Metered,
             dispatched_at: Utc::now(),
         };
@@ -1586,6 +3040,7 @@ mod tests {
                 "https://alice:password@example.test/v1?token=secret#fragment".to_string(),
             ),
             endpoint_fingerprint: Some("../.ssh/provider_key".to_string()),
+            provider_live_pricing: None,
             billing_mode: RouteBillingMode::Metered,
             dispatched_at: Utc::now(),
         };
@@ -1661,6 +3116,118 @@ mod tests {
 
         report(scope_token(), &deepseek(), &small_usage());
         assert_eq!(drain().priced_turns, 1);
+    }
+
+    #[test]
+    fn detached_advisor_and_translation_receipts_survive_new_exactly_once() {
+        let _g = test_scope();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manager = crate::session_manager::SessionManager::new(tmp.path().join("sessions"))
+            .expect("session manager");
+        let old_session_id = "origin-session";
+        let new_session_id = "replacement-session";
+        for session_id in [old_session_id, new_session_id] {
+            let session = crate::session_manager::create_saved_session_with_id_and_mode(
+                session_id.to_string(),
+                &[],
+                "deepseek-v4-flash",
+                tmp.path(),
+                0,
+                None,
+                Some("agent"),
+            );
+            manager.save_session(&session).expect("save session");
+        }
+
+        let origin_scope = scope_token();
+        let owner = "interactive:origin-session:origin-turn";
+        register_persistent_interactive_runtime_usage_sink_at(
+            owner,
+            origin_scope,
+            old_session_id,
+            "origin-turn",
+            manager.sessions_dir().to_path_buf(),
+        );
+        let advisor_lease = acquire_runtime_usage_lease(owner).expect("advisor owner lease");
+        finish_runtime_usage_owner(owner);
+
+        // `/new` closes the old foreground generation while the detached
+        // advisor and translation requests are still in flight.
+        assert!(close_current_scope().is_empty());
+        let route = deepseek_envelope();
+        let usage = Usage {
+            input_tokens: 17,
+            output_tokens: 5,
+            ..Usage::default()
+        };
+        for _ in 0..2 {
+            report_effective_route_for_runtime(
+                origin_scope,
+                Some(owner),
+                "advisor:origin-turn:response",
+                &route,
+                &usage,
+            );
+            report_unreceipted_provider_success(
+                origin_scope,
+                Some(owner),
+                "advisor:origin-turn:missing-usage",
+                &route,
+            );
+            assert!(report_effective_route_for_interactive_origin_with_manager(
+                origin_scope,
+                old_session_id,
+                "origin-turn",
+                "translation:origin-turn:assistant",
+                &route,
+                &usage,
+                &manager,
+            ));
+            assert!(report_unreceipted_for_interactive_origin_with_manager(
+                origin_scope,
+                old_session_id,
+                "origin-turn",
+                "translation:origin-turn:thinking-missing-usage",
+                &route,
+                &manager,
+            ));
+        }
+        drop(advisor_lease);
+
+        let fallback = take_runtime_usage(owner);
+        assert!(fallback.records.is_empty());
+        assert!(fallback.drop_records.is_empty());
+        assert_eq!(fallback.dropped_records, 0);
+        assert!(drain().is_empty(), "late receipts polluted the new scope");
+
+        let old = manager
+            .load_session_snapshot(old_session_id)
+            .expect("load origin session");
+        assert_eq!(old.metadata.total_tokens, 44);
+        assert_eq!(old.metadata.cost.priced_turns, 2);
+        assert_eq!(old.metadata.cost.unpriced_turns, 2);
+        assert_eq!(old.metadata.cost.cny_unpriced_turns, 2);
+        assert_eq!(old.metadata.cost.usage_source_fingerprints.len(), 4);
+
+        let replay = manager
+            .load_session_snapshot(old_session_id)
+            .expect("replay origin session");
+        assert_eq!(replay.metadata.total_tokens, 44);
+        assert_eq!(replay.metadata.cost.usage_source_fingerprints.len(), 4);
+
+        let replacement = manager
+            .load_session_snapshot(new_session_id)
+            .expect("load replacement session");
+        assert_eq!(replacement.metadata.total_tokens, 0);
+        assert_eq!(replacement.metadata.cost.priced_turns, 0);
+        assert_eq!(replacement.metadata.cost.unpriced_turns, 0);
+        assert!(
+            replacement
+                .metadata
+                .cost
+                .usage_source_fingerprints
+                .is_empty()
+        );
     }
 
     #[test]

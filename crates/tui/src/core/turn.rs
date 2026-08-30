@@ -44,6 +44,16 @@ pub struct TurnContext {
     /// Usage for this turn
     pub usage: Usage,
 
+    /// Subset of `usage` served by the parent turn's frozen route. Programmatic
+    /// reviewer/RLM calls remain in the total above but are billed only from
+    /// their own routed receipts.
+    pub parent_route_usage: Usage,
+
+    /// Provider calls whose usage became ambiguous after dispatch (for
+    /// example an RLM timeout). A non-zero value makes cost coverage
+    /// explicitly incomplete instead of inventing a zero-usage receipt.
+    pub routed_usage_dropped_records: u64,
+
     /// Input tokens reported for the most recent parent-route model request.
     /// This is deliberately separate from `usage`, which accumulates every
     /// parent step and programmatic child call for billing.
@@ -73,6 +83,8 @@ impl TurnContext {
                 output_tokens: 0,
                 ..Usage::default()
             },
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             latest_parent_input_tokens: None,
             compaction_refusal_notified: false,
             pending_route: None,
@@ -110,33 +122,7 @@ impl TurnContext {
 
     /// Add usage from an API response
     pub fn add_usage(&mut self, usage: &Usage) {
-        self.usage.input_tokens = self.usage.input_tokens.saturating_add(usage.input_tokens);
-        self.usage.output_tokens = self.usage.output_tokens.saturating_add(usage.output_tokens);
-        self.usage.prompt_cache_hit_tokens = add_optional_usage(
-            self.usage.prompt_cache_hit_tokens,
-            usage.prompt_cache_hit_tokens,
-        );
-        self.usage.prompt_cache_miss_tokens = add_optional_usage(
-            self.usage.prompt_cache_miss_tokens,
-            usage.prompt_cache_miss_tokens,
-        );
-        self.usage.prompt_cache_write_tokens = add_optional_usage(
-            self.usage.prompt_cache_write_tokens,
-            usage.prompt_cache_write_tokens,
-        );
-        self.usage.reasoning_tokens =
-            add_optional_usage(self.usage.reasoning_tokens, usage.reasoning_tokens);
-        self.usage.reasoning_replay_tokens = add_optional_usage(
-            self.usage.reasoning_replay_tokens,
-            usage.reasoning_replay_tokens,
-        );
-        if let Some(delta) = usage.server_tool_use.as_ref() {
-            let total = self.usage.server_tool_use.get_or_insert_default();
-            total.code_execution_requests =
-                add_optional_usage(total.code_execution_requests, delta.code_execution_requests);
-            total.tool_search_requests =
-                add_optional_usage(total.tool_search_requests, delta.tool_search_requests);
-        }
+        add_usage_to(&mut self.usage, usage);
     }
 
     /// Record one parent-route response for both billing and live-context
@@ -145,6 +131,53 @@ impl TurnContext {
     pub fn add_parent_usage(&mut self, usage: &Usage) {
         self.latest_parent_input_tokens = (usage.input_tokens > 0).then_some(usage.input_tokens);
         self.add_usage(usage);
+        add_usage_to(&mut self.parent_route_usage, usage);
+    }
+
+    pub fn add_routed_usage_dropped_records(&mut self, dropped_records: u64) {
+        self.routed_usage_dropped_records = self
+            .routed_usage_dropped_records
+            .saturating_add(dropped_records);
+    }
+
+    /// Add programmatic child-call usage to the authoritative total and
+    /// return the same batch aggregate for telemetry emission.
+    pub fn add_routed_usages<'a>(&mut self, usages: impl IntoIterator<Item = &'a Usage>) -> Usage {
+        let mut aggregate = Usage::default();
+        for usage in usages {
+            self.add_usage(usage);
+            add_usage_to(&mut aggregate, usage);
+        }
+        aggregate
+    }
+}
+
+fn add_usage_to(total: &mut Usage, delta: &Usage) {
+    total.input_tokens = total.input_tokens.saturating_add(delta.input_tokens);
+    total.output_tokens = total.output_tokens.saturating_add(delta.output_tokens);
+    total.prompt_cache_hit_tokens =
+        add_optional_usage(total.prompt_cache_hit_tokens, delta.prompt_cache_hit_tokens);
+    total.prompt_cache_miss_tokens = add_optional_usage(
+        total.prompt_cache_miss_tokens,
+        delta.prompt_cache_miss_tokens,
+    );
+    total.prompt_cache_write_tokens = add_optional_usage(
+        total.prompt_cache_write_tokens,
+        delta.prompt_cache_write_tokens,
+    );
+    total.reasoning_tokens = add_optional_usage(total.reasoning_tokens, delta.reasoning_tokens);
+    total.reasoning_replay_tokens =
+        add_optional_usage(total.reasoning_replay_tokens, delta.reasoning_replay_tokens);
+    if let Some(delta) = delta.server_tool_use.as_ref() {
+        let server_total = total.server_tool_use.get_or_insert_default();
+        server_total.code_execution_requests = add_optional_usage(
+            server_total.code_execution_requests,
+            delta.code_execution_requests,
+        );
+        server_total.tool_search_requests = add_optional_usage(
+            server_total.tool_search_requests,
+            delta.tool_search_requests,
+        );
     }
 }
 

@@ -1613,6 +1613,33 @@ fn custom_endpoint_does_not_inherit_first_party_pricing() {
 }
 
 #[test]
+fn exact_endpoint_catalog_may_carry_its_own_pricing_on_a_custom_base_url() {
+    use super::candidate::PricingSku;
+
+    let request = RouteRequest {
+        explicit_provider: Some(ProviderKind::Deepseek),
+        model_selector: Some(LogicalModelRef::from("deepseek-v4-pro")),
+        saved_provider_model: None,
+        base_url_override: Some("https://authenticated-catalog.example.test/v1".to_string()),
+        limit_overrides: Vec::new(),
+    };
+    let out = priced_deepseek_resolver()
+        .resolve_with_endpoint_catalog_authority(&request)
+        .expect("exact endpoint-owned catalog route resolves");
+
+    match out.pricing() {
+        Some(PricingSku::Token {
+            input_per_mtok,
+            output_per_mtok,
+        }) => {
+            assert_eq!(*input_per_mtok, Some(0.28));
+            assert_eq!(*output_per_mtok, Some(0.42));
+        }
+        other => panic!("expected exact endpoint pricing, got {other:?}"),
+    }
+}
+
+#[test]
 fn unpriced_offering_stays_unknown() {
     use super::candidate::PricingSku;
 

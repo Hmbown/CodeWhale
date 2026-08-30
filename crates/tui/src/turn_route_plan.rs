@@ -69,6 +69,11 @@ pub(crate) struct PlannedTurnRoute {
     pub(crate) effective_reasoning_effort: Option<String>,
     pub(crate) auto_controls_reasoning: bool,
     pub(crate) auto_selection: Option<crate::model_routing::AutoRouteSelection>,
+    /// Bounded auxiliary classifier usage that must enter the accepted turn
+    /// under its own frozen routes. It is moved out of `auto_selection` so a
+    /// UI-only receipt consumer cannot accidentally become the accounting
+    /// owner or price it under the parent route.
+    pub(crate) initial_routed_usage: crate::cost_status::RuntimeUsageBatch,
     /// Why this concrete route was selected. This is captured by the planner,
     /// not inferred later from the resulting provider/model pair.
     pub(crate) routing_source: TurnRoutingSource,
@@ -108,6 +113,18 @@ fn reasoning_effort_for_route_selection(
     }
 }
 
+fn settle_failed_parent_route(
+    error: String,
+    initial_routed_usage: &crate::cost_status::RuntimeUsageBatch,
+) -> String {
+    crate::cost_status::report_runtime_usage_batch(
+        crate::cost_status::scope_token(),
+        None,
+        initial_routed_usage,
+    );
+    error
+}
+
 /// Resolve the route for one turn.
 ///
 /// This is *the* route planner (#1004). `spawned_dispatch_inner` calls it to
@@ -125,7 +142,7 @@ fn reasoning_effort_for_route_selection(
 pub(crate) async fn plan_turn_route(
     request: TurnRoutePlanRequest<'_>,
 ) -> Result<PlannedTurnRoute, String> {
-    let auto_selection = if request.should_auto_resolve {
+    let mut auto_selection = if request.should_auto_resolve {
         Some(
             crate::model_routing::resolve_auto_route_with_inventory_for_session_and_cache_policy(
                 request.route_config,
@@ -163,6 +180,18 @@ pub(crate) async fn plan_turn_route(
         request.app_model.to_string()
     };
 
+    // Move classifier accounting out immediately. Every later parent-route
+    // failure must settle this already-incurred auxiliary call instead of
+    // returning an error that silently drops its exact quote/usage.
+    let initial_routed_usage = auto_selection
+        .as_mut()
+        .map(|selection| crate::cost_status::RuntimeUsageBatch {
+            records: std::mem::take(&mut selection.routed_usage),
+            drop_records: std::mem::take(&mut selection.routed_usage_drop_records),
+            dropped_records: std::mem::take(&mut selection.routed_usage_dropped_records),
+        })
+        .unwrap_or_default();
+
     let turn_route = if effective_provider == request.app_route_identity.provider {
         resolve_runtime_route_for_identity(
             request.route_config,
@@ -177,9 +206,22 @@ pub(crate) async fn plan_turn_route(
         )
     };
 
-    let turn_route = turn_route.map_err(|err| err.to_string())?;
+    let turn_route = match turn_route {
+        Ok(route) => route,
+        Err(err) => {
+            return Err(settle_failed_parent_route(
+                err.to_string(),
+                &initial_routed_usage,
+            ));
+        }
+    };
     let turn_route = if request.preflight_required {
-        turn_route.preflight()?
+        match turn_route.preflight() {
+            Ok(route) => route,
+            Err(err) => {
+                return Err(settle_failed_parent_route(err, &initial_routed_usage));
+            }
+        }
     } else {
         turn_route
     };
@@ -262,6 +304,7 @@ pub(crate) async fn plan_turn_route(
         effective_reasoning_effort,
         auto_controls_reasoning,
         auto_selection,
+        initial_routed_usage,
         routing_source,
     })
 }
@@ -278,6 +321,49 @@ mod tests {
             exact_id: None,
             migrated_legacy_ollama_cloud_route: false,
         }
+    }
+
+    #[test]
+    fn failed_parent_route_settles_classifier_batch_once() {
+        let _cost_scope = crate::cost_status::test_scope();
+        let route = crate::cost_status::EffectiveRouteEnvelope::capture(
+            None,
+            ApiProvider::Deepseek,
+            "deepseek",
+            "classifier-model",
+            Some(ApiProvider::Deepseek.default_base_url()),
+            chrono::Utc::now(),
+        );
+        let batch = crate::cost_status::RuntimeUsageBatch {
+            records: vec![crate::cost_status::RuntimeUsageRecord {
+                source_id: "auto-router:plan-usage".to_string(),
+                usage: crate::cost_status::EffectiveRouteUsage {
+                    route: route.clone(),
+                    usage: crate::models::Usage {
+                        input_tokens: 4,
+                        output_tokens: 2,
+                        ..Default::default()
+                    },
+                },
+            }],
+            drop_records: vec![crate::cost_status::RuntimeUsageDropRecord {
+                source_id: "auto-router:plan-drop".to_string(),
+                route,
+            }],
+            dropped_records: 1,
+        };
+
+        assert_eq!(
+            settle_failed_parent_route("route failed".to_string(), &batch),
+            "route failed"
+        );
+        settle_failed_parent_route("route failed".to_string(), &batch);
+        let pending = crate::cost_status::drain();
+        assert_eq!(
+            pending.usage_source_fingerprints.len(),
+            2,
+            "both exact classifier outcomes persist, and replay is idempotent"
+        );
     }
 
     #[test]

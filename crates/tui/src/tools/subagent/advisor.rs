@@ -2,7 +2,7 @@
 //!
 //! When enabled, the advisor wakes on turn boundaries, reads a bounded slice
 //! of recent tool calls from the session transcript, makes a concise LLM
-//! advisory call (reusing the same `DeepSeekClient` as the parent turn), and
+//! advisory call on an exactly resolved provider/model client, and
 //! emits an [`Event::AdvisoryNote`] fire-and-forget.
 //!
 //! Key design properties:
@@ -26,6 +26,7 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::client::DeepSeekClient;
+use crate::config::Config;
 use crate::core::events::Event;
 use crate::llm_client::LlmClient;
 use crate::models::Role;
@@ -107,6 +108,60 @@ pub struct EmissionGuard {
     last_emission: Option<Instant>,
     last_note_hash: Option<u64>,
     last_note_hash_at: Option<Instant>,
+}
+
+/// Accounting ownership captured while the originating turn is still live.
+///
+/// Runtime turns retain their synchronous durable sink through the lease;
+/// ordinary interactive turns fall back to the exact session cost generation
+/// captured here. Neither path can spill into a later session.
+#[derive(Debug)]
+pub(crate) struct AdvisorUsageContext {
+    cost_scope: crate::cost_status::CostScopeToken,
+    runtime_usage_lease: Option<crate::cost_status::RuntimeUsageLease>,
+}
+
+impl AdvisorUsageContext {
+    #[must_use]
+    pub(crate) fn capture(runtime_owner: Option<&str>) -> Self {
+        Self {
+            cost_scope: crate::cost_status::scope_token(),
+            runtime_usage_lease: runtime_owner
+                .and_then(crate::cost_status::acquire_runtime_usage_lease),
+        }
+    }
+
+    fn report(
+        &self,
+        source_id: &str,
+        route: &crate::cost_status::EffectiveRouteEnvelope,
+        usage: &crate::models::Usage,
+    ) {
+        crate::cost_status::report_effective_route_for_runtime(
+            self.cost_scope,
+            self.runtime_usage_lease
+                .as_ref()
+                .map(crate::cost_status::RuntimeUsageLease::owner),
+            source_id,
+            route,
+            usage,
+        );
+    }
+
+    fn report_unreceipted(
+        &self,
+        source_id: &str,
+        route: &crate::cost_status::EffectiveRouteEnvelope,
+    ) {
+        crate::cost_status::report_unreceipted_provider_success(
+            self.cost_scope,
+            self.runtime_usage_lease
+                .as_ref()
+                .map(crate::cost_status::RuntimeUsageLease::owner),
+            source_id,
+            route,
+        );
+    }
 }
 
 impl EmissionGuard {
@@ -259,7 +314,9 @@ pub async fn run_advisor_for_turn(
     messages: Vec<Message>,
     config: AdvisorConfig,
     client: DeepSeekClient,
+    route_config: Config,
     session_model: String,
+    usage_context: AdvisorUsageContext,
     guard: std::sync::Arc<tokio::sync::Mutex<EmissionGuard>>,
     tx_event: mpsc::Sender<Event>,
 ) {
@@ -292,6 +349,15 @@ pub async fn run_advisor_for_turn(
         .clone()
         .unwrap_or_else(|| session_model.clone());
 
+    let (client, model) = match exact_advisor_client(&route_config, client, &session_model, &model)
+    {
+        Ok(route) => route,
+        Err(error) => {
+            tracing::warn!(target: "advisor", "advisor route resolution failed for turn {turn_id}: {error}");
+            return;
+        }
+    };
+    let route = client.effective_route_envelope(&model, chrono::Utc::now());
     let request = MessageRequest {
         model: model.clone(),
         messages: vec![Message {
@@ -322,6 +388,19 @@ pub async fn run_advisor_for_turn(
             return;
         }
     };
+
+    // A decoded provider response is billable even when its partial/empty
+    // content is rejected below or the emission guard suppresses a duplicate.
+    let usage_source_id = format!("advisor:{turn_id}:provider-response:0");
+    if response.usage == crate::models::Usage::default() {
+        usage_context.report_unreceipted(&usage_source_id, &route);
+        tracing::warn!(
+            target: "advisor",
+            "advisor provider response omitted usage for turn {turn_id}; cost coverage is unknown"
+        );
+    } else {
+        usage_context.report(&usage_source_id, &route, &response.usage);
+    }
 
     if crate::models::is_incomplete_stop_reason(response.stop_reason.as_deref()) {
         tracing::warn!(
@@ -374,6 +453,62 @@ pub async fn run_advisor_for_turn(
     debug!(target: "advisor", "advisory note emitted for turn {turn_id} ({tool_call_count} tool calls reviewed)");
 }
 
+fn exact_advisor_client(
+    config: &Config,
+    parent_client: DeepSeekClient,
+    session_model: &str,
+    requested_model: &str,
+) -> anyhow::Result<(DeepSeekClient, String)> {
+    if requested_model
+        .trim()
+        .eq_ignore_ascii_case(session_model.trim())
+    {
+        return Ok((parent_client, session_model.trim().to_string()));
+    }
+
+    if config.providers.as_ref().is_some_and(|providers| {
+        providers.custom.values().any(|provider| {
+            provider
+                .model
+                .as_deref()
+                .is_some_and(|model| model.trim().eq_ignore_ascii_case(requested_model.trim()))
+        })
+    }) {
+        anyhow::bail!(
+            "advisor model `{}` belongs to a custom provider but no exact provider identity is carried",
+            requested_model.trim()
+        );
+    }
+
+    let selection =
+        crate::model_routing::resolve_explicit_route_with_inventory(config, requested_model);
+    let (provider, model) = if let Some(selection) = selection {
+        if selection.provider == crate::config::ApiProvider::Custom {
+            anyhow::bail!(
+                "advisor model `{}` resolved only to a custom provider kind without an exact provider identity",
+                requested_model.trim()
+            );
+        }
+        (selection.provider, selection.model)
+    } else {
+        let candidates =
+            crate::model_routing::explicit_route_candidate_providers(config, requested_model);
+        if !candidates.is_empty() && !candidates.contains(&config.api_provider()) {
+            anyhow::bail!(
+                "advisor model `{}` is not owned by the originating provider and has no unique exact route",
+                requested_model.trim()
+            );
+        }
+        (config.api_provider(), requested_model.trim().to_string())
+    };
+    let client = crate::route_runtime::resolve_runtime_route(config, provider, Some(&model))
+        .map_err(anyhow::Error::msg)?
+        .validate()
+        .map(|route| route.client)
+        .map_err(anyhow::Error::msg)?;
+    Ok((client, model))
+}
+
 fn hash_str(s: &str) -> u64 {
     let mut h = DefaultHasher::new();
     s.hash(&mut h);
@@ -385,7 +520,10 @@ fn hash_str(s: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ProviderConfig, ProvidersConfig};
     use std::time::Duration;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn test_config() -> AdvisorConfig {
         AdvisorConfig {
@@ -601,6 +739,230 @@ mod tests {
         assert!(
             prompt.contains("ls -la"),
             "prompt must include the tool input"
+        );
+    }
+
+    #[test]
+    fn advisor_model_override_builds_the_owning_provider_client() {
+        let config = Config {
+            provider: Some("deepseek".to_string()),
+            providers: Some(ProvidersConfig {
+                deepseek: ProviderConfig {
+                    api_key: Some("sk-deepseek-advisor-test".to_string()),
+                    model: Some("deepseek-chat".to_string()),
+                    ..ProviderConfig::default()
+                },
+                zai: ProviderConfig {
+                    api_key: Some("zai-advisor-test-key".to_string()),
+                    model: Some(crate::config::DEFAULT_ZAI_MODEL.to_string()),
+                    ..ProviderConfig::default()
+                },
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        };
+        let parent = DeepSeekClient::new(&config).expect("parent client");
+        let (advisor, resolved_model) = exact_advisor_client(
+            &config,
+            parent,
+            "deepseek-chat",
+            crate::config::DEFAULT_ZAI_MODEL,
+        )
+        .expect("cross-provider advisor route");
+        let route = advisor.effective_route_envelope(&resolved_model, chrono::Utc::now());
+
+        assert_eq!(route.provider, crate::config::ApiProvider::Zai);
+        assert_eq!(route.provider_identity, "zai");
+        assert_eq!(route.model, crate::config::DEFAULT_ZAI_MODEL);
+    }
+
+    #[test]
+    fn advisor_foreign_custom_override_fails_closed_without_exact_identity() {
+        let config = Config {
+            provider: Some("deepseek".to_string()),
+            providers: Some(ProvidersConfig {
+                deepseek: ProviderConfig {
+                    api_key: Some("sk-deepseek-advisor-test".to_string()),
+                    model: Some("deepseek-chat".to_string()),
+                    ..ProviderConfig::default()
+                },
+                custom: [(
+                    "private-route".to_string(),
+                    ProviderConfig {
+                        api_key: Some("custom-advisor-test-key".to_string()),
+                        base_url: Some("https://custom.invalid/v1".to_string()),
+                        model: Some("private-advisor-model".to_string()),
+                        ..ProviderConfig::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        };
+        let parent = DeepSeekClient::new(&config).expect("parent client");
+        let error =
+            match exact_advisor_client(&config, parent, "deepseek-chat", "private-advisor-model") {
+                Ok(_) => panic!("generic custom kind cannot identify the exact foreign route"),
+                Err(error) => error,
+            };
+        assert!(
+            error.to_string().contains("exact provider identity"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn advisor_named_custom_a_cannot_route_model_owned_by_custom_b() {
+        let config = Config {
+            provider: Some("custom-a".to_string()),
+            providers: Some(ProvidersConfig {
+                custom: [
+                    (
+                        "custom-a".to_string(),
+                        ProviderConfig {
+                            api_key: Some("custom-a-advisor-test-key".to_string()),
+                            base_url: Some("https://custom-a.invalid/v1".to_string()),
+                            model: Some("custom-a-model".to_string()),
+                            kind: Some("openai-compatible".to_string()),
+                            ..ProviderConfig::default()
+                        },
+                    ),
+                    (
+                        "custom-b".to_string(),
+                        ProviderConfig {
+                            api_key: Some("custom-b-advisor-test-key".to_string()),
+                            base_url: Some("https://custom-b.invalid/v1".to_string()),
+                            model: Some("custom-b-model".to_string()),
+                            kind: Some("openai-compatible".to_string()),
+                            ..ProviderConfig::default()
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        };
+        let parent = DeepSeekClient::new(&config).expect("active custom-a client");
+        let error = match exact_advisor_client(&config, parent, "custom-a-model", "custom-b-model")
+        {
+            Ok(_) => panic!("custom-b must not reuse custom-a's endpoint or credential"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("exact provider identity"),
+            "{error}"
+        );
+    }
+
+    async fn run_billed_advisor_fixture(
+        note: &str,
+        stop_reason: &str,
+        suppress_as_duplicate: bool,
+        include_usage: bool,
+    ) -> (crate::cost_status::PendingBackgroundCost, Option<Event>) {
+        let _scope = crate::cost_status::test_scope();
+        let server = MockServer::start().await;
+        let mut provider_response = serde_json::json!({
+            "id": "advisor-provider-response",
+            "model": "deepseek-chat",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": note},
+                "finish_reason": stop_reason
+            }]
+        });
+        if include_usage {
+            provider_response["usage"] = serde_json::json!({
+                "prompt_tokens": 9,
+                "completion_tokens": 3,
+                "total_tokens": 12
+            });
+        }
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(provider_response))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let route_config = Config {
+            provider: Some("deepseek".to_string()),
+            providers: Some(ProvidersConfig {
+                deepseek: ProviderConfig {
+                    api_key: Some("sk-deepseek-advisor-test".to_string()),
+                    model: Some("deepseek-chat".to_string()),
+                    ..ProviderConfig::default()
+                },
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        };
+        let mut client = DeepSeekClient::new(&route_config).expect("advisor client");
+        client.set_test_chat_transport_base_url(server.uri());
+        let mut emission_guard = EmissionGuard::new();
+        if suppress_as_duplicate {
+            emission_guard.record_emission(note);
+        }
+        let guard = std::sync::Arc::new(tokio::sync::Mutex::new(emission_guard));
+        let (tx, mut rx) = mpsc::channel(1);
+        run_advisor_for_turn(
+            "advisor-turn".to_string(),
+            make_messages_with_n_tool_calls(1),
+            AdvisorConfig {
+                enabled: true,
+                max_tool_calls: 5,
+                rate_limit: Duration::ZERO,
+                dedup_window: Duration::from_secs(60),
+                model: None,
+            },
+            client,
+            route_config,
+            "deepseek-chat".to_string(),
+            AdvisorUsageContext::capture(None),
+            guard,
+            tx,
+        )
+        .await;
+        (crate::cost_status::drain(), rx.try_recv().ok())
+    }
+
+    #[tokio::test]
+    async fn advisor_incomplete_and_dedup_suppressed_responses_are_each_billed_once() {
+        let (incomplete, incomplete_event) =
+            run_billed_advisor_fixture("partial note", "max_tokens", false, true).await;
+        assert!(incomplete_event.is_none());
+        assert_eq!(
+            incomplete
+                .priced_turns
+                .saturating_add(incomplete.unpriced_turns),
+            1
+        );
+
+        let (dedup, dedup_event) =
+            run_billed_advisor_fixture("same advisory", "stop", true, true).await;
+        assert!(dedup_event.is_none());
+        assert_eq!(dedup.priced_turns.saturating_add(dedup.unpriced_turns), 1);
+    }
+
+    #[tokio::test]
+    async fn advisor_provider_success_without_usage_marks_unknown_once() {
+        let (pending, event) =
+            run_billed_advisor_fixture("use a smaller focused slice", "stop", false, false).await;
+
+        assert!(
+            event.is_some(),
+            "the semantic advisor response remains usable"
+        );
+        assert_eq!(pending.priced_turns, 0);
+        assert_eq!(pending.unpriced_turns, 1);
+        assert_eq!(pending.cny_unpriced_turns, 1);
+        assert!(
+            pending
+                .unpriced_reasons
+                .contains("provider_success_missing_usage")
         );
     }
 }

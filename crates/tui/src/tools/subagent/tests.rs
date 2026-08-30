@@ -2199,6 +2199,381 @@ async fn detached_interactive_usage_after_mailbox_seal_reaches_session_accountin
     }
 }
 
+#[tokio::test]
+async fn child_guardian_usage_source_is_sanitized_and_replay_idempotent() {
+    let _cost_scope = crate::cost_status::test_scope();
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        1,
+    )));
+    manager.write().await.register_worker_for_session(
+        make_worker_spec("agent_guardian", tmp.path().to_path_buf()),
+        "guardian-usage-session",
+    );
+
+    let runtime_owner = "interactive:guardian-usage-session:turn-parent";
+    crate::cost_status::register_interactive_runtime_usage_sink(
+        runtime_owner,
+        crate::cost_status::scope_token(),
+    );
+    let mut runtime = stub_runtime();
+    runtime.manager = Arc::clone(&manager);
+    runtime.runtime_usage_lease = crate::cost_status::acquire_runtime_usage_lease(runtime_owner);
+
+    let source_id = child_guardian_usage_source_id("agent_guardian", "tool-fixed");
+    assert_eq!(
+        source_id,
+        child_guardian_usage_source_id("agent_guardian", "tool-fixed"),
+        "replaying one logical held call must preserve its accounting identity"
+    );
+    assert_ne!(
+        source_id,
+        child_guardian_usage_source_id("agent_guardian", "tool-other")
+    );
+    assert_eq!(source_id.len(), "subagent-guardian:".len() + 64);
+    assert!(!source_id.contains("agent_guardian"));
+    assert!(!source_id.contains("tool-fixed"));
+
+    let route = crate::cost_status::EffectiveRouteEnvelope::capture(
+        None,
+        ApiProvider::Deepseek,
+        "deepseek-direct",
+        "deepseek-v4-flash",
+        Some(ApiProvider::Deepseek.default_base_url()),
+        chrono::Utc::now(),
+    );
+    let usage = Usage {
+        input_tokens: 7,
+        output_tokens: 5,
+        ..Usage::default()
+    };
+    record_provider_response_usage(
+        &runtime,
+        "agent_guardian",
+        &source_id,
+        route.clone(),
+        &usage,
+    )
+    .await;
+    // A mailbox or durable-record replay must not charge the routed guardian
+    // call a second time in either the session or worker projection.
+    record_provider_response_usage(&runtime, "agent_guardian", &source_id, route, &usage).await;
+
+    crate::cost_status::finish_runtime_usage_owner(runtime_owner);
+    let session_usage = crate::cost_status::drain();
+    let fingerprint = crate::cost_status::usage_source_fingerprint(&source_id);
+    assert_eq!(
+        session_usage.usage_source_fingerprints,
+        [fingerprint.clone()].into()
+    );
+    assert_eq!(
+        session_usage
+            .priced_turns
+            .saturating_add(session_usage.unpriced_turns),
+        1,
+        "the routed guardian response contributes exactly one cost receipt"
+    );
+    let worker = manager
+        .read()
+        .await
+        .get_worker_record("agent_guardian")
+        .expect("guardian worker record")
+        .clone();
+    assert_eq!(worker.usage.input_tokens, Some(7));
+    assert_eq!(worker.usage.output_tokens, Some(5));
+    assert_eq!(worker.usage_source_fingerprints, [fingerprint].into());
+}
+
+#[tokio::test]
+async fn ownerless_no_mailbox_provider_usage_reaches_accounting_once() {
+    let _cost_scope = crate::cost_status::test_scope();
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        1,
+    )));
+    manager.write().await.register_worker_for_session(
+        make_worker_spec("agent_direct", tmp.path().to_path_buf()),
+        "direct-usage-session",
+    );
+    let mut runtime = stub_runtime();
+    runtime.manager = Arc::clone(&manager);
+    assert!(runtime.runtime_usage_lease.is_none());
+    assert!(runtime.mailbox.is_none());
+
+    let source_id = "subagent:agent_direct:step:1:response:direct";
+    let route = crate::cost_status::EffectiveRouteEnvelope::capture(
+        None,
+        ApiProvider::Deepseek,
+        "deepseek-direct",
+        "deepseek-v4-flash",
+        Some(ApiProvider::Deepseek.default_base_url()),
+        chrono::Utc::now(),
+    );
+    let usage = Usage {
+        input_tokens: 19,
+        output_tokens: 7,
+        ..Usage::default()
+    };
+    for _ in 0..2 {
+        record_provider_response_usage(&runtime, "agent_direct", source_id, route.clone(), &usage)
+            .await;
+    }
+
+    let session_usage = crate::cost_status::drain();
+    let fingerprint = crate::cost_status::usage_source_fingerprint(source_id);
+    assert_eq!(
+        session_usage.usage_source_fingerprints,
+        [fingerprint.clone()].into()
+    );
+    assert_eq!(
+        session_usage
+            .priced_turns
+            .saturating_add(session_usage.unpriced_turns),
+        1,
+        "a replayed ownerless provider response must have one cost receipt"
+    );
+    assert!(session_usage.estimate.is_positive());
+
+    let worker = manager
+        .read()
+        .await
+        .get_worker_record("agent_direct")
+        .expect("direct worker record")
+        .clone();
+    assert_eq!(worker.usage.input_tokens, Some(19));
+    assert_eq!(worker.usage.output_tokens, Some(7));
+    assert_eq!(worker.usage_source_fingerprints, [fingerprint].into());
+}
+
+/// Dispatch-time accounting ownership must survive `/new`. An off-turn
+/// continuation runtime (no turn owner, no mailbox) is dispatched in the
+/// origin session; a later provider response, its monitor replay, and a
+/// guardian reply without a usage payload all land after the origin scope has
+/// been retired. Each must settle exactly once against the origin session's
+/// durable sidecar and never against the replacement scope.
+#[tokio::test]
+async fn ownerless_child_usage_crossing_new_settles_to_its_dispatch_origin_once() {
+    let _env = crate::test_support::lock_test_env();
+    let _cost_scope = crate::cost_status::test_scope();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path().join("home");
+    let _codewhale_home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &home);
+    let sessions =
+        crate::session_manager::SessionManager::default_location().expect("session store");
+    assert!(
+        sessions.sessions_dir().starts_with(&home),
+        "the sidecar must resolve into the guarded temporary home, not the real store: {}",
+        sessions.sessions_dir().display()
+    );
+    let origin_session_id = "origin-session";
+    let replacement_session_id = "replacement-session";
+    for session_id in [origin_session_id, replacement_session_id] {
+        let session = crate::session_manager::create_saved_session_with_id_and_mode(
+            session_id.to_string(),
+            &[],
+            "deepseek-v4-flash",
+            tmp.path(),
+            0,
+            None,
+            Some("agent"),
+        );
+        sessions.save_session(&session).expect("save session");
+    }
+
+    let agent_id = "agent_off_turn";
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        1,
+    )));
+    manager.write().await.register_worker_for_session(
+        make_worker_spec(agent_id, tmp.path().to_path_buf()),
+        origin_session_id,
+    );
+
+    // Dispatch in the origin session: the engine's off-turn continuation
+    // runtime carries neither a runtime owner lease nor a turn mailbox.
+    let mut root = stub_runtime();
+    root.manager = Arc::clone(&manager);
+    root.context = ToolContext::new(tmp.path()).with_state_namespace(origin_session_id);
+    root.accounting_origin = SubAgentAccountingOrigin::capture(&root.context);
+    let child = root.background_runtime();
+    assert!(child.runtime_usage_lease.is_none());
+    assert!(child.mailbox.is_none());
+
+    let route = crate::cost_status::EffectiveRouteEnvelope::capture(
+        None,
+        ApiProvider::Deepseek,
+        "deepseek-direct",
+        "deepseek-v4-flash",
+        Some(ApiProvider::Deepseek.default_base_url()),
+        chrono::Utc::now(),
+    );
+    let usage = Usage {
+        input_tokens: 19,
+        output_tokens: 7,
+        ..Usage::default()
+    };
+    let first_source = "subagent:agent_off_turn:step:1:response:before-new";
+    let late_source = "subagent:agent_off_turn:step:2:response:after-new";
+    let missing_source = child_guardian_usage_source_id(agent_id, "tool-after-new");
+    let first_fingerprint = crate::cost_status::usage_source_fingerprint(first_source);
+    let late_fingerprint = crate::cost_status::usage_source_fingerprint(late_source);
+    let missing_fingerprint = crate::cost_status::usage_source_fingerprint(&missing_source);
+
+    // Step 1 settles while the origin scope is live.
+    record_provider_response_usage(&child, agent_id, first_source, route.clone(), &usage).await;
+    // `/new` retires the origin scope exactly as the TUI does, while the
+    // child keeps running.
+    let settled_origin = crate::cost_status::close_current_scope();
+    assert_eq!(
+        settled_origin.usage_source_fingerprints,
+        [first_fingerprint.clone()].into()
+    );
+    assert_eq!(settled_origin.priced_turns, 1);
+    assert!(settled_origin.estimate.is_positive());
+
+    // The next response, its monitor replay, and a guardian reply without a
+    // usage payload all arrive after the scope generation moved on.
+    for _ in 0..2 {
+        record_provider_response_usage(&child, agent_id, late_source, route.clone(), &usage).await;
+        record_provider_response_usage(
+            &child,
+            agent_id,
+            &missing_source,
+            route.clone(),
+            &Usage::default(),
+        )
+        .await;
+    }
+
+    let replacement_live = crate::cost_status::drain();
+    assert!(
+        replacement_live.is_empty(),
+        "late origin receipts charged the replacement scope: {replacement_live:?}"
+    );
+
+    let origin = sessions
+        .load_session_snapshot(origin_session_id)
+        .expect("origin session");
+    assert_eq!(origin.metadata.total_tokens, 26);
+    assert_eq!(origin.metadata.cost.priced_turns, 1);
+    assert_eq!(origin.metadata.cost.unpriced_turns, 1);
+    assert!(
+        origin
+            .metadata
+            .cost
+            .unpriced_reasons
+            .contains("provider_success_missing_usage")
+    );
+    assert_eq!(
+        origin.metadata.cost.usage_source_fingerprints,
+        [late_fingerprint.clone(), missing_fingerprint.clone()].into()
+    );
+
+    let replacement = sessions
+        .load_session_snapshot(replacement_session_id)
+        .expect("replacement session");
+    assert_eq!(replacement.metadata.total_tokens, 0);
+    assert_eq!(replacement.metadata.cost.priced_turns, 0);
+    assert_eq!(replacement.metadata.cost.unpriced_turns, 0);
+    assert!(
+        replacement
+            .metadata
+            .cost
+            .usage_source_fingerprints
+            .is_empty()
+    );
+
+    let worker = manager
+        .read()
+        .await
+        .get_worker_record(agent_id)
+        .expect("off-turn worker record")
+        .clone();
+    assert_eq!(worker.usage.input_tokens, Some(38));
+    assert_eq!(worker.usage.output_tokens, Some(14));
+    assert_eq!(
+        worker.usage_source_fingerprints,
+        [first_fingerprint, late_fingerprint, missing_fingerprint].into()
+    );
+}
+
+#[tokio::test]
+async fn provider_success_without_usage_records_one_route_aware_gap_and_no_zero_mail() {
+    let _cost_scope = crate::cost_status::test_scope();
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        1,
+    )));
+    manager.write().await.register_worker_for_session(
+        make_worker_spec("agent_missing_usage", tmp.path().to_path_buf()),
+        "missing-usage-session",
+    );
+
+    let runtime_owner = "interactive:missing-usage-session:turn-parent";
+    crate::cost_status::register_interactive_runtime_usage_sink(
+        runtime_owner,
+        crate::cost_status::scope_token(),
+    );
+    let (mailbox, mut mailbox_rx) = Mailbox::new(CancellationToken::new());
+    let mut runtime = stub_runtime();
+    runtime.manager = Arc::clone(&manager);
+    runtime.mailbox = Some(mailbox);
+    runtime.runtime_usage_lease = crate::cost_status::acquire_runtime_usage_lease(runtime_owner);
+
+    let source_id = child_guardian_usage_source_id("agent_missing_usage", "tool-fixed");
+    let route = crate::cost_status::EffectiveRouteEnvelope::capture(
+        None,
+        ApiProvider::Deepseek,
+        "deepseek-direct",
+        "deepseek-v4-flash",
+        Some(ApiProvider::Deepseek.default_base_url()),
+        chrono::Utc::now(),
+    );
+    for _ in 0..2 {
+        record_provider_response_usage(
+            &runtime,
+            "agent_missing_usage",
+            &source_id,
+            route.clone(),
+            &Usage::default(),
+        )
+        .await;
+    }
+
+    assert!(
+        !mailbox_rx.has_pending(),
+        "missing usage must not also publish a priced-zero TokenUsage message"
+    );
+    crate::cost_status::finish_runtime_usage_owner(runtime_owner);
+    let session_usage = crate::cost_status::drain();
+    let fingerprint = crate::cost_status::usage_source_fingerprint(&source_id);
+    assert_eq!(
+        session_usage.usage_source_fingerprints,
+        [fingerprint.clone()].into()
+    );
+    assert_eq!(session_usage.priced_turns, 0);
+    assert_eq!(session_usage.unpriced_turns, 1);
+    assert!(
+        session_usage
+            .unpriced_reasons
+            .contains("provider_success_missing_usage")
+    );
+
+    let worker = manager
+        .read()
+        .await
+        .get_worker_record("agent_missing_usage")
+        .expect("missing-usage worker record")
+        .clone();
+    assert_eq!(worker.usage.total_tokens, Some(0));
+    assert_eq!(worker.usage.cost_microusd, None);
+    assert_eq!(worker.usage_source_fingerprints, [fingerprint].into());
+}
+
 /// Like [`delayed_chat_client`] but delays *every* attempt, so the per-step
 /// API timeout fires on the first call and on every retry — the shape needed
 /// to drive the timeout-retry budget to exhaustion.
@@ -12696,6 +13071,7 @@ pub(crate) fn stub_runtime() -> SubAgentRuntime {
         api_key: Some("test-key".to_string()),
         ..crate::config::Config::default()
     };
+    let accounting_origin = SubAgentAccountingOrigin::capture(&context);
     SubAgentRuntime {
         client: stub_client(),
         api_config: Some(std::sync::Arc::new(stub_config)),
@@ -12720,6 +13096,7 @@ pub(crate) fn stub_runtime() -> SubAgentRuntime {
         foreground_children: None,
         mailbox: None,
         runtime_usage_lease: None,
+        accounting_origin,
         parent_agent_id: None,
         parent_completion_tx: None,
         fork_context: None,
@@ -20267,7 +20644,9 @@ mod child_permission_gate {
         if let Some(client) = client {
             runtime.client = client;
         }
-        runtime.context = ToolContext::new(tmp.path().to_path_buf());
+        let workspace = tmp.path().to_path_buf();
+        runtime.context =
+            ToolContext::new(workspace.clone()).with_state_namespace("guardian-test-session");
         runtime.context.auto_approve = auto_approve;
         runtime.allow_shell = true;
         runtime.event_tx = Some(tx);
@@ -20277,6 +20656,15 @@ mod child_permission_gate {
             parent_can_prompt,
         );
         let manager = Arc::clone(&runtime.manager);
+        {
+            let mut manager = manager
+                .try_write()
+                .expect("guardian test worker registry is uncontended");
+            manager.register_worker_for_session(
+                make_worker_spec("agent_gate", workspace),
+                "guardian-test-session",
+            );
+        }
         // Keep the tempdir alive for the registry's lifetime by leaking it
         // into the workspace path (tests are short-lived).
         std::mem::forget(tmp);
@@ -20311,8 +20699,12 @@ mod child_permission_gate {
         out
     }
 
-    /// A chat-completions mock that answers every request with `content`.
-    async fn guardian_mock(content: &str) -> (wiremock::MockServer, DeepSeekClient) {
+    /// A chat-completions mock that answers every request with `content` and
+    /// the requested semantic completion state.
+    async fn guardian_mock_with_stop(
+        content: &str,
+        finish_reason: &str,
+    ) -> (wiremock::MockServer, DeepSeekClient) {
         use wiremock::matchers::method;
         use wiremock::{Mock, MockServer, ResponseTemplate};
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -20325,9 +20717,40 @@ mod child_permission_gate {
                 "choices": [{
                     "index": 0,
                     "message": {"role": "assistant", "content": content},
-                    "finish_reason": "stop"
+                    "finish_reason": finish_reason
                 }],
                 "usage": {"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12}
+            })))
+            .mount(&server)
+            .await;
+        let config = crate::config::Config {
+            api_key: Some("test-key".to_string()),
+            base_url: Some(server.uri()),
+            ..crate::config::Config::default()
+        };
+        let client = DeepSeekClient::new(&config).expect("mock-backed client");
+        (server, client)
+    }
+
+    async fn guardian_mock(content: &str) -> (wiremock::MockServer, DeepSeekClient) {
+        guardian_mock_with_stop(content, "stop").await
+    }
+
+    async fn guardian_mock_without_usage(content: &str) -> (wiremock::MockServer, DeepSeekClient) {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "chatcmpl-guardian-missing-usage",
+                "object": "chat.completion",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": "stop"
+                }]
             })))
             .mount(&server)
             .await;
@@ -20521,6 +20944,145 @@ mod child_permission_gate {
         assert_eq!(receipts.len(), 1, "{receipts:?}");
         assert_eq!(receipts[0].1, ToolGateVerdict::Denied);
         assert_eq!(receipts[0].2.as_deref(), Some("high"));
+    }
+
+    #[tokio::test]
+    async fn auto_review_guardian_semantic_failures_still_record_provider_usage() {
+        for (content, finish_reason, expected_reason) in [
+            ("not a guardian verdict", "stop", "answer was unparseable"),
+            (
+                r#"{"risk_level":"low","decision":"allow","reason":"truncated"}"#,
+                "length",
+                "answer was incomplete",
+            ),
+        ] {
+            let (_server, client) = guardian_mock_with_stop(content, finish_reason).await;
+            let (registry, mut rx, manager) =
+                worker_registry(ApprovalMode::Auto, false, true, Some(client));
+            // Keep each provider-success case distinct from the process-wide
+            // deterministic response cache: this test is proving two actual
+            // semantic outcomes, not replaying the first cached answer.
+            let command = format!("{GUARDIAN_PIPELINE} # {finish_reason}");
+            let err = registry
+                .execute("agent_gate", "bash", json!({"command": command}))
+                .await
+                .expect_err("a semantically unusable guardian response fails closed");
+            assert!(err.to_string().contains(expected_reason), "{err}");
+
+            let worker = manager
+                .read()
+                .await
+                .get_worker_record("agent_gate")
+                .expect("guardian usage reaches the durable worker record")
+                .clone();
+            assert_eq!(worker.usage.input_tokens, Some(9));
+            assert_eq!(worker.usage.output_tokens, Some(3));
+            assert_eq!(
+                worker.usage_source_fingerprints.len(),
+                1,
+                "one provider-success guardian call records exactly once"
+            );
+
+            let receipts = drain_gate_receipts(&mut rx);
+            assert_eq!(receipts.len(), 1, "{receipts:?}");
+            assert_eq!(receipts[0].0, ToolGate::AutoReviewGuardian);
+            assert_eq!(receipts[0].1, ToolGateVerdict::Unavailable);
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_review_guardian_success_without_usage_records_one_missing_coverage_receipt() {
+        let _cost_scope = crate::cost_status::test_scope();
+        let (_server, client) = guardian_mock_without_usage(
+            r#"{"risk_level":"low","decision":"allow","reason":"missing usage regression"}"#,
+        )
+        .await;
+        let (registry, mut rx, manager) =
+            worker_registry(ApprovalMode::Auto, false, true, Some(client));
+
+        let output = registry
+            .execute(
+                "agent_gate",
+                "bash",
+                json!({"command": "echo guardian-missing-usage | cat"}),
+            )
+            .await
+            .expect("semantic guardian success remains usable");
+        assert!(output.contains("guardian-missing-usage"), "{output}");
+
+        let pending = crate::cost_status::drain();
+        assert_eq!(pending.priced_turns, 0);
+        assert_eq!(pending.unpriced_turns, 1);
+        assert!(
+            pending
+                .unpriced_reasons
+                .contains("provider_success_missing_usage")
+        );
+        assert_eq!(pending.usage_source_fingerprints.len(), 1);
+
+        let worker = manager
+            .read()
+            .await
+            .get_worker_record("agent_gate")
+            .expect("guardian missing usage reaches the worker ledger")
+            .clone();
+        assert_eq!(worker.usage.total_tokens, Some(0));
+        assert_eq!(worker.usage.cost_microusd, None);
+        assert_eq!(worker.usage_source_fingerprints.len(), 1);
+
+        let receipts = drain_gate_receipts(&mut rx);
+        assert_eq!(receipts.len(), 1, "{receipts:?}");
+        assert_eq!(receipts[0].0, ToolGate::AutoReviewGuardian);
+        assert_eq!(receipts[0].1, ToolGateVerdict::Allowed);
+    }
+
+    #[tokio::test]
+    async fn auto_review_guardian_cache_hit_does_not_mint_a_second_usage_receipt() {
+        let (server, client) = guardian_mock(
+            r#"{"risk_level":"low","decision":"allow","reason":"bounded cache regression"}"#,
+        )
+        .await;
+        let (registry, mut rx, manager) =
+            worker_registry(ApprovalMode::Auto, false, true, Some(client));
+        let input = json!({"command": "echo guardian-cache-regression | cat"});
+
+        for _ in 0..2 {
+            let output = registry
+                .execute("agent_gate", "bash", input.clone())
+                .await
+                .expect("both the provider verdict and its cache replay allow the call");
+            assert!(output.contains("guardian-cache-regression"), "{output}");
+        }
+
+        let requests = server
+            .received_requests()
+            .await
+            .expect("guardian provider requests are recorded");
+        assert_eq!(
+            requests.len(),
+            1,
+            "the second verdict came from response cache"
+        );
+        let worker = manager
+            .read()
+            .await
+            .get_worker_record("agent_gate")
+            .expect("guardian usage reaches the durable worker record")
+            .clone();
+        assert_eq!(worker.usage.input_tokens, Some(9));
+        assert_eq!(worker.usage.output_tokens, Some(3));
+        assert_eq!(
+            worker.usage_source_fingerprints.len(),
+            1,
+            "an all-zero cache replay is not a second provider call"
+        );
+        let receipts = drain_gate_receipts(&mut rx);
+        assert_eq!(receipts.len(), 2, "both gate decisions remain auditable");
+        assert!(
+            receipts
+                .iter()
+                .all(|receipt| receipt.1 == ToolGateVerdict::Allowed)
+        );
     }
 
     #[tokio::test]

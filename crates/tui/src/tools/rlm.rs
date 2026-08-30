@@ -45,8 +45,7 @@ const ALL_ACTIONS: &[&str] = &["session_objects", "open", "eval", "configure", "
 fn rlm_kernel_error_result(
     error: &str,
     elapsed: Duration,
-    route: &crate::cost_status::EffectiveRouteEnvelope,
-    usage: &crate::models::Usage,
+    usage_batch: &crate::cost_status::RuntimeUsageBatch,
 ) -> ToolResult {
     let mut metadata = json!({
         // The registered tool is `rlm`; `eval` is its action. Naming a
@@ -57,7 +56,7 @@ fn rlm_kernel_error_result(
         "duration_ms": elapsed.as_millis() as u64,
         "kernel_error": true,
     });
-    crate::cost_status::attach_child_usage_metadata(&mut metadata, route, usage);
+    crate::cost_status::attach_child_usage_batch_metadata(&mut metadata, usage_batch);
     ToolResult::error(format!("rlm action='eval': {error}")).with_metadata(metadata)
 }
 
@@ -463,16 +462,14 @@ impl RlmTool {
         };
 
         let started = Instant::now();
-        let (round, child_usage, child_route) = if let Some(client) = self.client.clone() {
-            let route = client.effective_route_envelope(&self.root_model, chrono::Utc::now());
+        let (round, child_usage_batch) = if let Some(client) = self.client.clone() {
             let bridge = RlmBridge::new(
                 Arc::new(client),
                 self.root_model.clone(),
                 config.sub_rlm_max_depth.min(HARD_SUB_RLM_DEPTH_CAP),
             );
-            let usage_handle = bridge.usage_handle();
             let round_result = kernel.run(code, Some(&bridge)).await;
-            let usage = usage_handle.lock().await.clone();
+            let usage = bridge.usage_snapshot().await;
             let round = match round_result {
                 Ok(round) => round,
                 Err(error) => {
@@ -485,18 +482,28 @@ impl RlmTool {
                     return Ok(rlm_kernel_error_result(
                         &error.to_string(),
                         started.elapsed(),
-                        &route,
-                        &usage,
+                        &crate::cost_status::RuntimeUsageBatch {
+                            records: usage.records,
+                            drop_records: usage.drop_records,
+                            dropped_records: usage.dropped_records,
+                        },
                     ));
                 }
             };
-            (round, usage, Some(route))
+            (
+                round,
+                crate::cost_status::RuntimeUsageBatch {
+                    records: usage.records,
+                    drop_records: usage.drop_records,
+                    dropped_records: usage.dropped_records,
+                },
+            )
         } else {
             let round = kernel
                 .run(code, None::<&RlmBridge>)
                 .await
                 .map_err(|e| ToolError::execution_failed(format!("rlm_eval: {e}")))?;
-            (round, Default::default(), None)
+            (round, crate::cost_status::RuntimeUsageBatch::default())
         };
 
         session.rpc_count = session.rpc_count.saturating_add(round.rpc_count);
@@ -595,11 +602,10 @@ impl RlmTool {
             "tool": "rlm_eval",
             "duration_ms": started.elapsed().as_millis() as u64,
         });
-        // RLM fans out dozens of child rounds, so an undercounted class here
-        // scales; report every billable class from the shared producer (#4318).
-        if let Some(route) = child_route.as_ref() {
-            crate::cost_status::attach_child_usage_metadata(&mut metadata, route, &child_usage);
-        }
+        // Every RLM provider call keeps its own dispatch timestamp and frozen
+        // quote. The preferred batch format prevents a fan-out from being
+        // retroactively priced as one aggregate call on the first route.
+        crate::cost_status::attach_child_usage_batch_metadata(&mut metadata, &child_usage_batch);
 
         Ok(ToolResult::json(&output)
             .map_err(|e| ToolError::execution_failed(e.to_string()))?
@@ -964,25 +970,39 @@ mod tests {
             reasoning_replay_tokens: Some(7),
             ..Default::default()
         };
+        let record = crate::cost_status::RuntimeUsageRecord {
+            source_id: "rlm:test:request:0".to_string(),
+            usage: crate::cost_status::EffectiveRouteUsage {
+                route: route.clone(),
+                usage: usage.clone(),
+            },
+        };
+        let drop_record = crate::cost_status::RuntimeUsageDropRecord {
+            source_id: "rlm:test:request:1".to_string(),
+            route: route.clone(),
+        };
         let result = rlm_kernel_error_result(
             "kernel stdout closed",
             Duration::from_millis(11),
-            &route,
-            &usage,
+            &crate::cost_status::RuntimeUsageBatch {
+                records: vec![record],
+                drop_records: vec![drop_record],
+                dropped_records: 1,
+            },
         );
 
         assert!(!result.success);
         let metadata = result
             .metadata
             .expect("usage metadata on failed tool result");
-        assert_eq!(
-            crate::cost_status::child_route_envelope_from_metadata(&metadata),
-            Some(route)
-        );
-        assert_eq!(
-            crate::cost_status::child_usage_from_metadata(&metadata),
-            Some(usage)
-        );
+        let batch = crate::cost_status::child_usage_records_from_metadata(&metadata)
+            .expect("preferred routed batch");
+        assert_eq!(batch.dropped_records, 1);
+        assert_eq!(batch.records.len(), 1);
+        assert_eq!(batch.drop_records.len(), 1);
+        assert_eq!(batch.records[0].usage.route, route);
+        assert_eq!(batch.records[0].usage.usage, usage);
+        assert_eq!(batch.drop_records[0].route, route);
     }
 
     #[test]

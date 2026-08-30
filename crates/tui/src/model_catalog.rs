@@ -1,9 +1,13 @@
-//! Offline model metadata catalog (#3072).
+//! Legacy offline model metadata compatibility catalog (#3072).
 //!
 //! This module adds a secret-free metadata layer in front of the legacy model
 //! tables. It is intentionally conservative: startup reads a local cache plus a
 //! bundled snapshot, never performs a network refresh, and only overrides a
 //! legacy fact when the active catalog entry actually carries that field.
+//! The unscoped `catalog/openrouter.json` file cannot safely own a live provider
+//! roster; new provider/base-URL-scoped refreshes and runtime consumers use
+//! `provider_catalog_live` + `provider_lake`. Keep this reader only until the
+//! remaining `models`, `pricing`, and safe-label compatibility callers migrate.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

@@ -48,13 +48,15 @@ pub struct TurnRoute {
     /// `None` when no concrete client was installed (injected-client engines,
     /// or a client that failed to construct).
     pub receipt: Option<crate::route_receipt::TurnRouteReceipt>,
-    /// Billing evidence for the request that was actually put on the wire.
+    /// Billing evidence for a request admitted to application dispatch.
     ///
     /// `None` at `TurnStarted`: a lifecycle start is not a dispatch, and a
-    /// route that has not been sent has no billing time, no metering surface,
-    /// and no endpoint to attest. Populated exactly once, at the wire
-    /// boundary, and delivered on `RouteDispatched`. Consumers that price a
-    /// turn must treat `None` as *unknown*, never as a zero-cost turn.
+    /// route that has not reached admission has no billing time, no metering
+    /// surface, and no endpoint to attest. Populated exactly once at the
+    /// pre-permit application-dispatch boundary and delivered on
+    /// `RouteDispatched`. This does not attest network delivery or a provider
+    /// invoice-time rate. Consumers that price a turn must treat `None` as
+    /// *unknown*, never as a zero-cost turn.
     pub billing: Option<RouteBillingEnvelope>,
     /// Endpoint this turn's client was frozen against, verbatim.
     ///
@@ -92,14 +94,16 @@ pub struct TurnRoute {
 ///   it bill* — a [`crate::route_billing::DispatchedReceipt`]. They must be
 ///   readable from `TurnStarted` onward so a child turn arriving mid-flight
 ///   can be billed against the parent's frozen route.
-/// - This envelope is stamped at the **wire** boundary and answers *what was
-///   actually put on the wire, when*. A planned-but-unsent route has no
-///   metering surface and no dispatch instant, so it must be structurally
-///   absent rather than defaulted.
+/// - This envelope is stamped at the **pre-permit application-dispatch**
+///   boundary and answers *what CodeWhale admitted for provider execution,
+///   when*. It does not claim network delivery or provider invoice-time
+///   pricing. A merely planned route has no metering surface or dispatch
+///   instant, so it must be structurally absent rather than defaulted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteBillingEnvelope {
     pub billing_surface: Option<String>,
     pub endpoint_fingerprint: Option<String>,
+    pub provider_live_pricing: Option<crate::provider_catalog_live::ProviderLivePricingQuote>,
     pub billing_mode: crate::cost_status::RouteBillingMode,
     pub dispatched_at: DateTime<Utc>,
 }
@@ -117,6 +121,7 @@ impl TurnRoute {
             model: self.model.clone(),
             billing_surface: billing.billing_surface.clone(),
             endpoint_fingerprint: billing.endpoint_fingerprint.clone(),
+            provider_live_pricing: billing.provider_live_pricing.clone(),
             billing_mode: billing.billing_mode,
             dispatched_at: billing.dispatched_at,
         })
@@ -218,7 +223,7 @@ pub enum Event {
         turn_id: String,
         created_at: DateTime<Utc>,
         /// Legacy/non-model hosts may still attach a route at start. Model
-        /// turns emit it separately at the real provider dispatch boundary.
+        /// turns emit it separately at the application dispatch boundary.
         route: Option<TurnRoute>,
     },
 
@@ -228,13 +233,23 @@ pub enum Event {
         snapshot: crate::tool_inspection::ToolInspectionSnapshot,
     },
 
-    /// Immutable billing route captured immediately before the first provider
-    /// request, after snapshots and other potentially slow pre-dispatch work.
+    /// Immutable billing route captured at CodeWhale's pre-permit application
+    /// dispatch boundary, after request preparation. This is admission-time
+    /// evidence, not proof of network delivery or provider invoice-time rates.
     RouteDispatched { turn_id: String, route: TurnRoute },
 
     /// The turn is complete (no more tool calls)
     TurnComplete {
+        /// Total usage for session/goal/token metrics, including programmatic
+        /// child calls performed inline during this turn.
         usage: Usage,
+        /// Usage served by the parent turn's frozen route only. Consumers
+        /// price this under the parent quote and price routed children from
+        /// their own receipts, avoiding double billing without subtraction.
+        parent_route_usage: Usage,
+        /// Provider calls whose execution/usage could not be receipted.
+        /// Non-zero makes cost coverage explicitly incomplete.
+        routed_usage_dropped_records: u64,
         status: TurnOutcomeStatus,
         error: Option<String>,
         /// Tool catalog sent with this turn's model request.
@@ -263,6 +278,17 @@ pub enum Event {
         /// Wall-clock time from request dispatch to the usage receipt for
         /// this model call — the whole call including connection setup, not
         /// only the stream. `None` where dispatch is not measured.
+        request_ms: Option<u64>,
+    },
+
+    /// Usage telemetry for a programmatic provider call whose cost is carried
+    /// by its own routed receipt rather than the active parent route. TUI
+    /// consumers fold this into model-call metrics only; `TurnComplete.usage`
+    /// remains the authoritative total-token reconciliation.
+    RoutedTurnUsage {
+        usage: Usage,
+        duration_ms: u64,
+        first_token_ms: Option<u64>,
         request_ms: Option<u64>,
     },
 

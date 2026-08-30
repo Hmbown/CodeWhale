@@ -270,15 +270,21 @@ type PendingToolUses = Vec<(String, String, serde_json::Value)>;
 #[derive(Debug)]
 enum TranslationEvent {
     AssistantMessage {
+        origin_session_fingerprint: Option<String>,
+        origin_turn_fingerprint: Option<String>,
         history_index: Option<usize>,
         original_text: String,
         translated: anyhow::Result<String>,
+        usage: Option<crate::models::Usage>,
         thinking: Option<String>,
         tool_uses: PendingToolUses,
     },
     Thinking {
+        origin_session_fingerprint: Option<String>,
+        origin_turn_fingerprint: Option<String>,
         placeholder: String,
         translated: anyhow::Result<String>,
+        usage: Option<crate::models::Usage>,
     },
 }
 

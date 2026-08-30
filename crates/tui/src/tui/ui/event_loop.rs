@@ -20,6 +20,198 @@ pub(super) fn event_owner_is_active(
     !owner_session_id.is_empty() && current_session_id == Some(owner_session_id)
 }
 
+#[derive(Debug)]
+struct TranslationAccountingContext {
+    cost_scope: crate::cost_status::CostScopeToken,
+    origin_session_id: Option<String>,
+    origin_turn_id: Option<String>,
+    source_id: String,
+}
+
+struct SettledTranslation {
+    translated: anyhow::Result<String>,
+    usage: Option<crate::models::Usage>,
+}
+
+impl TranslationAccountingContext {
+    fn capture(app: &App, kind: &str, sequence: u64) -> Self {
+        let raw_source = format!(
+            "translation:{}:{}:{kind}:{sequence}",
+            app.current_session_id.as_deref().unwrap_or("no-session"),
+            app.runtime_turn_id.as_deref().unwrap_or("no-turn")
+        );
+        Self {
+            cost_scope: crate::cost_status::scope_token(),
+            origin_session_id: app.current_session_id.clone(),
+            origin_turn_id: app.runtime_turn_id.clone(),
+            source_id: format!(
+                "translation:{}",
+                crate::cost_status::usage_source_fingerprint(&raw_source)
+            ),
+        }
+    }
+
+    fn settle(
+        self,
+        response: anyhow::Result<crate::client::TranslationProviderResponse>,
+    ) -> SettledTranslation {
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                return SettledTranslation {
+                    translated: Err(error),
+                    usage: None,
+                };
+            }
+        };
+        if let Some(usage) = response.usage.as_ref() {
+            if let (Some(session_id), Some(turn_id)) = (
+                self.origin_session_id.as_deref(),
+                self.origin_turn_id.as_deref(),
+            ) {
+                crate::cost_status::report_effective_route_for_interactive_origin(
+                    self.cost_scope,
+                    session_id,
+                    turn_id,
+                    &self.source_id,
+                    &response.route,
+                    usage,
+                );
+            } else {
+                crate::cost_status::report_effective_route_for_runtime(
+                    self.cost_scope,
+                    None,
+                    &self.source_id,
+                    &response.route,
+                    usage,
+                );
+            }
+        } else {
+            if let (Some(session_id), Some(turn_id)) = (
+                self.origin_session_id.as_deref(),
+                self.origin_turn_id.as_deref(),
+            ) {
+                crate::cost_status::report_unreceipted_for_interactive_origin(
+                    self.cost_scope,
+                    session_id,
+                    turn_id,
+                    &self.source_id,
+                    &response.route,
+                );
+            } else {
+                crate::cost_status::report_unreceipted_provider_success(
+                    self.cost_scope,
+                    None,
+                    &self.source_id,
+                    &response.route,
+                );
+            }
+        }
+        SettledTranslation {
+            translated: response.translated,
+            usage: response.usage,
+        }
+    }
+}
+
+fn accrue_translation_usage(app: &mut App, usage: &crate::models::Usage) {
+    let turn_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
+    app.session.total_tokens = app.session.total_tokens.saturating_add(turn_tokens);
+    app.session.total_conversation_tokens = app
+        .session
+        .total_conversation_tokens
+        .saturating_add(turn_tokens);
+    app.session.total_input_tokens = app
+        .session
+        .total_input_tokens
+        .saturating_add(usage.input_tokens);
+    app.session.total_output_tokens = app
+        .session
+        .total_output_tokens
+        .saturating_add(usage.output_tokens);
+    if usage.prompt_cache_hit_tokens.is_some()
+        || usage.prompt_cache_miss_tokens.is_some()
+        || usage.prompt_cache_write_tokens.is_some()
+    {
+        let classes = crate::pricing::token_usage_for_pricing(usage);
+        app.session.total_cache_hit_tokens = app
+            .session
+            .total_cache_hit_tokens
+            .saturating_add(u32::try_from(classes.cache_read).unwrap_or(u32::MAX));
+        app.session.total_cache_miss_tokens = app
+            .session
+            .total_cache_miss_tokens
+            .saturating_add(u32::try_from(classes.input).unwrap_or(u32::MAX));
+        app.session.total_cache_write_tokens = app
+            .session
+            .total_cache_write_tokens
+            .saturating_add(u32::try_from(classes.cache_write).unwrap_or(u32::MAX));
+    }
+}
+
+fn translation_origin(app: &App) -> (Option<String>, Option<String>) {
+    // Fixed-size one-way identities avoid retaining raw imported ids in a
+    // detached completion envelope without introducing truncation aliases.
+    let fingerprint = |value: Option<&str>| value.map(crate::cost_status::usage_source_fingerprint);
+    (
+        fingerprint(app.current_session_id.as_deref()),
+        fingerprint(app.runtime_turn_id.as_deref()),
+    )
+}
+
+fn translation_origin_is_current(
+    app: &App,
+    origin_session_fingerprint: Option<&str>,
+    origin_turn_fingerprint: Option<&str>,
+) -> bool {
+    let current = translation_origin(app);
+    current.0.as_deref() == origin_session_fingerprint
+        && current.1.as_deref() == origin_turn_fingerprint
+}
+
+fn translation_session_is_current(app: &App, origin_session_fingerprint: Option<&str>) -> bool {
+    translation_origin(app).0.as_deref() == origin_session_fingerprint
+}
+
+fn exact_translation_client(
+    config: &Config,
+    route: &crate::core::events::TurnRoute,
+) -> anyhow::Result<Arc<DeepSeekClient>> {
+    let identity = config
+        .resolve_persisted_provider_identity(
+            Some(route.provider.as_str()),
+            Some(&route.provider_identity),
+        )
+        .map_err(anyhow::Error::msg)?;
+    let validated = crate::route_runtime::resolve_runtime_route_for_identity(
+        config,
+        &identity,
+        Some(&route.model),
+    )
+    .map_err(anyhow::Error::msg)?
+    .validate()
+    .map_err(anyhow::Error::msg)?;
+    if validated.identity.key != route.provider_identity
+        || validated.model != route.model
+        || validated.candidate.endpoint().base_url != route.base_url
+    {
+        anyhow::bail!(
+            "translation route changed after turn dispatch; refusing to reuse a different provider client"
+        );
+    }
+    if let Some(receipt) = route.receipt.as_ref()
+        && &validated
+            .client
+            .turn_route_receipt(&route.provider_identity)
+            != receipt
+    {
+        anyhow::bail!(
+            "translation credential or endpoint changed after turn dispatch; refusing stale completion ownership"
+        );
+    }
+    Ok(Arc::new(validated.client))
+}
+
 /// Bind the Runtime thread store to a session before the process-owner lock
 /// is taken, so a second Codewhale on the same machine does not collide on
 /// the default root (#5630). Resume reuses the loaded id; a fresh session
@@ -883,6 +1075,10 @@ pub(crate) async fn run_event_loop(
     let mut stream_display_clock = StreamDisplayClock::default();
     let (translation_tx, mut translation_rx) =
         tokio::sync::mpsc::unbounded_channel::<TranslationEvent>();
+    let fallback_translation_client = translation_client;
+    let mut active_translation_client = fallback_translation_client.clone();
+    let mut active_translation_route: Option<crate::core::events::TurnRoute> = None;
+    let mut translation_sequence = 0_u64;
     let mut pending_translations = 0usize;
     let mut pending_thinking_translations = 0usize;
     let mut last_queue_state = (app.queued_messages.clone(), app.queued_draft.clone());
@@ -1058,14 +1254,31 @@ pub(crate) async fn run_event_loop(
         while let Ok(event) = translation_rx.try_recv() {
             match event {
                 TranslationEvent::AssistantMessage {
+                    origin_session_fingerprint,
+                    origin_turn_fingerprint,
                     history_index,
                     original_text,
                     translated,
+                    usage,
                     thinking,
                     tool_uses,
                 } => {
                     pending_translations = pending_translations.saturating_sub(1);
-                    pending_thinking_translations = pending_thinking_translations.saturating_sub(1);
+                    if translation_session_is_current(app, origin_session_fingerprint.as_deref())
+                        && let Some(usage) = usage.as_ref()
+                    {
+                        accrue_translation_usage(app, usage);
+                    }
+                    if !translation_origin_is_current(
+                        app,
+                        origin_session_fingerprint.as_deref(),
+                        origin_turn_fingerprint.as_deref(),
+                    ) {
+                        tracing::debug!(
+                            "discarded assistant translation completed for a stale session/turn"
+                        );
+                        continue;
+                    }
                     let text = match translated {
                         Ok(text) => {
                             app.status_message = Some(
@@ -1110,10 +1323,29 @@ pub(crate) async fn run_event_loop(
                     app.needs_redraw = true;
                 }
                 TranslationEvent::Thinking {
+                    origin_session_fingerprint,
+                    origin_turn_fingerprint,
                     placeholder,
                     translated,
+                    usage,
                 } => {
                     pending_translations = pending_translations.saturating_sub(1);
+                    pending_thinking_translations = pending_thinking_translations.saturating_sub(1);
+                    if translation_session_is_current(app, origin_session_fingerprint.as_deref())
+                        && let Some(usage) = usage.as_ref()
+                    {
+                        accrue_translation_usage(app, usage);
+                    }
+                    if !translation_origin_is_current(
+                        app,
+                        origin_session_fingerprint.as_deref(),
+                        origin_turn_fingerprint.as_deref(),
+                    ) {
+                        tracing::debug!(
+                            "discarded thinking translation completed for a stale session/turn"
+                        );
+                        continue;
+                    }
                     let text = match translated {
                         Ok(text) => {
                             app.status_message = Some(
@@ -1373,7 +1605,7 @@ pub(crate) async fn run_event_loop(
                         if app.translation_enabled
                             && !current_streaming_text.is_empty()
                             && crate::tui::translation::needs_translation(&current_streaming_text)
-                            && let Some(translation_client) = translation_client.as_ref()
+                            && let Some(translation_client) = active_translation_client.as_ref()
                         {
                             app.status_message = Some(
                                 crate::localization::tr(
@@ -1387,24 +1619,38 @@ pub(crate) async fn run_event_loop(
                             let tx = translation_tx.clone();
                             let client = translation_client.clone();
                             let original_text = current_streaming_text.clone();
-                            let translation_model = app
-                                .last_effective_model
-                                .clone()
+                            let translation_model = active_translation_route
+                                .as_ref()
+                                .map(|route| route.model.clone())
+                                .or_else(|| app.last_effective_model.clone())
                                 .unwrap_or_else(|| app.model.clone());
+                            translation_sequence = translation_sequence.saturating_add(1);
+                            let accounting = TranslationAccountingContext::capture(
+                                app,
+                                "assistant",
+                                translation_sequence,
+                            );
+                            let (origin_session_fingerprint, origin_turn_fingerprint) =
+                                translation_origin(app);
                             let target_language =
                                 app.ui_locale.translation_target_name().to_string();
                             tokio::spawn(async move {
-                                let translated = crate::tui::translation::translate_text(
-                                    &original_text,
-                                    &client,
-                                    &translation_model,
-                                    &target_language,
-                                )
-                                .await;
+                                let settled = accounting.settle(
+                                    client
+                                        .translate_with_usage(
+                                            &original_text,
+                                            &translation_model,
+                                            &target_language,
+                                        )
+                                        .await,
+                                );
                                 let _ = tx.send(TranslationEvent::AssistantMessage {
+                                    origin_session_fingerprint,
+                                    origin_turn_fingerprint,
                                     history_index,
                                     original_text,
-                                    translated,
+                                    translated: settled.translated,
+                                    usage: settled.usage,
                                     thinking,
                                     tool_uses,
                                 });
@@ -1461,7 +1707,7 @@ pub(crate) async fn run_event_loop(
                             }
                             if !original_thinking.is_empty()
                                 && crate::tui::translation::needs_translation(&original_thinking)
-                                && let Some(translation_client) = translation_client.as_ref()
+                                && let Some(translation_client) = active_translation_client.as_ref()
                             {
                                 app.status_message = Some(
                                     crate::localization::thinking_translation_in_progress(
@@ -1475,10 +1721,19 @@ pub(crate) async fn run_event_loop(
                                     pending_thinking_translations.saturating_add(1);
                                 let tx = translation_tx.clone();
                                 let client = translation_client.clone();
-                                let translation_model = app
-                                    .last_effective_model
-                                    .clone()
+                                let translation_model = active_translation_route
+                                    .as_ref()
+                                    .map(|route| route.model.clone())
+                                    .or_else(|| app.last_effective_model.clone())
                                     .unwrap_or_else(|| app.model.clone());
+                                translation_sequence = translation_sequence.saturating_add(1);
+                                let accounting = TranslationAccountingContext::capture(
+                                    app,
+                                    "thinking",
+                                    translation_sequence,
+                                );
+                                let (origin_session_fingerprint, origin_turn_fingerprint) =
+                                    translation_origin(app);
                                 let placeholder =
                                     crate::localization::thinking_translation_placeholder(
                                         app.ui_locale,
@@ -1487,16 +1742,21 @@ pub(crate) async fn run_event_loop(
                                 let target_language =
                                     app.ui_locale.translation_target_name().to_string();
                                 tokio::spawn(async move {
-                                    let translated = crate::tui::translation::translate_text(
-                                        &original_thinking,
-                                        &client,
-                                        &translation_model,
-                                        &target_language,
-                                    )
-                                    .await;
+                                    let settled = accounting.settle(
+                                        client
+                                            .translate_with_usage(
+                                                &original_thinking,
+                                                &translation_model,
+                                                &target_language,
+                                            )
+                                            .await,
+                                    );
                                     let _ = tx.send(TranslationEvent::Thinking {
+                                        origin_session_fingerprint,
+                                        origin_turn_fingerprint,
                                         placeholder,
-                                        translated,
+                                        translated: settled.translated,
+                                        usage: settled.usage,
                                     });
                                 });
                             } else {
@@ -1654,7 +1914,7 @@ pub(crate) async fn run_event_loop(
                             subagent_list_refresh_requested = true;
                         }
                     }
-                    EngineEvent::TurnStarted { turn_id, .. } => {
+                    EngineEvent::TurnStarted { turn_id, route, .. } => {
                         // A prior turn that died without its `TurnComplete`
                         // must not leak its provisional estimate into this one.
                         app.clear_pending_turn_cost();
@@ -1695,6 +1955,19 @@ pub(crate) async fn run_event_loop(
                         if app.status_message.is_none() {
                             app.status_message = Some("Press Esc or Ctrl+C to cancel".to_string());
                         }
+                        active_translation_client = match route.as_ref() {
+                            Some(route) => match exact_translation_client(config, route) {
+                                Ok(client) => Some(client),
+                                Err(error) => {
+                                    tracing::warn!(
+                                        "translation client rejected the frozen turn route: {error}"
+                                    );
+                                    None
+                                }
+                            },
+                            None => fallback_translation_client.clone(),
+                        };
+                        active_translation_route = route;
                         app.runtime_turn_id = Some(turn_id);
                         app.runtime_turn_status = Some("in_progress".to_string());
                         app.turn_counter = app.turn_counter.saturating_add(1);
@@ -1724,9 +1997,26 @@ pub(crate) async fn run_event_loop(
                     EngineEvent::ToolRequestSnapshot { snapshot } => {
                         app.session.last_tool_request_snapshot = Some(snapshot);
                     }
-                    EngineEvent::RouteDispatched { .. } => {}
+                    EngineEvent::RouteDispatched { turn_id, route } => {
+                        if app.runtime_turn_id.as_deref() == Some(turn_id.as_str()) {
+                            active_translation_client = match exact_translation_client(
+                                config, &route,
+                            ) {
+                                Ok(client) => Some(client),
+                                Err(error) => {
+                                    tracing::warn!(
+                                        "translation client rejected the dispatched turn route: {error}"
+                                    );
+                                    None
+                                }
+                            };
+                            active_translation_route = Some(route);
+                        }
+                    }
                     EngineEvent::TurnComplete {
                         usage,
+                        parent_route_usage,
+                        routed_usage_dropped_records,
                         status,
                         error,
                         tool_catalog,
@@ -1943,19 +2233,19 @@ pub(crate) async fn run_event_loop(
                             .as_ref()
                             .and_then(|turn| turn.route.as_ref())
                             .and_then(crate::core::events::TurnRoute::cost_envelope)
-                            .map(|route| route.audit(&usage));
+                            .map(|route| route.audit(&parent_route_usage));
                         app.push_turn_cache_record(crate::tui::app::TurnCacheRecord {
                             provider,
                             provider_identity,
                             model,
                             auto_model,
-                            input_tokens: usage.input_tokens,
-                            output_tokens: usage.output_tokens,
-                            cache_hit_tokens: usage.prompt_cache_hit_tokens,
-                            cache_miss_tokens: usage.prompt_cache_miss_tokens,
-                            reasoning_replay_tokens: usage.reasoning_replay_tokens,
-                            cache_write_tokens: usage.prompt_cache_write_tokens,
-                            reasoning_tokens: usage.reasoning_tokens,
+                            input_tokens: parent_route_usage.input_tokens,
+                            output_tokens: parent_route_usage.output_tokens,
+                            cache_hit_tokens: parent_route_usage.prompt_cache_hit_tokens,
+                            cache_miss_tokens: parent_route_usage.prompt_cache_miss_tokens,
+                            reasoning_replay_tokens: parent_route_usage.reasoning_replay_tokens,
+                            cache_write_tokens: parent_route_usage.prompt_cache_write_tokens,
+                            reasoning_tokens: parent_route_usage.reasoning_tokens,
                             cost_audit: cost_audit.clone(),
                             recorded_at: Instant::now(),
                         });
@@ -1974,8 +2264,9 @@ pub(crate) async fn run_event_loop(
                         // *not* cover so `/cost` can stay honest about it.
                         //
                         // `cost_audit` above came from `cost_envelope()`, i.e.
-                        // the billing envelope stamped at the wire boundary
-                        // and classified from this turn's frozen receipt. It
+                        // the billing envelope frozen at CodeWhale's
+                        // pre-permit application-dispatch boundary and
+                        // classified from this turn's frozen receipt. It
                         // is `None` for a route that was never dispatched, and
                         // a route whose receipt named no product classified as
                         // Unknown — either way nothing accrues. A `/provider`
@@ -1997,6 +2288,20 @@ pub(crate) async fn run_event_loop(
                         }
                         if let Some(cost) = turn_cost {
                             app.accrue_session_cost_estimate(cost);
+                        }
+                        if routed_usage_dropped_records > 0 {
+                            let dropped =
+                                u32::try_from(routed_usage_dropped_records).unwrap_or(u32::MAX);
+                            app.session.cost_unpriced_turns =
+                                app.session.cost_unpriced_turns.saturating_add(dropped);
+                            app.session.cost_cny_unpriced_turns =
+                                app.session.cost_cny_unpriced_turns.saturating_add(dropped);
+                            app.session
+                                .cost_unpriced_reasons
+                                .insert("routed_usage_receipt_missing".to_string());
+                            app.session
+                                .cost_cny_unpriced_reasons
+                                .insert("routed_usage_receipt_missing".to_string());
                         }
 
                         // Emit OSC 9 / BEL desktop notification for long turns, and
@@ -3281,6 +3586,24 @@ pub(crate) async fn run_event_loop(
                             app.accrue_pending_turn_cost_estimate(cost);
                         }
                         app.session.accrue_pending_turn_usage(&usage);
+                    }
+                    EngineEvent::RoutedTurnUsage {
+                        usage,
+                        duration_ms,
+                        first_token_ms,
+                        request_ms,
+                    } => {
+                        // Routed calls own separate immutable cost receipts.
+                        // Preserve model-call telemetry without pricing them
+                        // provisionally under the active parent route or
+                        // incrementally adding tokens that TurnComplete will
+                        // reconcile authoritatively.
+                        app.session_metrics.record_model_call(
+                            usage.output_tokens,
+                            duration_ms,
+                            first_token_ms,
+                            request_ms,
+                        );
                     }
                     EngineEvent::AdvisoryNote { note, .. } => {
                         // Advisor background watcher note. Display as a
@@ -6278,6 +6601,177 @@ mod session_boot_event_tests {
                 .and_then(|snapshot| snapshot.servers.first())
                 .map(|server| server.name.as_str()),
             Some("fresh")
+        );
+    }
+
+    fn translation_test_route() -> crate::cost_status::EffectiveRouteEnvelope {
+        crate::cost_status::EffectiveRouteEnvelope {
+            provider: crate::config::ApiProvider::Deepseek,
+            provider_identity: "deepseek".to_string(),
+            model: "deepseek-chat".to_string(),
+            billing_surface: crate::pricing::billing_surface_for_route(
+                crate::config::ApiProvider::Deepseek,
+                Some("https://api.deepseek.com/v1"),
+            )
+            .map(str::to_string),
+            endpoint_fingerprint: crate::cost_status::endpoint_fingerprint(
+                "https://api.deepseek.com/v1",
+            ),
+            provider_live_pricing: None,
+            billing_mode: crate::cost_status::RouteBillingMode::Metered,
+            dispatched_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn assistant_and_thinking_translation_usage_each_accrue_once() {
+        let _scope = crate::cost_status::test_scope();
+        let mut app = test_app();
+        app.current_session_id = Some("session-translation".to_string());
+        app.runtime_turn_id = Some("turn-translation".to_string());
+        let usage_a = crate::models::Usage {
+            input_tokens: 5,
+            output_tokens: 2,
+            ..crate::models::Usage::default()
+        };
+        let usage_b = crate::models::Usage {
+            input_tokens: 3,
+            output_tokens: 1,
+            ..crate::models::Usage::default()
+        };
+
+        let assistant = TranslationAccountingContext::capture(&app, "assistant", 1).settle(Ok(
+            crate::client::TranslationProviderResponse {
+                translated: Ok("助理".to_string()),
+                route: translation_test_route(),
+                usage: Some(usage_a.clone()),
+            },
+        ));
+        let thinking = TranslationAccountingContext::capture(&app, "thinking", 2).settle(Ok(
+            crate::client::TranslationProviderResponse {
+                translated: Err(anyhow::anyhow!("incomplete: max_tokens")),
+                route: translation_test_route(),
+                usage: Some(usage_b.clone()),
+            },
+        ));
+
+        assert_eq!(assistant.usage.as_ref(), Some(&usage_a));
+        assert_eq!(thinking.usage.as_ref(), Some(&usage_b));
+        assert!(
+            thinking.translated.is_err(),
+            "semantic rejection is preserved"
+        );
+        accrue_translation_usage(&mut app, assistant.usage.as_ref().expect("assistant usage"));
+        accrue_translation_usage(&mut app, thinking.usage.as_ref().expect("thinking usage"));
+        assert_eq!(app.session.total_input_tokens, 8);
+        assert_eq!(app.session.total_output_tokens, 3);
+        assert_eq!(app.session.total_tokens, 11);
+
+        let pending = crate::cost_status::drain();
+        assert_eq!(
+            pending.priced_turns.saturating_add(pending.unpriced_turns),
+            2,
+            "each decoded provider response is audited exactly once"
+        );
+    }
+
+    #[test]
+    fn translation_unreceipted_success_is_marked_once_but_transport_failure_is_not() {
+        let _scope = crate::cost_status::test_scope();
+        let mut app = test_app();
+        app.current_session_id = Some("session-translation-missing-usage".to_string());
+        app.runtime_turn_id = Some("turn-translation-missing-usage".to_string());
+
+        for _ in 0..2 {
+            let settled = TranslationAccountingContext::capture(&app, "assistant", 7).settle(Ok(
+                crate::client::TranslationProviderResponse {
+                    translated: Ok("translation remains usable".to_string()),
+                    route: translation_test_route(),
+                    usage: None,
+                },
+            ));
+            assert_eq!(
+                settled.translated.expect("semantic output remains usable"),
+                "translation remains usable"
+            );
+            assert_eq!(settled.usage, None);
+        }
+        let transport = TranslationAccountingContext::capture(&app, "assistant", 8)
+            .settle(Err(anyhow::anyhow!("HTTP 429")));
+        assert!(transport.translated.is_err());
+        assert_eq!(transport.usage, None);
+
+        let pending = crate::cost_status::drain();
+        assert_eq!(pending.priced_turns, 0);
+        assert_eq!(
+            pending.unpriced_turns, 1,
+            "stable response id dedupes replay"
+        );
+        assert_eq!(pending.cny_unpriced_turns, 1);
+        assert!(
+            pending
+                .unpriced_reasons
+                .contains("provider_success_missing_usage")
+        );
+    }
+
+    #[test]
+    fn late_translation_delivery_isolated_from_new_session_or_turn() {
+        let mut app = test_app();
+        app.current_session_id = Some("session-a".to_string());
+        app.runtime_turn_id = Some("turn-a".to_string());
+        let (session, turn) = translation_origin(&app);
+        assert!(translation_origin_is_current(
+            &app,
+            session.as_deref(),
+            turn.as_deref()
+        ));
+
+        app.current_session_id = Some("session-b".to_string());
+        assert!(!translation_session_is_current(&app, session.as_deref()));
+        assert!(!translation_origin_is_current(
+            &app,
+            session.as_deref(),
+            turn.as_deref()
+        ));
+        app.current_session_id = Some("session-a".to_string());
+        app.runtime_turn_id = Some("turn-b".to_string());
+        assert!(
+            translation_session_is_current(&app, session.as_deref()),
+            "same-session late usage still belongs in session totals"
+        );
+        assert!(!translation_origin_is_current(
+            &app,
+            session.as_deref(),
+            turn.as_deref()
+        ));
+
+        let usage = crate::models::Usage {
+            input_tokens: 4,
+            output_tokens: 2,
+            ..crate::models::Usage::default()
+        };
+        if translation_session_is_current(&app, session.as_deref()) {
+            accrue_translation_usage(&mut app, &usage);
+        }
+        assert_eq!(app.session.total_tokens, 6);
+        app.current_session_id = Some("session-b".to_string());
+        if translation_session_is_current(&app, session.as_deref()) {
+            accrue_translation_usage(&mut app, &usage);
+        }
+        assert_eq!(
+            app.session.total_tokens, 6,
+            "cross-session late usage must not pollute the new session"
+        );
+
+        let shared_prefix = "x".repeat(300);
+        app.current_session_id = Some(format!("{shared_prefix}:old"));
+        app.runtime_turn_id = Some("turn-long".to_string());
+        let (long_session, long_turn) = translation_origin(&app);
+        app.current_session_id = Some(format!("{shared_prefix}:new"));
+        assert!(
+            !translation_origin_is_current(&app, long_session.as_deref(), long_turn.as_deref()),
+            "fixed fingerprints must distinguish ids with the same long prefix"
         );
     }
 }

@@ -22,7 +22,7 @@ use crate::work_graph::ReasoningEffortTier;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
@@ -39,6 +39,45 @@ const MAX_SESSION_GOAL_OBJECTIVE_CHARS: usize = 8_192;
 const MAX_SESSION_GOAL_FILE_BYTES: u64 = 64 * 1_024;
 const CURRENT_SESSION_SCHEMA_VERSION: u32 = 1;
 const CURRENT_QUEUE_SCHEMA_VERSION: u32 = 1;
+const LATE_USAGE_DIR: &str = ".late-usage";
+const CURRENT_LATE_USAGE_SCHEMA_VERSION: u32 = 1;
+const MAX_LATE_USAGE_RECORDS_PER_SESSION: usize = 64;
+const MAX_LATE_USAGE_LEDGER_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LateUsageRecord {
+    source_fingerprint: String,
+    turn_fingerprint: String,
+    route: crate::cost_status::EffectiveRouteEnvelope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    usage: Option<crate::models::Usage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LateUsageLedger {
+    schema_version: u32,
+    #[serde(default)]
+    records: Vec<LateUsageRecord>,
+    #[serde(default)]
+    overflowed: bool,
+}
+
+impl Default for LateUsageLedger {
+    fn default() -> Self {
+        Self {
+            schema_version: CURRENT_LATE_USAGE_SCHEMA_VERSION,
+            records: Vec::new(),
+            overflowed: false,
+        }
+    }
+}
+
+fn is_sha256_fingerprint(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 
 const fn default_session_schema_version() -> u32 {
     CURRENT_SESSION_SCHEMA_VERSION
@@ -71,6 +110,119 @@ fn normalize_managed_dir(path: PathBuf) -> std::io::Result<PathBuf> {
         return Ok(path);
     }
     std::env::current_dir().map(|cwd| cwd.join(path))
+}
+
+fn open_private_lock_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
+        let file = options.open(path)?;
+        validate_private_regular_file(&file, path)?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        return Ok(file);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        let file = options.open(path)?;
+        validate_private_regular_file(&file, path)?;
+        return Ok(file);
+    }
+    #[cfg(all(not(unix), not(windows)))]
+    {
+        let file = options.open(path)?;
+        validate_private_regular_file(&file, path)?;
+        Ok(file)
+    }
+}
+
+fn open_private_read_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    validate_private_regular_file(&file, path)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn validate_private_regular_file(file: &fs::File, path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.nlink() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "private sidecar file {} must be one regular filesystem link",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_private_regular_file(file: &fs::File, path: &Path) -> io::Result<()> {
+    use std::os::windows::fs::MetadataExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT, GetFileInformationByHandle,
+    };
+
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "private sidecar file {} must be a non-reparse regular file",
+                path.display()
+            ),
+        ));
+    }
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: `file` keeps the handle valid and `info` is writable for the call.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if info.nNumberOfLinks != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "private sidecar file {} must have exactly one filesystem link",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn validate_private_regular_file(file: &fs::File, path: &Path) -> io::Result<()> {
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("private sidecar file {} must be regular", path.display()),
+        ));
+    }
+    Ok(())
 }
 
 /// Persisted queued message for offline/degraded mode.
@@ -436,6 +588,45 @@ pub struct SessionCostSnapshot {
 }
 
 impl SessionCostSnapshot {
+    fn absorb_late_background_cost(&mut self, pool: &crate::cost_status::PendingBackgroundCost) {
+        let estimate = crate::pricing::CostEstimate {
+            usd: self.subagent_cost_usd,
+            cny: self.subagent_cost_cny,
+        }
+        .saturating_add(pool.estimate);
+        self.subagent_cost_usd = estimate.usd;
+        self.subagent_cost_cny = estimate.cny;
+        self.priced_turns = self.priced_turns.saturating_add(pool.priced_turns);
+        self.unpriced_turns = self.unpriced_turns.saturating_add(pool.unpriced_turns);
+        self.cny_priced_turns = self.cny_priced_turns.saturating_add(pool.cny_priced_turns);
+        self.cny_unpriced_turns = self
+            .cny_unpriced_turns
+            .saturating_add(pool.cny_unpriced_turns);
+        self.unpriced_reasons
+            .extend(pool.unpriced_reasons.iter().map(ToString::to_string));
+        self.cny_unpriced_reasons
+            .extend(pool.cny_unpriced_reasons.iter().map(ToString::to_string));
+        self.unpriced_classes
+            .extend(pool.unpriced_classes.iter().map(ToString::to_string));
+        self.pricing_provenances
+            .extend(pool.pricing_provenances.iter().map(ToString::to_string));
+        self.live_pricing_defects
+            .extend(pool.live_pricing_defects.iter().map(ToString::to_string));
+        self.live_pricing_unusable_defects.extend(
+            pool.live_pricing_unusable_defects
+                .iter()
+                .map(ToString::to_string),
+        );
+        self.route_receipts
+            .extend(pool.route_receipts.iter().cloned());
+        self.usage_source_fingerprints
+            .extend(pool.usage_source_fingerprints.iter().cloned());
+        self.coverage_recorded = true;
+        let total = self.total_estimate();
+        self.displayed_cost_high_water_usd = self.displayed_cost_high_water_usd.max(total.usd);
+        self.displayed_cost_high_water_cny = self.displayed_cost_high_water_cny.max(total.cny);
+    }
+
     /// Session + subagent spend as **one** dual-currency accumulator.
     ///
     /// The persisted USD and CNY columns are projections of per-turn
@@ -1039,6 +1230,224 @@ impl SessionManager {
         &self.sessions_dir
     }
 
+    fn late_usage_paths(&self, session_id: &str) -> io::Result<(PathBuf, PathBuf)> {
+        let session_id = self.validated_session_id(session_id)?;
+        let dir = self.sessions_dir.join(LATE_USAGE_DIR);
+        fs::create_dir_all(&dir)?;
+        let metadata = fs::symlink_metadata(&dir)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "late usage store {} must be a real directory",
+                    dir.display()
+                ),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+        }
+        Ok((
+            dir.join(format!("{session_id}.json")),
+            dir.join(format!("{session_id}.lock")),
+        ))
+    }
+
+    fn load_late_usage_unlocked(path: &Path) -> io::Result<LateUsageLedger> {
+        let file = match open_private_read_file(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(LateUsageLedger::default());
+            }
+            Err(error) => return Err(error),
+        };
+        let metadata = file.metadata()?;
+        if metadata.len() > MAX_LATE_USAGE_LEDGER_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "late usage ledger {} exceeds its size bound",
+                    path.display()
+                ),
+            ));
+        }
+        use std::io::Read as _;
+        let mut raw = Vec::with_capacity(
+            usize::try_from(metadata.len().min(MAX_LATE_USAGE_LEDGER_BYTES)).unwrap_or(0),
+        );
+        file.take(MAX_LATE_USAGE_LEDGER_BYTES.saturating_add(1))
+            .read_to_end(&mut raw)?;
+        if u64::try_from(raw.len()).unwrap_or(u64::MAX) > MAX_LATE_USAGE_LEDGER_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "late usage ledger {} exceeds its size bound",
+                    path.display()
+                ),
+            ));
+        }
+        let ledger: LateUsageLedger = serde_json::from_slice(&raw)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if ledger.schema_version != CURRENT_LATE_USAGE_SCHEMA_VERSION
+            || ledger.records.len() > MAX_LATE_USAGE_RECORDS_PER_SESSION
+            || ledger.records.iter().any(|record| {
+                !is_sha256_fingerprint(&record.source_fingerprint)
+                    || !is_sha256_fingerprint(&record.turn_fingerprint)
+            })
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "late usage ledger has an unsupported or unbounded shape",
+            ));
+        }
+        Ok(ledger)
+    }
+
+    fn persist_late_usage_record(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        source_id: &str,
+        route: &crate::cost_status::EffectiveRouteEnvelope,
+        usage: Option<&crate::models::Usage>,
+    ) -> io::Result<bool> {
+        let (path, lock_path) = self.late_usage_paths(session_id)?;
+        let lock_file = open_private_lock_file(&lock_path)?;
+        let mut lock = fd_lock::RwLock::new(lock_file);
+        let _guard = lock.write()?;
+        let mut ledger = Self::load_late_usage_unlocked(&path)?;
+        let source_fingerprint = crate::cost_status::usage_source_fingerprint(source_id);
+        if ledger
+            .records
+            .iter()
+            .any(|record| record.source_fingerprint == source_fingerprint)
+        {
+            return Ok(true);
+        }
+        if ledger.records.len() == MAX_LATE_USAGE_RECORDS_PER_SESSION {
+            if !ledger.overflowed {
+                ledger.overflowed = true;
+                let bytes = serde_json::to_vec(&ledger)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                write_atomic(&path, &bytes)?;
+            }
+            return Ok(true);
+        }
+        ledger.records.push(LateUsageRecord {
+            source_fingerprint,
+            turn_fingerprint: crate::cost_status::usage_source_fingerprint(turn_id),
+            route: route.sanitized_for_persistence(),
+            usage: usage.cloned(),
+        });
+        let bytes = serde_json::to_vec(&ledger)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        write_atomic(&path, &bytes)?;
+        Ok(true)
+    }
+
+    pub(crate) fn persist_late_runtime_usage(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        record: &crate::cost_status::RuntimeUsageRecord,
+    ) -> io::Result<bool> {
+        self.persist_late_usage_record(
+            session_id,
+            turn_id,
+            &record.source_id,
+            &record.usage.route,
+            Some(&record.usage.usage),
+        )
+    }
+
+    pub(crate) fn persist_late_runtime_drop(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        record: &crate::cost_status::RuntimeUsageDropRecord,
+    ) -> io::Result<bool> {
+        self.persist_late_usage_record(session_id, turn_id, &record.source_id, &record.route, None)
+    }
+
+    fn load_late_usage(&self, session_id: &str) -> io::Result<LateUsageLedger> {
+        let (path, lock_path) = self.late_usage_paths(session_id)?;
+        let lock_file = open_private_lock_file(&lock_path)?;
+        let lock = fd_lock::RwLock::new(lock_file);
+        let _guard = lock.read()?;
+        Self::load_late_usage_unlocked(&path)
+    }
+
+    fn apply_late_usage_to_metadata(&self, metadata: &mut SessionMetadata) -> io::Result<()> {
+        let ledger = self.load_late_usage(&metadata.id)?;
+        for record in ledger.records {
+            let source_fingerprint = record.source_fingerprint.clone();
+            let source_id = format!("late:{}", record.source_fingerprint);
+            let mut pending = if let Some(usage) = record.usage.as_ref() {
+                crate::cost_status::background_cost_for_runtime_usage(
+                    &crate::cost_status::RuntimeUsageRecord {
+                        source_id,
+                        usage: crate::cost_status::EffectiveRouteUsage {
+                            route: record.route,
+                            usage: usage.clone(),
+                        },
+                    },
+                )
+            } else {
+                crate::cost_status::background_cost_for_runtime_drop(
+                    &crate::cost_status::RuntimeUsageDropRecord {
+                        source_id,
+                        route: record.route,
+                    },
+                )
+            };
+            // The sidecar already stores the canonical SHA-256 identity. Do
+            // not hash it again while projecting the receipt into the saved
+            // session, or a concurrent main-snapshot writer that already
+            // contains the response would not dedupe against this overlay.
+            pending.usage_source_fingerprints.clear();
+            pending
+                .usage_source_fingerprints
+                .insert(source_fingerprint.clone());
+            if metadata
+                .cost
+                .usage_source_fingerprints
+                .contains(&source_fingerprint)
+            {
+                continue;
+            }
+            if let Some(usage) = record.usage {
+                metadata.total_tokens = metadata
+                    .total_tokens
+                    .saturating_add(u64::from(usage.input_tokens))
+                    .saturating_add(u64::from(usage.output_tokens));
+            }
+            metadata.cost.absorb_late_background_cost(&pending);
+        }
+        if ledger.overflowed {
+            let fingerprint = crate::cost_status::usage_source_fingerprint(&format!(
+                "late-usage-overflow:{}",
+                crate::cost_status::usage_source_fingerprint(&metadata.id)
+            ));
+            if metadata.cost.usage_source_fingerprints.insert(fingerprint) {
+                metadata.cost.unpriced_turns = metadata.cost.unpriced_turns.saturating_add(1);
+                metadata.cost.cny_unpriced_turns =
+                    metadata.cost.cny_unpriced_turns.saturating_add(1);
+                metadata
+                    .cost
+                    .unpriced_reasons
+                    .insert("late_usage_ledger_overflow".to_string());
+                metadata
+                    .cost
+                    .cny_unpriced_reasons
+                    .insert("late_usage_ledger_overflow".to_string());
+                metadata.cost.coverage_recorded = true;
+            }
+        }
+        Ok(())
+    }
+
     /// Persist the bounded goal control state for one saved session.
     /// `None` is the canonical clear operation and is idempotent.
     pub fn save_session_goal(
@@ -1448,6 +1857,7 @@ impl SessionManager {
         session.system_prompt = strip_legacy_truncation_note(session.system_prompt);
         session.ensure_journal();
         self.hydrate_approval_receipts(&mut session)?;
+        self.apply_late_usage_to_metadata(&mut session.metadata)?;
 
         Ok(session)
     }
@@ -1531,8 +1941,9 @@ impl SessionManager {
             let path = entry.path();
 
             if path.extension().is_some_and(|ext| ext == "json")
-                && let Ok(session) = Self::load_session_metadata(&path)
+                && let Ok(mut session) = Self::load_session_metadata(&path)
             {
+                self.apply_late_usage_to_metadata(&mut session)?;
                 sessions.push(session);
             }
         }
@@ -2500,6 +2911,284 @@ mod tests {
                 cache_control: None,
             }],
         }
+    }
+
+    #[test]
+    fn late_usage_sidecar_survives_stale_session_save_and_replays_once() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("manager");
+        let old_id = "old-session";
+        let new_id = "new-session";
+        let old = create_saved_session_with_id_and_mode(
+            old_id.to_string(),
+            &[make_test_message("user", "old session")],
+            "deepseek-v4-flash",
+            tmp.path(),
+            0,
+            None,
+            Some("agent"),
+        );
+        let new = create_saved_session_with_id_and_mode(
+            new_id.to_string(),
+            &[make_test_message("user", "new session")],
+            "deepseek-v4-flash",
+            tmp.path(),
+            0,
+            None,
+            Some("agent"),
+        );
+        manager.save_session(&old).expect("save old");
+        manager.save_session(&new).expect("save new");
+
+        let priced_route = crate::cost_status::EffectiveRouteEnvelope::capture(
+            None,
+            ApiProvider::Deepseek,
+            "deepseek",
+            "deepseek-v4-flash",
+            Some(crate::config::DEFAULT_DEEPSEEK_BASE_URL),
+            Utc::now(),
+        );
+        let usage = crate::models::Usage {
+            input_tokens: 17,
+            output_tokens: 5,
+            ..crate::models::Usage::default()
+        };
+        let usage_record = crate::cost_status::RuntimeUsageRecord {
+            source_id: "translation:old-turn:assistant:1".to_string(),
+            usage: crate::cost_status::EffectiveRouteUsage {
+                route: priced_route.clone(),
+                usage: usage.clone(),
+            },
+        };
+        let missing_record = crate::cost_status::RuntimeUsageDropRecord {
+            source_id: "advisor:old-turn:provider-response:0".to_string(),
+            route: priced_route,
+        };
+        let mut subscription_route = missing_record.route.clone();
+        subscription_route.billing_mode = crate::cost_status::RouteBillingMode::Subscription;
+        let subscription_missing = crate::cost_status::RuntimeUsageDropRecord {
+            source_id: "translation:old-turn:thinking:2".to_string(),
+            route: subscription_route,
+        };
+
+        for _ in 0..2 {
+            assert!(
+                manager
+                    .persist_late_runtime_usage(old_id, "old-turn", &usage_record)
+                    .expect("persist late usage")
+            );
+            assert!(
+                manager
+                    .persist_late_runtime_drop(old_id, "old-turn", &missing_record)
+                    .expect("persist missing usage")
+            );
+            assert!(
+                manager
+                    .persist_late_runtime_drop(old_id, "old-turn", &subscription_missing)
+                    .expect("persist subscription missing usage")
+            );
+        }
+
+        // A concurrent stale whole-session writer cannot erase the independent
+        // origin ledger. Loading overlays it once by stable response identity.
+        manager.save_session(&old).expect("stale old-session save");
+        let first = manager.load_session_snapshot(old_id).expect("load old");
+        let second = manager.load_session_snapshot(old_id).expect("replay old");
+        for loaded in [&first, &second] {
+            assert_eq!(loaded.metadata.total_tokens, 22);
+            assert_eq!(loaded.metadata.cost.unpriced_turns, 1);
+            assert_eq!(loaded.metadata.cost.cny_unpriced_turns, 1);
+            assert_eq!(loaded.metadata.cost.usage_source_fingerprints.len(), 3);
+            assert!(
+                loaded
+                    .metadata
+                    .cost
+                    .unpriced_reasons
+                    .contains("provider_success_missing_usage")
+            );
+        }
+        assert_eq!(first.metadata.cost.priced_turns, 1);
+
+        let clean = manager.load_session_snapshot(new_id).expect("load new");
+        assert_eq!(clean.metadata.total_tokens, 0);
+        assert_eq!(clean.metadata.cost.priced_turns, 0);
+        assert_eq!(clean.metadata.cost.unpriced_turns, 0);
+        assert!(clean.metadata.cost.usage_source_fingerprints.is_empty());
+
+        let ledger = fs::read_to_string(
+            manager
+                .sessions_dir()
+                .join(LATE_USAGE_DIR)
+                .join(format!("{old_id}.json")),
+        )
+        .expect("late ledger");
+        assert!(!ledger.contains("translation:old-turn"));
+        assert!(!ledger.contains(crate::config::DEFAULT_DEEPSEEK_BASE_URL));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let ledger_dir = manager.sessions_dir().join(LATE_USAGE_DIR);
+            assert_eq!(
+                fs::metadata(&ledger_dir)
+                    .expect("private sidecar directory")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+            for path in [
+                ledger_dir.join(format!("{old_id}.json")),
+                ledger_dir.join(format!("{old_id}.lock")),
+            ] {
+                assert_eq!(
+                    fs::metadata(path)
+                        .expect("private sidecar metadata")
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o600
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn late_usage_sidecar_has_a_bounded_fail_closed_overflow() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("manager");
+        let session_id = "bounded-session";
+        let session = create_saved_session_with_id_and_mode(
+            session_id.to_string(),
+            &[make_test_message("user", "bounded session")],
+            "local-model",
+            tmp.path(),
+            0,
+            None,
+            Some("agent"),
+        );
+        manager.save_session(&session).expect("save bounded");
+        let mut route = crate::cost_status::EffectiveRouteEnvelope::capture(
+            None,
+            ApiProvider::Custom,
+            "local-provider",
+            "local-model",
+            Some("http://127.0.0.1:11434/v1"),
+            Utc::now(),
+        );
+        route.billing_mode = crate::cost_status::RouteBillingMode::Local;
+        for index in 0..=MAX_LATE_USAGE_RECORDS_PER_SESSION {
+            manager
+                .persist_late_runtime_usage(
+                    session_id,
+                    "bounded-turn",
+                    &crate::cost_status::RuntimeUsageRecord {
+                        source_id: format!("late-bounded:{index}"),
+                        usage: crate::cost_status::EffectiveRouteUsage {
+                            route: route.clone(),
+                            usage: crate::models::Usage {
+                                input_tokens: 1,
+                                ..crate::models::Usage::default()
+                            },
+                        },
+                    },
+                )
+                .expect("bounded append");
+        }
+
+        let loaded = manager
+            .load_session_snapshot(session_id)
+            .expect("load bounded");
+        assert_eq!(
+            loaded.metadata.total_tokens,
+            u64::try_from(MAX_LATE_USAGE_RECORDS_PER_SESSION).unwrap_or(u64::MAX)
+        );
+        assert_eq!(loaded.metadata.cost.unpriced_turns, 1);
+        assert!(
+            loaded
+                .metadata
+                .cost
+                .unpriced_reasons
+                .contains("late_usage_ledger_overflow")
+        );
+        let ledger = manager.load_late_usage(session_id).expect("bounded ledger");
+        assert_eq!(ledger.records.len(), MAX_LATE_USAGE_RECORDS_PER_SESSION);
+        assert!(ledger.overflowed);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn late_usage_sidecar_rejects_linked_lock_and_ledger_leaves() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("manager");
+        let session_id = "linked-sidecar-session";
+        let (ledger_path, lock_path) = manager.late_usage_paths(session_id).expect("paths");
+        let route = crate::cost_status::EffectiveRouteEnvelope::capture(
+            None,
+            ApiProvider::Deepseek,
+            "deepseek",
+            "deepseek-v4-flash",
+            Some(crate::config::DEFAULT_DEEPSEEK_BASE_URL),
+            Utc::now(),
+        );
+        let record = crate::cost_status::RuntimeUsageRecord {
+            source_id: "linked-sidecar-response".to_string(),
+            usage: crate::cost_status::EffectiveRouteUsage {
+                route,
+                usage: crate::models::Usage {
+                    input_tokens: 1,
+                    ..crate::models::Usage::default()
+                },
+            },
+        };
+
+        let outside_lock = tmp.path().join("outside.lock");
+        fs::write(&outside_lock, b"outside-lock").expect("outside lock");
+        symlink(&outside_lock, &lock_path).expect("symlink lock");
+        assert!(
+            manager
+                .persist_late_runtime_usage(session_id, "turn", &record)
+                .is_err(),
+            "a symlink lock leaf must fail closed"
+        );
+        assert_eq!(
+            fs::read(&outside_lock).expect("outside lock unchanged"),
+            b"outside-lock"
+        );
+        fs::remove_file(&lock_path).expect("remove lock symlink");
+
+        fs::hard_link(&outside_lock, &lock_path).expect("hard-linked lock");
+        assert!(
+            manager
+                .persist_late_runtime_usage(session_id, "turn", &record)
+                .is_err(),
+            "a multiply linked lock leaf must fail closed"
+        );
+        fs::remove_file(&lock_path).expect("remove hard-linked lock");
+
+        let outside_ledger = tmp.path().join("outside.json");
+        fs::write(
+            &outside_ledger,
+            br#"{"schema_version":1,"records":[],"overflowed":false}"#,
+        )
+        .expect("outside ledger");
+        symlink(&outside_ledger, &ledger_path).expect("symlink ledger");
+        assert!(
+            manager.load_late_usage(session_id).is_err(),
+            "a symlink ledger leaf must fail closed"
+        );
+        fs::remove_file(&ledger_path).expect("remove ledger symlink");
+
+        fs::hard_link(&outside_ledger, &ledger_path).expect("hard-linked ledger");
+        assert!(
+            manager.load_late_usage(session_id).is_err(),
+            "a multiply linked ledger leaf must fail closed"
+        );
+        assert_eq!(
+            fs::read(&outside_ledger).expect("outside ledger unchanged"),
+            br#"{"schema_version":1,"records":[],"overflowed":false}"#
+        );
     }
 
     #[test]

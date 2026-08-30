@@ -246,6 +246,19 @@ pub struct SpeechSynthesisResponse {
     pub voice: Option<String>,
 }
 
+/// One decoded provider response from the auxiliary translation path.
+///
+/// The immutable route and provider-reported usage travel beside the semantic
+/// translation result so callers can account for a successful provider call
+/// before rejecting an incomplete, empty, or otherwise unusable translation.
+/// `usage == None` is distinct from a transport failure: the provider returned
+/// a response, but omitted the receipt needed to price it exactly.
+pub(crate) struct TranslationProviderResponse {
+    pub(crate) translated: Result<String>,
+    pub(crate) route: crate::cost_status::EffectiveRouteEnvelope,
+    pub(crate) usage: Option<Usage>,
+}
+
 /// Client for DeepSeek's OpenAI-compatible APIs.
 #[must_use]
 pub struct DeepSeekClient {
@@ -741,6 +754,8 @@ pub(super) const ERROR_BODY_MAX_BYTES: usize = 64 * 1024;
 /// the connection and never answers hangs model-list, catalog refresh, and
 /// health checks forever (ops R4).
 pub(super) const NON_STREAMING_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+const PROVIDER_CATALOG_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const PROVIDER_CATALOG_MAX_ROWS: usize = 10_000;
 
 /// Read an error response body with a size limit to prevent unbounded allocation.
 pub(super) async fn bounded_error_text(response: reqwest::Response, max_bytes: usize) -> String {
@@ -756,6 +771,27 @@ pub(super) async fn bounded_error_text(response: reqwest::Response, max_bytes: u
         buf.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
     }
     String::from_utf8_lossy(&buf).into_owned()
+}
+
+async fn bounded_provider_catalog_text(
+    response: reqwest::Response,
+) -> Result<String, CatalogRefreshError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > PROVIDER_CATALOG_MAX_RESPONSE_BYTES as u64)
+    {
+        return Err(CatalogRefreshError::InvalidResponse);
+    }
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| CatalogRefreshError::Network)?;
+        if body.len().saturating_add(chunk.len()) > PROVIDER_CATALOG_MAX_RESPONSE_BYTES {
+            return Err(CatalogRefreshError::InvalidResponse);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).map_err(|_| CatalogRefreshError::InvalidResponse)
 }
 
 fn validate_base_url_security(base_url: &str) -> Result<()> {
@@ -2186,10 +2222,11 @@ impl DeepSeekClient {
         )
     }
 
-    /// Capture the immutable, redacted route envelope for a request immediately
-    /// before it is dispatched. The wire model is normalized exactly as the
-    /// transport will normalize it; a provider-returned alias must never replace
-    /// this billing identity later.
+    /// Capture the immutable, redacted route envelope at the caller's
+    /// application-dispatch/admission time. This is not proof of network
+    /// delivery or provider invoice-time pricing. The wire model is normalized
+    /// exactly as the transport will normalize it; a provider-returned alias
+    /// must never replace this billing identity later.
     #[must_use]
     pub fn effective_route_envelope(
         &self,
@@ -2198,12 +2235,28 @@ impl DeepSeekClient {
     ) -> crate::cost_status::EffectiveRouteEnvelope {
         let model =
             wire_model_for_provider_route(self.api_provider, &self.base_url, requested_model);
+        let endpoint_fingerprint = crate::cost_status::endpoint_fingerprint(&self.base_url);
+        let provider_live_pricing =
+            u64::try_from(dispatched_at.timestamp())
+                .ok()
+                .and_then(|dispatched_at_unix| {
+                    endpoint_fingerprint.as_deref().and_then(|fingerprint| {
+                        crate::provider_catalog_live::fresh_provider_live_pricing_quote_at(
+                            self.api_provider,
+                            &self.provider_identity,
+                            &model,
+                            fingerprint,
+                            dispatched_at_unix,
+                        )
+                    })
+                });
         crate::cost_status::EffectiveRouteEnvelope {
             provider: self.api_provider,
             provider_identity: self.provider_identity.clone(),
             model,
             billing_surface: self.billing_surface.clone(),
-            endpoint_fingerprint: crate::cost_status::endpoint_fingerprint(&self.base_url),
+            endpoint_fingerprint,
+            provider_live_pricing,
             billing_mode: self.billing_mode,
             dispatched_at,
         }
@@ -2293,12 +2346,15 @@ impl DeepSeekClient {
     /// This is a lightweight translation service — no tool calls, no
     /// streaming, no conversation history. The dedicated translation agent
     /// receives the source text and returns only the translated result.
-    pub async fn translate(
+    pub(crate) async fn translate_with_usage(
         &self,
         text: &str,
         model: &str,
         target_language: &str,
-    ) -> Result<String> {
+    ) -> Result<TranslationProviderResponse> {
+        // Freeze pricing before either the remote-control gate or the provider
+        // permit. A later live-catalog refresh must not reprice this request.
+        let route = self.effective_route_envelope(model, chrono::Utc::now());
         let _inference = self.acquire_remote_control_inference_permit().await;
         let _permit = self.acquire_provider_request_permit().await;
         let model = wire_model_for_provider_route(self.api_provider, &self.base_url, model);
@@ -2319,11 +2375,25 @@ impl DeepSeekClient {
                 WireDialect::AnthropicMessages => self.handle_anthropic_message(&prepared).await?,
                 WireDialect::ChatCompletions | WireDialect::GoogleCloudCode => unreachable!(),
             };
-            return translation_text_from_response(&response);
+            let usage = (response.usage != Usage::default()).then_some(response.usage.clone());
+            let translated =
+                if crate::models::is_incomplete_stop_reason(response.stop_reason.as_deref()) {
+                    Err(anyhow::anyhow!(
+                        "translate: provider response incomplete ({})",
+                        crate::models::stop_reason_detail(response.stop_reason.as_deref())
+                    ))
+                } else {
+                    translation_text_from_response(&response)
+                };
+            return Ok(TranslationProviderResponse {
+                translated,
+                route,
+                usage,
+            });
         }
 
         let url = api_url_with_suffix(
-            &self.base_url,
+            self.chat_transport_base_url(),
             "chat/completions",
             self.path_suffix.as_deref(),
         );
@@ -2351,15 +2421,71 @@ impl DeepSeekClient {
         );
 
         let response = self.send_json_with_retry(&url, &body).await?;
+        let status = response.status();
+        if !status.is_success() {
+            let raw_error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let error_text = sanitize_http_error_body(
+                Some(self.api_provider.display_name()),
+                status.as_u16(),
+                &raw_error_text,
+            );
+            anyhow::bail!("translate: HTTP {status}: {error_text}");
+        }
 
         let value: serde_json::Value = response.json().await?;
-        let translated = value["choices"][0]["message"]["content"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("translate: unexpected API response shape"))?
-            .trim()
-            .to_string();
+        let usage_reported = value
+            .get("usage")
+            .and_then(Value::as_object)
+            .is_some_and(|usage| {
+                [
+                    "input_tokens",
+                    "prompt_tokens",
+                    "output_tokens",
+                    "completion_tokens",
+                    "total_tokens",
+                ]
+                .iter()
+                .any(|field| usage.contains_key(*field))
+            });
+        let usage = parse_usage(value.get("usage"));
+        let stop_reason = value["choices"][0]["finish_reason"].as_str();
+        let usage = (usage_reported && usage != Usage::default()).then_some(usage);
+        let translated = if crate::models::is_incomplete_stop_reason(stop_reason) {
+            Err(anyhow::anyhow!(
+                "translate: provider response incomplete ({})",
+                crate::models::stop_reason_detail(stop_reason)
+            ))
+        } else {
+            value["choices"][0]["message"]["content"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("translate: unexpected API response shape"))
+                .and_then(|translated| {
+                    let translated = translated.trim().to_string();
+                    if translated.is_empty() {
+                        bail!("translate: provider response did not contain text content");
+                    }
+                    Ok(translated)
+                })
+        };
 
-        Ok(translated)
+        Ok(TranslationProviderResponse {
+            translated,
+            route,
+            usage,
+        })
+    }
+
+    /// Compatibility wrapper for callers that only render the translation.
+    /// Receipt-aware TUI paths use [`Self::translate_with_usage`] directly.
+    pub async fn translate(
+        &self,
+        text: &str,
+        model: &str,
+        target_language: &str,
+    ) -> Result<String> {
+        self.translate_with_usage(text, model, target_language)
+            .await?
+            .translated
     }
 
     /// List available models from the provider.
@@ -2396,10 +2522,28 @@ impl DeepSeekClient {
     /// back to the `ApiProvider` slug for legacy variants without a kind). This
     /// is the id used as the cache scope and `CatalogOffering.provider`.
     fn catalog_provider_id(&self) -> String {
+        if self.api_provider == ApiProvider::Custom {
+            // This is an ownership key, not a provider-family slug. Exact
+            // custom identities (including case and built-in-looking names)
+            // must remain isolated across cache, picker, and runtime layers.
+            return self.provider_identity.trim().to_string();
+        }
         self.api_provider
             .kind()
             .map(|kind| kind.as_str().to_string())
             .unwrap_or_else(|| self.api_provider.as_str().to_string())
+    }
+
+    /// Reviewed response schema for a named compatible provider.
+    ///
+    /// Schema recognition is intentionally separate from catalog ownership:
+    /// `base-ten` may use Baseten's `/models` shape, while its exact configured
+    /// identity remains `base-ten` rather than sharing the `baseten` partition.
+    fn catalog_setup_template_id(&self) -> Option<&'static str> {
+        (self.api_provider == ApiProvider::Custom)
+            .then(|| codewhale_config::provider_setup_template(&self.provider_identity))
+            .flatten()
+            .map(|template| template.id)
     }
 
     /// Fetch the provider's live `/models` listing as a secret-free
@@ -2442,10 +2586,7 @@ impl DeepSeekClient {
             });
         }
 
-        let body = response
-            .text()
-            .await
-            .map_err(|_| CatalogRefreshError::Network)?;
+        let body = bounded_provider_catalog_text(response).await?;
 
         let provider = self.catalog_provider_id();
         let fingerprint = base_url_fingerprint(&self.base_url);
@@ -2454,7 +2595,7 @@ impl DeepSeekClient {
         // OpenRouter returns extended capability metadata in its /models
         // response (#3385). Capture limits, pricing, reasoning, and modalities
         // from the live API instead of leaving them unknown.
-        let offerings: Vec<CatalogOffering> = if provider == "openrouter" {
+        let offerings: Vec<CatalogOffering> = if self.api_provider == ApiProvider::Openrouter {
             let or_models = parse_openrouter_models_response(&body)?;
             if or_models.is_empty() {
                 return Err(CatalogRefreshError::EmptyList);
@@ -2464,8 +2605,17 @@ impl DeepSeekClient {
                 .map(|item| {
                     openrouter_to_catalog_offering(item, &provider, &fingerprint, fetched_at)
                 })
-                .collect()
-        } else if provider == "telecomjs" {
+                .collect::<Result<Vec<_>, _>>()?
+        } else if self.catalog_setup_template_id() == Some(codewhale_config::BASETEN_TEMPLATE_ID) {
+            let baseten_models = parse_baseten_models_response(&body)?;
+            if baseten_models.is_empty() {
+                return Err(CatalogRefreshError::EmptyList);
+            }
+            baseten_models
+                .iter()
+                .map(|item| baseten_to_catalog_offering(item, &provider, &fingerprint, fetched_at))
+                .collect::<Result<Vec<_>, _>>()?
+        } else if self.api_provider == ApiProvider::Telecomjs {
             named_gateway_catalog_offerings_from_body(
                 &body,
                 codewhale_config::ProviderKind::Telecomjs,
@@ -2473,7 +2623,7 @@ impl DeepSeekClient {
                 &fingerprint,
                 fetched_at,
             )?
-        } else if provider == "edenai" {
+        } else if self.api_provider == ApiProvider::Edenai {
             named_gateway_catalog_offerings_from_body(
                 &body,
                 codewhale_config::ProviderKind::Edenai,
@@ -2514,6 +2664,10 @@ impl DeepSeekClient {
                 .collect()
         };
 
+        if offerings.len() > PROVIDER_CATALOG_MAX_ROWS {
+            return Err(CatalogRefreshError::InvalidResponse);
+        }
+
         Ok(ProviderCatalogDelta {
             provider,
             base_url_fingerprint: fingerprint,
@@ -2533,41 +2687,60 @@ impl DeepSeekClient {
     ) -> CatalogStatus {
         match self.fetch_catalog_delta().await {
             Ok(delta) => {
+                let provider = delta.provider.clone();
+                let fingerprint = delta.base_url_fingerprint.clone();
                 cache.record_success(delta, ttl_secs);
-                publish_provider_lake_snapshot(cache);
+                publish_provider_lake_scope(cache, &provider, &fingerprint);
                 CatalogStatus::Fresh
             }
             Err(reason) => {
-                cache.record_failure(
-                    &self.catalog_provider_id(),
-                    &base_url_fingerprint(&self.base_url),
-                    reason,
-                );
-                publish_provider_lake_snapshot(cache);
+                let provider = self.catalog_provider_id();
+                let fingerprint = base_url_fingerprint(&self.base_url);
+                cache.record_failure(&provider, &fingerprint, reason);
+                publish_provider_lake_scope(cache, &provider, &fingerprint);
                 CatalogStatus::Failed { reason }
             }
         }
     }
 
     /// Best-effort background refresh of the active provider's own `/v1/models`
-    /// catalog, merging results into the provider lake (#3385).
+    /// catalog, replacing that provider's exact lake partition (#3385).
     ///
     /// Unlike `models_dev_live::spawn_background_refresh` (which fetches the
     /// cross-provider Models.dev catalog), this calls the provider's own
     /// `/v1/models` endpoint and merges the results into the existing live
-    /// snapshot via `provider_lake::merge_live_offerings`, preserving rows
-    /// from other sources.
+    /// snapshot via `provider_catalog_live`, preserving other providers while
+    /// allowing this provider's successful roster to retire removed ids.
     ///
-    /// Currently activated for providers whose model list is not covered by the
-    /// Models.dev catalog (e.g. TelecomJS TokenHub). The refresh is non-fatal:
-    /// on failure, existing/bundled rows remain available.
+    /// Activated for model-list authorities that are not satisfied by the
+    /// cross-provider Models.dev snapshot: OpenRouter, named live gateways, and
+    /// the reviewed OpenAI-compatible setup templates (including Baseten).
+    /// The refresh is non-fatal: on failure, persisted prior rows and static
+    /// seeds remain available with a typed failed receipt.
     pub fn spawn_active_provider_catalog_refresh(config: &Config) {
         let provider = config.api_provider();
-        // Only refresh for providers that serve their own model list and are
-        // not already covered by the Models.dev catalog.
-        if !matches!(provider, ApiProvider::Telecomjs | ApiProvider::Edenai) {
+        let provider_identity = config.provider_identity_for(provider);
+        let is_reviewed_compatible_template = provider == ApiProvider::Custom
+            && codewhale_config::provider_setup_template(&provider_identity)
+                .is_some_and(|template| template.is_compatible());
+        if !matches!(
+            provider,
+            ApiProvider::Openrouter | ApiProvider::Telecomjs | ApiProvider::Edenai
+        ) && !is_reviewed_compatible_template
+        {
             return;
         }
+
+        // Invalidate older in-flight fetches before loading any reusable
+        // scope. Baseten's ticket also clears account-scoped rows because the
+        // same endpoint can expose a different workspace after a key change.
+        let refresh_ticket = crate::provider_catalog_live::begin_refresh(&provider_identity);
+
+        // Publish the exact persisted scope immediately so opening `/model`
+        // never waits on the network and another endpoint's rows cannot leak
+        // into this route. Account-scoped Baseten rows deliberately do not
+        // reload from disk until the current credential proves them again.
+        crate::provider_catalog_live::maybe_load_persisted_cache_for_config(config);
 
         let client = match DeepSeekClient::new(config) {
             Ok(client) => client,
@@ -2585,7 +2758,18 @@ impl DeepSeekClient {
             match client.fetch_catalog_delta().await {
                 Ok(delta) => {
                     let count = delta.offerings.len();
-                    crate::provider_lake::merge_live_offerings(delta.offerings);
+                    if crate::provider_catalog_live::record_success_if_current(
+                        &refresh_ticket,
+                        delta,
+                    )
+                    .is_none()
+                    {
+                        tracing::debug!(
+                            target: "provider_catalog",
+                            "discarded provider catalog response superseded by a newer refresh"
+                        );
+                        return;
+                    }
                     tracing::debug!(
                         target: "provider_catalog",
                         offering_count = count,
@@ -2593,6 +2777,20 @@ impl DeepSeekClient {
                     );
                 }
                 Err(err) => {
+                    if crate::provider_catalog_live::record_failure_if_current(
+                        &refresh_ticket,
+                        &client.catalog_provider_id(),
+                        &base_url_fingerprint(&client.base_url),
+                        err,
+                    )
+                    .is_none()
+                    {
+                        tracing::debug!(
+                            target: "provider_catalog",
+                            "discarded provider catalog failure superseded by a newer refresh"
+                        );
+                        return;
+                    }
                     tracing::debug!(
                         target: "provider_catalog",
                         error = ?err,
@@ -3209,6 +3407,102 @@ struct OpenRouterArchitecture {
     output_modalities: Option<Vec<String>>,
 }
 
+/// Baseten Model APIs `/v1/models` item.
+///
+/// Baseten publishes OpenAI-style ids and per-token prices, while current
+/// serving limits and feature fields are additive. Numeric fields accept JSON
+/// numbers or numeric strings because both appear in provider catalogs in the
+/// wild; malformed or negative known fields reject the refresh so the durable
+/// last-known-good snapshot remains authoritative.
+#[derive(Debug, Deserialize)]
+struct BasetenModelsResponse {
+    data: Vec<BasetenModelItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BasetenModelItem {
+    id: String,
+    #[serde(default)]
+    context_length: Option<CatalogNumber>,
+    #[serde(default)]
+    context_window: Option<CatalogNumber>,
+    #[serde(default)]
+    max_output_tokens: Option<CatalogNumber>,
+    #[serde(default)]
+    max_completion_tokens: Option<CatalogNumber>,
+    #[serde(default)]
+    limits: Option<BasetenLimits>,
+    #[serde(default)]
+    top_provider: Option<BasetenTopProvider>,
+    #[serde(default)]
+    pricing: Option<BasetenPricing>,
+    #[serde(default)]
+    supported_parameters: Option<Vec<String>>,
+    #[serde(default)]
+    supported_features: Option<Vec<String>>,
+    #[serde(default)]
+    features: Option<Vec<String>>,
+    #[serde(default)]
+    architecture: Option<BasetenArchitecture>,
+    #[serde(default)]
+    input_modalities: Option<Vec<String>>,
+    #[serde(default)]
+    output_modalities: Option<Vec<String>>,
+    #[serde(default)]
+    reasoning: Option<bool>,
+    #[serde(default)]
+    supports_reasoning: Option<bool>,
+    #[serde(default)]
+    supports_tools: Option<bool>,
+    #[serde(default)]
+    supports_structured_output: Option<bool>,
+    #[serde(default)]
+    reasoning_options: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum CatalogNumber {
+    Number(serde_json::Number),
+    Text(String),
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BasetenLimits {
+    #[serde(default)]
+    context: Option<CatalogNumber>,
+    #[serde(default)]
+    output: Option<CatalogNumber>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BasetenTopProvider {
+    #[serde(default)]
+    context_length: Option<CatalogNumber>,
+    #[serde(default)]
+    max_completion_tokens: Option<CatalogNumber>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BasetenPricing {
+    #[serde(default)]
+    prompt: Option<CatalogNumber>,
+    #[serde(default)]
+    completion: Option<CatalogNumber>,
+    #[serde(default)]
+    input_cache_read: Option<CatalogNumber>,
+    #[serde(default)]
+    input_cache_write: Option<CatalogNumber>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BasetenArchitecture {
+    #[serde(default)]
+    input_modalities: Option<Vec<String>>,
+    #[serde(default)]
+    output_modalities: Option<Vec<String>>,
+}
+
 pub(super) fn parse_models_response(payload: &str) -> Result<Vec<AvailableModel>> {
     let parsed: ModelsListResponse =
         serde_json::from_str(payload).context("Failed to parse model list JSON")?;
@@ -3342,18 +3636,250 @@ fn parse_openrouter_models_response(
     Ok(models)
 }
 
-fn publish_provider_lake_snapshot(cache: &ProviderCatalogCache) {
-    // Publish fresh *and* stale/prior rows so pickers keep live catalog coverage
-    // after TTL expiry or a failed refresh (#4139). An empty cache publishes
-    // nothing: it must not erase a provider-scoped layer populated by another
-    // refresh path.
-    let offerings = cache.all_visible_offerings(now_unix());
-    if !offerings.is_empty() {
-        crate::provider_lake::set_live_snapshot(
-            CatalogSnapshot { offerings },
-            crate::provider_lake::LiveSource::PerProvider,
-        );
+/// Parse Baseten's authenticated Model APIs catalog without inferring facts
+/// from an identically named model on another provider.
+fn parse_baseten_models_response(
+    payload: &str,
+) -> Result<Vec<BasetenModelItem>, CatalogRefreshError> {
+    let parsed: BasetenModelsResponse =
+        serde_json::from_str(payload).map_err(|_| CatalogRefreshError::InvalidResponse)?;
+    let mut seen = std::collections::HashSet::new();
+    let mut models = Vec::with_capacity(parsed.data.len());
+    for mut item in parsed.data {
+        item.id = item.id.trim().to_string();
+        if item.id.is_empty() || !seen.insert(item.id.clone()) {
+            return Err(CatalogRefreshError::InvalidResponse);
+        }
+        models.push(item);
     }
+    Ok(models)
+}
+
+fn catalog_number_f64(value: Option<&CatalogNumber>) -> Result<Option<f64>, CatalogRefreshError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let parsed = match value {
+        CatalogNumber::Number(number) => number.as_f64(),
+        CatalogNumber::Text(text) => text.trim().parse::<f64>().ok(),
+    }
+    .filter(|number| number.is_finite() && *number >= 0.0)
+    .ok_or(CatalogRefreshError::InvalidResponse)?;
+    Ok(Some(parsed))
+}
+
+fn catalog_number_u64(value: Option<&CatalogNumber>) -> Result<Option<u64>, CatalogRefreshError> {
+    let Some(number) = catalog_number_f64(value)? else {
+        return Ok(None);
+    };
+    if number.fract() != 0.0 || number > u64::MAX as f64 {
+        return Err(CatalogRefreshError::InvalidResponse);
+    }
+    Ok(Some(number as u64))
+}
+
+fn checked_per_token_to_per_million(value: f64) -> Result<f64, CatalogRefreshError> {
+    let scaled = value * 1_000_000.0;
+    (scaled.is_finite()
+        && (0.0..=codewhale_config::pricing::MAX_PLAUSIBLE_PRICE_PER_MILLION).contains(&scaled))
+    .then_some(scaled)
+    .ok_or(CatalogRefreshError::InvalidResponse)
+}
+
+fn catalog_price_per_million(
+    value: Option<&CatalogNumber>,
+) -> Result<Option<f64>, CatalogRefreshError> {
+    catalog_number_f64(value)?
+        .map(checked_per_token_to_per_million)
+        .transpose()
+}
+
+fn feature_matches_any(feature: &str, aliases: &[&str]) -> bool {
+    let normalized = feature.replace('-', "_");
+    aliases.iter().any(|alias| normalized == *alias)
+}
+
+fn baseten_features(item: &BasetenModelItem) -> Option<Vec<String>> {
+    let sources = [
+        item.supported_parameters.as_ref(),
+        item.supported_features.as_ref(),
+        item.features.as_ref(),
+    ];
+    let mut features = Vec::new();
+    let mut published = false;
+    for source in sources.into_iter().flatten() {
+        published = true;
+        for feature in source {
+            let normalized = feature.trim().to_ascii_lowercase();
+            if !normalized.is_empty() && !features.contains(&normalized) {
+                features.push(normalized);
+            }
+        }
+    }
+    published.then_some(features)
+}
+
+fn baseten_to_catalog_offering(
+    item: &BasetenModelItem,
+    provider: &str,
+    base_url_fingerprint: &str,
+    fetched_at: u64,
+) -> Result<CatalogOffering, CatalogRefreshError> {
+    use codewhale_config::models_dev::{ModelsDevCost, ModelsDevLimit, ModelsDevModalities};
+
+    let context = catalog_number_u64(
+        item.top_provider
+            .as_ref()
+            .and_then(|provider| provider.context_length.as_ref())
+            .or(item.context_length.as_ref())
+            .or(item.context_window.as_ref())
+            .or_else(|| {
+                item.limits
+                    .as_ref()
+                    .and_then(|limits| limits.context.as_ref())
+            }),
+    )?;
+    let output = catalog_number_u64(
+        item.top_provider
+            .as_ref()
+            .and_then(|provider| provider.max_completion_tokens.as_ref())
+            .or(item.max_output_tokens.as_ref())
+            .or(item.max_completion_tokens.as_ref())
+            .or_else(|| {
+                item.limits
+                    .as_ref()
+                    .and_then(|limits| limits.output.as_ref())
+            }),
+    )?;
+    let limit = (context.is_some() || output.is_some()).then_some(ModelsDevLimit {
+        context,
+        input: context,
+        output,
+    });
+
+    let cost = if let Some(pricing) = item.pricing.as_ref() {
+        let cost = ModelsDevCost {
+            input: catalog_price_per_million(pricing.prompt.as_ref())?,
+            output: catalog_price_per_million(pricing.completion.as_ref())?,
+            cache_read: catalog_price_per_million(pricing.input_cache_read.as_ref())?,
+            cache_write: catalog_price_per_million(pricing.input_cache_write.as_ref())?,
+        };
+        if !codewhale_config::pricing::catalog_cost_is_valid(&cost) {
+            return Err(CatalogRefreshError::InvalidResponse);
+        }
+        (cost.input.is_some()
+            || cost.output.is_some()
+            || cost.cache_read.is_some()
+            || cost.cache_write.is_some())
+        .then_some(cost)
+    } else {
+        None
+    };
+
+    let features = baseten_features(item);
+    let has_feature = |needles: &[&str]| {
+        features.as_ref().is_some_and(|features| {
+            features
+                .iter()
+                .any(|feature| feature_matches_any(feature, needles))
+        })
+    };
+    let mut input_modalities = item
+        .architecture
+        .as_ref()
+        .and_then(|architecture| architecture.input_modalities.clone())
+        .or_else(|| item.input_modalities.clone());
+    let mut output_modalities = item
+        .architecture
+        .as_ref()
+        .and_then(|architecture| architecture.output_modalities.clone())
+        .or_else(|| item.output_modalities.clone());
+    if input_modalities.is_none() {
+        let supports_vision = has_feature(&["vision", "image", "image_input"]);
+        let supports_audio = has_feature(&["audio", "audio_input"]);
+        if supports_vision || supports_audio {
+            let mut derived = vec!["text".to_string()];
+            if supports_vision {
+                derived.push("image".to_string());
+            }
+            if supports_audio {
+                derived.push("audio".to_string());
+            }
+            input_modalities = Some(derived);
+            output_modalities.get_or_insert_with(|| vec!["text".to_string()]);
+        }
+    }
+    let modalities = if input_modalities.is_some() || output_modalities.is_some() {
+        Some(ModelsDevModalities {
+            input: input_modalities.unwrap_or_default(),
+            output: output_modalities.unwrap_or_default(),
+        })
+    } else {
+        None
+    };
+    let attachment = modalities.as_ref().map(|modalities| {
+        modalities
+            .input
+            .iter()
+            .any(|modality| !modality.eq_ignore_ascii_case("text") && !modality.trim().is_empty())
+    });
+
+    let feature_support = |needles: &[&str]| {
+        features.as_ref().map(|features| {
+            features
+                .iter()
+                .any(|feature| feature_matches_any(feature, needles))
+        })
+    };
+    let reasoning = item
+        .reasoning
+        .or(item.supports_reasoning)
+        .or_else(|| feature_support(&["reasoning", "include_reasoning"]));
+    // Baseten's current Model APIs contract states every catalog model supports
+    // tool calling and structured outputs. Explicit upstream booleans still
+    // win if the endpoint publishes a narrower model-specific fact.
+    // Baseten's Model APIs contract applies these two capabilities to every
+    // catalog model. `supported_features` is additive and may list only
+    // model-variable facts such as `reasoning` or `vision`; absence from that
+    // list is therefore not an explicit false. Only an upstream boolean may
+    // narrow the universal contract for a specific row.
+    let tool_call = item.supports_tools.or(Some(true));
+    let structured_output = item.supports_structured_output.or(Some(true));
+
+    Ok(CatalogOffering {
+        provider: provider.to_string(),
+        wire_model_id: item.id.clone(),
+        canonical_model: None,
+        endpoint_key: "chat".to_string(),
+        default_for_provider: item
+            .id
+            .eq_ignore_ascii_case(codewhale_config::BASETEN_DEFAULT_MODEL),
+        family: None,
+        limit,
+        cost,
+        modalities,
+        attachment,
+        reasoning,
+        tool_call,
+        structured_output,
+        reasoning_options: item.reasoning_options.clone(),
+        source: CatalogSource::Live {
+            base_url_fingerprint: base_url_fingerprint.to_string(),
+            fetched_at,
+        },
+    })
+}
+
+fn publish_provider_lake_scope(cache: &ProviderCatalogCache, provider: &str, fingerprint: &str) {
+    // Publish fresh *and* stale/prior rows so pickers keep live catalog coverage
+    // after TTL expiry or a failed refresh (#4139). Exact replacement is
+    // essential: a successful smaller roster must remove upstream-retired ids,
+    // while a failure preserves the rows already stored in this cache scope.
+    let offerings = cache
+        .get(provider, fingerprint)
+        .map(|entry| entry.offerings.clone())
+        .unwrap_or_default();
+    crate::provider_lake::replace_provider_live_snapshot(provider, CatalogSnapshot { offerings });
 }
 
 /// Convert an OpenRouter model item into a [`CatalogOffering`] with live-sourced
@@ -3363,7 +3889,7 @@ fn openrouter_to_catalog_offering(
     provider: &str,
     base_url_fingerprint: &str,
     fetched_at: u64,
-) -> CatalogOffering {
+) -> Result<CatalogOffering, CatalogRefreshError> {
     use codewhale_config::models_dev::{ModelsDevCost, ModelsDevLimit, ModelsDevModalities};
 
     let context_length = item
@@ -3387,20 +3913,35 @@ fn openrouter_to_catalog_offering(
         None
     };
 
-    let cost = item.pricing.as_ref().map(|p| {
+    let cost = if let Some(p) = item.pricing.as_ref() {
         // OpenRouter quotes per-token USD strings; ModelsDevCost is per million.
-        let parse_price = |s: &Option<String>| -> Option<f64> {
-            s.as_ref()
-                .and_then(|v| v.parse::<f64>().ok())
-                .map(|price_per_token| price_per_token * 1_000_000.0)
+        let parse_price = |value: &Option<String>| -> Result<Option<f64>, CatalogRefreshError> {
+            value
+                .as_ref()
+                .map(|value| {
+                    let parsed = value
+                        .trim()
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|value| value.is_finite() && *value >= 0.0)
+                        .ok_or(CatalogRefreshError::InvalidResponse)?;
+                    checked_per_token_to_per_million(parsed)
+                })
+                .transpose()
         };
-        ModelsDevCost {
-            input: parse_price(&p.prompt),
-            output: parse_price(&p.completion),
-            cache_read: parse_price(&p.input_cache_read),
-            cache_write: parse_price(&p.input_cache_write),
+        let cost = ModelsDevCost {
+            input: parse_price(&p.prompt)?,
+            output: parse_price(&p.completion)?,
+            cache_read: parse_price(&p.input_cache_read)?,
+            cache_write: parse_price(&p.input_cache_write)?,
+        };
+        if !codewhale_config::pricing::catalog_cost_is_valid(&cost) {
+            return Err(CatalogRefreshError::InvalidResponse);
         }
-    });
+        Some(cost)
+    } else {
+        None
+    };
 
     let reasoning = item.supported_parameters.as_ref().map(|params| {
         params
@@ -3441,7 +3982,7 @@ fn openrouter_to_catalog_offering(
         ModelsDevModalities { input, output }
     });
 
-    CatalogOffering {
+    Ok(CatalogOffering {
         provider: provider.to_string(),
         wire_model_id: item.id.clone(),
         canonical_model: None,
@@ -3460,7 +4001,7 @@ fn openrouter_to_catalog_offering(
             base_url_fingerprint: base_url_fingerprint.to_string(),
             fetched_at,
         },
-    }
+    })
 }
 
 pub(super) fn system_to_instructions(system: Option<SystemPrompt>) -> Option<String> {
@@ -4245,7 +4786,8 @@ mod tests {
         }]}"#;
 
         let items = parse_openrouter_models_response(payload).expect("parses");
-        let priced = openrouter_to_catalog_offering(&items[0], "openrouter", "fp", 42);
+        let priced = openrouter_to_catalog_offering(&items[0], "openrouter", "fp", 42)
+            .expect("valid priced row");
         let cost = priced.cost.as_ref().expect("pricing row");
         assert_eq!(cost.input, Some(3.0));
         assert_eq!(cost.output, Some(15.0));
@@ -4265,7 +4807,8 @@ mod tests {
 
         // A row without a published write rate stays unknown, not zero, and
         // fails closed for cache-creation turns.
-        let unwritten = openrouter_to_catalog_offering(&items[1], "openrouter", "fp", 42);
+        let unwritten = openrouter_to_catalog_offering(&items[1], "openrouter", "fp", 42)
+            .expect("valid row without cache-write rate");
         assert_eq!(
             unwritten.cost.as_ref().and_then(|cost| cost.cache_write),
             None
@@ -4278,6 +4821,145 @@ mod tests {
             unwritten.unpriced_used_classes(&write),
             vec![codewhale_config::pricing::TokenClass::CacheWrite]
         );
+    }
+
+    #[test]
+    fn baseten_catalog_maps_provider_stated_prices_limits_and_features() {
+        // Exact current Baseten shape: pricing is captured from the official
+        // baseten-switch repository; Model APIs publishes context_length,
+        // max_completion_tokens, and supported_features including `vision`.
+        let payload = r#"{"data":[{
+            "id":"deepseek-ai/DeepSeek-V4-Pro",
+            "context_length":"1048576",
+            "max_completion_tokens":262144,
+            "pricing":{
+                "prompt":0.0000014,
+                "completion":"0.0000044",
+                "input_cache_read":0.00000014
+            },
+            "supported_features":["reasoning","vision"],
+            "reasoning_options":[{"type":"toggle"}]
+        }]}"#;
+
+        let items = parse_baseten_models_response(payload).expect("Baseten catalog");
+        let offering =
+            baseten_to_catalog_offering(&items[0], "baseten", "baseten-fp", 42).expect("row");
+        assert_eq!(offering.provider, "baseten");
+        assert_eq!(
+            offering.wire_model_id,
+            codewhale_config::BASETEN_DEFAULT_MODEL
+        );
+        assert!(offering.default_for_provider);
+        let limit = offering.limit.expect("published limits");
+        assert_eq!(limit.context, Some(1_048_576));
+        assert_eq!(limit.input, Some(1_048_576));
+        assert_eq!(limit.output, Some(262_144));
+        let cost = offering.cost.expect("published pricing");
+        assert_eq!(cost.input, Some(1.4));
+        assert_eq!(cost.output, Some(4.4));
+        assert_eq!(cost.cache_read, Some(0.14));
+        assert_eq!(cost.cache_write, None);
+        assert_eq!(offering.reasoning, Some(true));
+        assert_eq!(offering.tool_call, Some(true));
+        assert_eq!(offering.structured_output, Some(true));
+        assert_eq!(offering.attachment, Some(true));
+        let modalities = offering.modalities.expect("vision feature modalities");
+        assert_eq!(modalities.input, vec!["text", "image"]);
+        assert_eq!(modalities.output, vec!["text"]);
+        assert_eq!(offering.reasoning_options, vec![json!({"type":"toggle"})]);
+        assert!(matches!(offering.source, CatalogSource::Live { .. }));
+    }
+
+    #[test]
+    fn baseten_catalog_rejects_duplicate_ids_and_invalid_known_numbers() {
+        let duplicates = r#"{"data":[{"id":"same/model"},{"id":"same/model"}]}"#;
+        assert_eq!(
+            parse_baseten_models_response(duplicates).unwrap_err(),
+            CatalogRefreshError::InvalidResponse
+        );
+
+        let negative = r#"{"data":[{
+            "id":"synthetic/model",
+            "pricing":{"prompt":-0.000001,"completion":0.000002}
+        }]}"#;
+        let items = parse_baseten_models_response(negative).expect("shape parses");
+        assert_eq!(
+            baseten_to_catalog_offering(&items[0], "baseten", "fp", 1).unwrap_err(),
+            CatalogRefreshError::InvalidResponse
+        );
+    }
+
+    #[test]
+    fn provider_live_price_parsers_reject_present_bad_rates_but_keep_zero_and_omission() {
+        for invalid in ["not-a-number", "-0.1", "NaN", "inf", "1e308", "0.100001"] {
+            let openrouter = json!({
+                "data": [{
+                    "id": "synthetic/openrouter-invalid-price",
+                    "pricing": { "prompt": invalid, "completion": "0.000001" }
+                }]
+            })
+            .to_string();
+            let items = parse_openrouter_models_response(&openrouter).expect("OpenRouter shape");
+            assert_eq!(
+                openrouter_to_catalog_offering(&items[0], "openrouter", "fp", 1).unwrap_err(),
+                CatalogRefreshError::InvalidResponse,
+                "OpenRouter must reject {invalid:?}"
+            );
+
+            let baseten = json!({
+                "data": [{
+                    "id": "synthetic/baseten-invalid-price",
+                    "pricing": { "prompt": invalid, "completion": "0.000001" }
+                }]
+            })
+            .to_string();
+            let items = parse_baseten_models_response(&baseten).expect("Baseten shape");
+            assert_eq!(
+                baseten_to_catalog_offering(&items[0], "baseten", "fp", 1).unwrap_err(),
+                CatalogRefreshError::InvalidResponse,
+                "Baseten must reject {invalid:?}"
+            );
+        }
+
+        let openrouter = parse_openrouter_models_response(
+            r#"{"data":[{"id":"synthetic/openrouter-free","pricing":{"prompt":"0","completion":"0"}}]}"#,
+        )
+        .expect("OpenRouter zero row");
+        let openrouter = openrouter_to_catalog_offering(&openrouter[0], "openrouter", "fp", 1)
+            .expect("explicit zero is a valid published price");
+        let cost = openrouter.cost.expect("published zero cost");
+        assert_eq!(cost.input, Some(0.0));
+        assert_eq!(cost.output, Some(0.0));
+        assert_eq!(cost.cache_read, None);
+        assert_eq!(cost.cache_write, None);
+
+        let baseten = parse_baseten_models_response(
+            r#"{"data":[{"id":"synthetic/baseten-free","pricing":{"prompt":"0","completion":0}}]}"#,
+        )
+        .expect("Baseten zero row");
+        let baseten = baseten_to_catalog_offering(&baseten[0], "baseten", "fp", 1)
+            .expect("explicit zero is a valid published price");
+        let cost = baseten.cost.expect("published zero cost");
+        assert_eq!(cost.input, Some(0.0));
+        assert_eq!(cost.output, Some(0.0));
+        assert_eq!(cost.cache_read, None);
+        assert_eq!(cost.cache_write, None);
+    }
+
+    #[test]
+    fn baseten_feature_names_require_exact_normalized_aliases() {
+        let payload = r#"{"data":[{
+            "id":"synthetic/text-only",
+            "supported_features":["revision","pre_reasoning_filter"]
+        }]}"#;
+        let items = parse_baseten_models_response(payload).expect("Baseten catalog");
+        let offering =
+            baseten_to_catalog_offering(&items[0], "baseten", "fp", 1).expect("valid row");
+        assert_eq!(offering.reasoning, Some(false));
+        assert_eq!(offering.modalities, None);
+        assert_eq!(offering.attachment, None);
+        assert_eq!(offering.tool_call, Some(true));
+        assert_eq!(offering.structured_output, Some(true));
     }
 
     fn test_tool(name: &str) -> Tool {
@@ -7777,6 +8459,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn incomplete_translation_keeps_exact_route_and_usage_before_rejection() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "msg_partial",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Parcial"}],
+                // A provider-returned alias must not replace the admitted
+                // route/model in the frozen cost receipt.
+                "model": "provider-alias-after-dispatch",
+                "stop_reason": "max_tokens",
+                "stop_sequence": null,
+                "usage": {"input_tokens": 7, "output_tokens": 2}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = deepseek_anthropic_client(&server);
+        let response = client
+            .translate_with_usage("Hello", "deepseek-chat", "Spanish")
+            .await
+            .expect("decoded provider response retains its receipt");
+
+        assert!(
+            response.translated.is_err(),
+            "partial text must be rejected"
+        );
+        let usage = response.usage.expect("provider-reported usage");
+        assert_eq!(usage.input_tokens, 7);
+        assert_eq!(usage.output_tokens, 2);
+        assert_eq!(response.route.provider, ApiProvider::DeepseekAnthropic);
+        assert_eq!(response.route.model, "deepseek-chat");
+        assert_eq!(response.route.provider_identity, "deepseek-anthropic");
+        assert!(response.route.endpoint_fingerprint.is_some());
+    }
+
+    #[tokio::test]
+    async fn chat_translation_without_usage_keeps_unreceipted_success_outcome() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "chatcmpl-no-usage",
+                "model": "deepseek-chat",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hola"},
+                    "finish_reason": "stop"
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = deepseek_request_boundary_client("https://api.deepseek.com/v1", server.uri());
+        let response = client
+            .translate_with_usage("Hello", "deepseek-chat", "Spanish")
+            .await
+            .expect("provider success must retain its frozen route");
+        assert_eq!(
+            response
+                .translated
+                .expect("useful output remains deliverable"),
+            "Hola"
+        );
+        assert_eq!(response.usage, None, "must not mint a priced-zero receipt");
+        assert_eq!(response.route.provider, ApiProvider::Deepseek);
+        assert_eq!(
+            response.route.model,
+            wire_model_for_provider_route(
+                ApiProvider::Deepseek,
+                "https://api.deepseek.com/v1",
+                "deepseek-chat"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_translation_http_error_is_not_a_provider_success_outcome() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+                "error": {"message": "rate limited"}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = deepseek_request_boundary_client("https://api.deepseek.com/v1", server.uri());
+        let error = match client
+            .translate_with_usage("Hello", "deepseek-chat", "Spanish")
+            .await
+        {
+            Ok(_) => panic!("HTTP failure must not become a provider-success receipt"),
+            Err(error) => error,
+        };
+        let display = error.to_string();
+        assert!(
+            display.to_ascii_lowercase().contains("rate limit"),
+            "{display}"
+        );
+        assert!(!display.contains("chatcmpl"), "{display}");
+    }
+
+    #[tokio::test]
     async fn deepseek_anthropic_health_check_skips_models_probe() {
         let server = MockServer::start().await;
         let client = deepseek_anthropic_client(&server);
@@ -9822,6 +10610,31 @@ mod tests {
         .expect("openrouter client")
     }
 
+    fn baseten_client_for(server: &MockServer) -> DeepSeekClient {
+        baseten_client_for_identity(server, codewhale_config::BASETEN_TEMPLATE_ID)
+    }
+
+    fn baseten_client_for_identity(server: &MockServer, identity: &str) -> DeepSeekClient {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut providers = ProvidersConfig::default();
+        providers.custom.insert(
+            identity.to_string(),
+            ProviderConfig {
+                kind: Some("openai-compatible".to_string()),
+                api_key: Some("test-baseten-key".to_string()),
+                base_url: Some(format!("{}/v1", server.uri())),
+                model: Some(codewhale_config::BASETEN_DEFAULT_MODEL.to_string()),
+                ..ProviderConfig::default()
+            },
+        );
+        DeepSeekClient::new(&Config {
+            provider: Some(identity.to_string()),
+            providers: Some(providers),
+            ..Config::default()
+        })
+        .expect("Baseten client")
+    }
+
     fn opencode_go_client_for(server: &MockServer) -> DeepSeekClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
         DeepSeekClient::new(&Config {
@@ -9894,6 +10707,76 @@ mod tests {
         verify_provider_api_key(ApiProvider::Openrouter, "test-key", &server.uri())
             .await
             .expect("mocked /models success should verify");
+    }
+
+    #[tokio::test]
+    async fn baseten_live_catalog_keeps_exact_identity_auth_and_metadata() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .and(header("authorization", "Bearer test-baseten-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{
+                    "id": codewhale_config::BASETEN_DEFAULT_MODEL,
+                    "context_length": 1_048_576,
+                    "max_completion_tokens": 262_144,
+                    "pricing": {
+                        "prompt": 0.0000014,
+                        "completion": 0.0000044,
+                        "input_cache_read": 0.00000014
+                    },
+                    "supported_features": ["reasoning", "tools", "structured_outputs", "vision"]
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = baseten_client_for(&server);
+        assert_eq!(client.catalog_provider_id(), "baseten");
+        let delta = client.fetch_catalog_delta().await.expect("Baseten delta");
+        assert_eq!(delta.provider, "baseten");
+        assert_eq!(delta.offerings.len(), 1);
+        let offering = &delta.offerings[0];
+        assert_eq!(
+            offering.wire_model_id,
+            codewhale_config::BASETEN_DEFAULT_MODEL
+        );
+        assert_eq!(
+            offering.limit.as_ref().and_then(|limit| limit.context),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            offering.cost.as_ref().and_then(|cost| cost.input),
+            Some(1.4)
+        );
+        assert_eq!(offering.tool_call, Some(true));
+        assert_eq!(offering.structured_output, Some(true));
+
+        let alias = baseten_client_for_identity(&server, "base-ten");
+        assert_eq!(alias.catalog_provider_id(), "base-ten");
+        assert_eq!(
+            alias.catalog_setup_template_id(),
+            Some(codewhale_config::BASETEN_TEMPLATE_ID)
+        );
+        let alias_delta = alias
+            .fetch_catalog_delta()
+            .await
+            .expect("Baseten alias delta");
+        assert_eq!(alias_delta.provider, "base-ten");
+        assert!(
+            alias_delta
+                .offerings
+                .iter()
+                .all(|row| row.provider == "base-ten"),
+            "schema aliases must preserve exact catalog ownership"
+        );
+        assert_eq!(offering.attachment, Some(true));
+        assert!(
+            offering
+                .modalities
+                .as_ref()
+                .is_some_and(|modalities| modalities.input.iter().any(|value| value == "image"))
+        );
     }
 
     #[tokio::test]
@@ -10174,6 +11057,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetch_catalog_delta_rejects_oversized_bodies_and_rosters() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                "x".repeat(PROVIDER_CATALOG_MAX_RESPONSE_BYTES + 1),
+                "application/json",
+            ))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            openrouter_client_for(&server)
+                .fetch_catalog_delta()
+                .await
+                .expect_err("oversized body"),
+            CatalogRefreshError::InvalidResponse
+        );
+
+        let server = MockServer::start().await;
+        let rows: Vec<_> = (0..=PROVIDER_CATALOG_MAX_ROWS)
+            .map(|index| json!({"id": format!("synthetic-model-{index}")}))
+            .collect();
+        mount_models_json(&server, 200, json!({"data": rows})).await;
+        assert_eq!(
+            openrouter_client_for(&server)
+                .fetch_catalog_delta()
+                .await
+                .expect_err("oversized roster"),
+            CatalogRefreshError::InvalidResponse
+        );
+    }
+
+    #[tokio::test]
     async fn refresh_catalog_cache_records_success_then_preserves_rows_on_failure() {
         // First refresh succeeds and caches live rows.
         let server = MockServer::start().await;
@@ -10221,6 +11137,111 @@ mod tests {
         assert!(
             cache.all_fresh_offerings(now_unix()).is_empty(),
             "Failed entries are not fresh, but they remain visible"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_live_prices_fail_refresh_and_preserve_each_provider_last_known_good() {
+        let openrouter_server = MockServer::start().await;
+        mount_models_json(
+            &openrouter_server,
+            200,
+            json!({"data": [{
+                "id": "synthetic/openrouter-priced",
+                "pricing": {"prompt": "0.000001", "completion": "0.000002"}
+            }]}),
+        )
+        .await;
+        let openrouter = openrouter_client_for(&openrouter_server);
+        let mut openrouter_cache = ProviderCatalogCache::new();
+        assert_eq!(
+            openrouter
+                .refresh_catalog_cache(&mut openrouter_cache, 3_600)
+                .await,
+            CatalogStatus::Fresh
+        );
+        let openrouter_fp = base_url_fingerprint(&openrouter_server.uri());
+        let openrouter_lkg = openrouter_cache
+            .get("openrouter", &openrouter_fp)
+            .expect("OpenRouter LKG")
+            .offerings
+            .clone();
+
+        openrouter_server.reset().await;
+        mount_models_json(
+            &openrouter_server,
+            200,
+            json!({"data": [{
+                "id": "synthetic/openrouter-priced",
+                "pricing": {"prompt": "1e308", "completion": "0.000002"}
+            }]}),
+        )
+        .await;
+        assert!(matches!(
+            openrouter
+                .refresh_catalog_cache(&mut openrouter_cache, 3_600)
+                .await,
+            CatalogStatus::Failed {
+                reason: CatalogRefreshError::InvalidResponse
+            }
+        ));
+        assert_eq!(
+            openrouter_cache
+                .get("openrouter", &openrouter_fp)
+                .expect("preserved OpenRouter LKG")
+                .offerings,
+            openrouter_lkg
+        );
+
+        let baseten_server = MockServer::start().await;
+        mount_models_json(
+            &baseten_server,
+            200,
+            json!({"data": [{
+                "id": "synthetic/baseten-priced",
+                "pricing": {"prompt": "0.000001", "completion": "0.000002"}
+            }]}),
+        )
+        .await;
+        let baseten = baseten_client_for(&baseten_server);
+        let mut baseten_cache = ProviderCatalogCache::new();
+        assert_eq!(
+            baseten
+                .refresh_catalog_cache(&mut baseten_cache, 3_600)
+                .await,
+            CatalogStatus::Fresh
+        );
+        let baseten_fp = base_url_fingerprint(&format!("{}/v1", baseten_server.uri()));
+        let baseten_lkg = baseten_cache
+            .get(codewhale_config::BASETEN_TEMPLATE_ID, &baseten_fp)
+            .expect("Baseten LKG")
+            .offerings
+            .clone();
+
+        baseten_server.reset().await;
+        mount_models_json(
+            &baseten_server,
+            200,
+            json!({"data": [{
+                "id": "synthetic/baseten-priced",
+                "pricing": {"prompt": "0.100001", "completion": "0.000002"}
+            }]}),
+        )
+        .await;
+        assert!(matches!(
+            baseten
+                .refresh_catalog_cache(&mut baseten_cache, 3_600)
+                .await,
+            CatalogStatus::Failed {
+                reason: CatalogRefreshError::InvalidResponse
+            }
+        ));
+        assert_eq!(
+            baseten_cache
+                .get(codewhale_config::BASETEN_TEMPLATE_ID, &baseten_fp)
+                .expect("preserved Baseten LKG")
+                .offerings,
+            baseten_lkg
         );
     }
 

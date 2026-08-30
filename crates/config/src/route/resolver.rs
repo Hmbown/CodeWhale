@@ -142,6 +142,29 @@ impl RouteResolver {
     /// Returns [`RouteError`] when the model is empty, the provider is invalid,
     /// or a clearly-foreign model is requested for a strict direct provider.
     pub fn resolve(&self, req: &RouteRequest) -> Result<ReadyRouteCandidate, RouteError> {
+        self.resolve_inner(req, false)
+    }
+
+    /// Resolve with catalog facts authenticated against this exact endpoint.
+    ///
+    /// The ordinary [`Self::resolve`] path strips capabilities and pricing when
+    /// a route uses a custom base URL, because a same-named first-party model is
+    /// not evidence about an arbitrary proxy. Callers may use this seam only
+    /// when the injected offering came from the selected provider identity's
+    /// own endpoint and its base-URL fingerprint matches the request endpoint.
+    /// All normal routing and protocol validation still applies.
+    pub fn resolve_with_endpoint_catalog_authority(
+        &self,
+        req: &RouteRequest,
+    ) -> Result<ReadyRouteCandidate, RouteError> {
+        self.resolve_inner(req, true)
+    }
+
+    fn resolve_inner(
+        &self,
+        req: &RouteRequest,
+        endpoint_catalog_authoritative: bool,
+    ) -> Result<ReadyRouteCandidate, RouteError> {
         // 1. Provider scope from explicit choice only; default otherwise.
         //    The provider is NEVER inferred from a model prefix.
         let provider_kind = req.explicit_provider.unwrap_or_default();
@@ -232,14 +255,17 @@ impl RouteResolver {
                 selected.endpoint_key = "responses".to_string();
             }
         }
-        if custom_endpoint {
+        if custom_endpoint && !endpoint_catalog_authoritative {
             // Capabilities and pricing belong to the exact provider endpoint
             // offering that reported them. Reusing a provider enum and a
             // first-party model id against a custom compatible endpoint does
-            // not prove that proxy serves the same modality, tool, reasoning,
-            // or billing contract. Keep the caller's model id and Chat
-            // pass-through above, but clear every unowned offering fact at the
-            // authority boundary instead of presenting it as verified.
+            // not prove that proxy serves the same canonical model, protocol,
+            // limits, modality, tool, reasoning, or billing contract. Keep the
+            // caller's wire model id, but clear every unowned offering fact at
+            // the authority boundary instead of presenting it as verified.
+            selected.canonical_model = None;
+            selected.endpoint_key = "chat".to_string();
+            selected.limits = RouteLimits::default();
             selected.capabilities = RouteCapabilities::default();
             selected.pricing = PricingSku::UnknownOrStale;
         }

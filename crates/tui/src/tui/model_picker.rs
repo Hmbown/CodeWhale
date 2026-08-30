@@ -20,7 +20,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Widget},
 };
 
-use codewhale_config::catalog::CatalogSource;
+use codewhale_config::catalog::{CatalogRefreshError, CatalogSource, CatalogStatus};
 use codewhale_config::model_reference::ModelReferenceCard;
 use codewhale_config::pricing::OfferingPricing;
 
@@ -37,7 +37,8 @@ use crate::model_registry;
 use crate::models_dev_live::{self, ModelsDevFreshness};
 use crate::palette;
 use crate::provider_lake::{
-    all_catalog_models_for_provider, catalog_offering_for_model, configured_providers,
+    all_catalog_models_for_provider_identity, catalog_offering_for_model,
+    catalog_offering_for_model_identity, configured_providers,
 };
 use crate::settings::PinnedModel;
 use crate::tui::app::{App, ReasoningEffort};
@@ -1300,6 +1301,7 @@ fn picker_model_rows_for_app(app: &App, config: &Config) -> Vec<ModelPickerRow> 
     push_provider_model_rows(
         &mut rows,
         app.api_provider,
+        (app.api_provider == ApiProvider::Custom).then(|| app.provider_identity_for_persistence()),
         active_model_ids,
         app.api_provider,
         config,
@@ -1335,6 +1337,7 @@ fn picker_model_rows_for_app(app: &App, config: &Config) -> Vec<ModelPickerRow> 
         push_provider_model_rows(
             &mut rows,
             provider,
+            None,
             model_ids,
             app.api_provider,
             config,
@@ -1343,21 +1346,10 @@ fn picker_model_rows_for_app(app: &App, config: &Config) -> Vec<ModelPickerRow> 
         );
     }
 
-    // `ApiProvider::Custom` is shared by every named custom route. Preserve
-    // the concrete active route key on rows so exact pins cannot collide.
-    let active_custom_identity = (app.api_provider == ApiProvider::Custom)
-        .then(|| app.provider_identity_for_persistence().to_string());
-    for row in &mut rows {
-        if row.provider == Some(ApiProvider::Custom) {
-            row.provider_identity = active_custom_identity.clone();
-        }
-    }
-
     for row in &mut rows {
         row.enabled = model_row_enabled_for_app(app, config, row);
         if let Some(pin) = app.pinned_models.iter().find(|pin| {
-            row_provider_identity(row)
-                .is_some_and(|provider| provider.eq_ignore_ascii_case(&pin.provider))
+            row_provider_identity(row).is_some_and(|provider| provider == pin.provider)
                 && row.id.eq_ignore_ascii_case(&pin.model)
         }) {
             let label = pin.label.as_deref().unwrap_or("pinned");
@@ -1371,13 +1363,17 @@ fn picker_model_rows_for_app(app: &App, config: &Config) -> Vec<ModelPickerRow> 
     for pin in &app.pinned_models {
         let provider = ApiProvider::parse(&pin.provider).unwrap_or(ApiProvider::Custom);
         if rows.iter().any(|row| {
-            row_provider_identity(row)
-                .is_some_and(|identity| identity.eq_ignore_ascii_case(&pin.provider))
+            row_provider_identity(row).is_some_and(|identity| identity == pin.provider)
                 && row.id.eq_ignore_ascii_case(&pin.model)
         }) {
             continue;
         }
-        let metadata = effective_picker_metadata(config, Some(provider), &pin.model);
+        let metadata = effective_picker_metadata_for_identity(
+            config,
+            Some(provider),
+            Some(&pin.provider),
+            &pin.model,
+        );
         // Bypass the ordinary `(enum provider, model)` de-duplication here:
         // two named Custom routes may intentionally expose the same model id.
         rows.push(ModelPickerRow {
@@ -1409,11 +1405,13 @@ fn model_row_enabled_for_app(app: &App, config: &Config, row: &ModelPickerRow) -
             return true;
         }
     }
-    let provider_identity = if provider == app.api_provider {
-        app.provider_identity_for_persistence()
-    } else {
-        provider.as_str()
-    };
+    let provider_identity = row_provider_identity(row).unwrap_or_else(|| {
+        if provider == app.api_provider {
+            app.provider_identity_for_persistence()
+        } else {
+            provider.as_str()
+        }
+    });
     if app.provider_model_is_enabled(provider_identity, &row.id)
         || app
             .provider_models
@@ -1453,6 +1451,7 @@ fn model_row_enabled_for_app(app: &App, config: &Config, row: &ModelPickerRow) -
 fn push_provider_model_rows(
     rows: &mut Vec<ModelPickerRow>,
     provider: ApiProvider,
+    provider_identity: Option<&str>,
     model_ids: Vec<String>,
     active_provider: ApiProvider,
     config: &Config,
@@ -1478,9 +1477,26 @@ fn push_provider_model_rows(
             None
         };
         let codex_freshness = roster_entry.map(|_| codex_roster.freshness);
-        let metadata =
-            effective_picker_metadata_with_codex(config, Some(provider), &id, codex_metadata);
-        let mut hint = render_picker_model_hint(&id, Some(provider), &metadata, codex_freshness);
+        let metadata = effective_picker_metadata_with_codex(
+            config,
+            Some(provider),
+            provider_identity,
+            &id,
+            codex_metadata,
+        );
+        let provider_catalog_receipt = provider_catalog_receipt_for_route(
+            provider,
+            provider_identity,
+            config,
+            metadata.source.as_ref(),
+        );
+        let mut hint = render_picker_model_hint(
+            &id,
+            Some(provider),
+            &metadata,
+            codex_freshness,
+            provider_catalog_receipt.as_ref(),
+        );
         hint = format!("{readiness_label} · {hint}");
         if provider != active_provider {
             hint = format!("switch route · {hint}");
@@ -1490,12 +1506,47 @@ fn push_provider_model_rows(
             rows,
             id.clone(),
             Some(provider),
+            provider_identity.map(str::to_string),
             hint,
             metadata,
             selectable,
             blocked_reason,
         );
     }
+}
+
+fn provider_catalog_receipt_for_route(
+    provider: ApiProvider,
+    provider_identity: Option<&str>,
+    config: &Config,
+    source: Option<&CatalogSource>,
+) -> Option<(CatalogStatus, bool)> {
+    let identity = provider_identity.unwrap_or_else(|| provider.as_str());
+    let owns_provider_catalog = matches!(
+        provider,
+        ApiProvider::Openrouter | ApiProvider::Telecomjs | ApiProvider::Edenai
+    ) || (provider == ApiProvider::Custom
+        && codewhale_config::provider_setup_template(identity)
+            .is_some_and(|template| template.is_compatible()));
+    if !owns_provider_catalog {
+        return None;
+    }
+
+    let base_url = config.base_url_for_route_identity(provider, identity);
+    let endpoint_matches = match source {
+        Some(CatalogSource::Live {
+            base_url_fingerprint,
+            ..
+        }) => *base_url_fingerprint == codewhale_config::catalog::base_url_fingerprint(&base_url),
+        // A bundled/template fallback has no endpoint claim to compare. Its
+        // exact-scope status still matters: a first refresh failure must be
+        // visible even though no live row exists yet.
+        _ => true,
+    };
+    Some((
+        crate::provider_catalog_live::status_for_scope(identity, &base_url),
+        endpoint_matches,
+    ))
 }
 
 fn push_auto_model_row(rows: &mut Vec<ModelPickerRow>, app: &App, config: &Config, hint: &str) {
@@ -1511,6 +1562,7 @@ fn push_auto_model_row(rows: &mut Vec<ModelPickerRow>, app: &App, config: &Confi
     push_model_row(
         rows,
         "auto".to_string(),
+        None,
         None,
         format!("{} · {hint}", readiness.label()),
         metadata,
@@ -1578,8 +1630,15 @@ fn push_configured_provider_model(
 }
 
 fn provider_catalog_model_ids(provider: ApiProvider) -> Vec<String> {
+    provider_catalog_model_ids_for_identity(provider, None)
+}
+
+fn provider_catalog_model_ids_for_identity(
+    provider: ApiProvider,
+    provider_identity: Option<&str>,
+) -> Vec<String> {
     let mut models = Vec::new();
-    for id in all_catalog_models_for_provider(provider) {
+    for id in all_catalog_models_for_provider_identity(provider, provider_identity) {
         // The catalog describes the built-in provider route. A custom route's
         // endpoint-owned current/configured model is appended separately.
         push_model_id(&mut models, picker_visible_model_id(provider, &id, false));
@@ -1592,7 +1651,9 @@ fn provider_scoped_model_ids_for_app(app: &App, include_current_model: bool) -> 
     // separate custom/current-model row.
     let mut models = Vec::new();
     push_model_id(&mut models, "auto");
-    for id in provider_catalog_model_ids(app.api_provider) {
+    let provider_identity =
+        (app.api_provider == ApiProvider::Custom).then(|| app.provider_identity_for_persistence());
+    for id in provider_catalog_model_ids_for_identity(app.api_provider, provider_identity) {
         push_model_id(&mut models, &id);
     }
 
@@ -1674,21 +1735,30 @@ fn push_model_row(
     rows: &mut Vec<ModelPickerRow>,
     id: String,
     provider: Option<ApiProvider>,
+    provider_identity: Option<String>,
     hint: String,
     metadata: EffectivePickerMetadata,
     selectable: bool,
     blocked_reason: Option<String>,
 ) {
-    if rows
-        .iter()
-        .any(|row| row.id == id && row.provider == provider)
-    {
+    if rows.iter().any(|row| {
+        row.id == id
+            && row.provider == provider
+            && match (
+                row.provider_identity.as_deref(),
+                provider_identity.as_deref(),
+            ) {
+                (Some(left), Some(right)) => left == right,
+                (None, None) => true,
+                _ => false,
+            }
+    }) {
         return;
     }
     rows.push(ModelPickerRow {
         id,
         provider,
-        provider_identity: None,
+        provider_identity,
         hint,
         metadata,
         selectable,
@@ -1770,9 +1840,13 @@ fn normalize_picker_search_text(text: &str) -> String {
 /// offer, the provider's own id — the `[providers.<id>]` key the user would
 /// edit — supplies the discriminator, with the leading run it already shares
 /// with the display name removed so the suffix is the part that differs.
-fn route_labels_for_rows(rows: &[&ModelPickerRow]) -> BTreeMap<&'static str, String> {
+fn route_labels_for_rows(rows: &[&ModelPickerRow]) -> BTreeMap<String, String> {
     let mut by_display: BTreeMap<&'static str, Vec<ApiProvider>> = BTreeMap::new();
-    for provider in rows.iter().filter_map(|row| row.provider) {
+    for provider in rows
+        .iter()
+        .filter_map(|row| row.provider)
+        .filter(|provider| *provider != ApiProvider::Custom)
+    {
         let bucket = by_display.entry(provider.display_name()).or_default();
         if !bucket.contains(&provider) {
             bucket.push(provider);
@@ -1790,8 +1864,20 @@ fn route_labels_for_rows(rows: &[&ModelPickerRow]) -> BTreeMap<&'static str, Str
                 // distinct.
                 Some(None) | None => display.to_string(),
             };
-            labels.insert(provider.as_str(), label);
+            labels.insert(provider.as_str().to_string(), label);
         }
+    }
+    for row in rows
+        .iter()
+        .filter(|row| row.provider == Some(ApiProvider::Custom))
+    {
+        let Some(identity) = row_provider_identity(row) else {
+            continue;
+        };
+        let label = codewhale_config::provider_setup_template(identity)
+            .map(|template| template.display_name.to_string())
+            .unwrap_or_else(|| identity.to_string());
+        labels.entry(identity.to_string()).or_insert(label);
     }
     labels
 }
@@ -1845,11 +1931,15 @@ fn route_discriminator(display: &str, provider_id: &str) -> Option<String> {
 /// DeepSeek has published both `deepseek` and `deepseek-thinking` as family
 /// values for its current V4 models, so keep its picker heading stable and
 /// provider-facing rather than exposing either implementation detail.
-fn catalog_family_for(provider: ApiProvider, model_id: &str) -> Option<String> {
+fn catalog_family_for_identity(
+    provider: ApiProvider,
+    provider_identity: Option<&str>,
+    model_id: &str,
+) -> Option<String> {
     if provider == ApiProvider::Deepseek {
         return Some(provider.display_name().to_string());
     }
-    crate::provider_lake::catalog_offering_for_model(provider, model_id)
+    catalog_offering_for_model_identity(provider, provider_identity, model_id)
         .and_then(|offering| offering.family)
 }
 
@@ -2014,7 +2104,7 @@ fn row_provider_identity(row: &ModelPickerRow) -> Option<&str> {
 
 fn offering_for_row(row: &ModelPickerRow) -> Option<codewhale_config::catalog::CatalogOffering> {
     let provider = row.provider?;
-    catalog_offering_for_model(provider, &row.id)
+    catalog_offering_for_model_identity(provider, row.provider_identity.as_deref(), &row.id)
 }
 
 fn offering_fetched_at(row: &ModelPickerRow) -> u64 {
@@ -2068,16 +2158,27 @@ fn effective_picker_metadata(
     provider: Option<ApiProvider>,
     id: &str,
 ) -> EffectivePickerMetadata {
-    effective_picker_metadata_with_codex(config, provider, id, None)
+    effective_picker_metadata_for_identity(config, provider, None, id)
+}
+
+fn effective_picker_metadata_for_identity(
+    config: &Config,
+    provider: Option<ApiProvider>,
+    provider_identity: Option<&str>,
+    id: &str,
+) -> EffectivePickerMetadata {
+    effective_picker_metadata_with_codex(config, provider, provider_identity, id, None)
 }
 
 fn effective_picker_metadata_with_codex(
     config: &Config,
     provider: Option<ApiProvider>,
+    provider_identity: Option<&str>,
     id: &str,
     codex_metadata: Option<&CodexModelMetadata>,
 ) -> EffectivePickerMetadata {
-    let offering = provider.and_then(|provider| catalog_offering_for_model(provider, id));
+    let offering = provider
+        .and_then(|provider| catalog_offering_for_model_identity(provider, provider_identity, id));
     let card = offering.as_ref().map(ModelReferenceCard::from_offering);
     let registry = model_registry::lookup(id);
 
@@ -2228,6 +2329,7 @@ fn render_picker_model_hint(
     provider: Option<ApiProvider>,
     metadata: &EffectivePickerMetadata,
     codex_freshness: Option<CodexModelCacheFreshness>,
+    provider_catalog_receipt: Option<&(CatalogStatus, bool)>,
 ) -> String {
     debug_assert_ne!(id, "auto", "Auto rows use the context-aware picker hint");
 
@@ -2315,15 +2417,25 @@ fn render_picker_model_hint(
         PickerPricing::Known(label) => parts.push(label.clone()),
         PickerPricing::Unknown => parts.push("price unknown".to_string()),
     }
+    let provider_live_source = matches!(metadata.source.as_ref(), Some(CatalogSource::Live { .. }));
     match metadata.source.as_ref() {
-        Some(CatalogSource::Live { .. } | CatalogSource::ModelsDevLive { .. }) => {
-            parts.push("live".to_string())
+        Some(CatalogSource::Live { .. }) => {
+            parts.push(provider_catalog_source_label(provider_catalog_receipt))
         }
+        Some(CatalogSource::ModelsDevLive { .. }) => parts.push("live".to_string()),
         Some(CatalogSource::Bundled) => parts.push("bundled".to_string()),
         Some(CatalogSource::ConfigOverride | CatalogSource::UserOverride) => {
             parts.push("override".to_string())
         }
         None => {}
+    }
+    if !provider_live_source
+        && let Some((CatalogStatus::Failed { reason }, _)) = provider_catalog_receipt
+    {
+        parts.push(format!(
+            "refresh failed ({})",
+            catalog_refresh_error_label(*reason)
+        ));
     }
     if provider == Some(ApiProvider::OpenaiCodex) {
         parts.push(match codex_freshness {
@@ -2336,6 +2448,38 @@ fn render_picker_model_hint(
         "provider model".to_string()
     } else {
         parts.join(" · ")
+    }
+}
+
+fn provider_catalog_source_label(receipt: Option<&(CatalogStatus, bool)>) -> String {
+    let Some((status, endpoint_matches)) = receipt else {
+        return "catalog freshness unknown".to_string();
+    };
+    if !endpoint_matches {
+        return "catalog from different endpoint".to_string();
+    }
+    match status {
+        CatalogStatus::Fresh => "live".to_string(),
+        CatalogStatus::Stale { age_secs } => {
+            let age_hours = age_secs.saturating_add(3_599) / 3_600;
+            format!("stale catalog ({age_hours}h)")
+        }
+        CatalogStatus::Failed { reason } => {
+            format!("refresh failed ({})", catalog_refresh_error_label(*reason))
+        }
+        CatalogStatus::Unknown => "catalog freshness unknown".to_string(),
+    }
+}
+
+fn catalog_refresh_error_label(error: CatalogRefreshError) -> &'static str {
+    match error {
+        CatalogRefreshError::Unauthorized => "unauthorized",
+        CatalogRefreshError::Forbidden => "forbidden",
+        CatalogRefreshError::NotFound => "not found",
+        CatalogRefreshError::RateLimited => "rate limited",
+        CatalogRefreshError::InvalidResponse => "invalid response",
+        CatalogRefreshError::EmptyList => "empty list",
+        CatalogRefreshError::Network => "network error",
     }
 }
 
@@ -2736,11 +2880,15 @@ impl ModelPickerView {
                     Some(provider) => PaneRow {
                         primary: row.id.clone(),
                         route: route_labels
-                            .get(provider.as_str())
+                            .get(row_provider_identity(row).unwrap_or(provider.as_str()))
                             .cloned()
                             .unwrap_or_else(|| provider.display_name().to_string()),
                         meta: model_row_meta_chips(row),
-                        family: catalog_family_for(provider, &row.id),
+                        family: catalog_family_for_identity(
+                            provider,
+                            row.provider_identity.as_deref(),
+                            &row.id,
+                        ),
                         active,
                     },
                 }
@@ -2995,7 +3143,7 @@ mod tests {
     #[test]
     fn deepseek_picker_heading_hides_legacy_family_metadata() {
         assert_eq!(
-            catalog_family_for(ApiProvider::Deepseek, "deepseek-v4-pro").as_deref(),
+            catalog_family_for_identity(ApiProvider::Deepseek, None, "deepseek-v4-pro").as_deref(),
             Some("DeepSeek")
         );
     }
@@ -3006,5 +3154,126 @@ mod tests {
 
         assert!(model_row_visible_by_default(&row, ApiProvider::Deepseek));
         assert!(!model_row_visible_by_default(&row, ApiProvider::Openai));
+    }
+
+    #[test]
+    fn baseten_picker_models_use_exact_identity_and_direct_provider_label() {
+        let _live = crate::provider_lake::lock_live_snapshot();
+        crate::provider_lake::clear_live_snapshot();
+
+        let models = provider_catalog_model_ids_for_identity(
+            ApiProvider::Custom,
+            Some(codewhale_config::BASETEN_TEMPLATE_ID),
+        );
+        assert_eq!(models.len(), codewhale_config::BASETEN_MODELS.len());
+        assert!(models.contains(&codewhale_config::BASETEN_DEFAULT_MODEL.to_string()));
+
+        let row = ModelPickerRow {
+            id: codewhale_config::BASETEN_DEFAULT_MODEL.to_string(),
+            provider: Some(ApiProvider::Custom),
+            provider_identity: Some(codewhale_config::BASETEN_TEMPLATE_ID.to_string()),
+            hint: String::new(),
+            metadata: EffectivePickerMetadata::default(),
+            selectable: true,
+            blocked_reason: None,
+            enabled: true,
+        };
+        let labels = route_labels_for_rows(&[&row]);
+        assert_eq!(labels.get("baseten").map(String::as_str), Some("Baseten"));
+    }
+
+    #[test]
+    fn provider_catalog_hint_never_calls_failed_or_mismatched_rows_live() {
+        assert_eq!(
+            provider_catalog_source_label(Some(&(CatalogStatus::Fresh, true))),
+            "live"
+        );
+        assert_eq!(
+            provider_catalog_source_label(Some(&(
+                CatalogStatus::Failed {
+                    reason: CatalogRefreshError::Unauthorized,
+                },
+                true,
+            ))),
+            "refresh failed (unauthorized)"
+        );
+        assert_eq!(
+            provider_catalog_source_label(Some(&(CatalogStatus::Fresh, false))),
+            "catalog from different endpoint"
+        );
+        assert_eq!(
+            provider_catalog_source_label(None),
+            "catalog freshness unknown"
+        );
+    }
+
+    #[test]
+    fn first_provider_catalog_failure_is_visible_on_bundled_fallback_rows() {
+        let _env = crate::test_support::lock_test_env();
+        let _live = crate::provider_lake::lock_live_snapshot();
+        let home = tempfile::tempdir().expect("test home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        crate::provider_catalog_live::reset_cache_for_test();
+        crate::provider_lake::clear_live_snapshot();
+
+        let config = Config {
+            provider: Some("openrouter".to_string()),
+            ..Config::default()
+        };
+        let base_url = config.base_url_for_route_identity(ApiProvider::Openrouter, "openrouter");
+        let fingerprint = codewhale_config::catalog::base_url_fingerprint(&base_url);
+        crate::provider_catalog_live::record_failure(
+            "openrouter",
+            &fingerprint,
+            CatalogRefreshError::Unauthorized,
+        );
+
+        let model = provider_catalog_model_ids(ApiProvider::Openrouter)
+            .into_iter()
+            .next()
+            .expect("bundled OpenRouter fallback");
+        let mut rows = Vec::new();
+        let codex_roster = CodexModelRoster {
+            models: Vec::new(),
+            freshness: CodexModelCacheFreshness::Missing,
+            fetched_at: None,
+        };
+        push_provider_model_rows(
+            &mut rows,
+            ApiProvider::Openrouter,
+            None,
+            vec![model],
+            ApiProvider::Openrouter,
+            &config,
+            &codex_roster,
+            &crate::provider_readiness::ProviderReadinessSnapshot::default(),
+        );
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].hint.contains("refresh failed (unauthorized)"),
+            "{}",
+            rows[0].hint
+        );
+
+        crate::provider_catalog_live::reset_cache_for_test();
+        crate::provider_lake::clear_live_snapshot();
+    }
+
+    #[test]
+    fn model_rows_keep_case_distinct_custom_identities() {
+        let mut rows = Vec::new();
+        for identity in ["CustomA", "customa"] {
+            push_model_row(
+                &mut rows,
+                "shared-model".to_string(),
+                Some(ApiProvider::Custom),
+                Some(identity.to_string()),
+                String::new(),
+                EffectivePickerMetadata::default(),
+                true,
+                None,
+            );
+        }
+        assert_eq!(rows.len(), 2);
     }
 }

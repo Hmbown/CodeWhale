@@ -91,6 +91,7 @@ mod project_context;
 mod project_context_cache;
 mod prompt_zones;
 mod prompts;
+mod provider_catalog_live;
 mod provider_lake;
 mod provider_readiness;
 mod purge;

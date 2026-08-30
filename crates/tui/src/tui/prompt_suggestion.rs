@@ -1235,6 +1235,7 @@ mod tests {
             billing: Some(crate::core::events::RouteBillingEnvelope {
                 billing_surface: None,
                 endpoint_fingerprint: None,
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Unknown,
                 dispatched_at: chrono::Utc::now(),
             }),
@@ -1583,6 +1584,7 @@ mod tests {
                 billing: Some(crate::core::events::RouteBillingEnvelope {
                     billing_surface: None,
                     endpoint_fingerprint: None,
+                    provider_live_pricing: None,
                     billing_mode: crate::cost_status::RouteBillingMode::Unknown,
                     dispatched_at: chrono::Utc::now(),
                 }),

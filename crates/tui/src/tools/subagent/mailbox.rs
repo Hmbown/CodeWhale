@@ -641,6 +641,7 @@ mod tests {
             model: "k3".to_string(),
             billing_surface: Some(crate::pricing::MOONSHOT_KIMI_CODE_BILLING_SURFACE.to_string()),
             endpoint_fingerprint: Some("a".repeat(64)),
+            provider_live_pricing: None,
             billing_mode: crate::cost_status::RouteBillingMode::Subscription,
             dispatched_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1_234, 0)
                 .expect("timestamp"),

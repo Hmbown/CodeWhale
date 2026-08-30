@@ -35,17 +35,31 @@ pub const SENSENOVA_MODELS: &[&str] = &[SENSENOVA_DEFAULT_MODEL];
 pub const AGNES_TEMPLATE_ID: &str = "agnes";
 
 /// Baseten Model APIs — OpenAI Chat Completions, discovered at `/v1/models`.
+///
+/// This 2026-08-29 roster is the official offline seed from Baseten's Model
+/// APIs overview. The authenticated live catalog replaces this exact provider
+/// partition after startup, so upstream additions and removals do not require a
+/// Codewhale release.
 pub const BASETEN_TEMPLATE_ID: &str = "baseten";
 pub const BASETEN_BASE_URL: &str = "https://inference.baseten.co/v1";
 pub const BASETEN_DEFAULT_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub const BASETEN_API_KEY_ENV: &str = "BASETEN_API_KEY";
 pub const BASETEN_MODELS: &[&str] = &[
     BASETEN_DEFAULT_MODEL,
-    "deepseek-ai/DeepSeek-V4-Flash-0731",
     "deepseek-ai/DeepSeek-V4-Pro-0813",
+    "deepseek-ai/DeepSeek-V4-Flash-0731",
+    "zai-org/GLM-4.7",
     "zai-org/GLM-5.2",
+    "zai-org/GLM-5.2-Fast",
+    "zai-org/GLM-5.3",
     "zai-org/GLM-5.3-Flash",
+    "thinkingmachines/inkling",
+    "thinkingmachines/inkling-small",
+    "moonshotai/Kimi-K2.6",
     "moonshotai/Kimi-K2.7-Code",
+    "moonshotai/Kimi-K3",
+    "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B",
+    "openai/gpt-oss-120b",
 ];
 
 /// Groq — OpenAI Chat Completions hosted inference.
@@ -502,6 +516,25 @@ mod tests {
             assert!(
                 ProviderKind::parse(id).is_none(),
                 "{id} must not be a ProviderKind"
+            );
+        }
+    }
+
+    #[test]
+    fn baseten_offline_seed_matches_the_current_official_model_api_roster() {
+        let template = provider_setup_template(BASETEN_TEMPLATE_ID).expect("baseten");
+        assert_eq!(template.picker_models(), BASETEN_MODELS);
+        assert_eq!(BASETEN_MODELS.len(), 15);
+        for required in [
+            "deepseek-ai/DeepSeek-V4-Pro",
+            "zai-org/GLM-5.3",
+            "thinkingmachines/inkling",
+            "moonshotai/Kimi-K3",
+            "openai/gpt-oss-120b",
+        ] {
+            assert!(
+                BASETEN_MODELS.contains(&required),
+                "missing current Baseten seed {required}"
             );
         }
     }

@@ -680,6 +680,10 @@ pub(crate) async fn spawned_dispatch_execute(
     completion_permit.send(apply);
 }
 
+pub(super) fn settle_failed_dispatch_routed_usage(batch: &crate::cost_status::RuntimeUsageBatch) {
+    crate::cost_status::report_runtime_usage_batch(crate::cost_status::scope_token(), None, batch);
+}
+
 pub(crate) async fn spawned_dispatch_inner(
     prepare: UserDispatchPrepare,
     recovery: DispatchRecovery,
@@ -722,6 +726,7 @@ pub(crate) async fn spawned_dispatch_inner(
         effective_reasoning_effort,
         auto_controls_reasoning,
         auto_selection,
+        initial_routed_usage,
         routing_source: _,
     } = planned;
     let effective_reasoning_tier = selected_reasoning_effort
@@ -738,12 +743,18 @@ pub(crate) async fn spawned_dispatch_inner(
         &turn_route.model,
     );
 
+    // Retain one fallback copy until mailbox acceptance. The classifier has
+    // already run; if the engine channel closes now, its exact spend still
+    // belongs to this interactive session rather than disappearing with the
+    // unstarted parent turn.
+    let send_failure_routed_usage = initial_routed_usage.clone();
     if let Err(err) = engine_handle
         .send(Op::SendMessage {
             content: prepare.content.clone(),
             mode: prepare.mode,
             route: Box::new(turn_route),
             compaction: Box::new(turn_compaction.clone()),
+            initial_routed_usage: Box::new(initial_routed_usage),
             goal_objective: prepare.goal_objective.clone(),
             goal_token_budget: prepare.goal_token_budget,
             goal_status: prepare.goal_status,
@@ -763,6 +774,7 @@ pub(crate) async fn spawned_dispatch_inner(
         })
         .await
     {
+        settle_failed_dispatch_routed_usage(&send_failure_routed_usage);
         return build_dispatch_error_closure(prepare, recovery, err.to_string());
     }
 
