@@ -162,12 +162,18 @@ const RUNTIME_UNAVAILABLE_CODE: i64 = -32005;
 /// Server error: the named thread does not exist.
 const THREAD_NOT_FOUND_CODE: i64 = -32004;
 /// Server error: a daemon-socket client tried to act before `daemon/attach`.
+/// Only the unix listener raises it; gated so the Windows build (where the
+/// listener is a typed-unsupported stub) does not fail `warnings = "deny"`
+/// on dead code.
+#[cfg(unix)]
 const ATTACH_REQUIRED_CODE: i64 = -32010;
 /// Server error: a `daemon/attach` claim lost to a live owner.
+#[cfg(unix)]
 const DAEMON_ALREADY_CLAIMED_CODE: i64 = -32011;
 /// Server error: only the owning client may `shutdown` the daemon.
 const NOT_DAEMON_OWNER_CODE: i64 = -32012;
 /// Server error: the client refused the daemon's version at attach time.
+#[cfg(unix)]
 const DAEMON_VERSION_SKEW_CODE: i64 = -32013;
 /// Server error: `daemon/attach` sent twice on one connection.
 const ALREADY_ATTACHED_CODE: i64 = -32014;
@@ -1011,6 +1017,7 @@ impl JsonRpcError {
 
     /// Server error (-32000..-32099): the daemon-socket connection has not
     /// completed `daemon/attach`, so nothing but `healthz` is allowed yet.
+    #[cfg(unix)]
     fn attach_required(method: &str) -> Self {
         Self {
             code: ATTACH_REQUIRED_CODE,
@@ -1024,6 +1031,7 @@ impl JsonRpcError {
     }
 
     /// Server error (-32000..-32099): a `claim` attach lost to a live owner.
+    #[cfg(unix)]
     fn daemon_already_claimed(owner: &Value) -> Self {
         Self {
             code: DAEMON_ALREADY_CLAIMED_CODE,
@@ -1047,6 +1055,7 @@ impl JsonRpcError {
 
     /// Server error (-32000..-32099): the client's expected daemon version
     /// does not match the running binary (bundle skew).
+    #[cfg(unix)]
     fn daemon_version_skew(expected: &str, actual: &str) -> Self {
         Self {
             code: DAEMON_VERSION_SKEW_CODE,
