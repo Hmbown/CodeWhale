@@ -4350,6 +4350,9 @@ mod tests {
             ..crate::test_support::test_tui_options(PathBuf::from("."))
         };
         let mut app = App::new(options, &Config::default());
+        // Widget contracts below exercise the post-Startup conversation
+        // surface. Startup rendering has its own explicit fixture/tests.
+        app.launch.visible = false;
         app.ui_locale = Locale::En;
         app.composer.vim_enabled = false;
         // Most widget fixtures exercise the explicitly selected underwater

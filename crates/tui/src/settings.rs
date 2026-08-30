@@ -421,13 +421,6 @@ pub struct Settings {
     pub composer_vim_mode: String,
     /// Transcript spacing rhythm: compact, comfortable, spacious
     pub transcript_spacing: String,
-    /// Retired pre-Tideline preference, retained only so existing
-    /// `launch_screen` values keep parsing. Fresh interactive launches now
-    /// always start at Tideline Startup; an intentional resume or explicit
-    /// initial prompt is the only direct-session route.
-    #[allow(dead_code)] // persisted compatibility only; clean launches no longer branch on it
-    #[serde(default, skip_serializing)]
-    pub launch_screen: bool,
     /// Default mode: "agent" (Act), "plan", or "operate". Legacy permission
     /// shorthands are accepted for migration but never advertised as modes.
     pub default_mode: String,
@@ -611,7 +604,6 @@ impl Default for Settings {
             composer_multiline_mode: false,
             composer_vim_mode: "normal".to_string(),
             transcript_spacing: "comfortable".to_string(),
-            launch_screen: false,
             default_mode: "agent".to_string(),
             sidebar_width_percent: 28,
             sidebar_focus: "auto".to_string(),
@@ -3583,9 +3575,24 @@ mod tests {
         );
         assert!(!settings.low_motion);
         assert_eq!(settings.transcript_spacing, "comfortable");
+    }
+
+    #[test]
+    fn retired_launch_screen_setting_is_accepted_and_dropped_on_save() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("settings.toml");
+        std::fs::write(&path, "launch_screen = false\n").expect("legacy settings");
+
+        let settings = Settings::load_persisted_from_candidates(Some(path.clone()), None, None)
+            .expect("legacy setting must remain readable");
+        settings
+            .save_to_path(&path)
+            .expect("save normalized settings");
+
+        let saved = std::fs::read_to_string(&path).expect("read normalized settings");
         assert!(
-            !settings.launch_screen,
-            "legacy launch-screen state is inert by default"
+            !saved.contains("launch_screen"),
+            "the retired setting must not be written back: {saved}"
         );
     }
 
