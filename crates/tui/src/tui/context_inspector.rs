@@ -1029,6 +1029,7 @@ mod tests {
                     read_timeout: 1,
                     connected: true,
                     error: None,
+                    auth_required: false,
                     capability_metadata: Default::default(),
                     tools: vec![McpDiscoveredItem {
                         name: "echo".to_string(),
@@ -1049,6 +1050,7 @@ mod tests {
                     read_timeout: 1,
                     connected: true,
                     error: None,
+                    auth_required: false,
                     capability_metadata: Default::default(),
                     tools: Vec::new(),
                     resources: Vec::new(),

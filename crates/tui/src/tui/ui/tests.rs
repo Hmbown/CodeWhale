@@ -1794,6 +1794,7 @@ async fn mcp_enable_persists_and_applies_the_live_tool_pool_in_one_action() {
             read_timeout: 5,
             connected: true,
             error: None,
+            auth_required: false,
             capability_metadata: crate::mcp::McpServerCapabilityMetadata::LegacyFallback,
             tools: Vec::new(),
             resources: Vec::new(),

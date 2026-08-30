@@ -6176,6 +6176,7 @@ mod session_boot_event_tests {
             read_timeout: 5,
             connected,
             error: None,
+            auth_required: false,
             capability_metadata: McpServerCapabilityMetadata::NotObserved,
             tools: Vec::new(),
             resources: Vec::new(),

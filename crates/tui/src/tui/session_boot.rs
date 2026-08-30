@@ -377,7 +377,7 @@ fn row_from_snapshot(
         };
     }
     if let Some(error) = server.error.as_deref() {
-        if mcp_error_requires_login(error) {
+        if server.auth_required || mcp_error_requires_login(error) {
             return McpServerBootRow {
                 name: server.name.clone(),
                 state: McpServerBootState::NeedsLogin,
@@ -416,12 +416,21 @@ fn row_from_snapshot(
     }
 }
 
+/// Text fallback for the typed [`McpServerSnapshot::auth_required`] state:
+/// the one shared auth-required classifier, plus the shape the session-boot
+/// receipt itself prints.
 #[must_use]
 pub fn mcp_error_requires_login(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    error.contains("mcp login")
-        || error.contains("auth required")
-        || (error.contains("oauth") && error.contains("authenticat"))
+    let lowered = error.to_ascii_lowercase();
+    crate::mcp::oauth::error_text_looks_auth_required(error)
+        || (lowered.contains("oauth") && lowered.contains("authenticat"))
+}
+
+/// The `◆ auth required` state label every TUI MCP surface prints for a
+/// server whose login is missing, expired, or revoked.
+#[must_use]
+pub fn mcp_auth_required_state_label() -> String {
+    format!("{} auth required", crate::tui::glyphs::ATTENTION)
 }
 
 fn named_chip_line(kind: &str, count: usize, verb: &str, names: &[&str]) -> String {
@@ -447,7 +456,7 @@ fn server_row_text(row: &McpServerBootRow, locale: Locale) -> String {
         McpServerBootState::Connecting => Cow::Borrowed("connecting"),
         McpServerBootState::Connected => tr(locale, MessageId::ExtensionsStateConnected),
         McpServerBootState::Failed => tr(locale, MessageId::PhaseFailed),
-        McpServerBootState::NeedsLogin => Cow::Borrowed("needs login"),
+        McpServerBootState::NeedsLogin => Cow::Owned(mcp_auth_required_state_label()),
         McpServerBootState::Disabled => tr(locale, MessageId::HotbarSetupStatusDisabled),
     };
     let action = match row.action {
@@ -567,6 +576,7 @@ mod tests {
             read_timeout: 5,
             connected,
             error: error.map(str::to_string),
+            auth_required: false,
             capability_metadata: McpServerCapabilityMetadata::NotObserved,
             tools: Vec::new(),
             resources: Vec::new(),
@@ -694,8 +704,35 @@ mod tests {
         assert!(joined.contains("2 duplicate"), "{joined}");
         assert!(joined.contains("/mcp retry beta"), "{joined}");
         assert!(joined.contains("/mcp login gamma"), "{joined}");
+        assert!(joined.contains("gamma · ◆ auth required"), "{joined}");
+        assert!(!joined.contains("needs login"), "{joined}");
         assert!(!joined.contains("/mcp auth"), "{joined}");
         assert!(!joined.to_ascii_lowercase().contains("slack"), "{joined}");
+    }
+
+    #[test]
+    fn typed_auth_required_state_routes_to_login_without_error_text_sniffing() {
+        let mut delta = server("delta", true, false, Some("request rejected"));
+        delta.auth_required = true;
+        let snap = snapshot(vec![delta]);
+        let surface = SessionBootSurface::from_parts(
+            Some(&snap),
+            false,
+            &[],
+            1,
+            PluginBootSummary::default(),
+        );
+        assert_eq!(
+            surface
+                .servers
+                .iter()
+                .find(|row| row.name == "delta")
+                .map(|row| (row.state, row.action)),
+            Some((McpServerBootState::NeedsLogin, McpServerAction::Login))
+        );
+        let joined = surface.receipt_lines(Locale::En, 100).join("\n");
+        assert!(joined.contains("◆ auth required"), "{joined}");
+        assert!(joined.contains("/mcp login delta"), "{joined}");
     }
 
     #[test]

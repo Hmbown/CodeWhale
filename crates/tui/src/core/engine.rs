@@ -6393,6 +6393,7 @@ impl Engine {
                         match result {
                             Ok(connection) => pool.store_ready_connection(name, connection),
                             Err(error) => {
+                                pool.note_connect_failure(&name, &error);
                                 connection_errors
                                     .insert(name, crate::mcp::format_mcp_error_for_display(&error));
                             }

@@ -1483,6 +1483,7 @@ mod tests {
             read_timeout: 5,
             connected: enabled,
             error: None,
+            auth_required: false,
             capability_metadata: if enabled {
                 crate::mcp::McpServerCapabilityMetadata::LegacyFallback
             } else {

@@ -41,14 +41,16 @@ pub(super) fn format_mcp_manager(snapshot: &McpManagerSnapshot, locale: Locale) 
 fn push_server(lines: &mut Vec<String>, server: &McpServerSnapshot, locale: Locale) {
     let state = if server.enabled {
         if server.connected {
-            "connected"
+            "connected".to_string()
+        } else if server.auth_required {
+            crate::tui::session_boot::mcp_auth_required_state_label()
         } else if server.error.is_some() {
-            "failed"
+            "failed".to_string()
         } else {
-            "enabled"
+            "enabled".to_string()
         }
     } else {
-        "disabled"
+        "disabled".to_string()
     };
     let required = if server.required { " required" } else { "" };
     lines.push(format!(
@@ -62,13 +64,7 @@ fn push_server(lines: &mut Vec<String>, server: &McpServerSnapshot, locale: Loca
     if let Some(error) = server.error.as_ref() {
         lines.push(format!("  error: {error}"));
     }
-    let recovery = crate::mcp::mcp_recovery_kind(
-        server.enabled,
-        true,
-        server.connected,
-        server.error.as_deref(),
-        false,
-    );
+    let recovery = server.recovery_kind(false);
     let command = if crate::mcp::mcp_name_is_command_safe(&server.name)
         || matches!(
             recovery,
@@ -191,6 +187,7 @@ mod tests {
                     read_timeout: 120,
                     connected: true,
                     error: None,
+                    auth_required: false,
                     capability_metadata: McpServerCapabilityMetadata::Advertised(
                         crate::mcp::McpServerCapabilities {
                             tools: true,
@@ -217,6 +214,7 @@ mod tests {
                     read_timeout: 120,
                     connected: false,
                     error: Some("boom".to_string()),
+                    auth_required: false,
                     capability_metadata: McpServerCapabilityMetadata::NotObserved,
                     tools: Vec::new(),
                     resources: Vec::new(),
@@ -254,6 +252,7 @@ mod tests {
                 read_timeout: 120,
                 connected: false,
                 error: Some("401 Unauthorized".to_string()),
+                auth_required: false,
                 capability_metadata: McpServerCapabilityMetadata::NotObserved,
                 tools: Vec::new(),
                 resources: Vec::new(),
@@ -263,6 +262,39 @@ mod tests {
         let text = format_mcp_manager(&snapshot, Locale::En);
         assert!(text.contains("next: Re-auth /mcp login github"), "{text}");
         assert!(!text.contains("/mcp auth"));
+    }
+
+    #[test]
+    fn manager_text_prints_typed_auth_required_state() {
+        // The typed state decides the row even when the error text alone
+        // would not classify (a transport that only says "rejected").
+        let snapshot = McpManagerSnapshot {
+            config_path: PathBuf::from("/tmp/mcp.json"),
+            config_exists: true,
+            reload_required: false,
+            servers: vec![McpServerSnapshot {
+                name: "wiki".to_string(),
+                enabled: true,
+                required: false,
+                transport: "http".to_string(),
+                command_or_url: "https://wiki.example/mcp".to_string(),
+                connect_timeout: 10,
+                execute_timeout: 60,
+                read_timeout: 120,
+                connected: false,
+                error: Some("request rejected".to_string()),
+                auth_required: true,
+                capability_metadata: McpServerCapabilityMetadata::NotObserved,
+                tools: Vec::new(),
+                resources: Vec::new(),
+                prompts: Vec::new(),
+            }],
+        };
+        let text = format_mcp_manager(&snapshot, Locale::En);
+        assert!(text.contains("- wiki [◆ auth required]"), "{text}");
+        assert!(!text.contains("[failed]"), "{text}");
+        assert!(text.contains("next: Re-auth /mcp login wiki"), "{text}");
+        assert!(text.contains("requires OAuth reauthentication"), "{text}");
     }
 
     #[test]
