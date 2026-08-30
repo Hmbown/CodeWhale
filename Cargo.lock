@@ -4734,9 +4734,9 @@ dependencies = [
 
 [[package]]
 name = "schemaui"
-version = "0.12.3"
+version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08368da4a080d99e5b4e95fcea4e8d876a27f190230ae1762c504c33f3af444e"
+checksum = "cfd31406aa5c4778587e7d7ed82bada4131fbf1e69d0212fda60d6a2c5f5b5e6"
 dependencies = [
  "anyhow",
  "axum",
@@ -5399,7 +5399,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
