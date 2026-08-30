@@ -44,7 +44,7 @@ function LoginForm({ locale, error }: { locale: string; error: boolean }) {
         </label>
         <button
           type="submit"
-          className="w-full px-5 py-3 bg-ink text-paper font-mono text-sm uppercase tracking-wider hover:bg-indigo transition-colors"
+          className="w-full px-5 py-3 bg-indigo text-paper font-mono text-sm uppercase tracking-wider hover:bg-indigo-deep transition-colors"
         >
           {isZh ? "登录 →" : "Sign in →"}
         </button>

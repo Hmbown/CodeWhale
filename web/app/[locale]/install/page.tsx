@@ -372,13 +372,13 @@ codewhale doctor`;
             </div>
 
             {/* GitHub Release */}
-            <div className="rounded-lg border border-ink/12 bg-white/70 p-5">
+            <div className="rounded-lg border border-paper-edge bg-paper-card p-5">
               <div className="font-display text-lg mb-3">{isZh ? "GitHub Releases" : "GitHub Releases"}</div>
               <InstallCodeBlock cmd={RELEASE_DOWNLOAD} copyLabel={copyLabel} copiedLabel={copiedLabel} />
             </div>
 
             {/* CNB */}
-            <div className="rounded-lg border border-ink/12 bg-white/70 p-5">
+            <div className="rounded-lg border border-paper-edge bg-paper-card p-5">
               <div className="font-display text-lg mb-3">{isZh ? "CNB 镜像" : "CNB mirror"}</div>
               {publishedRelease ? (
                 <InstallCodeBlock
