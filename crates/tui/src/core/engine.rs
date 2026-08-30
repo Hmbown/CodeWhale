@@ -260,6 +260,16 @@ pub struct EngineConfig {
     pub active_route_limits: Option<codewhale_config::route::RouteLimits>,
     /// Workspace root for tool execution and file operations.
     pub workspace: PathBuf,
+    /// Host-owned conversation id the engine adopts at construction.
+    ///
+    /// Interactive hosts claim a session id before the engine exists: the
+    /// per-session Runtime store lock and the first crash checkpoint are both
+    /// keyed by it. The engine must run the conversation the host persists,
+    /// so it adopts this id instead of minting a second one that the host
+    /// only learns about from the first `SessionUpdated` event (which left
+    /// the turn-start checkpoint orphaned under the host id). `None`
+    /// (headless/embed callers) keeps the generated id.
+    pub session_id: Option<String>,
     /// Optional host-owned root for delegated-agent runtime state.
     ///
     /// When unset, the worker ledger, complete transcript artifacts and
@@ -492,6 +502,7 @@ impl Default for EngineConfig {
             model: DEFAULT_TEXT_MODEL.to_string(),
             active_route_limits: None,
             workspace: PathBuf::from("."),
+            session_id: None,
             subagent_state_root: None,
             allow_shell: true,
             trust_mode: false,
@@ -1456,6 +1467,14 @@ impl Engine {
             config.notes_path.clone(),
             config.mcp_config_path.clone(),
         );
+        if let Some(session_id) = config
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            session.id = session_id.to_string();
+        }
         // Set up stable system prompt with project context (default to agent mode).
         // Per-turn working-set metadata is injected into the latest user
         // message at request time so file churn does not rewrite this prefix.
@@ -2115,6 +2134,13 @@ impl Engine {
     /// process-local capabilities that must never cross that boundary. The
     /// returned id is the conversation being closed; callers use it to scope
     /// asynchronous fleet finalization before loading the new history.
+    /// Conversation id this engine persists and reports in `SessionUpdated`.
+    /// Test-only observation point for the host/engine id contract.
+    #[cfg(test)]
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session.id
+    }
+
     fn install_synced_session_id(&mut self, next_session_id: String) -> Option<String> {
         let previous_session_id = self.session.id.clone();
         if next_session_id == previous_session_id {

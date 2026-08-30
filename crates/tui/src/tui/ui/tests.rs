@@ -23928,3 +23928,123 @@ fn focused_agent_transcript_receives_wheel_scroll_through_the_frame() {
         "the invisible main transcript must not consume the focused pane's scroll"
     );
 }
+
+#[test]
+fn fresh_launch_engine_adopts_the_app_session_id() {
+    // Regression for phantom duplicate sessions: a fresh interactive launch
+    // claimed session id A in the App (Runtime store lock, turn-start crash
+    // checkpoint) while the engine minted its own id B. The first
+    // `SessionUpdated` re-keyed the App to B, the completion commit cleared
+    // only `checkpoints/<B>.json`, and `--continue` later "recovered" the
+    // orphaned `checkpoints/<A>.json` (one user message, no reply) instead of
+    // the real session. The engine must adopt the App's id at spawn.
+    let mut app = create_test_app();
+    app.current_session_id = None;
+    let config = Config::default();
+
+    let session_id = super::event_loop::ensure_runtime_session_id(&mut app);
+    assert_eq!(app.current_session_id.as_deref(), Some(session_id.as_str()));
+    assert!(
+        uuid::Uuid::parse_str(&session_id).is_ok(),
+        "fresh launch claims a uuid, got {session_id:?}"
+    );
+
+    let engine_config = build_engine_config(&app, &config);
+    assert_eq!(
+        engine_config.session_id.as_deref(),
+        Some(session_id.as_str()),
+        "the engine config must carry the App session id"
+    );
+    let (engine, _handle) = crate::core::engine::Engine::new(engine_config, &config);
+    assert_eq!(
+        engine.session_id(),
+        session_id,
+        "the engine must run the conversation the App persists"
+    );
+}
+
+#[test]
+fn fresh_session_turn_lifecycle_leaves_no_orphan_checkpoint() {
+    // Store-level regression for the phantom duplicate sessions: walk the
+    // persistence lifecycle of one fresh interactive turn against an
+    // isolated session store and require that the turn-start checkpoint and
+    // the completion commit are keyed by the same id. Before the fix the
+    // engine minted its own id, `SessionUpdated` re-keyed the App to it, and
+    // `checkpoints/<app id>.json` survived every completed turn; `--continue`
+    // then "recovered" that one-message orphan as a duplicate session.
+    let mut app = create_test_app();
+    app.current_session_id = None;
+    app.current_session_metadata = None;
+    let config = Config::default();
+    let store = TempDir::new().expect("sessions tempdir");
+    let manager = crate::session_manager::SessionManager::new(store.path().join("sessions"))
+        .expect("manager");
+
+    // Fresh launch (event_loop::run_tui): the App claims the id, the engine
+    // adopts it.
+    let app_session_id = super::event_loop::ensure_runtime_session_id(&mut app);
+    let (engine, _handle) =
+        crate::core::engine::Engine::new(build_engine_config(&app, &config), &config);
+
+    // Turn start (dispatch.rs): crash checkpoint under the App id.
+    app.api_messages.push(crate::models::Message {
+        role: Role::User,
+        content: vec![crate::models::ContentBlock::Text {
+            text: "please answer".to_string(),
+            cache_control: None,
+        }],
+    });
+    let checkpoint = build_session_snapshot(&mut app, &manager).expect("turn-start snapshot");
+    assert_eq!(checkpoint.metadata.id, app_session_id);
+    manager
+        .save_checkpoint(&checkpoint)
+        .expect("save turn-start checkpoint");
+
+    // The engine reports its conversation id (`SessionUpdated` handler).
+    app.current_session_id = Some(engine.session_id().to_string());
+
+    // Turn completion (`PersistRequest::CompletedCommit`): save the session,
+    // then clear the checkpoint of the id the snapshot carries.
+    app.api_messages.push(crate::models::Message {
+        role: Role::Assistant,
+        content: vec![crate::models::ContentBlock::Text {
+            text: "answer".to_string(),
+            cache_control: None,
+        }],
+    });
+    let completed = build_session_snapshot(&mut app, &manager).expect("completed snapshot");
+    manager.save_session(&completed).expect("save session");
+    manager
+        .clear_session_checkpoint(&completed.metadata.id)
+        .expect("clear checkpoint");
+
+    assert_eq!(
+        completed.metadata.id, app_session_id,
+        "the completed turn must commit under the id the checkpoint was written with"
+    );
+    let orphans = manager.list_checkpoints().expect("list checkpoints");
+    assert!(
+        orphans.is_empty(),
+        "a completed turn must leave no checkpoint behind, found {:?}",
+        orphans.iter().map(|c| c.path.clone()).collect::<Vec<_>>()
+    );
+    let sessions = manager.list_sessions().expect("list sessions");
+    assert_eq!(sessions.len(), 1, "exactly one session file: {sessions:?}");
+    assert_eq!(sessions[0].id, app_session_id);
+    assert_eq!(sessions[0].message_count, 2);
+    crate::session_manager::set_live_session(None);
+}
+
+#[test]
+fn resumed_launch_keeps_the_loaded_session_id_for_the_engine() {
+    let mut app = create_test_app();
+    app.current_session_id = Some("800596e6-56fd-477c-9a0f-13ada7846194".to_string());
+    let config = Config::default();
+
+    let session_id = super::event_loop::ensure_runtime_session_id(&mut app);
+    assert_eq!(session_id, "800596e6-56fd-477c-9a0f-13ada7846194");
+
+    let (engine, _handle) =
+        crate::core::engine::Engine::new(build_engine_config(&app, &config), &config);
+    assert_eq!(engine.session_id(), "800596e6-56fd-477c-9a0f-13ada7846194");
+}

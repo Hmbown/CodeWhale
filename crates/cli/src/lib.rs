@@ -129,6 +129,21 @@ struct Cli {
     /// Continue the most recent interactive session for this workspace.
     #[arg(short = 'c', long = "continue")]
     continue_session: bool,
+    /// Resume a saved interactive session by id or unique id prefix.
+    #[arg(
+        short = 'r',
+        long = "resume",
+        value_name = "SESSION_ID",
+        conflicts_with_all = ["continue_session", "session_id"]
+    )]
+    resume: Option<String>,
+    /// Alias of `--resume` matching `codewhale exec --session-id`.
+    #[arg(
+        long = "session-id",
+        value_name = "SESSION_ID",
+        conflicts_with_all = ["continue_session", "resume"]
+    )]
+    session_id: Option<String>,
     #[arg(short = 'p', long = "prompt", value_name = "PROMPT")]
     prompt_flag: Option<String>,
     #[arg(
@@ -2076,6 +2091,16 @@ fn root_tui_passthrough(cli: &Cli) -> Result<Vec<String>> {
     if cli.continue_session {
         forwarded.push("--continue".to_string());
     }
+    let resume_session_id = cli
+        .resume
+        .as_deref()
+        .or(cli.session_id.as_deref())
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    if let Some(session_id) = resume_session_id {
+        forwarded.push("--resume".to_string());
+        forwarded.push(session_id.to_string());
+    }
 
     let prompt =
         cli.prompt_flag
@@ -2092,6 +2117,11 @@ fn root_tui_passthrough(cli: &Cli) -> Result<Vec<String>> {
         if cli.continue_session {
             bail!(
                 "`codewhale --continue` resumes the interactive TUI. Use `codewhale exec --continue <PROMPT>` to continue a session non-interactively."
+            );
+        }
+        if let Some(session_id) = resume_session_id {
+            bail!(
+                "`codewhale --resume {session_id}` resumes the interactive TUI. Use `codewhale exec --resume {session_id} <PROMPT>` to continue a session non-interactively."
             );
         }
         forwarded.push("--prompt".to_string());
@@ -9127,6 +9157,49 @@ verbosity = "project-imported"
         assert!(cli.prompt_flag.is_none());
         assert!(cli.prompt.is_empty());
         assert_eq!(root_tui_passthrough(&cli).unwrap(), vec!["--continue"]);
+    }
+
+    #[test]
+    fn parses_top_level_resume_flags_for_interactive_resume() {
+        // The operations runbook advertises `codewhale --resume <id>`. Before
+        // the root flag existed, the trailing prompt positional swallowed it
+        // and forwarded `--prompt "--resume <id>"` to the TUI (exit 2).
+        for argv in [
+            &["codewhale", "--resume", "800596e6"][..],
+            &["codewhale", "--resume=800596e6"][..],
+            &["codewhale", "-r", "800596e6"][..],
+            &["codewhale", "--session-id", "800596e6"][..],
+            &["codewhale", "--session-id=800596e6"][..],
+        ] {
+            let cli = parse_ok(argv);
+            assert!(
+                cli.prompt.is_empty(),
+                "{argv:?} must not be swallowed as a prompt: {:?}",
+                cli.prompt
+            );
+            assert!(cli.prompt_flag.is_none(), "{argv:?}");
+            assert!(cli.command.is_none(), "{argv:?}");
+            assert_eq!(
+                root_tui_passthrough(&cli).unwrap(),
+                vec!["--resume".to_string(), "800596e6".to_string()],
+                "{argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn top_level_resume_rejects_startup_prompt_and_conflicting_flags() {
+        let cli = parse_ok(&["codewhale", "--resume", "800596e6", "-p", "follow up"]);
+        let err = root_tui_passthrough(&cli).expect_err("prompted resume should be rejected");
+        assert!(
+            err.to_string()
+                .contains("codewhale exec --resume 800596e6 <PROMPT>"),
+            "{err}"
+        );
+
+        assert!(Cli::try_parse_from(["codewhale", "--resume", "800596e6", "--continue"]).is_err());
+        assert!(Cli::try_parse_from(["codewhale", "--resume", "a", "--session-id", "b"]).is_err());
+        assert!(Cli::try_parse_from(["codewhale", "--session-id", "b", "-c"]).is_err());
     }
 
     #[test]

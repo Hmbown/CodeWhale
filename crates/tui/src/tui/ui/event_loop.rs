@@ -24,7 +24,7 @@ pub(super) fn event_owner_is_active(
 /// is taken, so a second Codewhale on the same machine does not collide on
 /// the default root (#5630). Resume reuses the loaded id; a fresh session
 /// claims one here so first persist keeps it.
-fn ensure_runtime_session_id(app: &mut App) -> String {
+pub(crate) fn ensure_runtime_session_id(app: &mut App) -> String {
     if let Some(existing) = app
         .current_session_id
         .as_deref()
@@ -2386,6 +2386,20 @@ pub(crate) async fn run_event_loop(
                         model,
                         workspace,
                     } => {
+                        // The engine adopts the host session id at spawn and
+                        // every SyncSession carries it, so a different id here
+                        // means a checkpoint written under the previous id
+                        // would be orphaned. Surface it instead of silently
+                        // re-keying persistence mid-session.
+                        if let Some(previous) = app.current_session_id.as_deref()
+                            && previous != session_id
+                        {
+                            tracing::warn!(
+                                previous,
+                                next = %session_id,
+                                "engine session id diverged from the host session id"
+                            );
+                        }
                         app.current_session_id = Some(session_id.clone());
                         if app.last_known_goal_state.is_some()
                             && let Err(error) = persist_current_session_goal(app)

@@ -12,7 +12,7 @@ Feature: Session command workflows
     Then the saved session file should contain the saved message
     And the load action should target the saved session file
     And the exported markdown should contain the active transcript
-    And the active session should be cleared without an active session id
+    And the active session should be cleared into a fresh empty session
     And CodeWhale should defer the session-loaded receipt to the event loop
 
   Scenario: Fork keeps the original session resumable
@@ -48,7 +48,7 @@ Feature: Session command workflows
     When the user forks the active session
     And the user clears the active conversation
     Then the original and forked sessions should remain loadable
-    And the active session should be cleared without an active session id
+    And the active session should be cleared into a fresh empty session
 
   Scenario: Rename updates the active saved session title
     Given a CodeWhale persisted session workspace with one user message

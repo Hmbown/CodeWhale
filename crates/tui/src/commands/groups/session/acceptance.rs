@@ -449,11 +449,43 @@ fn active_session_is_new_empty_session(world: &mut SessionCommandWorld) {
     assert_eq!(app.session.total_tokens, 0);
 }
 
-#[then("the active session should be cleared without an active session id")]
-fn active_session_cleared_without_active_session_id(world: &mut SessionCommandWorld) {
+#[then("the active session should be cleared into a fresh empty session")]
+fn active_session_cleared_into_fresh_empty_session(world: &mut SessionCommandWorld) {
     let app = world.app.as_deref().expect("app should exist");
 
-    assert!(app.current_session_id.is_none());
+    // `/clear` claims the next session id in the App (like `/new`) so the
+    // engine, the turn-start checkpoint, and autosave all share one id.
+    let cleared_id = app
+        .current_session_id
+        .as_deref()
+        .expect("/clear should claim a fresh session id");
+    assert!(
+        uuid::Uuid::parse_str(cleared_id).is_ok(),
+        "fresh session id should be a uuid, got {cleared_id:?}"
+    );
+    for previous in [
+        world.original_session_id.as_deref(),
+        world.fork_session_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        assert_ne!(
+            cleared_id, previous,
+            "/clear must not reuse a saved session id"
+        );
+    }
+    // When `/clear` was the last command its SyncSession must carry the same
+    // id; a later `/load` in the same scenario leaves a different action.
+    if let Some(AppAction::SyncSession {
+        session_id,
+        messages,
+        ..
+    }) = world.last_action.as_ref()
+    {
+        assert_eq!(session_id.as_deref(), Some(cleared_id));
+        assert!(messages.is_empty());
+    }
     assert!(app.api_messages.is_empty());
     assert_eq!(app.session.total_tokens, 0);
 }

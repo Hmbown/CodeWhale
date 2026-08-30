@@ -195,6 +195,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fresh interactive sessions no longer leave a phantom one-message duplicate
+  behind. The TUI claimed one session id (Runtime store lock, turn-start crash
+  checkpoint) while the engine minted a second one; the first `SessionUpdated`
+  re-keyed the App, the completion commit cleared only the engine id's
+  checkpoint, and `codewhale --continue` later "recovered" the orphaned
+  checkpoint as a duplicate session instead of the real one. The engine now
+  adopts the host-owned id at spawn (`EngineConfig::session_id`) and `/clear`
+  mints the next id in the App like `/new`. A non-TTY `--continue` no longer
+  promotes and consumes the crash checkpoint before failing the terminal
+  check, and the root `codewhale --resume <id>` / `--session-id <id>` flags
+  documented in the operations runbook now parse instead of being swallowed
+  as a prompt.
 - The sandbox read deny-list matches a rule's resolved path as well as its
   literal spelling. On macOS `/etc` and `/var` are symlinks into `/private`,
   so a read of `/private/etc/sudoers` walked around the `/etc/sudoers` rule,
