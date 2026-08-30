@@ -10,10 +10,11 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
 use super::{
-    TidelineRail, TidelineWorkStage, render_tideline_rail, render_tideline_work_stage,
-    tideline_rail_groups, tideline_rail_hitboxes, tideline_rail_width,
+    TidelineRail, TidelineWorkStage, active_session_tideline_rail_groups, render_tideline_rail,
+    render_tideline_work_stage, tideline_rail_groups, tideline_rail_hitboxes, tideline_rail_width,
 };
 use crate::palette::UI_THEME;
+use crate::tui::app::{TaskPanelEntry, TaskPanelEntryKind};
 use crate::tui::golden_harness::{BLOCKER_SIZES, assert_matches_golden, render_golden_text};
 use crate::tui::history::tideline_exports::{
     TidelineReceiptState, TidelineStream, TidelineStreamEvent, render_tideline_stream,
@@ -68,6 +69,134 @@ fn groups() -> Vec<super::TidelineRailGroup> {
         &["▸ footer band", "  goldens ×4"],
         61,
     )
+}
+
+fn active_rail_app() -> crate::tui::app::App {
+    let options = crate::test_support::test_tui_options(std::path::PathBuf::from("."));
+    let mut app = crate::test_support::test_app_with_options(options);
+    app.launch.visible = false;
+    app.current_session_id = Some("tideline-live-rail-facts".to_string());
+    app
+}
+
+fn pending_task(id: &str, status: &str) -> TaskPanelEntry {
+    TaskPanelEntry {
+        id: id.to_string(),
+        status: status.to_string(),
+        prompt_summary: "durable work".to_string(),
+        duration_ms: None,
+        kind: TaskPanelEntryKind::Background,
+        stale: false,
+        elapsed_since_output_ms: None,
+        owner_agent_id: None,
+        owner_agent_name: None,
+        current_tool: None,
+        role: None,
+        files_touched: 0,
+    }
+}
+
+fn rail_fact<'a>(groups: &'a [super::TidelineRailGroup], label: &str) -> &'a str {
+    groups
+        .iter()
+        .find(|group| group.label == label)
+        .and_then(|group| group.lines.first())
+        .map(|(line, _)| line.as_str())
+        .unwrap_or_else(|| panic!("missing {label} fact"))
+}
+
+fn subagent(
+    id: &str,
+    status: crate::tools::subagent::SubAgentStatus,
+) -> crate::tools::subagent::SubAgentResult {
+    crate::tools::subagent::SubAgentResult {
+        name: id.to_string(),
+        agent_id: id.to_string(),
+        context_mode: "fresh".to_string(),
+        fork_context: false,
+        workspace: None,
+        git_branch: None,
+        agent_type: crate::tools::subagent::FleetRole::Worker,
+        assignment: crate::tools::subagent::SubAgentAssignment {
+            objective: format!("objective-{id}"),
+            role: Some("worker".to_string()),
+        },
+        model: "deepseek-v4-flash".to_string(),
+        nickname: None,
+        status,
+        worker_status: None,
+        runtime_permissions: None,
+        parent_run_id: None,
+        spawn_depth: 0,
+        child_route: None,
+        result: None,
+        steps_taken: 0,
+        checkpoint: None,
+        needs_input: None,
+        duration_ms: 0,
+        started_at: None,
+        from_prior_session: false,
+    }
+}
+
+#[test]
+fn live_rail_reports_pending_durable_tasks_as_a_run() {
+    let mut app = active_rail_app();
+    app.task_panel.push(pending_task("durable-1", "queued"));
+
+    let groups = active_session_tideline_rail_groups(&app);
+    assert_eq!(rail_fact(&groups, "RUNS"), "1 task pending");
+    assert_eq!(rail_fact(&groups, "WORK"), "1 active");
+}
+
+#[test]
+fn live_rail_keeps_pending_work_visible_alongside_a_completed_checklist() {
+    let mut app = active_rail_app();
+    app.todos.try_lock().expect("todos lock").add(
+        "already done".to_string(),
+        crate::tools::todo::TodoStatus::Completed,
+    );
+    app.task_panel.push(pending_task("durable-1", "running"));
+
+    let groups = active_session_tideline_rail_groups(&app);
+    assert_eq!(rail_fact(&groups, "RUNS"), "1 task pending");
+    assert_eq!(rail_fact(&groups, "WORK"), "1 active · 1/1 done");
+}
+
+#[test]
+fn live_rail_dedupes_cached_and_progress_only_pod_members() {
+    let mut app = active_rail_app();
+    app.subagent_cache = vec![
+        subagent(
+            "agent-running",
+            crate::tools::subagent::SubAgentStatus::Running,
+        ),
+        subagent(
+            "agent-completed",
+            crate::tools::subagent::SubAgentStatus::Completed,
+        ),
+    ];
+    app.agent_progress
+        .insert("agent-running".to_string(), "working".to_string());
+    app.agent_progress
+        .insert("agent-progress-only".to_string(), "planning".to_string());
+
+    let groups = active_session_tideline_rail_groups(&app);
+    assert_eq!(rail_fact(&groups, "RUNS"), "2 whales active");
+    assert_eq!(rail_fact(&groups, "POD"), "2/3 live");
+    assert_eq!(
+        rail_fact(&groups, "WHALES"),
+        format!("2/{} active", app.max_subagents.max(1))
+    );
+}
+
+#[test]
+fn live_rail_treats_a_runtime_in_progress_status_as_a_foreground_turn() {
+    let mut app = active_rail_app();
+    app.runtime_turn_status = Some("in_progress".to_string());
+
+    let groups = active_session_tideline_rail_groups(&app);
+    assert_eq!(rail_fact(&groups, "RUNS"), "turn active");
 }
 
 /// Render the stage directly (the fixture borrows cannot outlive the fn).

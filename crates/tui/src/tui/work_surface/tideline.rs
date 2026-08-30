@@ -9,6 +9,8 @@
 //! Also hosts the Tideline work-stage composite (`rail │ receipt stream`)
 //! whose golden buffers are `work_{w}x{h}`.
 
+use std::collections::HashSet;
+
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
@@ -318,26 +320,33 @@ pub(crate) fn render_active_session_tideline_rail(area: Rect, buf: &mut Buffer, 
 pub(crate) fn active_session_tideline_rail_groups(app: &App) -> Vec<TidelineRailGroup> {
     let pending = pending_work_from_app(app);
     let running_whales = pending.count(PendingItemKind::Agent);
-    // Progress-only workers can briefly precede their cache snapshot. Count
-    // at least the live workers so the POD summary never claims none exist.
-    let pod_total = app.subagent_cache.len().max(running_whales);
-    let whale_capacity = app.max_subagents;
+    let pending_tasks = pending.count(PendingItemKind::Task);
+    // A progress event may precede the cache snapshot. The denominator is the
+    // deduped union of both authoritative snapshots, rather than `max`ing
+    // their counts and silently losing a known member.
+    let pod_total = known_pod_member_count(app);
+    let whale_capacity = app.max_subagents.max(1);
 
     let run_label = match app.workflow_panel.as_ref() {
         Some(panel) => {
             let chip = panel.top_bar_chip();
             chip.strip_prefix("wf ").unwrap_or(&chip).to_string()
         }
-        None if app.is_loading => {
+        None if app.is_loading
+            || matches!(app.runtime_turn_status.as_deref(), Some("in_progress")) =>
+        {
             if app.turn_counter == 0 {
                 "turn active".to_string()
             } else {
                 format!("turn {}", app.turn_counter)
             }
         }
+        None if pending_tasks > 0 || running_whales > 0 => {
+            pending_run_label(pending_tasks, running_whales)
+        }
         None => "idle".to_string(),
     };
-    let whales = format!("{running_whales}/{whale_capacity} ready");
+    let whales = format!("{running_whales}/{whale_capacity} active");
     let pod_label = if pod_total == 0 {
         "no agents".to_string()
     } else {
@@ -354,9 +363,44 @@ pub(crate) fn active_session_tideline_rail_groups(app: &App) -> Vec<TidelineRail
     )
 }
 
+fn known_pod_member_count(app: &App) -> usize {
+    let mut ids: HashSet<&str> = app
+        .subagent_cache
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect();
+    ids.extend(app.agent_progress.keys().map(String::as_str));
+    ids.len()
+}
+
+fn pending_task_label(pending_tasks: usize) -> String {
+    let noun = if pending_tasks == 1 { "task" } else { "tasks" };
+    format!("{pending_tasks} {noun} pending")
+}
+
+fn pending_run_label(pending_tasks: usize, running_whales: usize) -> String {
+    match (pending_tasks, running_whales) {
+        (0, whales) => {
+            let noun = if whales == 1 { "whale" } else { "whales" };
+            format!("{whales} {noun} active")
+        }
+        (tasks, 0) => pending_task_label(tasks),
+        (tasks, whales) => {
+            let task_noun = if tasks == 1 { "task" } else { "tasks" };
+            let whale_noun = if whales == 1 { "whale" } else { "whales" };
+            format!("{tasks} {task_noun} + {whales} {whale_noun}")
+        }
+    }
+}
+
 fn active_session_work_line(app: &App, pending: &PendingWork) -> String {
+    let background_count = pending.items.len();
     let Ok(todos) = app.todos.try_lock() else {
-        return "checklist busy".to_string();
+        return if background_count > 0 {
+            format!("{background_count} active · checklist busy")
+        } else {
+            "checklist busy".to_string()
+        };
     };
     let snapshot = todos.snapshot();
     if !snapshot.items.is_empty() {
@@ -366,14 +410,18 @@ fn active_session_work_line(app: &App, pending: &PendingWork) -> String {
             .iter()
             .filter(|item| !item.status.is_settled())
             .count();
-        return if open == 0 {
+        let checklist = if open == 0 {
             format!("{total}/{total} done")
         } else {
             format!("{open}/{total} open")
         };
+        return if background_count > 0 {
+            format!("{background_count} active · {checklist}")
+        } else {
+            checklist
+        };
     }
 
-    let background_count = pending.items.len();
     if background_count > 0 {
         format!("{background_count} active")
     } else if app.is_loading {
