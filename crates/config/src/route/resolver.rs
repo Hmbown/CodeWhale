@@ -259,12 +259,16 @@ impl RouteResolver {
             // Capabilities and pricing belong to the exact provider endpoint
             // offering that reported them. Reusing a provider enum and a
             // first-party model id against a custom compatible endpoint does
-            // not prove that proxy serves the same canonical model, protocol,
-            // limits, modality, tool, reasoning, or billing contract. Keep the
+            // not prove that proxy serves the same canonical model, limits,
+            // modality, tool, reasoning, or billing contract. Keep the
             // caller's wire model id, but clear every unowned offering fact at
             // the authority boundary instead of presenting it as verified.
+            // The endpoint_key/protocol stays: it is the provider adapter's
+            // wire contract (a model-aware roster row or fixed policy), not an
+            // endpoint-catalog fact, and coercing it to Chat would silently
+            // change how a Responses- or Messages-bound route speaks.
+            // Deepseek's custom-endpoint Chat pass-through is handled above.
             selected.canonical_model = None;
-            selected.endpoint_key = "chat".to_string();
             selected.limits = RouteLimits::default();
             selected.capabilities = RouteCapabilities::default();
             selected.pricing = PricingSku::UnknownOrStale;

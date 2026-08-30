@@ -586,28 +586,28 @@ pub(crate) fn runtime_catalog_resolver_for_identity(
         if !exact_matches && let LivePartitionOwner::BuiltIn(identity) = &partition_owner {
             authoritative.remove(identity);
         }
-        let fallback = (provider != ApiProvider::Custom)
-            .then(|| {
-                live.models_dev
-                    .as_ref()
-                    .map(|models_dev| {
-                        models_dev
-                            .offerings
-                            .iter()
-                            .filter(|row| catalog_partition_key(&row.provider) == catalog_key)
-                            .cloned()
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default()
-            })
-            .unwrap_or_default();
-        let custom_rows = (provider == ApiProvider::Custom && exact_matches)
-            .then(|| {
-                exact_partition
-                    .map(|partition| partition.offerings.clone())
-                    .unwrap_or_default()
-            })
-            .unwrap_or_default();
+        let fallback = if provider == ApiProvider::Custom {
+            Vec::new()
+        } else {
+            live.models_dev
+                .as_ref()
+                .map(|models_dev| {
+                    models_dev
+                        .offerings
+                        .iter()
+                        .filter(|row| catalog_partition_key(&row.provider) == catalog_key)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let custom_rows = if provider == ApiProvider::Custom && exact_matches {
+            exact_partition
+                .map(|partition| partition.offerings.clone())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         (exact_matches, authoritative, fallback, custom_rows)
     } else {
         (

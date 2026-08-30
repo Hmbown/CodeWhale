@@ -5962,7 +5962,7 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
             message: crate::tools::subagent::MailboxMessage::TokenUsage {
                 agent_id: "agent_child".to_string(),
                 source_id: "response-child".to_string(),
-                route: crate::cost_status::EffectiveRouteEnvelope {
+                route: Box::new(crate::cost_status::EffectiveRouteEnvelope {
                     provider: ApiProvider::OpenaiCodex,
                     provider_identity: "codex-child".to_string(),
                     model: "gpt-5.5".to_string(),
@@ -5973,7 +5973,7 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
                     provider_live_pricing: None,
                     billing_mode: crate::cost_status::RouteBillingMode::Subscription,
                     dispatched_at,
-                },
+                }),
                 usage: Usage {
                     input_tokens: 3,
                     output_tokens: 2,
@@ -6106,7 +6106,7 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
             message: crate::tools::subagent::MailboxMessage::TokenUsage {
                 agent_id: "agent-child-second".to_string(),
                 source_id: "response-child-second".to_string(),
-                route: crate::cost_status::EffectiveRouteEnvelope {
+                route: Box::new(crate::cost_status::EffectiveRouteEnvelope {
                     provider: ApiProvider::OpenaiCodex,
                     provider_identity: "codex-child".to_string(),
                     model: "gpt-5.5".to_string(),
@@ -6117,7 +6117,7 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
                     provider_live_pricing: None,
                     billing_mode: crate::cost_status::RouteBillingMode::Subscription,
                     dispatched_at: Utc::now(),
-                },
+                }),
                 usage: Usage {
                     input_tokens: 5,
                     output_tokens: 1,

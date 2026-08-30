@@ -10,10 +10,12 @@
 //!
 //! - `needs_translation()` — heuristic to detect if text is predominantly
 //!   English and should be translated.
+//!
 //! The event loop dispatches focused translation requests through the exact
 //! provider/model client frozen for the originating turn. The dedicated agent
 //! receives only the source text and returns only the translation — no tool
 //! calls or conversation history.
+//!
 //! - `TranslationStatus` — tracks per-message translation status in the UI.
 
 /// Heuristic threshold: if more than this fraction of alphabetic characters

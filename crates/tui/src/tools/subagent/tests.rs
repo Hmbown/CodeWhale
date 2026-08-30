@@ -20902,6 +20902,19 @@ mod child_permission_gate {
     #[cfg(not(windows))]
     const GUARDIAN_PIPELINE: &str = "echo built | cat";
 
+    /// [`GUARDIAN_PIPELINE`] with a caller-chosen marker, for tests that
+    /// need to recognize their own output.
+    fn guardian_marker_pipeline(marker: &str) -> String {
+        #[cfg(windows)]
+        {
+            format!("echo {marker} | Out-String")
+        }
+        #[cfg(not(windows))]
+        {
+            format!("echo {marker} | cat")
+        }
+    }
+
     #[tokio::test]
     async fn auto_review_consults_the_guardian_and_runs_an_allowed_call_with_a_receipt() {
         let (_server, client) = guardian_mock(
@@ -21004,7 +21017,7 @@ mod child_permission_gate {
             .execute(
                 "agent_gate",
                 "bash",
-                json!({"command": "echo guardian-missing-usage | cat"}),
+                json!({"command": guardian_marker_pipeline("guardian-missing-usage")}),
             )
             .await
             .expect("semantic guardian success remains usable");
@@ -21044,7 +21057,7 @@ mod child_permission_gate {
         .await;
         let (registry, mut rx, manager) =
             worker_registry(ApprovalMode::Auto, false, true, Some(client));
-        let input = json!({"command": "echo guardian-cache-regression | cat"});
+        let input = json!({"command": guardian_marker_pipeline("guardian-cache-regression")});
 
         for _ in 0..2 {
             let output = registry

@@ -4102,14 +4102,14 @@ fn subagent_mailbox_keeps_lifecycle_events_reliable() {
         &MailboxMessage::TokenUsage {
             agent_id: "agent_a".to_string(),
             source_id: "response-a".to_string(),
-            route: crate::cost_status::EffectiveRouteEnvelope::capture(
+            route: Box::new(crate::cost_status::EffectiveRouteEnvelope::capture(
                 None,
                 ApiProvider::Deepseek,
                 "deepseek",
                 "model",
                 Some(ApiProvider::Deepseek.default_base_url()),
                 chrono::Utc::now(),
-            ),
+            )),
             usage: Usage::default(),
         }
     ));
@@ -4196,14 +4196,14 @@ fn subagent_mailbox_never_samples_lifecycle_or_usage_events() {
         &MailboxMessage::TokenUsage {
             agent_id: "agent_a".to_string(),
             source_id: "response-a".to_string(),
-            route: crate::cost_status::EffectiveRouteEnvelope::capture(
+            route: Box::new(crate::cost_status::EffectiveRouteEnvelope::capture(
                 None,
                 ApiProvider::Deepseek,
                 "deepseek",
                 "model",
                 Some(ApiProvider::Deepseek.default_base_url()),
                 chrono::Utc::now(),
-            ),
+            )),
             usage: Usage::default(),
         },
         start,
@@ -5659,8 +5659,11 @@ async fn normal_repl_kernel_persists_across_user_turns() {
     assert_eq!(first_turn.usage.output_tokens, 11);
     let child_usage_event = {
         let mut events = handle.rx_event.write().await;
+        // Kernel child calls carry their own routed cost receipt, so their
+        // per-call telemetry arrives as `RoutedTurnUsage` rather than the
+        // parent-route `TurnUsage` receipt.
         std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {
-            Event::TurnUsage { usage, .. }
+            Event::RoutedTurnUsage { usage, .. }
                 if usage.input_tokens == 7 && usage.output_tokens == 11 =>
             {
                 Some(usage)
@@ -7395,7 +7398,12 @@ async fn collect_guardian_journey_with_receipts(
                     "duplicate tool result"
                 );
             }
-            Event::TurnUsage { usage, .. } => usage_events.push(usage),
+            // Guardian consults carry their own routed receipt; both the
+            // parent-route and routed per-call telemetry count as reaching
+            // the cost UI.
+            Event::TurnUsage { usage, .. } | Event::RoutedTurnUsage { usage, .. } => {
+                usage_events.push(usage);
+            }
             Event::ToolGateDecision {
                 tool_id,
                 gate,

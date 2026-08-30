@@ -124,7 +124,7 @@ fn open_private_lock_file(path: &Path) -> io::Result<fs::File> {
         let file = options.open(path)?;
         validate_private_regular_file(&file, path)?;
         file.set_permissions(fs::Permissions::from_mode(0o600))?;
-        return Ok(file);
+        Ok(file)
     }
     #[cfg(windows)]
     {
@@ -133,7 +133,7 @@ fn open_private_lock_file(path: &Path) -> io::Result<fs::File> {
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         let file = options.open(path)?;
         validate_private_regular_file(&file, path)?;
-        return Ok(file);
+        Ok(file)
     }
     #[cfg(all(not(unix), not(windows)))]
     {

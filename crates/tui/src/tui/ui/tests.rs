@@ -11995,7 +11995,7 @@ fn subagent_token_usage_updates_live_cost_counter_without_card_change() {
         &crate::tools::subagent::MailboxMessage::TokenUsage {
             agent_id: "agent-a".to_string(),
             source_id: "response-a".to_string(),
-            route: test_mailbox_route(ApiProvider::Deepseek, "deepseek-v4-flash"),
+            route: Box::new(test_mailbox_route(ApiProvider::Deepseek, "deepseek-v4-flash")),
             usage: crate::models::Usage {
                 input_tokens: 10_000,
                 output_tokens: 1_000,
@@ -12022,7 +12022,7 @@ fn subagent_token_usage_prices_the_child_route_not_the_parent_route() {
         &crate::tools::subagent::MailboxMessage::TokenUsage {
             agent_id: "agent-codex".to_string(),
             source_id: "response-codex".to_string(),
-            route: test_mailbox_route(ApiProvider::OpenaiCodex, "gpt-5.5"),
+            route: Box::new(test_mailbox_route(ApiProvider::OpenaiCodex, "gpt-5.5")),
             usage: crate::models::Usage {
                 input_tokens: 10_000,
                 output_tokens: 1_000,
@@ -12043,7 +12043,7 @@ fn subagent_token_usage_is_deduped_by_response_source() {
     let usage = crate::tools::subagent::MailboxMessage::TokenUsage {
         agent_id: "agent-a".to_string(),
         source_id: "response-a".to_string(),
-        route: test_mailbox_route(ApiProvider::Deepseek, "deepseek-v4-flash"),
+        route: Box::new(test_mailbox_route(ApiProvider::Deepseek, "deepseek-v4-flash")),
         usage: crate::models::Usage {
             input_tokens: 10_000,
             output_tokens: 1_000,
@@ -12070,7 +12070,7 @@ fn subagent_token_usage_source_is_stable_across_engine_turns() {
     let usage = crate::tools::subagent::MailboxMessage::TokenUsage {
         agent_id: "agent-a".to_string(),
         source_id: "response-a".to_string(),
-        route: test_mailbox_route(ApiProvider::Deepseek, "deepseek-v4-flash"),
+        route: Box::new(test_mailbox_route(ApiProvider::Deepseek, "deepseek-v4-flash")),
         usage: crate::models::Usage {
             input_tokens: 10_000,
             output_tokens: 1_000,
@@ -21273,7 +21273,7 @@ fn duplicate_mailbox_token_usage_does_not_regress_displayed_cost() {
     let usage = crate::tools::subagent::MailboxMessage::TokenUsage {
         agent_id: "agent-x".to_string(),
         source_id: "response-x".to_string(),
-        route: test_mailbox_route(ApiProvider::Deepseek, "deepseek-v4-flash"),
+        route: Box::new(test_mailbox_route(ApiProvider::Deepseek, "deepseek-v4-flash")),
         usage: crate::models::Usage {
             input_tokens: 10_000,
             output_tokens: 1_000,

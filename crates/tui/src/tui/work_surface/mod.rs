@@ -1326,7 +1326,7 @@ mod tests {
         let usage = |source_id: &str, input_tokens, output_tokens| MailboxMessage::TokenUsage {
             agent_id: "agent_stream".to_string(),
             source_id: source_id.to_string(),
-            route: route.clone(),
+            route: Box::new(route.clone()),
             usage: crate::models::Usage {
                 input_tokens,
                 output_tokens,

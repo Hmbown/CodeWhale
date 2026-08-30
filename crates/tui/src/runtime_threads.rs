@@ -8894,7 +8894,10 @@ impl RuntimeThreadManager {
                         self.append_routed_usage_to_turn(
                             &turn_id,
                             &source_id,
-                            EffectiveRouteUsage { route, usage },
+                            EffectiveRouteUsage {
+                                route: *route,
+                                usage,
+                            },
                         )?;
                     }
                 }
