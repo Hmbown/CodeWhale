@@ -4838,7 +4838,10 @@ async fn session_summary_route_projects_rows_and_honours_archive_filters() -> Re
     let client = crate::tls::reqwest_client();
 
     let active: Vec<serde_json::Value> = client
-        .get(format!("http://{addr}/v1/sessions/summary"))
+        .get(format!(
+            "http://127.0.0.1:{}/v1/sessions/summary",
+            addr.port()
+        ))
         .send()
         .await?
         .error_for_status()?
@@ -4868,7 +4871,8 @@ async fn session_summary_route_projects_rows_and_honours_archive_filters() -> Re
 
     let archived: Vec<serde_json::Value> = client
         .get(format!(
-            "http://{addr}/v1/sessions/summary?archived_only=true"
+            "http://127.0.0.1:{}/v1/sessions/summary?archived_only=true",
+            addr.port()
         ))
         .send()
         .await?
@@ -4899,7 +4903,10 @@ async fn session_patch_route_renames_archives_and_reports_real_changes() -> Resu
     let client = crate::tls::reqwest_client();
 
     let patched: serde_json::Value = client
-        .patch(format!("http://{addr}/v1/sessions/sess-patch"))
+        .patch(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-patch",
+            addr.port()
+        ))
         .json(&json!({ "title": "After", "archived": true }))
         .send()
         .await?
@@ -4919,7 +4926,10 @@ async fn session_patch_route_renames_archives_and_reports_real_changes() -> Resu
 
     // A re-patch to the same state changes nothing, and says so.
     let repeat: serde_json::Value = client
-        .patch(format!("http://{addr}/v1/sessions/sess-patch"))
+        .patch(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-patch",
+            addr.port()
+        ))
         .json(&json!({ "archived": true }))
         .send()
         .await?
@@ -4936,7 +4946,10 @@ async fn session_patch_route_renames_archives_and_reports_real_changes() -> Resu
 
     // An empty body is a client error, not a silent no-op.
     let empty = client
-        .patch(format!("http://{addr}/v1/sessions/sess-patch"))
+        .patch(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-patch",
+            addr.port()
+        ))
         .json(&json!({}))
         .send()
         .await?;
@@ -4944,7 +4957,10 @@ async fn session_patch_route_renames_archives_and_reports_real_changes() -> Resu
 
     // A blank title is rejected with the reason, not accepted.
     let blank = client
-        .patch(format!("http://{addr}/v1/sessions/sess-patch"))
+        .patch(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-patch",
+            addr.port()
+        ))
         .json(&json!({ "title": "   " }))
         .send()
         .await?;
@@ -4971,7 +4987,10 @@ async fn session_patch_route_refuses_a_live_session_with_a_conflict() -> Result<
 
     crate::session_manager::set_live_session(Some("sess-live"));
     let conflict = client
-        .patch(format!("http://{addr}/v1/sessions/sess-live"))
+        .patch(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-live",
+            addr.port()
+        ))
         .json(&json!({ "title": "Renamed from the dashboard" }))
         .send()
         .await?;
@@ -4979,7 +4998,10 @@ async fn session_patch_route_refuses_a_live_session_with_a_conflict() -> Result<
 
     crate::session_manager::set_live_session(None);
     let allowed = client
-        .patch(format!("http://{addr}/v1/sessions/sess-live"))
+        .patch(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-live",
+            addr.port()
+        ))
         .json(&json!({ "title": "Renamed from the dashboard" }))
         .send()
         .await?;
@@ -5002,7 +5024,8 @@ async fn session_detail_route_serves_a_bounded_redacted_peek_on_request() -> Res
 
     let peek: serde_json::Value = client
         .get(format!(
-            "http://{addr}/v1/sessions/sess-peek?peek=true&entries=12"
+            "http://127.0.0.1:{}/v1/sessions/sess-peek?peek=true&entries=12",
+            addr.port()
         ))
         .send()
         .await?
@@ -5024,7 +5047,10 @@ async fn session_detail_route_serves_a_bounded_redacted_peek_on_request() -> Res
     }
 
     let detail: serde_json::Value = client
-        .get(format!("http://{addr}/v1/sessions/sess-peek"))
+        .get(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-peek",
+            addr.port()
+        ))
         .send()
         .await?
         .error_for_status()?

@@ -2717,7 +2717,13 @@ mod tests {
         assert!(serialized.contains("catalog_revision"));
         assert!(serialized.contains("input_per_million"));
         for secret in [codewhale_config::BASETEN_BASE_URL, "api_key", "Bearer "] {
-            assert!(!serialized.contains(secret), "quote leaked {secret:?}");
+            // The assertion message must not itself become a logging sink for
+            // the credential fragment it checks for — name the check, not the
+            // secret.
+            assert!(
+                !serialized.contains(secret),
+                "frozen route serialization leaked a credential fragment"
+            );
         }
 
         let mut child = serde_json::json!({});

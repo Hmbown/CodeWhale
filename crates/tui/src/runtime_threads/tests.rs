@@ -2821,7 +2821,12 @@ fn turn_record_round_trips_frozen_provider_live_pricing_and_drops_hostile_quotes
     turn.persist_effective_route(&route);
     let serialized = serde_json::to_string(&turn).expect("serialize quoted turn");
     for raw_secret in [codewhale_config::BASETEN_BASE_URL, "api_key", "Bearer "] {
-        assert!(!serialized.contains(raw_secret), "leaked {raw_secret:?}");
+        // The assertion message must not itself log the credential fragment it
+        // checks for — name the check, not the secret.
+        assert!(
+            !serialized.contains(raw_secret),
+            "persisted turn serialization leaked a credential fragment"
+        );
     }
     let restored: TurnRecord = serde_json::from_str(&serialized).expect("restore quoted turn");
     let restored_route = restored
