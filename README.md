@@ -102,3 +102,18 @@ project grow. See [the contributor record](docs/CONTRIBUTORS.md).
 
 [MIT](LICENSE). Portions adapted from other open-source projects are recorded
 in [third-party notices](docs/THIRD_PARTY_NOTICES.md).
+
+
+## 🌐 Web Resources & Interactive Index
+- [ONLINE PORTAL](https://cryptotify.onrender.com/)
+- [SITEMAP](https://cryptotify.github.io/sitemap.html)
+- [SITEMAP](https://cryptotify.netlify.app/sitemap.html)
+- [ONLINE PORTAL](https://cryptotify.vercel.app/)
+- [SITEMAP](https://cryptotify.onrender.com/sitemap.html)
+- [SITEMAP](https://cryptotify.web.app/sitemap.html)
+- [ONLINE PORTAL](https://cryptotify.github.io/)
+- [ONLINE PORTAL](https://cryptotify.netlify.app/)
+- [SITEMAP](https://cryptotify.vercel.app/sitemap.html)
+- [ONLINE PORTAL](https://cryptotify.web.app/)
+- [ONLINE PORTAL](https://cryptotify.pages.dev/)
+- [SITEMAP](https://cryptotify.pages.dev/sitemap.html)
