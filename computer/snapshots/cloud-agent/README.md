@@ -41,6 +41,18 @@ against the release it claims to run.
 
 ## Provider credentials inside the Computer
 
+> **Credential exposure note (verified 2026-08-30).** Daytona persists any
+> `daytona create -e KEY=VALUE` / SDK `envVars` on the server side and returns
+> the full environment through its API (`GET /sandbox/{id}`), so create-time
+> env injection makes provider keys readable by anyone with Daytona API
+> access. Do NOT put provider keys in create-time env. Inject them after the
+> Computer starts: write a `0600` file under `$CODEWHALE_HOME` over the
+> toolbox/ssh channel from stdin (never argv), point `api_key_env`/the
+> secret store at it, and delete it at teardown. The account machine token
+> (#5712 `CODEWHALE_API_KEY`) is not a provider credential today — see the
+> ledger's R5 finding — so the dispatcher must inject a real provider key the
+> same post-create way until account-scoped keys resolve server-side.
+
 The dispatcher injects only `CODEWHALE_API_KEY` (account machine token). The
 engine resolves model-provider keys from ambient env, so an end-to-end run
 must also inject provider env at create time, never on a command line:
