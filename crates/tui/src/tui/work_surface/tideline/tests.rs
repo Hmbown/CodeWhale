@@ -76,6 +76,7 @@ fn active_rail_app() -> crate::tui::app::App {
     let mut app = crate::test_support::test_app_with_options(options);
     app.launch.visible = false;
     app.current_session_id = Some("tideline-live-rail-facts".to_string());
+    app.ui_locale = crate::localization::Locale::En;
     app
 }
 
@@ -145,8 +146,8 @@ fn live_rail_reports_pending_durable_tasks_as_a_run() {
     app.task_panel.push(pending_task("durable-1", "queued"));
 
     let groups = active_session_tideline_rail_groups(&app);
-    assert_eq!(rail_fact(&groups, "RUNS"), "1 task pending");
-    assert_eq!(rail_fact(&groups, "WORK"), "1 active");
+    assert_eq!(rail_fact(&groups, "RUNS"), "1 queued");
+    assert_eq!(rail_fact(&groups, "WORK"), "1 queued");
 }
 
 #[test]
@@ -159,8 +160,8 @@ fn live_rail_keeps_pending_work_visible_alongside_a_completed_checklist() {
     app.task_panel.push(pending_task("durable-1", "running"));
 
     let groups = active_session_tideline_rail_groups(&app);
-    assert_eq!(rail_fact(&groups, "RUNS"), "1 task pending");
-    assert_eq!(rail_fact(&groups, "WORK"), "1 active · 1/1 done");
+    assert_eq!(rail_fact(&groups, "RUNS"), "1 running");
+    assert_eq!(rail_fact(&groups, "WORK"), "1 running · 0/1");
 }
 
 #[test]
@@ -182,21 +183,57 @@ fn live_rail_dedupes_cached_and_progress_only_pod_members() {
         .insert("agent-progress-only".to_string(), "planning".to_string());
 
     let groups = active_session_tideline_rail_groups(&app);
-    assert_eq!(rail_fact(&groups, "RUNS"), "2 whales active");
-    assert_eq!(rail_fact(&groups, "POD"), "2/3 live");
+    assert_eq!(rail_fact(&groups, "RUNS"), "2 running");
+    assert_eq!(rail_fact(&groups, "POD"), "2/3");
     assert_eq!(
         rail_fact(&groups, "WHALES"),
-        format!("2/{} active", app.max_subagents.max(1))
+        format!("2/{}", app.max_subagents.max(1))
     );
 }
 
 #[test]
-fn live_rail_treats_a_runtime_in_progress_status_as_a_foreground_turn() {
+fn live_rail_keeps_runs_and_work_consistent_for_a_foreground_turn() {
     let mut app = active_rail_app();
-    app.runtime_turn_status = Some("in_progress".to_string());
+    app.is_loading = true;
 
     let groups = active_session_tideline_rail_groups(&app);
-    assert_eq!(rail_fact(&groups, "RUNS"), "turn active");
+    assert_eq!(rail_fact(&groups, "RUNS"), "running");
+    assert_eq!(rail_fact(&groups, "WORK"), "running");
+}
+
+#[test]
+fn live_rail_counts_a_running_shell_without_calling_it_idle() {
+    let mut app = active_rail_app();
+    app.task_panel.push(TaskPanelEntry {
+        id: "shell_a1b2c3d4".to_string(),
+        status: "running".to_string(),
+        prompt_summary: "shell: cargo test -p codewhale-tui".to_string(),
+        duration_ms: Some(42_000),
+        kind: TaskPanelEntryKind::Background,
+        stale: false,
+        elapsed_since_output_ms: None,
+        owner_agent_id: None,
+        owner_agent_name: None,
+        current_tool: None,
+        role: None,
+        files_touched: 0,
+    });
+
+    let groups = active_session_tideline_rail_groups(&app);
+    assert_eq!(rail_fact(&groups, "RUNS"), "1 running");
+    assert_eq!(rail_fact(&groups, "WORK"), "1 running");
+}
+
+#[test]
+fn live_rail_uses_the_selected_locale_for_its_group_labels() {
+    let mut app = active_rail_app();
+    app.ui_locale = crate::localization::Locale::Ja;
+
+    let labels = active_session_tideline_rail_groups(&app)
+        .into_iter()
+        .map(|group| group.label.into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, ["実行", "クジラ", "POD", "作業", "コンテキスト"]);
 }
 
 /// Render the stage directly (the fixture borrows cannot outlive the fn).

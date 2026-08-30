@@ -1406,6 +1406,10 @@ pub enum MessageId {
     PhaseDone,
     PhaseFailed,
     PhaseFinishing,
+    // Active-session Tideline rail group labels.
+    TidelineRuns,
+    TidelineWhales,
+    TidelineRunningCount,
     // Underwater header chips: mode and permission words.
     ChipModeAct,
     ChipModePlan,
@@ -3344,6 +3348,9 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::PhaseDone,
     MessageId::PhaseFailed,
     MessageId::PhaseFinishing,
+    MessageId::TidelineRuns,
+    MessageId::TidelineWhales,
+    MessageId::TidelineRunningCount,
     MessageId::ChipModeAct,
     MessageId::ChipModePlan,
     MessageId::ChipModeOperate,

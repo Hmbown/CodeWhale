@@ -23031,6 +23031,7 @@ mod work_surface {
 
     fn idle_rail_app(panel: RailPanel) -> App {
         let mut app = create_test_app();
+        app.ui_locale = crate::localization::Locale::En;
         // Pin the chrome the budget charges for: `App::new` reads the developer's
         // real settings.toml, and a host with `composer_border = false` would
         // shift every threshold below by a row.
@@ -23088,7 +23089,7 @@ mod work_surface {
                 "100-column rail misses {label}:\n{medium_text}"
             );
         }
-        assert!(medium_text.contains("no checklist"), "{medium_text}");
+        assert!(medium_text.contains("idle"), "{medium_text}");
         assert!(
             !medium_text.contains("« collapse") && !medium_text.contains("? help"),
             "passive state summaries must not paint inert controls:\n{medium_text}"
@@ -23144,6 +23145,7 @@ mod work_surface {
                 "App must retain the shipped default placement at {width} columns"
             );
             app.launch.visible = false;
+            app.ui_locale = crate::localization::Locale::En;
             app.current_session_id = Some(format!("tideline-default-left-{width}"));
             assert!(
                 app.todos

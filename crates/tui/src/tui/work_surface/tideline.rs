@@ -9,6 +9,7 @@
 //! Also hosts the Tideline work-stage composite (`rail │ receipt stream`)
 //! whose golden buffers are `work_{w}x{h}`.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use ratatui::{
@@ -18,9 +19,12 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette::{ChromeInk, UiTheme, chrome_style};
 use crate::tui::app::App;
-use crate::tui::background_indicator::{PendingItemKind, PendingWork, pending_work_from_app};
+use crate::tui::background_indicator::{
+    PendingItemKind, PendingItemState, PendingWork, live_work_from_app,
+};
 use crate::tui::history::TidelineStream;
 
 use super::WorkSurfacePlacement;
@@ -48,7 +52,7 @@ pub fn tideline_rail_width(host_width: u16) -> u16 {
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub struct TidelineRailGroup {
-    pub label: &'static str,
+    pub label: Cow<'static, str>,
     /// (fact line, ink) pairs, already summarized by the caller.
     pub lines: Vec<(String, ChromeInk)>,
 }
@@ -198,7 +202,7 @@ pub fn render_tideline_rail(area: Rect, buf: &mut Buffer, rail: &TidelineRail<'_
             buf,
             area.x,
             y,
-            &rtruncate(group.label, width),
+            &rtruncate(group.label.as_ref(), width),
             rchrome(theme, ChromeInk::MetadataDim).add_modifier(Modifier::BOLD),
         );
         y += 1;
@@ -318,43 +322,31 @@ pub(crate) fn render_active_session_tideline_rail(area: Rect, buf: &mut Buffer, 
 /// refresh path is introduced here.
 #[must_use]
 pub(crate) fn active_session_tideline_rail_groups(app: &App) -> Vec<TidelineRailGroup> {
-    let pending = pending_work_from_app(app);
-    let running_whales = pending.count(PendingItemKind::Agent);
-    let pending_tasks = pending.count(PendingItemKind::Task);
+    let live_work = live_work_from_app(app);
+    let running_whales = live_work.count(PendingItemKind::Agent);
     // A progress event may precede the cache snapshot. The denominator is the
     // deduped union of both authoritative snapshots, rather than `max`ing
     // their counts and silently losing a known member.
     let pod_total = known_pod_member_count(app);
     let whale_capacity = app.max_subagents.max(1);
 
-    let run_label = match app.workflow_panel.as_ref() {
-        Some(panel) => {
-            let chip = panel.top_bar_chip();
-            chip.strip_prefix("wf ").unwrap_or(&chip).to_string()
-        }
-        None if app.is_loading
-            || matches!(app.runtime_turn_status.as_deref(), Some("in_progress")) =>
-        {
-            if app.turn_counter == 0 {
-                "turn active".to_string()
-            } else {
-                format!("turn {}", app.turn_counter)
-            }
-        }
-        None if pending_tasks > 0 || running_whales > 0 => {
-            pending_run_label(pending_tasks, running_whales)
-        }
-        None => "idle".to_string(),
-    };
-    let whales = format!("{running_whales}/{whale_capacity} active");
-    let pod_label = if pod_total == 0 {
-        "no agents".to_string()
+    let run_label = if app.is_loading || app.dispatch_in_flight {
+        tr(app.ui_locale, MessageId::AutomationRunStatusRunning).into_owned()
+    } else if let Some(panel) = app
+        .workflow_panel
+        .as_ref()
+        .filter(|panel| panel.lifecycle.is_running())
+    {
+        panel.top_bar_chip()
     } else {
-        format!("{running_whales}/{pod_total} live")
+        live_work_status_line(app.ui_locale, &live_work)
     };
-    let work_line = active_session_work_line(app, &pending);
+    let whales = format!("{running_whales}/{whale_capacity}");
+    let pod_label = format!("{running_whales}/{pod_total}");
+    let work_line = active_session_work_line(app, &live_work);
 
-    tideline_rail_groups(
+    localized_tideline_rail_groups(
+        app.ui_locale,
         &run_label,
         &whales,
         &pod_label,
@@ -373,33 +365,48 @@ fn known_pod_member_count(app: &App) -> usize {
     ids.len()
 }
 
-fn pending_task_label(pending_tasks: usize) -> String {
-    let noun = if pending_tasks == 1 { "task" } else { "tasks" };
-    format!("{pending_tasks} {noun} pending")
+fn has_foreground_activity(app: &App) -> bool {
+    app.is_loading
+        || app.dispatch_in_flight
+        || app
+            .workflow_panel
+            .as_ref()
+            .is_some_and(|panel| panel.lifecycle.is_running())
 }
 
-fn pending_run_label(pending_tasks: usize, running_whales: usize) -> String {
-    match (pending_tasks, running_whales) {
-        (0, whales) => {
-            let noun = if whales == 1 { "whale" } else { "whales" };
-            format!("{whales} {noun} active")
-        }
-        (tasks, 0) => pending_task_label(tasks),
-        (tasks, whales) => {
-            let task_noun = if tasks == 1 { "task" } else { "tasks" };
-            let whale_noun = if whales == 1 { "whale" } else { "whales" };
-            format!("{tasks} {task_noun} + {whales} {whale_noun}")
-        }
+fn live_work_status_line(locale: Locale, work: &PendingWork) -> String {
+    let queued = work.count_state(PendingItemState::Queued);
+    let running = work.count_state(PendingItemState::Running);
+    let mut states = Vec::new();
+    if queued > 0 {
+        states.push(
+            tr(locale, MessageId::AgentRailQueuedCount).replace("{count}", &queued.to_string()),
+        );
+    }
+    if running > 0 {
+        states.push(
+            tr(locale, MessageId::TidelineRunningCount).replace("{count}", &running.to_string()),
+        );
+    }
+    if states.is_empty() {
+        tr(locale, MessageId::PhaseIdle).into_owned()
+    } else {
+        states.join(" · ")
     }
 }
 
-fn active_session_work_line(app: &App, pending: &PendingWork) -> String {
-    let background_count = pending.items.len();
+fn active_session_work_line(app: &App, work: &PendingWork) -> String {
+    let has_activity = !work.is_empty() || has_foreground_activity(app);
+    let work_status = if work.is_empty() && has_foreground_activity(app) {
+        tr(app.ui_locale, MessageId::AutomationRunStatusRunning).into_owned()
+    } else {
+        live_work_status_line(app.ui_locale, work)
+    };
     let Ok(todos) = app.todos.try_lock() else {
-        return if background_count > 0 {
-            format!("{background_count} active · checklist busy")
+        return if has_activity {
+            work_status
         } else {
-            "checklist busy".to_string()
+            "?".to_string()
         };
     };
     let snapshot = todos.snapshot();
@@ -410,25 +417,50 @@ fn active_session_work_line(app: &App, pending: &PendingWork) -> String {
             .iter()
             .filter(|item| !item.status.is_settled())
             .count();
-        let checklist = if open == 0 {
-            format!("{total}/{total} done")
-        } else {
-            format!("{open}/{total} open")
-        };
-        return if background_count > 0 {
-            format!("{background_count} active · {checklist}")
+        let checklist = format!("{open}/{total}");
+        return if has_activity {
+            format!("{work_status} · {checklist}")
         } else {
             checklist
         };
     }
 
-    if background_count > 0 {
-        format!("{background_count} active")
-    } else if app.is_loading {
-        "turn active".to_string()
+    if has_activity {
+        work_status
     } else {
-        "no checklist".to_string()
+        tr(app.ui_locale, MessageId::PhaseIdle).into_owned()
     }
+}
+
+fn localized_tideline_rail_groups(
+    locale: Locale,
+    run_label: &str,
+    whales: &str,
+    pod_label: &str,
+    work_lines: &[&str],
+    context_percent: u8,
+) -> Vec<TidelineRailGroup> {
+    tideline_rail_groups_with_labels(
+        [
+            tideline_heading(locale, MessageId::TidelineRuns),
+            tideline_heading(locale, MessageId::TidelineWhales),
+            tideline_heading(locale, MessageId::ConfigCategoryPod),
+            tideline_heading(locale, MessageId::ConfigCategoryWork),
+            tideline_heading(locale, MessageId::CtxInspContext),
+        ],
+        run_label,
+        whales,
+        pod_label,
+        work_lines,
+        context_percent,
+    )
+}
+
+/// Rail group names use an all-caps display treatment in the approved
+/// Tideline chrome. Translation owns the words; this helper owns only that
+/// shared visual treatment.
+fn tideline_heading(locale: Locale, message_id: MessageId) -> Cow<'static, str> {
+    Cow::Owned(tr(locale, message_id).to_uppercase())
 }
 
 /// The five-group fixture projection used by goldens and the preview pane:
@@ -442,6 +474,30 @@ pub fn tideline_rail_groups(
     work_lines: &[&str],
     context_percent: u8,
 ) -> Vec<TidelineRailGroup> {
+    tideline_rail_groups_with_labels(
+        [
+            Cow::Borrowed("RUNS"),
+            Cow::Borrowed("WHALES"),
+            Cow::Borrowed("POD"),
+            Cow::Borrowed("WORK"),
+            Cow::Borrowed("CONTEXT"),
+        ],
+        run_label,
+        whales,
+        pod_label,
+        work_lines,
+        context_percent,
+    )
+}
+
+fn tideline_rail_groups_with_labels(
+    [runs, whales_label, pod, work, context]: [Cow<'static, str>; 5],
+    run_label: &str,
+    whales: &str,
+    pod_label: &str,
+    work_lines: &[&str],
+    context_percent: u8,
+) -> Vec<TidelineRailGroup> {
     let meter_cells = 5usize;
     let filled = (usize::from(context_percent) * meter_cells / 100).min(meter_cells);
     let meter: String = (0..meter_cells)
@@ -449,26 +505,26 @@ pub fn tideline_rail_groups(
         .collect();
     vec![
         TidelineRailGroup {
-            label: "RUNS",
+            label: runs,
             lines: vec![(run_label.to_string(), ChromeInk::Identity)],
         },
         TidelineRailGroup {
-            label: "WHALES",
+            label: whales_label,
             lines: vec![(whales.to_string(), ChromeInk::Info)],
         },
         TidelineRailGroup {
-            label: "POD",
+            label: pod,
             lines: vec![(pod_label.to_string(), ChromeInk::Active)],
         },
         TidelineRailGroup {
-            label: "WORK",
+            label: work,
             lines: work_lines
                 .iter()
                 .map(|line| (line.to_string(), ChromeInk::MetadataValue))
                 .collect(),
         },
         TidelineRailGroup {
-            label: "CONTEXT",
+            label: context,
             lines: vec![(
                 format!("{meter} {context_percent}%"),
                 if context_percent >= 80 {

@@ -40,7 +40,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::localization::truncate_to_width;
-use crate::tui::app::{App, TaskPanelEntryKind};
+use crate::tui::app::{App, TaskPanelEntry, TaskPanelEntryKind};
 
 /// Per-item label cap so one long command or objective cannot eat the whole
 /// row before the whole-line truncation kicks in.
@@ -55,6 +55,17 @@ pub enum PendingItemKind {
     Task,
     /// Running sub-agent / fleet worker.
     Agent,
+}
+
+/// Lifecycle state carried by the App's background-work projection.
+///
+/// The task panel currently receives wire-status tokens, so normalize them at
+/// the projection boundary. Renderers then consume this typed state instead
+/// of re-interpreting status strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingItemState {
+    Queued,
+    Running,
 }
 
 impl PendingItemKind {
@@ -81,6 +92,7 @@ impl PendingItemKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingItem {
     pub kind: PendingItemKind,
+    pub state: PendingItemState,
     /// Short human label (task id / role / name / command), pre-truncated.
     pub label: String,
 }
@@ -102,6 +114,11 @@ impl PendingWork {
     #[must_use]
     pub fn count(&self, kind: PendingItemKind) -> usize {
         self.items.iter().filter(|item| item.kind == kind).count()
+    }
+
+    #[must_use]
+    pub fn count_state(&self, state: PendingItemState) -> usize {
+        self.items.iter().filter(|item| item.state == state).count()
     }
 
     /// Compact one-line chip text. `None` when nothing is pending (the
@@ -148,10 +165,25 @@ fn truncate_label(label: &str) -> String {
     }
 }
 
-/// Build the pending-work snapshot from the same state the Work strip and
-/// `/jobs` surface render. Read-only; no locks, no registries.
+/// Build the composer pending-work snapshot from the same state the Work
+/// strip and `/jobs` surface render. Read-only; no locks, no registries.
+///
+/// Live shells deliberately remain only on the detailed Work strip, rather
+/// than being repeated in the composer crumb. Use [`live_work_from_app`] for
+/// a whole-session status surface that must account for them.
 #[must_use]
 pub fn pending_work_from_app(app: &App) -> PendingWork {
+    collect_pending_work(app, false)
+}
+
+/// Build the complete live-work projection for an active-session status
+/// surface. Unlike [`pending_work_from_app`], this includes live shell jobs.
+#[must_use]
+pub(crate) fn live_work_from_app(app: &App) -> PendingWork {
+    collect_pending_work(app, true)
+}
+
+fn collect_pending_work(app: &App, include_shells: bool) -> PendingWork {
     let mut items: Vec<PendingItem> = Vec::new();
 
     // Background shells and durable tasks: the merged task_panel snapshot
@@ -159,20 +191,30 @@ pub fn pending_work_from_app(app: &App) -> PendingWork {
     // carry a `shell: <command>` summary; durable/RLM tasks carry their own
     // prompt summary and their task id is the stable label.
     for entry in &app.task_panel {
-        if entry.kind != TaskPanelEntryKind::Background {
+        let Some(state) = pending_item_state(entry) else {
             continue;
-        }
-        if !matches!(entry.status.as_str(), "running" | "queued") {
-            continue;
-        }
+        };
         // Live shells belong on the work strip (`▾ Shells N`), not this
         // composer crumb. A dual surface hid the PTY behind hourglasses.
-        if entry.prompt_summary.starts_with("shell: ") || entry.id.starts_with("shell_") {
+        let is_shell = is_live_shell_entry(entry);
+        if is_shell && !include_shells {
             continue;
         }
-        let (kind, raw_label) = (PendingItemKind::Task, entry.id.as_str());
+        let (kind, raw_label) = if is_shell {
+            (
+                PendingItemKind::Shell,
+                entry
+                    .prompt_summary
+                    .strip_prefix("shell: ")
+                    .filter(|command| !command.trim().is_empty())
+                    .unwrap_or(entry.id.as_str()),
+            )
+        } else {
+            (PendingItemKind::Task, entry.id.as_str())
+        };
         items.push(PendingItem {
             kind,
+            state,
             label: truncate_label(raw_label),
         });
     }
@@ -211,6 +253,7 @@ pub fn pending_work_from_app(app: &App) -> PendingWork {
         };
         items.push(PendingItem {
             kind: PendingItemKind::Agent,
+            state: PendingItemState::Running,
             label: truncate_label(&label),
         });
     }
@@ -221,11 +264,36 @@ pub fn pending_work_from_app(app: &App) -> PendingWork {
         let label = app.agent_display_label(id);
         items.push(PendingItem {
             kind: PendingItemKind::Agent,
+            state: PendingItemState::Running,
             label: truncate_label(&label),
         });
     }
 
     PendingWork { items }
+}
+
+/// Normalize the task-panel's serialized lifecycle token once at the
+/// projection boundary. Consumers should use [`PendingItemState`] rather than
+/// comparing these wire values in their render paths.
+#[must_use]
+pub(crate) fn pending_item_state(entry: &TaskPanelEntry) -> Option<PendingItemState> {
+    if entry.kind != TaskPanelEntryKind::Background {
+        return None;
+    }
+    match entry.status.as_str() {
+        "queued" => Some(PendingItemState::Queued),
+        "running" => Some(PendingItemState::Running),
+        _ => None,
+    }
+}
+
+/// Whether a task-panel row is a currently live shell job. This is shared by
+/// the detailed Work strip and compact live-status projections so a shell
+/// cannot be omitted or classified differently between surfaces.
+#[must_use]
+pub(crate) fn is_live_shell_entry(entry: &TaskPanelEntry) -> bool {
+    pending_item_state(entry).is_some()
+        && (entry.prompt_summary.starts_with("shell: ") || entry.id.starts_with("shell_"))
 }
 
 /// Paint the one-row pending-work chip. No-op when `area` is empty or `work`
@@ -270,6 +338,7 @@ mod tests {
     fn shell(label: &str) -> PendingItem {
         PendingItem {
             kind: PendingItemKind::Shell,
+            state: PendingItemState::Running,
             label: truncate_label(label),
         }
     }
@@ -277,6 +346,7 @@ mod tests {
     fn task(label: &str) -> PendingItem {
         PendingItem {
             kind: PendingItemKind::Task,
+            state: PendingItemState::Running,
             label: truncate_label(label),
         }
     }
@@ -284,6 +354,7 @@ mod tests {
     fn agent(label: &str) -> PendingItem {
         PendingItem {
             kind: PendingItemKind::Agent,
+            state: PendingItemState::Running,
             label: truncate_label(label),
         }
     }
@@ -439,6 +510,55 @@ mod tests {
         app.agent_progress.clear();
         let cleared = pending_work_from_app(&app);
         assert!(cleared.is_empty(), "completion clears the indicator");
+    }
+
+    #[test]
+    fn live_work_projection_keeps_shells_and_typed_task_states() {
+        use crate::tui::app::TaskPanelEntry;
+        let options = crate::test_support::test_tui_options(std::path::PathBuf::from("."));
+        let mut app = crate::test_support::test_app_with_options(options);
+        app.task_panel.extend([
+            TaskPanelEntry {
+                id: "shell_a1b2c3d4".to_string(),
+                status: "running".to_string(),
+                prompt_summary: "shell: cargo test -p codewhale-tui".to_string(),
+                duration_ms: Some(42_000),
+                kind: TaskPanelEntryKind::Background,
+                stale: false,
+                elapsed_since_output_ms: None,
+                owner_agent_id: None,
+                owner_agent_name: None,
+                current_tool: None,
+                role: None,
+                files_touched: 0,
+            },
+            TaskPanelEntry {
+                id: "durable-queued".to_string(),
+                status: "queued".to_string(),
+                prompt_summary: "durable work".to_string(),
+                duration_ms: None,
+                kind: TaskPanelEntryKind::Background,
+                stale: false,
+                elapsed_since_output_ms: None,
+                owner_agent_id: None,
+                owner_agent_name: None,
+                current_tool: None,
+                role: None,
+                files_touched: 0,
+            },
+        ]);
+
+        let live = live_work_from_app(&app);
+        assert_eq!(live.count(PendingItemKind::Shell), 1);
+        assert_eq!(live.count_state(PendingItemState::Queued), 1);
+        assert_eq!(live.count_state(PendingItemState::Running), 1);
+        assert!(
+            live.items
+                .iter()
+                .any(|item| item.kind == PendingItemKind::Shell
+                    && item.state == PendingItemState::Running),
+            "live shell must retain its running state: {live:?}"
+        );
     }
 
     #[test]
