@@ -1,0 +1,14 @@
+{
+  "envelope": 1,
+  "channel": "stable",
+  "facts_version": 8,
+  "schema_version": 1,
+  "key_id": "cwf-test-only",
+  "alg": "ed25519",
+  "applies_to": ">=99.0.0",
+  "published_at": "2026-08-30T00:00:00Z",
+  "payload_b64": "eyJhbm5vdW5jZW1lbnRzIjpbXSwiYXBwbGllc190byI6Ij49OTkuMC4wIiwiY2hhbm5lbCI6InN0YWJsZSIsImZhY3RzX3ZlcnNpb24iOjgsIm1vZGVscyI6W10sInByb3ZpZGVyX2RlZmF1bHRzIjp7fSwicHVibGlzaGVkX2F0IjoiMjAyNi0wOC0zMFQwMDowMDowMFoiLCJyZWxlYXNlIjp7ImxhdGVzdCI6Ijk5LjAuMCJ9LCJzY2hlbWFfdmVyc2lvbiI6MX0=",
+  "sig_b64": "xJ12O6H7Aw32DH5ox0QOFXF7FhJza0u0r0YaQSeIrx2pZbijy0Nlya1hTIG/blVdj3ERTMBIyNCTwWUFHmRRAw==",
+  "sigs": [],
+  "sha256": "5f5709697d99710f3c0e6588ff19e67a16c04b63bf0d81a835f3980b0ab6cdef"
+}
