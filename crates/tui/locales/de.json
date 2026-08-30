@@ -1625,6 +1625,8 @@
   "StatusLabelContextWindow": "Kontextfenster",
   "StatusLabelWindowSource": "Fensterquelle",
   "StatusLabelWindowOverride": "Fensteranpassung",
+  "StatusLabelCatalog": "Katalog",
+  "StatusLabelCloudFacts": "Cloud-Fakten",
   "StatusLabelSession": "Sitzung",
   "StatusLabelSessionTokens": "Sitzungstoken",
   "StatusLabelSessionCost": "Sitzungskosten",

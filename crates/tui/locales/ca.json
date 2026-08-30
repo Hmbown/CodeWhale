@@ -1625,6 +1625,8 @@
   "StatusLabelContextWindow": "Finestra de context",
   "StatusLabelWindowSource": "Origen de la finestra",
   "StatusLabelWindowOverride": "Ajust de la finestra",
+  "StatusLabelCatalog": "Catàleg",
+  "StatusLabelCloudFacts": "Fets al núvol",
   "StatusLabelSession": "Sessió",
   "StatusLabelSessionTokens": "Tokens de sessió",
   "StatusLabelSessionCost": "Cost de sessió",

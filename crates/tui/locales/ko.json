@@ -1625,6 +1625,8 @@
   "StatusLabelContextWindow": "컨텍스트 창",
   "StatusLabelWindowSource": "창 출처",
   "StatusLabelWindowOverride": "창 재정의",
+  "StatusLabelCatalog": "카탈로그",
+  "StatusLabelCloudFacts": "클라우드 팩트",
   "StatusLabelSession": "세션",
   "StatusLabelSessionTokens": "세션 토큰",
   "StatusLabelSessionCost": "세션 비용",

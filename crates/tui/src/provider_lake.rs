@@ -57,38 +57,6 @@ struct LiveSnapshotPartitions {
     per_provider: BTreeMap<String, CatalogSnapshot>,
 }
 
-impl LiveSnapshotPartitions {
-    /// Collect all live rows from every partition into a single flat snapshot.
-    fn flattened(&self) -> Option<CatalogSnapshot> {
-        if self.models_dev.is_none() && self.per_provider.is_empty() {
-            return None;
-        }
-
-        // Merge by (provider, wire_model_id); provider-scoped rows win on
-        // collision because they came from that gateway's own live endpoint.
-        let mut merged: BTreeMap<(String, String), CatalogOffering> = BTreeMap::new();
-        if let Some(models_dev) = &self.models_dev {
-            for row in &models_dev.offerings {
-                merged.insert(
-                    (row.provider.clone(), row.wire_model_id.clone()),
-                    row.clone(),
-                );
-            }
-        }
-        for provider_snapshot in self.per_provider.values() {
-            for row in &provider_snapshot.offerings {
-                merged.insert(
-                    (row.provider.clone(), row.wire_model_id.clone()),
-                    row.clone(),
-                );
-            }
-        }
-        Some(CatalogSnapshot {
-            offerings: merged.into_values().collect(),
-        })
-    }
-}
-
 fn offerings_by_provider(
     offerings: Vec<CatalogOffering>,
 ) -> BTreeMap<String, Vec<CatalogOffering>> {
@@ -305,32 +273,70 @@ fn merged_snapshot() -> Arc<CatalogSnapshot> {
 
 /// Uncached merge (see [`merged_snapshot`] for the caching seam).
 fn compute_merged_snapshot() -> CatalogSnapshot {
-    let live = LIVE_SNAPSHOT
-        .read()
-        .ok()
-        .and_then(|guard| guard.flattened());
-    let merged = match live {
-        None => bundled_snapshot().clone(),
-        Some(live) => {
-            let mut merged: BTreeMap<(String, String), CatalogOffering> = BTreeMap::new();
-            for row in &bundled_snapshot().offerings {
-                merged.insert(
-                    (row.provider.clone(), row.wire_model_id.clone()),
-                    row.clone(),
-                );
+    let cloud = codewhale_config::cloud_facts::overlay::overlay();
+    let guard = LIVE_SNAPSHOT.read().ok();
+    let has_live = guard
+        .as_ref()
+        .is_some_and(|g| g.models_dev.is_some() || !g.per_provider.is_empty());
+    if !has_live && cloud.is_none() {
+        return apply_provider_model_cutlines(bundled_snapshot().clone());
+    }
+    // Layer order (#4188 + cloud facts layer 15): bundled < models.dev live
+    // < cloud facts patches < per-provider live. Provider-scoped rows win on
+    // collision because they came from that gateway's own live endpoint.
+    let mut merged: BTreeMap<(String, String), CatalogOffering> = BTreeMap::new();
+    let insert = |merged: &mut BTreeMap<(String, String), CatalogOffering>,
+                  row: &CatalogOffering| {
+        merged.insert(
+            (row.provider.clone(), row.wire_model_id.clone()),
+            row.clone(),
+        );
+    };
+    for row in &bundled_snapshot().offerings {
+        insert(&mut merged, row);
+    }
+    if let Some(models_dev) = guard.as_ref().and_then(|g| g.models_dev.as_ref()) {
+        for row in &models_dev.offerings {
+            insert(&mut merged, row);
+        }
+    }
+    if let Some(cloud) = cloud.as_deref() {
+        let fetched_at = match codewhale_config::cloud_facts::overlay::status().state {
+            codewhale_config::cloud_facts::CloudFactsState::Verified { fetched_at, .. } => {
+                fetched_at
             }
-            for row in &live.offerings {
-                merged.insert(
-                    (row.provider.clone(), row.wire_model_id.clone()),
-                    row.clone(),
-                );
-            }
-            CatalogSnapshot {
-                offerings: merged.into_values().collect(),
+            _ => codewhale_config::catalog::now_unix(),
+        };
+        let skipped = codewhale_config::cloud_facts::catalog_patch::apply_model_patches(
+            &mut merged,
+            cloud,
+            fetched_at,
+        );
+        for receipt in skipped {
+            tracing::debug!(
+                target: "cloud_facts",
+                provider = %receipt.provider,
+                model = %receipt.id,
+                reason = %receipt.reason,
+                "cloud facts patch skipped"
+            );
+        }
+    }
+    if let Some(guard) = guard.as_ref() {
+        for provider_snapshot in guard.per_provider.values() {
+            for row in &provider_snapshot.offerings {
+                insert(&mut merged, row);
             }
         }
-    };
-    apply_provider_model_cutlines(merged)
+    }
+    apply_provider_model_cutlines(CatalogSnapshot {
+        offerings: merged.into_values().collect(),
+    })
+}
+
+/// Invalidate the memoized merge after the cloud facts overlay changed.
+pub fn note_cloud_facts_updated() {
+    LIVE_GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
 /// Maps an [`ApiProvider`] to its bundled-catalog provider id.

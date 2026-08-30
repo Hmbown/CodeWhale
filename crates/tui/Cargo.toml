@@ -30,6 +30,7 @@ path = "src/main.rs"
 [dependencies]
 ahash = "0.8"
 anyhow.workspace = true
+codewhale-cloud-facts = { path = "../cloud-facts", version = "0.9.11" }
 codewhale-config = { path = "../config", version = "0.9.11" }
 codewhale-command-contract = { path = "../command-contract", version = "0.9.11" }
 codewhale-core = { path = "../core", version = "0.9.11" }

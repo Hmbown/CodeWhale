@@ -1625,6 +1625,8 @@
   "StatusLabelContextWindow": "कॉन्टेक्स्ट विंडो",
   "StatusLabelWindowSource": "विंडो स्रोत",
   "StatusLabelWindowOverride": "विंडो ओवरराइड",
+  "StatusLabelCatalog": "कैटलॉग",
+  "StatusLabelCloudFacts": "क्लाउड तथ्य",
   "StatusLabelSession": "सत्र",
   "StatusLabelSessionTokens": "सत्र टोकन",
   "StatusLabelSessionCost": "सत्र लागत",

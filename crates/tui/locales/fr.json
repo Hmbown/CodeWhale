@@ -1625,6 +1625,8 @@
   "StatusLabelContextWindow": "Fenêtre de contexte",
   "StatusLabelWindowSource": "Source de la fenêtre",
   "StatusLabelWindowOverride": "Réglage de la fenêtre",
+  "StatusLabelCatalog": "Catalogue",
+  "StatusLabelCloudFacts": "Faits cloud",
   "StatusLabelSession": "Session",
   "StatusLabelSessionTokens": "Jetons de session",
   "StatusLabelSessionCost": "Coût de session",
