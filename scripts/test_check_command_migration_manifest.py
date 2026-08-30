@@ -363,10 +363,11 @@ class LiveGateTests(unittest.TestCase):
         self.assertEqual(frontier, sorted(frontier))
         self.assertEqual(len(frontier), len(set(frontier)))
         # FEAT-018 removed the utility group from the frontier (Stage B first
-        # slice); the remaining eight groups stay pending.
+        # slice); FEAT-021 removed the project group; the remaining seven
+        # groups stay pending.
         self.assertEqual(
             set(frontier),
-            {"memory", "plugins", "project", "skills", "session", "config", "debug", "core"},
+            {"memory", "plugins", "skills", "session", "config", "debug", "core"},
         )
 
 
