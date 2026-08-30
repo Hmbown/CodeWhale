@@ -415,6 +415,41 @@ mod tests {
         );
     }
 
+    /// The activity band's automation slot (AUTOMATION-VISIBILITY §2.1)
+    /// reads the `AutomationPanelState` projection verbatim: `⏱ N scheduled`
+    /// plus `· M running`, zero-suppressed, dropped at Compact like every
+    /// other optional segment.
+    #[test]
+    fn the_automation_slot_reads_the_projection_and_drops_at_compact() {
+        let mut app = test_app();
+        app.ui_locale = crate::localization::Locale::En;
+        app.automation_panel.active_automations = 2;
+        app.automation_panel.live_runs = 1;
+
+        let facts = tideline_footer_from_app(&mut app, 120);
+        let (slot, ink) = facts.automation_slot.expect("slot rides a Normal row");
+        assert_eq!(slot, "⏱ 2 scheduled · 1 running");
+        assert_eq!(ink, crate::palette::ChromeInk::Active);
+
+        // Compact: the slot sheds with the other optional segments.
+        let facts = tideline_footer_from_app(&mut app, 48);
+        assert!(
+            facts.automation_slot.is_none(),
+            "Compact drops the slot: {:?}",
+            facts.automation_slot
+        );
+
+        // Zero-suppressed: no Active automations, no slot — the count never
+        // becomes permanent furniture.
+        app.automation_panel.active_automations = 0;
+        app.automation_panel.live_runs = 0;
+        let facts = tideline_footer_from_app(&mut app, 120);
+        assert!(
+            facts.automation_slot.is_none(),
+            "zero counts suppress the slot"
+        );
+    }
+
     /// The keys legend (the merged footer's right side) advertises chords
     /// you cannot discover any other way; a slash command announces itself
     /// the moment you type `/`, so it must not pay columns to advertise
@@ -581,6 +616,13 @@ pub struct TidelineFooter<'a> {
     /// Urgent session notice (status toast / MCP boot chip) that owns the
     /// right-hand keys slot while it is live.
     pub notice: Option<(&'a str, crate::palette::ChromeInk)>,
+    /// Scheduled-work count from `AutomationPanelState` (spec §2.1):
+    /// `⏱ N scheduled · M running`, zero-suppressed, dropped at Compact.
+    /// Painted between the live detail and the cost ledger, whole or not at
+    /// all, and only when the ledger and posture chips still fit whole
+    /// behind it; it outranks only the key chorus. Never Failure ink — a
+    /// failed report job is not a product failure.
+    pub automation_slot: Option<(&'a str, crate::palette::ChromeInk)>,
     pub ascii_safe: bool,
 }
 
@@ -605,6 +647,7 @@ impl<'a> TidelineFooter<'a> {
             mode_chip: None,
             permission_chip: None,
             notice: None,
+            automation_slot: None,
             ascii_safe: false,
         }
     }
@@ -630,6 +673,12 @@ impl<'a> TidelineFooter<'a> {
     #[must_use]
     pub fn notice(mut self, notice: Option<(&'a str, crate::palette::ChromeInk)>) -> Self {
         self.notice = notice;
+        self
+    }
+
+    #[must_use]
+    pub fn automation_slot(mut self, slot: Option<(&'a str, crate::palette::ChromeInk)>) -> Self {
+        self.automation_slot = slot;
         self
     }
 
@@ -729,10 +778,10 @@ pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFoo
     let depth_ink = footer.depth_ink();
 
     // Trailing-slot precedence: a live notice outranks the cap warning,
-    // which outranks the posture chips, which outrank the key chorus (the
-    // classic bands' own rule that identity outranks hints). A notice was
-    // clause-fitted at build time, so the whole phrase lands or the band
-    // was too narrow for it anyway.
+    // which outranks the posture chips, which outrank the scheduled-work
+    // slot, which outranks the key chorus (the classic bands' own rule that
+    // identity outranks hints). A notice was clause-fitted at build time, so
+    // the whole phrase lands or the band was too narrow for it anyway.
     let extra: (&str, crate::palette::ChromeInk) = if let Some((text, ink)) = &notice_text {
         (text.as_str(), *ink)
     } else if warn {
@@ -746,7 +795,8 @@ pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFoo
     };
     let right_width = right_base_w + 1 + extra.0.width() as u16 + 1;
 
-    // Left: still-frame echolocation chip + phase word + live detail + cost.
+    // Left: still-frame echolocation chip + phase word + live detail +
+    // automation slot + cost.
     let chip = footer.sym("<·>");
     let phase = footer.sym(footer.phase_word);
     let cost = footer.sym(footer.cost_label);
@@ -760,6 +810,7 @@ pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFoo
         tchrome(theme, footer.phase_ink).add_modifier(Modifier::BOLD),
     );
     x += phase.width() as u16 + 1;
+    let left_edge_end = (area.x + area.width).saturating_sub(right_width + 1);
     if let Some(detail) = footer.live_detail {
         let detail = footer.sym(detail);
         tput(
@@ -771,7 +822,19 @@ pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFoo
         );
         x += detail.width() as u16 + 1;
     }
-    let left_edge_end = (area.x + area.width).saturating_sub(right_width + 1);
+    // The scheduled-work slot ranks below the standing furniture it sits in
+    // front of: it paints only when the divider, the whole cost ledger and
+    // every posture chip still fit behind it, else it stands down whole — a
+    // clipped count is worse than none, and a count that clips the ledger to
+    // `$0` is worse still (spec §7.2's width budget).
+    if let Some((slot, ink)) = footer.automation_slot {
+        let slot = footer.sym(slot);
+        let standing = 2 + cost.width() + posture_chips_width(footer);
+        if x as usize + slot.width() + 1 + standing <= left_edge_end as usize {
+            tput(buf, x, area.y, &slot, tchrome(theme, ink));
+            x += slot.width() as u16 + 1;
+        }
+    }
     if x + 2 <= left_edge_end {
         tput(
             buf,
@@ -865,12 +928,12 @@ fn trailing_extra_width(footer: &TidelineFooter<'_>, area_width: u16) -> usize {
     if pct >= 80 {
         return footer.sym(DEPTH_WARN).width();
     }
-    let posture_w: usize = [footer.mode_chip, footer.permission_chip]
-        .into_iter()
-        .flatten()
-        .map(|(text, _)| ITEM_SEPARATOR_WIDTH + footer.sym(text).width())
-        .sum();
-    if posture_w == 0 {
+    let posture_w = posture_chips_width(footer);
+    let slot_w = footer
+        .automation_slot
+        .map(|(text, _)| footer.sym(text).width() + 1)
+        .unwrap_or(0);
+    if posture_w == 0 && slot_w == 0 {
         return keys_w;
     }
     // The left half's standing width before the posture chips: chip, phase
@@ -885,14 +948,35 @@ fn trailing_extra_width(footer: &TidelineFooter<'_>, area_width: u16) -> usize {
     let prefix_w = chip.width() + 1 + phase.width() + 1 + detail_w + 2 + cost.width();
     let depth = footer.depth_cells();
     let right_base_w = format!("{depth} {pct}%").width();
-    let available = usize::from(area_width)
+    let available_with_keys = usize::from(area_width)
         .saturating_sub(right_base_w + 1 + keys_w + 1)
         .saturating_sub(1);
-    if prefix_w + posture_w <= available {
+    let available_without_keys = usize::from(area_width)
+        .saturating_sub(right_base_w + 1 + 1)
+        .saturating_sub(1);
+    let standing = prefix_w + posture_w;
+    // Chips outrank the scheduled-work slot, which outranks the chorus: the
+    // chorus stands down when it is the only thing keeping the slot (or the
+    // chips) off the row, and stays when standing down would not help.
+    if standing + slot_w <= available_with_keys {
+        keys_w
+    } else if standing + slot_w <= available_without_keys {
+        0
+    } else if standing <= available_with_keys {
         keys_w
     } else {
         0
     }
+}
+
+/// Columns the posture chips (`· mode · permission`) claim after the cost
+/// ledger, separators included.
+fn posture_chips_width(footer: &TidelineFooter<'_>) -> usize {
+    [footer.mode_chip, footer.permission_chip]
+        .into_iter()
+        .flatten()
+        .map(|(text, _)| ITEM_SEPARATOR_WIDTH + footer.sym(text).width())
+        .sum()
 }
 
 /// Depth-segment hitbox → context inspector (spec §6). Returns the rect
@@ -932,6 +1016,8 @@ pub fn tideline_footer_depth_hitbox(area: Rect, footer: &TidelineFooter<'_>) -> 
 ///   (`underwater::posture_chips`, same words, same inks).
 /// - `notice` — the activity band's status toast, or the MCP boot chip when
 ///   no toast is live; it owns the trailing right slot while present.
+/// - `automation_slot` — the scheduled-work count owned by
+///   `AutomationPanelState` (spec §2.1); zero-suppressed, dropped at Compact.
 ///
 /// Session metrics (turns/steps/TTFT/cache) move behind `/cost` per spec §3.
 pub(crate) struct TidelineFooterFacts {
@@ -944,6 +1030,7 @@ pub(crate) struct TidelineFooterFacts {
     pub mode_chip: Option<(String, crate::palette::ChromeInk)>,
     pub permission_chip: Option<(String, crate::palette::ChromeInk)>,
     pub notice: Option<(String, crate::palette::ChromeInk)>,
+    pub automation_slot: Option<(String, crate::palette::ChromeInk)>,
 }
 
 impl TidelineFooterFacts {
@@ -974,6 +1061,11 @@ impl TidelineFooterFacts {
         )
         .notice(
             self.notice
+                .as_ref()
+                .map(|(text, ink)| (text.as_str(), *ink)),
+        )
+        .automation_slot(
+            self.automation_slot
                 .as_ref()
                 .map(|(text, ink)| (text.as_str(), *ink)),
         )
@@ -1029,6 +1121,17 @@ pub(crate) fn tideline_footer_from_app(app: &mut App, width: u16) -> TidelineFoo
         chip.map(|(text, ink)| (text.into_owned(), ink))
     };
 
+    // The scheduled-work slot reads the single projection
+    // (`AutomationPanelState`, spec §2.1): zero-suppressed, and dropped at
+    // Compact like every other optional segment.
+    let automation_slot = if tier == ShellTier::Compact {
+        None
+    } else {
+        app.automation_panel
+            .activity_slot(app.ui_locale)
+            .map(|text| (text, app.automation_panel.activity_ink()))
+    };
+
     // The notice: the live status toast if one is owed, else the MCP boot
     // chip (a slow optional server must not look like a hung turn). Clause-
     // shed against half the row — the depth line owns the other half.
@@ -1064,6 +1167,7 @@ pub(crate) fn tideline_footer_from_app(app: &mut App, width: u16) -> TidelineFoo
         mode_chip: map_chip(mode_chip),
         permission_chip: map_chip(permission_chip),
         notice,
+        automation_slot,
     }
 }
 

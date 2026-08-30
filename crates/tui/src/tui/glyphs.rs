@@ -81,6 +81,8 @@ pub fn ascii_fallback(symbol: &str) -> Option<&'static str> {
         "✓" | "✔" | "☑" => Some("Y"),
         "✕" | "×" | "⊘" | "✗" | "✘" | "☒" => Some("X"),
         "⏸" => Some("="),
+        // Schedule/timer (the activity band's automation slot) — cron's `@`.
+        "⏱" => Some("@"),
         "≈≈>" => Some("~>"),
         "≈" | "～" => Some("~"),
         "🐳" | "🐋" => Some("w"),
@@ -130,6 +132,7 @@ mod tests {
             ("∼", "~"),
             ("∿", "~"),
             ("⋯", "."),
+            ("⏱", "@"),
         ] {
             assert_eq!(ascii_fallback(rich), Some(safe));
         }

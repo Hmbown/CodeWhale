@@ -3,6 +3,7 @@
 //! (TUI_MODULARIZATION.md slice 5). Pure projection — no dispatch here.
 
 use super::*;
+use crate::tui::automation_panel::AutomationScan;
 
 pub(super) async fn refresh_active_task_panel(
     app: &mut App,
@@ -151,6 +152,105 @@ pub(super) fn newly_completed_id<'a>(
     completed_ids
         .into_iter()
         .any(|id| previously_active_ids.contains(id))
+}
+
+/// Newest runs scanned per automation when refreshing the automation
+/// projection. Live runs sit at the head of the newest-first listing, and a
+/// failure once seen is held unacknowledged by the projection until the
+/// operator engages the automation surface, so the band never needs a full
+/// run-history scan on the render cadence.
+const AUTOMATION_PANEL_RUN_SCAN: usize = 25;
+
+/// Refresh the activity band's scheduled-work projection
+/// (AUTOMATION-VISIBILITY-SPEC §2.1) from the durable automation store.
+///
+/// The store is files on disk — every definition plus up to
+/// `AUTOMATION_PANEL_RUN_SCAN` run files per definition — so the scan never
+/// runs on the async UI loop: it is taken on a blocking thread, and this
+/// tick folds whatever scan has finished, then starts the next one. At most
+/// one scan is in flight; a slow disk costs the band latency, never the
+/// frame. Returns whether the visible state changed, so the idle tick can
+/// skip the redraw (#3757).
+pub(super) async fn refresh_automation_panel(app: &mut App) -> bool {
+    let mut changed = false;
+    if let Some(scan) = app.automation_scan.take() {
+        if scan.is_finished() {
+            match scan.await {
+                Ok(scan) => changed = fold_automation_scan(app, &scan),
+                Err(err) => {
+                    tracing::warn!(error = %err, "automation panel scan task failed");
+                }
+            }
+        } else {
+            app.automation_scan = Some(scan);
+            return false;
+        }
+    }
+    app.automation_scan = start_automation_scan(app);
+    changed
+}
+
+/// Startup variant: take one scan and wait for it, so the first frame
+/// already carries the band count (the task panel gets the same courtesy).
+pub(super) async fn refresh_automation_panel_blocking(app: &mut App) -> bool {
+    let Some(scan) = start_automation_scan(app) else {
+        return false;
+    };
+    match scan.await {
+        Ok(scan) => fold_automation_scan(app, &scan),
+        Err(err) => {
+            tracing::warn!(error = %err, "automation panel scan task failed");
+            false
+        }
+    }
+}
+
+/// Start one store scan on a blocking thread. The manager is cloned out
+/// from under its tokio Mutex (`try_lock`, same rule as the shell snapshot:
+/// the scheduler tick holds that lock while persisting, and the UI loop
+/// must not park behind it; on contention the next tick retries) so the
+/// scan holds no lock while it reads — the store's writes are atomic
+/// renames, so a concurrent read sees a whole file either way.
+fn start_automation_scan(app: &App) -> Option<tokio::task::JoinHandle<AutomationScan>> {
+    let automations = app.runtime_services.automations.as_ref()?;
+    let manager = automations.try_lock().ok()?.clone();
+    Some(tokio::task::spawn_blocking(move || {
+        let records = match manager.list_automations() {
+            Ok(records) => records,
+            Err(err) => {
+                tracing::warn!(error = %err, "automation panel refresh could not list automations");
+                return AutomationScan::default();
+            }
+        };
+        let mut runs = Vec::new();
+        for record in &records {
+            match manager.list_runs(&record.id, Some(AUTOMATION_PANEL_RUN_SCAN)) {
+                Ok(recent) => runs.extend(recent),
+                Err(err) => {
+                    tracing::warn!(automation_id = %record.id, error = %err, "automation panel refresh could not list runs");
+                }
+            }
+        }
+        AutomationScan { records, runs }
+    }))
+}
+
+/// Fold a finished scan into the projection and post the typed receipt
+/// (spec §2.2) for every run this session watched go live and settle — the
+/// transcript learns about background work from the same scan that
+/// repaints the band.
+fn fold_automation_scan(app: &mut App, scan: &AutomationScan) -> bool {
+    let session_started_at = app.session_started_at;
+    let delta = app
+        .automation_panel
+        .fold_scan(&scan.records, &scan.runs, session_started_at);
+    let locale = app.ui_locale;
+    for run in &delta.settled {
+        app.add_message(crate::tui::automation_routing::settled_run_receipt(
+            locale, run,
+        ));
+    }
+    delta.changed || !delta.settled.is_empty()
 }
 
 pub(super) fn refresh_shell_exec_live_output(app: &mut App) -> bool {

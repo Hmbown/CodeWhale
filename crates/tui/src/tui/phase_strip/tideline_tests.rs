@@ -25,6 +25,7 @@ fn thinking_footer() -> TelineFixture {
         mode_chip: Some(("act", ChromeInk::PolicyAct)),
         permission_chip: Some(("ask", ChromeInk::PermissionAsk)),
         notice: None,
+        automation_slot: None,
     }
 }
 
@@ -37,6 +38,7 @@ struct TelineFixture {
     mode_chip: Option<(&'static str, ChromeInk)>,
     permission_chip: Option<(&'static str, ChromeInk)>,
     notice: Option<(&'static str, ChromeInk)>,
+    automation_slot: Option<(&'static str, ChromeInk)>,
 }
 
 impl TelineFixture {
@@ -53,6 +55,7 @@ impl TelineFixture {
         .mode_chip(self.mode_chip)
         .permission_chip(self.permission_chip)
         .notice(self.notice)
+        .automation_slot(self.automation_slot)
     }
 }
 
@@ -73,6 +76,54 @@ fn footer_matches_goldens_at_blocker_sizes() {
     for (w, h) in BLOCKER_SIZES {
         let footer = fixture.widget(&UI_THEME);
         assert_matches_golden(&format!("footer_{w}x{h}"), &draw(w, h, &footer));
+    }
+}
+
+/// Golden contract for the band with the scheduled-work slot lit
+/// (AUTOMATION-VISIBILITY §2.1, the `[2 tasks running]` moment). Goldens:
+/// `footer_automation_{w}x{h}`. At 80 columns the slot stands down whole
+/// rather than clipping; at 100 and 120 it displaces the key chorus (a hint)
+/// and never the ledger or the posture chips — that, too, is the contract.
+#[test]
+fn footer_automation_slot_matches_goldens_at_blocker_sizes() {
+    let mut fixture = thinking_footer();
+    fixture.automation_slot = Some(("⏱ 2 scheduled · 1 running", ChromeInk::Active));
+    for (w, h) in BLOCKER_SIZES {
+        let footer = fixture.widget(&UI_THEME);
+        assert_matches_golden(&format!("footer_automation_{w}x{h}"), &draw(w, h, &footer));
+    }
+}
+
+/// Width budget (spec §7.2): lighting the slot never costs the standing
+/// furniture a column. At every blocker size the cost ledger and both
+/// posture chips paint verbatim with the slot lit, exactly as they do
+/// without it; the slot only ever spends the key chorus's columns.
+#[test]
+fn footer_automation_slot_never_clips_the_ledger_or_posture_chips() {
+    const LEDGER: &str = "│ $0.42 · 61K tok · act · ask";
+    let mut fixture = thinking_footer();
+    fixture.automation_slot = Some(("⏱ 2 scheduled · 1 running", ChromeInk::Active));
+    for (w, h) in BLOCKER_SIZES {
+        let lit = draw(w, h, &fixture.widget(&UI_THEME));
+        let band = lit.lines().last().unwrap_or_default();
+        assert!(
+            band.contains(LEDGER),
+            "{w}x{h}: ledger and chips must paint whole behind the slot: {band}"
+        );
+        assert!(
+            band.contains("▁▂▄▆▆∿∿∿∿ 61%"),
+            "{w}x{h}: the depth line keeps its pinned right slot: {band}"
+        );
+        let slot_lit = band.contains("⏱ 2 scheduled · 1 running");
+        let keys_lit = band.contains("? help");
+        assert!(
+            slot_lit || !band.contains("scheduled"),
+            "{w}x{h}: the slot paints whole or not at all: {band}"
+        );
+        // The slot fits whenever it can spend the chorus's columns (100+);
+        // at 80 the chorus was already standing down for the chips.
+        assert_eq!(slot_lit, w >= 100, "{w}x{h}: slot presence: {band}");
+        assert_eq!(keys_lit, w >= 160, "{w}x{h}: chorus presence: {band}");
     }
 }
 
@@ -213,5 +264,52 @@ fn footer_degenerate_sizes_do_not_panic() {
     for (w, h) in [(0u16, 0), (2, 1), (8, 1), (300, 2)] {
         let footer = thinking_footer().widget(&UI_THEME);
         let _ = draw(w, h, &footer);
+    }
+}
+
+/// The scheduled-work slot (AUTOMATION-VISIBILITY §2.1) rides between the
+/// live detail and the cost ledger, painted whole or standing down — the
+/// posture-chip rule.
+#[test]
+fn footer_automation_slot_paints_whole_or_stands_down() {
+    let mut fixture = thinking_footer();
+    fixture.automation_slot = Some(("⏱ 2 scheduled · 1 running", ChromeInk::Active));
+    let text = draw(140, 40, &fixture.widget(&UI_THEME));
+    let band = text.trim_end();
+    assert!(
+        band.contains("<·> thinking 1m 15s ⏱ 2 scheduled · 1 running"),
+        "slot follows the live detail: {band}"
+    );
+    assert!(
+        band.contains("⏱ 2 scheduled · 1 running │ $0.42 · 61K tok"),
+        "cost ledger keeps its divider after the slot: {band}"
+    );
+
+    // Narrow: the slot stands down rather than clipping.
+    let narrow = draw(60, 16, &fixture.widget(&UI_THEME));
+    assert!(
+        !narrow.contains("scheduled"),
+        "narrow row must not clip the slot: {narrow}"
+    );
+}
+
+#[test]
+fn footer_automation_slot_projects_ascii_safe() {
+    let mut fixture = thinking_footer();
+    fixture.automation_slot = Some(("⏱ 2 scheduled · 1 running", ChromeInk::Active));
+    let footer = fixture.widget(&UI_THEME).ascii_safe(true);
+    let text = draw(140, 40, &footer);
+    assert!(
+        text.contains("@ 2 scheduled . 1 running"),
+        "glyphs project through the charter's fallbacks: {text}"
+    );
+    for ch in text.chars() {
+        if ch != '\n' {
+            assert_eq!(
+                unicode_width::UnicodeWidthChar::width(ch),
+                Some(1),
+                "ascii-safe single-width: {ch:?}"
+            );
+        }
     }
 }

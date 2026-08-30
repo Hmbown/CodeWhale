@@ -20,6 +20,7 @@ pub mod app;
 pub mod approval;
 pub mod auto_review;
 pub mod auto_router;
+pub mod automation_panel;
 mod automation_routing;
 pub mod background_indicator;
 pub mod backtrack;

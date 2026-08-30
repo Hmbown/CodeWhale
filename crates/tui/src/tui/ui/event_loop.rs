@@ -9,7 +9,10 @@ use super::observer_hooks::{
     execute_turn_end_observer_hook, subagent_failure_notice,
     subagent_status_from_completion_result, surface_observer_hook_submission_failure,
 };
-use super::task_projection::{refresh_active_task_panel, refresh_shell_exec_live_output};
+use super::task_projection::{
+    refresh_active_task_panel, refresh_automation_panel, refresh_automation_panel_blocking,
+    refresh_shell_exec_live_output,
+};
 use super::*;
 use crate::models::Role;
 
@@ -505,6 +508,7 @@ pub async fn run_tui(
     };
     crate::startup_trace::mark("task_manager_ready");
     refresh_active_task_panel(&mut app, &task_manager).await;
+    refresh_automation_panel_blocking(&mut app).await;
 
     let engine_config = build_engine_config(&app, config);
 
@@ -1145,6 +1149,9 @@ pub(crate) async fn run_event_loop(
 
         if last_task_refresh.elapsed() >= Duration::from_millis(2500) {
             if refresh_active_task_panel(app, &task_manager).await {
+                app.needs_redraw = true;
+            }
+            if refresh_automation_panel(app).await {
                 app.needs_redraw = true;
             }
             if refresh_shell_exec_live_output(app) {

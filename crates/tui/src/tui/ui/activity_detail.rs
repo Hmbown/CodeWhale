@@ -484,6 +484,7 @@ pub(crate) fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> b
         HistoryCell::Thinking { .. } => "Reasoning".to_string(),
         HistoryCell::Tool(_) => "Message".to_string(),
         HistoryCell::SubAgent(_) => "Sub-agent".to_string(),
+        HistoryCell::Automation(_) => "Automation".to_string(),
         HistoryCell::ArchivedContext { .. } => "Archived Context".to_string(),
     };
     let width = app
@@ -519,6 +520,7 @@ pub(crate) fn open_focused_cell_pager(app: &mut App) -> bool {
         HistoryCell::Thinking { .. } => "Reasoning",
         HistoryCell::Tool(_) => "Tool",
         HistoryCell::SubAgent(_) => "Sub-agent",
+        HistoryCell::Automation(_) => "Automation",
         HistoryCell::ArchivedContext { .. } => "Archived Context",
     };
     let width = app
@@ -991,6 +993,7 @@ fn turn_full_conversation_lines(app: &App, start: usize, end: usize) -> Vec<Stri
                 )
             ),
             HistoryCell::Error { .. } => "[!]".to_string(),
+            HistoryCell::Automation(_) => "[⏱]".to_string(),
             HistoryCell::System { .. } | HistoryCell::ArchivedContext { .. } => "[i]".to_string(),
         };
         if !out.is_empty() {
@@ -1259,6 +1262,10 @@ fn turn_timeline_lines(app: &App, start: usize, end: usize) -> Vec<String> {
                 let summary = one_line_summary(message, 96);
                 let status = severity.to_string();
                 rows.push(timeline_row("error", &summary, Some(&status), None, &[]));
+            }
+            HistoryCell::Automation(cell) => {
+                let summary = one_line_summary(&cell.plain_summary(), 96);
+                rows.push(timeline_row("automation", &summary, None, None, &[]));
             }
             HistoryCell::System { content }
             | HistoryCell::ArchivedContext {
