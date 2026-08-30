@@ -923,6 +923,155 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
         tokio::task::JoinHandle<()>,
     )>,
 > {
+    let (setup_tx, setup_rx) = oneshot::channel();
+    // If this test sealed the process environment (`lock_test_env`), the
+    // server thread must join that scope: its `Config::load` reads env through
+    // `with_test_env_lock`, which would otherwise block on the mutex the test
+    // holds while awaiting this very setup — a deadlock.
+    let env_ticket = crate::test_support::env_scope_ticket();
+    spawn_product_stack_server(
+        root,
+        sessions_dir,
+        runtime_token,
+        mobile_enabled,
+        workspace,
+        overrides,
+        env_ticket,
+        setup_tx,
+    );
+    let Some((addr, runtime_threads, shutdown_tx)) = setup_rx
+        .await
+        .context("runtime-api test server thread ended during setup")??
+    else {
+        return Ok(None);
+    };
+    // Owns the shutdown side for as long as the test keeps the handle alive:
+    // aborting it (or the test runtime dropping it) closes the listener and
+    // ends the server thread.
+    let handle = tokio::spawn(async move {
+        let _shutdown = shutdown_tx;
+        std::future::pending::<()>().await
+    });
+    Ok(Some((addr, runtime_threads, handle)))
+}
+
+/// What the server thread hands back once the router is bound: everything the
+/// test body needs, plus the shutdown side of the server.
+type TestServerSetup = (SocketAddr, SharedRuntimeThreadManager, oneshot::Sender<()>);
+
+/// Builds and serves the Runtime API router where the product builds and
+/// serves it: on a thread with the product's `CODEWHALE_MAIN_STACK_BYTES`
+/// stack.
+///
+/// `#[tokio::test]` drives its current-thread runtime on the 2 MiB libtest
+/// thread, so a harness that built its state and spawned its server onto that
+/// runtime ran every product path — config load and reload (the serde
+/// `toml::de::visit_map` frames for the full `Config`), manager construction,
+/// thread lifecycle, streaming — on a stack the product never gives it
+/// (`lib.rs` sizes the runtime workers with `CODEWHALE_MAIN_STACK_BYTES`).
+/// Config load under a profile and the thread-lifecycle path marginally
+/// overflowed 2 MiB in debug builds (`has overflowed its stack`, SIGABRT for
+/// the whole lib suite), which CI masked with `RUST_MIN_STACK`. Running setup
+/// *and* serving on one product-sized thread removes the class: the libtest
+/// thread keeps only the test body and its HTTP client, and no product frame
+/// depth can overflow it.
+///
+/// Setup results come back through `setup_tx`; the caller wraps the shutdown
+/// sender in the `JoinHandle` the call sites expect. Nothing here runs on the
+/// test's runtime, so the server thread must outlive setup: it serves until
+/// the shutdown sender is dropped.
+///
+/// `env_ticket` adopts the thread into the calling test's sealed env scope
+/// (`test_env_lock::join_env_scope`), so its `Config::load` env reads see the
+/// test's environment instead of blocking on the mutex the test holds while
+/// awaiting setup. `None` when the caller sealed nothing.
+fn spawn_product_stack_server(
+    root: PathBuf,
+    sessions_dir: PathBuf,
+    runtime_token: Option<String>,
+    mobile_enabled: bool,
+    workspace: PathBuf,
+    overrides: TestServerOverrides,
+    env_ticket: Option<crate::test_support::EnvScopeTicket>,
+    setup_tx: oneshot::Sender<Result<Option<TestServerSetup>>>,
+) {
+    std::thread::Builder::new()
+        .name("runtime-api-test-server".to_string())
+        .stack_size(crate::CODEWHALE_MAIN_STACK_BYTES)
+        .spawn(move || {
+            // Adopted for the thread's lifetime; the scope's generation check
+            // refuses enrollment once the sealing test has ended.
+            let _membership = crate::test_support::join_env_scope(env_ticket);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime-api test server runtime");
+            runtime.block_on(async move {
+                match build_test_server(
+                    root,
+                    sessions_dir,
+                    runtime_token,
+                    mobile_enabled,
+                    workspace,
+                    overrides,
+                )
+                .await
+                {
+                    Ok(Some((listener, app, addr, runtime_threads))) => {
+                        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+                        if setup_tx
+                            .send(Ok(Some((addr, runtime_threads, shutdown_tx))))
+                            .is_err()
+                        {
+                            // The test gave up waiting; do not serve.
+                            return;
+                        }
+                        listener
+                            .set_nonblocking(true)
+                            .expect("nonblocking test listener");
+                        let listener =
+                            TcpListener::from_std(listener).expect("register test listener");
+                        tokio::select! {
+                            _ = async {
+                                let _ = axum::serve(
+                                    listener,
+                                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                                )
+                                .await;
+                            } => {}
+                            _ = shutdown_rx => {}
+                        }
+                    }
+                    Ok(None) => {
+                        let _ = setup_tx.send(Ok(None));
+                    }
+                    Err(err) => {
+                        let _ = setup_tx.send(Err(err));
+                    }
+                }
+            });
+        })
+        .expect("spawn runtime-api test server thread");
+}
+
+/// The whole harness body — config load, managers, router build — formerly
+/// inline in `spawn_test_server_with_root_token_mobile_workspace_and_overrides`.
+/// Runs on the product-stack server thread (see `spawn_product_stack_server`).
+async fn build_test_server(
+    root: PathBuf,
+    sessions_dir: PathBuf,
+    runtime_token: Option<String>,
+    mobile_enabled: bool,
+    workspace: PathBuf,
+    overrides: TestServerOverrides,
+) -> Result<
+    Option<(
+        std::net::TcpListener,
+        axum::Router,
+        SocketAddr,
+        SharedRuntimeThreadManager,
+    )>,
+> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     fs::create_dir_all(&sessions_dir)?;
     fs::create_dir_all(&workspace)?;
@@ -937,8 +1086,6 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
             ..Config::default()
         }
     };
-    config.mcp_config_path = Some(root.join("mcp.json").to_string_lossy().to_string());
-
     config.mcp_config_path = Some(root.join("mcp.json").to_string_lossy().to_string());
     let manager = TaskManager::start_with_executor(
         TaskManagerConfig {
@@ -969,7 +1116,9 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
     let sub_agent_manager = overrides
         .sub_agent_manager
         .unwrap_or_else(|| runtime_api_sub_agent_manager(&workspace, 2));
-    let listener = match TcpListener::bind("127.0.0.1:0").await {
+    // A std listener: the server thread registers it with its own runtime
+    // after setup is reported (see `spawn_product_stack_server`).
+    let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => return Ok(None),
         Err(err) => return Err(err.into()),
@@ -1005,14 +1154,7 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
         compat_stream_test_hook: overrides.compat_stream_test_hook,
     };
     let app = build_router(state);
-    let handle = tokio::spawn(async move {
-        let _ = axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await;
-    });
-    Ok(Some((addr, runtime_threads, handle)))
+    Ok(Some((listener, app, addr, runtime_threads)))
 }
 
 async fn spawn_test_server() -> Result<
