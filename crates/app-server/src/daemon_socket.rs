@@ -87,7 +87,10 @@ pub enum DaemonSocketError {
     #[error("{} exists and is not a unix socket; refusing to remove it", path.display())]
     NotASocket { path: PathBuf },
     /// A daemon answered on the socket: this one must not replace it.
-    #[error("another codewhale daemon is already listening on {}", path.display())]
+    #[error(
+        "a live listener already answers on {}; refusing to replace it (another codewhale daemon, or something else bound to this path)",
+        path.display()
+    )]
     AlreadyRunning { path: PathBuf },
     /// The liveness probe neither connected nor was refused within the
     /// budget. Refused rather than clobbered; remove the file by hand if the

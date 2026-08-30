@@ -179,10 +179,18 @@ async fn owner_attaches_round_trips_and_shuts_down_cleanly() {
 
     let mut client = Client::connect(&harness.socket_path).await;
 
-    // Anything but healthz before attaching is refused with a typed error.
-    let early = client.call(1, "capabilities", json!({})).await;
-    assert_eq!(early["error"]["code"], json!(-32010), "{early}");
-    assert_eq!(early["error"]["data"]["error"], json!("attach_required"));
+    // Anything but healthz before attaching is refused with a typed error:
+    // a read-only probe, a thread/* read, and a prompt run alike.
+    for (id, method, params) in [
+        (1, "capabilities", json!({})),
+        (10, "thread/list", json!({})),
+        (11, "prompt/run", json!({ "prompt": "hi" })),
+    ] {
+        let early = client.call(id, method, params).await;
+        assert_eq!(early["error"]["code"], json!(-32010), "{method}: {early}");
+        assert_eq!(early["error"]["data"]["error"], json!("attach_required"));
+        assert_eq!(early["error"]["data"]["method"], json!(method));
+    }
 
     // healthz is allowed pre-attach so a shell can probe liveness first.
     let health = client.call(2, "healthz", json!({})).await;
@@ -207,8 +215,21 @@ async fn owner_attaches_round_trips_and_shuts_down_cleanly() {
     );
     assert_eq!(attached["result"]["connections"], json!(1));
 
-    // Round-trip one request through the shared dispatcher: an app/* Op in,
-    // its typed AppResponse out — the same shape the stdio transport emits.
+    // Post-attach, the socket transport advertises its own handshake next to
+    // the stdio method set.
+    let advertised = client.call(8, "capabilities", json!({})).await;
+    let methods = advertised["result"]["methods"]
+        .as_array()
+        .expect("methods array");
+    assert_eq!(methods[0], json!("healthz"), "{advertised}");
+    assert_eq!(methods[1], json!("daemon/attach"), "{advertised}");
+    assert!(methods.contains(&json!("shutdown")));
+
+    // Round-trip JSON-RPC requests through the shared dispatcher: `app/*`
+    // methods in, their JSON results out — byte-for-byte the shapes the
+    // stdio transport emits. (No protocol-crate Op/EventMsg envelope is on
+    // this wire; the framing is the stdio transport's newline-delimited
+    // JSON-RPC.)
     let caps = client.call(4, "app/capabilities", json!({})).await;
     assert_eq!(caps["result"]["ok"], json!(true), "{caps}");
     assert!(caps["result"]["data"]["routes"].is_array());
@@ -288,6 +309,10 @@ async fn guests_share_the_daemon_but_cannot_stop_it() {
     .expect("owner slot must free when the owner disconnects");
     assert_eq!(reclaimed["result"]["role"], json!("owner"), "{reclaimed}");
 
+    // The guest is still attached and served while the new owner is in.
+    let health = guest.call(5, "healthz", json!({})).await;
+    assert_eq!(health["result"]["status"], json!("ok"));
+
     let stopped = relaunched.call(2, "shutdown", json!({})).await;
     assert_eq!(stopped["result"]["status"], json!("stopped"));
     tokio::time::timeout(Duration::from_secs(10), server)
@@ -296,6 +321,9 @@ async fn guests_share_the_daemon_but_cannot_stop_it() {
         .expect("join")
         .expect("serve result");
     wait_for_socket_removed(&harness.socket_path).await;
+    // The owner's shutdown closes every other connection, not just its own.
+    guest.wait_for_close().await;
+    relaunched.wait_for_close().await;
 }
 
 #[tokio::test]

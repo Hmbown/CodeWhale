@@ -6066,13 +6066,51 @@ verbosity = "project-imported"
             }))
         ));
 
+        assert!(matches!(
+            parse_ok(&["deepseek", "app-server", "--socket"]).command,
+            Some(Commands::AppServer(AppServerArgs {
+                socket: true,
+                socket_path: None,
+                http: false,
+                mobile: false,
+                stdio: false,
+                ..
+            }))
+        ));
+
         for argv in [
             ["deepseek", "app-server", "--http", "--mobile"].as_slice(),
             ["deepseek", "app-server", "--http", "--stdio"].as_slice(),
             ["deepseek", "app-server", "--mobile", "--stdio"].as_slice(),
+            ["deepseek", "app-server", "--socket", "--stdio"].as_slice(),
+            ["deepseek", "app-server", "--socket", "--http"].as_slice(),
+            ["deepseek", "app-server", "--socket", "--mobile"].as_slice(),
         ] {
             let err = Cli::try_parse_from(argv).expect_err("conflicting transports must fail");
             assert_eq!(err.kind(), ErrorKind::ArgumentConflict, "argv={argv:?}");
+        }
+    }
+
+    #[test]
+    fn app_server_socket_path_requires_socket() {
+        let err = Cli::try_parse_from(["deepseek", "app-server", "--socket-path", "/tmp/d.sock"])
+            .expect_err("--socket-path without --socket must fail");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+        match parse_ok(&[
+            "deepseek",
+            "app-server",
+            "--socket",
+            "--socket-path",
+            "/tmp/d.sock",
+        ])
+        .command
+        {
+            Some(Commands::AppServer(AppServerArgs {
+                socket: true,
+                socket_path: Some(path),
+                ..
+            })) => assert_eq!(path, PathBuf::from("/tmp/d.sock")),
+            other => panic!("unexpected parse: {other:?}"),
         }
     }
 

@@ -134,8 +134,8 @@ when `CODEWHALE_HOME` is set (an explicit home is an isolation boundary); else
 `~/.codewhale/run/daemon.sock` elsewhere. The directory is created `0700`, the
 socket is `0600`, and every accepted peer must present the daemon's own uid.
 On start, a socket file nobody answers on is removed; a live one makes the new
-daemon exit with `another codewhale daemon is already listening`; a non-socket
-file at the path is never touched. On Windows `--socket` fails with a typed
+daemon exit with `a live listener already answers on <path>; refusing to
+replace it`; a non-socket file at the path is never touched. On Windows `--socket` fails with a typed
 `UnsupportedPlatform` error naming the reserved pipe `\\.\pipe\codewhale-daemon`
 — there is no silent TCP fallback. The daemon prints
 `codewhale daemon: listening on <path>` to stderr once it is accepting.
@@ -161,6 +161,11 @@ The reply reports the granted `role` (`owner` / `attached`), the daemon's
 `pid`, `version`, `socket_path`, and `uptime_ms`, the current `owner`, and the
 live `connections` count. A second `daemon/attach` on an attached connection
 is `-32014 already_attached`.
+
+**Capabilities.** On this transport `capabilities.methods` is the pinned stdio
+set plus `daemon/attach` (second entry, after `healthz`); `transport` reads
+`unix-socket`. `shutdown` is advertised to every connection because the method
+exists, but only the owner may call it (below).
 
 **Ownership.** Only the owner may `shutdown`; a guest's `shutdown` is refused
 with `-32012 not_daemon_owner` and does not interrupt anyone's turn. When the

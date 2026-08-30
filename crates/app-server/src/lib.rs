@@ -1882,45 +1882,53 @@ async fn dispatch_stdio_request_with_writer<W: AsyncWrite + Unpin>(
             }),
             should_exit: false,
         },
-        "capabilities" => StdioDispatchResult {
-            result: json!({
-                "transport": transport.label(),
-                "families": ["thread/*", "app/*", "prompt/*"],
-                "methods": [
-                    "healthz",
-                    "thread/capabilities",
-                    "thread/request",
-                    "thread/create",
-                    "thread/start",
-                    "thread/resume",
-                    "thread/fork",
-                    "thread/list",
-                    "thread/read",
-                    "thread/set_name",
-                    "thread/goal/set",
-                    "thread/goal/get",
-                    "thread/goal/clear",
-                    "thread/archive",
-                    "thread/unarchive",
-                    "thread/message",
-                    "thread/interrupt",
-                    "app/capabilities",
-                    "app/request",
-                    "app/config/get",
-                    "app/config/set",
-                    "app/config/unset",
-                    "app/config/list",
-                    "app/config/reload",
-                    "app/models",
-                    "app/thread_loaded_list",
-                    "prompt/capabilities",
-                    "prompt/request",
-                    "prompt/run",
-                    "shutdown"
-                ]
-            }),
-            should_exit: false,
-        },
+        "capabilities" => {
+            let mut methods = vec![
+                "healthz",
+                "thread/capabilities",
+                "thread/request",
+                "thread/create",
+                "thread/start",
+                "thread/resume",
+                "thread/fork",
+                "thread/list",
+                "thread/read",
+                "thread/set_name",
+                "thread/goal/set",
+                "thread/goal/get",
+                "thread/goal/clear",
+                "thread/archive",
+                "thread/unarchive",
+                "thread/message",
+                "thread/interrupt",
+                "app/capabilities",
+                "app/request",
+                "app/config/get",
+                "app/config/set",
+                "app/config/unset",
+                "app/config/list",
+                "app/config/reload",
+                "app/models",
+                "app/thread_loaded_list",
+                "prompt/capabilities",
+                "prompt/request",
+                "prompt/run",
+                "shutdown",
+            ];
+            if transport == AppTransport::Socket {
+                // The daemon handshake exists only on the socket transport;
+                // stdio/HTTP clients never see it, so the stdio pin is unchanged.
+                methods.insert(1, daemon_socket::ATTACH_METHOD);
+            }
+            StdioDispatchResult {
+                result: json!({
+                    "transport": transport.label(),
+                    "families": ["thread/*", "app/*", "prompt/*"],
+                    "methods": methods,
+                }),
+                should_exit: false,
+            }
+        }
         "thread/capabilities" => StdioDispatchResult {
             result: json!({
                 "methods": [
@@ -3858,6 +3866,36 @@ mod tests {
             "app-server stdio capability set drifted; update the dispatcher, this \
              snapshot, and docs/RUNTIME_API.md together"
         );
+    }
+
+    /// The socket transport advertises the `daemon/attach` handshake right
+    /// after `healthz`; the stdio pin above must stay untouched by it.
+    #[tokio::test]
+    async fn socket_transport_advertises_daemon_attach() {
+        let (state, _tmp) = capability_test_state();
+        let mut sink = tokio::io::sink();
+        let caps = dispatch_stdio_request_with_writer(
+            &state,
+            &mut sink,
+            "capabilities",
+            json!({}),
+            AppTransport::Socket,
+        )
+        .await
+        .expect("capabilities dispatch");
+        assert_eq!(caps.result["transport"], json!("unix-socket"));
+        let methods: Vec<String> = caps.result["methods"]
+            .as_array()
+            .expect("methods array")
+            .iter()
+            .map(|m| m.as_str().expect("method string").to_string())
+            .collect();
+        let mut expected: Vec<String> = EXPECTED_CAPABILITY_METHODS
+            .iter()
+            .map(|m| m.to_string())
+            .collect();
+        expected.insert(1, daemon_socket::ATTACH_METHOD.to_string());
+        assert_eq!(methods, expected);
     }
 
     #[tokio::test]
