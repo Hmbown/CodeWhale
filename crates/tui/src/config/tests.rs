@@ -120,19 +120,99 @@ fn retired_antigravity_is_not_selectable_but_has_an_actionable_tombstone() {
     assert!(!ApiProvider::catalog().contains(&ApiProvider::Antigravity));
     assert!(!ApiProvider::sorted_for_display().contains(&ApiProvider::Antigravity));
 
-    let config = Config {
+    for identity in ["antigravity", "agy"] {
+        assert!(is_legacy_antigravity_identity(identity), "{identity}");
+        let config = Config {
+            provider: Some(identity.to_string()),
+            ..Config::default()
+        };
+        let error = config
+            .validate()
+            .expect_err("a persisted legacy selection must fail before runtime setup")
+            .to_string();
+        assert!(error.contains("non-runnable"), "{identity}: {error}");
+        assert!(
+            error.contains("auth clear --provider antigravity"),
+            "{identity}: {error}"
+        );
+        assert!(error.contains("provider `google`"), "{identity}: {error}");
+        assert!(error.contains("GEMINI_API_KEY"), "{identity}: {error}");
+    }
+}
+
+#[test]
+fn retired_antigravity_env_selection_is_refused_with_the_tombstone() {
+    let _guard = lock_test_env();
+    let _deepseek_provider = EnvVarGuard::remove("DEEPSEEK_PROVIDER");
+    for identity in ["antigravity", "agy"] {
+        let _provider = EnvVarGuard::set("CODEWHALE_PROVIDER", identity);
+        let mut config = Config::default();
+        apply_env_overrides(&mut config, ConfigEnvironmentPolicy::Runtime);
+        let error = config
+            .validate()
+            .expect_err("CODEWHALE_PROVIDER must not select the tombstone")
+            .to_string();
+        assert!(error.contains("non-runnable"), "{identity}: {error}");
+        assert!(error.contains("GEMINI_API_KEY"), "{identity}: {error}");
+    }
+}
+
+#[test]
+fn retired_antigravity_credentials_are_never_read_and_no_client_is_built() {
+    let _guard = lock_test_env();
+    // The retired private credential plane: neither variable is consulted.
+    let _api_key = EnvVarGuard::set("ANTIGRAVITY_API_KEY", "must-never-be-read");
+    let _adc = EnvVarGuard::set("AGY_ADC_AUTH", "must-never-be-read");
+    assert!(ApiProvider::Antigravity.env_vars().is_empty());
+    assert!(
+        ApiProvider::Antigravity.kind().is_some(),
+        "tombstone keeps a kind so it can deserialize"
+    );
+
+    // A persisted legacy selection resolves to its own tombstone identity
+    // instead of falling through to the DeepSeek default, so every
+    // fail-closed branch keyed on `api_provider()` is actually reachable.
+    for identity in ["antigravity", "agy"] {
+        let config = Config {
+            provider: Some(identity.to_string()),
+            ..Config::default()
+        };
+        assert_eq!(
+            config.api_provider(),
+            ApiProvider::Antigravity,
+            "{identity}"
+        );
+    }
+
+    let mut config = Config {
         provider: Some("antigravity".to_string()),
         ..Config::default()
     };
-    let error = config
-        .validate()
-        .expect_err("a persisted legacy selection must fail before runtime setup")
+    let providers = config.providers.get_or_insert_with(Default::default);
+    providers.antigravity.api_key = Some("legacy-literal-left-behind".to_string());
+
+    // A leftover key in the legacy table is not a credential: readiness
+    // reports the tombstone as legacy, so `/model` never lists it.
+    assert_eq!(
+        crate::provider_readiness::credential_state_for_provider(&config, ApiProvider::Antigravity),
+        crate::provider_readiness::CredentialState::Legacy
+    );
+    let inventory = crate::model_inventory::ModelInventory::from_config(&config);
+    assert!(
+        inventory
+            .candidates
+            .iter()
+            .all(|candidate| candidate.provider != ApiProvider::Antigravity),
+        "the tombstone must not surface as a model candidate"
+    );
+
+    // No transport can be constructed for the tombstone; the refusal happens
+    // before any network or credential I/O.
+    let error = crate::client::DeepSeekClient::new(&config)
+        .err()
+        .expect("constructing a client for the tombstone must fail")
         .to_string();
     assert!(error.contains("non-runnable"), "{error}");
-    assert!(
-        error.contains("auth clear --provider antigravity"),
-        "{error}"
-    );
     assert!(error.contains("GEMINI_API_KEY"), "{error}");
 }
 

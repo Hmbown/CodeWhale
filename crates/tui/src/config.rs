@@ -4938,6 +4938,18 @@ impl Config {
         {
             return ApiProvider::Custom;
         }
+        // The retired Antigravity selection is not selectable (`parse` rejects
+        // it) but it must still resolve to its own tombstone identity here:
+        // falling through to the base-URL sniff would silently run a legacy
+        // `provider = "antigravity"` config as DeepSeek and bypass every
+        // fail-closed tombstone branch in the client and credential resolver.
+        if self
+            .provider
+            .as_deref()
+            .is_some_and(is_legacy_antigravity_identity)
+        {
+            return ApiProvider::Antigravity;
+        }
         if let Some(provider) = self.provider.as_deref().and_then(ApiProvider::parse) {
             if provider == ApiProvider::Ollama && self.selects_legacy_ollama_cloud_route() {
                 return ApiProvider::OllamaCloud;

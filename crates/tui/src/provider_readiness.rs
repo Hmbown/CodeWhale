@@ -179,7 +179,12 @@ pub(crate) fn credential_state_for_provider(
             CredentialState::MissingKey
         };
     }
-    if provider.kind().is_none() {
+    // The retired Antigravity identity keeps a `ProviderKind` only so legacy
+    // `[providers.antigravity]` tables deserialize and can be cleared. A
+    // leftover `api_key` in that table must never read as `Saved`: the route
+    // is a non-runnable tombstone, so `/model`, setup, and readiness treat it
+    // as legacy regardless of what the table contains.
+    if provider == ApiProvider::Antigravity || provider.kind().is_none() {
         return CredentialState::Legacy;
     }
     if provider == ApiProvider::Custom {

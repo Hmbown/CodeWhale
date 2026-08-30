@@ -4292,6 +4292,17 @@ fn doctor_should_probe_api(
     probes.should_probe_api(local)
 }
 
+/// Providers whose credential *presence* `codewhale doctor` reports.
+///
+/// The retired Antigravity identity is a non-runnable tombstone kept only so
+/// legacy tables deserialize and clear; doctor never advertises it as a slot.
+fn doctor_api_key_providers() -> impl Iterator<Item = crate::config::ApiProvider> {
+    crate::config::ApiProvider::all()
+        .iter()
+        .copied()
+        .filter(|provider| *provider != crate::config::ApiProvider::Antigravity)
+}
+
 /// Doctor must never turn credential inspection into a refresh/write path.
 /// OAuth connectivity is exercised by an ordinary user request instead;
 /// doctor limits itself to non-mutating readiness inspection.
@@ -4463,7 +4474,7 @@ async fn run_doctor(
     // Per-provider state: env + config file only (no values printed).
     // Keep doctor/status prompt-free and credential-value-free even for
     // unsigned rebuilt binaries.
-    for provider in crate::config::ApiProvider::all().iter().copied() {
+    for provider in doctor_api_key_providers() {
         let slot = provider.as_str();
         let provider_config = config.provider_config_for(provider);
         let config_declared = provider_config.is_some_and(|entry| {

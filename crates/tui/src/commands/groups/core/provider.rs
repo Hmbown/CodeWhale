@@ -273,6 +273,25 @@ mod tests {
     }
 
     #[test]
+    fn retired_antigravity_selectors_return_the_tombstone_without_an_action() {
+        let _guard = lock_test_env();
+        for identity in ["antigravity", "agy", "AGY"] {
+            let mut app = create_test_app();
+            let result = provider(&mut app, Some(identity));
+            assert!(result.is_error, "{identity}");
+            assert_eq!(result.action, None, "{identity}");
+            let message = result.message.expect("tombstone message");
+            assert!(message.contains("non-runnable"), "{identity}: {message}");
+            assert!(message.contains("GEMINI_API_KEY"), "{identity}: {message}");
+            assert_eq!(app.api_provider, crate::config::ApiProvider::Deepseek);
+
+            let setup = provider_setup_action_for_name(identity)
+                .expect_err("setup must not open for the tombstone");
+            assert!(setup.contains("provider `google`"), "{identity}: {setup}");
+        }
+    }
+
+    #[test]
     fn setup_subcommand_opens_provider_setup_catalog() {
         let mut app = create_test_app();
         let result = provider(&mut app, Some("setup"));

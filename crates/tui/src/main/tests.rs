@@ -4,6 +4,18 @@ use std::fs;
 use tempfile::TempDir;
 
 #[test]
+fn doctor_api_key_rows_never_name_the_retired_antigravity_slot() {
+    let rows: Vec<crate::config::ApiProvider> = doctor_api_key_providers().collect();
+    assert!(!rows.contains(&crate::config::ApiProvider::Antigravity));
+    assert!(rows.contains(&crate::config::ApiProvider::Deepseek));
+    assert!(rows.contains(&crate::config::ApiProvider::Google));
+    assert!(
+        rows.iter()
+            .all(|provider| provider.as_str() != "antigravity")
+    );
+}
+
+#[test]
 fn offline_doctor_loads_never_materialize_secret_environment_overrides() {
     let _guard = crate::test_support::lock_test_env();
     let temp = tempfile::TempDir::new().expect("tempdir");
