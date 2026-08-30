@@ -1666,6 +1666,8 @@
   "StatusSafetyWorkspaceWriteNetworkOn": "सैंडबॉक्स workspace-write, नेटवर्क चालू",
   "StatusSafetyWorkspaceWriteNetworkOff": "सैंडबॉक्स workspace-write, नेटवर्क बंद",
   "StatusSafetyDisabled": "सैंडबॉक्स बंद, नेटवर्क अप्रतिबंधित",
+  "StatusSafetyDisabledSetuidBlocked": "सैंडबॉक्स बंद, नेटवर्क अप्रतिबंधित; sudo/setuid अवरुद्ध (no-new-privs)",
+  "StatusSafetyDisabledSetuidAllowed": "सैंडबॉक्स बंद, नेटवर्क अप्रतिबंधित; sudo/setuid अनुमत",
   "StatusSafetyExternal": "बाहरी सैंडबॉक्स, नेटवर्क नियंत्रण होस्ट को सौंपा गया",
   "StatusPointers": "हर टर्न के टोकन: /tokens · फुटर आइटम: /statusline",
   "AutoReviewReceiptGuardianAllowed": "Auto-Review ने '{tool}' की अनुमति दी (जोखिम {risk}, मॉडल गार्जियन): {reason}",

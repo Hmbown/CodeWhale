@@ -1666,6 +1666,8 @@
   "StatusSafetyWorkspaceWriteNetworkOn": "sandbox workspace-write, jaringan aktif",
   "StatusSafetyWorkspaceWriteNetworkOff": "sandbox workspace-write, jaringan nonaktif",
   "StatusSafetyDisabled": "sandbox nonaktif, jaringan tanpa batas",
+  "StatusSafetyDisabledSetuidBlocked": "sandbox nonaktif, jaringan tanpa batas; sudo/setuid diblokir (no-new-privs)",
+  "StatusSafetyDisabledSetuidAllowed": "sandbox nonaktif, jaringan tanpa batas; sudo/setuid diizinkan",
   "StatusSafetyExternal": "sandbox eksternal, jaringan didelegasikan ke host",
   "StatusPointers": "Token per giliran: /tokens · Item footer: /statusline",
   "AutoReviewReceiptGuardianAllowed": "Auto-Review mengizinkan '{tool}' (risiko {risk}, penjaga model): {reason}",

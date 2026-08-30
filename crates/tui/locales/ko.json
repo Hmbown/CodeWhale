@@ -1666,6 +1666,8 @@
   "StatusSafetyWorkspaceWriteNetworkOn": "샌드박스 workspace-write, 네트워크 켜짐",
   "StatusSafetyWorkspaceWriteNetworkOff": "샌드박스 workspace-write, 네트워크 꺼짐",
   "StatusSafetyDisabled": "샌드박스 꺼짐, 네트워크 제한 없음",
+  "StatusSafetyDisabledSetuidBlocked": "샌드박스 꺼짐, 네트워크 제한 없음; sudo/setuid 차단됨(no-new-privs)",
+  "StatusSafetyDisabledSetuidAllowed": "샌드박스 꺼짐, 네트워크 제한 없음; sudo/setuid 허용됨",
   "StatusSafetyExternal": "외부 샌드박스, 네트워크 제어는 호스트에 위임",
   "StatusPointers": "턴별 토큰: /tokens · 바닥글 항목: /statusline",
   "AutoReviewReceiptGuardianAllowed": "Auto-Review가 '{tool}'을(를) 허용했습니다 (위험 {risk}, 모델 가디언): {reason}",

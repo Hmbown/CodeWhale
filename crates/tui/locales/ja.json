@@ -1666,6 +1666,8 @@
   "StatusSafetyWorkspaceWriteNetworkOn": "サンドボックスは workspace-write、ネットワーク有効",
   "StatusSafetyWorkspaceWriteNetworkOff": "サンドボックスは workspace-write、ネットワーク無効",
   "StatusSafetyDisabled": "サンドボックス無効、ネットワーク制限なし",
+  "StatusSafetyDisabledSetuidBlocked": "サンドボックス無効、ネットワーク制限なし。sudo/setuid はブロック中（no-new-privs）",
+  "StatusSafetyDisabledSetuidAllowed": "サンドボックス無効、ネットワーク制限なし。sudo/setuid は許可されています",
   "StatusSafetyExternal": "外部サンドボックス、ネットワーク制御はホストに委任",
   "StatusPointers": "ターン別トークン: /tokens · フッター項目: /statusline",
   "AutoReviewReceiptGuardianAllowed": "Auto-Review が '{tool}' を許可しました（リスク {risk}、モデルガーディアン）: {reason}",

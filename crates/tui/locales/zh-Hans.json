@@ -1666,6 +1666,8 @@
   "StatusSafetyWorkspaceWriteNetworkOn": "沙箱为 workspace-write，网络开启",
   "StatusSafetyWorkspaceWriteNetworkOff": "沙箱为 workspace-write，网络关闭",
   "StatusSafetyDisabled": "沙箱已禁用，网络不受限",
+  "StatusSafetyDisabledSetuidBlocked": "沙箱已禁用，网络不受限；sudo/setuid 仍被阻止（no-new-privs）",
+  "StatusSafetyDisabledSetuidAllowed": "沙箱已禁用，网络不受限；sudo/setuid 已放开",
   "StatusSafetyExternal": "外部沙箱，网络控制委托给主机",
   "StatusPointers": "每轮令牌：/tokens · 页脚项目：/statusline",
   "AutoReviewReceiptGuardianAllowed": "Auto-Review 已允许 '{tool}'（风险 {risk}，模型守护者）：{reason}",

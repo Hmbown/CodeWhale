@@ -1666,6 +1666,8 @@
   "StatusSafetyWorkspaceWriteNetworkOn": "пісочниця workspace-write, мережу увімкнено",
   "StatusSafetyWorkspaceWriteNetworkOff": "пісочниця workspace-write, мережу вимкнено",
   "StatusSafetyDisabled": "пісочницю вимкнено, мережа без обмежень",
+  "StatusSafetyDisabledSetuidBlocked": "пісочницю вимкнено, мережа без обмежень; sudo/setuid заблоковано (no-new-privs)",
+  "StatusSafetyDisabledSetuidAllowed": "пісочницю вимкнено, мережа без обмежень; sudo/setuid дозволено",
   "StatusSafetyExternal": "зовнішня пісочниця, керування мережею делеговано хосту",
   "StatusPointers": "Токени за ходами: /tokens · Елементи рядка стану: /statusline",
   "AutoReviewReceiptGuardianAllowed": "Auto-Review дозволив '{tool}' (ризик {risk}, модельний вартовий): {reason}",
