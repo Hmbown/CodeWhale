@@ -243,11 +243,9 @@ jobs:
             # PR so a non-run never passes for a clean review. Only the HTTP
             # status line is quoted, never the model output.
             MARK="<!-- codewhale-review-nonrun -->"
-            BODY="${MARK}
-## Codewhale review did not run
-
-\`codewhale review --pr ${PR_NUMBER}\` (provider: \`${PROVIDER}\`) could not reach the model: \`${REASON}\`.
-This is a provider funding/config problem, not a finding about this PR. The check stays advisory; a maintainer with secret access needs to fund or rotate the review key (see \`.github/workflows/codewhale-review.yml\`). Re-run the workflow after that."
+            # Single printf: column-0 continuation lines would terminate the
+            # YAML block scalar (actionlint syntax-check failure at :249).
+            BODY=$(printf '%s\n\n## Codewhale review did not run\n\n`codewhale review --pr %s` (provider: `%s`) could not reach the model: `%s`.\n%s' "$MARK" "$PR_NUMBER" "$PROVIDER" "$REASON" "This is a provider funding/config problem, not a finding about this PR. The check stays advisory; a maintainer with secret access needs to fund or rotate the review key (see \`.github/workflows/codewhale-review.yml\`). Re-run the workflow after that.")
             EXISTING=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate --jq ".[] | select(.body | startswith(\"${MARK}\")) | .id" 2>/dev/null | head -1 || true)
             if [ -n "$EXISTING" ]; then
               gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING}" -f body="$BODY" >/dev/null 2>&1 || echo "::warning::could not update the non-run note"
