@@ -1149,7 +1149,7 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     let composer_slot = 7;
     let footer_slot = 8;
 
-    let (work_chat_area, side_work_area) = if mini && !mini_cfg.keep_sidebar {
+    let (legacy_work_chat_area, side_work_area) = if mini && !mini_cfg.keep_sidebar {
         // Mini mode without the side rail: the transcript takes the whole
         // chat row. split_chat is skipped so the rail never reserves columns.
         (body_chunks[1], None)
@@ -1157,10 +1157,42 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         crate::tui::work_surface::split_chat(app, body_chunks[1], rail_min_chat_width(idle_empty))
     };
 
+    // The legacy work surface continues to own its configured placement and
+    // detailed rows. In a normal active session, add the compact Tideline
+    // state rail beside the transcript even when the normal default Left
+    // surface has no rows to reserve. A populated legacy side surface wins,
+    // so the two rails can never overlap or duplicate each other. The summary
+    // is deliberately passive until its controls have registered keyboard +
+    // mouse behavior.
+    let tideline_rail_width = if mini {
+        0
+    } else {
+        crate::tui::work_surface::tideline::active_session_tideline_rail_width(
+            app,
+            legacy_work_chat_area,
+            side_work_area.is_some(),
+        )
+    };
+    let (tideline_live_rail_area, work_chat_area) = if tideline_rail_width == 0 {
+        (None, legacy_work_chat_area)
+    } else {
+        let [rail_area, chat_area] =
+            Layout::horizontal([Constraint::Length(tideline_rail_width), Constraint::Min(1)])
+                .areas(legacy_work_chat_area);
+        (Some(rail_area), chat_area)
+    };
+
     if top_work_strip_height > 0 {
         crate::tui::work_surface::render(f, body_chunks[0], app);
     } else if let Some(work_area) = side_work_area {
         crate::tui::work_surface::render(f, work_area, app);
+    }
+    if let Some(rail_area) = tideline_live_rail_area {
+        crate::tui::work_surface::tideline::render_active_session_tideline_rail(
+            rail_area,
+            f.buffer_mut(),
+            app,
+        );
     }
 
     // The Tideline topbar owns the header slot (spec §3: it replaces
@@ -1436,6 +1468,9 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         }
         if let Some(side_area) = side_work_area {
             column.paint_matching(side_area, f.buffer_mut(), app.ui_theme.surface_bg);
+        }
+        if let Some(rail_area) = tideline_live_rail_area {
+            column.paint_matching(rail_area, f.buffer_mut(), app.ui_theme.surface_bg);
         }
         column.paint_matching(work_chat_area, f.buffer_mut(), app.ui_theme.surface_bg);
         column.paint_matching(body_chunks[2], f.buffer_mut(), app.ui_theme.surface_bg);

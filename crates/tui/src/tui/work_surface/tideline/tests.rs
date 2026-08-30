@@ -122,6 +122,26 @@ fn rail_shows_five_groups_help_and_collapse() {
 }
 
 #[test]
+fn passive_summary_shows_five_groups_without_inert_controls_or_hitboxes() {
+    let groups = groups();
+    let rail = TidelineRail::new(&UI_THEME, &groups).summary();
+    let area = Rect::new(0, 0, 16, 10);
+    let text = render_golden_text(area.width, area.height, |buf| {
+        render_tideline_rail(area, buf, &rail);
+    });
+
+    for label in ["RUNS", "WHALES", "POD", "WORK", "CONTEXT"] {
+        assert!(text.contains(label), "missing {label}: {text}");
+    }
+    assert!(!text.contains("? help"), "{text}");
+    assert!(!text.contains("« collapse"), "{text}");
+    assert!(
+        tideline_rail_hitboxes(area, &rail).is_empty(),
+        "passive visual state must not advertise a clickable target"
+    );
+}
+
+#[test]
 fn rail_collapsed_leaves_only_the_expander() {
     let groups = groups();
     let rail = TidelineRail::new(&UI_THEME, &groups).collapsed(true);

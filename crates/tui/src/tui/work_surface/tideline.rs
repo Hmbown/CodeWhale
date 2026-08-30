@@ -17,7 +17,17 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::palette::{ChromeInk, UiTheme, chrome_style};
+use crate::tui::app::App;
+use crate::tui::background_indicator::{PendingItemKind, PendingWork, pending_work_from_app};
 use crate::tui::history::TidelineStream;
+
+use super::WorkSurfacePlacement;
+
+/// A compact live rail needs one row for each of its five labels and facts.
+/// When the transcript slot is shorter than this, leave the current compact
+/// work-surface behavior intact instead of reserving a column that cannot
+/// truthfully show its full state.
+const LIVE_TIDELINE_MIN_HEIGHT: u16 = 10;
 
 /// Rail width ladder (spec §5b): 22 at ≥120, 16 at ≥100, hidden below.
 #[must_use]
@@ -52,6 +62,13 @@ pub struct TidelineRail<'a> {
     /// Focused (keyboard Tab target per §6).
     pub focused: bool,
     pub ascii_safe: bool,
+    /// Whether the caller has registered real keyboard and mouse behavior for
+    /// the rail's help/settings/collapse affordances. Passive summaries omit
+    /// those controls rather than painting inert UI.
+    interactive: bool,
+    /// Use a dense label/fact cadence. The live summary uses this to keep all
+    /// five factual groups visible in a normal terminal-height chat slot.
+    compact: bool,
 }
 
 #[allow(dead_code)] // translation scaffolding: builder methods feed tests + the landing slice
@@ -64,6 +81,8 @@ impl<'a> TidelineRail<'a> {
             collapsed: false,
             focused: false,
             ascii_safe: false,
+            interactive: true,
+            compact: false,
         }
     }
 
@@ -82,6 +101,19 @@ impl<'a> TidelineRail<'a> {
     #[must_use]
     pub fn ascii_safe(mut self, ascii_safe: bool) -> Self {
         self.ascii_safe = ascii_safe;
+        self
+    }
+
+    /// Render the rail as a passive state summary.
+    ///
+    /// The live landing slice has no registered rail input targets yet, so it
+    /// deliberately shows no `? help`, settings, or collapse glyph. This
+    /// preserves the mockup's information architecture without implying that
+    /// an unimplemented control can be clicked or focused.
+    #[must_use]
+    pub fn summary(mut self) -> Self {
+        self.interactive = false;
+        self.compact = true;
         self
     }
 
@@ -140,7 +172,7 @@ pub fn render_tideline_rail(area: Rect, buf: &mut Buffer, rail: &TidelineRail<'_
         ChromeInk::MetadataDim
     };
 
-    if rail.collapsed {
+    if rail.interactive && rail.collapsed {
         // Expander spine: `»` at the top, dim focus edge down the column.
         rput(
             buf,
@@ -153,9 +185,11 @@ pub fn render_tideline_rail(area: Rect, buf: &mut Buffer, rail: &TidelineRail<'_
     }
 
     let width = area.width as usize;
+    let controls_height = if rail.interactive { 2 } else { 0 };
+    let content_bottom = area.y + area.height.saturating_sub(controls_height);
     let mut y = area.y;
     for group in rail.groups {
-        if y >= area.y + area.height.saturating_sub(2) {
+        if y >= content_bottom {
             break;
         }
         rput(
@@ -167,7 +201,7 @@ pub fn render_tideline_rail(area: Rect, buf: &mut Buffer, rail: &TidelineRail<'_
         );
         y += 1;
         for (line, ink) in &group.lines {
-            if y >= area.y + area.height.saturating_sub(2) {
+            if y >= content_bottom {
                 break;
             }
             rput(
@@ -179,11 +213,13 @@ pub fn render_tideline_rail(area: Rect, buf: &mut Buffer, rail: &TidelineRail<'_
             );
             y += 1;
         }
-        y += 1;
+        if !rail.compact {
+            y += 1;
+        }
     }
 
     // Meta rows then the collapse toggle.
-    if area.height >= 3 {
+    if rail.interactive && area.height >= 3 {
         // One row above the collapse toggle.
         let bottom = area.y + area.height - 2;
         rput(
@@ -194,7 +230,7 @@ pub fn render_tideline_rail(area: Rect, buf: &mut Buffer, rail: &TidelineRail<'_
             rchrome(theme, ChromeInk::MetadataHint),
         );
     }
-    if area.height >= 2 {
+    if rail.interactive && area.height >= 2 {
         rput(
             buf,
             area.x,
@@ -202,6 +238,148 @@ pub fn render_tideline_rail(area: Rect, buf: &mut Buffer, rail: &TidelineRail<'_
             &rail.sym("« collapse"),
             rchrome(theme, focus_edge_ink),
         );
+    }
+}
+
+/// Return the Tideline reservation for a real active session.
+///
+/// `work_surface` remains the owner of placement and detailed work rows. The
+/// default Left placement gets this summary only when its legacy side surface
+/// has nothing to render; an occupied legacy rail is never overlaid or
+/// duplicated. Top also receives the summary, while explicit Right and Off
+/// keep their existing behavior.
+#[must_use]
+pub(crate) fn active_session_tideline_rail_width(
+    app: &App,
+    chat_area: Rect,
+    legacy_side_rail_visible: bool,
+) -> u16 {
+    if app.launch.visible
+        || app.current_session_id.is_none()
+        || legacy_side_rail_visible
+        || !matches!(
+            app.work_surface.placement,
+            WorkSurfacePlacement::Top | WorkSurfacePlacement::Left
+        )
+        || chat_area.height < LIVE_TIDELINE_MIN_HEIGHT
+    {
+        return 0;
+    }
+    tideline_rail_width(chat_area.width)
+}
+
+/// Paint the non-interactive active-session Tideline summary and its visual
+/// divider. The rail owns no hitboxes until its controls have keyboard and
+/// pointer parity; all facts are read from existing App projections.
+pub(crate) fn render_active_session_tideline_rail(area: Rect, buf: &mut Buffer, app: &App) {
+    if area.width < 2 || area.height < LIVE_TIDELINE_MIN_HEIGHT {
+        return;
+    }
+
+    let theme = &app.ui_theme;
+    let blank = " ".repeat(usize::from(area.width));
+    for y in area.y..area.y.saturating_add(area.height) {
+        rput(
+            buf,
+            area.x,
+            y,
+            &blank,
+            Style::default().bg(theme.surface_bg),
+        );
+    }
+
+    let content_area = Rect {
+        width: area.width.saturating_sub(1),
+        ..area
+    };
+    let groups = active_session_tideline_rail_groups(app);
+    let rail = TidelineRail::new(theme, &groups)
+        .summary()
+        .ascii_safe(crate::tui::color_compat::ascii_safe_enabled());
+    render_tideline_rail(content_area, buf, &rail);
+
+    let divider = rail.sym("│");
+    let divider_x = area.x.saturating_add(area.width.saturating_sub(1));
+    for y in area.y..area.y.saturating_add(area.height) {
+        rput(
+            buf,
+            divider_x,
+            y,
+            &divider,
+            rchrome(theme, ChromeInk::MetadataDim).bg(theme.surface_bg),
+        );
+    }
+}
+
+/// Derive the five groups from the existing App state. This is intentionally
+/// a read-only projection: no independent Tideline store, catalog, or async
+/// refresh path is introduced here.
+#[must_use]
+pub(crate) fn active_session_tideline_rail_groups(app: &App) -> Vec<TidelineRailGroup> {
+    let pending = pending_work_from_app(app);
+    let running_whales = pending.count(PendingItemKind::Agent);
+    // Progress-only workers can briefly precede their cache snapshot. Count
+    // at least the live workers so the POD summary never claims none exist.
+    let pod_total = app.subagent_cache.len().max(running_whales);
+    let whale_capacity = app.max_subagents;
+
+    let run_label = match app.workflow_panel.as_ref() {
+        Some(panel) => {
+            let chip = panel.top_bar_chip();
+            chip.strip_prefix("wf ").unwrap_or(&chip).to_string()
+        }
+        None if app.is_loading => {
+            if app.turn_counter == 0 {
+                "turn active".to_string()
+            } else {
+                format!("turn {}", app.turn_counter)
+            }
+        }
+        None => "idle".to_string(),
+    };
+    let whales = format!("{running_whales}/{whale_capacity} ready");
+    let pod_label = if pod_total == 0 {
+        "no agents".to_string()
+    } else {
+        format!("{running_whales}/{pod_total} live")
+    };
+    let work_line = active_session_work_line(app, &pending);
+
+    tideline_rail_groups(
+        &run_label,
+        &whales,
+        &pod_label,
+        &[work_line.as_str()],
+        crate::tui::phase_strip::context_percent_from_app(app),
+    )
+}
+
+fn active_session_work_line(app: &App, pending: &PendingWork) -> String {
+    let Ok(todos) = app.todos.try_lock() else {
+        return "checklist busy".to_string();
+    };
+    let snapshot = todos.snapshot();
+    if !snapshot.items.is_empty() {
+        let total = snapshot.items.len();
+        let open = snapshot
+            .items
+            .iter()
+            .filter(|item| !item.status.is_settled())
+            .count();
+        return if open == 0 {
+            format!("{total}/{total} done")
+        } else {
+            format!("{open}/{total} open")
+        };
+    }
+
+    let background_count = pending.items.len();
+    if background_count > 0 {
+        format!("{background_count} active")
+    } else if app.is_loading {
+        "turn active".to_string()
+    } else {
+        "no checklist".to_string()
     }
 }
 
@@ -296,6 +474,9 @@ pub fn render_tideline_work_stage(area: Rect, buf: &mut Buffer, stage: &Tideline
 #[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub fn tideline_rail_hitboxes(area: Rect, rail: &TidelineRail<'_>) -> Vec<Rect> {
     let mut out = Vec::new();
+    if !rail.interactive {
+        return out;
+    }
     if area.width < 2 || area.height < 2 || rail.collapsed {
         out.push(Rect {
             x: area.x,

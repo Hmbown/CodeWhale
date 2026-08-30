@@ -23019,6 +23019,7 @@ fn backtrack_cut_index_skips_tool_result_user_messages() {
 /// name the same filter reaches them: `tui::ui::tests::work_surface::…`.
 mod work_surface {
     use super::*;
+    use crate::test_support::{EnvVarGuard, lock_test_env};
     use crate::tui::ui::{rail_min_chat_width, rail_row_budget};
     use crate::tui::underwater::AMBIENT_MIN_CHAT_WIDTH;
     use crate::tui::widgets::should_render_empty_state;
@@ -23044,6 +23045,181 @@ mod work_surface {
         app.work_surface.placement = WorkSurfacePlacement::Top;
         app.work_surface.panel = panel;
         app
+    }
+
+    fn active_tideline_app() -> App {
+        let mut app = idle_rail_app(RailPanel::Tasks);
+        app.launch.visible = false;
+        app.current_session_id = Some("tideline-live-rail".to_string());
+        assert!(
+            app.todos
+                .try_lock()
+                .expect("todos lock")
+                .snapshot()
+                .is_empty(),
+            "the active-session rail must not depend on a checklist item"
+        );
+        app
+    }
+
+    #[test]
+    fn active_session_tideline_rail_uses_the_width_ladder_without_fake_controls() {
+        let mut narrow = active_tideline_app();
+        let narrow_text = render_underwater_test_app(&mut narrow, 80, 32);
+        assert!(
+            !narrow_text.contains("RUNS"),
+            "the Tideline rail must yield below 100 columns:\n{narrow_text}"
+        );
+        assert_eq!(
+            narrow
+                .viewport
+                .last_transcript_area
+                .expect("80-column transcript")
+                .x,
+            0,
+            "80 columns retain the existing compact transcript layout"
+        );
+
+        let mut medium = active_tideline_app();
+        let medium_text = render_underwater_test_app(&mut medium, 100, 32);
+        for label in ["RUNS", "WHALES", "POD", "WORK", "CONTEXT"] {
+            assert!(
+                medium_text.contains(label),
+                "100-column rail misses {label}:\n{medium_text}"
+            );
+        }
+        assert!(medium_text.contains("no checklist"), "{medium_text}");
+        assert!(
+            !medium_text.contains("« collapse") && !medium_text.contains("? help"),
+            "passive state summaries must not paint inert controls:\n{medium_text}"
+        );
+        assert_eq!(
+            medium
+                .viewport
+                .last_transcript_area
+                .expect("100-column transcript")
+                .x,
+            16,
+            "100–119 columns reserve the compact 16-column rail"
+        );
+
+        let mut wide = active_tideline_app();
+        let wide_text = render_underwater_test_app(&mut wide, 120, 32);
+        assert!(wide_text.contains("RUNS"), "{wide_text}");
+        assert_eq!(
+            wide.viewport
+                .last_transcript_area
+                .expect("120-column transcript")
+                .x,
+            22,
+            "120+ columns reserve the full 22-column rail"
+        );
+    }
+
+    #[test]
+    fn default_left_active_session_uses_tideline_when_legacy_surface_is_empty() {
+        // Exercise the real Settings default through App initialization rather
+        // than forcing a placement in the fixture. The process-wide env lock
+        // keeps the isolated CODEWHALE_HOME from racing other settings tests.
+        let _env_lock = lock_test_env();
+        let settings_root = tempfile::tempdir().expect("isolated settings root");
+        let default_home = settings_root.path().join("codewhale-home");
+        let _home = EnvVarGuard::set("CODEWHALE_HOME", &default_home);
+        assert_eq!(
+            crate::settings::Settings::load_persisted()
+                .expect("load default settings")
+                .work_surface_placement,
+            "left",
+            "the app-level regression must start from the shipped Settings default"
+        );
+
+        for (width, expected_x) in [(100, 16), (120, 22)] {
+            let mut app = App::new(
+                crate::test_support::test_tui_options(std::path::PathBuf::from(".")),
+                &Config::default(),
+            );
+            assert_eq!(
+                app.work_surface.placement,
+                WorkSurfacePlacement::Left,
+                "App must retain the shipped default placement at {width} columns"
+            );
+            app.launch.visible = false;
+            app.current_session_id = Some(format!("tideline-default-left-{width}"));
+            assert!(
+                app.todos
+                    .try_lock()
+                    .expect("todos lock")
+                    .snapshot()
+                    .is_empty(),
+                "the default Left rail must not need an active checklist"
+            );
+
+            let rendered = render_underwater_test_app(&mut app, width, 32);
+            for label in ["RUNS", "WHALES", "POD", "WORK", "CONTEXT"] {
+                assert!(
+                    rendered.contains(label),
+                    "default Left rail misses {label} at {width} columns:\n{rendered}"
+                );
+            }
+            assert_eq!(
+                app.viewport
+                    .last_transcript_area
+                    .expect("default Left transcript")
+                    .x,
+                expected_x,
+                "the default Left layout must use the Tideline width ladder"
+            );
+        }
+    }
+
+    #[test]
+    fn occupied_left_work_surface_wins_over_the_tideline_summary() {
+        let mut app = active_tideline_app();
+        app.work_surface.placement = WorkSurfacePlacement::Left;
+        app.todos.try_lock().expect("todos lock").add(
+            "legacy side work owns this column".to_string(),
+            crate::tools::todo::TodoStatus::InProgress,
+        );
+
+        let rendered = render_underwater_test_app(&mut app, 120, 32);
+        assert!(
+            rendered.contains("legacy side work"),
+            "the existing detailed work surface must still render:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("RUNS"),
+            "an occupied legacy Left surface must not receive a duplicate Tideline rail:\n{rendered}"
+        );
+        assert_eq!(
+            app.viewport
+                .last_transcript_area
+                .expect("legacy Left transcript")
+                .x,
+            app.work_surface.side_width,
+            "the legacy side surface, not the compact Tideline width, owns this layout"
+        );
+    }
+
+    #[test]
+    fn explicit_right_and_off_do_not_enable_the_tideline_summary() {
+        for placement in [WorkSurfacePlacement::Right, WorkSurfacePlacement::Off] {
+            let mut app = active_tideline_app();
+            app.work_surface.placement = placement;
+
+            let rendered = render_underwater_test_app(&mut app, 120, 32);
+            assert!(
+                !rendered.contains("RUNS"),
+                "explicit {placement:?} must not be replaced by the Tideline rail:\n{rendered}"
+            );
+            assert_eq!(
+                app.viewport
+                    .last_transcript_area
+                    .expect("explicit placement transcript")
+                    .x,
+                0,
+                "explicit {placement:?} retains the full transcript when its legacy surface is empty"
+            );
+        }
     }
 
     /// The nickname the seeded sub-agent renders under. A marker the test owns,
