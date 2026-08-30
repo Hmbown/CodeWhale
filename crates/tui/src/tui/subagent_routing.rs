@@ -1331,7 +1331,10 @@ mod tests {
             &MailboxMessage::TokenUsage {
                 agent_id: "agent_route".to_string(),
                 source_id: "response-route".to_string(),
-                route: Box::new(test_route(crate::config::ApiProvider::Openrouter, "vendor/model-real")),
+                route: Box::new(test_route(
+                    crate::config::ApiProvider::Openrouter,
+                    "vendor/model-real",
+                )),
                 usage: crate::models::Usage::default(),
             },
         );

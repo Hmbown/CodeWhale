@@ -407,7 +407,10 @@ test("new thread dialog labels exact vision capability without exposing attachme
   assert.match(html, /does not change your Runtime defaults/);
   assert.doesNotMatch(html, /type="file"/);
   assert.match(source, /api\("\/v1\/providers"\)/);
-  assert.match(source, /\/v1\/providers\/\$\{encodeURIComponent\(provider\.id\)\}\/models/);
+  // The dialog loads the catalog through the bounded, paginated collector
+  // keyed by provider.id; the wire endpoint stays /v1/providers/<id>/models.
+  assert.match(source, /collectProviderModelPages\(provider\.id/);
+  assert.match(source, /\/v1\/providers\/\$\{encodeURIComponent\(provider\)\}\/models\?\$\{query\.toString\(\)\}/);
   assert.match(source, /body: JSON\.stringify\(request\)/);
   assert.match(source, /function trapFocusWithin\(event, container\)/);
   assert.match(source, /dom\.newThreadCancel\.focus\(\{ preventScroll: true \}\)/);
