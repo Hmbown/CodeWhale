@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.12] - Unreleased candidate
 
+This is the Codewhale v0.9.12 source candidate. It is not a published release
+until the matching tag, packages, checksums, and release assets exist.
+
 Codewhale v0.9.12 makes the agent loop finite by default, lands the Tideline
 visual redesign across the TUI and the website, unifies managed Chat with
 native runtime threads, adds provider-native web search across DeepSeek,
@@ -7847,8 +7850,8 @@ overflow report and `/theme` picker edge-wrapping patch in #1814.
 
 Older releases (v0.8.39 and earlier) are archived in [docs/CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md).
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.9.12...HEAD
-[0.9.12]: https://github.com/Hmbown/CodeWhale/compare/v0.9.11...v0.9.12
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.9.11...HEAD
+[0.9.12]: https://github.com/Hmbown/CodeWhale/compare/v0.9.11...HEAD
 [0.9.11]: https://github.com/Hmbown/CodeWhale/compare/v0.9.10...v0.9.11
 [0.9.10]: https://github.com/Hmbown/CodeWhale/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/Hmbown/CodeWhale/compare/v0.9.8...v0.9.9

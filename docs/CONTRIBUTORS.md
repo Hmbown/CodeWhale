@@ -57,6 +57,10 @@ notes, and relevant issue/PR comments.
   translations for the Tier-2 docs (#5613)
 - **[M-Maciej](https://github.com/M-Maciej)** — goal continuation cadence fix
   (#5591)
+- **[AdityaVG13](https://github.com/AdityaVG13)** — startup and token-accounting
+  performance work consolidated in #5667 from #5664 and #5665
+- **[Lstarsky0](https://github.com/Lstarsky0)** — moved `docs/subagents` and
+  `docs/mcp` onto the shared dictionary spine (#5544)
 - **[Serephus / serephus](https://github.com/serephus)** — nixpkgs update
   (#5669)
 

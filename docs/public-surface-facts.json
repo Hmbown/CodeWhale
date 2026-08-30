@@ -221,10 +221,16 @@
       "web/lib/release-credits.ts"
     ],
     "requiredCandidateCredits": [
-      "@bistack",
-      "@aboimpinto",
+      "@h3c-hexin",
       "@wuisabel-gif",
-      "@RepentStar"
+      "@aboimpinto",
+      "@M-Maciej",
+      "@gaord",
+      "@Lstarsky0",
+      "@SparkofSpike",
+      "@musichen",
+      "@AdityaVG13",
+      "@serephus"
     ]
   },
   "screenshot": {
