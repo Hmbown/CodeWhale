@@ -58,7 +58,8 @@ export function Footer({ locale = "en" }: { locale?: Locale }) {
           {GITEE_ENABLED && <a href="https://gitee.com/Hmbown/CodeWhale">Gitee</a>}
           <a href="https://cnb.cool/codewhale.net/codewhale">CNB</a>
           <a href="https://npmmirror.com/package/codewhale">npmmirror</a>
-          <a href="mailto:hmbown@gmail.com">{chrome.footerSecurity}</a>
+          <a href="mailto:help@codewhale.net">help@codewhale.net</a>
+          <a href="mailto:hunter@codewhale.net">{chrome.footerSecurity}</a>
         </div>
         <span>© {new Date().getFullYear()} Codewhale</span>
       </div>

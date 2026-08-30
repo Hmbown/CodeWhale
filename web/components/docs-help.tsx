@@ -58,6 +58,7 @@ export function DocsHelp({ locale }: { locale: string }) {
         <a href={DISCORD_URL} target="_blank" rel="noreferrer">
           {t.helpDiscord}
         </a>
+        <a href="mailto:help@codewhale.net">help@codewhale.net</a>
         <a href={issueUrl} target="_blank" rel="noreferrer">
           {t.helpIssue}
         </a>
