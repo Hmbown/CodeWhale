@@ -9,7 +9,7 @@
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
-    "check:facts": "node scripts/check-facts.mjs",
+    "check:facts": "node scripts/check-facts.mjs && node scripts/check-cloud-facts.mjs",
     "sync:latest-release": "node scripts/sync-latest-release.mjs",
     "check:latest-release": "node scripts/sync-latest-release.mjs --check",
     "check:docs": "node scripts/check-docs.mjs",
