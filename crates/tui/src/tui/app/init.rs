@@ -113,8 +113,12 @@ impl App {
             false
         };
         settings.apply_env_overrides();
-        let launch_visible =
-            settings.launch_screen && resume_session_id.is_none() && initial_input.is_none();
+        // Tideline Startup is the fresh interactive landing surface. It must
+        // not be bypassed by a stale historical `launch_screen = false`, a
+        // provider/config notice, or a previous session record: only an
+        // intentional resume or explicit initial input enters the live session
+        // path directly.
+        let launch_visible = resume_session_id.is_none() && initial_input.is_none();
         let launch = LaunchState::new(launch_visible, &workspace);
 
         // If settings.toml exists on disk but couldn't be parsed (we fell back

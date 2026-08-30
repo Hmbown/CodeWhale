@@ -2171,14 +2171,6 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Display,
-                key: "launch_screen".to_string(),
-                value: settings.launch_screen.to_string(),
-                editable: true,
-                scope: ConfigScope::Saved,
-                facts: ConfigRowFacts::saved_setting().apply(SettingApplySemantics::NextSession),
-            },
-            ConfigRow {
-                section: ConfigSection::Display,
                 key: "show_thinking".to_string(),
                 value: settings.show_thinking.to_string(),
                 editable: true,
@@ -3357,7 +3349,6 @@ fn config_label_message(key: &str) -> Option<MessageId> {
         "calm_mode" => MessageId::ConfigLabelCalmMode,
         "low_motion" => MessageId::ConfigLabelLowMotion,
         "fancy_animations" => MessageId::ConfigLabelFancyAnimations,
-        "launch_screen" => MessageId::ConfigLabelLaunchScreen,
         "show_thinking" => MessageId::ConfigLabelShowThinking,
         "thinking_highlight" => MessageId::ConfigLabelThinkingHighlight,
         "show_tool_details" => MessageId::ConfigLabelShowToolDetails,
@@ -3461,11 +3452,9 @@ fn config_hint_for_key(locale: Locale, key: &str) -> Cow<'static, str> {
         "managed_allow_shell" => MessageId::ConfigHintManagedAllowShell,
         "allow_shell" => MessageId::ConfigHintAllowShell,
         "composer_multiline_mode" => MessageId::ConfigHintComposerMultilineMode,
-        "auto_compact"
-        | "launch_screen"
-        | "show_tool_details"
-        | "composer_border"
-        | "paste_burst_detection" => MessageId::ConfigHintBooleanValues,
+        "auto_compact" | "show_tool_details" | "composer_border" | "paste_burst_detection" => {
+            MessageId::ConfigHintBooleanValues
+        }
         "composer_density" | "transcript_spacing" => MessageId::ConfigHintDensity,
         "inline_diffs" => MessageId::ConfigHintInlineDiffs,
         "tool_collapse" => MessageId::ConfigHintToolCollapse,
@@ -3532,7 +3521,6 @@ fn config_boolean_key(key: &str) -> bool {
             | "calm_mode"
             | "low_motion"
             | "fancy_animations"
-            | "launch_screen"
             | "show_thinking"
             | "thinking_default_expanded"
             | "thinking_highlight"

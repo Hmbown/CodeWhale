@@ -421,9 +421,11 @@ pub struct Settings {
     pub composer_vim_mode: String,
     /// Transcript spacing rhythm: compact, comfortable, spacious
     pub transcript_spacing: String,
-    /// Show the pre-session launch menu. When false, Codewhale enters a new
-    /// session directly; resume remains available in-session.
-    #[serde(default)]
+    /// Retired pre-Tideline preference, retained only so existing
+    /// `launch_screen` values keep parsing. Fresh interactive launches now
+    /// always start at Tideline Startup; an intentional resume or explicit
+    /// initial prompt is the only direct-session route.
+    #[serde(default, skip_serializing)]
     pub launch_screen: bool,
     /// Default mode: "agent" (Act), "plan", or "operate". Legacy permission
     /// shorthands are accepted for migration but never advertised as modes.
@@ -1482,9 +1484,6 @@ impl Settings {
                 }
                 self.transcript_spacing = normalized.to_string();
             }
-            "launch_screen" | "launch" => {
-                self.launch_screen = parse_bool(value)?;
-            }
             "status_indicator" | "indicator" => {
                 let normalized = normalize_status_indicator(value);
                 if !["cw", "whale", "dots", "off"].contains(&normalized) {
@@ -1698,7 +1697,6 @@ impl Settings {
             self.workspace_follow_symlinks
         ));
         lines.push(format!("  default_mode:       {}", self.default_mode));
-        lines.push(format!("  launch_screen:      {}", self.launch_screen));
         lines.push(format!("  context_panel:      {}", self.context_panel));
         lines.push(format!("  cost_currency:      {}", self.cost_currency));
         lines.push(format!("  max_history:        {}", self.max_input_history));
@@ -1875,10 +1873,6 @@ impl Settings {
             (
                 "transcript_spacing",
                 "Transcript spacing: compact, comfortable, spacious",
-            ),
-            (
-                "launch_screen",
-                "Show the pre-session launch menu on startup: on/off",
             ),
             (
                 "status_indicator",
@@ -3590,7 +3584,7 @@ mod tests {
         assert_eq!(settings.transcript_spacing, "comfortable");
         assert!(
             !settings.launch_screen,
-            "returning users enter a session directly"
+            "legacy launch-screen state is inert by default"
         );
     }
 
