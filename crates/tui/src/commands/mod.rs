@@ -1903,10 +1903,10 @@ mod tests {
         // FEAT-015 shipped no production contextual command, so the assertion
         // below used to exclude nothing. FEAT-018 migrates the utility group;
         // the remaining non-fixture commands must still use the legacy
-        // concrete-App path. The migrated utility entries (the FEAT-018 seven
-        // plus `/dispatch`, which joins the same portable path) are asserted
-        // separately by the FEAT-018 public-dispatch and inventory tests.
-        const FEAT_018_UTILITY: &[&str] = &[
+        // concrete-App path. The migrated groups (FEAT-018 utility seven plus
+        // `/dispatch`, and the FEAT-021 project four) are asserted separately
+        // by their public-dispatch and inventory tests.
+        const MIGRATED_GROUPS: &[&str] = &[
             "attach",
             "automation",
             "dispatch",
@@ -1915,9 +1915,14 @@ mod tests {
             "network",
             "task",
             "update",
+            // FEAT-021 project group.
+            "init",
+            "lsp",
+            "share",
+            "goal",
         ];
         for info in command_infos() {
-            if info.name == "feat015ctx" || FEAT_018_UTILITY.contains(&info.name) {
+            if info.name == "feat015ctx" || MIGRATED_GROUPS.contains(&info.name) {
                 continue;
             }
             assert!(
@@ -2025,5 +2030,105 @@ mod tests {
         // /network (pure): list produces a message.
         let network = execute("/network list", &mut app);
         assert!(network.message.is_some() || network.is_error, "{network:?}");
+    }
+
+    // FEAT-021 project group public dispatch (Phase 6)
+
+    #[test]
+    fn feat021_project_entries_register_through_portable_bridge() {
+        // main's model carries no capability bitmask: each project command
+        // must register through the portable bridge as a contextual handler
+        // and dispatch safely through the public seam. Exact facet
+        // destructuring (D4) is proven by the handler tests and the adapter
+        // exposure test.
+        for name in ["init", "lsp", "share", "goal"] {
+            assert!(
+                registry().has_contextual_handler(name),
+                "/{name} must register through the portable bridge"
+            );
+            let handler = registry()
+                .get(name)
+                .expect("entry")
+                .contextual_handler()
+                .expect("contextual handler");
+            assert!(
+                matches!(
+                    handler,
+                    codewhale_command_contract::handler::CommandHandler::Contextual(_)
+                ),
+                "/{name} must be contextual"
+            );
+        }
+    }
+
+    #[test]
+    fn feat021_project_commands_dispatch_through_public_seam() {
+        let mut app = create_test_app();
+        app.workspace = PathBuf::from(".");
+
+        // /init: creating message + SendMessage action.
+        let init = execute("/init", &mut app);
+        assert!(!init.is_error, "{init:?}");
+        assert!(matches!(init.action, Some(AppAction::SendMessage(_))));
+
+        // /lsp status reaches the adapter through the public seam.
+        let lsp = execute("/lsp status", &mut app);
+        assert!(!lsp.is_error, "{lsp:?}");
+        let lsp_msg = lsp.message.expect("lsp message");
+        assert!(
+            lsp_msg.contains("LSP diagnostics are currently **"),
+            "{lsp_msg}"
+        );
+
+        // /share help is a safe no-op route.
+        let share = execute("/share help", &mut app);
+        assert!(!share.is_error, "{share:?}");
+
+        // /goal status without a goal prints usage (no panic).
+        let goal = execute("/goal status", &mut app);
+        assert!(!goal.is_error, "{goal:?}");
+
+        // Metadata bridges to the TUI localization ids.
+        for (name, id) in [
+            ("init", MessageId::CmdInitDescription),
+            ("lsp", MessageId::CmdLspDescription),
+            ("share", MessageId::CmdShareDescription),
+            ("goal", MessageId::CmdGoalDescription),
+        ] {
+            let info = registry().get_info(name).expect("info");
+            assert_eq!(info.description_id, id, "/{name} description bridge");
+        }
+    }
+
+    #[test]
+    fn feat021_public_dispatch_never_panics_on_project_commands() {
+        let mut app = create_test_app();
+        app.workspace = PathBuf::from(".");
+        for command in [
+            "/init",
+            "/init ",
+            "/lsp",
+            "/lsp status",
+            "/lsp on",
+            "/lsp off",
+            "/lsp bogus",
+            "/share",
+            "/share help",
+            "/share bogus",
+            "/goal",
+            "/goal status",
+            "/goal pause",
+            "/goal resume",
+            "/goal done",
+            "/goal bogus",
+            "/goal 42",
+        ] {
+            let result = execute(command, &mut app);
+            // Every path returns a result; none may panic.
+            assert!(
+                result.message.is_some() || result.action.is_some(),
+                "{command}: {result:?}"
+            );
+        }
     }
 }

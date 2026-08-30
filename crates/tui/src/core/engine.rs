@@ -3483,7 +3483,12 @@ impl Engine {
             ),
             format!(
                 "Current sandbox posture: {}",
-                sandbox_posture.posture_label_with_enforcement(self.sandbox_enforcement)
+                sandbox_posture.posture_label_with_enforcement_and_no_new_privs(
+                    self.sandbox_enforcement,
+                    // Fixed at process start, so the per-turn line stays
+                    // byte-stable for the session.
+                    crate::sandbox::process_hardening::no_new_privs_active(),
+                )
             ),
         ];
         if approval_mode == crate::tui::approval::ApprovalMode::Never {

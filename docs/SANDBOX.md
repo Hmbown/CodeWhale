@@ -123,6 +123,16 @@ logged and startup continues. These controls reduce process-inspection,
 privilege-escalation, and core-dump risk; they do not create filesystem or
 network isolation for a child command and are not listed as a sandbox backend.
 
+The one exception is the startup posture itself: when the startup sandbox mode
+resolves to `danger-full-access` (via `CODEWHALE_SANDBOX_MODE` or the config
+file's `sandbox_mode` key), `PR_SET_NO_NEW_PRIVS` is skipped so that
+`sudo`/`su`/setuid helpers keep working from the agent shell (#5723) — "full
+access" means it. Every narrower posture keeps the flag as defense-in-depth,
+and `CODEWHALE_NO_NEW_PRIVS` overrides the posture in both directions
+(#5413): a falsey value always skips the flag, a truthy value always sets it.
+The flag is irreversible for the process tree, so the decision can only be
+made at launch; per-call sandbox escalation inside a session cannot lift it.
+
 ## External OpenSandbox execution
 
 When `sandbox_backend = "opensandbox"` is configured, shell execution is sent
@@ -148,7 +158,10 @@ sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-acc
 
 - `read-only` and `workspace-write` are enforced by Seatbelt or bubblewrap only
   when that wrapper is selected and available.
-- `danger-full-access` deliberately bypasses the local OS wrapper.
+- `danger-full-access` deliberately bypasses the local OS wrapper. On Linux it
+  also skips the `PR_SET_NO_NEW_PRIVS` process-hardening flag at startup so
+  `sudo`/setuid workflows keep running (#5723); see the process-hardening
+  section above.
 - `external-sandbox` declares that execution is already externally isolated
   and bypasses a second local wrapper.
 - When no wrapper is selected, the shell command runs without Codewhale OS

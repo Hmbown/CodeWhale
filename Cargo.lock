@@ -4405,9 +4405,9 @@ checksum = "cc82053a58d5488dee8f14c7279f8c905d935e58a309aa32f2ec5b311694229d"
 
 [[package]]
 name = "rio-vt"
-version = "0.5.25"
+version = "0.5.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "beb873ec0e1b0bda41d28b8bb0dcb7fd41e3dd80a8b57db2862d8c7e8cacf620"
+checksum = "26e0107383748c79f096674a343953ff527d13eacafc581cc123e8888679c3fd"
 dependencies = [
  "base64 0.23.1",
  "bitflags 2.13.1",

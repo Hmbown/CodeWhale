@@ -8,15 +8,15 @@ import { getEnv } from "@/lib/kv";
 import { LocaleSwitcher } from "./locale-switcher";
 import { MobileMenu } from "./mobile-menu";
 import { NavLinks } from "./nav-links";
-import { Seal } from "./seal";
 import { ThemeToggle } from "./theme-toggle";
 import { Whale } from "./whale";
 
 /**
- * Newspaper masthead + primary nav.
+ * Masthead + primary nav — the Tideline topbar on the web: issue strip, the
+ * new whale mark beside the wordmark, then the route segments.
  *
  * One dictionary path for every routed locale: labels, the issue strip, the
- * wordmark seal and strapline, the star-badge aria, and the theme/menu
+ * wordmark strapline, the star-badge aria, and the theme/menu
  * controls all come from `getChrome(locale)`. No `isZh` branch, and the
  * masthead weekday uses the locale's own Intl tag rather than en-US.
  */
@@ -46,7 +46,7 @@ export async function Nav({ locale = "en" }: { locale?: Locale }) {
 
   return (
     <header className="site-nav paper-nav">
-      {/* Issue / build strip — the newspaper masthead people loved */}
+      {/* Issue / build strip — the topbar's metadata row */}
       <div className="paper-issue-bar">
         <div className="paper-issue-inner">
           <div className="paper-issue-left">
@@ -65,12 +65,9 @@ export async function Nav({ locale = "en" }: { locale?: Locale }) {
 
       <div className="site-nav-inner paper-nav-inner">
         <Link href={homeHref} className="site-wordmark paper-wordmark" aria-label={chrome.navHomeAria}>
-          <Seal char={chrome.wordmarkSeal} size="md" />
+          <Whale size={30} className="paper-wordmark-mark" />
           <div className="paper-wordmark-text">
-            <span className="paper-wordmark-name">
-              Codewhale
-              <Whale size={18} className="paper-wordmark-whale" />
-            </span>
+            <span className="paper-wordmark-name">Codewhale</span>
             <span className="paper-wordmark-tag">{chrome.wordmarkTag}</span>
           </div>
         </Link>

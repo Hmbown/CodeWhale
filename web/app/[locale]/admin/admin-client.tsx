@@ -66,16 +66,16 @@ export function AdminClient({ drafts, posted, isZh, typeLabels }: Props) {
             const label = typeLabels[draft.type] ?? { en: draft.type, zh: draft.type };
             return (
               <div key={key} className="hairline-t hairline-b hairline-l hairline-r bg-paper">
-                <div className="bg-ink text-paper px-4 py-2 flex items-center justify-between">
+                <div className="bg-paper-deep text-ink px-4 py-2 flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className="font-mono text-xs uppercase tracking-wider text-indigo">
                       {isZh ? label.zh : label.en}
                     </span>
                     {draft.targetNumber && (
-                      <span className="font-mono text-xs text-paper-deep/70 tabular">#{draft.targetNumber}</span>
+                      <span className="font-mono text-xs text-ink-mute tabular">#{draft.targetNumber}</span>
                     )}
                   </div>
-                  <span className="font-mono text-xs text-paper-deep/50">
+                  <span className="font-mono text-xs text-ink-mute">
                     {new Date(draft.generatedAt).toISOString().slice(0, 16)}
                   </span>
                 </div>
@@ -113,7 +113,7 @@ export function AdminClient({ drafts, posted, isZh, typeLabels }: Props) {
                         <button
                           onClick={() => handleAction(key, "post")}
                           disabled={loading === key}
-                          className="px-4 py-2 bg-ink text-paper font-mono text-xs uppercase tracking-wider hover:bg-indigo transition-colors disabled:opacity-50"
+                          className="px-4 py-2 bg-indigo text-paper font-mono text-xs uppercase tracking-wider hover:bg-indigo-deep transition-colors disabled:opacity-50"
                         >
                           {isZh ? "发布评论" : "Post as comment"}
                         </button>
