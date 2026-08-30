@@ -111,3 +111,97 @@ pub trait CommandMediaContext {
     /// Validate and insert a resolved media path atomically.
     fn attach_media(&mut self, resolved_path: &Path) -> Result<MediaAttachmentReceipt, String>;
 }
+
+// Project (FEAT-021 D1/D2/D3/D4)
+// ---------------------------------------------------------------------------
+
+/// Portable goal status for the project facet (FEAT-021 D1).
+///
+/// Mirrors the four TUI-owned `tools::goal::GoalStatus` variants without
+/// naming the TUI type. The adapter maps host state onto this enum; handlers
+/// compare and render it directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProjectGoalStatus {
+    #[default]
+    Active,
+    Paused,
+    Complete,
+    Blocked,
+}
+
+/// Portable session-share projection (FEAT-021 D1).
+///
+/// Carries only the emptiness/length and the model/mode labels the live
+/// `/share` handler consumes. The session history itself, exporter I/O, and
+/// all `App` state stay host-side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectShareProjection {
+    /// Whether the session history is empty (drives the empty-share error).
+    pub history_is_empty: bool,
+    /// Session history length used in the export message and action.
+    pub history_len: usize,
+    /// Current model label.
+    pub model: String,
+    /// Current operating-mode label.
+    pub mode_label: String,
+}
+
+/// Portable goal projection (FEAT-021 D1).
+///
+/// Carries the visible goal state, the effective pending-control view, and the
+/// session-derived token fallback the live `/goal` handler consumes. Concrete
+/// goal-service, session-manager, and `App` types never cross the boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectGoalState {
+    /// Visible goal objective.
+    pub objective: Option<String>,
+    /// Visible goal status.
+    pub status: ProjectGoalStatus,
+    /// Pause reason label when the goal is paused (already rendered).
+    pub pause_reason: Option<String>,
+    /// Elapsed seconds from `started_at` when present (host-computed).
+    pub started_at_elapsed_seconds: Option<u64>,
+    /// Seconds of goal time used (stable budget/elapsed source).
+    pub time_used_seconds: u64,
+    /// Optional token budget.
+    pub token_budget: Option<u32>,
+    /// Tokens used by the goal engine.
+    pub tokens_used: u64,
+    /// Session conversation-token total (fallback when tokens_used == 0).
+    pub session_total_tokens: u32,
+    /// Goal continuation count.
+    pub continuation_count: u32,
+    /// Whether pending goal controls are queued (effective-state gate).
+    pub pending_controls: bool,
+    /// Last-known durable objective (session-derived effective source).
+    pub last_known_objective: Option<String>,
+    /// Last-known durable status (session-derived effective source).
+    pub last_known_status: Option<ProjectGoalStatus>,
+    /// Whether the conversation has API messages (bare `/goal` context gate).
+    pub conversation_present: bool,
+    /// Whether the host is currently loading (idle-hint gate).
+    pub is_loading: bool,
+    /// Whether the goal continuation loop is waiting (idle-hint gate).
+    pub goal_continuation_waiting: bool,
+}
+
+/// Host project data for the project command group (FEAT-021 D1).
+///
+/// Exposes the typed, exact-minimum operations the live project handlers
+/// consume: `/lsp` status/set state, `/share` session payload data, and
+/// `/goal` goal state including the session-derived effective values.
+/// `/init` host data flows through the existing `WORKSPACE` facet (D2), so
+/// `/init` destructures exactly `WORKSPACE` (D4) and consumes no
+/// project-facet method. All results are contract-owned portable values; implementation
+/// errors cross as safe text. The TUI adapter is the only place that touches
+/// `App`, `config::config`, the goal service, or the session manager.
+pub trait CommandProjectContext {
+    /// `/lsp` status: whether LSP diagnostics are enabled.
+    fn lsp_enabled(&self) -> bool;
+    /// `/lsp` set: enable or disable LSP diagnostics.
+    fn lsp_set(&mut self, enabled: bool) -> Result<(), String>;
+    /// `/share` projection: session emptiness, length, model, and mode label.
+    fn share_projection(&self) -> ProjectShareProjection;
+    /// `/goal` projection: visible and effective goal state.
+    fn goal_state(&self) -> ProjectGoalState;
+}
