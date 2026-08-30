@@ -1571,6 +1571,57 @@ fn qwen_native_search_is_exact_to_token_plan_responses_routes() {
 }
 
 #[test]
+fn moonshot_native_search_requires_exact_product_model_pair() {
+    use crate::route::CapabilityState;
+
+    let resolver = RouteResolver::new();
+    for (model, base_url) in [
+        ("kimi-k3", "https://api.moonshot.ai/v1"),
+        ("kimi-k3", "https://api.moonshot.cn/v1"),
+        ("kimi-k2.6", "https://api.moonshot.ai/v1"),
+        ("k3", "https://api.kimi.com/coding/v1"),
+        ("kimi-for-coding", "https://api.kimi.com/coding/v1"),
+    ] {
+        let direct = resolver
+            .resolve(&RouteRequest {
+                explicit_provider: Some(ProviderKind::Moonshot),
+                model_selector: Some(LogicalModelRef::from(model)),
+                saved_provider_model: None,
+                base_url_override: Some(base_url.to_string()),
+                limit_overrides: Vec::new(),
+            })
+            .expect("documented Moonshot/Kimi route resolves");
+        assert_eq!(
+            direct.capabilities().server_side_web_search,
+            CapabilityState::Supported,
+            "{base_url}/{model} should expose native search"
+        );
+    }
+
+    for (model, base_url) in [
+        ("kimi-k3", "https://api.kimi.com/coding/v2"),
+        ("kimi-k2.6", "https://api.kimi.com/coding/v1/preview"),
+        ("k3", "https://api.moonshot.ai/v1"),
+        ("kimi-k2.7-code", "https://api.moonshot.ai/v1"),
+    ] {
+        let adjacent = resolver
+            .resolve(&RouteRequest {
+                explicit_provider: Some(ProviderKind::Moonshot),
+                model_selector: Some(LogicalModelRef::from(model)),
+                saved_provider_model: None,
+                base_url_override: Some(base_url.to_string()),
+                limit_overrides: Vec::new(),
+            })
+            .expect("adjacent Moonshot/Kimi route resolves");
+        assert_eq!(
+            adjacent.capabilities().server_side_web_search,
+            CapabilityState::Unknown,
+            "{base_url}/{model} must remain fail-closed"
+        );
+    }
+}
+
+#[test]
 fn priced_offering_yields_token_pricing_sku() {
     use super::candidate::PricingSku;
 

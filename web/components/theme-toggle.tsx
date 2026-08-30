@@ -3,13 +3,15 @@
 /**
  * <ThemeToggle> — a compact Auto / Light / Dark control for the date strip.
  *
- * Dark mode is scoped to the /docs routes (see globals.css `.docs-theme`),
- * so the toggle only renders while on a docs route — showing it site-wide
- * would be a control that appears to do nothing on the marketing pages.
+ * The site ships the Tideline dark field everywhere; the toggle only renders
+ * on docs routes, where it switches the docs sheet between the dark default
+ * and the opt-in Blue Stage light sheet — the same preset pair the TUI
+ * offers. Showing it off the docs routes would be a control that appears to
+ * do nothing.
  *
- * "auto" removes the attribute and follows prefers-color-scheme; "light" and
- * "dark" force the choice via `data-theme` on <html>. The choice persists to
- * localStorage and is re-applied before paint by the inline script in the
+ * "auto" removes the attribute and follows the site default (dark); "light"
+ * and "dark" force the choice via `data-theme` on <html>. The choice persists
+ * to localStorage and is re-applied before paint by the inline script in the
  * locale layout, so there is no theme flash on reload.
  */
 

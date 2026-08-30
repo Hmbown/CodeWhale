@@ -5,32 +5,33 @@ export default {
   theme: {
     extend: {
       colors: {
-        // The surface and ink tokens resolve through CSS custom properties so
-        // docs can still re-theme, while the shared accent palette stays oceanic.
+        // The surface, ink, and accent tokens all resolve through CSS custom
+        // properties so the docs light sheet can re-theme the subtree, while
+        // the default values stay the Tideline dark whale palette.
         paper: "rgb(var(--c-paper) / <alpha-value>)",
         "paper-deep": "rgb(var(--c-paper-deep) / <alpha-value>)",
         "paper-edge": "rgb(var(--c-paper-edge) / <alpha-value>)",
         "paper-card": "var(--paper-card)",
-        "paper-line": "#1B2230",
-        "paper-line-soft": "#CBD3DF",
+        "paper-line": "var(--paper-line)",
+        "paper-line-soft": "var(--paper-line-soft)",
         ink: "rgb(var(--c-ink) / <alpha-value>)",
         "ink-soft": "rgb(var(--c-ink-soft) / <alpha-value>)",
         "ink-mute": "rgb(var(--c-ink-mute) / <alpha-value>)",
-        indigo: "#315FD8",
-        "indigo-deep": "#2448A6",
-        "indigo-pale": "#E8EEF8",
-        ochre: "#7A5500",
-        jade: "#08766D",
-        cobalt: "#315FD8",
+        indigo: "rgb(var(--c-indigo) / <alpha-value>)",
+        "indigo-deep": "rgb(var(--c-indigo-deep) / <alpha-value>)",
+        "indigo-pale": "var(--indigo-pale)",
+        ochre: "var(--ochre)",
+        jade: "var(--jade)",
+        cobalt: "var(--cobalt)",
       },
       fontFamily: {
-        // The real display face is Fraunces, loaded by next/font in
-        // app/[locale]/layout.tsx onto --font-display (globals.css .font-display
-        // resolves the same stack). Space Grotesk was never loaded — naming it
-        // here only produced a utility that silently fell back to sans-serif.
-        display: ["var(--font-display)", '"Fraunces"', '"Noto Serif SC"', "Georgia", "serif"],
+        // Display and body are one instrument voice — system sans at heading
+        // weight and tracking (globals.css resolves --font-display to
+        // --font-body). Mono stays JetBrains Mono, loaded by next/font in
+        // app/[locale]/layout.tsx.
+        display: ["var(--font-display)", "ui-sans-serif", "system-ui", "sans-serif"],
         body: ["var(--font-body)", '"IBM Plex Sans"', '"Noto Sans SC"', "ui-sans-serif", "system-ui", "sans-serif"],
-        cjk: ["var(--font-cjk)", '"Noto Serif SC"', '"Source Han Serif SC"', "serif"],
+        cjk: ["var(--font-cjk)", '"PingFang SC"', '"Source Han Serif SC"', "serif"],
         mono: ["var(--font-mono)", '"JetBrains Mono"', "ui-monospace", "Menlo", "monospace"],
       },
       letterSpacing: {
