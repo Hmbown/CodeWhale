@@ -1030,6 +1030,7 @@ fn active_turn_zai_receipt_overrides_all_mutable_parallel_route_metadata() {
             billing: Some(crate::core::events::RouteBillingEnvelope {
                 billing_surface: None,
                 endpoint_fingerprint: None,
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Unknown,
                 dispatched_at: chrono::Utc::now(),
             }),

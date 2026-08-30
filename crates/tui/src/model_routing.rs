@@ -8,8 +8,11 @@ use std::time::Duration;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::client::DeepSeekClient;
+use crate::client::{DeepSeekClient, WireDialect};
 use crate::config::{ApiProvider, Config, normalize_model_name_for_provider};
+use crate::cost_status::{
+    EffectiveRouteEnvelope, EffectiveRouteUsage, RuntimeUsageDropRecord, RuntimeUsageRecord,
+};
 use crate::llm_client::LlmClient;
 use crate::model_inventory::ModelInventory;
 use crate::models::Role;
@@ -514,6 +517,21 @@ pub(crate) struct AutoRouteSelection {
     /// Present for Auto decisions; explicit inventory lookups intentionally do
     /// not pretend to be Auto routing receipts.
     pub(crate) receipt: Option<AutoRouteReceipt>,
+    /// Provider calls made to choose this route. These are deliberately kept
+    /// separate from the selected parent route: a classifier may run on a
+    /// different provider/model/quote, so pricing it under the eventual turn
+    /// would double-charge the parent and lose the classifier's real route.
+    ///
+    /// Auto currently admits at most one classifier request per selection.
+    pub(crate) routed_usage: Vec<RuntimeUsageRecord>,
+    /// Exact frozen routes for admitted classifier calls whose provider
+    /// response omitted usage. The count below remains authoritative and may
+    /// exceed this bounded vector after overflow.
+    pub(crate) routed_usage_drop_records: Vec<RuntimeUsageDropRecord>,
+    /// Classifier requests admitted to dispatch whose response usage could not
+    /// be recovered (timeout/transport failure). Consumers must surface this
+    /// as incomplete coverage rather than silently treating it as zero spend.
+    pub(crate) routed_usage_dropped_records: u64,
 }
 
 fn extract_first_json_object(raw: &str) -> Option<&str> {
@@ -605,6 +623,17 @@ struct InventoryAutoRouteRecommendation {
     reasoning_effort: Option<ReasoningEffort>,
 }
 
+/// One provider-backed classifier attempt. A provider-success response always
+/// reaches this shape before its content is interpreted, so invalid JSON and
+/// provider-declared incomplete output retain their exact routed usage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InventoryAutoRouteAttempt {
+    recommendation: Option<InventoryAutoRouteRecommendation>,
+    routed_usage: Vec<RuntimeUsageRecord>,
+    routed_usage_drop_records: Vec<RuntimeUsageDropRecord>,
+    routed_usage_dropped_records: u64,
+}
+
 pub(crate) async fn resolve_auto_route_with_inventory(
     config: &Config,
     latest_request: &str,
@@ -679,8 +708,11 @@ pub(crate) async fn resolve_auto_route_with_inventory_for_session_and_cache_poli
     )
     .await
     {
-        Ok(Some(recommendation)) => auto_route_from_classifier(&inventory, recommendation),
-        Ok(None) | Err(_) => auto_route_classifier_fallback(heuristic, &inventory),
+        Ok(attempt) => auto_route_from_classifier_attempt(heuristic, &inventory, attempt),
+        // Client construction/preparation failed before a provider request was
+        // admitted. There is no provider usage to invent and no dropped
+        // response receipt to claim.
+        Err(_) => auto_route_classifier_fallback(heuristic, &inventory),
     };
     Ok(normalize_auto_route_selection_for_config(config, selection))
 }
@@ -714,6 +746,9 @@ pub(crate) fn resolve_explicit_route_with_inventory(
             }),
             source: AutoRouteSource::Heuristic,
             receipt: None,
+            routed_usage: Vec::new(),
+            routed_usage_drop_records: Vec::new(),
+            routed_usage_dropped_records: 0,
         });
     }
 
@@ -739,6 +774,9 @@ pub(crate) fn resolve_explicit_route_with_inventory(
         }),
         source: AutoRouteSource::Heuristic,
         receipt: None,
+        routed_usage: Vec::new(),
+        routed_usage_drop_records: Vec::new(),
+        routed_usage_dropped_records: 0,
     })
 }
 
@@ -794,6 +832,9 @@ fn auto_route_from_inventory_heuristic(
             model,
             reasoning_effort: Some(crate::auto_reasoning::select(false, latest_request)),
             source: AutoRouteSource::Heuristic,
+            routed_usage: Vec::new(),
+            routed_usage_drop_records: Vec::new(),
+            routed_usage_dropped_records: 0,
         };
     };
     // Use the candidates' cheap/big info for complexity-based routing.
@@ -829,6 +870,9 @@ fn auto_route_from_inventory_heuristic(
         model: decision.model,
         reasoning_effort: Some(crate::auto_reasoning::select(false, latest_request)),
         source: AutoRouteSource::Heuristic,
+        routed_usage: Vec::new(),
+        routed_usage_drop_records: Vec::new(),
+        routed_usage_dropped_records: 0,
     }
 }
 
@@ -860,7 +904,31 @@ fn auto_route_from_classifier(
         model: recommendation.model,
         reasoning_effort: recommendation.reasoning_effort,
         source: AutoRouteSource::FlashRouter,
+        routed_usage: Vec::new(),
+        routed_usage_drop_records: Vec::new(),
+        routed_usage_dropped_records: 0,
     }
+}
+
+fn auto_route_from_classifier_attempt(
+    heuristic: AutoRouteSelection,
+    inventory: &ModelInventory,
+    attempt: InventoryAutoRouteAttempt,
+) -> AutoRouteSelection {
+    let InventoryAutoRouteAttempt {
+        recommendation,
+        routed_usage,
+        routed_usage_drop_records,
+        routed_usage_dropped_records,
+    } = attempt;
+    let mut selection = recommendation.map_or_else(
+        || auto_route_classifier_fallback(heuristic, inventory),
+        |recommendation| auto_route_from_classifier(inventory, recommendation),
+    );
+    selection.routed_usage = routed_usage;
+    selection.routed_usage_drop_records = routed_usage_drop_records;
+    selection.routed_usage_dropped_records = routed_usage_dropped_records;
+    selection
 }
 
 fn auto_route_classifier_fallback(
@@ -970,6 +1038,135 @@ fn auto_route_pair(
     AutoRoutePair { strong, fast }
 }
 
+fn auto_route_usage_has_reported_data(usage: &crate::models::Usage) -> bool {
+    usage.input_tokens > 0
+        || usage.output_tokens > 0
+        || usage.prompt_cache_hit_tokens.is_some()
+        || usage.prompt_cache_miss_tokens.is_some()
+        || usage.prompt_cache_write_tokens.is_some()
+        || usage.reasoning_tokens.is_some()
+        || usage.reasoning_replay_tokens.is_some()
+        || usage.server_tool_use.is_some()
+}
+
+/// Stable, persistence-safe identity for one classifier response. The raw
+/// provider response id is hashed with the frozen dispatch route and instant;
+/// neither it nor any custom route label crosses into telemetry/persistence.
+fn auto_route_usage_source_id(route: &EffectiveRouteEnvelope, response_id: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+
+    let mut digest = Sha256::new();
+    let dispatched_at = route.dispatched_at.to_rfc3339();
+    for part in [
+        b"codewhale:auto-route-classifier:v1".as_slice(),
+        route.provider.as_str().as_bytes(),
+        route.provider_identity.as_bytes(),
+        route.model.as_bytes(),
+        route
+            .endpoint_fingerprint
+            .as_deref()
+            .unwrap_or_default()
+            .as_bytes(),
+        dispatched_at.as_bytes(),
+        response_id.as_bytes(),
+    ] {
+        digest.update((part.len() as u64).to_le_bytes());
+        digest.update(part);
+    }
+    format!(
+        "auto-router:{}",
+        crate::hashing::hex_bytes(digest.finalize())
+    )
+}
+
+fn auto_route_attempt_from_response(
+    request_route: EffectiveRouteEnvelope,
+    response: &MessageResponse,
+    inventory: &ModelInventory,
+) -> InventoryAutoRouteAttempt {
+    // All-zero usage cannot price a routed segment. The dispatch caller owns
+    // the stronger cache/provenance context and must explicitly classify this
+    // as either a proven cache replay or missing provider billing evidence.
+    let routed_usage = auto_route_usage_has_reported_data(&response.usage)
+        .then(|| RuntimeUsageRecord {
+            source_id: auto_route_usage_source_id(&request_route, &response.id),
+            usage: EffectiveRouteUsage {
+                route: request_route.sanitized_for_persistence(),
+                usage: response.usage.clone(),
+            },
+        })
+        .into_iter()
+        .collect();
+    let recommendation =
+        (!crate::models::is_incomplete_stop_reason(response.stop_reason.as_deref()))
+            .then(|| {
+                parse_inventory_auto_route_recommendation(
+                    &message_response_text(response),
+                    inventory,
+                )
+            })
+            .flatten();
+    InventoryAutoRouteAttempt {
+        recommendation,
+        routed_usage,
+        routed_usage_drop_records: Vec::new(),
+        routed_usage_dropped_records: 0,
+    }
+}
+
+fn auto_route_attempt_from_provider_response(
+    request_route: EffectiveRouteEnvelope,
+    response: &MessageResponse,
+    inventory: &ModelInventory,
+) -> InventoryAutoRouteAttempt {
+    let drop_route = request_route.sanitized_for_persistence();
+    let mut attempt = auto_route_attempt_from_response(request_route, response, inventory);
+    // This classifier request is currently not cacheable (temperature is
+    // provider-default, not the deterministic Some(0.0) cache contract), so a
+    // decoded all-zero response is missing provider billing evidence even when
+    // the caller permits response-cache use. Do not silently reinterpret the
+    // policy boolean as cache-hit provenance.
+    if attempt.routed_usage.is_empty() {
+        attempt.routed_usage_drop_records = vec![RuntimeUsageDropRecord {
+            source_id: auto_route_usage_source_id(
+                &drop_route,
+                &format!("missing-usage:{}", response.id),
+            ),
+            route: drop_route,
+        }];
+        attempt.routed_usage_dropped_records = 1;
+    }
+    attempt
+}
+
+fn auto_route_attempt_with_dropped_response(
+    request_route: EffectiveRouteEnvelope,
+) -> InventoryAutoRouteAttempt {
+    let request_route = request_route.sanitized_for_persistence();
+    InventoryAutoRouteAttempt {
+        recommendation: None,
+        routed_usage: Vec::new(),
+        routed_usage_drop_records: vec![RuntimeUsageDropRecord {
+            source_id: auto_route_usage_source_id(&request_route, "transport-error"),
+            route: request_route,
+        }],
+        routed_usage_dropped_records: 1,
+    }
+}
+
+/// Prove that the deterministic request seam accepts this classifier request
+/// before capturing a quote or entering any provider permit/network path.
+/// Blocking Cloud Code is rejected here too: that dialect is stream-only, so
+/// `create_message` would otherwise fail locally after the apparent dispatch
+/// boundary and incorrectly look like missing provider usage.
+fn preflight_auto_route_request(client: &DeepSeekClient, request: &MessageRequest) -> Result<()> {
+    let prepared = client.prepare_outbound_request(request.clone(), false)?;
+    if prepared.dialect == WireDialect::GoogleCloudCode {
+        anyhow::bail!("auto-route classifier requires a blocking-capable provider route");
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn auto_route_inventory_recommendation(
     config: &Config,
@@ -980,7 +1177,7 @@ async fn auto_route_inventory_recommendation(
     selected_model_mode: &str,
     selected_thinking_mode: &str,
     allow_response_cache: bool,
-) -> Result<Option<InventoryAutoRouteRecommendation>> {
+) -> Result<InventoryAutoRouteAttempt> {
     let mut router_config = config.clone();
     // The classifier runs on the inventory's router route: the explicit
     // [auto.router] route when configured, else the DeepSeek flash default.
@@ -997,8 +1194,7 @@ async fn auto_route_inventory_recommendation(
         selected_model_mode,
         selected_thinking_mode,
     );
-    let request_route =
-        client.effective_route_envelope(&inventory.router_model, chrono::Utc::now());
+    let max_tokens = client.effective_max_output_tokens(&inventory.router_model);
     let request = MessageRequest {
         model: inventory.router_model.to_string(),
         messages: vec![Message {
@@ -1008,7 +1204,7 @@ async fn auto_route_inventory_recommendation(
                 cache_control: None,
             }],
         }],
-        max_tokens: client.effective_max_output_tokens(&request_route.model),
+        max_tokens,
         system: Some(SystemPrompt::Text(router_system)),
         tools: None,
         tool_choice: None,
@@ -1025,27 +1221,49 @@ async fn auto_route_inventory_recommendation(
         top_p: None,
     };
 
+    // Freeze pricing at the last application seam before the provider future
+    // starts. Prompt shaping above may be slow and may overlap a catalog
+    // refresh; completion-time mutable catalog state must never reprice this
+    // already-admitted classifier request.
+    preflight_auto_route_request(&client, &request)?;
+    let request_route =
+        client.effective_route_envelope(&inventory.router_model, chrono::Utc::now());
     let response = if allow_response_cache {
         tokio::time::timeout(
             Duration::from_secs(inventory.router_timeout_secs),
             client.create_message(request),
         )
-        .await??
+        .await
     } else {
         tokio::time::timeout(
             Duration::from_secs(inventory.router_timeout_secs),
             client.create_message_without_response_cache(request),
         )
-        .await??
+        .await
     };
-    if crate::models::is_incomplete_stop_reason(response.stop_reason.as_deref()) {
-        anyhow::bail!(
-            "auto-route classifier response incomplete: provider stop reason `{}`",
-            crate::models::stop_reason_detail(response.stop_reason.as_deref())
-        );
-    }
-    Ok(parse_inventory_auto_route_recommendation(
-        &message_response_text(&response),
+    let response = match response {
+        Ok(Ok(response)) => response,
+        // The request crossed Codewhale's dispatch boundary, but no exact
+        // provider usage came back. Preserve the fallback while explicitly
+        // failing cost coverage closed.
+        Ok(Err(_)) => return Ok(auto_route_attempt_with_dropped_response(request_route)),
+        // The local deadline cancels the future and can fire while the request
+        // is still waiting on an application/provider permit. With no response
+        // evidence we must not invent a provider call or a missing-usage
+        // receipt. Transport errors returned by the client remain the
+        // conservative explicit-dropped path above.
+        Err(_) => {
+            return Ok(InventoryAutoRouteAttempt {
+                recommendation: None,
+                routed_usage: Vec::new(),
+                routed_usage_drop_records: Vec::new(),
+                routed_usage_dropped_records: 0,
+            });
+        }
+    };
+    Ok(auto_route_attempt_from_provider_response(
+        request_route,
+        &response,
         inventory,
     ))
 }
@@ -1216,6 +1434,297 @@ fn truncate_for_auto_router(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ProviderCatalogReset;
+
+    impl Drop for ProviderCatalogReset {
+        fn drop(&mut self) {
+            crate::provider_catalog_live::reset_cache_for_test();
+            crate::provider_lake::clear_live_snapshot();
+        }
+    }
+
+    fn priced_openrouter_delta(
+        model: &str,
+        fingerprint: &str,
+        fetched_at: u64,
+        input: f64,
+        output: f64,
+    ) -> codewhale_config::catalog::ProviderCatalogDelta {
+        use codewhale_config::catalog::{CatalogOffering, CatalogSource, ProviderCatalogDelta};
+
+        ProviderCatalogDelta {
+            provider: ApiProvider::Openrouter.as_str().to_string(),
+            base_url_fingerprint: fingerprint.to_string(),
+            fetched_at,
+            offerings: vec![CatalogOffering {
+                provider: ApiProvider::Openrouter.as_str().to_string(),
+                wire_model_id: model.to_string(),
+                endpoint_key: "chat".to_string(),
+                source: CatalogSource::Live {
+                    base_url_fingerprint: fingerprint.to_string(),
+                    fetched_at,
+                },
+                cost: Some(codewhale_config::models_dev::ModelsDevCost {
+                    input: Some(input),
+                    output: Some(output),
+                    cache_read: Some(input / 2.0),
+                    cache_write: None,
+                }),
+                ..CatalogOffering::default()
+            }],
+        }
+    }
+
+    fn classifier_response(
+        id: &str,
+        text: &str,
+        stop_reason: &str,
+        usage: crate::models::Usage,
+    ) -> MessageResponse {
+        MessageResponse {
+            id: id.to_string(),
+            r#type: "message".to_string(),
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+                cache_control: None,
+            }],
+            model: "router-response-alias-must-not-price".to_string(),
+            stop_reason: Some(stop_reason.to_string()),
+            stop_sequence: None,
+            container: None,
+            usage,
+        }
+    }
+
+    #[test]
+    fn classifier_semantic_fallbacks_keep_exact_quotes_and_replay_once() {
+        let _env_lock = crate::test_support::lock_test_env();
+        let _live = crate::provider_lake::lock_live_snapshot();
+        let home = tempfile::tempdir().expect("test home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let _reset = ProviderCatalogReset;
+        crate::provider_catalog_live::reset_cache_for_test();
+        crate::provider_lake::clear_live_snapshot();
+
+        let model = "synthetic/openrouter-auto-classifier";
+        let config = Config {
+            provider: Some("openrouter".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                openrouter: crate::config::ProviderConfig {
+                    api_key: Some("test-openrouter-key".to_string()),
+                    base_url: Some(crate::config::DEFAULT_OPENROUTER_BASE_URL.to_string()),
+                    model: Some(model.to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            auto: Some(crate::config::AutoConfig {
+                cost_saving: None,
+                cross_provider: None,
+                router: Some(crate::config::AutoRouterConfig {
+                    provider: Some("openrouter".to_string()),
+                    model: Some(model.to_string()),
+                    thinking: Some("off".to_string()),
+                    timeout_secs: None,
+                }),
+            }),
+            ..Default::default()
+        };
+        let inventory = ModelInventory::from_config(&config);
+        assert!(
+            inventory
+                .candidate(ApiProvider::Openrouter, model)
+                .is_some()
+        );
+        let client = DeepSeekClient::new(&config).expect("OpenRouter classifier client");
+        let fingerprint = codewhale_config::catalog::base_url_fingerprint(
+            crate::config::DEFAULT_OPENROUTER_BASE_URL,
+        );
+        let first_at = chrono::Utc::now();
+        let fetched_at = u64::try_from(first_at.timestamp()).expect("nonnegative timestamp");
+
+        crate::provider_catalog_live::record_success(priced_openrouter_delta(
+            model,
+            &fingerprint,
+            fetched_at,
+            1.0,
+            4.0,
+        ));
+        let first_route = client.effective_route_envelope(model, first_at);
+        let valid = auto_route_attempt_from_response(
+            first_route,
+            &classifier_response(
+                "same-provider-response-id",
+                &format!(r#"{{"provider":"openrouter","model":"{model}","thinking":"off"}}"#),
+                "stop",
+                crate::models::Usage {
+                    input_tokens: 10,
+                    output_tokens: 2,
+                    prompt_cache_hit_tokens: Some(3),
+                    ..Default::default()
+                },
+            ),
+            &inventory,
+        );
+
+        // Replace the live row in the same Unix second. The first routed
+        // record must keep its old immutable revision and the new attempt must
+        // freeze a distinct one at its own dispatch boundary.
+        crate::provider_catalog_live::record_success(priced_openrouter_delta(
+            model,
+            &fingerprint,
+            fetched_at,
+            9.0,
+            19.0,
+        ));
+        let second_at = first_at + chrono::Duration::nanoseconds(1);
+        let invalid = auto_route_attempt_from_response(
+            client.effective_route_envelope(model, second_at),
+            &classifier_response(
+                "same-provider-response-id",
+                "not valid route json",
+                "stop",
+                crate::models::Usage {
+                    input_tokens: 11,
+                    output_tokens: 3,
+                    ..Default::default()
+                },
+            ),
+            &inventory,
+        );
+        let incomplete = auto_route_attempt_from_response(
+            client.effective_route_envelope(model, second_at + chrono::Duration::nanoseconds(1)),
+            &classifier_response(
+                "same-provider-response-id",
+                &format!(r#"{{"provider":"openrouter","model":"{model}"}}"#),
+                "length",
+                crate::models::Usage {
+                    input_tokens: 12,
+                    output_tokens: 4,
+                    ..Default::default()
+                },
+            ),
+            &inventory,
+        );
+        let missing_usage_route =
+            client.effective_route_envelope(model, second_at + chrono::Duration::nanoseconds(2));
+        let missing_usage = auto_route_attempt_from_provider_response(
+            missing_usage_route.clone(),
+            &classifier_response(
+                "missing-usage-response-id",
+                "not valid route json",
+                "stop",
+                crate::models::Usage::default(),
+            ),
+            &inventory,
+        );
+        assert!(missing_usage.routed_usage.is_empty());
+        assert_eq!(missing_usage.routed_usage_dropped_records, 1);
+        assert_eq!(missing_usage.routed_usage_drop_records.len(), 1);
+        assert_eq!(
+            missing_usage.routed_usage_drop_records[0].route,
+            missing_usage_route.sanitized_for_persistence()
+        );
+        assert!(
+            missing_usage.routed_usage_drop_records[0]
+                .source_id
+                .starts_with("auto-router:")
+        );
+        assert!(
+            !missing_usage.routed_usage_drop_records[0]
+                .source_id
+                .contains("missing-usage-response-id")
+        );
+
+        let transport = auto_route_attempt_with_dropped_response(
+            client.effective_route_envelope(model, second_at + chrono::Duration::nanoseconds(3)),
+        );
+        assert_eq!(transport.routed_usage_dropped_records, 1);
+        assert_eq!(transport.routed_usage_drop_records.len(), 1);
+        assert!(transport.routed_usage.is_empty());
+
+        let heuristic = auto_route_from_inventory_heuristic(&config, "quick status", &inventory);
+        let valid = auto_route_from_classifier_attempt(heuristic.clone(), &inventory, valid);
+        let invalid = auto_route_from_classifier_attempt(heuristic.clone(), &inventory, invalid);
+        let incomplete = auto_route_from_classifier_attempt(heuristic, &inventory, incomplete);
+        assert_eq!(valid.source, AutoRouteSource::FlashRouter);
+        for fallback in [&invalid, &incomplete] {
+            assert_eq!(fallback.source, AutoRouteSource::Heuristic);
+            assert!(matches!(
+                fallback.receipt.as_ref().map(|receipt| receipt.reason),
+                Some(AutoRouteReason::ClassifierFallback(_))
+            ));
+            assert_eq!(fallback.routed_usage.len(), 1);
+            assert_eq!(fallback.routed_usage_dropped_records, 0);
+        }
+        assert_eq!(valid.routed_usage.len(), 1);
+        assert_eq!(valid.routed_usage[0].usage.usage.input_tokens, 10);
+        assert_eq!(
+            valid.routed_usage[0].usage.usage.prompt_cache_hit_tokens,
+            Some(3)
+        );
+
+        let first_quote = valid.routed_usage[0]
+            .usage
+            .route
+            .provider_live_pricing
+            .as_ref()
+            .expect("first exact quote");
+        let second_quote = invalid.routed_usage[0]
+            .usage
+            .route
+            .provider_live_pricing
+            .as_ref()
+            .expect("replacement exact quote");
+        assert_ne!(first_quote.catalog_revision, second_quote.catalog_revision);
+        assert_eq!(first_quote.input_per_million.as_deref(), Some("1"));
+        assert_eq!(second_quote.input_per_million.as_deref(), Some("9"));
+
+        let records = valid
+            .routed_usage
+            .iter()
+            .chain(&invalid.routed_usage)
+            .chain(&incomplete.routed_usage)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 3);
+        assert!(records.iter().all(|record| {
+            record.source_id.starts_with("auto-router:")
+                && record.source_id.len() == "auto-router:".len() + 64
+                && !record.source_id.contains("same-provider-response-id")
+        }));
+
+        // Exercise the canonical sink exactly as selection consumers do:
+        // replaying any record cannot add parent-route spend or a second
+        // routed segment, while distinct dispatches remain distinct.
+        let _cost_scope = crate::cost_status::test_scope();
+        let owner = "auto-router-selection-test-owner";
+        crate::cost_status::register_interactive_runtime_usage_sink(
+            owner,
+            crate::cost_status::scope_token(),
+        );
+        let lease = crate::cost_status::acquire_runtime_usage_lease(owner)
+            .expect("runtime usage owner lease");
+        for record in &records {
+            for _ in 0..2 {
+                crate::cost_status::report_effective_route_for_runtime(
+                    crate::cost_status::scope_token(),
+                    Some(lease.owner()),
+                    &record.source_id,
+                    &record.usage.route,
+                    &record.usage.usage,
+                );
+            }
+        }
+        crate::cost_status::finish_runtime_usage_owner(owner);
+        drop(lease);
+        let pending = crate::cost_status::drain();
+        assert_eq!(pending.usage_source_fingerprints.len(), records.len());
+        assert_eq!(pending.priced_turns, records.len() as u32);
+        assert_eq!(pending.unpriced_turns, 0);
+    }
 
     #[test]
     fn auto_model_reasoning_keeps_model_and_thinking_choices_independent() {

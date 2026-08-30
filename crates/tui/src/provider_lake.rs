@@ -11,11 +11,16 @@
 //! does not represent (and for unbundled gateways until the live catalog covers
 //! them).
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
-use codewhale_config::catalog::{CatalogOffering, CatalogSnapshot, bundled_catalog_offerings};
+use codewhale_config::catalog::{
+    CatalogOffering, CatalogSnapshot, CatalogSource, CatalogStatus, base_url_fingerprint,
+    bundled_catalog_offerings,
+};
+use codewhale_config::route::{ProviderModelOffering, RouteResolver, bundled_offerings};
 
 use crate::codex_model_cache;
 use crate::config::{
@@ -54,50 +59,59 @@ static LIVE_SNAPSHOT: RwLock<LiveSnapshotPartitions> = RwLock::new(LiveSnapshotP
 #[derive(Default)]
 struct LiveSnapshotPartitions {
     models_dev: Option<CatalogSnapshot>,
-    per_provider: BTreeMap<String, CatalogSnapshot>,
+    per_provider: BTreeMap<LivePartitionOwner, CatalogSnapshot>,
 }
 
-impl LiveSnapshotPartitions {
-    /// Collect all live rows from every partition into a single flat snapshot.
-    fn flattened(&self) -> Option<CatalogSnapshot> {
-        if self.models_dev.is_none() && self.per_provider.is_empty() {
-            return None;
-        }
+/// Internal ownership key for one provider-owned live roster.
+///
+/// Catalog rows intentionally keep their public provider string for receipts and
+/// cache compatibility. The storage key carries the route kind separately so an
+/// exact custom table named `openai` cannot overwrite, suppress, or borrow the
+/// built-in OpenAI partition.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum LivePartitionOwner {
+    BuiltIn(String),
+    Custom(String),
+}
 
-        // Merge by (provider, wire_model_id); provider-scoped rows win on
-        // collision because they came from that gateway's own live endpoint.
-        let mut merged: BTreeMap<(String, String), CatalogOffering> = BTreeMap::new();
-        if let Some(models_dev) = &self.models_dev {
-            for row in &models_dev.offerings {
-                merged.insert(
-                    (row.provider.clone(), row.wire_model_id.clone()),
-                    row.clone(),
-                );
-            }
+impl LivePartitionOwner {
+    fn identity(&self) -> &str {
+        match self {
+            Self::BuiltIn(identity) | Self::Custom(identity) => identity,
         }
-        for provider_snapshot in self.per_provider.values() {
-            for row in &provider_snapshot.offerings {
-                merged.insert(
-                    (row.provider.clone(), row.wire_model_id.clone()),
-                    row.clone(),
-                );
-            }
-        }
-        Some(CatalogSnapshot {
-            offerings: merged.into_values().collect(),
-        })
     }
+}
+
+fn live_partition_owner_for_route(
+    provider: ApiProvider,
+    provider_identity: Option<&str>,
+) -> LivePartitionOwner {
+    let identity = catalog_provider_id_for_identity(provider, provider_identity);
+    if provider == ApiProvider::Custom {
+        LivePartitionOwner::Custom(catalog_partition_key(identity.as_ref()))
+    } else {
+        LivePartitionOwner::BuiltIn(catalog_partition_key(identity.as_ref()))
+    }
+}
+
+fn inferred_live_partition_owner(provider: &str) -> LivePartitionOwner {
+    let identity = catalog_partition_key(provider);
+    ApiProvider::parse(&identity).map_or_else(
+        || LivePartitionOwner::Custom(identity),
+        |provider| {
+            LivePartitionOwner::BuiltIn(catalog_partition_key(catalog_provider_id(provider)))
+        },
+    )
 }
 
 fn offerings_by_provider(
     offerings: Vec<CatalogOffering>,
-) -> BTreeMap<String, Vec<CatalogOffering>> {
+) -> BTreeMap<LivePartitionOwner, Vec<CatalogOffering>> {
     let mut grouped = BTreeMap::new();
-    for offering in offerings {
-        grouped
-            .entry(offering.provider.trim().to_ascii_lowercase())
-            .or_insert_with(Vec::new)
-            .push(offering);
+    for mut offering in offerings {
+        let owner = inferred_live_partition_owner(&offering.provider);
+        offering.provider = owner.identity().to_string();
+        grouped.entry(owner).or_insert_with(Vec::new).push(offering);
     }
     grouped
 }
@@ -113,6 +127,27 @@ static LIVE_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// `/model` open pay a multi-second, UI-thread-blocking cost; the merge result
 /// only changes when the live snapshot changes, so cache it.
 static MERGED_CACHE: RwLock<Option<(u64, Arc<CatalogSnapshot>)>> = RwLock::new(None);
+
+/// Generation/freshness-scoped route resolvers for provider-owned catalogs.
+/// Picker calls read the merged snapshot directly; execution projects that
+/// snapshot into the immutable `RouteResolver` seam and must not rebuild a
+/// 600+ row OpenRouter catalog for every route candidate.
+static RUNTIME_RESOLVER_CACHE: RwLock<BTreeMap<String, RuntimeResolverCacheEntry>> =
+    RwLock::new(BTreeMap::new());
+
+#[derive(Clone)]
+struct RuntimeResolverCacheEntry {
+    generation: u64,
+    status_is_fresh: bool,
+    endpoint_catalog_authoritative: bool,
+    resolver: RouteResolver,
+}
+
+#[derive(Clone)]
+pub(crate) struct RuntimeCatalogResolver {
+    pub(crate) resolver: RouteResolver,
+    pub(crate) endpoint_catalog_authoritative: bool,
+}
 
 fn bundled_snapshot() -> &'static CatalogSnapshot {
     BUNDLED_SNAPSHOT.get_or_init(|| CatalogSnapshot {
@@ -187,6 +222,66 @@ pub fn set_live_snapshot(snapshot: CatalogSnapshot, source: LiveSource) {
     }
 }
 
+/// Replace one exact provider-owned live partition, including with no rows.
+///
+/// The generic [`set_live_snapshot`] derives partitions from rows, so an empty
+/// snapshot cannot say which previous partition should disappear. Endpoint-
+/// scoped persistent caches need that distinction: switching Baseten to a new
+/// base URL with no matching cache must remove the old URL's Baseten rows
+/// immediately instead of presenting them as if they belonged to the new host.
+pub fn replace_provider_live_snapshot(provider: &str, snapshot: CatalogSnapshot) {
+    let provider = provider.trim();
+    if provider.is_empty() {
+        return;
+    }
+    let owner = inferred_live_partition_owner(provider);
+    replace_provider_live_snapshot_for_owner(owner, snapshot);
+}
+
+/// Replace one provider-owned partition with an explicit route-kind boundary.
+///
+/// Callers that know the concrete route must use this form. The legacy
+/// string-only wrapper above remains for built-in publishers and older generic
+/// tests, where a built-in-looking string necessarily denotes the built-in.
+pub(crate) fn replace_provider_live_snapshot_for_identity(
+    provider: ApiProvider,
+    provider_identity: &str,
+    snapshot: CatalogSnapshot,
+) {
+    let owner = live_partition_owner_for_route(provider, Some(provider_identity));
+    if owner.identity().is_empty() {
+        return;
+    }
+    replace_provider_live_snapshot_for_owner(owner, snapshot);
+}
+
+fn replace_provider_live_snapshot_for_owner(owner: LivePartitionOwner, snapshot: CatalogSnapshot) {
+    let provider_key = owner.identity().to_string();
+    let mut snapshot = if matches!(&owner, LivePartitionOwner::Custom(_)) {
+        snapshot
+    } else {
+        apply_provider_model_cutlines(snapshot)
+    };
+    snapshot.offerings.retain_mut(|row| {
+        if catalog_partition_key(&row.provider) != provider_key {
+            return false;
+        }
+        row.provider.clone_from(&provider_key);
+        true
+    });
+
+    if let Ok(mut guard) = LIVE_SNAPSHOT.write() {
+        let previous = guard.per_provider.remove(&owner);
+        let next = (!snapshot.offerings.is_empty()).then_some(snapshot);
+        if let Some(next) = next.clone() {
+            guard.per_provider.insert(owner, next);
+        }
+        if previous != next {
+            LIVE_GENERATION.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
 /// Clear all live snapshots (both Models.dev and per-provider partitions).
 /// Used by tests and shutdown paths that need a full reset.
 #[allow(dead_code)]
@@ -239,6 +334,7 @@ pub fn merge_live_offerings(new_offerings: Vec<CatalogOffering>) {
 #[must_use]
 pub fn live_catalog_origin(provider: ApiProvider, wire_model_id: &str) -> Option<LiveSource> {
     let catalog_id = catalog_provider_id(provider);
+    let owner = LivePartitionOwner::BuiltIn(catalog_partition_key(catalog_id));
     let needle = wire_model_id.trim();
     if needle.is_empty() {
         return None;
@@ -252,8 +348,8 @@ pub fn live_catalog_origin(provider: ApiProvider, wire_model_id: &str) -> Option
     };
     if guard
         .per_provider
-        .values()
-        .any(|snap| snap.offerings.iter().any(matches))
+        .get(&owner)
+        .is_some_and(|snap| snap.offerings.iter().any(matches))
     {
         return Some(LiveSource::PerProvider);
     }
@@ -276,11 +372,14 @@ pub(crate) fn lock_live_snapshot() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// The merged catalog snapshot: live rows override bundled rows on
-/// `(provider, wire_model_id)` identity (#4188). When no live snapshot is
-/// present, this is just the offline bundled snapshot. Per-provider live rows
-/// override Models.dev live rows on collision (gateway-specific wins over
-/// cross-provider).
+/// The merged catalog snapshot: Models.dev rows override bundled rows on
+/// `(provider, wire_model_id)` identity (#4188). A provider-owned live
+/// partition is authoritative for that provider's complete roster, so it
+/// suppresses both bundled and Models.dev rows for the provider rather than
+/// merely overlaying matching ids. This is what lets a successful
+/// `/v1/models` refresh remove models retired upstream. Failed refreshes retain
+/// the last successful provider partition; clearing a partition restores the
+/// offline/cross-provider fallbacks.
 ///
 /// Memoized: the merge is recomputed only after a live-layer mutation bumps
 /// `LIVE_GENERATION`; every other call returns the cached `Arc` (the picker
@@ -305,30 +404,64 @@ fn merged_snapshot() -> Arc<CatalogSnapshot> {
 
 /// Uncached merge (see [`merged_snapshot`] for the caching seam).
 fn compute_merged_snapshot() -> CatalogSnapshot {
-    let live = LIVE_SNAPSHOT
-        .read()
-        .ok()
-        .and_then(|guard| guard.flattened());
-    let merged = match live {
-        None => bundled_snapshot().clone(),
-        Some(live) => {
-            let mut merged: BTreeMap<(String, String), CatalogOffering> = BTreeMap::new();
-            for row in &bundled_snapshot().offerings {
+    let Ok(live) = LIVE_SNAPSHOT.read() else {
+        return apply_provider_model_cutlines(bundled_snapshot().clone());
+    };
+    if live.models_dev.is_none() && live.per_provider.is_empty() {
+        return apply_provider_model_cutlines(bundled_snapshot().clone());
+    }
+
+    let authoritative_providers: std::collections::BTreeSet<&str> = live
+        .per_provider
+        .keys()
+        .filter_map(|owner| match owner {
+            LivePartitionOwner::BuiltIn(identity) => Some(identity.as_str()),
+            LivePartitionOwner::Custom(_) => None,
+        })
+        .collect();
+    let is_authoritative = |provider: &str| {
+        let key = catalog_partition_key(provider);
+        authoritative_providers.contains(key.as_str())
+    };
+    let mut merged: BTreeMap<(String, String), CatalogOffering> = BTreeMap::new();
+    for row in &bundled_snapshot().offerings {
+        if !is_authoritative(&row.provider) {
+            merged.insert(
+                (row.provider.clone(), row.wire_model_id.clone()),
+                row.clone(),
+            );
+        }
+    }
+    if let Some(models_dev) = &live.models_dev {
+        for row in &models_dev.offerings {
+            if !is_authoritative(&row.provider) {
                 merged.insert(
                     (row.provider.clone(), row.wire_model_id.clone()),
                     row.clone(),
                 );
-            }
-            for row in &live.offerings {
-                merged.insert(
-                    (row.provider.clone(), row.wire_model_id.clone()),
-                    row.clone(),
-                );
-            }
-            CatalogSnapshot {
-                offerings: merged.into_values().collect(),
             }
         }
+    }
+    for provider_snapshot in live
+        .per_provider
+        .iter()
+        .filter_map(|(owner, snapshot)| match owner {
+            LivePartitionOwner::BuiltIn(_) => Some(snapshot),
+            LivePartitionOwner::Custom(identity) if ApiProvider::parse(identity).is_none() => {
+                Some(snapshot)
+            }
+            LivePartitionOwner::Custom(_) => None,
+        })
+    {
+        for row in &provider_snapshot.offerings {
+            merged.insert(
+                (row.provider.clone(), row.wire_model_id.clone()),
+                row.clone(),
+            );
+        }
+    }
+    let merged = CatalogSnapshot {
+        offerings: merged.into_values().collect(),
     };
     apply_provider_model_cutlines(merged)
 }
@@ -340,6 +473,250 @@ fn catalog_provider_id(provider: ApiProvider) -> &'static str {
         ApiProvider::SiliconflowCn => "siliconflow",
         _ => provider.as_str(),
     }
+}
+
+/// Exact partition key for one provider-owned catalog.
+///
+/// Publishers of built-in catalogs already emit their canonical provider id.
+/// Custom table identities are ownership boundaries and therefore remain
+/// case-sensitive even when their spelling resembles a built-in provider or a
+/// reviewed setup-template alias: `[providers.openai]` may intentionally shadow
+/// the built-in, and `CustomA` / `customa` may be different hosts.
+pub(crate) fn catalog_partition_key(provider: &str) -> String {
+    provider.trim().to_string()
+}
+
+/// Resolve the catalog partition for a concrete route.
+///
+/// `ApiProvider::Custom` is only the wire family. Named compatible providers
+/// such as Baseten own independent catalogs and must keep their exact config
+/// identity instead of collapsing into a shared `custom` bucket.
+fn catalog_provider_id_for_identity<'a>(
+    provider: ApiProvider,
+    provider_identity: Option<&'a str>,
+) -> Cow<'a, str> {
+    if provider == ApiProvider::Custom
+        && let Some(identity) = provider_identity.map(str::trim).filter(|id| !id.is_empty())
+    {
+        return Cow::Owned(catalog_partition_key(identity));
+    }
+    Cow::Borrowed(catalog_provider_id(provider))
+}
+
+fn offering_key(offering: &ProviderModelOffering) -> (String, String) {
+    (
+        offering.provider.as_str().trim().to_ascii_lowercase(),
+        offering.wire_model_id.as_str().to_string(),
+    )
+}
+
+fn row_matches_endpoint_fingerprint(row: &CatalogOffering, fingerprint: &str) -> bool {
+    matches!(
+        &row.source,
+        CatalogSource::Live {
+            base_url_fingerprint,
+            ..
+        } if base_url_fingerprint == fingerprint
+    )
+}
+
+/// Build or reuse the runtime resolver for an exact provider identity.
+///
+/// Only a fresh provider-owned partition whose source fingerprint matches the
+/// selected endpoint can carry live limits, capabilities, and pricing into an
+/// executable route. Stale, failed, unknown, or wrong-endpoint partitions stay
+/// visible to the picker but are removed from this resolver and replaced by the
+/// ordinary Models.dev/bundled fallback. Named compatible providers such as
+/// Baseten are remapped from their exact catalog identity to the resolver's
+/// `custom` transport scope only after this check.
+pub(crate) fn runtime_catalog_resolver_for_identity(
+    provider: ApiProvider,
+    provider_identity: Option<&str>,
+    base_url: &str,
+    status: CatalogStatus,
+) -> RuntimeCatalogResolver {
+    let catalog_id = catalog_provider_id_for_identity(provider, provider_identity);
+    let catalog_key = catalog_partition_key(catalog_id.as_ref());
+    let fingerprint = base_url_fingerprint(base_url);
+    let status_is_fresh = matches!(status, CatalogStatus::Fresh);
+    let generation = LIVE_GENERATION.load(Ordering::SeqCst);
+    let cache_key = format!(
+        "{}\u{1f}{}\u{1f}{}",
+        provider.as_str(),
+        catalog_key,
+        fingerprint
+    );
+
+    if let Ok(cache) = RUNTIME_RESOLVER_CACHE.read()
+        && let Some(cached) = cache.get(&cache_key)
+        && cached.generation == generation
+        && cached.status_is_fresh == status_is_fresh
+    {
+        return RuntimeCatalogResolver {
+            resolver: cached.resolver.clone(),
+            endpoint_catalog_authoritative: cached.endpoint_catalog_authoritative,
+        };
+    }
+
+    let mut snapshot = (*merged_snapshot()).clone();
+    let partition_owner = live_partition_owner_for_route(provider, provider_identity);
+    let (
+        endpoint_catalog_authoritative,
+        authoritative_providers,
+        models_dev_fallback,
+        exact_custom_rows,
+    ) = if let Ok(live) = LIVE_SNAPSHOT.read() {
+        let exact_partition = live.per_provider.get(&partition_owner);
+        let exact_matches = status_is_fresh
+            && exact_partition.is_some_and(|partition| {
+                !partition.offerings.is_empty()
+                    && partition.offerings.iter().all(|row| {
+                        catalog_partition_key(&row.provider) == catalog_key
+                            && row_matches_endpoint_fingerprint(row, &fingerprint)
+                    })
+            });
+        let mut authoritative: std::collections::BTreeSet<String> = live
+            .per_provider
+            .keys()
+            .filter_map(|owner| match owner {
+                LivePartitionOwner::BuiltIn(identity) => Some(identity.clone()),
+                LivePartitionOwner::Custom(_) => None,
+            })
+            .collect();
+        if !exact_matches && let LivePartitionOwner::BuiltIn(identity) = &partition_owner {
+            authoritative.remove(identity);
+        }
+        let fallback = if provider == ApiProvider::Custom {
+            Vec::new()
+        } else {
+            live.models_dev
+                .as_ref()
+                .map(|models_dev| {
+                    models_dev
+                        .offerings
+                        .iter()
+                        .filter(|row| catalog_partition_key(&row.provider) == catalog_key)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let custom_rows = if provider == ApiProvider::Custom && exact_matches {
+            exact_partition
+                .map(|partition| partition.offerings.clone())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        (exact_matches, authoritative, fallback, custom_rows)
+    } else {
+        (
+            false,
+            std::collections::BTreeSet::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    };
+
+    if provider != ApiProvider::Custom && !endpoint_catalog_authoritative {
+        let mut restored: BTreeMap<(String, String), CatalogOffering> = snapshot
+            .offerings
+            .into_iter()
+            .filter(|row| catalog_partition_key(&row.provider) != catalog_key)
+            .map(|row| {
+                (
+                    (
+                        catalog_partition_key(&row.provider),
+                        row.wire_model_id.clone(),
+                    ),
+                    row,
+                )
+            })
+            .collect();
+        for row in bundled_snapshot()
+            .offerings
+            .iter()
+            .filter(|row| catalog_partition_key(&row.provider) == catalog_key)
+            .cloned()
+            .chain(models_dev_fallback)
+        {
+            restored.insert(
+                (
+                    catalog_partition_key(&row.provider),
+                    row.wire_model_id.clone(),
+                ),
+                row,
+            );
+        }
+        snapshot.offerings = restored.into_values().collect();
+    }
+
+    let mut route_offerings: BTreeMap<(String, String), ProviderModelOffering> = snapshot
+        .to_offerings()
+        .into_iter()
+        .map(|offering| (offering_key(&offering), offering))
+        .collect();
+
+    // Restore the curated transport seam only where a provider-owned roster is
+    // not authoritative. Curated endpoint/protocol facts still win over the
+    // bundled Models.dev asset, matching `RouteResolver::new()`.
+    for offering in bundled_offerings() {
+        if !authoritative_providers.contains(offering.provider.as_str()) {
+            route_offerings.insert(offering_key(&offering), offering);
+        }
+    }
+
+    if provider == ApiProvider::Custom {
+        for row in &exact_custom_rows {
+            let mut mapped = row.clone();
+            mapped.provider = ApiProvider::Custom.as_str().to_string();
+            let offering = mapped.to_offering();
+            route_offerings.insert(offering_key(&offering), offering);
+        }
+    }
+
+    let resolver = RouteResolver::from_offerings(route_offerings.into_values().collect());
+    if let Ok(mut cache) = RUNTIME_RESOLVER_CACHE.write() {
+        cache.insert(
+            cache_key,
+            RuntimeResolverCacheEntry {
+                generation,
+                status_is_fresh,
+                endpoint_catalog_authoritative,
+                resolver: resolver.clone(),
+            },
+        );
+    }
+    RuntimeCatalogResolver {
+        resolver,
+        endpoint_catalog_authoritative,
+    }
+}
+
+fn offerings_for_provider_identity<'a>(
+    snapshot: &'a CatalogSnapshot,
+    provider_id: &str,
+) -> Vec<&'a CatalogOffering> {
+    let provider_key = catalog_partition_key(provider_id);
+    snapshot
+        .offerings
+        .iter()
+        .filter(|row| catalog_partition_key(&row.provider) == provider_key)
+        .collect()
+}
+
+fn exact_custom_offerings(provider_identity: &str) -> Vec<CatalogOffering> {
+    let provider_identity = provider_identity.trim();
+    if provider_identity.is_empty() {
+        return Vec::new();
+    }
+    let owner = LivePartitionOwner::Custom(catalog_partition_key(provider_identity));
+    LIVE_SNAPSHOT
+        .read()
+        .ok()
+        .and_then(|live| live.per_provider.get(&owner).cloned())
+        .map(|snapshot| snapshot.offerings)
+        .unwrap_or_default()
 }
 
 fn push_unique_model(models: &mut Vec<String>, model: &str) {
@@ -381,6 +758,19 @@ fn catalog_models_from_offerings<'a>(
 /// local providers (and gateways not yet in the offline seed) keep defaults.
 #[must_use]
 pub fn all_catalog_models_for_provider(provider: ApiProvider) -> Vec<String> {
+    all_catalog_models_for_provider_identity(provider, None)
+}
+
+/// Catalog-backed model ids for one exact provider route.
+///
+/// Built-in providers retain their canonical ids. Named compatible custom
+/// routes use `provider_identity`, so Baseten's live `/v1/models` rows and its
+/// offline setup-template seeds remain isolated from every other custom host.
+#[must_use]
+pub fn all_catalog_models_for_provider_identity(
+    provider: ApiProvider,
+    provider_identity: Option<&str>,
+) -> Vec<String> {
     // ChatGPT OAuth availability is account-scoped. A generic OpenAI or
     // Models.dev catalog is not evidence that a model can be routed through
     // the Codex backend, so this provider owns a separate secret-free source.
@@ -388,9 +778,26 @@ pub fn all_catalog_models_for_provider(provider: ApiProvider) -> Vec<String> {
         return codex_model_cache::model_roster().model_ids();
     }
 
-    let catalog_id = catalog_provider_id(provider);
+    let catalog_id = catalog_provider_id_for_identity(provider, provider_identity);
+    let custom_offerings =
+        (provider == ApiProvider::Custom).then(|| exact_custom_offerings(catalog_id.as_ref()));
     let merged = merged_snapshot();
-    let mut models = catalog_models_from_offerings(merged.offerings_for_provider(catalog_id));
+    let mut models = match custom_offerings.as_ref() {
+        Some(rows) => catalog_models_from_offerings(rows.iter()),
+        None => catalog_models_from_offerings(offerings_for_provider_identity(
+            &merged,
+            catalog_id.as_ref(),
+        )),
+    };
+    if models.is_empty()
+        && provider == ApiProvider::Custom
+        && let Some(template) = codewhale_config::provider_setup_template(catalog_id.as_ref())
+        && template.is_compatible()
+    {
+        for model in template.picker_models() {
+            push_unique_model(&mut models, model);
+        }
+    }
     if models.is_empty() {
         for model in model_completion_names_for_provider(provider) {
             push_unique_model(&mut models, model);
@@ -410,16 +817,30 @@ pub fn catalog_offering_for_model(
     provider: ApiProvider,
     wire_model_id: &str,
 ) -> Option<CatalogOffering> {
+    catalog_offering_for_model_identity(provider, None, wire_model_id)
+}
+
+/// Look up a merged-catalog offering for one exact provider route.
+#[must_use]
+pub fn catalog_offering_for_model_identity(
+    provider: ApiProvider,
+    provider_identity: Option<&str>,
+    wire_model_id: &str,
+) -> Option<CatalogOffering> {
     if provider == ApiProvider::OpenaiCodex {
         return None;
     }
-    let catalog_id = catalog_provider_id(provider);
+    let catalog_id = catalog_provider_id_for_identity(provider, provider_identity);
     let needle = wire_model_id.trim();
     if needle.is_empty() {
         return None;
     }
-    merged_snapshot()
-        .offerings_for_provider(catalog_id)
+    if provider == ApiProvider::Custom {
+        return exact_custom_offerings(catalog_id.as_ref())
+            .into_iter()
+            .find(|row| row.wire_model_id.eq_ignore_ascii_case(needle));
+    }
+    offerings_for_provider_identity(&merged_snapshot(), catalog_id.as_ref())
         .into_iter()
         .find(|row| row.wire_model_id.eq_ignore_ascii_case(needle))
         .cloned()
@@ -674,6 +1095,234 @@ mod tests {
         clear_live_snapshot();
         let after_clear = all_catalog_models_for_provider(ApiProvider::Deepseek);
         assert_eq!(after_clear, bundled);
+    }
+
+    #[test]
+    fn provider_owned_roster_replaces_bundled_and_models_dev_rows() {
+        let _live = lock_live_snapshot();
+        clear_live_snapshot();
+        let bundled = all_catalog_models_for_provider(ApiProvider::Openrouter);
+        assert!(
+            !bundled.is_empty(),
+            "OpenRouter must have an offline fallback roster"
+        );
+
+        set_live_snapshot(
+            CatalogSnapshot {
+                offerings: vec![CatalogOffering {
+                    provider: "openrouter".to_string(),
+                    wire_model_id: "models-dev-only-openrouter-model".to_string(),
+                    endpoint_key: "chat".to_string(),
+                    ..Default::default()
+                }],
+            },
+            LiveSource::ModelsDev,
+        );
+        set_live_snapshot(
+            CatalogSnapshot {
+                offerings: vec![CatalogOffering {
+                    provider: "openrouter".to_string(),
+                    wire_model_id: "provider-owned-openrouter-model".to_string(),
+                    endpoint_key: "chat".to_string(),
+                    ..Default::default()
+                }],
+            },
+            LiveSource::PerProvider,
+        );
+
+        assert_eq!(
+            all_catalog_models_for_provider(ApiProvider::Openrouter),
+            vec!["provider-owned-openrouter-model".to_string()],
+            "a successful provider-owned refresh must remove stale bundled and Models.dev ids"
+        );
+
+        replace_provider_live_snapshot("openrouter", CatalogSnapshot::default());
+        let restored_cross_provider = all_catalog_models_for_provider(ApiProvider::Openrouter);
+        assert!(
+            restored_cross_provider.contains(&"models-dev-only-openrouter-model".to_string()),
+            "clearing the exact partition must restore the cross-provider fallback"
+        );
+        assert!(
+            restored_cross_provider
+                .iter()
+                .any(|model| bundled.contains(model)),
+            "clearing the exact partition must restore bundled fallbacks"
+        );
+
+        clear_live_snapshot();
+        assert_eq!(
+            all_catalog_models_for_provider(ApiProvider::Openrouter),
+            bundled
+        );
+    }
+
+    #[test]
+    fn named_custom_catalogs_keep_exact_identity_and_baseten_offline_seeds() {
+        let _live = lock_live_snapshot();
+        clear_live_snapshot();
+
+        let offline = all_catalog_models_for_provider_identity(
+            ApiProvider::Custom,
+            Some(codewhale_config::BASETEN_TEMPLATE_ID),
+        );
+        assert_eq!(
+            offline,
+            codewhale_config::BASETEN_MODELS
+                .iter()
+                .map(|model| (*model).to_string())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !all_catalog_models_for_provider_identity(
+                ApiProvider::Custom,
+                Some("another-compatible-host"),
+            )
+            .iter()
+            .any(|model| offline.contains(model)),
+            "Baseten seeds must not leak into another custom provider"
+        );
+
+        set_live_snapshot(
+            CatalogSnapshot {
+                offerings: vec![CatalogOffering {
+                    provider: "baseten".to_string(),
+                    wire_model_id: "synthetic-live-baseten-model".to_string(),
+                    endpoint_key: "chat".to_string(),
+                    source: CatalogSource::Live {
+                        base_url_fingerprint: "baseten-fp".to_string(),
+                        fetched_at: 42,
+                    },
+                    ..Default::default()
+                }],
+            },
+            LiveSource::PerProvider,
+        );
+
+        assert_eq!(
+            all_catalog_models_for_provider_identity(ApiProvider::Custom, Some("baseten")),
+            vec!["synthetic-live-baseten-model".to_string()]
+        );
+        let case_distinct =
+            all_catalog_models_for_provider_identity(ApiProvider::Custom, Some("BASETEN"));
+        assert_eq!(
+            case_distinct,
+            codewhale_config::BASETEN_MODELS
+                .iter()
+                .map(|model| (*model).to_string())
+                .collect::<Vec<_>>(),
+            "template schema aliases may share offline seeds, but not another exact table's live roster"
+        );
+        assert!(
+            catalog_offering_for_model_identity(
+                ApiProvider::Custom,
+                Some("baseten"),
+                "synthetic-live-baseten-model",
+            )
+            .is_some()
+        );
+        assert!(
+            catalog_offering_for_model(ApiProvider::Custom, "synthetic-live-baseten-model",)
+                .is_none(),
+            "the generic custom bucket must not see Baseten rows"
+        );
+
+        clear_live_snapshot();
+    }
+
+    #[test]
+    fn case_colliding_and_builtin_named_custom_catalogs_stay_isolated() {
+        let _live = lock_live_snapshot();
+        clear_live_snapshot();
+
+        for (provider, model) in [("CustomA", "upper-model"), ("customa", "lower-model")] {
+            replace_provider_live_snapshot(
+                provider,
+                CatalogSnapshot {
+                    offerings: vec![CatalogOffering {
+                        provider: provider.to_string(),
+                        wire_model_id: model.to_string(),
+                        endpoint_key: "chat".to_string(),
+                        ..Default::default()
+                    }],
+                },
+            );
+        }
+
+        assert_eq!(
+            all_catalog_models_for_provider_identity(ApiProvider::Custom, Some("CustomA")),
+            vec!["upper-model".to_string()]
+        );
+        assert_eq!(
+            all_catalog_models_for_provider_identity(ApiProvider::Custom, Some("customa")),
+            vec!["lower-model".to_string()]
+        );
+        let built_in_openai = all_catalog_models_for_provider(ApiProvider::Openai);
+        assert!(!built_in_openai.is_empty());
+        assert!(
+            all_catalog_models_for_provider_identity(ApiProvider::Custom, Some("openai"))
+                .is_empty(),
+            "a custom table named openai must not borrow the first-class OpenAI template"
+        );
+        for model in &built_in_openai {
+            assert!(
+                catalog_offering_for_model_identity(ApiProvider::Custom, Some("openai"), model)
+                    .is_none(),
+                "an exact custom table named openai must not inherit built-in model {model}"
+            );
+        }
+
+        let custom_model = "custom-openai-only-model";
+        replace_provider_live_snapshot_for_identity(
+            ApiProvider::Custom,
+            "openai",
+            CatalogSnapshot {
+                offerings: vec![CatalogOffering {
+                    provider: "openai".to_string(),
+                    wire_model_id: custom_model.to_string(),
+                    endpoint_key: "chat".to_string(),
+                    ..Default::default()
+                }],
+            },
+        );
+        assert_eq!(
+            all_catalog_models_for_provider_identity(ApiProvider::Custom, Some("openai")),
+            vec![custom_model.to_string()],
+            "the exact custom table must retrieve its own built-in-looking roster"
+        );
+        assert_eq!(
+            all_catalog_models_for_provider(ApiProvider::Openai),
+            built_in_openai,
+            "publishing custom openai must not replace or suppress built-in OpenAI"
+        );
+        assert!(
+            catalog_offering_for_model(ApiProvider::Openai, custom_model).is_none(),
+            "the built-in OpenAI route must not see the custom table's row"
+        );
+
+        let built_in_live_model = "built-in-openai-only-model";
+        replace_provider_live_snapshot_for_identity(
+            ApiProvider::Openai,
+            "openai",
+            CatalogSnapshot {
+                offerings: vec![CatalogOffering {
+                    provider: "openai".to_string(),
+                    wire_model_id: built_in_live_model.to_string(),
+                    endpoint_key: "chat".to_string(),
+                    ..Default::default()
+                }],
+            },
+        );
+        assert_eq!(
+            all_catalog_models_for_provider(ApiProvider::Openai),
+            vec![built_in_live_model.to_string()]
+        );
+        assert_eq!(
+            all_catalog_models_for_provider_identity(ApiProvider::Custom, Some("openai")),
+            vec![custom_model.to_string()],
+            "publishing built-in OpenAI must not replace the custom table's roster"
+        );
+
+        clear_live_snapshot();
     }
 
     #[test]

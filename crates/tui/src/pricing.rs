@@ -1345,11 +1345,43 @@ pub(crate) fn audit_turn_cost_for_provider_on_endpoint_at(
     usage: &Usage,
     recorded_at: DateTime<Utc>,
 ) -> TurnCostAudit {
+    audit_turn_cost_for_provider_on_endpoint_for_identity_at(
+        provider,
+        None,
+        model,
+        endpoint_fingerprint,
+        usage,
+        recorded_at,
+    )
+}
+
+/// Identity-aware provider audit for named compatible routes.
+///
+/// `ApiProvider::Custom` is only a transport family, so it is never sufficient
+/// pricing provenance on its own. Baseten is the first reviewed compatible
+/// provider whose authenticated live catalog can price actual usage; every
+/// other custom identity stays unknown until it receives an equivalent
+/// provider/endpoint contract.
+#[must_use]
+fn audit_turn_cost_for_provider_on_endpoint_for_identity_at(
+    provider: ApiProvider,
+    provider_identity: Option<&str>,
+    model: &str,
+    endpoint_fingerprint: Option<&str>,
+    usage: &Usage,
+    recorded_at: DateTime<Utc>,
+) -> TurnCostAudit {
     if !usage_cache_partition_is_consistent(usage) {
         return TurnCostAudit::unpriced(UnpricedReason::InconsistentUsage);
     }
     if provider == ApiProvider::OpenaiCodex {
         return TurnCostAudit::unpriced(UnpricedReason::NotMoneyMetered);
+    }
+    if provider == ApiProvider::Custom {
+        // A transport family plus current mutable catalog state is not a
+        // billing receipt. Reviewed custom routes are priced only by the
+        // frozen dispatch quote handled in the route-audit path below.
+        return TurnCostAudit::unpriced(UnpricedReason::UnknownBillingBasis);
     }
     if route_requires_billing_surface(provider, model) {
         return TurnCostAudit::unpriced(UnpricedReason::AmbiguousBillingSurface);
@@ -1426,6 +1458,7 @@ pub(crate) fn audit_turn_cost_for_provider_on_endpoint_at(
     let mut live_defect = None;
     let offering = match verified_catalog_offering(
         provider,
+        provider_identity,
         &catalog_model,
         endpoint_fingerprint,
         recorded_at,
@@ -1438,6 +1471,9 @@ pub(crate) fn audit_turn_cost_for_provider_on_endpoint_at(
         VerifiedOffering::Unusable(defect) => {
             live_defect = Some(defect);
             None
+        }
+        VerifiedOffering::FutureEffective => {
+            return TurnCostAudit::unpriced(UnpricedReason::UnverifiedLivePricing);
         }
         VerifiedOffering::Absent => None,
     };
@@ -1518,6 +1554,9 @@ enum VerifiedOffering {
     },
     /// The live row could not be verified and no bundled row exists.
     Unusable(LivePricingDefect),
+    /// The row claims it was fetched after this turn was dispatched. Clock
+    /// saturation must never turn a future price into an age-zero price.
+    FutureEffective,
     /// No catalog row for this provider/model at all.
     Absent,
 }
@@ -1532,12 +1571,16 @@ enum VerifiedOffering {
 /// billing against a rate whose endpoint scope is unproven.
 fn verified_catalog_offering(
     provider: ApiProvider,
+    provider_identity: Option<&str>,
     catalog_model: &str,
     endpoint_fingerprint: Option<&str>,
     recorded_at: DateTime<Utc>,
 ) -> VerifiedOffering {
-    let Some(offering) = crate::provider_lake::catalog_offering_for_model(provider, catalog_model)
-    else {
+    let Some(offering) = crate::provider_lake::catalog_offering_for_model_identity(
+        provider,
+        provider_identity,
+        catalog_model,
+    ) else {
         return VerifiedOffering::Absent;
     };
     // Models.dev is a capabilities catalog. A live overlay from that fetch
@@ -1562,6 +1605,14 @@ fn verified_catalog_offering(
     // `recorded_at` is the turn's own clock, which is the right reference for
     // "was this price current when the turn happened".
     let now_unix = u64::try_from(recorded_at.timestamp()).ok();
+    if pricing.provenance == PricingProvenance::ProviderLive
+        && pricing
+            .effective_at
+            .zip(now_unix)
+            .is_some_and(|(effective_at, dispatched_at)| effective_at > dispatched_at)
+    {
+        return VerifiedOffering::FutureEffective;
+    }
     let Some(defect) =
         pricing.live_pricing_defect(endpoint_fingerprint, now_unix, LIVE_PRICING_MAX_AGE_SECS)
     else {
@@ -1649,6 +1700,34 @@ pub(crate) fn audit_turn_cost_for_route_on_endpoint_at(
     usage: &Usage,
     recorded_at: DateTime<Utc>,
 ) -> TurnCostAudit {
+    audit_turn_cost_for_route_on_endpoint_for_identity_at(
+        provider,
+        None,
+        model,
+        billing_surface,
+        endpoint_fingerprint,
+        None,
+        usage,
+        recorded_at,
+    )
+}
+
+/// Identity-aware route audit for an immutable dispatch receipt.
+#[must_use]
+pub(crate) fn audit_turn_cost_for_route_on_endpoint_for_identity_at(
+    provider: ApiProvider,
+    provider_identity: Option<&str>,
+    model: &str,
+    billing_surface: Option<&str>,
+    endpoint_fingerprint: Option<&str>,
+    provider_live_pricing: Option<&crate::provider_catalog_live::ProviderLivePricingQuote>,
+    usage: &Usage,
+    recorded_at: DateTime<Utc>,
+) -> TurnCostAudit {
+    let reviewed_custom_metered =
+        reviewed_custom_route_is_metered(provider, provider_identity, endpoint_fingerprint);
+    let reviewed_provider_live =
+        reviewed_provider_live_route_is_metered(provider, provider_identity, endpoint_fingerprint);
     // An explicitly recorded surface is evidence.  Exact non-metered surfaces
     // override provider guesses; an explicit unknown/unrecognized surface must
     // fail closed and may never fall through to a familiar model's hand row.
@@ -1656,7 +1735,7 @@ pub(crate) fn audit_turn_cost_for_route_on_endpoint_at(
         EndpointMetering::ExactSubscription | EndpointMetering::LocalNoBill => {
             return TurnCostAudit::unpriced(UnpricedReason::NotMoneyMetered);
         }
-        EndpointMetering::Unknown if billing_surface.is_some() => {
+        EndpointMetering::Unknown if billing_surface.is_some() && !reviewed_custom_metered => {
             return TurnCostAudit::unpriced(UnpricedReason::UnknownBillingBasis);
         }
         EndpointMetering::Unknown | EndpointMetering::Money => {}
@@ -1700,13 +1779,197 @@ pub(crate) fn audit_turn_cost_for_route_on_endpoint_at(
     if billing_surface.is_none() {
         return TurnCostAudit::unpriced(UnpricedReason::UnestablishedEndpoint);
     }
-    audit_turn_cost_for_provider_on_endpoint_at(
+    if reviewed_provider_live {
+        let Some(provider_identity) = provider_identity.map(str::trim).filter(|id| !id.is_empty())
+        else {
+            return TurnCostAudit::unpriced(UnpricedReason::UnknownBillingBasis);
+        };
+        let Some(endpoint_fingerprint) = endpoint_fingerprint else {
+            return TurnCostAudit::unpriced(UnpricedReason::UnknownBillingBasis);
+        };
+        let Some(dispatched_at_unix) = u64::try_from(recorded_at.timestamp()).ok() else {
+            return TurnCostAudit::unpriced(UnpricedReason::UnverifiedLivePricing);
+        };
+        let pricing = match provider_live_pricing {
+            Some(quote) => {
+                let Some(pricing) = quote.pricing_for_route(
+                    provider,
+                    provider_identity,
+                    model,
+                    endpoint_fingerprint,
+                    dispatched_at_unix,
+                ) else {
+                    return TurnCostAudit::unpriced(UnpricedReason::UnverifiedLivePricing);
+                };
+                pricing
+            }
+            None if provider == ApiProvider::Openrouter => {
+                // An offline/startup OpenRouter dispatch has no mutable live
+                // quote to freeze. Audit it only against the immutable bundled
+                // snapshot (and provider-owned hand rows, if one is added), so
+                // a refresh that lands after dispatch cannot retro-price it.
+                return audit_openrouter_immutable_pricing(model, usage, recorded_at);
+            }
+            None => {
+                // Baseten has no reviewed immutable price card. Its compatible
+                // custom route therefore requires the exact frozen live quote.
+                return TurnCostAudit::unpriced(UnpricedReason::UnverifiedLivePricing);
+            }
+        };
+        let classes = token_usage_for_pricing(usage);
+        let unpriced_classes = pricing.unpriced_used_classes(&classes);
+        if !unpriced_classes.is_empty() {
+            return TurnCostAudit::missing_classes(pricing.provenance, unpriced_classes);
+        }
+        let Some(amount) = pricing.estimate_cost(&classes) else {
+            return TurnCostAudit::unpriced(UnpricedReason::InvalidPricingRow);
+        };
+        let (estimate, usd_priced, cny_priced) = match pricing.currency {
+            Currency::Usd => (CostEstimate::usd_only(amount), true, false),
+            Currency::Cny => (
+                CostEstimate {
+                    usd: 0.0,
+                    cny: amount,
+                },
+                false,
+                true,
+            ),
+            Currency::Other(_) => {
+                return TurnCostAudit::unpriced(UnpricedReason::UnsupportedCurrency);
+            }
+        };
+        return TurnCostAudit::priced(estimate, pricing.provenance, usd_priced, cny_priced);
+    }
+    if provider == ApiProvider::Openrouter && provider_identity.is_some() {
+        // A persisted built-in OpenRouter receipt that is missing the exact
+        // official identity/endpoint binding (or its frozen quote) must not
+        // fall through to the mutable process-wide provider lake.
+        return TurnCostAudit::unpriced(UnpricedReason::UnverifiedLivePricing);
+    }
+    if provider == ApiProvider::Custom {
+        return TurnCostAudit::unpriced(UnpricedReason::UnknownBillingBasis);
+    }
+    audit_turn_cost_for_provider_on_endpoint_for_identity_at(
         provider,
+        provider_identity,
         model,
         endpoint_fingerprint,
         usage,
         recorded_at,
     )
+}
+
+/// Price an exact official OpenRouter route without consulting mutable live
+/// catalog state. This is the no-quote application-dispatch fallback used when
+/// CodeWhale starts offline or the provider refresh has not completed yet.
+fn audit_openrouter_immutable_pricing(
+    model: &str,
+    usage: &Usage,
+    recorded_at: DateTime<Utc>,
+) -> TurnCostAudit {
+    let Some(canonical_model) = canonical_model_id_for_provider(ApiProvider::Openrouter, model)
+    else {
+        return TurnCostAudit::unpriced(UnpricedReason::NoPricingRow);
+    };
+    let classes = token_usage_for_pricing(usage);
+    if let Some(offering) = crate::provider_lake::bundled_catalog_offering_for_model(
+        ApiProvider::Openrouter,
+        &canonical_model,
+    ) {
+        if let Some(audit) = invalid_catalog_pricing_audit(&offering) {
+            return audit;
+        }
+        if let Some(pricing) = effective_offering_pricing(
+            ApiProvider::Openrouter,
+            &canonical_model,
+            &offering,
+            &classes,
+        ) {
+            let unpriced_classes = pricing.unpriced_used_classes(&classes);
+            if !unpriced_classes.is_empty() {
+                return TurnCostAudit::missing_classes(pricing.provenance, unpriced_classes);
+            }
+            let Some(estimate) = catalog_cost_estimate_for_route(
+                ApiProvider::Openrouter,
+                &canonical_model,
+                &offering,
+                usage,
+            ) else {
+                return TurnCostAudit::unpriced(UnpricedReason::UnsupportedCurrency);
+            };
+            let (usd_priced, cny_priced) = match pricing.currency {
+                Currency::Usd => (true, false),
+                Currency::Cny => (false, true),
+                Currency::Other(_) => {
+                    return TurnCostAudit::unpriced(UnpricedReason::UnsupportedCurrency);
+                }
+            };
+            return TurnCostAudit::priced(estimate, pricing.provenance, usd_priced, cny_priced);
+        }
+    }
+
+    hand_priced_audit(
+        provider_owned_hand_pricing_at(ApiProvider::Openrouter, &canonical_model, recorded_at),
+        usage,
+    )
+}
+
+/// Whether a named compatible route has a reviewed per-token billing contract.
+///
+/// Baseten is accepted only through its setup-template identity (including the
+/// aliases that resolve to that canonical template) and the fingerprint of its
+/// documented Model APIs endpoint. A generic custom table, a Baseten-like name,
+/// or a Baseten identity pointed at another host cannot become metered merely by
+/// publishing a priced `/models` row.
+#[must_use]
+pub(crate) fn reviewed_custom_route_is_metered(
+    provider: ApiProvider,
+    provider_identity: Option<&str>,
+    endpoint_fingerprint: Option<&str>,
+) -> bool {
+    if provider != ApiProvider::Custom {
+        return false;
+    }
+    let is_baseten = provider_identity
+        .and_then(codewhale_config::provider_setup_template)
+        .is_some_and(|template| template.id == codewhale_config::BASETEN_TEMPLATE_ID);
+    if !is_baseten {
+        return false;
+    }
+    endpoint_fingerprint.is_some_and(|fingerprint| {
+        fingerprint
+            == codewhale_config::catalog::base_url_fingerprint(codewhale_config::BASETEN_BASE_URL)
+    })
+}
+
+/// Exact routes whose mutable provider-live rates must be frozen at the
+/// pre-permit application-dispatch boundary.
+///
+/// OpenRouter is accepted only as the built-in identity on its official API;
+/// a custom table shadowing that name or an endpoint override is a different
+/// billing contract. Baseten-compatible custom identities follow the reviewed
+/// setup template but retain their exact, case-sensitive cache ownership.
+#[must_use]
+fn reviewed_provider_live_route_is_metered(
+    provider: ApiProvider,
+    provider_identity: Option<&str>,
+    endpoint_fingerprint: Option<&str>,
+) -> bool {
+    match provider {
+        ApiProvider::Openrouter => {
+            provider_identity.map(str::trim) == Some(ApiProvider::Openrouter.as_str())
+                && endpoint_fingerprint.is_some_and(|fingerprint| {
+                    fingerprint
+                        == codewhale_config::catalog::base_url_fingerprint(
+                            crate::config::DEFAULT_OPENROUTER_BASE_URL,
+                        )
+                })
+        }
+        ApiProvider::Custom => {
+            reviewed_custom_route_is_metered(provider, provider_identity, endpoint_fingerprint)
+        }
+        _ => false,
+    }
 }
 
 /// Audit a turn against the route's billing presentation.
@@ -4627,6 +4890,62 @@ mod tests {
             (estimate.usd - 9.0).abs() < 1e-12,
             "verified live must win: {}",
             estimate.usd
+        );
+    }
+
+    #[test]
+    fn future_effective_provider_live_rate_is_not_treated_as_age_zero() {
+        let _live = crate::provider_lake::lock_live_snapshot();
+        crate::provider_lake::clear_live_snapshot();
+        let dispatched_at = Utc::now();
+        let future_fetched_at = u64::try_from(dispatched_at.timestamp())
+            .expect("timestamp")
+            .saturating_add(1);
+        let fingerprint = codewhale_config::catalog::base_url_fingerprint(
+            crate::config::DEFAULT_FIREWORKS_BASE_URL,
+        );
+        crate::provider_lake::set_live_snapshot(
+            codewhale_config::catalog::CatalogSnapshot {
+                offerings: vec![codewhale_config::catalog::CatalogOffering {
+                    provider: "fireworks".to_string(),
+                    wire_model_id: "accounts/fireworks/models/future-price-only".to_string(),
+                    endpoint_key: "chat".to_string(),
+                    cost: Some(codewhale_config::models_dev::ModelsDevCost {
+                        input: Some(9.0),
+                        output: Some(18.0),
+                        cache_read: Some(1.0),
+                        cache_write: None,
+                    }),
+                    source: codewhale_config::catalog::CatalogSource::Live {
+                        base_url_fingerprint: fingerprint.clone(),
+                        fetched_at: future_fetched_at,
+                    },
+                    ..Default::default()
+                }],
+            },
+            crate::provider_lake::LiveSource::PerProvider,
+        );
+
+        let audit = audit_turn_cost_for_route_on_endpoint_at(
+            ApiProvider::Fireworks,
+            "accounts/fireworks/models/future-price-only",
+            billing_surface_for_route(
+                ApiProvider::Fireworks,
+                Some(crate::config::DEFAULT_FIREWORKS_BASE_URL),
+            ),
+            Some(&fingerprint),
+            &million_input_usage(),
+            dispatched_at,
+        );
+        crate::provider_lake::clear_live_snapshot();
+
+        assert!(
+            !audit.is_priced(),
+            "future price must fail closed: {audit:?}"
+        );
+        assert_eq!(
+            audit.unpriced_reason,
+            Some(UnpricedReason::UnverifiedLivePricing)
         );
     }
 

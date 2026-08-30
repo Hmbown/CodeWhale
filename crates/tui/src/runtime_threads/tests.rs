@@ -426,15 +426,18 @@ fn sample_turn(thread_id: &str, turn_id: &str, status: RuntimeTurnStatus) -> Tur
         ended_at: None,
         duration_ms: None,
         usage: None,
+        effective_route_usage: None,
         permission_posture: None,
         effective_provider: None,
         effective_provider_id: None,
         effective_billing_surface: None,
         effective_endpoint_fingerprint: None,
+        effective_provider_live_pricing: None,
         effective_billing_mode: None,
         effective_dispatched_at: None,
         effective_model: None,
         routed_usage: Vec::new(),
+        routed_usage_drop_records: Vec::new(),
         routed_usage_source_ids: Vec::new(),
         routed_usage_dropped_records: 0,
         error: None,
@@ -612,6 +615,7 @@ fn set_test_turn_route(
         model: model.to_string(),
         billing_surface: billing_surface.map(str::to_string),
         endpoint_fingerprint: None,
+        provider_live_pricing: None,
         billing_mode,
         dispatched_at: turn.created_at,
     });
@@ -1441,6 +1445,8 @@ async fn caller_cancellation_after_engine_acceptance_keeps_owned_turn_lifecycle(
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -1553,6 +1559,8 @@ async fn operation_key_replays_torn_response_survives_restart_and_rejects_mismat
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -1764,6 +1772,8 @@ async fn thread_updates_while_start_waits_for_capacity_survive_latest_turn_write
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -1926,6 +1936,8 @@ async fn compact_lifecycle_outlives_caller_and_preserves_concurrent_thread_updat
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -2734,6 +2746,7 @@ fn turn_record_persists_billing_surface_without_raw_endpoint() {
         model: "step-3.7-flash".to_string(),
         billing_surface: Some(crate::pricing::STEPFUN_PAYG_BILLING_SURFACE.to_string()),
         endpoint_fingerprint: Some(fingerprint.clone()),
+        provider_live_pricing: None,
         billing_mode: crate::cost_status::RouteBillingMode::Metered,
         dispatched_at: turn.created_at,
     });
@@ -2748,6 +2761,159 @@ fn turn_record_persists_billing_surface_without_raw_endpoint() {
     assert!(value["effective_dispatched_at"].is_string());
     assert!(value.get("base_url").is_none());
     assert!(value.get("effective_base_url").is_none());
+}
+
+#[test]
+fn turn_record_round_trips_frozen_provider_live_pricing_and_drops_hostile_quotes() {
+    struct ProviderCatalogReset;
+    impl Drop for ProviderCatalogReset {
+        fn drop(&mut self) {
+            crate::provider_catalog_live::reset_cache_for_test();
+            crate::provider_lake::clear_live_snapshot();
+        }
+    }
+
+    let _env = crate::test_support::lock_test_env();
+    let _live = crate::provider_lake::lock_live_snapshot();
+    let home = tempfile::tempdir().expect("test home");
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+    let _reset = ProviderCatalogReset;
+    crate::provider_catalog_live::reset_cache_for_test();
+    crate::provider_lake::clear_live_snapshot();
+
+    let dispatched_at = Utc::now();
+    let fetched_at = u64::try_from(dispatched_at.timestamp()).expect("timestamp");
+    let model = "synthetic-baseten-turn-record";
+    let fingerprint =
+        codewhale_config::catalog::base_url_fingerprint(codewhale_config::BASETEN_BASE_URL);
+    let priced_delta = |input: f64, output: f64| codewhale_config::catalog::ProviderCatalogDelta {
+        provider: codewhale_config::BASETEN_TEMPLATE_ID.to_string(),
+        base_url_fingerprint: fingerprint.clone(),
+        fetched_at,
+        offerings: vec![codewhale_config::catalog::CatalogOffering {
+            provider: codewhale_config::BASETEN_TEMPLATE_ID.to_string(),
+            wire_model_id: model.to_string(),
+            endpoint_key: "chat".to_string(),
+            cost: Some(codewhale_config::models_dev::ModelsDevCost {
+                input: Some(input),
+                output: Some(output),
+                cache_read: Some(0.25),
+                cache_write: None,
+            }),
+            ..Default::default()
+        }],
+    };
+    crate::provider_catalog_live::record_success(priced_delta(1.25, 5.0));
+    let route = crate::cost_status::EffectiveRouteEnvelope::capture(
+        None,
+        ApiProvider::Custom,
+        codewhale_config::BASETEN_TEMPLATE_ID,
+        model,
+        Some(codewhale_config::BASETEN_BASE_URL),
+        dispatched_at,
+    );
+    let valid_quote = route
+        .provider_live_pricing
+        .clone()
+        .expect("fresh Baseten scope freezes quote");
+
+    let mut turn = sample_turn("thr_quote", "turn_quote", RuntimeTurnStatus::Completed);
+    turn.persist_effective_route(&route);
+    let serialized = serde_json::to_string(&turn).expect("serialize quoted turn");
+    for raw_secret in [codewhale_config::BASETEN_BASE_URL, "api_key", "Bearer "] {
+        // The assertion message must not itself log the credential fragment it
+        // checks for — name the check, not the secret.
+        assert!(
+            !serialized.contains(raw_secret),
+            "persisted turn serialization leaked a credential fragment"
+        );
+    }
+    let restored: TurnRecord = serde_json::from_str(&serialized).expect("restore quoted turn");
+    let restored_route = restored
+        .effective_route_envelope()
+        .expect("complete persisted route");
+    assert_eq!(
+        restored_route.provider_live_pricing,
+        Some(valid_quote.clone())
+    );
+
+    crate::provider_catalog_live::record_success(priced_delta(19.0, 29.0));
+    let usage = Usage {
+        input_tokens: 1_000_000,
+        ..Usage::default()
+    };
+    assert_eq!(
+        restored_route
+            .audit(&usage)
+            .estimate
+            .expect("frozen price survives refresh")
+            .usd,
+        1.25
+    );
+
+    // Model the strongest persisted attack: an adversary recomputes the
+    // unkeyed integrity revision after placing credential text in the quote.
+    // Structural validation, not the digest alone, must reject it.
+    let secret = "Authorization: Bearer persisted-secret";
+    let mut hostile_quote = valid_quote;
+    hostile_quote.wire_model = secret.to_string();
+    let revision_payload = serde_json::to_vec(&(
+        "codewhale-provider-live-pricing-quote-v1",
+        hostile_quote.provider,
+        &hostile_quote.provider_identity,
+        &hostile_quote.wire_model,
+        &hostile_quote.endpoint_fingerprint,
+        hostile_quote.catalog_fetched_at,
+        &hostile_quote.currency,
+        &hostile_quote.provenance,
+        &hostile_quote.input_per_million,
+        &hostile_quote.output_per_million,
+        &hostile_quote.cache_read_per_million,
+        &hostile_quote.cache_write_per_million,
+    ))
+    .expect("revision payload");
+    hostile_quote.catalog_revision =
+        format!("sha256:{}", crate::hashing::sha256_hex(revision_payload));
+
+    let mut hostile_quote_value = serde_json::to_value(
+        restored_route
+            .provider_live_pricing
+            .as_ref()
+            .expect("valid persisted quote"),
+    )
+    .expect("quote JSON");
+    hostile_quote_value["wire_model"] = serde_json::json!(secret);
+    hostile_quote_value["catalog_revision"] = serde_json::json!(hostile_quote.catalog_revision);
+
+    let mut hostile_turn_value = serde_json::to_value(&restored).expect("turn JSON");
+    hostile_turn_value["effective_provider_live_pricing"] = hostile_quote_value.clone();
+    let mut hostile_child_route = serde_json::to_value(&restored_route).expect("route JSON");
+    hostile_child_route["provider_live_pricing"] = hostile_quote_value;
+    hostile_turn_value["routed_usage"] = serde_json::json!([{
+        "route": hostile_child_route,
+        "usage": Usage::default(),
+    }]);
+
+    let sanitized: TurnRecord =
+        serde_json::from_value(hostile_turn_value).expect("hostile optional quotes fail closed");
+    assert!(sanitized.effective_provider_live_pricing.is_none());
+    assert_eq!(sanitized.routed_usage.len(), 1);
+    assert!(
+        sanitized.routed_usage[0]
+            .route
+            .provider_live_pricing
+            .is_none()
+    );
+    let sanitized_json = serde_json::to_string(&sanitized).expect("reserialize sanitized turn");
+    assert!(!sanitized_json.contains("persisted-secret"));
+    assert_eq!(
+        sanitized
+            .effective_route_envelope()
+            .expect("route remains readable")
+            .audit(&usage)
+            .unpriced_reason,
+        Some(crate::pricing::UnpricedReason::UnverifiedLivePricing)
+    );
 }
 
 #[test]
@@ -2907,6 +3073,7 @@ async fn aggregate_usage_for_thread_scopes_both_currencies_to_one_thread() -> Re
             model: "deepseek-v4-flash".to_string(),
             billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
             endpoint_fingerprint: None,
+            provider_live_pricing: None,
             billing_mode: crate::cost_status::RouteBillingMode::Metered,
             dispatched_at: turn.created_at,
         },
@@ -3279,6 +3446,7 @@ async fn aggregate_usage_includes_exclusive_child_calls_and_zero_usage_receipts(
                 // the route audit will not price a metered route without one.
                 billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
                 endpoint_fingerprint: None,
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Metered,
                 dispatched_at: turn.created_at,
             },
@@ -3301,6 +3469,7 @@ async fn aggregate_usage_includes_exclusive_child_calls_and_zero_usage_receipts(
                     crate::pricing::OAUTH_SUBSCRIPTION_BILLING_SURFACE.to_string(),
                 ),
                 endpoint_fingerprint: None,
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Subscription,
                 dispatched_at: turn.created_at,
             },
@@ -3357,6 +3526,7 @@ async fn aggregate_usage_filters_each_call_by_its_dispatch_timestamp() -> Result
                 model: "deepseek-v4-flash".to_string(),
                 billing_surface: None,
                 endpoint_fingerprint: None,
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Metered,
                 dispatched_at: window,
             },
@@ -3528,7 +3698,7 @@ fn routed_usage_append_is_bounded_and_idempotent_for_every_delivery_path() {
             1 => "mailbox",
             _ => "fallback",
         };
-        assert!(append_routed_usage_record(
+        let changed = append_routed_usage_record(
             &mut turn,
             &format!("{path}:response:{index}"),
             crate::cost_status::EffectiveRouteUsage {
@@ -3538,12 +3708,19 @@ fn routed_usage_append_is_bounded_and_idempotent_for_every_delivery_path() {
                     ..Usage::default()
                 },
             },
-        ));
+        );
+        assert_eq!(
+            changed,
+            index <= u32::try_from(MAX_ROUTED_USAGE_RECORDS_PER_TURN).unwrap()
+        );
     }
 
     assert_eq!(turn.routed_usage.len(), MAX_ROUTED_USAGE_RECORDS_PER_TURN);
-    assert_eq!(turn.routed_usage_dropped_records, 26);
-    assert_eq!(turn.routed_usage_source_ids.len(), 90);
+    assert_eq!(turn.routed_usage_dropped_records, 1);
+    assert_eq!(
+        turn.routed_usage_source_ids.len(),
+        MAX_ROUTED_USAGE_RECORDS_PER_TURN
+    );
     let before = turn.clone();
     assert!(!append_routed_usage_record(
         &mut turn,
@@ -5218,6 +5395,12 @@ async fn thread_lifecycle_persists_across_restart() -> Result<()> {
                         output_tokens: 12,
                         ..Usage::default()
                     },
+                    parent_route_usage: Usage {
+                        input_tokens: 10,
+                        output_tokens: 12,
+                        ..Usage::default()
+                    },
+                    routed_usage_dropped_records: 0,
                     status: TurnOutcomeStatus::Completed,
                     error: None,
                     tool_catalog: None,
@@ -5257,6 +5440,466 @@ async fn thread_lifecycle_persists_across_restart() -> Result<()> {
     assert!(
         events.iter().any(|ev| ev.event == "turn.completed"),
         "expected turn.completed event after restart"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn initial_classifier_usage_is_persisted_before_terminal_and_merged_exactly_once()
+-> Result<()> {
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    let mut harness = install_mock_engine(&manager, &thread.id).await;
+    let turn = manager
+        .start_turn(
+            &thread.id,
+            StartTurnRequest {
+                prompt: "persist classifier receipt".to_string(),
+                ..StartTurnRequest::default()
+            },
+        )
+        .await?;
+    assert!(matches!(
+        harness.rx_op.recv().await,
+        Some(Op::SendMessage { .. })
+    ));
+
+    let classifier_usage = Usage {
+        input_tokens: 7,
+        output_tokens: 5,
+        ..Usage::default()
+    };
+    let classifier_route = crate::cost_status::EffectiveRouteEnvelope::capture(
+        None,
+        ApiProvider::Openai,
+        "openai",
+        "classifier-model",
+        Some(ApiProvider::Openai.default_base_url()),
+        Utc::now(),
+    );
+    let classifier_batch = crate::cost_status::RuntimeUsageBatch {
+        records: vec![crate::cost_status::RuntimeUsageRecord {
+            source_id: "auto-router:runtime-fixture".to_string(),
+            usage: crate::cost_status::EffectiveRouteUsage {
+                route: classifier_route.clone(),
+                usage: classifier_usage.clone(),
+            },
+        }],
+        drop_records: vec![crate::cost_status::RuntimeUsageDropRecord {
+            source_id: "auto-router:runtime-missing-usage".to_string(),
+            route: classifier_route,
+        }],
+        // One exact drop plus two residual/unidentifiable gaps.
+        dropped_records: 3,
+    };
+    {
+        let _turn_mutation = manager.store.turn_mutation.lock();
+        let mut reserved = manager.store.load_turn(&turn.id)?;
+        append_initial_routed_usage_to_turn(&mut reserved, &classifier_batch);
+        append_initial_routed_usage_to_turn(&mut reserved, &classifier_batch);
+        manager.store.save_turn(&reserved)?;
+    }
+    let preterminal = manager.store.load_turn(&turn.id)?;
+    assert_eq!(preterminal.routed_usage.len(), 1);
+    assert_eq!(preterminal.routed_usage_drop_records.len(), 1);
+    assert_eq!(preterminal.routed_usage_drop_records[0].source_id.len(), 64);
+    assert!(
+        !preterminal.routed_usage_drop_records[0]
+            .source_id
+            .contains("runtime-missing-usage")
+    );
+    assert_eq!(preterminal.routed_usage[0].usage, classifier_usage);
+    assert_eq!(preterminal.routed_usage_source_ids.len(), 2);
+    assert!(
+        preterminal
+            .routed_usage_source_ids
+            .contains(&preterminal.routed_usage_drop_records[0].source_id),
+        "the persisted exact-drop receipt must retain the same durable source fingerprint as the dedupe ledger"
+    );
+    assert_eq!(
+        preterminal.routed_usage_dropped_records, 0,
+        "TurnComplete, not pre-persistence, owns classifier drop coverage"
+    );
+    {
+        let _turn_mutation = manager.store.turn_mutation.lock();
+        let mut replayed = manager.store.load_turn(&turn.id)?;
+        append_initial_routed_usage_to_turn(&mut replayed, &classifier_batch);
+        manager.store.save_turn(&replayed)?;
+    }
+    let replayed = manager.store.load_turn(&turn.id)?;
+    assert_eq!(replayed.routed_usage.len(), 1);
+    assert_eq!(replayed.routed_usage_drop_records.len(), 1);
+    assert_eq!(replayed.routed_usage_source_ids.len(), 2);
+
+    harness
+        .tx_event
+        .send(EngineEvent::TurnStarted {
+            turn_id: "engine_classifier_receipt".to_string(),
+            created_at: Utc::now(),
+            route: None,
+        })
+        .await?;
+    harness
+        .tx_event
+        .send(EngineEvent::TurnComplete {
+            usage: Usage {
+                input_tokens: 18,
+                output_tokens: 8,
+                ..Usage::default()
+            },
+            parent_route_usage: Usage {
+                input_tokens: 11,
+                output_tokens: 3,
+                ..Usage::default()
+            },
+            routed_usage_dropped_records: classifier_batch.dropped_records.saturating_sub(
+                u64::try_from(classifier_batch.drop_records.len()).unwrap_or(u64::MAX),
+            ),
+            status: TurnOutcomeStatus::Completed,
+            error: None,
+            tool_catalog: None,
+            base_url: None,
+        })
+        .await?;
+
+    let completed = wait_for_terminal_turn(&manager, &turn.id, Duration::from_secs(2)).await?;
+    assert_eq!(completed.routed_usage.len(), 1);
+    assert_eq!(completed.routed_usage_drop_records.len(), 1);
+    assert_eq!(completed.routed_usage_source_ids.len(), 2);
+    assert_eq!(completed.routed_usage[0].usage, classifier_usage);
+    assert_eq!(completed.routed_usage_dropped_records, 2);
+    assert_eq!(
+        completed.usage,
+        Some(Usage {
+            input_tokens: 18,
+            output_tokens: 8,
+            ..Usage::default()
+        })
+    );
+    assert_eq!(
+        completed.effective_route_usage,
+        Some(Usage {
+            input_tokens: 11,
+            output_tokens: 3,
+            ..Usage::default()
+        })
+    );
+    let aggregate = manager
+        .aggregate_usage(None, None, UsageGroupBy::Thread)
+        .await?;
+    assert_eq!(aggregate.totals.dropped_usage_records, 3);
+    assert!(
+        aggregate.totals.route_receipts.iter().any(
+            |receipt| receipt.contains("classifier-model") && receipt.contains("usage=missing")
+        )
+    );
+    Ok(())
+}
+
+/// One completed auxiliary provider call, on its own frozen route, as the
+/// classifier hands it to `start_turn` before the parent route is resolved.
+fn classifier_settlement_batch(
+    identity: &str,
+    model: &str,
+    source_prefix: &str,
+    dropped_records: u64,
+) -> crate::cost_status::RuntimeUsageBatch {
+    let mut route = crate::cost_status::EffectiveRouteEnvelope::capture(
+        None,
+        ApiProvider::Openrouter,
+        identity,
+        model,
+        Some(ApiProvider::Openrouter.default_base_url()),
+        Utc::now(),
+    );
+    route.billing_mode = crate::cost_status::RouteBillingMode::Subscription;
+    crate::cost_status::RuntimeUsageBatch {
+        records: vec![crate::cost_status::RuntimeUsageRecord {
+            source_id: format!("auto-router:{source_prefix}-usage"),
+            usage: crate::cost_status::EffectiveRouteUsage {
+                route: route.clone(),
+                usage: Usage {
+                    input_tokens: 9,
+                    output_tokens: 4,
+                    ..Usage::default()
+                },
+            },
+        }],
+        drop_records: vec![crate::cost_status::RuntimeUsageDropRecord {
+            source_id: format!("auto-router:{source_prefix}-drop"),
+            route,
+        }],
+        dropped_records,
+    }
+}
+
+/// A classifier call that completed before the parent route failed must land
+/// in the Runtime store, not in ownerless in-process accounting: headless
+/// Runtime/API execution has no foreground session draining that pool, so a
+/// process loss erased real provider spend. Settling the same completed call
+/// again must not charge a second time, and the failed parent route must never
+/// become the billing route.
+#[tokio::test]
+async fn failed_runtime_parent_route_resolve_and_preflight_settle_batch_once_without_repricing()
+-> Result<()> {
+    let _cost_scope = crate::cost_status::test_scope();
+    let scope = crate::cost_status::scope_token();
+    let runtime_dir = test_runtime_dir();
+    let manager = test_manager(runtime_dir.clone())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    // One exact missing-usage route plus two residual coverage gaps.
+    let batch = classifier_settlement_batch(
+        "classifier-openrouter",
+        "classifier/frozen-route",
+        "runtime-parent-failure",
+        3,
+    );
+    let frozen_batch = batch.clone();
+
+    for error_message in [
+        "selected parent provider/model is invalid",
+        "selected parent route failed preflight",
+    ] {
+        let error = {
+            let _settlement = InitialRoutedUsageSettlementGuard::new(
+                manager.store.clone(),
+                &thread.id,
+                scope,
+                &batch,
+            );
+            anyhow::anyhow!(error_message)
+        };
+        assert_eq!(
+            error.to_string(),
+            error_message,
+            "settlement must preserve the original route failure"
+        );
+    }
+
+    assert_eq!(
+        batch, frozen_batch,
+        "settlement must not coerce classifier receipts onto the failed parent provider/model"
+    );
+
+    let turns = manager.store.list_turns_for_thread(&thread.id)?;
+    assert_eq!(
+        turns.len(),
+        1,
+        "settling the same completed call twice must reuse one durable record: {turns:?}"
+    );
+    let settled = &turns[0];
+    assert_eq!(settled.status, RuntimeTurnStatus::Failed);
+    assert_eq!(settled.usage, None);
+    assert_eq!(settled.effective_route_usage, None);
+    assert_eq!(settled.effective_provider, None);
+    assert_eq!(settled.effective_model, None);
+    assert!(
+        settled.effective_route_envelope().is_none(),
+        "the parent route never dispatched and must never be charged"
+    );
+    assert_eq!(settled.routed_usage.len(), 1);
+    assert_eq!(
+        settled.routed_usage[0].route.model,
+        "classifier/frozen-route"
+    );
+    assert_eq!(
+        settled.routed_usage[0].usage,
+        Usage {
+            input_tokens: 9,
+            output_tokens: 4,
+            ..Usage::default()
+        }
+    );
+    assert_eq!(settled.routed_usage_drop_records.len(), 1);
+    assert_eq!(settled.routed_usage_drop_records[0].source_id.len(), 64);
+    assert_eq!(settled.routed_usage_source_ids.len(), 2);
+    assert_eq!(
+        settled.routed_usage_dropped_records, 2,
+        "no engine TurnComplete will ever arrive, so this record owns its residual gap"
+    );
+    assert!(
+        crate::cost_status::drain().is_empty(),
+        "runtime spend must not be charged to whichever session happens to be live"
+    );
+
+    // Process loss: a fresh manager over the same store still prices the call
+    // exactly once, under the classifier's own frozen route.
+    drop(manager);
+    let reopened = test_manager(runtime_dir)?;
+    let aggregate = reopened
+        .aggregate_usage(None, None, UsageGroupBy::Provider)
+        .await?;
+    assert_eq!(aggregate.totals.input_tokens, 9);
+    assert_eq!(aggregate.totals.output_tokens, 4);
+    assert_eq!(aggregate.totals.dropped_usage_records, 3);
+    assert_eq!(
+        aggregate
+            .buckets
+            .iter()
+            .map(|bucket| bucket.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["classifier-openrouter", "unknown-truncated"],
+        "exact receipts bill the classifier identity; only the residual gap is unattributed"
+    );
+    assert!(aggregate.totals.route_receipts.iter().any(|receipt| {
+        receipt.contains("identity=classifier-openrouter")
+            && receipt.contains("model=classifier/frozen-route")
+    }));
+    assert!(
+        aggregate
+            .totals
+            .route_receipts
+            .iter()
+            .all(|receipt| !receipt.contains("selected_parent")),
+        "the failed parent route must never become the classifier billing route"
+    );
+
+    // Restart recovery treats the record as the terminal turn it is: it emits
+    // the one missing receipt and re-prices nothing.
+    let recovered = reopened.get_thread(&thread.id).await?;
+    assert_eq!(
+        recovered.latest_turn_id.as_deref(),
+        Some(settled.id.as_str())
+    );
+    assert_eq!(
+        serde_json::to_value(
+            reopened
+                .aggregate_usage(None, None, UsageGroupBy::Provider)
+                .await?
+                .totals
+        )?,
+        serde_json::to_value(aggregate.totals)?,
+        "flushing the recovery receipt must not count the call again"
+    );
+    Ok(())
+}
+
+/// `/new` and session load close the cost scope captured at dispatch, and
+/// ownerless in-process settlement rejects a stale scope outright — which is
+/// how a real classifier call vanished. The durable record must not depend on
+/// the scope, and must not charge the replacement scope either.
+#[tokio::test]
+async fn unaccepted_classifier_settlement_survives_a_closed_cost_scope() -> Result<()> {
+    let _cost_scope = crate::cost_status::test_scope();
+    let dispatch_scope = crate::cost_status::scope_token();
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    let batch = classifier_settlement_batch(
+        "stale-scope-openrouter",
+        "classifier/stale-scope",
+        "stale-scope",
+        1,
+    );
+
+    let _closed = crate::cost_status::close_current_scope();
+    assert_ne!(dispatch_scope, crate::cost_status::scope_token());
+    drop(InitialRoutedUsageSettlementGuard::new(
+        manager.store.clone(),
+        &thread.id,
+        dispatch_scope,
+        &batch,
+    ));
+
+    let turns = manager.store.list_turns_for_thread(&thread.id)?;
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].routed_usage.len(), 1);
+    assert_eq!(
+        turns[0].routed_usage[0].route.model,
+        "classifier/stale-scope"
+    );
+    assert_eq!(turns[0].routed_usage_drop_records.len(), 1);
+    assert_eq!(turns[0].routed_usage_dropped_records, 0);
+    assert!(
+        crate::cost_status::drain().is_empty(),
+        "the replacement scope must not inherit the closed scope's spend"
+    );
+    Ok(())
+}
+
+/// An exact operation-key retry replays the original turn, but its own
+/// classifier call really happened. It settles into its own record, and the
+/// replayed turn stays exactly as its owner left it.
+#[tokio::test]
+async fn raced_runtime_operation_replay_settles_second_classifier_without_mutating_original_turn()
+-> Result<()> {
+    let _cost_scope = crate::cost_status::test_scope();
+    let scope = crate::cost_status::scope_token();
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    let original_turn = sample_turn(
+        &thread.id,
+        "turn_original_operation",
+        RuntimeTurnStatus::Completed,
+    );
+    manager.store.save_turn(&original_turn)?;
+    let second_classifier_batch = classifier_settlement_batch(
+        "second-classifier-openrouter",
+        "classifier/second-actual-call",
+        "raced-replay-second-call",
+        1,
+    );
+
+    let replayed_turn = {
+        let _settlement = InitialRoutedUsageSettlementGuard::new(
+            manager.store.clone(),
+            &thread.id,
+            scope,
+            &second_classifier_batch,
+        );
+        manager.store.load_turn(&original_turn.id)?
+    };
+    assert_eq!(replayed_turn.id, original_turn.id);
+    assert_eq!(replayed_turn.status, original_turn.status);
+    assert!(replayed_turn.routed_usage.is_empty());
+    assert!(replayed_turn.routed_usage_drop_records.is_empty());
+
+    let persisted_original = manager.store.load_turn(&original_turn.id)?;
+    assert!(persisted_original.routed_usage.is_empty());
+    assert!(persisted_original.routed_usage_drop_records.is_empty());
+    assert_eq!(persisted_original.routed_usage_dropped_records, 0);
+
+    let settled = manager
+        .store
+        .list_turns_for_thread(&thread.id)?
+        .into_iter()
+        .filter(|turn| turn.id != original_turn.id)
+        .collect::<Vec<_>>();
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0].routed_usage.len(), 1);
+    assert_eq!(
+        settled[0].routed_usage[0].route.model,
+        "classifier/second-actual-call"
+    );
+    assert_eq!(settled[0].routed_usage_drop_records.len(), 1);
+    Ok(())
+}
+
+/// Auto routing that reported nothing has nothing to settle. Minting a record
+/// anyway would put a phantom turn on every thread whose parent route failed.
+#[tokio::test]
+async fn pre_turn_settlement_with_nothing_to_keep_writes_no_record() -> Result<()> {
+    let _cost_scope = crate::cost_status::test_scope();
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    drop(InitialRoutedUsageSettlementGuard::new(
+        manager.store.clone(),
+        &thread.id,
+        crate::cost_status::scope_token(),
+        &crate::cost_status::RuntimeUsageBatch::default(),
+    ));
+    assert!(
+        manager.store.list_turns_for_thread(&thread.id)?.is_empty(),
+        "a classifier that reported nothing must not mint a phantom turn"
     );
     Ok(())
 }
@@ -5306,6 +5949,7 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
                 billing: Some(crate::core::events::RouteBillingEnvelope {
                     billing_surface: Some(crate::pricing::STEPFUN_PAYG_BILLING_SURFACE.to_string()),
                     endpoint_fingerprint: Some(endpoint_fingerprint.clone()),
+                    provider_live_pricing: None,
                     billing_mode: crate::cost_status::RouteBillingMode::Metered,
                     dispatched_at,
                 }),
@@ -5323,7 +5967,7 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
             message: crate::tools::subagent::MailboxMessage::TokenUsage {
                 agent_id: "agent_child".to_string(),
                 source_id: "response-child".to_string(),
-                route: crate::cost_status::EffectiveRouteEnvelope {
+                route: Box::new(crate::cost_status::EffectiveRouteEnvelope {
                     provider: ApiProvider::OpenaiCodex,
                     provider_identity: "codex-child".to_string(),
                     model: "gpt-5.5".to_string(),
@@ -5331,9 +5975,10 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
                         crate::pricing::OAUTH_SUBSCRIPTION_BILLING_SURFACE.to_string(),
                     ),
                     endpoint_fingerprint: None,
+                    provider_live_pricing: None,
                     billing_mode: crate::cost_status::RouteBillingMode::Subscription,
                     dispatched_at,
-                },
+                }),
                 usage: Usage {
                     input_tokens: 3,
                     output_tokens: 2,
@@ -5341,6 +5986,27 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
                     ..Usage::default()
                 },
             },
+        })
+        .await?;
+    harness
+        .tx_event
+        .send(EngineEvent::ToolCallStarted {
+            id: "tool-routed-coverage".to_string(),
+            name: "rlm".to_string(),
+            input: json!({"action": "eval"}),
+        })
+        .await?;
+    harness
+        .tx_event
+        .send(EngineEvent::ToolCallComplete {
+            id: "tool-routed-coverage".to_string(),
+            name: "rlm".to_string(),
+            result: Ok(
+                crate::tools::spec::ToolResult::success("covered").with_metadata(json!({
+                    "child_usage_records": [],
+                    "child_usage_dropped_records": 2,
+                })),
+            ),
         })
         .await?;
     harness
@@ -5356,6 +6022,20 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
                 }),
                 ..Usage::default()
             },
+            parent_route_usage: Usage {
+                input_tokens: 10,
+                output_tokens: 4,
+                reasoning_replay_tokens: Some(6),
+                server_tool_use: Some(crate::models::ServerToolUsage {
+                    code_execution_requests: Some(2),
+                    tool_search_requests: Some(3),
+                }),
+                ..Usage::default()
+            },
+            // The engine already folded the synchronous tool metadata into
+            // this authoritative turn count. Runtime must not persist the
+            // ToolCallComplete copy and then add it again here.
+            routed_usage_dropped_records: 2,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -5385,6 +6065,7 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
     assert_eq!(completed.effective_dispatched_at, Some(dispatched_at));
     assert_eq!(completed.started_at, Some(started_at));
     assert_eq!(completed.routed_usage.len(), 1);
+    assert_eq!(completed.routed_usage_dropped_records, 2);
     assert_eq!(completed.routed_usage[0].usage.reasoning_tokens, Some(2));
     let persisted_usage = completed.usage.expect("parent usage");
     assert_eq!(persisted_usage.reasoning_replay_tokens, Some(6));
@@ -5430,7 +6111,7 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
             message: crate::tools::subagent::MailboxMessage::TokenUsage {
                 agent_id: "agent-child-second".to_string(),
                 source_id: "response-child-second".to_string(),
-                route: crate::cost_status::EffectiveRouteEnvelope {
+                route: Box::new(crate::cost_status::EffectiveRouteEnvelope {
                     provider: ApiProvider::OpenaiCodex,
                     provider_identity: "codex-child".to_string(),
                     model: "gpt-5.5".to_string(),
@@ -5438,9 +6119,10 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
                         crate::pricing::OAUTH_SUBSCRIPTION_BILLING_SURFACE.to_string(),
                     ),
                     endpoint_fingerprint: None,
+                    provider_live_pricing: None,
                     billing_mode: crate::cost_status::RouteBillingMode::Subscription,
                     dispatched_at: Utc::now(),
-                },
+                }),
                 usage: Usage {
                     input_tokens: 5,
                     output_tokens: 1,
@@ -5453,6 +6135,8 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -5502,6 +6186,12 @@ async fn completed_turn_without_engine_output_fails() -> Result<()> {
                         output_tokens: 0,
                         ..Usage::default()
                     },
+                    parent_route_usage: Usage {
+                        input_tokens: 10,
+                        output_tokens: 0,
+                        ..Usage::default()
+                    },
+                    routed_usage_dropped_records: 0,
                     status: TurnOutcomeStatus::Completed,
                     error: None,
                     tool_catalog: None,
@@ -5585,6 +6275,8 @@ async fn preturn_control_status_does_not_make_empty_turn_succeed() -> Result<()>
             let _ = tx_event
                 .send(EngineEvent::TurnComplete {
                     usage: Usage::default(),
+                    parent_route_usage: Usage::default(),
+                    routed_usage_dropped_records: 0,
                     status: TurnOutcomeStatus::Completed,
                     error: None,
                     tool_catalog: None,
@@ -5645,6 +6337,8 @@ async fn engine_error_remains_failed_after_nominal_turn_complete() -> Result<()>
             let _ = tx_event
                 .send(EngineEvent::TurnComplete {
                     usage: Usage::default(),
+                    parent_route_usage: Usage::default(),
+                    routed_usage_dropped_records: 0,
                     status: TurnOutcomeStatus::Completed,
                     error: None,
                     tool_catalog: None,
@@ -6184,6 +6878,8 @@ async fn compact_interrupt_persists_canceled_item_for_the_exact_request() -> Res
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Interrupted,
             error: None,
             tool_catalog: None,
@@ -6421,6 +7117,12 @@ async fn multi_turn_continuity_same_thread() -> Result<()> {
                         output_tokens: 5,
                         ..Usage::default()
                     },
+                    parent_route_usage: Usage {
+                        input_tokens: 5,
+                        output_tokens: 5,
+                        ..Usage::default()
+                    },
+                    routed_usage_dropped_records: 0,
                     status: TurnOutcomeStatus::Completed,
                     error: None,
                     tool_catalog: None,
@@ -6747,6 +7449,8 @@ async fn approval_required_with_stale_active_turn_is_denied() -> Result<()> {
                 output_tokens: 0,
                 ..Usage::default()
             },
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -6862,6 +7566,8 @@ async fn approval_required_awaits_external_decision_allow() -> Result<()> {
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -6974,6 +7680,8 @@ async fn user_input_snapshot_survives_reload_and_clears_after_submission() -> Re
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -7321,6 +8029,8 @@ async fn thread_detail_cursor_precedes_projection_reads_at_terminal_boundary() -
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -7571,6 +8281,8 @@ async fn thread_detail_materializes_stream_prefixes_before_their_delta_cursor() 
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Interrupted,
             error: None,
             tool_catalog: None,
@@ -7709,6 +8421,8 @@ async fn thread_detail_delta_boundary_is_replay_idempotent() -> Result<()> {
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Interrupted,
             error: None,
             tool_catalog: None,
@@ -7778,6 +8492,8 @@ async fn terminal_turn_cancels_pending_user_input_and_clears_snapshot() -> Resul
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -7966,6 +8682,8 @@ async fn dynamic_tool_result_settles_snapshot_and_emits_one_safe_resolution() ->
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -8150,6 +8868,8 @@ async fn dynamic_tool_result_receipt_outlives_canceled_delivery_future() -> Resu
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -8978,6 +9698,8 @@ async fn dynamic_tool_timeout_clears_snapshot_and_emits_once() -> Result<()> {
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -9050,6 +9772,8 @@ async fn terminal_turn_cancels_pending_dynamic_tool_exactly_once() -> Result<()>
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Interrupted,
             error: None,
             tool_catalog: None,
@@ -9164,6 +9888,8 @@ async fn approval_required_external_deny_is_denied() -> Result<()> {
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -9234,6 +9960,8 @@ async fn auto_review_force_prompt_is_denied_without_opening_a_modal() -> Result<
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -9332,6 +10060,8 @@ async fn approval_timeout_denies_clears_ui_and_next_turn_can_start() -> Result<(
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -9422,6 +10152,8 @@ async fn thinking_delta_emits_agent_reasoning_item() -> Result<()> {
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -9559,6 +10291,8 @@ async fn approval_required_remember_flips_thread_auto_approve() -> Result<()> {
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -9643,6 +10377,8 @@ async fn elevation_required_with_stale_active_turn_is_denied() -> Result<()> {
                 output_tokens: 0,
                 ..Usage::default()
             },
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -9709,6 +10445,12 @@ async fn steer_turn_on_active_turn_records_item_and_event() -> Result<()> {
                         output_tokens: 9,
                         ..Usage::default()
                     },
+                    parent_route_usage: Usage {
+                        input_tokens: 8,
+                        output_tokens: 9,
+                        ..Usage::default()
+                    },
+                    routed_usage_dropped_records: 0,
                     status: TurnOutcomeStatus::Completed,
                     error: None,
                     tool_catalog: None,
@@ -9866,6 +10608,8 @@ async fn steer_receipts_outlive_caller_cancellation_after_engine_acceptance() ->
     tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -9953,6 +10697,8 @@ async fn steer_rejects_a_terminal_durable_turn_without_dispatch_or_item() -> Res
     tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,
@@ -10226,6 +10972,12 @@ async fn compaction_lifecycle_emits_item_events_with_compaction_counts() -> Resu
                                 output_tokens: 3,
                                 ..Usage::default()
                             },
+                            parent_route_usage: Usage {
+                                input_tokens: 3,
+                                output_tokens: 3,
+                                ..Usage::default()
+                            },
+                            routed_usage_dropped_records: 0,
                             status: TurnOutcomeStatus::Completed,
                             error: None,
                             tool_catalog: None,
@@ -10263,6 +11015,12 @@ async fn compaction_lifecycle_emits_item_events_with_compaction_counts() -> Resu
                                 output_tokens: 1,
                                 ..Usage::default()
                             },
+                            parent_route_usage: Usage {
+                                input_tokens: 1,
+                                output_tokens: 1,
+                                ..Usage::default()
+                            },
+                            routed_usage_dropped_records: 0,
                             status: TurnOutcomeStatus::Completed,
                             error: None,
                             tool_catalog: None,
@@ -10473,15 +11231,18 @@ fn opening_manager_recovers_stale_queued_and_in_progress_work() -> Result<()> {
         ended_at: None,
         duration_ms: None,
         usage: None,
+        effective_route_usage: None,
         permission_posture: None,
         effective_provider: None,
         effective_provider_id: None,
         effective_billing_surface: None,
         effective_endpoint_fingerprint: None,
+        effective_provider_live_pricing: None,
         effective_billing_mode: None,
         effective_dispatched_at: None,
         effective_model: None,
         routed_usage: Vec::new(),
+        routed_usage_drop_records: Vec::new(),
         routed_usage_source_ids: Vec::new(),
         routed_usage_dropped_records: 0,
         error: None,
@@ -10500,15 +11261,18 @@ fn opening_manager_recovers_stale_queued_and_in_progress_work() -> Result<()> {
         ended_at: None,
         duration_ms: None,
         usage: None,
+        effective_route_usage: None,
         permission_posture: None,
         effective_provider: None,
         effective_provider_id: None,
         effective_billing_surface: None,
         effective_endpoint_fingerprint: None,
+        effective_provider_live_pricing: None,
         effective_billing_mode: None,
         effective_dispatched_at: None,
         effective_model: None,
         routed_usage: Vec::new(),
+        routed_usage_drop_records: Vec::new(),
         routed_usage_source_ids: Vec::new(),
         routed_usage_dropped_records: 0,
         error: None,
@@ -10773,15 +11537,18 @@ fn seed_turns_with_user_messages(
             ended_at: Some(created_at),
             duration_ms: Some(0),
             usage: None,
+            effective_route_usage: None,
             permission_posture: None,
             effective_provider: None,
             effective_provider_id: None,
             effective_billing_surface: None,
             effective_endpoint_fingerprint: None,
+            effective_provider_live_pricing: None,
             effective_billing_mode: None,
             effective_dispatched_at: None,
             effective_model: None,
             routed_usage: Vec::new(),
+            routed_usage_drop_records: Vec::new(),
             routed_usage_source_ids: Vec::new(),
             routed_usage_dropped_records: 0,
             error: None,
@@ -11129,6 +11896,8 @@ async fn agent_mail_release_acceptance_two_task_matrix() -> Result<()> {
         .tx_event
         .send(EngineEvent::TurnComplete {
             usage: Usage::default(),
+            parent_route_usage: Usage::default(),
+            routed_usage_dropped_records: 0,
             status: TurnOutcomeStatus::Completed,
             error: None,
             tool_catalog: None,

@@ -84,8 +84,9 @@ pub enum MailboxMessage {
         /// this across direct durability, mailbox replay, and restart dedupe.
         source_id: String,
         /// Immutable provider/model/billing evidence captured before the
-        /// child request was sent.
-        route: crate::cost_status::EffectiveRouteEnvelope,
+        /// child request was sent. Boxed: the envelope dwarfs every other
+        /// variant, and mailboxes queue many messages.
+        route: Box<crate::cost_status::EffectiveRouteEnvelope>,
         /// Provider usage payload, including cache-hit/cache-miss fields.
         usage: Usage,
     },
@@ -141,7 +142,7 @@ impl MailboxMessage {
         Self::TokenUsage {
             agent_id: agent_id.into(),
             source_id: source_id.into(),
-            route,
+            route: Box::new(route),
             usage,
         }
     }
@@ -618,7 +619,7 @@ mod tests {
                 MailboxMessage::TokenUsage {
                     agent_id: "a9".into(),
                     source_id: "response-a9".into(),
-                    route: test_route(ApiProvider::Deepseek, "deepseek-v4-flash"),
+                    route: Box::new(test_route(ApiProvider::Deepseek, "deepseek-v4-flash")),
                     usage: Usage {
                         input_tokens: 100,
                         output_tokens: 50,
@@ -641,6 +642,7 @@ mod tests {
             model: "k3".to_string(),
             billing_surface: Some(crate::pricing::MOONSHOT_KIMI_CODE_BILLING_SURFACE.to_string()),
             endpoint_fingerprint: Some("a".repeat(64)),
+            provider_live_pricing: None,
             billing_mode: crate::cost_status::RouteBillingMode::Subscription,
             dispatched_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1_234, 0)
                 .expect("timestamp"),

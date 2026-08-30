@@ -18,6 +18,7 @@ use std::{future::Future, pin::Pin};
 use anyhow::Result;
 use futures_util::future::join_all;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 use crate::llm_client::LlmClient;
 use crate::models::Role;
@@ -27,6 +28,183 @@ use crate::models::{
 };
 use crate::repl::runtime::{BatchResp, RpcDispatcher, RpcRequest, RpcResponse, SingleResp};
 use crate::utils::spawn_supervised;
+
+/// One pre-dispatch reservation in the shared routed-usage ledger.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RlmUsageReservation {
+    index: usize,
+}
+
+#[derive(Debug, Default)]
+struct RlmUsageState {
+    ledger_id: String,
+    usage: Usage,
+    records: Vec<Option<RlmUsageSlot>>,
+    drop_records: Vec<crate::cost_status::RuntimeUsageDropRecord>,
+    dropped_records: u64,
+}
+
+#[derive(Debug)]
+struct RlmUsageSlot {
+    record: crate::cost_status::RuntimeUsageRecord,
+    completed: bool,
+}
+
+/// Shared, bounded provider-call ledger for one complete RLM tree.
+///
+/// Every root, child, batch member, and recursive call reserves one slot
+/// before invoking a provider. A distinct call is never coalesced merely
+/// because it used the same route: its dispatch instant and frozen quote are
+/// independent accounting evidence. Sharing one accumulator across recursion
+/// makes the bound global instead of allowing every nested bridge to reset it.
+#[derive(Debug, Clone)]
+pub(crate) struct RlmUsageAccumulator {
+    state: Arc<Mutex<RlmUsageState>>,
+}
+
+/// Atomic snapshot returned after all RPC work for a round has settled.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RlmUsageSnapshot {
+    pub usage: Usage,
+    pub records: Vec<crate::cost_status::RuntimeUsageRecord>,
+    /// Exact frozen routes for provider-success responses that did not carry
+    /// authoritative usage. Keeping these separate prevents a missing payload
+    /// from becoming a priced zero-usage receipt.
+    pub drop_records: Vec<crate::cost_status::RuntimeUsageDropRecord>,
+    /// Calls whose execution/usage became ambiguous (for example a timeout).
+    /// They are never represented as authoritative zero-usage responses.
+    pub dropped_records: u64,
+}
+
+impl RlmUsageAccumulator {
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(RlmUsageState {
+                ledger_id: Uuid::new_v4().simple().to_string(),
+                ..RlmUsageState::default()
+            })),
+        }
+    }
+
+    /// Reserve durable accounting capacity before a provider request.
+    /// Definite transport failure cancels the slot; ambiguous cancellation is
+    /// explicit incomplete coverage. Reaching the cap rejects before any
+    /// unreceipted provider work can occur.
+    pub(crate) async fn reserve(
+        &self,
+        route: crate::cost_status::EffectiveRouteEnvelope,
+    ) -> std::result::Result<RlmUsageReservation, String> {
+        let mut state = self.state.lock().await;
+        if state.records.len() == crate::cost_status::MAX_CHILD_USAGE_RECORDS {
+            return Err(format!(
+                "RLM provider-call receipt limit reached ({}); request rejected before dispatch",
+                crate::cost_status::MAX_CHILD_USAGE_RECORDS
+            ));
+        }
+        let index = state.records.len();
+        let source_id = format!("rlm:{}:request:{index}", state.ledger_id);
+        state.records.push(Some(RlmUsageSlot {
+            record: crate::cost_status::RuntimeUsageRecord {
+                source_id,
+                usage: crate::cost_status::EffectiveRouteUsage {
+                    route: route.sanitized_for_persistence(),
+                    usage: Usage::default(),
+                },
+            },
+            completed: false,
+        }));
+        Ok(RlmUsageReservation { index })
+    }
+
+    /// Attach a provider's reported usage to its already-reserved exact route.
+    pub(crate) async fn complete(&self, reservation: RlmUsageReservation, usage: &Usage) {
+        let mut state = self.state.lock().await;
+        let completed = if let Some(Some(slot)) = state.records.get_mut(reservation.index)
+            && !slot.completed
+        {
+            super::add_usage_with_prompt_cache(&mut slot.record.usage.usage, usage);
+            slot.completed = true;
+            true
+        } else {
+            false
+        };
+        if completed {
+            super::add_usage_with_prompt_cache(&mut state.usage, usage);
+        }
+    }
+
+    /// Settle a decoded provider-success response without inventing usage.
+    /// `MessageResponse::usage == Usage::default()` is also what adapters
+    /// produce when the provider omitted the payload, so it is not proof of a
+    /// genuine zero-token request.
+    pub(crate) async fn settle_provider_success(
+        &self,
+        reservation: RlmUsageReservation,
+        usage: &Usage,
+    ) {
+        if usage == &Usage::default() {
+            self.cancel(reservation, true).await;
+        } else {
+            self.complete(reservation, usage).await;
+        }
+    }
+
+    /// Remove a reservation that never produced provider-reported usage.
+    /// Ambiguous execution increments explicit incomplete coverage instead of
+    /// being persisted as a priced-zero response.
+    pub(crate) async fn cancel(&self, reservation: RlmUsageReservation, coverage_unknown: bool) {
+        let mut state = self.state.lock().await;
+        let cancelled = state.records.get_mut(reservation.index).and_then(|slot| {
+            if slot.as_ref().is_some_and(|slot| !slot.completed) {
+                slot.take()
+            } else {
+                None
+            }
+        });
+        if let Some(slot) = cancelled
+            && coverage_unknown
+        {
+            state
+                .drop_records
+                .push(crate::cost_status::RuntimeUsageDropRecord {
+                    source_id: slot.record.source_id,
+                    route: slot.record.usage.route,
+                });
+            state.dropped_records = state.dropped_records.saturating_add(1);
+        }
+    }
+
+    pub(crate) async fn snapshot(&self) -> RlmUsageSnapshot {
+        let state = self.state.lock().await;
+        let pending = state
+            .records
+            .iter()
+            .flatten()
+            .filter(|slot| !slot.completed)
+            .map(|slot| crate::cost_status::RuntimeUsageDropRecord {
+                source_id: slot.record.source_id.clone(),
+                route: slot.record.usage.route.clone(),
+            })
+            .collect::<Vec<_>>();
+        let mut drop_records = state.drop_records.clone();
+        drop_records.extend(pending.iter().cloned());
+        RlmUsageSnapshot {
+            usage: state.usage.clone(),
+            records: state
+                .records
+                .iter()
+                .flatten()
+                .filter(|slot| slot.completed)
+                .map(|slot| slot.record.clone())
+                .collect(),
+            drop_records,
+            dropped_records: state
+                .dropped_records
+                .saturating_add(u64::try_from(pending.len()).unwrap_or(u64::MAX)),
+        }
+    }
+}
 
 /// Object-safe runtime-model adapter for a working kernel.
 ///
@@ -124,7 +302,7 @@ pub struct RlmBridge {
     /// Recursion budget remaining for `Rlm` / `RlmBatch` requests. When
     /// zero, those requests fall back to plain `Llm` completions.
     depth_remaining: u32,
-    usage: Arc<Mutex<Usage>>,
+    usage: RlmUsageAccumulator,
 }
 
 impl RlmBridge {
@@ -133,16 +311,30 @@ impl RlmBridge {
         child_model: String,
         depth_remaining: u32,
     ) -> Self {
+        Self::with_usage_accumulator(
+            client,
+            child_model,
+            depth_remaining,
+            RlmUsageAccumulator::new(),
+        )
+    }
+
+    pub(crate) fn with_usage_accumulator(
+        client: Arc<dyn RlmLlmClient>,
+        child_model: String,
+        depth_remaining: u32,
+        usage: RlmUsageAccumulator,
+    ) -> Self {
         Self {
             client,
             child_model,
             depth_remaining,
-            usage: Arc::new(Mutex::new(Usage::default())),
+            usage,
         }
     }
 
-    pub fn usage_handle(&self) -> Arc<Mutex<Usage>> {
-        Arc::clone(&self.usage)
+    pub(crate) async fn usage_snapshot(&self) -> RlmUsageSnapshot {
+        self.usage.snapshot().await
     }
 
     async fn dispatch_llm(
@@ -155,6 +347,15 @@ impl RlmBridge {
         let request_route = self
             .client
             .effective_route_envelope(&self.child_model, chrono::Utc::now());
+        let reservation = match self.usage.reserve(request_route.clone()).await {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                return SingleResp {
+                    text: String::new(),
+                    error: Some(error),
+                };
+            }
+        };
         let route_max_tokens = self
             .client
             .effective_max_output_tokens(&request_route.model);
@@ -191,12 +392,14 @@ impl RlmBridge {
             match tokio::time::timeout(Duration::from_secs(CHILD_TIMEOUT_SECS), fut).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
+                    self.usage.cancel(reservation, false).await;
                     return SingleResp {
                         text: String::new(),
                         error: Some(format!("llm_query failed: {e}")),
                     };
                 }
                 Err(_) => {
+                    self.usage.cancel(reservation, true).await;
                     return SingleResp {
                         text: String::new(),
                         error: Some(format!("llm_query timed out after {CHILD_TIMEOUT_SECS}s")),
@@ -204,10 +407,12 @@ impl RlmBridge {
                 }
             };
 
-        {
-            let mut u = self.usage.lock().await;
-            super::add_usage_with_prompt_cache(&mut u, &response.usage);
-        }
+        // Incomplete output is rejected below, but it is still a successful
+        // provider response and therefore billed. Complete the reserved route
+        // before inspecting the stop reason.
+        self.usage
+            .settle_provider_success(reservation, &response.usage)
+            .await;
 
         if is_incomplete_stop_reason(response.stop_reason.as_deref()) {
             return SingleResp {
@@ -279,7 +484,7 @@ impl RlmBridge {
 
         // Recursive call. The dyn-erasure on `run_rlm_turn_inner` breaks
         // the `bridge → turn → bridge` opaque-future cycle.
-        let result = super::turn::run_rlm_turn_inner(
+        let result = super::turn::run_rlm_turn_inner_with_usage(
             Arc::clone(&self.client),
             child_model.clone(),
             prompt,
@@ -287,15 +492,11 @@ impl RlmBridge {
             child_model,
             tx,
             self.depth_remaining.saturating_sub(1),
+            self.usage.clone(),
         )
         .await;
 
         drain.abort();
-
-        {
-            let mut u = self.usage.lock().await;
-            super::add_usage_with_prompt_cache(&mut u, &result.usage);
-        }
 
         SingleResp {
             text: result.answer,
@@ -518,9 +719,87 @@ mod tests {
             Some(SystemPrompt::Text("child system".to_string()))
         );
 
-        let usage = bridge.usage.lock().await;
-        assert_eq!(usage.input_tokens, 7);
-        assert_eq!(usage.output_tokens, 11);
+        let snapshot = bridge.usage_snapshot().await;
+        assert_eq!(snapshot.usage.input_tokens, 7);
+        assert_eq!(snapshot.usage.output_tokens, 11);
+        assert_eq!(snapshot.records.len(), 1);
+        assert_eq!(snapshot.records[0].usage.usage, snapshot.usage);
+        assert!(snapshot.drop_records.is_empty());
+        assert_eq!(snapshot.dropped_records, 0);
+    }
+
+    #[tokio::test]
+    async fn llm_dispatch_keeps_semantic_success_but_marks_missing_usage_once() {
+        let mock = Arc::new(MockLlmClient::new(Vec::new()));
+        mock.push_message_response(mock_response_with_usage(
+            "usable child answer",
+            Usage::default(),
+        ));
+        let bridge = bridge_for(Arc::clone(&mock), 1);
+
+        let response = bridge
+            .dispatch(RpcRequest::Llm {
+                prompt: "child prompt".to_string(),
+                model: None,
+                max_tokens: None,
+                system: None,
+            })
+            .await;
+
+        let RpcResponse::Single(response) = response else {
+            panic!("expected single response");
+        };
+        assert_eq!(response.text, "usable child answer");
+        assert!(response.error.is_none());
+
+        let first = bridge.usage_snapshot().await;
+        let replay = bridge.usage_snapshot().await;
+        assert_eq!(first.usage, Usage::default());
+        assert!(first.records.is_empty());
+        assert_eq!(first.drop_records.len(), 1);
+        assert_eq!(first.dropped_records, 1);
+        assert_eq!(replay.drop_records, first.drop_records);
+        assert_eq!(replay.dropped_records, 1);
+        assert_eq!(first.drop_records[0].route.model, "child-model");
+        assert!(first.drop_records[0].source_id.starts_with("rlm:"));
+    }
+
+    #[tokio::test]
+    async fn repeated_reservation_settlement_cannot_duplicate_usage_or_missing_coverage() {
+        let mock = Arc::new(MockLlmClient::new(Vec::new()));
+        let bridge = bridge_for(Arc::clone(&mock), 1);
+        let route = RlmLlmClient::effective_route_envelope(
+            mock.as_ref(),
+            "child-model",
+            chrono::Utc::now(),
+        );
+
+        let usage_reservation = bridge
+            .usage
+            .reserve(route.clone())
+            .await
+            .expect("usage reservation");
+        let reported = Usage {
+            input_tokens: 3,
+            output_tokens: 5,
+            ..Usage::default()
+        };
+        bridge.usage.complete(usage_reservation, &reported).await;
+        bridge.usage.complete(usage_reservation, &reported).await;
+
+        let missing_reservation = bridge
+            .usage
+            .reserve(route)
+            .await
+            .expect("missing reservation");
+        bridge.usage.cancel(missing_reservation, true).await;
+        bridge.usage.cancel(missing_reservation, true).await;
+
+        let snapshot = bridge.usage_snapshot().await;
+        assert_eq!(snapshot.usage, reported);
+        assert_eq!(snapshot.records.len(), 1);
+        assert_eq!(snapshot.drop_records.len(), 1);
+        assert_eq!(snapshot.dropped_records, 1);
     }
 
     #[tokio::test]
@@ -555,7 +834,7 @@ mod tests {
             other => panic!("expected single response, got {other:?}"),
         }
 
-        let usage = bridge.usage.lock().await;
+        let usage = bridge.usage_snapshot().await.usage;
         assert_eq!(usage.input_tokens, 1000);
         assert_eq!(usage.output_tokens, 100);
         assert_eq!(usage.prompt_cache_hit_tokens, Some(800));
@@ -601,7 +880,10 @@ mod tests {
             other => panic!("expected single response, got {other:?}"),
         }
 
-        assert_eq!(*bridge.usage.lock().await, usage);
+        let snapshot = bridge.usage_snapshot().await;
+        assert_eq!(snapshot.usage, usage);
+        assert_eq!(snapshot.records.len(), 1);
+        assert_eq!(snapshot.records[0].usage.usage, usage);
         assert_eq!(mock.call_count(), 1, "truncation must not retry");
     }
 
@@ -643,9 +925,77 @@ mod tests {
                 .all(|request| request.model == "child-model")
         );
 
-        let usage = bridge.usage.lock().await;
-        assert_eq!(usage.input_tokens, 9);
-        assert_eq!(usage.output_tokens, 12);
+        let snapshot = bridge.usage_snapshot().await;
+        assert_eq!(snapshot.usage.input_tokens, 9);
+        assert_eq!(snapshot.usage.output_tokens, 12);
+        assert_eq!(snapshot.records.len(), 3);
+        assert_ne!(
+            snapshot.records[0].source_id, snapshot.records[1].source_id,
+            "distinct provider calls must keep distinct stable identities"
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_accumulator_rejects_the_first_unreceipted_request_before_provider_work() {
+        let mock = Arc::new(MockLlmClient::new(Vec::new()));
+        let client: Arc<dyn RlmLlmClient> = mock.clone();
+        let usage = RlmUsageAccumulator::new();
+        let bridge = RlmBridge::with_usage_accumulator(
+            Arc::clone(&client),
+            "child-model".to_string(),
+            1,
+            usage.clone(),
+        );
+        let nested_bridge =
+            RlmBridge::with_usage_accumulator(client, "child-model".to_string(), 1, usage);
+        let route = RlmLlmClient::effective_route_envelope(
+            mock.as_ref(),
+            "child-model",
+            chrono::Utc::now(),
+        );
+        for _ in 0..crate::cost_status::MAX_CHILD_USAGE_RECORDS {
+            let reservation = bridge
+                .usage
+                .reserve(route.clone())
+                .await
+                .expect("receipt slot below cap");
+            bridge
+                .usage
+                .complete(
+                    reservation,
+                    &Usage {
+                        input_tokens: 1,
+                        ..Usage::default()
+                    },
+                )
+                .await;
+        }
+
+        let response = nested_bridge
+            .dispatch(RpcRequest::Llm {
+                prompt: "must not reach provider".to_string(),
+                model: None,
+                max_tokens: None,
+                system: None,
+            })
+            .await;
+        let RpcResponse::Single(response) = response else {
+            panic!("expected single response");
+        };
+        assert!(
+            response
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("rejected before dispatch"))
+        );
+        assert_eq!(mock.call_count(), 0);
+        let snapshot = bridge.usage_snapshot().await;
+        assert_eq!(
+            snapshot.records.len(),
+            crate::cost_status::MAX_CHILD_USAGE_RECORDS
+        );
+        assert_eq!(snapshot.dropped_records, 0);
+        assert!(snapshot.drop_records.is_empty());
     }
 
     #[tokio::test]
@@ -669,7 +1019,7 @@ mod tests {
             other => panic!("expected single response, got {other:?}"),
         }
 
-        let usage = bridge.usage.lock().await;
+        let usage = bridge.usage_snapshot().await.usage;
         assert_eq!(usage.input_tokens, 3);
         assert_eq!(usage.output_tokens, 5);
 

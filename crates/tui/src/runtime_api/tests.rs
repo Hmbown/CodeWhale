@@ -441,15 +441,18 @@ fn messages_from_thread_detail_batches_tool_results() {
         ended_at: Some(now),
         duration_ms: Some(0),
         usage: None,
+        effective_route_usage: None,
         permission_posture: Some("ask".to_string()),
         effective_provider: None,
         effective_provider_id: None,
         effective_billing_surface: None,
         effective_endpoint_fingerprint: None,
+        effective_provider_live_pricing: None,
         effective_billing_mode: None,
         effective_dispatched_at: None,
         effective_model: None,
         routed_usage: Vec::new(),
+        routed_usage_drop_records: Vec::new(),
         routed_usage_source_ids: Vec::new(),
         routed_usage_dropped_records: 0,
         error: None,
@@ -920,6 +923,155 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
         tokio::task::JoinHandle<()>,
     )>,
 > {
+    let (setup_tx, setup_rx) = oneshot::channel();
+    // If this test sealed the process environment (`lock_test_env`), the
+    // server thread must join that scope: its `Config::load` reads env through
+    // `with_test_env_lock`, which would otherwise block on the mutex the test
+    // holds while awaiting this very setup — a deadlock.
+    let env_ticket = crate::test_support::env_scope_ticket();
+    spawn_product_stack_server(
+        root,
+        sessions_dir,
+        runtime_token,
+        mobile_enabled,
+        workspace,
+        overrides,
+        env_ticket,
+        setup_tx,
+    );
+    let Some((addr, runtime_threads, shutdown_tx)) = setup_rx
+        .await
+        .context("runtime-api test server thread ended during setup")??
+    else {
+        return Ok(None);
+    };
+    // Owns the shutdown side for as long as the test keeps the handle alive:
+    // aborting it (or the test runtime dropping it) closes the listener and
+    // ends the server thread.
+    let handle = tokio::spawn(async move {
+        let _shutdown = shutdown_tx;
+        std::future::pending::<()>().await
+    });
+    Ok(Some((addr, runtime_threads, handle)))
+}
+
+/// What the server thread hands back once the router is bound: everything the
+/// test body needs, plus the shutdown side of the server.
+type TestServerSetup = (SocketAddr, SharedRuntimeThreadManager, oneshot::Sender<()>);
+
+/// Builds and serves the Runtime API router where the product builds and
+/// serves it: on a thread with the product's `CODEWHALE_MAIN_STACK_BYTES`
+/// stack.
+///
+/// `#[tokio::test]` drives its current-thread runtime on the 2 MiB libtest
+/// thread, so a harness that built its state and spawned its server onto that
+/// runtime ran every product path — config load and reload (the serde
+/// `toml::de::visit_map` frames for the full `Config`), manager construction,
+/// thread lifecycle, streaming — on a stack the product never gives it
+/// (`lib.rs` sizes the runtime workers with `CODEWHALE_MAIN_STACK_BYTES`).
+/// Config load under a profile and the thread-lifecycle path marginally
+/// overflowed 2 MiB in debug builds (`has overflowed its stack`, SIGABRT for
+/// the whole lib suite), which CI masked with `RUST_MIN_STACK`. Running setup
+/// *and* serving on one product-sized thread removes the class: the libtest
+/// thread keeps only the test body and its HTTP client, and no product frame
+/// depth can overflow it.
+///
+/// Setup results come back through `setup_tx`; the caller wraps the shutdown
+/// sender in the `JoinHandle` the call sites expect. Nothing here runs on the
+/// test's runtime, so the server thread must outlive setup: it serves until
+/// the shutdown sender is dropped.
+///
+/// `env_ticket` adopts the thread into the calling test's sealed env scope
+/// (`test_env_lock::join_env_scope`), so its `Config::load` env reads see the
+/// test's environment instead of blocking on the mutex the test holds while
+/// awaiting setup. `None` when the caller sealed nothing.
+fn spawn_product_stack_server(
+    root: PathBuf,
+    sessions_dir: PathBuf,
+    runtime_token: Option<String>,
+    mobile_enabled: bool,
+    workspace: PathBuf,
+    overrides: TestServerOverrides,
+    env_ticket: Option<crate::test_support::EnvScopeTicket>,
+    setup_tx: oneshot::Sender<Result<Option<TestServerSetup>>>,
+) {
+    std::thread::Builder::new()
+        .name("runtime-api-test-server".to_string())
+        .stack_size(crate::CODEWHALE_MAIN_STACK_BYTES)
+        .spawn(move || {
+            // Adopted for the thread's lifetime; the scope's generation check
+            // refuses enrollment once the sealing test has ended.
+            let _membership = crate::test_support::join_env_scope(env_ticket);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime-api test server runtime");
+            runtime.block_on(async move {
+                match build_test_server(
+                    root,
+                    sessions_dir,
+                    runtime_token,
+                    mobile_enabled,
+                    workspace,
+                    overrides,
+                )
+                .await
+                {
+                    Ok(Some((listener, app, addr, runtime_threads))) => {
+                        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+                        if setup_tx
+                            .send(Ok(Some((addr, runtime_threads, shutdown_tx))))
+                            .is_err()
+                        {
+                            // The test gave up waiting; do not serve.
+                            return;
+                        }
+                        listener
+                            .set_nonblocking(true)
+                            .expect("nonblocking test listener");
+                        let listener =
+                            TcpListener::from_std(listener).expect("register test listener");
+                        tokio::select! {
+                            _ = async {
+                                let _ = axum::serve(
+                                    listener,
+                                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                                )
+                                .await;
+                            } => {}
+                            _ = shutdown_rx => {}
+                        }
+                    }
+                    Ok(None) => {
+                        let _ = setup_tx.send(Ok(None));
+                    }
+                    Err(err) => {
+                        let _ = setup_tx.send(Err(err));
+                    }
+                }
+            });
+        })
+        .expect("spawn runtime-api test server thread");
+}
+
+/// The whole harness body — config load, managers, router build — formerly
+/// inline in `spawn_test_server_with_root_token_mobile_workspace_and_overrides`.
+/// Runs on the product-stack server thread (see `spawn_product_stack_server`).
+async fn build_test_server(
+    root: PathBuf,
+    sessions_dir: PathBuf,
+    runtime_token: Option<String>,
+    mobile_enabled: bool,
+    workspace: PathBuf,
+    overrides: TestServerOverrides,
+) -> Result<
+    Option<(
+        std::net::TcpListener,
+        axum::Router,
+        SocketAddr,
+        SharedRuntimeThreadManager,
+    )>,
+> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     fs::create_dir_all(&sessions_dir)?;
     fs::create_dir_all(&workspace)?;
@@ -934,8 +1086,6 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
             ..Config::default()
         }
     };
-    config.mcp_config_path = Some(root.join("mcp.json").to_string_lossy().to_string());
-
     config.mcp_config_path = Some(root.join("mcp.json").to_string_lossy().to_string());
     let manager = TaskManager::start_with_executor(
         TaskManagerConfig {
@@ -966,7 +1116,9 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
     let sub_agent_manager = overrides
         .sub_agent_manager
         .unwrap_or_else(|| runtime_api_sub_agent_manager(&workspace, 2));
-    let listener = match TcpListener::bind("127.0.0.1:0").await {
+    // A std listener: the server thread registers it with its own runtime
+    // after setup is reported (see `spawn_product_stack_server`).
+    let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => return Ok(None),
         Err(err) => return Err(err.into()),
@@ -1002,14 +1154,7 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
         compat_stream_test_hook: overrides.compat_stream_test_hook,
     };
     let app = build_router(state);
-    let handle = tokio::spawn(async move {
-        let _ = axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await;
-    });
-    Ok(Some((addr, runtime_threads, handle)))
+    Ok(Some((listener, app, addr, runtime_threads)))
 }
 
 async fn spawn_test_server() -> Result<
@@ -2514,6 +2659,12 @@ async fn compatibility_stream_closes_losslessly_across_replay_live_handoff() -> 
                     output_tokens: 1,
                     ..Usage::default()
                 },
+                parent_route_usage: Usage {
+                    input_tokens: 3,
+                    output_tokens: 1,
+                    ..Usage::default()
+                },
+                routed_usage_dropped_records: 0,
                 status: TurnOutcomeStatus::Completed,
                 error: None,
                 tool_catalog: None,
@@ -2762,6 +2913,8 @@ async fn compatibility_stream_exposes_and_resolves_user_input_without_answer_ech
             .tx_event
             .send(EngineEvent::TurnComplete {
                 usage: Usage::default(),
+                parent_route_usage: Usage::default(),
+                routed_usage_dropped_records: 0,
                 status: TurnOutcomeStatus::Completed,
                 error: None,
                 tool_catalog: None,
@@ -3125,6 +3278,12 @@ async fn thread_endpoints_expose_lifecycle_contract() -> Result<()> {
                                 output_tokens: 5,
                                 ..Usage::default()
                             },
+                            parent_route_usage: Usage {
+                                input_tokens: 10,
+                                output_tokens: 5,
+                                ..Usage::default()
+                            },
+                            routed_usage_dropped_records: 0,
                             status: TurnOutcomeStatus::Completed,
                             error: None,
                             tool_catalog: None,
@@ -3140,6 +3299,8 @@ async fn thread_endpoints_expose_lifecycle_contract() -> Result<()> {
                                 output_tokens: 0,
                                 ..Usage::default()
                             },
+                            parent_route_usage: Usage::default(),
+                            routed_usage_dropped_records: 0,
                             status: TurnOutcomeStatus::Completed,
                             error: None,
                             tool_catalog: None,
@@ -3277,6 +3438,8 @@ async fn turn_endpoint_operation_key_returns_original_and_conflicts_on_mismatch(
             let _ = tx_event
                 .send(EngineEvent::TurnComplete {
                     usage: Usage::default(),
+                    parent_route_usage: Usage::default(),
+                    routed_usage_dropped_records: 0,
                     status: TurnOutcomeStatus::Completed,
                     error: None,
                     tool_catalog: None,
@@ -3385,6 +3548,12 @@ async fn events_endpoint_respects_since_seq_cursor() -> Result<()> {
                     output_tokens: 3,
                     ..Usage::default()
                 },
+                parent_route_usage: Usage {
+                    input_tokens: 5,
+                    output_tokens: 3,
+                    ..Usage::default()
+                },
+                routed_usage_dropped_records: 0,
                 status: TurnOutcomeStatus::Completed,
                 error: None,
                 tool_catalog: None,
@@ -3604,6 +3773,12 @@ async fn steer_and_interrupt_endpoints_work_on_active_turn() -> Result<()> {
                     output_tokens: 1,
                     ..Usage::default()
                 },
+                parent_route_usage: Usage {
+                    input_tokens: 2,
+                    output_tokens: 1,
+                    ..Usage::default()
+                },
+                routed_usage_dropped_records: 0,
                 status: TurnOutcomeStatus::Completed,
                 error: None,
                 tool_catalog: None,
@@ -3961,6 +4136,12 @@ async fn stream_endpoint_remains_backward_compatible() -> Result<()> {
                     output_tokens: 2,
                     ..Usage::default()
                 },
+                parent_route_usage: Usage {
+                    input_tokens: 4,
+                    output_tokens: 2,
+                    ..Usage::default()
+                },
+                routed_usage_dropped_records: 0,
                 status: TurnOutcomeStatus::Completed,
                 error: None,
                 tool_catalog: None,
@@ -4650,6 +4831,12 @@ async fn session_create_from_thread_rejects_active_turn() -> Result<()> {
                     output_tokens: 1,
                     ..Usage::default()
                 },
+                parent_route_usage: Usage {
+                    input_tokens: 2,
+                    output_tokens: 1,
+                    ..Usage::default()
+                },
+                routed_usage_dropped_records: 0,
                 status: TurnOutcomeStatus::Completed,
                 error: None,
                 tool_catalog: None,
@@ -4793,7 +4980,10 @@ async fn session_summary_route_projects_rows_and_honours_archive_filters() -> Re
     let client = crate::tls::reqwest_client();
 
     let active: Vec<serde_json::Value> = client
-        .get(format!("http://{addr}/v1/sessions/summary"))
+        .get(format!(
+            "http://127.0.0.1:{}/v1/sessions/summary",
+            addr.port()
+        ))
         .send()
         .await?
         .error_for_status()?
@@ -4823,7 +5013,8 @@ async fn session_summary_route_projects_rows_and_honours_archive_filters() -> Re
 
     let archived: Vec<serde_json::Value> = client
         .get(format!(
-            "http://{addr}/v1/sessions/summary?archived_only=true"
+            "http://127.0.0.1:{}/v1/sessions/summary?archived_only=true",
+            addr.port()
         ))
         .send()
         .await?
@@ -4854,7 +5045,10 @@ async fn session_patch_route_renames_archives_and_reports_real_changes() -> Resu
     let client = crate::tls::reqwest_client();
 
     let patched: serde_json::Value = client
-        .patch(format!("http://{addr}/v1/sessions/sess-patch"))
+        .patch(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-patch",
+            addr.port()
+        ))
         .json(&json!({ "title": "After", "archived": true }))
         .send()
         .await?
@@ -4874,7 +5068,10 @@ async fn session_patch_route_renames_archives_and_reports_real_changes() -> Resu
 
     // A re-patch to the same state changes nothing, and says so.
     let repeat: serde_json::Value = client
-        .patch(format!("http://{addr}/v1/sessions/sess-patch"))
+        .patch(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-patch",
+            addr.port()
+        ))
         .json(&json!({ "archived": true }))
         .send()
         .await?
@@ -4891,7 +5088,10 @@ async fn session_patch_route_renames_archives_and_reports_real_changes() -> Resu
 
     // An empty body is a client error, not a silent no-op.
     let empty = client
-        .patch(format!("http://{addr}/v1/sessions/sess-patch"))
+        .patch(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-patch",
+            addr.port()
+        ))
         .json(&json!({}))
         .send()
         .await?;
@@ -4899,7 +5099,10 @@ async fn session_patch_route_renames_archives_and_reports_real_changes() -> Resu
 
     // A blank title is rejected with the reason, not accepted.
     let blank = client
-        .patch(format!("http://{addr}/v1/sessions/sess-patch"))
+        .patch(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-patch",
+            addr.port()
+        ))
         .json(&json!({ "title": "   " }))
         .send()
         .await?;
@@ -4926,7 +5129,10 @@ async fn session_patch_route_refuses_a_live_session_with_a_conflict() -> Result<
 
     crate::session_manager::set_live_session(Some("sess-live"));
     let conflict = client
-        .patch(format!("http://{addr}/v1/sessions/sess-live"))
+        .patch(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-live",
+            addr.port()
+        ))
         .json(&json!({ "title": "Renamed from the dashboard" }))
         .send()
         .await?;
@@ -4934,7 +5140,10 @@ async fn session_patch_route_refuses_a_live_session_with_a_conflict() -> Result<
 
     crate::session_manager::set_live_session(None);
     let allowed = client
-        .patch(format!("http://{addr}/v1/sessions/sess-live"))
+        .patch(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-live",
+            addr.port()
+        ))
         .json(&json!({ "title": "Renamed from the dashboard" }))
         .send()
         .await?;
@@ -4957,7 +5166,8 @@ async fn session_detail_route_serves_a_bounded_redacted_peek_on_request() -> Res
 
     let peek: serde_json::Value = client
         .get(format!(
-            "http://{addr}/v1/sessions/sess-peek?peek=true&entries=12"
+            "http://127.0.0.1:{}/v1/sessions/sess-peek?peek=true&entries=12",
+            addr.port()
         ))
         .send()
         .await?
@@ -4979,7 +5189,10 @@ async fn session_detail_route_serves_a_bounded_redacted_peek_on_request() -> Res
     }
 
     let detail: serde_json::Value = client
-        .get(format!("http://{addr}/v1/sessions/sess-peek"))
+        .get(format!(
+            "http://127.0.0.1:{}/v1/sessions/sess-peek",
+            addr.port()
+        ))
         .send()
         .await?
         .error_for_status()?
@@ -5463,11 +5676,13 @@ async fn session_save_merges_thread_cost_split_and_records_coverage() -> Result<
             output_tokens: 1_000,
             ..Usage::default()
         }),
+        effective_route_usage: None,
         permission_posture: None,
         effective_provider: None,
         effective_provider_id: None,
         effective_billing_surface: None,
         effective_endpoint_fingerprint: None,
+        effective_provider_live_pricing: None,
         effective_billing_mode: None,
         effective_dispatched_at: None,
         effective_model: None,
@@ -5478,6 +5693,7 @@ async fn session_save_merges_thread_cost_split_and_records_coverage() -> Result<
                 model: "deepseek-v4-flash".to_string(),
                 billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
                 endpoint_fingerprint: None,
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Metered,
                 dispatched_at: now,
             },
@@ -5487,6 +5703,7 @@ async fn session_save_merges_thread_cost_split_and_records_coverage() -> Result<
                 ..Usage::default()
             },
         }],
+        routed_usage_drop_records: Vec::new(),
         routed_usage_source_ids: Vec::new(),
         routed_usage_dropped_records: 0,
         error: None,
@@ -5648,11 +5865,13 @@ async fn session_save_persists_parent_cny_unpriced_reasons_without_double_count(
             output_tokens: 1_000,
             ..Usage::default()
         }),
+        effective_route_usage: None,
         permission_posture: None,
         effective_provider: None,
         effective_provider_id: None,
         effective_billing_surface: None,
         effective_endpoint_fingerprint: None,
+        effective_provider_live_pricing: None,
         effective_billing_mode: None,
         effective_dispatched_at: None,
         effective_model: None,
@@ -5663,6 +5882,7 @@ async fn session_save_persists_parent_cny_unpriced_reasons_without_double_count(
                 model: "deepseek-v4-flash".to_string(),
                 billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
                 endpoint_fingerprint: None,
+                provider_live_pricing: None,
                 billing_mode: crate::cost_status::RouteBillingMode::Metered,
                 dispatched_at: now,
             },
@@ -5672,6 +5892,7 @@ async fn session_save_persists_parent_cny_unpriced_reasons_without_double_count(
                 ..Usage::default()
             },
         }],
+        routed_usage_drop_records: Vec::new(),
         routed_usage_source_ids: Vec::new(),
         routed_usage_dropped_records: 0,
         error: None,
@@ -6416,15 +6637,18 @@ fn seed_summary_search_transcript(
             ended_at: Some(created_at),
             duration_ms: Some(0),
             usage: None,
+            effective_route_usage: None,
             permission_posture: None,
             effective_provider: None,
             effective_provider_id: None,
             effective_billing_surface: None,
             effective_endpoint_fingerprint: None,
+            effective_provider_live_pricing: None,
             effective_billing_mode: None,
             effective_dispatched_at: None,
             effective_model: None,
             routed_usage: Vec::new(),
+            routed_usage_drop_records: Vec::new(),
             routed_usage_source_ids: Vec::new(),
             routed_usage_dropped_records: 0,
             error: None,
@@ -7288,6 +7512,120 @@ async fn get_provider_models(
         .json()
         .await
         .expect("GET /v1/providers/{id}/models should return valid JSON")
+}
+
+#[test]
+fn provider_model_catalog_paginates_all_six_hundred_rows_without_truncation() {
+    let models = (0..600)
+        .rev()
+        .map(|index| ProviderModelEntry {
+            id: format!("openrouter/model-{index:03}"),
+            image_input: codewhale_config::route::CapabilityState::Unknown,
+        })
+        .collect::<Vec<_>>();
+    let mut cursor = None;
+    let mut observed = Vec::new();
+    let mut page_count = 0usize;
+
+    loop {
+        let response = paginate_provider_models(
+            "openrouter",
+            models.clone(),
+            &ListProviderModelsParams {
+                filter: None,
+                cursor,
+                limit: Some(MAX_PROVIDER_MODELS_PAGE_SIZE),
+            },
+        )
+        .expect("page should be valid");
+        page_count += 1;
+        assert_eq!(response.provider, "openrouter");
+        assert_eq!(response.total, 600);
+        assert!(!response.models.is_empty());
+        assert!(response.models.len() <= MAX_PROVIDER_MODELS_PAGE_SIZE);
+        observed.extend(response.models.into_iter().map(|entry| entry.id));
+        cursor = response.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    assert_eq!(page_count, 3);
+    assert_eq!(observed.len(), 600);
+    assert_eq!(
+        observed.first().map(String::as_str),
+        Some("openrouter/model-000")
+    );
+    assert_eq!(
+        observed.last().map(String::as_str),
+        Some("openrouter/model-599")
+    );
+    let unique = observed.iter().collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(unique.len(), 600);
+}
+
+#[test]
+fn provider_model_catalog_applies_filter_before_cursor_and_rejects_cross_scope_replay() {
+    let models = ["Alpha-One", "alpha-two", "beta"]
+        .into_iter()
+        .map(|id| ProviderModelEntry {
+            id: id.to_string(),
+            image_input: codewhale_config::route::CapabilityState::Unknown,
+        })
+        .collect::<Vec<_>>();
+    let first = paginate_provider_models(
+        "openrouter",
+        models.clone(),
+        &ListProviderModelsParams {
+            filter: Some(" ALPHA ".to_string()),
+            cursor: None,
+            limit: Some(1),
+        },
+    )
+    .expect("filtered first page should be valid");
+    assert_eq!(first.total, 2);
+    assert_eq!(first.models[0].id, "Alpha-One");
+    let cursor = first.next_cursor.expect("a second filtered row remains");
+
+    let second = paginate_provider_models(
+        "openrouter",
+        models.clone(),
+        &ListProviderModelsParams {
+            filter: Some("alpha".to_string()),
+            cursor: Some(cursor.clone()),
+            limit: Some(1),
+        },
+    )
+    .expect("matching filter should continue");
+    assert_eq!(second.models[0].id, "alpha-two");
+    assert!(second.next_cursor.is_none());
+
+    let replay = paginate_provider_models(
+        "baseten",
+        models,
+        &ListProviderModelsParams {
+            filter: Some("alpha".to_string()),
+            cursor: Some(cursor),
+            limit: Some(1),
+        },
+    );
+    assert!(replay.is_err(), "a cursor cannot cross provider ownership");
+}
+
+#[test]
+fn runtime_chat_relay_projection_keeps_six_hundred_safe_models_without_silent_cutoff() {
+    let models = (0..600)
+        .map(|index| format!("openrouter/model-{index:03}"))
+        .collect::<Vec<_>>();
+    let projected = runtime_chat_safe_models(models.clone()).expect("600 rows are safely bounded");
+    assert_eq!(projected, models);
+
+    let oversized = (0..=MAX_PROVIDER_MODELS_CATALOG_SIZE)
+        .map(|index| format!("provider/model-{index:05}"))
+        .collect::<Vec<_>>();
+    let error = runtime_chat_safe_models(oversized).expect_err("oversized relay must fail loudly");
+    assert!(error.contains("safe"));
+    assert!(error.contains(&MAX_PROVIDER_MODELS_CATALOG_SIZE.to_string()));
 }
 
 #[tokio::test]

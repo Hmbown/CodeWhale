@@ -16,7 +16,7 @@ use crate::models::{
 };
 use crate::repl::PythonRuntime;
 
-use super::bridge::{RlmBridge, RlmLlmClient};
+use super::bridge::{RlmBridge, RlmLlmClient, RlmUsageAccumulator};
 use super::prompt::rlm_system_prompt;
 use crate::models::Role;
 
@@ -79,6 +79,13 @@ pub struct RlmTurnResult {
     pub duration: Duration,
     pub error: Option<String>,
     pub usage: Usage,
+    /// One exact frozen route/quote receipt per admitted provider request.
+    /// Distinct calls are never coalesced, even when they share a route.
+    pub routed_usage: Vec<crate::cost_status::RuntimeUsageRecord>,
+    /// Exact routes for provider-success responses that omitted authoritative
+    /// usage metadata.
+    pub routed_usage_drop_records: Vec<crate::cost_status::RuntimeUsageDropRecord>,
+    pub routed_usage_dropped_records: u64,
     pub termination: RlmTermination,
     /// Per-round trace. Empty when the loop never reached the REPL.
     pub trace: Vec<RlmRoundTrace>,
@@ -145,7 +152,7 @@ pub(crate) fn run_rlm_turn_inner(
     tx_event: mpsc::Sender<Event>,
     max_depth: u32,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = RlmTurnResult> + Send>> {
-    Box::pin(run_rlm_turn_impl(
+    run_rlm_turn_inner_with_usage(
         client,
         model,
         prompt,
@@ -153,7 +160,41 @@ pub(crate) fn run_rlm_turn_inner(
         child_model,
         tx_event,
         max_depth,
-    ))
+        RlmUsageAccumulator::new(),
+    )
+}
+
+/// Recursive entry point that keeps one pre-dispatch receipt bound across the
+/// entire nested/batched RLM tree.
+pub(crate) fn run_rlm_turn_inner_with_usage(
+    client: Arc<dyn RlmLlmClient>,
+    model: String,
+    prompt: String,
+    root_prompt: Option<String>,
+    child_model: String,
+    tx_event: mpsc::Sender<Event>,
+    max_depth: u32,
+    usage: RlmUsageAccumulator,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = RlmTurnResult> + Send>> {
+    Box::pin(async move {
+        let mut result = run_rlm_turn_impl(
+            client,
+            model,
+            prompt,
+            root_prompt,
+            child_model,
+            tx_event,
+            max_depth,
+            usage.clone(),
+        )
+        .await;
+        let snapshot = usage.snapshot().await;
+        result.usage = snapshot.usage;
+        result.routed_usage = snapshot.records;
+        result.routed_usage_drop_records = snapshot.drop_records;
+        result.routed_usage_dropped_records = snapshot.dropped_records;
+        result
+    })
 }
 
 /// RLM turns are long-running background-style work. Do not kill the whole
@@ -175,6 +216,7 @@ async fn run_rlm_turn_impl(
     child_model: String,
     tx_event: mpsc::Sender<Event>,
     max_depth: u32,
+    routed_usage: RlmUsageAccumulator,
 ) -> RlmTurnResult {
     let start = Instant::now();
     let mut total_usage = Usage::default();
@@ -193,6 +235,9 @@ async fn run_rlm_turn_impl(
                 duration: start.elapsed(),
                 error: Some(format!("rlm: failed to stage context: {e}")),
                 usage: total_usage,
+                routed_usage: Vec::new(),
+                routed_usage_drop_records: Vec::new(),
+                routed_usage_dropped_records: 0,
                 termination: RlmTermination::Error,
                 trace,
                 total_rpcs,
@@ -211,6 +256,9 @@ async fn run_rlm_turn_impl(
                 duration: start.elapsed(),
                 error: Some(format!("rlm: failed to spawn REPL: {e}")),
                 usage: total_usage,
+                routed_usage: Vec::new(),
+                routed_usage_drop_records: Vec::new(),
+                routed_usage_dropped_records: 0,
                 termination: RlmTermination::Error,
                 trace,
                 total_rpcs,
@@ -219,8 +267,12 @@ async fn run_rlm_turn_impl(
     };
 
     // 3. Build the bridge that services llm_query / rlm_query RPCs.
-    let bridge = RlmBridge::new(Arc::clone(&client), child_model.clone(), max_depth);
-    let usage_handle = bridge.usage_handle();
+    let bridge = RlmBridge::with_usage_accumulator(
+        Arc::clone(&client),
+        child_model.clone(),
+        max_depth,
+        routed_usage.clone(),
+    );
 
     let _ = tx_event
         .send(Event::status(format!(
@@ -254,6 +306,9 @@ async fn run_rlm_turn_impl(
                     duration: start.elapsed(),
                     error: Some(format!("RLM turn timed out after {}s", timeout.as_secs())),
                     usage: total_usage,
+                    routed_usage: Vec::new(),
+                    routed_usage_drop_records: Vec::new(),
+                    routed_usage_dropped_records: 0,
                     termination: RlmTermination::Error,
                     trace: trace.clone(),
                     total_rpcs,
@@ -270,6 +325,24 @@ async fn run_rlm_turn_impl(
 
             // 4a. Root LLM generates code from metadata-only context.
             let request_route = client.effective_route_envelope(&model, chrono::Utc::now());
+            let reservation = match routed_usage.reserve(request_route.clone()).await {
+                Ok(reservation) => reservation,
+                Err(error) => {
+                    break 'turn RlmTurnResult {
+                        answer: String::new(),
+                        iterations: iteration,
+                        duration: start.elapsed(),
+                        error: Some(error),
+                        usage: total_usage,
+                        routed_usage: Vec::new(),
+                        routed_usage_drop_records: Vec::new(),
+                        routed_usage_dropped_records: 0,
+                        termination: RlmTermination::Error,
+                        trace: trace.clone(),
+                        total_rpcs,
+                    };
+                }
+            };
             let request = build_root_request(
                 &model,
                 &messages,
@@ -280,12 +353,16 @@ async fn run_rlm_turn_impl(
             let response = match client.create_message_boxed(request).await {
                 Ok(r) => r,
                 Err(e) => {
+                    routed_usage.cancel(reservation, false).await;
                     break 'turn RlmTurnResult {
                         answer: String::new(),
                         iterations: iteration + 1,
                         duration: start.elapsed(),
                         error: Some(format!("Root LLM call failed: {e}")),
                         usage: total_usage,
+                        routed_usage: Vec::new(),
+                        routed_usage_drop_records: Vec::new(),
+                        routed_usage_dropped_records: 0,
                         termination: RlmTermination::Error,
                         trace: trace.clone(),
                         total_rpcs,
@@ -293,6 +370,11 @@ async fn run_rlm_turn_impl(
                 }
             };
 
+            // Preserve billed usage even when the response is incomplete and
+            // its partial FINAL/REPL output is rejected below.
+            routed_usage
+                .settle_provider_success(reservation, &response.usage)
+                .await;
             super::add_usage_with_prompt_cache(&mut total_usage, &response.usage);
 
             if is_incomplete_stop_reason(response.stop_reason.as_deref()) {
@@ -305,6 +387,9 @@ async fn run_rlm_turn_impl(
                         "RLM root model response incomplete: provider stop reason `{reason}`; partial FINAL/REPL output was not accepted."
                     )),
                     usage: total_usage,
+                    routed_usage: Vec::new(),
+                    routed_usage_drop_records: Vec::new(),
+                    routed_usage_dropped_records: 0,
                     termination: RlmTermination::Error,
                     trace: trace.clone(),
                     total_rpcs,
@@ -331,6 +416,9 @@ async fn run_rlm_turn_impl(
                             duration: start.elapsed(),
                             error: None,
                             usage: total_usage,
+                            routed_usage: Vec::new(),
+                            routed_usage_drop_records: Vec::new(),
+                            routed_usage_dropped_records: 0,
                             termination: RlmTermination::NoCode,
                             trace: trace.clone(),
                             total_rpcs,
@@ -369,6 +457,9 @@ async fn run_rlm_turn_impl(
                     duration: start.elapsed(),
                     error: None,
                     usage: total_usage,
+                    routed_usage: Vec::new(),
+                    routed_usage_drop_records: Vec::new(),
+                    routed_usage_dropped_records: 0,
                     termination: RlmTermination::Final,
                     trace: trace.clone(),
                     total_rpcs,
@@ -393,6 +484,9 @@ async fn run_rlm_turn_impl(
                                 "RLM: model failed to emit ```repl after {MAX_CONSECUTIVE_NO_CODE} consecutive rounds"
                             )),
                             usage: total_usage,
+                            routed_usage: Vec::new(),
+                            routed_usage_drop_records: Vec::new(),
+                            routed_usage_dropped_records: 0,
                             termination: RlmTermination::NoCode,
                             trace: trace.clone(),
                             total_rpcs,
@@ -441,6 +535,9 @@ async fn run_rlm_turn_impl(
                         duration: start.elapsed(),
                         error: Some(format!("REPL execution failed: {e}")),
                         usage: total_usage,
+                        routed_usage: Vec::new(),
+                        routed_usage_drop_records: Vec::new(),
+                        routed_usage_dropped_records: 0,
                         termination: RlmTermination::Error,
                         trace: trace.clone(),
                         total_rpcs,
@@ -484,6 +581,9 @@ async fn run_rlm_turn_impl(
                     duration: start.elapsed(),
                     error: None,
                     usage: total_usage,
+                    routed_usage: Vec::new(),
+                    routed_usage_drop_records: Vec::new(),
+                    routed_usage_dropped_records: 0,
                     termination: RlmTermination::Final,
                     trace: trace.clone(),
                     total_rpcs,
@@ -534,6 +634,9 @@ async fn run_rlm_turn_impl(
                             "RLM: {MAX_CONSECUTIVE_NO_CODE} consecutive empty REPL rounds"
                         )),
                         usage: total_usage,
+                        routed_usage: Vec::new(),
+                        routed_usage_drop_records: Vec::new(),
+                        routed_usage_dropped_records: 0,
                         termination: RlmTermination::NoCode,
                         trace: trace.clone(),
                         total_rpcs,
@@ -608,24 +711,17 @@ async fn run_rlm_turn_impl(
                 "RLM loop exhausted after {MAX_RLM_ITERATIONS} iterations without FINAL"
             )),
             usage: total_usage,
+            routed_usage: Vec::new(),
+            routed_usage_drop_records: Vec::new(),
+            routed_usage_dropped_records: 0,
             termination: RlmTermination::Exhausted,
             trace: trace.clone(),
             total_rpcs,
         }
     };
 
-    // Fold bridge usage (children + nested sub_rlm) into totals.
-    let bridge_usage = usage_handle.lock().await;
-    let mut final_usage = result.usage.clone();
-    super::add_usage_with_prompt_cache(&mut final_usage, &bridge_usage);
-    drop(bridge_usage);
-
     repl.shutdown().await;
-
-    RlmTurnResult {
-        usage: final_usage,
-        ..result
-    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -956,10 +1052,55 @@ mod tests {
         assert!(error.contains("incomplete"), "{error}");
         assert!(error.contains("max_tokens"), "{error}");
         assert_eq!(result.usage, usage, "billed usage must still be charged");
+        assert_eq!(result.routed_usage.len(), 1);
+        assert_eq!(result.routed_usage[0].usage.usage, usage);
+        assert_eq!(result.routed_usage_dropped_records, 0);
         assert_eq!(mock.call_count(), 1, "truncation must not retry");
         assert!(
             !marker.exists(),
             "complete-looking code from a truncated response must not execute"
+        );
+    }
+
+    #[tokio::test]
+    async fn root_provider_success_without_usage_retains_exact_missing_receipt() {
+        let mock = Arc::new(MockLlmClient::new(Vec::new()));
+        mock.push_message_response(MessageResponse {
+            id: "mock_missing_rlm_usage".to_string(),
+            r#type: "message".to_string(),
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "partial".to_string(),
+                cache_control: None,
+            }],
+            model: "mock-model".to_string(),
+            stop_reason: Some("max_tokens".to_string()),
+            stop_sequence: None,
+            container: None,
+            usage: Usage::default(),
+        });
+        let client: Arc<dyn RlmLlmClient> = mock;
+        let (tx, _rx) = mpsc::channel(8);
+
+        let result = run_rlm_turn_inner(
+            client,
+            "root-model".to_string(),
+            "long context".to_string(),
+            None,
+            "child-model".to_string(),
+            tx,
+            0,
+        )
+        .await;
+
+        assert_eq!(result.termination, RlmTermination::Error);
+        assert_eq!(result.usage, Usage::default());
+        assert!(result.routed_usage.is_empty());
+        assert_eq!(result.routed_usage_drop_records.len(), 1);
+        assert_eq!(result.routed_usage_dropped_records, 1);
+        assert_eq!(
+            result.routed_usage_drop_records[0].route.model,
+            "root-model"
         );
     }
 

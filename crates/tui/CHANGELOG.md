@@ -195,6 +195,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Runtime API test harness builds and serves its router on a thread sized
+  like the product's runtime workers (`CODEWHALE_MAIN_STACK_BYTES`) instead of
+  the 2 MiB libtest thread. Two product paths (config load/reload under a
+  profile, thread lifecycle) marginally overflowed that stack in debug builds
+  and aborted the whole lib suite with SIGABRT; `runtime_api` now passes with
+  no `RUST_MIN_STACK` override.
 - The sandbox read deny-list matches a rule's resolved path as well as its
   literal spelling. On macOS `/etc` and `/var` are symlinks into `/private`,
   so a read of `/private/etc/sudoers` walked around the `/etc/sudoers` rule,

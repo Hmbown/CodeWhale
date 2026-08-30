@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import {
   NO_TARGET,
   canReply,
+  collectProviderModelPages,
   refusalMessage,
   receiptPresentation,
   resolveApprovalTarget,
@@ -25,6 +26,49 @@ import {
   threadTarget,
   workflowReceiptPresentation,
 } from "./app.mjs";
+
+describe("collectProviderModelPages", () => {
+  it("loads a 600-model catalog through every opaque page", async () => {
+    const all = Array.from({ length: 600 }, (_, index) => ({
+      id: `openrouter/model-${String(index).padStart(3, "0")}`,
+      image_input: "unknown",
+    }));
+    const cursors = new Map([
+      ["", { start: 0, nextCursor: "page-2" }],
+      ["page-2", { start: 250, nextCursor: "page-3" }],
+      ["page-3", { start: 500, nextCursor: "" }],
+    ]);
+    const paths = [];
+    const models = await collectProviderModelPages("openrouter", async (path) => {
+      paths.push(path);
+      const url = new URL(path, "http://runtime.local");
+      const cursor = url.searchParams.get("cursor") || "";
+      const page = cursors.get(cursor);
+      expect(url.searchParams.get("limit")).toBe("250");
+      expect(page).toBeDefined();
+      return {
+        provider: "openrouter",
+        models: all.slice(page.start, page.start + 250),
+        total: all.length,
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      };
+    });
+
+    expect(models).toEqual(all);
+    expect(paths).toHaveLength(3);
+  });
+
+  it("rejects a repeated or non-progressing cursor", async () => {
+    await expect(
+      collectProviderModelPages("openrouter", async () => ({
+        provider: "openrouter",
+        models: [{ id: "model-a", image_input: "unknown" }],
+        total: 2,
+        nextCursor: "same-page",
+      })),
+    ).rejects.toThrow("non-progressing model cursor");
+  });
+});
 
 describe("receiptPresentation", () => {
   it("keeps a failed MCP transport compact while preserving the raw receipt", () => {

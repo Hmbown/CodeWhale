@@ -10,15 +10,13 @@
 //!
 //! - `needs_translation()` — heuristic to detect if text is predominantly
 //!   English and should be translated.
-//! - `translate_text()` — calls the current session model through a
-//!   shared `DeepSeekClient` to translate text to the current locale. The dedicated
-//!   translation agent receives only the source text and returns only the
-//!   translation — no tool calls, no conversation history.
+//!
+//! The event loop dispatches focused translation requests through the exact
+//! provider/model client frozen for the originating turn. The dedicated agent
+//! receives only the source text and returns only the translation — no tool
+//! calls or conversation history.
+//!
 //! - `TranslationStatus` — tracks per-message translation status in the UI.
-
-use anyhow::Result;
-
-use crate::client::DeepSeekClient;
 
 /// Heuristic threshold: if more than this fraction of alphabetic characters
 /// are Latin (A-Z / a-z), the text is considered English.
@@ -80,24 +78,6 @@ fn is_cjk(ch: char) -> bool {
         | '\u{3040}'..='\u{309F}' // Hiragana
         | '\u{30A0}'..='\u{30FF}' // Katakana
     )
-}
-
-/// Translate text to the requested target language using a dedicated
-/// translation agent.
-///
-/// This is a lightweight, focused API call — no streaming, no tool calls,
-/// no conversation history. The agent's only role is translation.
-///
-/// # Errors
-///
-/// Returns an error if the API call fails or the response is malformed.
-pub async fn translate_text(
-    text: &str,
-    client: &DeepSeekClient,
-    model: &str,
-    target_language: &str,
-) -> Result<String> {
-    client.translate(text, model, target_language).await
 }
 
 /// Status of a translation operation for a single message.

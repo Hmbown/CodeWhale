@@ -19,6 +19,8 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
 use codewhale_protocol::agent_mail::{
     AgentMailDeliveryMode, AgentMailEnvelope, AgentMailMessageId, AgentMailSendRequest,
@@ -5463,6 +5465,137 @@ struct ProviderModelEntry {
 struct ProviderModelsResponse {
     provider: String,
     models: Vec<ProviderModelEntry>,
+    total: usize,
+    #[serde(rename = "nextCursor", skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<String>,
+}
+
+const DEFAULT_PROVIDER_MODELS_PAGE_SIZE: usize = 100;
+const MAX_PROVIDER_MODELS_PAGE_SIZE: usize = 250;
+const MAX_PROVIDER_MODELS_CATALOG_SIZE: usize = 10_000;
+const PROVIDER_MODELS_CURSOR_VERSION: u8 = 1;
+const MAX_PROVIDER_MODELS_CURSOR_BYTES: usize = 1_024;
+const MAX_PROVIDER_MODELS_FILTER_CHARS: usize = 128;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProviderModelsCursor {
+    version: u8,
+    provider: String,
+    filter: String,
+    after: String,
+}
+
+fn normalized_provider_model_filter(filter: Option<&str>) -> Result<String, ApiError> {
+    let filter = filter.unwrap_or_default().trim();
+    if filter.chars().count() > MAX_PROVIDER_MODELS_FILTER_CHARS {
+        return Err(ApiError::bad_request(format!(
+            "Provider model filter exceeds {MAX_PROVIDER_MODELS_FILTER_CHARS} characters"
+        )));
+    }
+    Ok(filter.to_lowercase())
+}
+
+fn encode_provider_models_cursor(cursor: &ProviderModelsCursor) -> Result<String, ApiError> {
+    let bytes = serde_json::to_vec(cursor)
+        .map_err(|error| ApiError::internal(format!("Could not encode model cursor: {error}")))?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn decode_provider_models_cursor(value: &str) -> Result<ProviderModelsCursor, ApiError> {
+    if value.is_empty() || value.len() > MAX_PROVIDER_MODELS_CURSOR_BYTES {
+        return Err(ApiError::bad_request("Invalid provider model cursor"));
+    }
+    let bytes = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| ApiError::bad_request("Invalid provider model cursor"))?;
+    if bytes.len() > MAX_PROVIDER_MODELS_CURSOR_BYTES {
+        return Err(ApiError::bad_request("Invalid provider model cursor"));
+    }
+    let cursor: ProviderModelsCursor = serde_json::from_slice(&bytes)
+        .map_err(|_| ApiError::bad_request("Invalid provider model cursor"))?;
+    if cursor.version != PROVIDER_MODELS_CURSOR_VERSION
+        || cursor.provider.is_empty()
+        || cursor.after.is_empty()
+        || cursor.after.len() > 256
+    {
+        return Err(ApiError::bad_request("Invalid provider model cursor"));
+    }
+    Ok(cursor)
+}
+
+fn paginate_provider_models(
+    provider: &str,
+    mut models: Vec<ProviderModelEntry>,
+    params: &ListProviderModelsParams,
+) -> Result<ProviderModelsResponse, ApiError> {
+    let filter = normalized_provider_model_filter(params.filter.as_deref())?;
+    let limit = params.limit.unwrap_or(DEFAULT_PROVIDER_MODELS_PAGE_SIZE);
+    if limit == 0 || limit > MAX_PROVIDER_MODELS_PAGE_SIZE {
+        return Err(ApiError::bad_request(format!(
+            "Provider model page limit must be between 1 and {MAX_PROVIDER_MODELS_PAGE_SIZE}"
+        )));
+    }
+
+    models.sort_by(|left, right| {
+        left.id
+            .to_lowercase()
+            .cmp(&right.id.to_lowercase())
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    models.dedup_by(|left, right| left.id.eq_ignore_ascii_case(&right.id));
+    if models.len() > MAX_PROVIDER_MODELS_CATALOG_SIZE {
+        return Err(ApiError::internal(format!(
+            "Provider model catalog exceeds the safe {MAX_PROVIDER_MODELS_CATALOG_SIZE}-row limit"
+        )));
+    }
+    if !filter.is_empty() {
+        models.retain(|entry| entry.id.to_lowercase().contains(&filter));
+    }
+
+    let start = if let Some(encoded) = params.cursor.as_deref() {
+        let cursor = decode_provider_models_cursor(encoded)?;
+        if cursor.provider != provider || cursor.filter != filter {
+            return Err(ApiError::bad_request(
+                "Provider model cursor does not match this provider and filter",
+            ));
+        }
+        models
+            .iter()
+            .position(|entry| entry.id == cursor.after)
+            .map(|index| index.saturating_add(1))
+            .ok_or_else(|| {
+                ApiError::bad_request("Provider model cursor is stale; restart from the first page")
+            })?
+    } else {
+        0
+    };
+    let total = models.len();
+    let end = start.saturating_add(limit).min(total);
+    let page = models
+        .get(start..end)
+        .ok_or_else(|| ApiError::bad_request("Provider model cursor is outside the catalog"))?
+        .to_vec();
+    let next_cursor = if end < total {
+        let after = page
+            .last()
+            .map(|entry| entry.id.clone())
+            .ok_or_else(|| ApiError::internal("Provider model page made no progress"))?;
+        Some(encode_provider_models_cursor(&ProviderModelsCursor {
+            version: PROVIDER_MODELS_CURSOR_VERSION,
+            provider: provider.to_string(),
+            filter,
+            after,
+        })?)
+    } else {
+        None
+    };
+
+    Ok(ProviderModelsResponse {
+        provider: provider.to_string(),
+        models: page,
+        total,
+        next_cursor,
+    })
 }
 
 fn push_unique_model(models: &mut Vec<String>, model: &str) {
@@ -5585,6 +5718,21 @@ pub(crate) fn runtime_chat_route_id_is_safe(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+fn runtime_chat_safe_models(mut models: Vec<String>) -> Result<Vec<String>, String> {
+    models.retain(|model| runtime_chat_model_id_is_safe(model));
+    models.sort();
+    models.dedup();
+    if models.len() > MAX_PROVIDER_MODELS_CATALOG_SIZE {
+        return Err(format!(
+            "The active Runtime provider catalog exceeds the safe {MAX_PROVIDER_MODELS_CATALOG_SIZE}-model relay limit."
+        ));
+    }
+    if models.is_empty() {
+        return Err("The active Runtime provider has no safe model catalog.".to_string());
+    }
+    Ok(models)
+}
+
 /// Build the deliberately narrow provider projection used by the account-owned
 /// Runtime Chat relay. This is the same active-route truth exposed by the
 /// authenticated native `/v1/runtime/info`, `/v1/providers`, and
@@ -5622,14 +5770,7 @@ pub(crate) fn runtime_chat_relay_catalog(
             }
         };
 
-    let mut models = provider_models_for_api(config, provider, provider);
-    models.retain(|model| runtime_chat_model_id_is_safe(model));
-    models.sort();
-    models.dedup();
-    models.truncate(256);
-    if models.is_empty() {
-        return Err("The active Runtime provider has no safe model catalog.".to_string());
-    }
+    let models = runtime_chat_safe_models(provider_models_for_api(config, provider, provider))?;
     let requested_default = provider_default_model_for_api(config, provider, provider);
     let default_model = models
         .iter()
@@ -5712,18 +5853,21 @@ async fn list_providers(
 
 #[derive(Debug, Deserialize)]
 struct ListProviderModelsParams {
-    /// Optional filter: when provided, models whose id contains this
-    /// substring (case-insensitive) are returned. Currently informational —
-    /// the catalog is small enough to filter client-side.
+    /// Optional case-insensitive substring filter applied before pagination.
     #[serde(default)]
-    #[allow(dead_code)]
     filter: Option<String>,
+    /// Opaque continuation cursor returned as `nextCursor` by the prior page.
+    #[serde(default)]
+    cursor: Option<String>,
+    /// Page size. The bounded default is 100 and the maximum is 250.
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 async fn list_provider_models(
     State(state): State<RuntimeApiState>,
     Path(id): Path<String>,
-    _params: Query<ListProviderModelsParams>,
+    Query(params): Query<ListProviderModelsParams>,
 ) -> Result<Json<ProviderModelsResponse>, ApiError> {
     let config = state.config.read().clone();
     let active_provider = config.api_provider();
@@ -5743,10 +5887,7 @@ async fn list_provider_models(
             id,
         })
         .collect();
-    Ok(Json(ProviderModelsResponse {
-        provider: api_provider.as_str().to_string(),
-        models,
-    }))
+    paginate_provider_models(api_provider.as_str(), models, &params).map(Json)
 }
 
 /// Request body for `POST /v1/providers/{id}/switch`.

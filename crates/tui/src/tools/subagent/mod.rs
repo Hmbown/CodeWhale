@@ -1071,6 +1071,17 @@ fn usage_total_tokens(usage: &Usage) -> u64 {
     u64::from(usage.input_tokens).saturating_add(u64::from(usage.output_tokens))
 }
 
+fn usage_has_reported_data(usage: &Usage) -> bool {
+    usage.input_tokens > 0
+        || usage.output_tokens > 0
+        || usage.prompt_cache_hit_tokens.is_some()
+        || usage.prompt_cache_miss_tokens.is_some()
+        || usage.prompt_cache_write_tokens.is_some()
+        || usage.reasoning_tokens.is_some()
+        || usage.reasoning_replay_tokens.is_some()
+        || usage.server_tool_use.is_some()
+}
+
 /// Convert an authoritative USD audit into the workflow IR's integer
 /// microdollar receipt. Route coverage stays on the cost-status path; this
 /// narrow projection deliberately preserves only a priced subtotal.
@@ -1086,9 +1097,85 @@ fn priced_usd_microusd(audit: &crate::pricing::TurnCostAudit) -> Option<u64> {
     Some(microusd.round() as u64)
 }
 
+/// Immutable accounting ownership of one sub-agent dispatch.
+///
+/// Captured once, when the runtime is built (`SubAgentRuntime::new`: the
+/// engine's per-turn runtime, its off-turn continuation runtime, the direct
+/// Workflow runtime), and inherited unchanged by every `child_runtime` /
+/// `background_runtime` descendant and by the child tool registry's guardian
+/// runtime. It replaces the completion-time `cost_status::scope_token()` read
+/// `record_provider_response_usage` used to perform: a provider response that
+/// lands after `/new` or a session load settles against the session it was
+/// dispatched from, never against whichever session is live when it arrives.
+///
+/// Runtime-owned dispatches (a `RuntimeUsageLease`) already carry their origin
+/// inside the owner sink. This origin governs the ownerless paths: off-turn
+/// continuations, direct Workflow runtimes, and their missing-usage receipts.
+#[derive(Debug, Clone)]
+pub(crate) struct SubAgentAccountingOrigin {
+    /// Cost-scope generation at dispatch. The live pool rejects a stale token;
+    /// it is never re-derived at completion.
+    cost_scope: crate::cost_status::CostScopeToken,
+    /// Root session of the dispatch: the tool context's state namespace, the
+    /// same identity the terminal fan-in and coordination paths use. A receipt
+    /// whose scope has been retired is appended to this session's durable
+    /// late-usage sidecar.
+    session_id: String,
+}
+
+impl SubAgentAccountingOrigin {
+    fn capture(context: &ToolContext) -> Self {
+        Self {
+            cost_scope: crate::cost_status::scope_token(),
+            session_id: context.state_namespace.clone(),
+        }
+    }
+
+    /// Settle one reported provider response that has no runtime owner. A
+    /// live origin scope charges the interactive pool exactly once per source
+    /// id; a retired one appends the exact frozen receipt to the origin
+    /// session's sidecar, labelled by the child run that dispatched it. Either
+    /// way the replacement session never sees it.
+    fn report_ownerless_usage(
+        &self,
+        agent_id: &str,
+        source_id: &str,
+        route: &crate::cost_status::EffectiveRouteEnvelope,
+        usage: &Usage,
+    ) {
+        crate::cost_status::report_effective_route_for_interactive_origin(
+            self.cost_scope,
+            &self.session_id,
+            agent_id,
+            source_id,
+            route,
+            usage,
+        );
+    }
+
+    /// Same settlement for a provider-success response without a usage
+    /// payload: one route-aware missing-coverage receipt for the origin.
+    fn report_ownerless_missing_usage(
+        &self,
+        agent_id: &str,
+        source_id: &str,
+        route: &crate::cost_status::EffectiveRouteEnvelope,
+    ) {
+        crate::cost_status::report_unreceipted_for_interactive_origin(
+            self.cost_scope,
+            &self.session_id,
+            agent_id,
+            source_id,
+            route,
+        );
+    }
+}
+
 /// Publish one child provider response into every projection that owns it.
 /// The stable source id is the shared exactly-once key: runtime/session cost
 /// and the durable worker record hash it with the same canonical function.
+/// Accounting ownership is the runtime's dispatch-time
+/// [`SubAgentAccountingOrigin`]; nothing here consults the live cost scope.
 async fn record_provider_response_usage(
     runtime: &SubAgentRuntime,
     agent_id: &str,
@@ -1096,23 +1183,53 @@ async fn record_provider_response_usage(
     route: crate::cost_status::EffectiveRouteEnvelope,
     usage: &Usage,
 ) {
-    let priced_cost_microusd = priced_usd_microusd(&route.audit(usage));
-    if let Some(lease) = runtime.runtime_usage_lease.as_ref() {
-        crate::cost_status::report_effective_route_for_runtime(
-            crate::cost_status::scope_token(),
-            Some(lease.owner()),
-            source_id,
-            &route,
-            usage,
-        );
-    }
-    if let Some(mailbox) = runtime.mailbox.as_ref() {
-        let _ = mailbox.send(MailboxMessage::token_usage(
-            agent_id,
-            source_id,
-            route,
-            usage.clone(),
-        ));
+    let has_reported_usage = usage_has_reported_data(usage);
+    let priced_cost_microusd = has_reported_usage
+        .then(|| priced_usd_microusd(&route.audit(usage)))
+        .flatten();
+    let origin = &runtime.accounting_origin;
+    let runtime_owner = runtime
+        .runtime_usage_lease
+        .as_ref()
+        .map(crate::cost_status::RuntimeUsageLease::owner);
+    if has_reported_usage {
+        if let Some(owner) = runtime_owner {
+            crate::cost_status::report_effective_route_for_runtime(
+                origin.cost_scope,
+                Some(owner),
+                source_id,
+                &route,
+                usage,
+            );
+        } else if runtime.mailbox.is_none() {
+            // Off-turn continuations and direct Workflow runtimes have no
+            // turn mailbox or durable turn owner. Their provider responses
+            // belong to the session that dispatched them; do not silently
+            // retain tokens only in the worker projection.
+            origin.report_ownerless_usage(agent_id, source_id, &route, usage);
+        }
+        if let Some(mailbox) = runtime.mailbox.as_ref() {
+            let _ = mailbox.send(MailboxMessage::token_usage(
+                agent_id,
+                source_id,
+                route,
+                usage.clone(),
+            ));
+        }
+    } else {
+        // A decoded provider-success response with the default Usage shape is
+        // indistinguishable from an omitted payload. Preserve its exact frozen
+        // route as one missing-coverage receipt; do not also publish a legacy
+        // priced-zero mailbox message under the same logical response.
+        match runtime_owner {
+            Some(owner) => crate::cost_status::report_unreceipted_provider_success(
+                origin.cost_scope,
+                Some(owner),
+                source_id,
+                &route,
+            ),
+            None => origin.report_ownerless_missing_usage(agent_id, source_id, &route),
+        }
     }
     runtime.manager.write().await.record_worker_usage(
         agent_id,
@@ -1120,6 +1237,27 @@ async fn record_provider_response_usage(
         usage,
         priced_cost_microusd,
     );
+}
+
+/// One logical held child-tool call gets one guardian usage identity even if a
+/// mailbox/monitor replays its receipt. Raw agent/tool ids can be model-owned,
+/// so only this fixed-length digest crosses telemetry or persistence seams.
+fn child_guardian_usage_source_id(agent_id: &str, tool_id: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+
+    let mut digest = Sha256::new();
+    for part in [
+        b"codewhale:subagent-auto-review-guardian:v1".as_slice(),
+        agent_id.as_bytes(),
+        tool_id.as_bytes(),
+    ] {
+        digest.update((part.len() as u64).to_le_bytes());
+        digest.update(part);
+    }
+    format!(
+        "subagent-guardian:{}",
+        crate::hashing::hex_bytes(digest.finalize())
+    )
 }
 
 fn refresh_usage_note(usage: &mut AgentRunUsage) {
@@ -2528,6 +2666,10 @@ pub struct SubAgentRuntime {
     /// runtimes clone this guard, keeping the sink alive after the parent UI
     /// mailbox closes until the final child response has been persisted.
     pub(crate) runtime_usage_lease: Option<crate::cost_status::RuntimeUsageLease>,
+    /// Dispatch-time accounting ownership for every provider response this
+    /// runtime or its descendants settle. Captured in [`Self::new`], cloned
+    /// by [`Self::child_runtime`], never refreshed from the live cost scope.
+    pub(crate) accounting_origin: SubAgentAccountingOrigin,
     /// Wakeup channel for this runtime's immediate parent (issue #756). For
     /// the engine's direct children this points at the engine turn loop. While
     /// a sub-agent is running, its tool registry swaps this for a local inbox
@@ -2603,6 +2745,9 @@ impl SubAgentRuntime {
         event_tx: Option<mpsc::Sender<Event>>,
         manager: SharedSubAgentManager,
     ) -> Self {
+        // Accounting ownership is fixed here, at dispatch, before any child
+        // provider request exists; see `SubAgentAccountingOrigin`.
+        let accounting_origin = SubAgentAccountingOrigin::capture(&context);
         Self {
             client,
             api_config: None,
@@ -2630,6 +2775,7 @@ impl SubAgentRuntime {
             foreground_children: None,
             mailbox: None,
             runtime_usage_lease: None,
+            accounting_origin,
             parent_completion_tx: None,
             fork_context: None,
             mcp_pool: None,
@@ -2967,6 +3113,7 @@ impl SubAgentRuntime {
             foreground_children: self.foreground_children.clone(),
             mailbox: self.mailbox.clone(),
             runtime_usage_lease: self.runtime_usage_lease.clone(),
+            accounting_origin: self.accounting_origin.clone(),
             parent_completion_tx: self.parent_completion_tx.clone(),
             fork_context: self.fork_context.clone(),
             mcp_pool: self.mcp_pool.clone(),
@@ -14681,12 +14828,34 @@ impl SubAgentToolRegistry {
 
         let context_text =
             crate::tui::auto_review::build_reviewer_context(review_context, held_reason, input);
+        // Capture the child guardian's own immutable quote immediately before
+        // its provider future starts. It is a routed auxiliary call, never
+        // billable under the parent turn's model/quote.
+        let review_route = self
+            .gate_runtime
+            .client
+            .effective_route_envelope(self.gate_runtime.client.model(), chrono::Utc::now());
         let review = consult_reviewer(
             &self.gate_runtime.client,
             &context_text,
             &self.gate_runtime.cancel_token,
         )
         .await;
+        // A provider-success reply carries usage even when it is incomplete or
+        // semantically invalid. Record before interpreting the verdict so the
+        // fail-closed path cannot erase spend. Pre-dispatch cancellation and
+        // transport failure expose no usage and therefore mint no receipt.
+        if let Some(usage) = review.usage.as_ref() {
+            let source_id = child_guardian_usage_source_id(agent_id, tool_id);
+            record_provider_response_usage(
+                &self.gate_runtime,
+                agent_id,
+                &source_id,
+                review_route,
+                usage,
+            )
+            .await;
+        }
         let risk = review.outcome.audit_risk();
         let (verdict, reason) = match &review.outcome {
             ReviewerOutcome::Allow { reason, .. } => (ToolGateVerdict::Allowed, reason.clone()),

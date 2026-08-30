@@ -454,6 +454,32 @@ fn accrue_child_token_cost_if_any(app: &mut App, result: &Result<ToolResult, Too
     let Some(metadata) = tool_result.metadata.as_ref() else {
         return;
     };
+    if let Some(batch) = crate::cost_status::child_usage_records_from_metadata(metadata) {
+        for record in &batch.records {
+            accrue_child_route_usage(app, &record.usage);
+        }
+        for record in &batch.drop_records {
+            let pending = crate::cost_status::background_cost_for_runtime_drop(record);
+            app.absorb_pending_background_cost(&pending);
+        }
+        let residual_dropped_records = batch
+            .dropped_records
+            .saturating_sub(u64::try_from(batch.drop_records.len()).unwrap_or(u64::MAX));
+        if residual_dropped_records > 0 {
+            let dropped = u32::try_from(residual_dropped_records).unwrap_or(u32::MAX);
+            app.session.cost_unpriced_turns =
+                app.session.cost_unpriced_turns.saturating_add(dropped);
+            app.session.cost_cny_unpriced_turns =
+                app.session.cost_cny_unpriced_turns.saturating_add(dropped);
+            app.session
+                .cost_unpriced_reasons
+                .insert("routed_usage_receipt_missing".to_string());
+            app.session
+                .cost_cny_unpriced_reasons
+                .insert("routed_usage_receipt_missing".to_string());
+        }
+        return;
+    }
     let Some(route) = crate::cost_status::child_route_envelope_from_metadata(metadata) else {
         return;
     };
@@ -464,6 +490,13 @@ fn accrue_child_token_cost_if_any(app: &mut App, result: &Result<ToolResult, Too
     let Some(usage) = crate::cost_status::child_usage_from_metadata(metadata) else {
         return;
     };
+    accrue_child_route_usage(
+        app,
+        &crate::cost_status::EffectiveRouteUsage { route, usage },
+    );
+}
+
+fn accrue_child_route_usage(app: &mut App, routed: &crate::cost_status::EffectiveRouteUsage) {
     // `route` is the child's own dispatch receipt, rehydrated from the
     // complete `child_*` metadata `attach_child_usage_metadata` emits at the
     // child's wire boundary (review/verify/rlm are the three producers). An
@@ -474,9 +507,9 @@ fn accrue_child_token_cost_if_any(app: &mut App, result: &Result<ToolResult, Too
     // Sub-agent spend lands in the same displayed total as parent turns, so it
     // has to feed the same completeness counters — otherwise `/cost` would call
     // a total complete while an unpriced child turn is missing from it.
-    let audit = route.audit(&usage);
+    let audit = routed.route.audit(&routed.usage);
     app.record_turn_cost_audit(&audit);
-    app.record_turn_cost_route_receipt(route.receipt(&audit));
+    app.record_turn_cost_route_receipt(routed.route.receipt(&audit));
     if let Some(cost) = audit.estimate {
         app.accrue_subagent_cost_estimate(cost);
     }
