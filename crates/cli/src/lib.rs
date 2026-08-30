@@ -17,6 +17,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use codewhale_agent::ModelRegistry;
+use codewhale_app_server::daemon_socket::{DaemonSocketOptions, run_daemon_socket};
 use codewhale_app_server::{
     AppServerOptions, run as run_app_server, run_stdio as run_app_server_stdio,
 };
@@ -1660,6 +1661,18 @@ struct AppServerArgs {
     /// Used by local SDKs and JSON-RPC integrations.
     #[arg(long, default_value_t = false)]
     stdio: bool,
+    /// Run as the desktop daemon: the same JSON-RPC control transport as
+    /// `--stdio`, served on a user-private unix domain socket under the
+    /// Codewhale runtime directory. Clients must `daemon/attach` first.
+    /// Not yet supported on Windows (fails with a typed error).
+    #[arg(long, default_value_t = false, conflicts_with_all = ["stdio", "http", "mobile"])]
+    socket: bool,
+    /// Socket path override for --socket. Defaults to
+    /// `$CODEWHALE_HOME/run/daemon.sock`, else `$XDG_RUNTIME_DIR/codewhale/daemon.sock`,
+    /// else `~/Library/Application Support/codewhale/daemon.sock` (macOS) or
+    /// `~/.codewhale/run/daemon.sock`.
+    #[arg(long = "socket-path", requires = "socket")]
+    socket_path: Option<PathBuf>,
     /// Show a QR code for the mobile URL in the terminal (requires --mobile).
     #[arg(long, requires = "mobile")]
     qr: bool,
@@ -4562,6 +4575,14 @@ fn run_app_server_command(
         finish_cli_telemetry(session, &outcome);
         return outcome;
     }
+    if args.socket {
+        let outcome = runtime.block_on(run_daemon_socket(DaemonSocketOptions {
+            socket_path: args.socket_path,
+            config_path: args.config,
+        }));
+        finish_cli_telemetry(session, &outcome);
+        return outcome;
+    }
     // Legacy in-process app-server HTTP transport (`/healthz`, `/thread`, `/app`,
     // `/prompt`, `/tool`, `/jobs`). Kept for backward compatibility; defaults to
     // 127.0.0.1:8787 to avoid colliding with the runtime API default of :7878.
@@ -6076,6 +6097,8 @@ verbosity = "project-imported"
             http: true,
             mobile: false,
             stdio: false,
+            socket: false,
+            socket_path: None,
             qr: false,
             host: Some("127.0.0.1".to_string()),
             port: Some(9000),
@@ -6114,6 +6137,8 @@ verbosity = "project-imported"
             http: false,
             mobile: true,
             stdio: false,
+            socket: false,
+            socket_path: None,
             qr: true,
             host: None,
             port: None,
