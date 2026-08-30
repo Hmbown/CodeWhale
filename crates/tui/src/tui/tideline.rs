@@ -60,6 +60,10 @@ pub enum SettingAuthority {
     UserSettings,
     WorkspaceConfiguration,
     ManagedPolicy,
+    /// An environment variable or session (SSH) forces the effective value.
+    Environment,
+    /// The terminal program forces the effective value.
+    Terminal,
 }
 
 /// When an edit to a setting becomes observable.
@@ -74,6 +78,13 @@ pub enum SettingApplySemantics {
     NextSession,
     RestartRequired,
     ReadOnly,
+    /// Persisted and the live owner updated now, but a running consumer keeps
+    /// the old value until it is explicitly reloaded (MCP servers after an
+    /// `mcp_config_path` change: `/mcp reload`).
+    ReloadRequired,
+    /// The UI applies the edit now while engine tools only read it at startup
+    /// (`workspace_follow_symlinks`).
+    UiNowEngineRestart,
 }
 
 /// One setting without collapsing live, resolved, startup, and persisted
@@ -300,6 +311,26 @@ mod tests {
         assert_eq!(fact.effective, Some("managed"));
         assert_eq!(fact.startup, Some("next"));
         assert_eq!(fact.saved, Some("disk"));
+    }
+
+    #[test]
+    fn apply_semantics_distinguish_reload_and_partial_restart_from_full_restart() {
+        let reload = SettingFact {
+            current: Some("live"),
+            effective: None,
+            startup: None,
+            saved: Some("disk"),
+            authority: SettingAuthority::UserSettings,
+            apply: SettingApplySemantics::ReloadRequired,
+        };
+        let partial = SettingFact {
+            apply: SettingApplySemantics::UiNowEngineRestart,
+            ..reload.clone()
+        };
+        assert_ne!(reload.apply, SettingApplySemantics::RestartRequired);
+        assert_ne!(partial.apply, SettingApplySemantics::RestartRequired);
+        assert_ne!(reload.apply, partial.apply);
+        assert_ne!(reload.apply, SettingApplySemantics::Immediate);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph, Widget, Wrap},
@@ -27,6 +27,7 @@ use crate::tui::approval::{ElevationOption, ReviewDecision};
 use crate::tui::focus_texture::FocusTextureMode;
 use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
 use crate::tui::menu_style;
+use crate::tui::tideline::{SettingApplySemantics, SettingAuthority, SettingFact, UiSnapshot};
 use crate::tui::widgets::agent_card::AgentLifecycle;
 
 pub mod extensions;
@@ -1325,6 +1326,207 @@ struct ConfigRow {
     value: String,
     editable: bool,
     scope: ConfigScope,
+    /// Typed facts decided when the row is built from `App`, `Settings`, and
+    /// `Config`; the shell never re-derives them from the key at render time.
+    facts: ConfigRowFacts,
+}
+
+/// What a row *is*: a persisted or session setting fact, an action that opens
+/// another surface, or a read-only receipt observed from the running app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigRowKind {
+    Setting,
+    Action,
+    Diagnostic,
+}
+
+/// Which [`UiSnapshot`] fact a row projects, when it projects one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotLane {
+    Provider,
+    Model,
+}
+
+/// Which durable store a saved row persists to — independent of which
+/// authority currently wins the *effective* decision. An environment or
+/// terminal override (NO_ANIMATIONS, a legacy console host, …) relabels the
+/// row's authority without repairing or breaking its store, so store-error
+/// marking must key on this field, never on `authority`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingStore {
+    /// `settings.toml` (user settings).
+    UserSettings,
+    /// `config.toml` (workspace configuration).
+    WorkspaceConfig,
+    /// Session-owned, diagnostic, or otherwise not persisted from this surface.
+    None,
+}
+
+impl SettingStore {
+    /// The store an authority implies when a row is *built* under it. Only
+    /// meaningful at construction: an override authority applied later must
+    /// keep the row's original store.
+    fn for_authority(authority: SettingAuthority) -> Self {
+        match authority {
+            SettingAuthority::UserSettings => SettingStore::UserSettings,
+            SettingAuthority::WorkspaceConfiguration => SettingStore::WorkspaceConfig,
+            _ => SettingStore::None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigRowFacts {
+    kind: ConfigRowKind,
+    /// Rail category when the section alone would misfile the row.
+    category: Option<ConfigCategory>,
+    authority: SettingAuthority,
+    /// The store this row's saved/startup lanes come from (#5730 Windows CI:
+    /// an override-authority row still has a store that can fail to load).
+    store: SettingStore,
+    apply: SettingApplySemantics,
+    /// Value observed in force from an explicit `App` field. `None` means
+    /// unobserved; it is never inferred from the persisted value.
+    effective: Option<String>,
+    /// Snapshot lane supplying the live fact for this row.
+    snapshot: Option<SnapshotLane>,
+    /// Slash command that activation runs, with the localized verb for it.
+    command: Option<(&'static str, MessageId)>,
+    /// The concrete environment/terminal token when `authority` is an
+    /// override (`NO_ANIMATIONS`, `TERM_PROGRAM=vscode`, …).
+    authority_detail: Option<&'static str>,
+    /// The load error of the row's store when it could not be read; the saved
+    /// and startup lanes are then unavailable, never a default in disguise.
+    store_error: Option<String>,
+}
+
+impl ConfigRowFacts {
+    /// A `settings.toml` value edited here and applied on save.
+    fn saved_setting() -> Self {
+        Self {
+            kind: ConfigRowKind::Setting,
+            category: None,
+            authority: SettingAuthority::UserSettings,
+            store: SettingStore::UserSettings,
+            apply: SettingApplySemantics::Immediate,
+            effective: None,
+            snapshot: None,
+            command: None,
+            authority_detail: None,
+            store_error: None,
+        }
+    }
+
+    /// The effective value is forced by an environment or terminal override.
+    fn overridden(self, environment: bool, detail: &'static str) -> Self {
+        Self {
+            authority: if environment {
+                SettingAuthority::Environment
+            } else {
+                SettingAuthority::Terminal
+            },
+            authority_detail: Some(detail),
+            ..self
+        }
+    }
+
+    /// The row's store failed to load: no saved or startup value is known.
+    /// The error is folded onto one line so it reads in a single lane.
+    fn unavailable(self, error: &str) -> Self {
+        Self {
+            store_error: Some(error.split_whitespace().collect::<Vec<_>>().join(" ")),
+            ..self
+        }
+    }
+
+    /// A value the live session owns; its row value *is* the observed value.
+    fn session_setting() -> Self {
+        Self {
+            authority: SettingAuthority::Session,
+            store: SettingStore::None,
+            apply: SettingApplySemantics::EffectiveNow,
+            ..Self::saved_setting()
+        }
+    }
+
+    /// A persisted setting shown but not editable from this surface.
+    fn read_only_setting(authority: SettingAuthority) -> Self {
+        Self {
+            store: SettingStore::for_authority(authority),
+            authority,
+            apply: SettingApplySemantics::ReadOnly,
+            ..Self::saved_setting()
+        }
+    }
+
+    /// A receipt observed from the running app, never a persisted fact.
+    fn diagnostic(authority: SettingAuthority) -> Self {
+        Self {
+            kind: ConfigRowKind::Diagnostic,
+            store: SettingStore::None,
+            authority,
+            apply: SettingApplySemantics::ReadOnly,
+            ..Self::saved_setting()
+        }
+    }
+
+    /// A row whose activation opens another surface; not a persisted fact.
+    fn action(command: &'static str, verb: MessageId) -> Self {
+        Self {
+            kind: ConfigRowKind::Action,
+            authority: SettingAuthority::Session,
+            store: SettingStore::None,
+            apply: SettingApplySemantics::EffectiveNow,
+            command: Some((command, verb)),
+            ..Self::saved_setting()
+        }
+    }
+
+    fn category(self, category: ConfigCategory) -> Self {
+        Self {
+            category: Some(category),
+            ..self
+        }
+    }
+
+    fn authority(self, authority: SettingAuthority) -> Self {
+        // Callers that relabel a row's authority through this builder are
+        // describing the row's store (e.g. a config.toml row), so the store
+        // follows. An *override* never goes through this builder — it wins
+        // the effective decision while the store stays what it was.
+        let store = SettingStore::for_authority(authority);
+        Self {
+            authority,
+            store,
+            ..self
+        }
+    }
+
+    fn apply(self, apply: SettingApplySemantics) -> Self {
+        Self { apply, ..self }
+    }
+
+    fn effective(self, value: impl Into<String>) -> Self {
+        Self {
+            effective: Some(value.into()),
+            ..self
+        }
+    }
+
+    fn snapshot(self, lane: SnapshotLane) -> Self {
+        Self {
+            snapshot: Some(lane),
+            ..self
+        }
+    }
+
+    /// A setting fact whose activation opens a picker instead of an editor.
+    fn opens(self, command: &'static str, verb: MessageId) -> Self {
+        Self {
+            command: Some((command, verb)),
+            ..self
+        }
+    }
 }
 
 /// Editor behavior for one Settings entry. This is intentionally independent
@@ -1393,16 +1595,7 @@ impl SettingsRegistry {
         };
         let kind = if !row.editable {
             SettingKind::ReadOnly
-        } else if matches!(
-            row.key.as_str(),
-            "provider"
-                | "model"
-                | "provider_templates"
-                | "mcp_open"
-                | "mcp_reconnect"
-                | "mcp_diagnose"
-                | "plugins_open"
-        ) {
+        } else if row.facts.command.is_some() {
             SettingKind::Action
         } else if config_boolean_key(&row.key) {
             SettingKind::Boolean
@@ -1444,85 +1637,99 @@ enum ConfigSection {
     Experimental,
 }
 
-/// App-style settings tabs (v0.9.1 redesign). Groups fine-grained sections.
+/// The eight Tideline settings categories in rail order
+/// (`docs/design/tideline-redesign.html`, "Settings categories").
+///
+/// A category is a projection over the existing [`ConfigRow`] store: rows keep
+/// their fine-grained [`ConfigSection`]; the category follows the section
+/// unless the row's typed facts file it elsewhere (motion keys, telemetry,
+/// low-level receipts).
+///
+/// This enum is the single taxonomy: the `ConfigView` rail/strip and the
+/// Tideline settings stage scaffold both iterate [`ConfigCategory::ALL`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConfigTab {
-    General,
-    Models,
-    Permissions,
-    Display,
+pub(crate) enum ConfigCategory {
+    Appearance,
+    ModelsProviders,
+    Pod,
+    Work,
+    ToolsMcp,
+    Trust,
+    Motion,
     Advanced,
 }
 
-impl ConfigTab {
-    const ALL: [ConfigTab; 5] = [
-        ConfigTab::General,
-        ConfigTab::Models,
-        ConfigTab::Permissions,
-        ConfigTab::Display,
-        ConfigTab::Advanced,
+impl ConfigCategory {
+    const ALL: [ConfigCategory; 8] = [
+        ConfigCategory::Appearance,
+        ConfigCategory::ModelsProviders,
+        ConfigCategory::Pod,
+        ConfigCategory::Work,
+        ConfigCategory::ToolsMcp,
+        ConfigCategory::Trust,
+        ConfigCategory::Motion,
+        ConfigCategory::Advanced,
     ];
 
-    fn label(self) -> &'static str {
-        match self {
-            ConfigTab::General => "General",
-            ConfigTab::Models => "Models",
-            ConfigTab::Permissions => "Permissions",
-            ConfigTab::Display => "Display",
-            ConfigTab::Advanced => "Advanced",
-        }
+    fn label(self, locale: Locale) -> Cow<'static, str> {
+        tr(
+            locale,
+            match self {
+                ConfigCategory::Appearance => MessageId::ConfigCategoryAppearance,
+                ConfigCategory::ModelsProviders => MessageId::ConfigCategoryModelsProviders,
+                ConfigCategory::Pod => MessageId::ConfigCategoryPod,
+                ConfigCategory::Work => MessageId::ConfigCategoryWork,
+                ConfigCategory::ToolsMcp => MessageId::ConfigCategoryToolsMcp,
+                ConfigCategory::Trust => MessageId::ConfigCategoryTrust,
+                ConfigCategory::Motion => MessageId::ConfigCategoryMotion,
+                ConfigCategory::Advanced => MessageId::ConfigCategoryAdvanced,
+            },
+        )
     }
 
-    fn contains(self, section: ConfigSection) -> bool {
-        match self {
-            ConfigTab::General => matches!(
-                section,
-                ConfigSection::Provider
-                    | ConfigSection::Network
-                    | ConfigSection::Composer
-                    | ConfigSection::Sidebar
-                    | ConfigSection::History
-            ),
-            ConfigTab::Models => matches!(section, ConfigSection::Model),
-            ConfigTab::Permissions => matches!(section, ConfigSection::Permissions),
-            ConfigTab::Display => matches!(section, ConfigSection::Display),
-            ConfigTab::Advanced => matches!(
-                section,
-                ConfigSection::Mcp
-                    | ConfigSection::Fleet
-                    | ConfigSection::Workflow
-                    | ConfigSection::Session
-                    | ConfigSection::Legacy
-                    | ConfigSection::Experimental
-            ),
-        }
-    }
-
+    /// Default category for a section; a row's typed facts may override it.
     fn for_section(section: ConfigSection) -> Self {
+        match section {
+            ConfigSection::Provider | ConfigSection::Model => ConfigCategory::ModelsProviders,
+            ConfigSection::Permissions => ConfigCategory::Trust,
+            ConfigSection::Display => ConfigCategory::Appearance,
+            ConfigSection::Composer
+            | ConfigSection::Sidebar
+            | ConfigSection::History
+            | ConfigSection::Session
+            | ConfigSection::Workflow => ConfigCategory::Work,
+            ConfigSection::Mcp => ConfigCategory::ToolsMcp,
+            ConfigSection::Fleet => ConfigCategory::Pod,
+            // Timeouts and other transport knobs are low-level rows.
+            ConfigSection::Network | ConfigSection::Legacy | ConfigSection::Experimental => {
+                ConfigCategory::Advanced
+            }
+        }
+    }
+
+    fn for_row(row: &ConfigRow) -> Self {
+        row.facts
+            .category
+            .unwrap_or_else(|| Self::for_section(row.section))
+    }
+
+    fn contains(self, row: &ConfigRow) -> bool {
+        Self::for_row(row) == self
+    }
+
+    fn position(self) -> usize {
         Self::ALL
-            .into_iter()
-            .find(|tab| tab.contains(section))
-            .unwrap_or(Self::General)
+            .iter()
+            .position(|category| *category == self)
+            .unwrap_or(0)
     }
 
     fn next(self) -> Self {
-        match self {
-            ConfigTab::General => ConfigTab::Models,
-            ConfigTab::Models => ConfigTab::Permissions,
-            ConfigTab::Permissions => ConfigTab::Display,
-            ConfigTab::Display => ConfigTab::Advanced,
-            ConfigTab::Advanced => ConfigTab::General,
-        }
+        Self::ALL[(self.position() + 1) % Self::ALL.len()]
     }
 
     fn prev(self) -> Self {
-        match self {
-            ConfigTab::General => ConfigTab::Advanced,
-            ConfigTab::Models => ConfigTab::General,
-            ConfigTab::Permissions => ConfigTab::Models,
-            ConfigTab::Display => ConfigTab::Permissions,
-            ConfigTab::Advanced => ConfigTab::Display,
-        }
+        Self::ALL[(self.position() + Self::ALL.len() - 1) % Self::ALL.len()]
     }
 }
 
@@ -1556,6 +1763,20 @@ enum ConfigListItem {
     Row(usize),
 }
 
+/// Clickable editor controls; keyboard Enter/Esc do the same thing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorControl {
+    Apply,
+    Cancel,
+}
+
+/// Clickable overflow markers of the category strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NavStep {
+    Previous,
+    Next,
+}
+
 #[derive(Debug, Clone)]
 struct ConfigEdit {
     key: String,
@@ -1576,23 +1797,31 @@ pub struct ConfigView {
     filter: String,
     status: Option<String>,
     locale: Locale,
-    effective_cost_currency: String,
-    effective_low_motion: bool,
-    effective_fancy_animations: bool,
     last_visible_rows: Cell<usize>,
     /// Selection-anchored scroll actually used by the last render; keeps the
     /// panel scroll rail truthful when the stored scroll predates a resize.
     last_render_scroll: Cell<usize>,
-    last_row_hitboxes: RefCell<Vec<(u16, usize)>>,
-    last_choice_hitboxes: RefCell<Vec<(u16, usize)>>,
-    last_tab_hitboxes: RefCell<Vec<(u16, u16, u16, ConfigTab)>>,
+    /// Exact painted cells of each list row; a click selects a row only when
+    /// it lands inside one of these rects.
+    last_row_hitboxes: RefCell<Vec<(Rect, usize)>>,
+    /// Exact painted cells of each visible editor choice.
+    last_choice_hitboxes: RefCell<Vec<(Rect, usize)>>,
+    /// Exact painted cells of the editor's Apply / Cancel controls.
+    last_editor_controls: RefCell<Vec<(Rect, EditorControl)>>,
+    /// Exact painted cells of each category in the rail or strip.
+    last_rail_hitboxes: RefCell<Vec<(Rect, ConfigCategory)>>,
+    /// Exact painted cells of the strip's ‹ / › overflow markers.
+    last_nav_controls: RefCell<Vec<(Rect, NavStep)>>,
     last_mouse_selected: Option<usize>,
     api_provider: ApiProvider,
     route_base_url: String,
     route_model: String,
     auto_model: bool,
-    /// Category tab for the app-style settings shell (v0.9.1).
-    active_tab: ConfigTab,
+    /// Selected rail category of the Tideline settings shell.
+    category: ConfigCategory,
+    /// Read-only session projection for the provider/model facts; the detail
+    /// pane shows its lanes verbatim instead of guessing a saved default.
+    snapshot: UiSnapshot,
 }
 
 const CONFIG_MIN_KEY_COLUMN_WIDTH: usize = 19;
@@ -1600,13 +1829,35 @@ const CONFIG_VALUE_COLUMN_WIDTH: usize = 44;
 const CONFIG_MIN_VALUE_COLUMN_WIDTH: usize = 10;
 const CONFIG_SCOPE_COLUMN_WIDTH: usize = 7;
 const CONFIG_ROW_PREFIX_WIDTH: usize = 2;
-const CONFIG_COLUMN_GAPS_WIDTH: usize = 2;
+/// The two two-column gaps painted between key, value, and affordance.
+const CONFIG_COLUMN_GAPS_WIDTH: usize = 4;
+/// Affordance glyph column (`[x]`, `‹ ›`, `✎`, `›`, `⊘`) plus its gap.
+const CONFIG_AFFORDANCE_COLUMN_WIDTH: usize = 5;
+/// List width below which the scope badge sheds in favour of the value.
+const CONFIG_SCOPE_BADGE_MIN_WIDTH: usize = 60;
 
 impl ConfigView {
     pub fn new_for_app(app: &App) -> Self {
-        let settings = Settings::load_persisted().unwrap_or_else(|_| Settings::default());
-        let config = Config::load(app.config_path.clone(), app.config_profile.as_deref())
-            .unwrap_or_default();
+        // A store that fails to load yields no saved facts. The defaults below
+        // only shape the row list; every row backed by a failed store is
+        // marked unavailable before the view is returned.
+        let (settings, settings_error) = match Settings::load_persisted() {
+            Ok(settings) => {
+                let error = settings.load_error.clone();
+                (settings, error)
+            }
+            Err(error) => (Settings::default(), Some(error.to_string())),
+        };
+        let (config, config_error) =
+            match Config::load(app.config_path.clone(), app.config_profile.as_deref()) {
+                Ok(config) => (config, None),
+                Err(error) => (Config::default(), Some(error.to_string())),
+            };
+        let motion_override = crate::settings::detect_low_motion_override();
+        let motion_facts = |facts: ConfigRowFacts| match motion_override {
+            Some(source) => facts.overridden(source.is_environment(), source.label()),
+            None => facts,
+        };
         let permission_control = config.approval_policy_control(
             app.config_path.as_deref(),
             app.config_profile.as_deref(),
@@ -1623,6 +1874,7 @@ impl ConfigView {
                     .to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ApprovalPolicyControl::RootConfig => ConfigRow {
                 section: ConfigSection::Permissions,
@@ -1634,6 +1886,8 @@ impl ConfigView {
                     .to_string(),
                 editable: permission_control.editable_root(),
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting()
+                    .authority(SettingAuthority::WorkspaceConfiguration),
             },
             source => ConfigRow {
                 section: ConfigSection::Permissions,
@@ -1645,6 +1899,7 @@ impl ConfigView {
                 ),
                 editable: false,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::read_only_setting(SettingAuthority::ManagedPolicy),
             },
         };
         let approval_session_editable = matches!(permission_control, ApprovalPolicyControl::Unset);
@@ -1660,6 +1915,8 @@ impl ConfigView {
                 value: app.allow_shell.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting()
+                    .authority(SettingAuthority::WorkspaceConfiguration),
             }
         } else {
             ConfigRow {
@@ -1668,6 +1925,7 @@ impl ConfigView {
                 value: format!("{} · {}", app.allow_shell, shell_control.label()),
                 editable: false,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::read_only_setting(SettingAuthority::ManagedPolicy),
             }
         };
         let (active_route_provider, _) = app.effective_route_display();
@@ -1696,6 +1954,9 @@ impl ConfigView {
                 value: active_provider_identity.clone(),
                 editable: true,
                 scope: ConfigScope::Session,
+                facts: ConfigRowFacts::session_setting()
+                    .snapshot(SnapshotLane::Provider)
+                    .opens("/provider", MessageId::ConfigActionOpenProvider),
             },
             ConfigRow {
                 section: ConfigSection::Provider,
@@ -1703,6 +1964,10 @@ impl ConfigView {
                 value: codewhale_config::ProviderSetupTemplate::settings_value(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::action(
+                    "/provider templates",
+                    MessageId::ConfigActionOpenProviderTemplates,
+                ),
             },
             ConfigRow {
                 section: ConfigSection::Provider,
@@ -1714,6 +1979,8 @@ impl ConfigView {
                 // receipt can mutate an already-running client.
                 editable: false,
                 scope: ConfigScope::Session,
+                facts: ConfigRowFacts::diagnostic(SettingAuthority::Session)
+                    .category(ConfigCategory::Advanced),
             },
             ConfigRow {
                 section: ConfigSection::Provider,
@@ -1723,6 +1990,8 @@ impl ConfigView {
                     .map_or_else(|| "(not set)".to_string(), |tokens| tokens.to_string()),
                 editable: false,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::read_only_setting(SettingAuthority::WorkspaceConfiguration)
+                    .category(ConfigCategory::Advanced),
             },
             ConfigRow {
                 section: ConfigSection::Provider,
@@ -1738,6 +2007,8 @@ impl ConfigView {
                 ),
                 editable: false,
                 scope: ConfigScope::Session,
+                facts: ConfigRowFacts::diagnostic(SettingAuthority::Session)
+                    .category(ConfigCategory::Advanced),
             },
             ConfigRow {
                 section: ConfigSection::Model,
@@ -1747,6 +2018,9 @@ impl ConfigView {
                 value: format!("{active_provider_identity} · {active_route_model}"),
                 editable: true,
                 scope: ConfigScope::Session,
+                facts: ConfigRowFacts::session_setting()
+                    .snapshot(SnapshotLane::Model)
+                    .opens("/model", MessageId::ConfigActionOpenModel),
             },
             ConfigRow {
                 section: ConfigSection::Model,
@@ -1754,6 +2028,8 @@ impl ConfigView {
                 value: fast_model,
                 editable: false,
                 scope: ConfigScope::Session,
+                facts: ConfigRowFacts::diagnostic(SettingAuthority::Session)
+                    .category(ConfigCategory::Advanced),
             },
             // DeepSeek-only legacy fallback: hide on non-DeepSeek providers so
             // it is not misread as an active setting (#4717). Keep the field
@@ -1776,6 +2052,7 @@ impl ConfigView {
                 ),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Permissions,
@@ -1783,6 +2060,7 @@ impl ConfigView {
                 value: app.approval_mode.permission_chip_label().to_string(),
                 editable: approval_session_editable,
                 scope: ConfigScope::Session,
+                facts: ConfigRowFacts::session_setting(),
             },
             saved_permission_row,
             ConfigRow {
@@ -1791,6 +2069,8 @@ impl ConfigView {
                 value: settings.default_mode.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                // The startup mode is read once when a session begins.
+                facts: ConfigRowFacts::saved_setting().apply(SettingApplySemantics::NextSession),
             },
             shell_row,
             ConfigRow {
@@ -1799,6 +2079,10 @@ impl ConfigView {
                 value: crate::telemetry_notice::saved_preference_enabled(&config).to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                // Telemetry is a trust decision, not a network knob.
+                facts: ConfigRowFacts::saved_setting()
+                    .authority(SettingAuthority::WorkspaceConfiguration)
+                    .category(ConfigCategory::Trust),
             },
             ConfigRow {
                 section: ConfigSection::Network,
@@ -1806,6 +2090,7 @@ impl ConfigView {
                 value: app.stream_chunk_timeout_secs.to_string(),
                 editable: true,
                 scope: ConfigScope::Session,
+                facts: ConfigRowFacts::session_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1813,6 +2098,8 @@ impl ConfigView {
                 value: settings.theme.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                // The live theme is the one the app is painting with.
+                facts: ConfigRowFacts::saved_setting().effective(app.theme_id.name()),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1820,6 +2107,7 @@ impl ConfigView {
                 value: settings.locale.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting().effective(app.ui_locale.tag()),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1829,6 +2117,7 @@ impl ConfigView {
                 }),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1836,6 +2125,7 @@ impl ConfigView {
                 value: settings.ocean_treatment.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1843,6 +2133,7 @@ impl ConfigView {
                 value: settings.focus_texture.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1850,6 +2141,7 @@ impl ConfigView {
                 value: settings.calm_mode.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1857,6 +2149,13 @@ impl ConfigView {
                 value: settings.low_motion.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                // `low_motion` always wins over fancy animations; both are
+                // Motion, and their live values come from `App`, not disk.
+                facts: motion_facts(
+                    ConfigRowFacts::saved_setting()
+                        .category(ConfigCategory::Motion)
+                        .effective(app.low_motion.to_string()),
+                ),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1864,6 +2163,11 @@ impl ConfigView {
                 value: settings.fancy_animations.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: motion_facts(
+                    ConfigRowFacts::saved_setting()
+                        .category(ConfigCategory::Motion)
+                        .effective(app.fancy_animations.to_string()),
+                ),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1871,6 +2175,7 @@ impl ConfigView {
                 value: settings.launch_screen.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting().apply(SettingApplySemantics::NextSession),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1878,6 +2183,7 @@ impl ConfigView {
                 value: settings.show_thinking.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1885,6 +2191,7 @@ impl ConfigView {
                 value: settings.thinking_default_expanded.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1892,6 +2199,7 @@ impl ConfigView {
                 value: settings.thinking_preview_lines.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1899,6 +2207,7 @@ impl ConfigView {
                 value: settings.thinking_highlight.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1906,6 +2215,7 @@ impl ConfigView {
                 value: settings.help_expand_groups.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1913,6 +2223,7 @@ impl ConfigView {
                 value: settings.pin_last_prompt.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1920,6 +2231,7 @@ impl ConfigView {
                 value: settings.show_tool_details.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1927,6 +2239,7 @@ impl ConfigView {
                 value: settings.inline_diffs.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1934,6 +2247,7 @@ impl ConfigView {
                 value: settings.status_indicator.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1941,6 +2255,7 @@ impl ConfigView {
                 value: settings.synchronized_output.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1948,6 +2263,7 @@ impl ConfigView {
                 value: settings.cost_currency.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting().effective(cost_currency_config_value(app)),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1955,6 +2271,7 @@ impl ConfigView {
                 value: settings.transcript_spacing.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Display,
@@ -1962,6 +2279,7 @@ impl ConfigView {
                 value: settings.tool_collapse_mode.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Composer,
@@ -1969,6 +2287,7 @@ impl ConfigView {
                 value: settings.composer_density.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Composer,
@@ -1976,6 +2295,7 @@ impl ConfigView {
                 value: settings.composer_border.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Composer,
@@ -1983,6 +2303,7 @@ impl ConfigView {
                 value: settings.composer_multiline_mode.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Composer,
@@ -1990,6 +2311,7 @@ impl ConfigView {
                 value: settings.composer_vim_mode.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Composer,
@@ -1997,6 +2319,7 @@ impl ConfigView {
                 value: settings.bracketed_paste.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Composer,
@@ -2004,6 +2327,7 @@ impl ConfigView {
                 value: settings.paste_burst_detection.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Composer,
@@ -2011,6 +2335,7 @@ impl ConfigView {
                 value: settings.mention_menu_limit.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Composer,
@@ -2018,6 +2343,7 @@ impl ConfigView {
                 value: settings.mention_menu_behavior.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Composer,
@@ -2025,6 +2351,7 @@ impl ConfigView {
                 value: settings.mention_walk_depth.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Composer,
@@ -2032,6 +2359,9 @@ impl ConfigView {
                 value: settings.workspace_follow_symlinks.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                // Mention menus follow it now; engine tools read it at startup.
+                facts: ConfigRowFacts::saved_setting()
+                    .apply(SettingApplySemantics::UiNowEngineRestart),
             },
             ConfigRow {
                 section: ConfigSection::Sidebar,
@@ -2039,6 +2369,7 @@ impl ConfigView {
                 value: settings.work_surface_placement.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Sidebar,
@@ -2046,6 +2377,7 @@ impl ConfigView {
                 value: settings.work_surface_top_height.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Sidebar,
@@ -2053,6 +2385,7 @@ impl ConfigView {
                 value: settings.work_surface_side_width.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Sidebar,
@@ -2060,6 +2393,7 @@ impl ConfigView {
                 value: settings.rail_panel.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Sidebar,
@@ -2067,6 +2401,7 @@ impl ConfigView {
                 value: settings.context_panel.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Sidebar,
@@ -2074,6 +2409,7 @@ impl ConfigView {
                 value: settings.sessions_rail.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             // Read at startup by `main`, not held on `App`, so the row reflects
             // the persisted value rather than a live field (#2934).
@@ -2083,6 +2419,7 @@ impl ConfigView {
                 value: settings.session_auto_resume.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting().apply(SettingApplySemantics::NextSession),
             },
             ConfigRow {
                 section: ConfigSection::History,
@@ -2090,6 +2427,7 @@ impl ConfigView {
                 value: settings.auto_compact.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::History,
@@ -2097,6 +2435,7 @@ impl ConfigView {
                 value: format!("{:.0}", settings.auto_compact_threshold_percent),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::History,
@@ -2109,6 +2448,7 @@ impl ConfigView {
                 ),
                 editable: false,
                 scope: ConfigScope::Session,
+                facts: ConfigRowFacts::diagnostic(SettingAuthority::Session),
             },
             ConfigRow {
                 section: ConfigSection::History,
@@ -2116,6 +2456,7 @@ impl ConfigView {
                 value: settings.max_input_history.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::saved_setting(),
             },
             ConfigRow {
                 section: ConfigSection::Mcp,
@@ -2123,6 +2464,7 @@ impl ConfigView {
                 value: "/mcp".to_string(),
                 editable: true,
                 scope: ConfigScope::Session,
+                facts: ConfigRowFacts::action("/mcp", MessageId::ConfigActionOpenMcp),
             },
             ConfigRow {
                 section: ConfigSection::Mcp,
@@ -2130,6 +2472,7 @@ impl ConfigView {
                 value: "/mcp reload".to_string(),
                 editable: true,
                 scope: ConfigScope::Session,
+                facts: ConfigRowFacts::action("/mcp reload", MessageId::ConfigActionMcpReconnect),
             },
             ConfigRow {
                 section: ConfigSection::Mcp,
@@ -2137,6 +2480,7 @@ impl ConfigView {
                 value: "/mcp validate".to_string(),
                 editable: true,
                 scope: ConfigScope::Session,
+                facts: ConfigRowFacts::action("/mcp validate", MessageId::ConfigActionMcpDiagnose),
             },
             ConfigRow {
                 section: ConfigSection::Mcp,
@@ -2144,6 +2488,7 @@ impl ConfigView {
                 value: "/plugin".to_string(),
                 editable: true,
                 scope: ConfigScope::Session,
+                facts: ConfigRowFacts::action("/plugin", MessageId::ConfigActionOpenPlugins),
             },
             ConfigRow {
                 section: ConfigSection::Mcp,
@@ -2151,6 +2496,11 @@ impl ConfigView {
                 value: app.mcp_config_path.display().to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
+                // The live path changes on save; running servers keep their
+                // old config until `/mcp reload`.
+                facts: ConfigRowFacts::saved_setting()
+                    .authority(SettingAuthority::WorkspaceConfiguration)
+                    .apply(SettingApplySemantics::ReloadRequired),
             },
             ConfigRow {
                 section: ConfigSection::Fleet,
@@ -2163,6 +2513,7 @@ impl ConfigView {
                     .to_string(),
                 editable: false,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::read_only_setting(SettingAuthority::WorkspaceConfiguration),
             },
         ];
         // #4717: only show the DeepSeek-only fallback model row when the active
@@ -2189,6 +2540,7 @@ impl ConfigView {
                     .to_string(),
                 editable: false,
                 scope: ConfigScope::Saved,
+                facts: ConfigRowFacts::read_only_setting(SettingAuthority::UserSettings),
             });
         }
         let external_status_rows = [ApiProvider::OpenaiCodex, ApiProvider::Xai]
@@ -2242,13 +2594,41 @@ impl ConfigView {
                             },
                             editable: false,
                             scope: ConfigScope::Saved,
+                            facts: ConfigRowFacts::diagnostic(
+                                SettingAuthority::WorkspaceConfiguration,
+                            )
+                            .category(ConfigCategory::Advanced),
                         }
                     })
             });
         rows.splice(2..2, external_status_rows);
         rows.extend(experimental_config_rows(&config));
 
-        Self {
+        // A row whose store failed to load carries the error instead of a
+        // default: its value reads unavailable, it is not editable (writing
+        // through an unreadable store could clobber it), and its saved and
+        // startup lanes are reported as unavailable. Keyed on the row's
+        // *store*, not its authority: an environment/terminal override wins
+        // the effective decision without making the store any less broken
+        // (caught by Windows CI, where the legacy-console probe relabels the
+        // motion rows' authority and a broken store then went unreported).
+        let unavailable = tr(app.ui_locale, MessageId::ConfigUnavailable).into_owned();
+        for row in &mut rows {
+            let error = match row.facts.store {
+                SettingStore::UserSettings => settings_error.as_deref(),
+                SettingStore::WorkspaceConfig => config_error.as_deref(),
+                SettingStore::None => None,
+            };
+            if let Some(error) = error
+                && row.facts.kind == ConfigRowKind::Setting
+            {
+                row.facts = row.facts.clone().unavailable(error);
+                row.editable = false;
+                row.value = unavailable.clone();
+            }
+        }
+
+        let mut view = Self {
             rows,
             selected: 0,
             scroll: 0,
@@ -2256,21 +2636,24 @@ impl ConfigView {
             filter: String::new(),
             status: None,
             locale: app.ui_locale,
-            effective_cost_currency: cost_currency_config_value(app),
-            effective_low_motion: app.low_motion,
-            effective_fancy_animations: app.fancy_animations,
             last_visible_rows: Cell::new(0),
             last_render_scroll: Cell::new(0),
             last_row_hitboxes: RefCell::new(Vec::new()),
             last_choice_hitboxes: RefCell::new(Vec::new()),
-            last_tab_hitboxes: RefCell::new(Vec::new()),
+            last_editor_controls: RefCell::new(Vec::new()),
+            last_rail_hitboxes: RefCell::new(Vec::new()),
+            last_nav_controls: RefCell::new(Vec::new()),
             last_mouse_selected: None,
             api_provider: app.api_provider,
             route_base_url: app.active_route_base_url.clone(),
             route_model: app.model.clone(),
             auto_model: app.auto_model,
-            active_tab: ConfigTab::General,
-        }
+            // Settings opens on Appearance (design: first rail category).
+            category: ConfigCategory::Appearance,
+            snapshot: UiSnapshot::from_app(app),
+        };
+        view.select_first_visible_row();
+        view
     }
 
     fn tr(&self, id: MessageId) -> Cow<'static, str> {
@@ -2281,8 +2664,9 @@ impl ConfigView {
     /// a setting to the live app.
     pub(crate) fn focus_key(&mut self, key: &str) {
         if let Some(index) = self.rows.iter().position(|row| row.key == key) {
-            self.active_tab = ConfigTab::for_section(self.rows[index].section);
+            self.category = ConfigCategory::for_row(&self.rows[index]);
             self.selected = index;
+            self.last_mouse_selected = None;
             self.adjust_scroll(self.visible_rows_cached());
         }
     }
@@ -2311,6 +2695,9 @@ impl ConfigView {
         let meta = SettingsRegistry::new(self).meta(row);
         let section = meta.category.label(self.locale).to_lowercase();
         let section_en = meta.category.label(Locale::En).to_lowercase();
+        let category = ConfigCategory::for_row(row);
+        let category_label = category.label(self.locale).to_lowercase();
+        let category_en = category.label(Locale::En).to_lowercase();
         let label = config_label_for_key_for_locale(self.locale, &row.key).to_lowercase();
         let key = row.key.to_lowercase();
         let raw_value = row.value.to_lowercase();
@@ -2322,6 +2709,8 @@ impl ConfigView {
         filter.split_whitespace().all(|term| {
             section.contains(term)
                 || section_en.contains(term)
+                || category_label.contains(term)
+                || category_en.contains(term)
                 || label.contains(term)
                 || key.contains(term)
                 || raw_value.contains(term)
@@ -2338,9 +2727,8 @@ impl ConfigView {
             .iter()
             .enumerate()
             .filter_map(|(idx, row)| {
-                (self.row_matches_filter(row)
-                    && (filtering || self.active_tab.contains(row.section)))
-                .then_some(idx)
+                (self.row_matches_filter(row) && (filtering || self.category.contains(row)))
+                    .then_some(idx)
             })
             .collect()
     }
@@ -2354,8 +2742,8 @@ impl ConfigView {
             if !self.row_matches_filter(row) {
                 continue;
             }
-            // Category tabs filter sections unless the user is searching.
-            if !filtering && !self.active_tab.contains(row.section) {
+            // The rail category filters rows unless the user is searching.
+            if !filtering && !self.category.contains(row) {
                 continue;
             }
 
@@ -2381,43 +2769,7 @@ impl ConfigView {
             self.selected = idx;
             self.scroll = 0;
         }
-    }
-
-    fn setting_description(key: &str) -> &'static str {
-        match key {
-            "provider" => {
-                "Active model provider for this session. Enter opens the provider picker."
-            }
-            "provider_templates" => {
-                "Beginner templates for OpenCode Zen/Go, SenseNova, and unpublished Agnes. Enter opens the list."
-            }
-            "model" => "Model id for the active provider. Enter opens the model picker.",
-            "base_url" | "provider_url" => {
-                "Current route endpoint. Change provider setup through /provider so credential, model, and endpoint stay together."
-            }
-            "approval_mode" => {
-                "Session approval posture (ask / auto). Separate from filesystem sandbox."
-            }
-            "permission_posture" | "approval_policy" => {
-                "Saved permission posture. Independent of filesystem sandbox (fs:* chrome)."
-            }
-            "allow_shell" => "Whether shell tools may run. Separate from approval posture.",
-            "sandbox_mode" => "Filesystem sandbox: none / workspace-write / read-only.",
-            "theme" => "Named UI theme. Scope: saved settings.",
-            "low_motion" => "Reduce motion: freezes pulses, keeps static highlights.",
-            "calm_mode" => "Quieter chrome and denser transcript.",
-            "ocean_treatment" => "Underwater field treatment (deepsea / flat / terminal).",
-            "locale" => "UI language. Scope: saved settings.",
-            "reasoning_effort" => "Default reasoning effort for capable models.",
-            "default_mode" => "Startup mode (agent / plan / operate).",
-            "mcp_open" => {
-                "Open the MCP manager. Connect, reconnect, re-auth, or diagnose from there."
-            }
-            "mcp_reconnect" => "Reconnect configured MCP servers (/mcp reload).",
-            "mcp_diagnose" => "Diagnose MCP servers (/mcp validate).",
-            "plugins_open" => "Open plugins. Trust, enable, or diagnose invalid manifests.",
-            _ => "Enter change · R reset · Esc close. Scope shown on the row badge.",
-        }
+        self.last_mouse_selected = None;
     }
 
     fn key_column_width(&self) -> usize {
@@ -2433,13 +2785,22 @@ impl ConfigView {
     }
 
     fn table_column_widths(&self, content_width: usize) -> (usize, usize, usize) {
-        let fixed_width =
-            CONFIG_ROW_PREFIX_WIDTH + CONFIG_COLUMN_GAPS_WIDTH + CONFIG_SCOPE_COLUMN_WIDTH;
+        // The affordance glyph is the interaction; the scope badge is
+        // secondary and sheds first so narrow lists keep a readable value.
+        let scope_width = if content_width >= CONFIG_SCOPE_BADGE_MIN_WIDTH {
+            CONFIG_SCOPE_COLUMN_WIDTH
+        } else {
+            0
+        };
+        let fixed_width = CONFIG_ROW_PREFIX_WIDTH
+            + CONFIG_COLUMN_GAPS_WIDTH
+            + CONFIG_AFFORDANCE_COLUMN_WIDTH
+            + scope_width;
         let key_value_width = content_width.saturating_sub(fixed_width);
         let desired_key_width = self.key_column_width();
 
         if key_value_width == 0 {
-            return (0, 0, CONFIG_SCOPE_COLUMN_WIDTH);
+            return (0, 0, scope_width);
         }
 
         let minimum_key_width = CONFIG_MIN_KEY_COLUMN_WIDTH.min(key_value_width);
@@ -2450,7 +2811,7 @@ impl ConfigView {
             .saturating_sub(key_width)
             .min(CONFIG_VALUE_COLUMN_WIDTH);
 
-        (key_width, value_width, CONFIG_SCOPE_COLUMN_WIDTH)
+        (key_width, value_width, scope_width)
     }
 
     fn selected_row_index(&self) -> Option<usize> {
@@ -2483,6 +2844,7 @@ impl ConfigView {
     fn update_filter(&mut self, update: impl FnOnce(&mut String)) {
         update(&mut self.filter);
         self.status = None;
+        self.last_mouse_selected = None;
         self.sync_selection_to_filter();
         self.adjust_scroll(self.visible_rows_cached());
     }
@@ -2550,16 +2912,10 @@ impl ConfigView {
 
     fn open_selected_catalog_picker(&self) -> Option<ViewAction> {
         let row = self.rows.get(self.selected_row_index()?)?;
-        let command = match row.key.as_str() {
-            "provider" if row.editable => "/provider",
-            "provider_templates" if row.editable => "/provider templates",
-            "model" if row.editable => "/model",
-            "mcp_open" if row.editable => "/mcp",
-            "mcp_reconnect" if row.editable => "/mcp reload",
-            "mcp_diagnose" if row.editable => "/mcp validate",
-            "plugins_open" if row.editable => "/plugin",
-            _ => return None,
-        };
+        if !row.editable {
+            return None;
+        }
+        let (command, _) = row.facts.command?;
         Some(ViewAction::Emit(ViewEvent::CommandPaletteSelected {
             action: CommandPaletteAction::ExecuteCommand {
                 command: command.to_string(),
@@ -2582,31 +2938,41 @@ impl ConfigView {
         };
     }
 
+    /// Leave the editor without applying (Esc or the Cancel control).
+    fn cancel_edit(&mut self) {
+        self.editing = None;
+        self.status = Some(self.tr(MessageId::ConfigEditCancelled).to_string());
+        self.last_mouse_selected = None;
+    }
+
+    /// Apply the editor's value (Enter or the Apply control): the selected
+    /// choice, or the trimmed text buffer.
+    fn commit_edit(&mut self) -> ViewAction {
+        let Some(edit) = self.editing.take() else {
+            return ViewAction::None;
+        };
+        self.last_mouse_selected = None;
+        let value = match edit.choices.as_ref() {
+            Some(choices) => match choices.get(edit.selected_choice).cloned() {
+                Some(value) => value,
+                None => return ViewAction::None,
+            },
+            None => edit.buffer.iter().collect::<String>().trim().to_string(),
+        };
+        ViewAction::Emit(ViewEvent::ConfigUpdated {
+            key: edit.key,
+            value,
+            persist: edit.scope.persist(),
+        })
+    }
+
     fn handle_choice_key(&mut self, key: KeyEvent) -> ViewAction {
         match key.code {
             KeyCode::Esc => {
-                self.editing = None;
-                self.status = Some(self.tr(MessageId::ConfigEditCancelled).to_string());
+                self.cancel_edit();
                 ViewAction::None
             }
-            KeyCode::Enter => {
-                let Some(edit) = self.editing.take() else {
-                    return ViewAction::None;
-                };
-                let Some(value) = edit
-                    .choices
-                    .as_ref()
-                    .and_then(|choices| choices.get(edit.selected_choice))
-                    .cloned()
-                else {
-                    return ViewAction::None;
-                };
-                ViewAction::Emit(ViewEvent::ConfigUpdated {
-                    key: edit.key,
-                    value,
-                    persist: edit.scope.persist(),
-                })
-            }
+            KeyCode::Enter => self.commit_edit(),
             KeyCode::Up | KeyCode::Left | KeyCode::Char('k') => {
                 self.move_choice(-1);
                 ViewAction::None
@@ -2666,22 +3032,10 @@ impl ConfigView {
         }
         match key.code {
             KeyCode::Esc => {
-                self.editing = None;
-                self.status = Some(self.tr(MessageId::ConfigEditCancelled).to_string());
+                self.cancel_edit();
                 ViewAction::None
             }
-            KeyCode::Enter => {
-                let Some(edit) = self.editing.take() else {
-                    return ViewAction::None;
-                };
-                let submitted = edit.buffer.iter().collect::<String>();
-                let value = submitted.trim().to_string();
-                ViewAction::Emit(ViewEvent::ConfigUpdated {
-                    key: edit.key,
-                    value,
-                    persist: edit.scope.persist(),
-                })
-            }
+            KeyCode::Enter => self.commit_edit(),
             KeyCode::Backspace => {
                 if let Some(edit) = self.editing.as_mut() {
                     if edit.select_all {
@@ -2807,6 +3161,7 @@ impl ConfigView {
             })
             .unwrap_or(0);
         let buffer: Vec<char> = initial_value.chars().collect();
+        self.last_mouse_selected = None;
         self.editing = Some(ConfigEdit {
             key,
             original_value,
@@ -2829,25 +3184,27 @@ impl ConfigView {
     }
 
     fn row_display_value(&self, row: &ConfigRow) -> String {
-        if row.key == "cost_currency" && row.scope == ConfigScope::Saved {
+        // The effective lane is only ever an explicit `App` observation carried
+        // on the row's typed facts; a persisted value never stands in for it.
+        let effective = row.facts.effective.as_deref();
+        if row.key == "cost_currency"
+            && row.scope == ConfigScope::Saved
+            && let Some(effective_currency) = effective
+        {
             let saved_cost_currency = crate::pricing::CostCurrency::from_setting(&row.value);
             let effective_cost_currency =
-                crate::pricing::CostCurrency::from_setting(&self.effective_cost_currency);
+                crate::pricing::CostCurrency::from_setting(effective_currency);
             if saved_cost_currency != effective_cost_currency {
                 return format!(
                     "{}{}",
                     row.value,
                     self.tr(MessageId::ConfigRowEffective)
-                        .replace("{currency}", &self.effective_cost_currency)
+                        .replace("{currency}", effective_currency)
                 );
             }
         }
 
-        let runtime_value = match row.key.as_str() {
-            "low_motion" => Some(self.effective_low_motion),
-            "fancy_animations" => Some(self.effective_fancy_animations),
-            _ => None,
-        };
+        let runtime_value = effective.and_then(|value| value.parse::<bool>().ok());
         if let Some(runtime_value) = runtime_value
             && row.value.parse::<bool>().ok() != Some(runtime_value)
         {
@@ -2875,53 +3232,13 @@ impl ConfigView {
             if config_default_placeholder_message(&row.key).is_some_and(|message_id| {
                 row.value == tr(self.locale, message_id) || row.value == tr(Locale::En, message_id)
             }) {
-                return "Provider default".to_string();
+                return self.tr(MessageId::ConfigValueProviderDefault).into_owned();
             }
             let canonical = canonical_config_choice(&row.key, &row.value);
             return config_choice_label(self.locale, &row.key, &canonical);
         }
 
         row.value.clone()
-    }
-
-    fn selected_row_hint(&self) -> Option<String> {
-        let row_idx = self.selected_row_index()?;
-        let row = self.rows.get(row_idx)?;
-        let meta = SettingsRegistry::new(self).meta(row);
-        let label = config_label_for_key_for_locale(self.locale, &row.key);
-        let hint = config_hint_for_key(self.locale, &row.key);
-        let action_id = if row.key == "provider" {
-            MessageId::ConfigActionOpenProvider
-        } else if row.key == "provider_templates" {
-            MessageId::ConfigActionOpenProviderTemplates
-        } else if row.key == "model" {
-            MessageId::ConfigActionOpenModel
-        } else if row.key == "mcp_open" {
-            MessageId::ConfigActionOpenMcp
-        } else if row.key == "mcp_reconnect" {
-            MessageId::ConfigActionMcpReconnect
-        } else if row.key == "mcp_diagnose" {
-            MessageId::ConfigActionMcpDiagnose
-        } else if row.key == "plugins_open" {
-            MessageId::ConfigActionOpenPlugins
-        } else if meta.kind == SettingKind::Boolean {
-            MessageId::ConfigActionToggle
-        } else if meta.kind == SettingKind::Choice {
-            MessageId::ConfigActionChoose
-        } else if matches!(meta.kind, SettingKind::Integer | SettingKind::Text) {
-            MessageId::ConfigActionEdit
-        } else {
-            MessageId::ConfigActionReadOnly
-        };
-        let action = self.tr(action_id);
-        if !hint.is_empty() {
-            return Some(format!("{label}: {hint} · {action}"));
-        }
-        if row.editable {
-            Some(format!("{label}: {action} ({})", row.key))
-        } else {
-            Some(format!("{label}: read-only status ({})", row.key))
-        }
     }
 }
 
@@ -2968,6 +3285,7 @@ fn experimental_config_rows(config: &Config) -> Vec<ConfigRow> {
             ),
             editable: false,
             scope: ConfigScope::Saved,
+            facts: ConfigRowFacts::read_only_setting(SettingAuthority::WorkspaceConfiguration),
         });
     }
 
@@ -2979,6 +3297,7 @@ fn experimental_config_rows(config: &Config) -> Vec<ConfigRow> {
                 .to_string(),
         editable: false,
         scope: ConfigScope::Saved,
+        facts: ConfigRowFacts::diagnostic(SettingAuthority::Session),
     });
     rows.push(ConfigRow {
         // Workflow orchestration is its own section, not a Fleet concern.
@@ -2989,6 +3308,7 @@ fn experimental_config_rows(config: &Config) -> Vec<ConfigRow> {
                 .to_string(),
         editable: false,
         scope: ConfigScope::Saved,
+        facts: ConfigRowFacts::diagnostic(SettingAuthority::Session),
     });
 
     rows
@@ -3108,139 +3428,92 @@ fn humanize_config_key(key: &str) -> String {
         .join(" ")
 }
 
+/// Localized hint for a setting key. Theme and locale hints are derived from
+/// the shipped registries (value lists, not prose) so they cannot go stale.
 fn config_hint_for_key(locale: Locale, key: &str) -> Cow<'static, str> {
-    if key == "telemetry" {
-        return tr(locale, MessageId::ConfigHintTelemetry);
-    }
-    if key == "provider_url" {
-        return tr(locale, MessageId::ConfigHintProviderUrl);
-    }
-    if key == "provider_templates" {
-        return tr(locale, MessageId::ConfigHintProviderTemplates);
-    }
-    Cow::Borrowed(config_literal_hint_for_key(key))
-}
-
-fn config_literal_hint_for_key(key: &str) -> &'static str {
-    match key {
-        "model" => "live route model for this session; Enter opens /model",
-        "fast_model" => {
-            "used by Auto routing and agent model_strength=faster when this provider has a known sibling"
-        }
-        "provider" => {
-            "live route provider for this session; Enter opens /provider (credential, model, and endpoint switch together)"
-        }
-        "approval_mode" => "this session only: Ask | Auto-Review | Full Access",
-        "permission_posture" => "default for new sessions: Ask | Auto-Review | Full Access",
-        "approval_policy" => {
-            "new sessions: Ask | Auto-Review | Full Access; choosing Full Access releases the raw config override"
-        }
-        "managed_approval_policy" => {
-            "a project, profile, environment, managed config, or organization requirement controls this value"
-        }
-        "managed_allow_shell" => {
-            "a project, profile, environment, or managed config controls shell access"
-        }
-        "allow_shell" => "on exposes shell tools in Agent mode; permission rules still apply",
-        "telemetry" => "anonymous usage counts only; never conversations or code",
-        "composer_multiline_mode" => {
-            "off: Enter sends, Shift+Enter adds a line; on: Enter adds a line, Shift+Enter sends"
-        }
-        "auto_compact"
-        | "launch_screen"
-        | "show_tool_details"
-        | "composer_border"
-        | "paste_burst_detection" => "on/off, true/false, yes/no, 1/0",
-        "composer_density" | "transcript_spacing" => "compact | comfortable | spacious",
-        "inline_diffs" => "full | summary | off; exact change remains in Alt/Option+V details",
-        "tool_collapse" => "compact | expanded | calm",
-        // Derived from the shipped theme/locale registries so these hints
-        // cannot go stale as new entries land (they previously advertised
-        // 4 of 12 themes and 4 of 8 locales).
+    let id = match key {
         "theme" => {
             static THEME_HINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-            THEME_HINT.get_or_init(|| {
+            return Cow::Borrowed(THEME_HINT.get_or_init(|| {
                 crate::palette::SELECTABLE_THEMES
                     .iter()
                     .map(|id| id.name())
                     .collect::<Vec<_>>()
                     .join(" | ")
-            })
+            }));
         }
         "locale" => {
             static LOCALE_HINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-            LOCALE_HINT.get_or_init(|| crate::localization::configured_locale_values(" | "))
+            return Cow::Borrowed(
+                LOCALE_HINT.get_or_init(|| crate::localization::configured_locale_values(" | ")),
+            );
         }
-        "background_color" => "#RRGGBB | default",
-        "work_surface_placement" => {
-            "top | left | right | off · side rails require Ocean mode and at least 72 columns"
-        }
-        "rail_panel" => "tasks | agents | context | pinned · which panel the rail shows",
-        "work_surface_top_height" => "5..=16 rows · also adjustable by dragging the divider",
-        "work_surface_side_width" => "26..=80 columns · also adjustable by dragging the divider",
-        "base_url" => {
-            "read-only route receipt for the live endpoint · change provider, credential, and endpoint together with /provider"
-        }
+        "telemetry" => MessageId::ConfigHintTelemetry,
+        "provider_url" => MessageId::ConfigHintProviderUrl,
+        "provider_templates" => MessageId::ConfigHintProviderTemplates,
+        "model" => MessageId::ConfigHintModel,
+        "fast_model" => MessageId::ConfigHintFastModel,
+        "provider" => MessageId::ConfigHintProvider,
+        "approval_mode" => MessageId::ConfigHintApprovalMode,
+        "permission_posture" => MessageId::ConfigHintPermissionPosture,
+        "approval_policy" => MessageId::ConfigHintApprovalPolicy,
+        "managed_approval_policy" => MessageId::ConfigHintManagedApprovalPolicy,
+        "managed_allow_shell" => MessageId::ConfigHintManagedAllowShell,
+        "allow_shell" => MessageId::ConfigHintAllowShell,
+        "composer_multiline_mode" => MessageId::ConfigHintComposerMultilineMode,
+        "auto_compact"
+        | "launch_screen"
+        | "show_tool_details"
+        | "composer_border"
+        | "paste_burst_detection" => MessageId::ConfigHintBooleanValues,
+        "composer_density" | "transcript_spacing" => MessageId::ConfigHintDensity,
+        "inline_diffs" => MessageId::ConfigHintInlineDiffs,
+        "tool_collapse" => MessageId::ConfigHintToolCollapse,
+        "background_color" => MessageId::ConfigHintBackgroundColor,
+        "work_surface_placement" => MessageId::ConfigHintWorkSurfacePlacement,
+        "rail_panel" => MessageId::ConfigHintRailPanel,
+        "work_surface_top_height" => MessageId::ConfigHintWorkSurfaceTopHeight,
+        "work_surface_side_width" => MessageId::ConfigHintWorkSurfaceSideWidth,
+        "base_url" => MessageId::ConfigHintBaseUrl,
         // #5134: the filter matches hint text, so the words a confused user
         // actually types — "context length", "context size", "max context",
-        // "1m" — have to appear here or these rows stay unfindable.
-        "context_window" => {
-            "max context length / context size limit in tokens · set `[providers.<name>] context_window` in config.toml, e.g. 1048576 for a 1M route; (not set) resolves it automatically"
-        }
-        "effective_context_window" => {
-            "resolved max context length / window size limit in tokens and where the value came from; drives compaction, pressure, and preflight budgets"
-        }
-        "cost_currency" => "usd | cny",
-        "calm_mode" => "quietens transcript chrome and tool detail; independent of live motion",
-        "low_motion" => "on overrides live-state motion; model output is unchanged",
-        "fancy_animations" => "on animates truthful tool, status, and ocean live state",
-        "ocean_treatment" => "deepsea | flat (appearance; independent of motion)",
-        "show_thinking" => "show or hide model reasoning in chat; task lists stay concise",
-        "thinking_default_expanded" => {
-            "expand model reasoning by default; Space still toggles each block"
-        }
-        "thinking_preview_lines" => {
-            "collapsed completed-thought preview rows (default 2; 0=header-only; 10=older dump)"
-        }
-        "help_expand_groups" => {
-            "start Help/shortcuts with every group expanded; default folds the long tail"
-        }
-        "pin_last_prompt" => {
-            "pin the last user prompt at the top of the transcript when it scrolls off"
-        }
-        "thinking_highlight" => {
-            "fill the model reasoning background; the dashed rail remains visible when off"
-        }
-        "synchronized_output" => "auto | on | off; terminal redraw pacing, not model speed",
-        "default_mode" => "act (agent) | plan | operate",
-        "max_history" => "integer (0 allowed)",
-        "auto_compact_threshold_percent" => {
-            "10..=100 · compaction threshold: percent of the usable context length at which auto-compaction fires"
-        }
-        "default_model" => {
-            "DeepSeek-only legacy fallback; other providers use their provider-scoped model above"
-        }
-        "reasoning_effort" => {
-            "Per-model thinking ladder from the active route. default clears the saved value and uses that model's official default. Always-thinking models omit off."
-        }
-        "mcp_open" => "open the MCP manager · Connect / Reconnect / Re-auth / Diagnose",
-        "mcp_reconnect" => "reconnect MCP · /mcp reload",
-        "mcp_diagnose" => "diagnose MCP · /mcp validate",
-        "plugins_open" => "open plugins · trust, enable, or diagnose",
-        "mcp_config_path" => "path to mcp.json",
-        "fleet.exec.max_spawn_depth" => {
-            "0 blocks child agents; 3 default (same axis as sub-agents); capped at 8"
-        }
-        "features.subagents" => "read-only feature flag state; /pod setup is the user-facing path",
-        "features.web_search" => "read-only feature flag state for web search tools",
-        "features.apply_patch" => "read-only feature flag state for patch editing tools",
-        "features.mcp" => "read-only feature flag state for MCP tools",
-        "features.exec_policy" => "read-only feature flag state for execution policy tools",
-        "features.vision_model" => "beta feature flag for vision/model image support",
-        "goal_command" => "/goal sets objectives, budgets, and Work-context status",
-        "workflow" => "/workflow runs scripted operations with fan-out/fan-in run cards",
-        _ => "",
-    }
+        // "1m" — have to appear in these hints or the rows stay unfindable.
+        "context_window" => MessageId::ConfigHintContextWindow,
+        "effective_context_window" => MessageId::ConfigHintEffectiveContextWindow,
+        "cost_currency" => MessageId::ConfigHintCostCurrency,
+        "calm_mode" => MessageId::ConfigHintCalmMode,
+        "low_motion" => MessageId::ConfigHintLowMotion,
+        "fancy_animations" => MessageId::ConfigHintFancyAnimations,
+        "ocean_treatment" => MessageId::ConfigHintOceanTreatment,
+        "show_thinking" => MessageId::ConfigHintShowThinking,
+        "thinking_default_expanded" => MessageId::ConfigHintThinkingDefaultExpanded,
+        "thinking_preview_lines" => MessageId::ConfigHintThinkingPreviewLines,
+        "help_expand_groups" => MessageId::ConfigHintHelpExpandGroups,
+        "pin_last_prompt" => MessageId::ConfigHintPinLastPrompt,
+        "thinking_highlight" => MessageId::ConfigHintThinkingHighlight,
+        "synchronized_output" => MessageId::ConfigHintSynchronizedOutput,
+        "default_mode" => MessageId::ConfigHintDefaultMode,
+        "max_history" => MessageId::ConfigHintMaxHistory,
+        "auto_compact_threshold_percent" => MessageId::ConfigHintAutoCompactThreshold,
+        "default_model" => MessageId::ConfigHintDefaultModel,
+        "reasoning_effort" => MessageId::ConfigHintReasoningEffort,
+        "mcp_open" => MessageId::ConfigHintMcpOpen,
+        "mcp_reconnect" => MessageId::ConfigHintMcpReconnect,
+        "mcp_diagnose" => MessageId::ConfigHintMcpDiagnose,
+        "plugins_open" => MessageId::ConfigHintPluginsOpen,
+        "mcp_config_path" => MessageId::ConfigHintMcpConfigPath,
+        "fleet.exec.max_spawn_depth" => MessageId::ConfigHintFleetMaxSpawnDepth,
+        "features.subagents" => MessageId::ConfigHintFeatureSubagents,
+        "features.web_search" => MessageId::ConfigHintFeatureWebSearch,
+        "features.apply_patch" => MessageId::ConfigHintFeatureApplyPatch,
+        "features.mcp" => MessageId::ConfigHintFeatureMcp,
+        "features.exec_policy" => MessageId::ConfigHintFeatureExecPolicy,
+        "features.vision_model" => MessageId::ConfigHintFeatureVisionModel,
+        "goal_command" => MessageId::ConfigHintGoalCommand,
+        "workflow" => MessageId::ConfigHintWorkflow,
+        _ => return Cow::Borrowed(""),
+    };
+    tr(locale, id)
 }
 
 fn config_default_placeholder_message(key: &str) -> Option<MessageId> {
@@ -3385,41 +3658,44 @@ fn canonical_config_choice(key: &str, value: &str) -> String {
 }
 
 fn config_choice_label(locale: Locale, key: &str, value: &str) -> String {
-    let label = match (key, value) {
-        ("telemetry", "true") => tr(locale, MessageId::ConfigValueTelemetryOn).to_string(),
-        ("telemetry", "false") => tr(locale, MessageId::ConfigValueTelemetryOff).to_string(),
-        (key, "true") if config_boolean_key(key) => "On".to_string(),
-        (key, "false") if config_boolean_key(key) => "Off".to_string(),
-        ("approval_mode" | "permission_posture" | "approval_policy", "ask") => "Ask".to_string(),
+    let id = match (key, value) {
+        ("telemetry", "true") => Some(MessageId::ConfigValueTelemetryOn),
+        ("telemetry", "false") => Some(MessageId::ConfigValueTelemetryOff),
+        (key, "true") if config_boolean_key(key) => Some(MessageId::ConfigValueOn),
+        (key, "false") if config_boolean_key(key) => Some(MessageId::ConfigValueOff),
+        ("approval_mode" | "permission_posture" | "approval_policy", "ask") => {
+            Some(MessageId::ConfigChoiceAsk)
+        }
         ("approval_mode" | "permission_posture" | "approval_policy", "auto-review") => {
-            "Auto-Review".to_string()
+            Some(MessageId::ConfigChoiceAutoReview)
         }
-        ("approval_policy", "use-tui-default") => "Use TUI permission default".to_string(),
+        ("approval_policy", "use-tui-default") => Some(MessageId::ConfigChoiceUseTuiDefault),
         ("approval_mode" | "permission_posture" | "approval_policy", "full-access") => {
-            "Full Access".to_string()
+            Some(MessageId::ConfigChoiceFullAccess)
         }
-        ("approval_mode" | "approval_policy", "never") => "Never".to_string(),
-        ("default_mode", "agent") => "Act".to_string(),
-        ("default_mode", "plan") => "Plan (read only)".to_string(),
-        ("default_mode", "operate") => "Operate".to_string(),
-        ("work_surface_placement", "top") => "Top".to_string(),
-        ("work_surface_placement", "left") => "Left sidebar".to_string(),
-        ("work_surface_placement", "right") => "Right sidebar".to_string(),
-        ("work_surface_placement", "off") => "Off".to_string(),
-        ("rail_panel", "tasks") => "Tasks".to_string(),
-        ("rail_panel", "agents") => "Agents".to_string(),
-        ("rail_panel", "context") => "Context".to_string(),
-        ("rail_panel", "pinned") => "Pinned".to_string(),
-        ("reasoning_effort", "default") => "Provider default".to_string(),
-        ("status_indicator", "cw") => "Codewhale mark".to_string(),
-        ("status_indicator", "whale") => "Animated whale".to_string(),
-        ("status_indicator", "dots") => "Animated dots".to_string(),
-        ("status_indicator", "off") => "Off".to_string(),
-        ("inline_diffs", "full") => "Full diff".to_string(),
-        ("inline_diffs", "summary") => "Summary".to_string(),
-        ("inline_diffs", "off") => "Off".to_string(),
-        _ => value.to_string(),
+        ("approval_mode" | "approval_policy", "never") => Some(MessageId::ConfigChoiceNever),
+        ("default_mode", "agent") => Some(MessageId::ConfigChoiceModeAct),
+        ("default_mode", "plan") => Some(MessageId::ConfigChoiceModePlan),
+        ("default_mode", "operate") => Some(MessageId::ConfigChoiceModeOperate),
+        ("work_surface_placement", "top") => Some(MessageId::ConfigChoicePlacementTop),
+        ("work_surface_placement", "left") => Some(MessageId::ConfigChoicePlacementLeft),
+        ("work_surface_placement", "right") => Some(MessageId::ConfigChoicePlacementRight),
+        ("work_surface_placement" | "status_indicator" | "inline_diffs", "off") => {
+            Some(MessageId::ConfigValueOff)
+        }
+        ("rail_panel", "tasks") => Some(MessageId::ConfigChoiceRailTasks),
+        ("rail_panel", "agents") => Some(MessageId::ConfigChoiceRailAgents),
+        ("rail_panel", "context") => Some(MessageId::ConfigChoiceRailContext),
+        ("rail_panel", "pinned") => Some(MessageId::ConfigChoiceRailPinned),
+        ("reasoning_effort", "default") => Some(MessageId::ConfigValueProviderDefault),
+        ("status_indicator", "cw") => Some(MessageId::ConfigChoiceStatusCw),
+        ("status_indicator", "whale") => Some(MessageId::ConfigChoiceStatusWhale),
+        ("status_indicator", "dots") => Some(MessageId::ConfigChoiceStatusDots),
+        ("inline_diffs", "full") => Some(MessageId::ConfigChoiceDiffFull),
+        ("inline_diffs", "summary") => Some(MessageId::ConfigChoiceDiffSummary),
+        _ => None,
     };
+    let label = id.map_or_else(|| value.to_string(), |id| tr(locale, id).into_owned());
 
     if key == "locale" && configured_locale_is_partial_pack(value) {
         format!(
@@ -3436,55 +3712,42 @@ fn config_choice_detail(locale: Locale, key: &str, value: &str) -> Cow<'static, 
         return tr(locale, MessageId::ConfigLocalePartialDetail);
     }
 
-    Cow::Borrowed(match (key, value) {
+    let id = match (key, value) {
         ("approval_mode" | "permission_posture" | "approval_policy", "ask") => {
-            "Ask before tools that can make consequential changes."
+            MessageId::ConfigChoiceDetailAsk
         }
         ("approval_mode" | "permission_posture" | "approval_policy", "auto-review") => {
-            "Review tool risk automatically and ask when a decision needs you."
+            MessageId::ConfigChoiceDetailAutoReview
         }
-        ("approval_policy", "use-tui-default") => {
-            "Remove the root config override and use the saved TUI permission choice."
-        }
+        ("approval_policy", "use-tui-default") => MessageId::ConfigChoiceDetailUseTuiDefault,
         ("approval_mode" | "permission_posture" | "approval_policy", "full-access") => {
-            "Run tools without approval prompts; workspace rules still apply."
+            MessageId::ConfigChoiceDetailFullAccess
         }
-        ("approval_mode" | "approval_policy", "never") => {
-            "Block every tool that requires approval."
-        }
-        ("default_mode", "agent") => "Start ready to collaborate and use tools.",
-        ("default_mode", "plan") => "Start in a read-only planning workspace.",
-        ("default_mode", "operate") => {
-            "Start as a coordinator that delegates work to bounded workers."
-        }
-        ("work_surface_placement", "top") => "Show Tasks, To-do, and Workers above the transcript.",
-        ("work_surface_placement", "left") => {
-            "Show Tasks, To-do, and Workers in a left sidebar when the terminal is wide enough."
-        }
-        ("work_surface_placement", "right") => {
-            "Show Tasks, To-do, and Workers in a right sidebar when the terminal is wide enough."
-        }
-        ("work_surface_placement", "off") => "Hide the rail entirely.",
-        ("rail_panel", "tasks") => "Rail shows the live Tasks / To-do / Workers list.",
-        ("rail_panel", "agents") => "Rail shows sub-agents and fan-out state.",
-        ("rail_panel", "context") => "Rail shows workspace, token, and cost context.",
-        ("rail_panel", "pinned") => "Rail shows the pinned goal and checklist summary.",
-        ("low_motion", "true") => "Stops live-state movement without changing model output.",
-        ("low_motion", "false") => "Allows motion selected by the other appearance settings.",
-        ("fancy_animations", "true") => "Animates truthful tool, status, and ocean live state.",
-        ("fancy_animations", "false") => "Keeps live-state markers and the ocean treatment static.",
-        ("show_thinking", "true") => "Show model reasoning blocks in the transcript.",
-        ("show_thinking", "false") => {
-            "Keep model reasoning hidden; answers and tools remain visible."
-        }
-        ("thinking_highlight", "true") => "Fill the model reasoning background.",
-        ("thinking_highlight", "false") => {
-            "Keep the dashed reasoning rail and italic text without a filled background."
-        }
-        ("ocean_treatment", "deepsea") => "Use one continuous ocean color field.",
-        ("ocean_treatment", "flat") => "Use a single flat background color.",
-        _ => "",
-    })
+        ("approval_mode" | "approval_policy", "never") => MessageId::ConfigChoiceDetailNever,
+        ("default_mode", "agent") => MessageId::ConfigChoiceDetailModeAgent,
+        ("default_mode", "plan") => MessageId::ConfigChoiceDetailModePlan,
+        ("default_mode", "operate") => MessageId::ConfigChoiceDetailModeOperate,
+        ("work_surface_placement", "top") => MessageId::ConfigChoiceDetailPlacementTop,
+        ("work_surface_placement", "left") => MessageId::ConfigChoiceDetailPlacementLeft,
+        ("work_surface_placement", "right") => MessageId::ConfigChoiceDetailPlacementRight,
+        ("work_surface_placement", "off") => MessageId::ConfigChoiceDetailPlacementOff,
+        ("rail_panel", "tasks") => MessageId::ConfigChoiceDetailRailTasks,
+        ("rail_panel", "agents") => MessageId::ConfigChoiceDetailRailAgents,
+        ("rail_panel", "context") => MessageId::ConfigChoiceDetailRailContext,
+        ("rail_panel", "pinned") => MessageId::ConfigChoiceDetailRailPinned,
+        ("low_motion", "true") => MessageId::ConfigChoiceDetailLowMotionOn,
+        ("low_motion", "false") => MessageId::ConfigChoiceDetailLowMotionOff,
+        ("fancy_animations", "true") => MessageId::ConfigChoiceDetailFancyOn,
+        ("fancy_animations", "false") => MessageId::ConfigChoiceDetailFancyOff,
+        ("show_thinking", "true") => MessageId::ConfigChoiceDetailShowThinkingOn,
+        ("show_thinking", "false") => MessageId::ConfigChoiceDetailShowThinkingOff,
+        ("thinking_highlight", "true") => MessageId::ConfigChoiceDetailThinkingHighlightOn,
+        ("thinking_highlight", "false") => MessageId::ConfigChoiceDetailThinkingHighlightOff,
+        ("ocean_treatment", "deepsea") => MessageId::ConfigChoiceDetailOceanDeepsea,
+        ("ocean_treatment", "flat") => MessageId::ConfigChoiceDetailOceanFlat,
+        _ => return Cow::Borrowed(""),
+    };
+    tr(locale, id)
 }
 
 fn render_config_editor_value_line(
@@ -3545,9 +3808,15 @@ impl ModalView for ConfigView {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
+        // Any key is a state change: a following single click must select,
+        // never activate, whatever the pointer touched before.
+        self.last_mouse_selected = None;
         if self.editing.is_some() {
             return self.handle_editing_key(key);
         }
+        // A status line ("Edit cancelled", …) is transient: navigation gives
+        // the row back to its activation copy.
+        self.status = None;
 
         match key.code {
             KeyCode::Esc => {
@@ -3559,17 +3828,15 @@ impl ModalView for ConfigView {
                 }
             }
             KeyCode::Char('q') if self.filter.is_empty() => ViewAction::Close,
-            KeyCode::Tab
+            KeyCode::Tab | KeyCode::Right
                 if !key.modifiers.contains(KeyModifiers::SHIFT) && self.filter.is_empty() =>
             {
-                self.active_tab = self.active_tab.next();
+                self.category = self.category.next();
                 self.select_first_visible_row();
                 ViewAction::None
             }
-            KeyCode::BackTab | KeyCode::Tab
-                if key.modifiers.contains(KeyModifiers::SHIFT) && self.filter.is_empty() =>
-            {
-                self.active_tab = self.active_tab.prev();
+            KeyCode::BackTab | KeyCode::Tab | KeyCode::Left if self.filter.is_empty() => {
+                self.category = self.category.prev();
                 self.select_first_visible_row();
                 ViewAction::None
             }
@@ -3668,20 +3935,35 @@ impl ModalView for ConfigView {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
-        if self
-            .editing
-            .as_ref()
-            .is_some_and(|edit| edit.choices.is_some())
-        {
+        if self.editing.is_some() {
+            let has_choices = self
+                .editing
+                .as_ref()
+                .is_some_and(|edit| edit.choices.is_some());
             match mouse.kind {
-                MouseEventKind::ScrollUp => self.move_choice(-1),
-                MouseEventKind::ScrollDown => self.move_choice(1),
+                MouseEventKind::ScrollUp if has_choices => self.move_choice(-1),
+                MouseEventKind::ScrollDown if has_choices => self.move_choice(1),
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(choice) = self
+                    let position = Position::new(mouse.column, mouse.row);
+                    let control = self
+                        .last_editor_controls
+                        .borrow()
+                        .iter()
+                        .find_map(|(rect, control)| rect.contains(position).then_some(*control));
+                    match control {
+                        Some(EditorControl::Apply) => return self.commit_edit(),
+                        Some(EditorControl::Cancel) => {
+                            self.cancel_edit();
+                            return ViewAction::None;
+                        }
+                        None => {}
+                    }
+                    let choice = self
                         .last_choice_hitboxes
                         .borrow()
                         .iter()
-                        .find_map(|(y, choice)| (*y == mouse.row).then_some(*choice))
+                        .find_map(|(rect, choice)| rect.contains(position).then_some(*choice));
+                    if let Some(choice) = choice
                         && let Some(edit) = self.editing.as_mut()
                     {
                         edit.selected_choice = choice;
@@ -3689,9 +3971,6 @@ impl ModalView for ConfigView {
                 }
                 _ => {}
             }
-            return ViewAction::None;
-        }
-        if self.editing.is_some() {
             return ViewAction::None;
         }
         match mouse.kind {
@@ -3711,27 +3990,42 @@ impl ModalView for ConfigView {
             return ViewAction::None;
         }
 
-        let clicked_tab = self
-            .last_tab_hitboxes
+        let position = Position::new(mouse.column, mouse.row);
+        let clicked_category = self
+            .last_rail_hitboxes
             .borrow()
             .iter()
-            .find_map(|(x0, x1, y, tab)| {
-                (*y == mouse.row && mouse.column >= *x0 && mouse.column < *x1).then_some(*tab)
+            .find_map(|(rect, category)| rect.contains(position).then_some(*category));
+        let stepped = self
+            .last_nav_controls
+            .borrow()
+            .iter()
+            .find_map(|(rect, step)| rect.contains(position).then_some(*step))
+            .map(|step| match step {
+                NavStep::Previous => self.category.prev(),
+                NavStep::Next => self.category.next(),
             });
-        if let Some(tab) = clicked_tab {
-            if self.active_tab != tab {
-                self.active_tab = tab;
+        if let Some(category) = clicked_category.or(stepped) {
+            // A category click (or an overflow marker) is an explicit
+            // navigation: it leaves search so the list shows exactly that
+            // category, never a stale filtered mix.
+            self.clear_filter();
+            self.status = None;
+            if self.category != category {
+                self.category = category;
                 self.select_first_visible_row();
             }
             self.last_mouse_selected = None;
             return ViewAction::None;
         }
 
+        // Only the painted cells of a list row select it; the rail, dividers,
+        // detail pane, status row, and footer never do.
         let selected = self
             .last_row_hitboxes
             .borrow()
             .iter()
-            .find_map(|(y, row_idx)| (*y == mouse.row).then_some(*row_idx));
+            .find_map(|(rect, row_idx)| rect.contains(position).then_some(*row_idx));
         if let Some(row_idx) = selected {
             let activate = self.last_mouse_selected == Some(row_idx) && self.selected == row_idx;
             self.selected = row_idx;
@@ -3762,22 +4056,28 @@ impl ModalView for ConfigView {
             render_underwater_surface(area, buf, self.tr(MessageId::ConfigModalTitle).to_string());
         let (lines, footer) = if let Some(edit) = self.editing.as_ref() {
             *self.last_choice_hitboxes.borrow_mut() = Vec::new();
-            *self.last_tab_hitboxes.borrow_mut() = Vec::new();
+            *self.last_editor_controls.borrow_mut() = Vec::new();
+            *self.last_rail_hitboxes.borrow_mut() = Vec::new();
+            *self.last_nav_controls.borrow_mut() = Vec::new();
             let footer_text = if edit.choices.is_some() {
                 if inner.width < 56 || inner.height <= 8 {
-                    " ↑/↓ choose · Enter apply · Esc ".to_string()
+                    self.tr(MessageId::ConfigChoiceFooterCompact).to_string()
                 } else {
-                    " ↑/↓ choose · Enter apply · Esc cancel · 1-9 jump ".to_string()
+                    self.tr(MessageId::ConfigChoiceFooter).to_string()
                 }
             } else {
                 self.tr(MessageId::ConfigEditFooter).to_string()
             };
             let reserved_footer_lines =
                 wrapped_footer_lines(&footer_text, inner.width, Style::default()).len();
+            // The clickable Apply / Cancel controls always own the last body
+            // row above the footer.
+            const CONTROL_ROWS: usize = 1;
             // Spacer rows are secondary chrome: give them up before the
             // editable value line falls below the wrapped footer on compact
             // terminals (#40x12).
-            let spacious = usize::from(inner.height).saturating_sub(reserved_footer_lines) >= 8;
+            let spacious =
+                usize::from(inner.height).saturating_sub(reserved_footer_lines + CONTROL_ROWS) >= 8;
             let mut lines: Vec<Line> = Vec::new();
             let edit_label = config_label_for_key_for_locale(self.locale, &edit.key);
             let edit_title = if edit_label == edit.key {
@@ -3797,26 +4097,30 @@ impl ModalView for ConfigView {
             if spacious {
                 lines.push(Line::from(""));
             }
-            lines.push(Line::from(vec![
-                Span::styled(
-                    self.tr(MessageId::ConfigEditScopeLabel),
-                    Style::default().fg(palette::TEXT_MUTED),
-                ),
+            let muted = Style::default().fg(palette::TEXT_MUTED);
+            let scope_spans = vec![
+                Span::styled(self.tr(MessageId::ConfigEditScopeLabel), muted),
                 Span::raw(edit.scope.label(self.locale)),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    self.tr(MessageId::ConfigEditCurrentLabel),
-                    Style::default().fg(palette::TEXT_MUTED),
-                ),
+            ];
+            let current_spans = vec![
+                Span::styled(self.tr(MessageId::ConfigEditCurrentLabel), muted),
                 Span::raw(truncate_view_text(&edit.original_value, 60)),
-            ]));
+            ];
             if spacious {
+                lines.push(Line::from(scope_spans));
+                lines.push(Line::from(current_spans));
                 lines.push(Line::from(""));
+            } else {
+                // Compact: scope and current share one row so the choices
+                // and the controls both stay visible at 40x12.
+                let mut merged = scope_spans;
+                merged.push(Span::styled(" · ", muted));
+                merged.extend(current_spans);
+                lines.push(Line::from(merged));
             }
             if let Some(choices) = edit.choices.as_ref() {
                 lines.push(Line::from(Span::styled(
-                    "Choose:",
+                    self.tr(MessageId::ConfigEditChooseLabel),
                     Style::default().fg(palette::TEXT_MUTED),
                 )));
 
@@ -3827,8 +4131,8 @@ impl ModalView for ConfigView {
                     .get(edit.selected_choice)
                     .map(|choice| config_choice_detail(self.locale, &edit.key, choice))
                     .unwrap_or_default();
-                let available_rows =
-                    usize::from(inner.height).saturating_sub(reserved_footer_lines + lines.len());
+                let available_rows = usize::from(inner.height)
+                    .saturating_sub(reserved_footer_lines + CONTROL_ROWS + lines.len());
                 // At the minimum supported height, the choices themselves are
                 // the primary object. Shed the explanatory detail before any
                 // option; larger surfaces keep one row for that detail.
@@ -3848,7 +4152,15 @@ impl ModalView for ConfigView {
                     let marker = crate::tui::glyphs::selection_marker(selected);
                     let label = config_choice_label(self.locale, &edit.key, choice);
                     let line_y = inner.y.saturating_add(lines.len() as u16);
-                    hitboxes.push((line_y, choice_idx));
+                    hitboxes.push((
+                        Rect {
+                            x: inner.x,
+                            y: line_y,
+                            width: inner.width,
+                            height: 1,
+                        },
+                        choice_idx,
+                    ));
                     let mut line = Line::from(format!(
                         "  {marker} {:>2}. {}",
                         choice_idx + 1,
@@ -3864,7 +4176,8 @@ impl ModalView for ConfigView {
                 *self.last_choice_hitboxes.borrow_mut() = hitboxes;
 
                 if !selected_detail.is_empty()
-                    && lines.len() + reserved_footer_lines < usize::from(inner.height)
+                    && lines.len() + reserved_footer_lines + CONTROL_ROWS
+                        < usize::from(inner.height)
                 {
                     lines.push(Line::from(Span::styled(
                         crate::tui::ui_text::semantic_truncate(
@@ -3892,303 +4205,1033 @@ impl ModalView for ConfigView {
             }
             (lines, footer_text)
         } else {
-            *self.last_choice_hitboxes.borrow_mut() = Vec::new();
-            let content_height = usize::from(inner.height);
-            let items = self.visible_items();
-            let match_count = self.matching_row_indices().len();
-
-            // Reserve the action footer by its actual wrapped height: the
-            // prose hints wrap to two or three rows at compact widths, and
-            // every wrapped row must come out of the table budget or the
-            // settings rows silently fall off the bottom of the body.
-            let footer_height = |id: MessageId| -> usize {
-                wrapped_footer_lines(&self.tr(id), inner.width, Style::default()).len()
-            };
-            let footer_lines = if !self.filter.is_empty() {
-                footer_height(MessageId::ConfigFooterFiltered)
-            } else {
-                footer_height(MessageId::ConfigFooterScrollable)
-                    .max(footer_height(MessageId::ConfigFooterDefault))
-            }
-            .max(1);
-
-            // Full chrome spends five header rows (in-body title, search,
-            // blank, column captions, separator) plus a status row under the
-            // table. That secondary material collapses before the settings
-            // rows do: compact keeps one search/count line — the surface
-            // hairline already owns the title — and cedes the rest to the
-            // rows the room exists to edit.
-            const FULL_HEADER_LINES: usize = 4;
-            const FULL_BOTTOM_LINES: usize = 1;
-            let full_rows =
-                content_height.saturating_sub(FULL_HEADER_LINES + FULL_BOTTOM_LINES + footer_lines);
-            let compact = full_rows < 4;
-            let header_lines = if compact { 2 } else { FULL_HEADER_LINES };
-            let bottom_lines = if compact {
-                usize::from(self.status.is_some())
-            } else {
-                FULL_BOTTOM_LINES
-            };
-            let description_lines = if compact { 0 } else { 4 };
-            let list_line_budget = content_height
-                .saturating_sub(header_lines + bottom_lines + description_lines + footer_lines)
-                .max(1);
-            self.last_visible_rows.set(list_line_budget);
-
-            // The stored scroll can predate this frame's geometry (a resize
-            // shrinks the window before any key recomputes it), so anchor the
-            // visible window to the selection here: the row being manipulated
-            // is always rendered.
-            let item_line_cost = |item: &ConfigListItem| match item {
-                ConfigListItem::Section(_) => 2usize,
-                ConfigListItem::Row(_) => 1usize,
-            };
-            let visible_end = |start: usize| {
-                let mut used = 0usize;
-                let mut end = start;
-                while end < items.len() {
-                    let cost = item_line_cost(&items[end]);
-                    if end > start && used.saturating_add(cost) > list_line_budget {
-                        break;
-                    }
-                    used = used.saturating_add(cost);
-                    end += 1;
-                }
-                end
-            };
-            let mut start = self.scroll.min(items.len().saturating_sub(1));
-            if let Some(selected_pos) = self.selected_display_position(&items) {
-                start = start.min(selected_pos);
-                while selected_pos >= visible_end(start) && start < selected_pos {
-                    start += 1;
-                }
-            }
-            let end = visible_end(start);
-            let scrollable = start > 0 || end < items.len();
-            let search_value = if self.filter.is_empty() {
-                self.tr(MessageId::ConfigSearchPlaceholder).to_string()
-            } else {
-                self.filter.clone()
-            };
-
-            let table_width = usize::from(inner.width).saturating_sub(usize::from(scrollable));
-            let (key_column_width, value_column_width, _scope_column_width) =
-                self.table_column_widths(table_width);
-            let search_line = Line::from(vec![
-                Span::styled("  Search: ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw(search_value),
-                Span::styled(
-                    format!("  ({match_count}/{})", self.rows.len()),
-                    Style::default().fg(palette::TEXT_MUTED),
-                ),
-            ]);
-            // Category tabs — app-style shell, not ASCII table headers.
-            let mut tab_spans = Vec::new();
-            let tab_y = inner.y.saturating_add(u16::from(!compact));
-            let mut tab_x = inner.x;
-            let mut tab_hitboxes = Vec::new();
-            for (i, tab) in ConfigTab::ALL.iter().enumerate() {
-                if i > 0 {
-                    tab_spans.push(Span::styled("  ", Style::default()));
-                    tab_x = tab_x.saturating_add(2);
-                }
-                let label = format!(" {} ", tab.label());
-                let width = UnicodeWidthStr::width(label.as_str()) as u16;
-                tab_hitboxes.push((tab_x, tab_x.saturating_add(width), tab_y, *tab));
-                let active = *tab == self.active_tab;
-                tab_spans.push(Span::styled(
-                    label,
-                    if active {
-                        Style::default()
-                            .fg(palette::SELECTION_TEXT)
-                            .bg(palette::WHALE_ACTION)
-                            .add_modifier(ratatui::style::Modifier::BOLD)
-                    } else {
-                        Style::default().fg(palette::TEXT_MUTED)
-                    },
-                ));
-                tab_x = tab_x.saturating_add(width);
-            }
-            *self.last_tab_hitboxes.borrow_mut() = tab_hitboxes;
-            let tab_line = Line::from(tab_spans);
-            let mut lines: Vec<Line> = if compact {
-                vec![tab_line, search_line]
-            } else {
-                vec![
-                    Line::from(vec![
-                        Span::styled(
-                            self.tr(MessageId::ConfigTitle),
-                            Style::default().fg(palette::WHALE_ACTION).bold(),
-                        ),
-                        Span::styled(
-                            "  Tab/Shift+Tab categories",
-                            Style::default().fg(palette::TEXT_HINT),
-                        ),
-                    ]),
-                    tab_line,
-                    search_line,
-                    Line::from(""),
-                ]
-            };
-            let mut row_hitboxes = Vec::new();
-
-            for item in &items[start..end] {
-                match item {
-                    ConfigListItem::Section(section) => {
-                        lines.push(Line::from(""));
-                        lines.push(Line::from(Span::styled(
-                            format!("  {}", section.label(self.locale)),
-                            Style::default().fg(palette::TEXT_HINT).bold(),
-                        )));
-                    }
-                    ConfigListItem::Row(idx) => {
-                        let Some(row) = self.rows.get(*idx) else {
-                            continue;
-                        };
-                        let line_y = inner.y.saturating_add(lines.len() as u16);
-                        row_hitboxes.push((line_y, *idx));
-                        let selected = *idx == self.selected;
-                        let style = if selected {
-                            menu_style::selected_row_style()
-                        } else {
-                            Style::default().fg(palette::TEXT_PRIMARY)
-                        };
-                        let label = config_label_for_key_for_locale(self.locale, &row.key);
-                        let key = fit_config_column(&label, key_column_width);
-                        let value =
-                            fit_config_column(&self.row_display_value(row), value_column_width);
-                        // Quiet saved / session badges (not a full scope column shout).
-                        let scope_badge = match row.scope {
-                            ConfigScope::Saved => "saved",
-                            ConfigScope::Session => "session",
-                        };
-                        let rail = if selected { "▌" } else { " " };
-                        let mut line = Line::from(vec![
-                            Span::styled(
-                                rail,
-                                Style::default().fg(if selected {
-                                    palette::WHALE_ACTION
-                                } else {
-                                    palette::TEXT_DIM
-                                }),
-                            ),
-                            Span::styled(format!("{key}  {value}  "), style),
-                            Span::styled(
-                                scope_badge,
-                                Style::default()
-                                    .fg(palette::TEXT_HINT)
-                                    .add_modifier(ratatui::style::Modifier::DIM),
-                            ),
-                        ]);
-                        if selected {
-                            line.style = menu_style::selected_row_bg_style();
-                        }
-                        lines.push(line);
-                    }
-                }
-            }
-
-            // Description pane for the selected setting.
-            if !compact && let Some(row) = self.rows.get(self.selected) {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "────────────────────────────────────────",
-                    Style::default().fg(palette::TEXT_DIM),
-                )));
-                let desc = Self::setting_description(&row.key);
-                lines.push(Line::from(Span::styled(
-                    format!("  {desc}"),
-                    Style::default().fg(palette::TEXT_MUTED),
-                )));
-                lines.push(Line::from(Span::styled(
-                    "  Enter change · R reset · Esc close",
-                    Style::default().fg(palette::TEXT_HINT),
-                )));
-            }
-            *self.last_row_hitboxes.borrow_mut() = row_hitboxes;
-
-            if items.is_empty() {
-                let message = if self.filter.is_empty() {
-                    self.tr(MessageId::ConfigNoSettings).to_string()
-                } else {
-                    format!(
-                        "{}\"{}\".",
-                        self.tr(MessageId::ConfigNoMatchesPrefix),
-                        self.filter
-                    )
-                };
-                lines.push(Line::from(Span::styled(
-                    message,
-                    Style::default().fg(palette::TEXT_MUTED),
-                )));
-            }
-
-            if bottom_lines > 0 {
-                let selected_hint = self.selected_row_hint();
-                let bottom_text = if let Some(status) = self.status.as_ref() {
-                    status.clone()
-                } else if !self.filter.is_empty() {
-                    format!(
-                        "{}: {match_count}",
-                        self.tr(MessageId::ConfigFilteredSettings)
-                    )
-                } else if scrollable && !items.is_empty() {
-                    let showing = format!(
-                        "{} {}-{} / {}",
-                        self.tr(MessageId::ConfigShowing),
-                        start.saturating_add(1),
-                        end,
-                        items.len()
-                    );
-                    if let Some(hint) = selected_hint {
-                        format!("{showing} | {hint}")
-                    } else {
-                        showing
-                    }
-                } else {
-                    selected_hint.unwrap_or_default()
-                };
-                lines.push(Line::from(Span::styled(
-                    crate::tui::ui_text::semantic_truncate(&bottom_text, usize::from(inner.width)),
-                    Style::default().fg(palette::TEXT_MUTED),
-                )));
-            }
-            self.last_render_scroll.set(start);
-
-            let footer = if !self.filter.is_empty() {
-                self.tr(MessageId::ConfigFooterFiltered)
-            } else if scrollable {
-                self.tr(MessageId::ConfigFooterScrollable)
-            } else {
-                self.tr(MessageId::ConfigFooterDefault)
-            };
-            (lines, footer.to_string())
+            self.render_settings_shell(inner, buf);
+            return;
         };
 
         // Footer wraps inside the body so its hints can never run off the modal
-        // edge (#3732); the table renders into the area above it.
+        // edge (#3732); the editor renders into the area above it, and the
+        // Apply / Cancel controls own the last body row.
         let content = render_modal_text_footer(
             inner,
             buf,
             &footer,
             Style::default().fg(palette::TEXT_MUTED),
         );
-        let content = if self.editing.is_none() {
-            render_panel_scroll_rail(
-                content,
-                buf,
-                self.visible_items().len(),
-                self.last_render_scroll.get(),
-                self.last_visible_rows.get().max(1),
-                true,
-            )
-        } else {
-            content
+        let body = Rect {
+            height: content.height.saturating_sub(1),
+            ..content
         };
         Paragraph::new(lines)
             .style(Style::default().fg(palette::TEXT_PRIMARY))
             .scroll((0, 0))
-            .render(content, buf);
+            .render(body, buf);
+        if content.height > 0 {
+            self.render_editor_controls(
+                Rect {
+                    y: content.bottom().saturating_sub(1),
+                    height: 1,
+                    ..content
+                },
+                buf,
+            );
+        }
+    }
+}
+
+impl ConfigView {
+    /// Paint `[ Apply ]  [ Cancel ]` and record their exact hitboxes.
+    fn render_editor_controls(&self, row: Rect, buf: &mut Buffer) {
+        use crate::tui::ui_text::text_display_width;
+
+        let mut controls = Vec::new();
+        let mut x = row.x;
+        for (control, id, style) in [
+            (
+                EditorControl::Apply,
+                MessageId::ConfigEditorApply,
+                Style::default()
+                    .fg(palette::SELECTION_TEXT)
+                    .bg(palette::WHALE_ACTION)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            (
+                EditorControl::Cancel,
+                MessageId::ConfigEditorCancel,
+                Style::default()
+                    .fg(palette::TEXT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ] {
+            let label = format!("[ {} ]", self.tr(id));
+            let width = u16::try_from(text_display_width(&label)).unwrap_or(u16::MAX);
+            let limit = row.right().saturating_sub(x);
+            if limit == 0 {
+                break;
+            }
+            buf.set_stringn(x, row.y, &label, usize::from(limit), style);
+            controls.push((
+                Rect {
+                    x,
+                    y: row.y,
+                    width: width.min(limit),
+                    height: 1,
+                },
+                control,
+            ));
+            x = x.saturating_add(width).saturating_add(2);
+        }
+        *self.last_editor_controls.borrow_mut() = controls;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tideline settings shell: category rail │ setting + action list │ detail at
+// ≥100 columns; a horizontally windowed category strip over a full-width list
+// below that. Every fact painted here comes from a row's typed
+// `ConfigRowFacts`; nothing is re-derived from the key at render time.
+
+/// Inner width at which the detail pane is painted beside the list and the
+/// category navigator may become a vertical rail.
+const CONFIG_SHELL_DETAIL_MIN_WIDTH: u16 = 100;
+const CONFIG_SHELL_RAIL_WIDTH: u16 = 20;
+
+/// Pane geometry for one render of the settings shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConfigShellPanes {
+    rail: Option<Rect>,
+    list: Rect,
+    detail: Option<Rect>,
+}
+
+fn config_shell_panes(body: Rect, use_rail: bool) -> ConfigShellPanes {
+    let rail_width = if use_rail { CONFIG_SHELL_RAIL_WIDTH } else { 0 };
+    let detail_width = if body.width >= CONFIG_SHELL_DETAIL_MIN_WIDTH {
+        // A third of the body, floored so the list keeps a legible value
+        // column at the 100-column blocker size.
+        (body.width.saturating_mul(34) / 100).clamp(28, 44)
+    } else {
+        0
+    };
+    let rail_gap = u16::from(rail_width > 0);
+    let detail_gap = u16::from(detail_width > 0);
+    let list_width = body
+        .width
+        .saturating_sub(rail_width + rail_gap + detail_width + detail_gap)
+        .max(1);
+    let rail = (rail_width > 0).then_some(Rect {
+        width: rail_width,
+        ..body
+    });
+    let list = Rect {
+        x: body.x.saturating_add(rail_width + rail_gap),
+        width: list_width,
+        ..body
+    };
+    let detail = (detail_width > 0).then_some(Rect {
+        x: list.right().saturating_add(detail_gap),
+        width: detail_width,
+        ..body
+    });
+    ConfigShellPanes { rail, list, detail }
+}
+
+fn setting_authority_label(
+    locale: Locale,
+    authority: SettingAuthority,
+    detail: Option<&str>,
+) -> Cow<'static, str> {
+    let name = detail.unwrap_or_default();
+    match authority {
+        SettingAuthority::Environment => {
+            Cow::Owned(tr(locale, MessageId::ConfigSourceEnvironment).replace("{name}", name))
+        }
+        SettingAuthority::Terminal => {
+            Cow::Owned(tr(locale, MessageId::ConfigSourceTerminal).replace("{name}", name))
+        }
+        SettingAuthority::Session => tr(locale, MessageId::ConfigSourceSession),
+        SettingAuthority::UserSettings => tr(locale, MessageId::ConfigSourceUserSettings),
+        SettingAuthority::WorkspaceConfiguration => tr(locale, MessageId::ConfigSourceConfig),
+        SettingAuthority::ManagedPolicy => tr(locale, MessageId::ConfigSourceManaged),
+    }
+}
+
+fn setting_apply_label(locale: Locale, apply: SettingApplySemantics) -> Cow<'static, str> {
+    tr(
+        locale,
+        match apply {
+            SettingApplySemantics::EffectiveNow => MessageId::ConfigApplyEffectiveNow,
+            SettingApplySemantics::Immediate => MessageId::ConfigApplyOnSave,
+            SettingApplySemantics::NextSession => MessageId::ConfigApplyNextSession,
+            SettingApplySemantics::RestartRequired => MessageId::ConfigApplyRestart,
+            SettingApplySemantics::ReadOnly => MessageId::ConfigApplyReadOnly,
+            SettingApplySemantics::ReloadRequired => MessageId::ConfigApplyReload,
+            SettingApplySemantics::UiNowEngineRestart => MessageId::ConfigApplyUiNowEngineRestart,
+        },
+    )
+}
+
+fn setting_kind_label(locale: Locale, kind: SettingKind) -> Cow<'static, str> {
+    tr(
+        locale,
+        match kind {
+            SettingKind::Boolean => MessageId::ConfigKindToggle,
+            SettingKind::Choice => MessageId::ConfigKindChoice,
+            SettingKind::Integer => MessageId::ConfigKindNumber,
+            SettingKind::Text => MessageId::ConfigKindText,
+            SettingKind::Action => MessageId::ConfigKindAction,
+            SettingKind::ReadOnly => MessageId::ConfigKindReadOnly,
+        },
+    )
+}
+
+/// Locale-neutral affordance glyph painted beside every list row so the
+/// interaction (toggle / choose / edit / open / none) is visible before the
+/// row is selected.
+fn setting_affordance(kind: SettingKind, on: Option<bool>) -> &'static str {
+    match kind {
+        SettingKind::Boolean => {
+            if on == Some(true) {
+                "[x]"
+            } else {
+                "[ ]"
+            }
+        }
+        SettingKind::Choice => "‹ ›",
+        SettingKind::Integer | SettingKind::Text => "✎",
+        SettingKind::Action => "›",
+        SettingKind::ReadOnly => "⊘",
+    }
+}
+
+/// Styles a category navigator paints with; `ConfigView` and the Tideline
+/// stage scaffold each supply their own palette.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CategoryNavStyle {
+    pub selected: Style,
+    pub normal: Style,
+    pub marker: Style,
+    pub ascii_safe: bool,
+}
+
+/// Paint the vertical rail: one row per category with the selected one
+/// marked. Returns the painted rect of every category (spec §6 parity).
+pub(crate) fn render_settings_category_rail(
+    area: Rect,
+    buf: &mut Buffer,
+    selected: ConfigCategory,
+    locale: Locale,
+    style: CategoryNavStyle,
+) -> Vec<(Rect, ConfigCategory)> {
+    let mut hitboxes = Vec::new();
+    if area.width < 3 {
+        return hitboxes;
+    }
+    let label_width = usize::from(area.width).saturating_sub(2);
+    for (index, category) in ConfigCategory::ALL.iter().enumerate() {
+        let Some(y) = area
+            .y
+            .checked_add(index as u16)
+            .filter(|y| *y < area.bottom())
+        else {
+            break;
+        };
+        let is_selected = *category == selected;
+        let marker = match (is_selected, style.ascii_safe) {
+            (false, _) => " ",
+            (true, true) => ">",
+            (true, false) => "▸",
+        };
+        buf.set_stringn(area.x, y, marker, 1, style.marker);
+        let label = crate::tui::ui_text::truncate_line_to_width(
+            category.label(locale).as_ref(),
+            label_width,
+        );
+        buf.set_stringn(
+            area.x.saturating_add(2),
+            y,
+            &label,
+            label_width,
+            if is_selected {
+                style.selected
+            } else {
+                style.normal
+            },
+        );
+        hitboxes.push((
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 1,
+            },
+            *category,
+        ));
+    }
+    hitboxes
+}
+
+/// Window of chips `[start, end)` that fits `width` columns while always
+/// containing `selected`. Chips are separated by one column and two columns
+/// are reserved on each side that hides chips, for the overflow markers.
+fn category_strip_window(widths: &[usize], selected: usize, width: usize) -> (usize, usize) {
+    let count = widths.len();
+    let mut start = 0;
+    loop {
+        let mut used = if start > 0 { 2 } else { 0 };
+        let mut end = start;
+        while end < count {
+            let separator = usize::from(end > start);
+            let tail = if end + 1 < count { 2 } else { 0 };
+            if end > start && used + separator + widths[end] + tail > width {
+                break;
+            }
+            used += separator + widths[end];
+            end += 1;
+        }
+        let end = end.max((start + 1).min(count));
+        if selected < end || start + 1 >= count {
+            return (start, end);
+        }
+        start += 1;
+    }
+}
+
+/// Painted cells of a category strip: the visible chips and the ‹ / ›
+/// overflow markers, which are themselves pointer targets so every category
+/// is reachable by clicking alone at any width.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CategoryStripHitboxes {
+    pub chips: Vec<(Rect, ConfigCategory)>,
+    pub previous: Option<Rect>,
+    pub next: Option<Rect>,
+}
+
+/// Paint the horizontally windowed category strip (the narrow-width
+/// navigator from the design's `.settings-nav` rule) and return the painted
+/// rect of every visible category and overflow marker.
+pub(crate) fn render_settings_category_strip(
+    area: Rect,
+    buf: &mut Buffer,
+    selected: ConfigCategory,
+    locale: Locale,
+    style: CategoryNavStyle,
+) -> CategoryStripHitboxes {
+    use crate::tui::ui_text::{text_display_width, truncate_line_to_width};
+
+    let mut hitboxes = CategoryStripHitboxes::default();
+    if area.width < 4 || area.height == 0 {
+        return hitboxes;
+    }
+    let labels: Vec<String> = ConfigCategory::ALL
+        .iter()
+        .map(|category| category.label(locale).into_owned())
+        .collect();
+    let widths: Vec<usize> = labels
+        .iter()
+        .map(|label| text_display_width(label) + 2)
+        .collect();
+    let (start, end) = category_strip_window(&widths, selected.position(), usize::from(area.width));
+    let (prev, next) = if style.ascii_safe {
+        ("< ", " >")
+    } else {
+        ("‹ ", " ›")
+    };
+    let y = area.y;
+    let right = area.right();
+    let mut x = area.x;
+    if start > 0 {
+        buf.set_stringn(x, y, prev, 2, style.marker);
+        hitboxes.previous = Some(Rect {
+            x,
+            y,
+            width: 2,
+            height: 1,
+        });
+        x = x.saturating_add(2);
+    }
+    let tail_reserve: u16 = if end < labels.len() { 2 } else { 0 };
+    for (index, label) in labels.iter().enumerate().take(end).skip(start) {
+        let limit = right.saturating_sub(tail_reserve).saturating_sub(x);
+        if limit == 0 {
+            break;
+        }
+        let chip = format!(" {label} ");
+        let painted = truncate_line_to_width(&chip, usize::from(limit));
+        let painted_width = u16::try_from(text_display_width(&painted)).unwrap_or(limit);
+        if painted_width == 0 {
+            break;
+        }
+        let category = ConfigCategory::ALL[index];
+        let chip_style = if category == selected {
+            style.selected
+        } else {
+            style.normal
+        };
+        buf.set_stringn(x, y, &painted, usize::from(limit), chip_style);
+        hitboxes.chips.push((
+            Rect {
+                x,
+                y,
+                width: painted_width,
+                height: 1,
+            },
+            category,
+        ));
+        x = x.saturating_add(painted_width).saturating_add(1);
+    }
+    if end < labels.len() {
+        let marker_x = right.saturating_sub(2);
+        buf.set_stringn(marker_x, y, next, 2, style.marker);
+        hitboxes.next = Some(Rect {
+            x: marker_x,
+            y,
+            width: 2,
+            height: 1,
+        });
+    }
+    hitboxes
+}
+
+impl ConfigView {
+    /// Display label of the exact persisted value, without any effective
+    /// suffix: the `saved` lane of the detail pane.
+    fn saved_display_value(&self, row: &ConfigRow) -> String {
+        // Preserve the exact saved currency alias (for example `rmb`).
+        if row.key == "cost_currency" {
+            return row.value.clone();
+        }
+        if SettingsRegistry::new(self).meta(row).choices.is_some() {
+            if config_default_placeholder_message(&row.key).is_some_and(|message_id| {
+                row.value == tr(self.locale, message_id) || row.value == tr(Locale::En, message_id)
+            }) {
+                return self.tr(MessageId::ConfigValueProviderDefault).into_owned();
+            }
+            let canonical = canonical_config_choice(&row.key, &row.value);
+            return config_choice_label(self.locale, &row.key, &canonical);
+        }
+        row.value.clone()
+    }
+
+    /// Editor kind from the existing registry (its boolean/choice/integer
+    /// tables plus the row's typed activation command).
+    fn editor_kind(&self, row: &ConfigRow) -> SettingKind {
+        SettingsRegistry::new(self).meta(row).kind
+    }
+
+    /// Project a setting row onto the shared Tideline fact. Action and
+    /// diagnostic rows are not persisted facts and project to `None`.
+    ///
+    /// A lane is filled only from an explicit observation: the session
+    /// snapshot, the live session value, the persisted value (saved and
+    /// startup), or the `App` field carried on the row as `effective`.
+    /// Nothing is inferred across lanes.
+    fn setting_fact(&self, row: &ConfigRow) -> Option<SettingFact<String>> {
+        if row.facts.kind != ConfigRowKind::Setting {
+            return None;
+        }
+        let mut fact = match row.facts.snapshot {
+            Some(SnapshotLane::Provider) => self.snapshot.provider.clone(),
+            Some(SnapshotLane::Model) => self.snapshot.model.clone(),
+            None => match row.scope {
+                ConfigScope::Session => SettingFact::active_session(self.saved_display_value(row)),
+                ConfigScope::Saved => {
+                    // An unreadable store yields no saved or startup value.
+                    let saved = row
+                        .facts
+                        .store_error
+                        .is_none()
+                        .then(|| self.saved_display_value(row));
+                    let effective = row.facts.effective.as_deref().map(|value| {
+                        config_choice_label(
+                            self.locale,
+                            &row.key,
+                            &canonical_config_choice(&row.key, value),
+                        )
+                    });
+                    SettingFact {
+                        current: effective.clone(),
+                        effective,
+                        startup: saved.clone(),
+                        saved,
+                        authority: row.facts.authority,
+                        apply: row.facts.apply,
+                    }
+                }
+            },
+        };
+        fact.authority = row.facts.authority;
+        fact.apply = row.facts.apply;
+        Some(fact)
+    }
+
+    /// Verb for activating the selected row (`Enter opens…`, `Space toggles`).
+    fn setting_action_label(&self, row: &ConfigRow) -> Cow<'static, str> {
+        if let Some((_, verb)) = row.facts.command {
+            return self.tr(verb);
+        }
+        self.tr(match self.editor_kind(row) {
+            SettingKind::Boolean => MessageId::ConfigActionToggle,
+            SettingKind::Choice => MessageId::ConfigActionChoose,
+            SettingKind::Integer | SettingKind::Text => MessageId::ConfigActionEdit,
+            SettingKind::Action | SettingKind::ReadOnly => MessageId::ConfigActionReadOnly,
+        })
+    }
+
+    /// What activating the selected row does, spelled out: second click or
+    /// Enter is the activation model, so the row says so.
+    fn activation_copy(&self, row: &ConfigRow) -> String {
+        if row.editable {
+            format!(
+                "{} {}",
+                self.tr(MessageId::ConfigActivateAgain),
+                self.setting_action_label(row)
+            )
+        } else {
+            self.tr(MessageId::ConfigActionReadOnly).into_owned()
+        }
+    }
+
+    fn lane_or_unobserved(&self, lane: Option<&String>) -> String {
+        lane.cloned()
+            .unwrap_or_else(|| self.tr(MessageId::ConfigLaneUnobserved).into_owned())
+    }
+
+    /// A persisted lane: the value, or the store's load error, or unobserved.
+    fn store_lane(&self, lane: Option<&String>, store_error: Option<&str>) -> String {
+        match (lane, store_error) {
+            (Some(value), _) => value.clone(),
+            (None, Some(error)) => self
+                .tr(MessageId::ConfigLaneUnavailable)
+                .replace("{error}", error),
+            (None, None) => self.tr(MessageId::ConfigLaneUnobserved).into_owned(),
+        }
+    }
+
+    /// The detail pane: label and key, then the typed facts for the row's
+    /// kind, then the description and the activation copy.
+    fn setting_detail_lines(&self, row: &ConfigRow, width: usize) -> Vec<Line<'static>> {
+        use crate::tui::ui_text::semantic_truncate;
+
+        let label = config_label_for_key_for_locale(self.locale, &row.key);
+        let kind = self.editor_kind(row);
+        let muted = Style::default().fg(palette::TEXT_MUTED);
+        let primary = Style::default().fg(palette::TEXT_PRIMARY);
+        let value_width = width.saturating_sub(10);
+        let fact_line = |name: MessageId, value: &str| {
+            Line::from(vec![
+                Span::styled(format!("{:<10}", self.tr(name)), muted),
+                Span::styled(semantic_truncate(value, value_width), primary),
+            ])
+        };
+        let mut lines = vec![
+            Line::from(Span::styled(
+                semantic_truncate(&label, width),
+                Style::default().fg(palette::WHALE_INFO).bold(),
+            )),
+            Line::from(Span::styled(
+                semantic_truncate(&row.key, width),
+                Style::default().fg(palette::TEXT_DIM),
+            )),
+            Line::from(""),
+        ];
+        let source =
+            setting_authority_label(self.locale, row.facts.authority, row.facts.authority_detail);
+        let kind_label = setting_kind_label(self.locale, kind);
+        match row.facts.kind {
+            ConfigRowKind::Setting => {
+                let fact = self
+                    .setting_fact(row)
+                    .unwrap_or_else(|| SettingFact::active_session(self.saved_display_value(row)));
+                let store_error = row.facts.store_error.as_deref();
+                lines.push(fact_line(
+                    MessageId::ConfigFactCurrent,
+                    &self.lane_or_unobserved(fact.effective.as_ref().or(fact.current.as_ref())),
+                ));
+                lines.push(fact_line(
+                    MessageId::ConfigFactSaved,
+                    &self.store_lane(fact.saved.as_ref(), store_error),
+                ));
+                lines.push(fact_line(
+                    MessageId::ConfigFactStartup,
+                    &self.store_lane(fact.startup.as_ref(), store_error),
+                ));
+                lines.push(fact_line(MessageId::ConfigFactSource, &source));
+                lines.push(fact_line(
+                    MessageId::ConfigFactScope,
+                    row.scope.label(self.locale).as_ref(),
+                ));
+                lines.push(fact_line(
+                    MessageId::ConfigFactApply,
+                    &setting_apply_label(self.locale, fact.apply),
+                ));
+                lines.push(fact_line(MessageId::ConfigFactKind, &kind_label));
+                // No existing source reports availability; say so rather
+                // than implying the setting is known to be usable.
+                lines.push(fact_line(
+                    MessageId::ConfigFactAvailable,
+                    &self.tr(MessageId::ConfigLaneUnobserved),
+                ));
+            }
+            ConfigRowKind::Action => {
+                lines.push(Line::from(Span::styled(
+                    self.tr(MessageId::ConfigRowActionNote).into_owned(),
+                    muted,
+                )));
+                if let Some((command, _)) = row.facts.command {
+                    lines.push(fact_line(MessageId::ConfigFactOpens, command));
+                }
+                lines.push(fact_line(MessageId::ConfigFactSource, &source));
+                lines.push(fact_line(MessageId::ConfigFactKind, &kind_label));
+            }
+            ConfigRowKind::Diagnostic => {
+                lines.push(Line::from(Span::styled(
+                    self.tr(MessageId::ConfigRowDiagnosticNote).into_owned(),
+                    muted,
+                )));
+                lines.push(fact_line(MessageId::ConfigFactObserved, &row.value));
+                lines.push(fact_line(MessageId::ConfigFactSource, &source));
+                lines.push(fact_line(MessageId::ConfigFactKind, &kind_label));
+            }
+        }
+        lines.push(Line::from(""));
+        let hint = config_hint_for_key(self.locale, &row.key);
+        let description = if hint.is_empty() {
+            self.tr(MessageId::ConfigDescriptionDefault)
+        } else {
+            hint
+        };
+        lines.push(Line::from(Span::styled(description.into_owned(), muted)));
+        lines.push(Line::from(Span::styled(
+            self.activation_copy(row),
+            Style::default().fg(palette::TEXT_HINT),
+        )));
+        lines
+    }
+
+    /// One-row fold of the detail for surfaces too narrow for the pane: the
+    /// activation copy first, then the lanes that still fit.
+    fn setting_detail_summary(&self, row: &ConfigRow) -> String {
+        let activation = self.activation_copy(row);
+        let label = config_label_for_key_for_locale(self.locale, &row.key);
+        match row.facts.kind {
+            ConfigRowKind::Setting => {
+                let fact = self
+                    .setting_fact(row)
+                    .unwrap_or_else(|| SettingFact::active_session(self.saved_display_value(row)));
+                format!(
+                    "{activation} · {label}: {} {} · {} {} · {}",
+                    self.tr(MessageId::ConfigFactCurrent),
+                    self.lane_or_unobserved(fact.effective.as_ref().or(fact.current.as_ref())),
+                    self.tr(MessageId::ConfigFactSaved),
+                    self.store_lane(fact.saved.as_ref(), row.facts.store_error.as_deref()),
+                    setting_apply_label(self.locale, fact.apply)
+                )
+            }
+            ConfigRowKind::Action => {
+                format!("{activation} · {}", self.tr(MessageId::ConfigRowActionNote))
+            }
+            ConfigRowKind::Diagnostic => {
+                format!(
+                    "{label}: {} · {}",
+                    row.value,
+                    self.tr(MessageId::ConfigRowDiagnosticNote)
+                )
+            }
+        }
+    }
+
+    fn render_pane_divider(area: Rect, buf: &mut Buffer, x: u16) {
+        if x < area.x || x >= area.right() {
+            return;
+        }
+        for y in area.top()..area.bottom() {
+            buf[(x, y)]
+                .set_symbol("│")
+                .set_style(Style::default().fg(palette::BORDER_COLOR));
+        }
+    }
+
+    fn render_setting_detail(&self, area: Rect, buf: &mut Buffer) {
+        let Some(row) = self.selected_row_index().and_then(|idx| self.rows.get(idx)) else {
+            Paragraph::new(Line::from(Span::styled(
+                self.tr(MessageId::ConfigNoSettings).into_owned(),
+                Style::default().fg(palette::TEXT_MUTED),
+            )))
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+            return;
+        };
+        Paragraph::new(self.setting_detail_lines(row, usize::from(area.width)))
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    /// Paint the three-pane shell into the surface body.
+    fn render_settings_shell(&self, inner: Rect, buf: &mut Buffer) {
+        *self.last_choice_hitboxes.borrow_mut() = Vec::new();
+        *self.last_editor_controls.borrow_mut() = Vec::new();
+        *self.last_nav_controls.borrow_mut() = Vec::new();
+        let items = self.visible_items();
+        let match_count = self.matching_row_indices().len();
+
+        // Reserve the action footer by its actual wrapped height so no list
+        // row silently falls off the bottom on compact terminals.
+        let footer_height = |id: MessageId| -> usize {
+            wrapped_footer_lines(&self.tr(id), inner.width, Style::default()).len()
+        };
+        let footer_lines = if !self.filter.is_empty() {
+            footer_height(MessageId::ConfigFooterFiltered)
+        } else {
+            footer_height(MessageId::ConfigFooterScrollable)
+                .max(footer_height(MessageId::ConfigFooterDefault))
+        }
+        .max(1);
+        let content_height = usize::from(inner.height).saturating_sub(footer_lines);
+
+        // Header: the category navigator (strip, or the title when a vertical
+        // rail owns the categories) over the search line; a status row under
+        // the panes gives way before the list rows do.
+        const HEADER_LINES: usize = 2;
+        let compact = content_height.saturating_sub(HEADER_LINES + 1) < 4;
+        // ≥100 columns may spend a vertical rail beside the list; below that
+        // the design's horizontally windowed category row takes over, and so
+        // it does whenever the body is too short to list all eight rows.
+        let show_detail = inner.width >= CONFIG_SHELL_DETAIL_MIN_WIDTH;
+        // Without a detail pane the status row carries the folded lanes, so
+        // it may wrap to a second line once the list has room to spare.
+        let bottom_lines = if compact {
+            // Keep one status row while at least two list lines remain (a
+            // section caption plus the selected row), so the selected row
+            // still states its activation at 40x12.
+            if content_height.saturating_sub(HEADER_LINES) >= 3 {
+                1
+            } else {
+                usize::from(self.status.is_some())
+            }
+        } else if show_detail {
+            1
+        } else {
+            2
+        };
+        let body_height = content_height
+            .saturating_sub(HEADER_LINES + bottom_lines)
+            .max(1);
+        self.last_visible_rows.set(body_height);
+        let use_rail = show_detail && body_height >= ConfigCategory::ALL.len();
+
+        let clamp_height = |y: u16, wanted: usize| -> u16 {
+            u16::try_from(wanted)
+                .unwrap_or(u16::MAX)
+                .min(inner.bottom().saturating_sub(y))
+        };
+        let header = Rect {
+            height: clamp_height(inner.y, HEADER_LINES),
+            ..inner
+        };
+        let body = Rect {
+            y: header.bottom(),
+            height: clamp_height(header.bottom(), body_height),
+            ..inner
+        };
+        let bottom = Rect {
+            y: body.bottom(),
+            height: clamp_height(body.bottom(), bottom_lines),
+            ..inner
+        };
+        let panes = config_shell_panes(body, use_rail);
+
+        // Selection-anchored scroll: the row being manipulated always renders.
+        let list_line_budget = usize::from(body.height).max(1);
+        // A section caption costs itself plus a blank spacer, except at the
+        // top of the window where no spacer is painted.
+        let item_line_cost = |item: &ConfigListItem, first: bool| match item {
+            ConfigListItem::Section(_) if first => 1usize,
+            ConfigListItem::Section(_) => 2usize,
+            ConfigListItem::Row(_) => 1usize,
+        };
+        let visible_end = |start: usize| {
+            let mut used = 0usize;
+            let mut end = start;
+            while end < items.len() {
+                let cost = item_line_cost(&items[end], end == start);
+                if end > start && used.saturating_add(cost) > list_line_budget {
+                    break;
+                }
+                used = used.saturating_add(cost);
+                end += 1;
+            }
+            end
+        };
+        let mut start = self.scroll.min(items.len().saturating_sub(1));
+        if let Some(selected_pos) = self.selected_display_position(&items) {
+            start = start.min(selected_pos);
+            while selected_pos >= visible_end(start) && start < selected_pos {
+                start += 1;
+            }
+        }
+        let end = visible_end(start);
+        let scrollable = start > 0 || end < items.len();
+        self.last_render_scroll.set(start);
+
+        // Header.
+        let search_value = if self.filter.is_empty() {
+            self.tr(MessageId::ConfigSearchPlaceholder).to_string()
+        } else {
+            self.filter.clone()
+        };
+        let search_line = Line::from(vec![
+            Span::styled(
+                self.tr(MessageId::ConfigSearchLabel),
+                Style::default().fg(palette::TEXT_MUTED),
+            ),
+            Span::raw(search_value),
+            Span::styled(
+                format!("  ({match_count}/{})", self.rows.len()),
+                Style::default().fg(palette::TEXT_MUTED),
+            ),
+        ]);
+        *self.last_rail_hitboxes.borrow_mut() = Vec::new();
+        if header.height > 0 {
+            let nav_row = Rect {
+                height: 1,
+                ..header
+            };
+            if use_rail {
+                Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        self.tr(MessageId::ConfigTitle),
+                        Style::default().fg(palette::WHALE_ACTION).bold(),
+                    ),
+                    Span::styled(
+                        format!("  {}", self.tr(MessageId::ConfigNavHint)),
+                        Style::default().fg(palette::TEXT_HINT),
+                    ),
+                ]))
+                .render(nav_row, buf);
+            } else {
+                let strip_style = CategoryNavStyle {
+                    selected: Style::default()
+                        .fg(palette::SELECTION_TEXT)
+                        .bg(palette::WHALE_ACTION)
+                        .add_modifier(Modifier::BOLD),
+                    normal: Style::default().fg(palette::TEXT_MUTED),
+                    marker: Style::default().fg(palette::TEXT_HINT),
+                    ascii_safe: false,
+                };
+                let strip = render_settings_category_strip(
+                    nav_row,
+                    buf,
+                    self.category,
+                    self.locale,
+                    strip_style,
+                );
+                *self.last_rail_hitboxes.borrow_mut() = strip.chips;
+                *self.last_nav_controls.borrow_mut() = strip
+                    .previous
+                    .map(|rect| (rect, NavStep::Previous))
+                    .into_iter()
+                    .chain(strip.next.map(|rect| (rect, NavStep::Next)))
+                    .collect();
+            }
+        }
+        if header.height > 1 {
+            Paragraph::new(search_line).render(
+                Rect {
+                    y: header.y.saturating_add(1),
+                    height: 1,
+                    ..header
+                },
+                buf,
+            );
+        }
+
+        // Rail.
+        if let Some(rail) = panes.rail {
+            let rail_style = CategoryNavStyle {
+                selected: Style::default()
+                    .fg(palette::WHALE_ACTION)
+                    .add_modifier(Modifier::BOLD),
+                normal: Style::default().fg(palette::TEXT_MUTED),
+                marker: Style::default().fg(palette::WHALE_ACTION),
+                ascii_safe: false,
+            };
+            *self.last_rail_hitboxes.borrow_mut() =
+                render_settings_category_rail(rail, buf, self.category, self.locale, rail_style);
+            Self::render_pane_divider(body, buf, rail.right());
+        }
+
+        // List.
+        let list =
+            render_panel_scroll_rail(panes.list, buf, items.len(), start, list_line_budget, true);
+        let (key_column_width, value_column_width, scope_column_width) =
+            self.table_column_widths(usize::from(list.width));
+        let mut lines: Vec<Line> = Vec::new();
+        let mut row_hitboxes = Vec::new();
+        for item in &items[start..end] {
+            match item {
+                ConfigListItem::Section(section) => {
+                    if !lines.is_empty() {
+                        lines.push(Line::from(""));
+                    }
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", section.label(self.locale)),
+                        Style::default().fg(palette::TEXT_HINT).bold(),
+                    )));
+                }
+                ConfigListItem::Row(idx) => {
+                    let Some(row) = self.rows.get(*idx) else {
+                        continue;
+                    };
+                    let line_y = list.y.saturating_add(lines.len() as u16);
+                    if line_y >= list.bottom() {
+                        break;
+                    }
+                    row_hitboxes.push((
+                        Rect {
+                            x: list.x,
+                            y: line_y,
+                            width: list.width,
+                            height: 1,
+                        },
+                        *idx,
+                    ));
+                    let selected = *idx == self.selected;
+                    let style = if selected {
+                        menu_style::selected_row_style()
+                    } else if row.editable {
+                        Style::default().fg(palette::TEXT_PRIMARY)
+                    } else {
+                        // Read-only rows look distinct from editable ones.
+                        Style::default()
+                            .fg(palette::TEXT_MUTED)
+                            .add_modifier(Modifier::DIM)
+                    };
+                    let label = config_label_for_key_for_locale(self.locale, &row.key);
+                    let key = fit_config_column(&label, key_column_width);
+                    let value = fit_config_column(&self.row_display_value(row), value_column_width);
+                    let kind = self.editor_kind(row);
+                    let on = (kind == SettingKind::Boolean)
+                        .then(|| canonical_config_choice(&row.key, &row.value) == "true");
+                    let affordance = setting_affordance(kind, on);
+                    // Action and diagnostic rows are not persisted facts, so
+                    // they carry no scope badge.
+                    let badge = match row.facts.kind {
+                        ConfigRowKind::Setting if scope_column_width > 0 => {
+                            row.scope.label(self.locale)
+                        }
+                        _ => Cow::Borrowed(""),
+                    };
+                    let rail = if selected { "▌" } else { " " };
+                    let mut line = Line::from(vec![
+                        Span::styled(
+                            rail,
+                            Style::default().fg(if selected {
+                                palette::WHALE_ACTION
+                            } else {
+                                palette::TEXT_DIM
+                            }),
+                        ),
+                        Span::styled(format!("{key}  {value}  "), style),
+                        Span::styled(
+                            format!("{affordance:<3}  "),
+                            if row.editable {
+                                Style::default().fg(palette::WHALE_ACTION)
+                            } else {
+                                Style::default()
+                                    .fg(palette::TEXT_DIM)
+                                    .add_modifier(Modifier::DIM)
+                            },
+                        ),
+                        Span::styled(
+                            badge.into_owned(),
+                            Style::default()
+                                .fg(palette::TEXT_HINT)
+                                .add_modifier(Modifier::DIM),
+                        ),
+                    ]);
+                    if selected {
+                        line.style = menu_style::selected_row_bg_style();
+                    }
+                    lines.push(line);
+                }
+            }
+        }
+        *self.last_row_hitboxes.borrow_mut() = row_hitboxes;
+        if items.is_empty() {
+            let message = if self.filter.is_empty() {
+                self.tr(MessageId::ConfigNoSettings).to_string()
+            } else {
+                format!(
+                    "{}\"{}\".",
+                    self.tr(MessageId::ConfigNoMatchesPrefix),
+                    self.filter
+                )
+            };
+            lines.push(Line::from(Span::styled(
+                message,
+                Style::default().fg(palette::TEXT_MUTED),
+            )));
+        }
+        Paragraph::new(lines)
+            .style(Style::default().fg(palette::TEXT_PRIMARY))
+            .render(list, buf);
+
+        // Detail.
+        if let Some(detail) = panes.detail {
+            Self::render_pane_divider(body, buf, detail.x.saturating_sub(1));
+            self.render_setting_detail(detail, buf);
+        }
+
+        // Status row: an explicit status wins; otherwise the selected row's
+        // activation copy, with the detail facts folded in when no pane
+        // shows them.
+        if bottom.height > 0 {
+            let selected_row = self.selected_row_index().and_then(|idx| self.rows.get(idx));
+            let bottom_text = if let Some(status) = self.status.as_ref() {
+                status.clone()
+            } else if !self.filter.is_empty() {
+                format!(
+                    "{}: {match_count}",
+                    self.tr(MessageId::ConfigFilteredSettings)
+                )
+            } else if let Some(row) = selected_row {
+                if panes.detail.is_none() {
+                    self.setting_detail_summary(row)
+                } else {
+                    self.activation_copy(row)
+                }
+            } else {
+                String::new()
+            };
+            // An explicit status or filter count stays one ellipsized line;
+            // only the folded lanes may use the second row.
+            let budget = if self.status.is_some() || !self.filter.is_empty() {
+                usize::from(inner.width)
+            } else {
+                usize::from(inner.width).saturating_mul(usize::from(bottom.height))
+            };
+            Paragraph::new(Line::from(Span::styled(
+                crate::tui::ui_text::semantic_truncate(&bottom_text, budget),
+                Style::default().fg(palette::TEXT_MUTED),
+            )))
+            .wrap(Wrap { trim: true })
+            .render(bottom, buf);
+        }
+
+        let footer = if !self.filter.is_empty() {
+            self.tr(MessageId::ConfigFooterFiltered)
+        } else if scrollable {
+            self.tr(MessageId::ConfigFooterScrollable)
+        } else {
+            self.tr(MessageId::ConfigFooterDefault)
+        };
+        render_modal_text_footer(
+            inner,
+            buf,
+            &footer,
+            Style::default().fg(palette::TEXT_MUTED),
+        );
     }
 }
 
@@ -4965,7 +6008,7 @@ fn fit_config_column(text: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActionHint, ConfigListItem, ConfigScope, ConfigSection, ConfigTab, ConfigView, EmptyState,
+        ActionHint, ConfigCategory, ConfigListItem, ConfigScope, ConfigView, EmptyState,
         FocusTextureMode, HelpView, ListDetailLayout, ModalKind, ModalView, SettingKind,
         SettingsRegistry, ViewAction, ViewEvent, ViewStack, action_footer_lines,
         canonical_config_choice, centered_modal_area, config_choice_detail, config_choice_label,
@@ -5729,7 +6772,8 @@ mod tests {
         let view = create_config_view(Locale::En);
         assert_eq!(
             visible_section_labels(&view),
-            vec!["Provider", "Network", "Composer", "Sidebar", "History"]
+            vec!["Display"],
+            "Settings opens on Appearance"
         );
     }
 
@@ -6051,11 +7095,7 @@ api_key_env = "ACME_API_KEY"
         app.config_path = Some(config_path);
         app.set_provider_identity(crate::config::ApiProvider::Custom, "acme_ai");
         let mut view = ConfigView::new_for_app(&app);
-        view.selected = view
-            .rows
-            .iter()
-            .position(|row| row.key == "provider")
-            .expect("provider row");
+        view.focus_key("provider");
 
         let row = &view.rows[view.selected];
         assert_eq!(row.value, "acme_ai");
@@ -6466,8 +7506,11 @@ base_url = "https://api.xiaomimimo.com/v1"
 
         view.focus_key("provider_url");
         let hint = view
-            .selected_row_hint()
-            .expect("provider URL row should expose its localized guidance");
+            .setting_detail_lines(&view.rows[view.selected], 200)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         let es_hint = tr(Locale::Es419, MessageId::ConfigHintProviderUrl);
         assert!(hint.contains(es_hint.as_ref()), "{hint}");
         assert!(hint.contains("pago por uso"), "{hint}");
@@ -6770,6 +7813,8 @@ context_window = 262144
             config_label_for_key("thinking_highlight"),
             "reasoning visibility and background controls need distinct labels"
         );
+        view.category = ConfigCategory::ModelsProviders;
+        view.select_first_visible_row();
         let area = Rect::new(0, 0, 100, 40);
         let mut buf = Buffer::empty(area);
 
@@ -6780,9 +7825,12 @@ context_window = 262144
             dump.contains("Active provider"),
             "missing provider label:\n{dump}"
         );
-        assert!(dump.contains("General"), "missing settings tabs:\n{dump}");
+        assert!(
+            dump.contains("Models & providers"),
+            "missing settings rail:\n{dump}"
+        );
 
-        view.active_tab = ConfigTab::Permissions;
+        view.category = ConfigCategory::Trust;
         view.select_first_visible_row();
         let mut permission_buf = Buffer::empty(area);
         view.render(area, &mut permission_buf);
@@ -6797,7 +7845,9 @@ context_window = 262144
     fn localized_config_view_renders_at_narrow_width() {
         let mut app = create_test_app();
         app.ui_locale = Locale::PtBr;
-        let view = ConfigView::new_for_app(&app);
+        let mut view = ConfigView::new_for_app(&app);
+        view.category = ConfigCategory::ModelsProviders;
+        view.select_first_visible_row();
         let area = Rect::new(0, 0, 60, 18);
         let mut buf = Buffer::empty(area);
 
@@ -6819,7 +7869,7 @@ context_window = 262144
             .iter()
             .position(|row| row.key == "theme")
             .expect("theme row");
-        view.active_tab = ConfigTab::Display;
+        view.category = ConfigCategory::Appearance;
         view.adjust_scroll(8);
         let area = Rect::new(0, 0, 100, 24);
         let mut buf = Buffer::empty(area);
@@ -6830,7 +7880,7 @@ context_window = 262144
             .last_row_hitboxes
             .borrow()
             .iter()
-            .find_map(|(y, idx)| (*idx == view.selected).then_some(*y))
+            .find_map(|(rect, idx)| (*idx == view.selected).then_some(rect.y))
             .expect("selected config row should have a hitbox");
         let highlighted_cells = (area.x..area.x.saturating_add(area.width))
             .filter(|&x| {
@@ -6872,9 +7922,12 @@ context_window = 262144
                 line.contains("comfortable") || line.contains("normal") || line.contains("fuzzy")
             })
             .filter_map(|y| {
+                // One dumped char per cell (wide glyphs dump as glyph +
+                // continuation cell), so a char count is the cell column.
+                // The three rows are choices, so the affordance glyph column
+                // (`‹ ›`) is the shared alignment anchor.
                 let line = buffer_row_text(&buf, area, y);
-                line.find("saved")
-                    .map(|byte| crate::tui::ui_text::text_display_width(&line[..byte]))
+                line.find('‹').map(|byte| line[..byte].chars().count())
             })
             .collect::<Vec<_>>();
         assert!(
@@ -6942,11 +7995,7 @@ context_window = 262144
     fn config_view_enter_and_ctrl_u_emit_config_updated() {
         let app = create_test_app();
         let mut view = ConfigView::new_for_app(&app);
-        view.selected = view
-            .rows
-            .iter()
-            .position(|row| row.key == "stream_chunk_timeout_secs")
-            .expect("stream timeout row");
+        view.focus_key("stream_chunk_timeout_secs");
 
         let start = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(start, ViewAction::None));
@@ -7221,9 +8270,13 @@ context_window = 262144
         let mut view = ConfigView::new_for_app(&app);
         view.focus_key("model");
 
-        let hint = view.selected_row_hint().expect("model row hint");
+        let hint = view.activation_copy(&view.rows[view.selected]);
         assert!(hint.contains("Enter opens model picker"), "{hint}");
         assert!(!hint.contains("Enter opens provider picker"), "{hint}");
+        assert!(
+            hint.starts_with(&en(MessageId::ConfigActivateAgain)),
+            "{hint}"
+        );
     }
 
     #[test]
@@ -7268,7 +8321,7 @@ context_window = 262144
     fn config_view_mouse_click_selects_row() {
         let app = create_test_app();
         let mut view = ConfigView::new_for_app(&app);
-        view.active_tab = ConfigTab::Models;
+        view.category = ConfigCategory::ModelsProviders;
         view.select_first_visible_row();
         let area = Rect::new(0, 0, 100, 30);
         let mut buf = Buffer::empty(area);
@@ -7282,7 +8335,7 @@ context_window = 262144
             .expect("model row should have a hitbox");
         let y = hitboxes
             .iter()
-            .find_map(|(y, idx)| (*idx == row_idx).then_some(*y))
+            .find_map(|(rect, idx)| (*idx == row_idx).then_some(rect.y))
             .expect("selected row should have a y coordinate");
 
         let action = view.handle_mouse(MouseEvent {
@@ -7311,40 +8364,1284 @@ context_window = 262144
     }
 
     #[test]
-    fn config_view_tabs_are_clickable() {
+    fn config_view_rail_categories_are_clickable() {
         let app = create_test_app();
         let mut view = ConfigView::new_for_app(&app);
-        assert_eq!(view.active_tab, ConfigTab::General);
-        let area = Rect::new(0, 0, 100, 30);
+        assert_eq!(view.category, ConfigCategory::Appearance);
+        // 120 columns: the vertical rail; 100 columns (96 inner): the strip.
+        for width in [120u16, 100] {
+            view.category = ConfigCategory::Appearance;
+            view.select_first_visible_row();
+            let area = Rect::new(0, 0, width, 30);
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+
+            let hitboxes = view.last_rail_hitboxes.borrow().clone();
+            assert_eq!(hitboxes.len(), ConfigCategory::ALL.len(), "{width}");
+            let (rect, category) = hitboxes
+                .iter()
+                .copied()
+                .find(|(_, category)| *category == ConfigCategory::Advanced)
+                .expect("Advanced should have a hitbox");
+
+            let action = view.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rect.x.saturating_add(1),
+                row: rect.y,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert!(matches!(action, ViewAction::None));
+            assert_eq!(category, ConfigCategory::Advanced);
+            assert_eq!(view.category, ConfigCategory::Advanced, "{width}");
+            assert!(
+                view.rows
+                    .get(view.selected)
+                    .is_some_and(|row| ConfigCategory::for_row(row) == ConfigCategory::Advanced)
+            );
+        }
+    }
+
+    #[test]
+    fn config_categories_cover_every_row_with_the_approved_eight() {
+        let app = create_test_app();
+        let view = ConfigView::new_for_app(&app);
+        let labels: Vec<Cow<'static, str>> = ConfigCategory::ALL
+            .iter()
+            .map(|category| category.label(Locale::En))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                "Appearance",
+                "Models & providers",
+                "Pod",
+                "Work",
+                "Tools & MCP",
+                "Trust",
+                "Motion",
+                "Advanced",
+            ]
+        );
+        let category_of = |key: &str| {
+            let row = view
+                .rows
+                .iter()
+                .find(|row| row.key == key)
+                .unwrap_or_else(|| panic!("row {key}"));
+            ConfigCategory::for_row(row)
+        };
+        assert_eq!(category_of("theme"), ConfigCategory::Appearance);
+        assert_eq!(category_of("provider"), ConfigCategory::ModelsProviders);
+        assert_eq!(category_of("model"), ConfigCategory::ModelsProviders);
+        assert_eq!(
+            category_of("reasoning_effort"),
+            ConfigCategory::ModelsProviders
+        );
+        // Raw endpoint, credential receipt, context diagnostic, timeout, and
+        // routing rows live under Advanced so default categories read as
+        // product language.
+        for key in [
+            "base_url",
+            "context_window",
+            "effective_context_window",
+            "fast_model",
+            "stream_chunk_timeout_secs",
+        ] {
+            assert_eq!(category_of(key), ConfigCategory::Advanced, "{key}");
+        }
+        assert!(
+            view.rows
+                .iter()
+                .filter(|row| ConfigCategory::for_row(row) == ConfigCategory::ModelsProviders)
+                .all(|row| !row.key.starts_with("external_credentials.")),
+            "credential receipts must not surface in Models & providers"
+        );
+        assert_eq!(
+            category_of("fleet.exec.max_spawn_depth"),
+            ConfigCategory::Pod
+        );
+        assert_eq!(category_of("composer_density"), ConfigCategory::Work);
+        assert_eq!(category_of("work_surface_placement"), ConfigCategory::Work);
+        assert_eq!(category_of("auto_compact"), ConfigCategory::Work);
+        assert_eq!(category_of("mcp_open"), ConfigCategory::ToolsMcp);
+        assert_eq!(category_of("approval_mode"), ConfigCategory::Trust);
+        assert_eq!(category_of("allow_shell"), ConfigCategory::Trust);
+        assert_eq!(category_of("telemetry"), ConfigCategory::Trust);
+        assert_eq!(category_of("low_motion"), ConfigCategory::Motion);
+        assert_eq!(category_of("fancy_animations"), ConfigCategory::Motion);
+        assert_eq!(category_of("default_model"), ConfigCategory::Advanced);
+        for category in ConfigCategory::ALL {
+            assert!(
+                view.rows.iter().any(|row| category.contains(row)),
+                "{} lists no rows",
+                category.label(Locale::En)
+            );
+        }
+        for category in ConfigCategory::ALL {
+            assert_eq!(category.next().prev(), category);
+        }
+    }
+
+    /// English copy for an id, for asserting on rendered chrome.
+    fn en(id: MessageId) -> String {
+        tr(Locale::En, id).into_owned()
+    }
+
+    fn render_dump(view: &ConfigView, width: u16, height: u16) -> String {
+        let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
+        buffer_text(&buf, area)
+    }
 
-        let hitboxes = view.last_tab_hitboxes.borrow().clone();
-        let (x0, _x1, y, tab) = hitboxes
+    #[test]
+    fn config_shell_uses_strip_and_list_at_80x24_and_rail_list_detail_when_wide() {
+        let app = create_test_app();
+        let view = ConfigView::new_for_app(&app);
+        assert_eq!(view.category, ConfigCategory::Appearance);
+
+        let dump = render_dump(&view, 80, 24);
+        assert!(
+            dump.contains("Appearance"),
+            "strip shows the active category:\n{dump}"
+        );
+        assert!(dump.contains("Theme"), "list missing theme row:\n{dump}");
+        assert!(
+            !dump.contains("▸ Appearance"),
+            "no vertical rail at 80 columns:\n{dump}"
+        );
+        assert!(
+            !dump.contains(&format!("{:<10}", en(MessageId::ConfigFactSource))),
+            "detail pane must shed at 80 columns:\n{dump}"
+        );
+        assert!(
+            dump.contains(&en(MessageId::ConfigActivateAgain)),
+            "selected row spells out its activation:\n{dump}"
+        );
+        assert!(
+            dump.contains(&en(MessageId::ConfigFactCurrent))
+                && dump.contains(&en(MessageId::ConfigFactSaved)),
+            "narrow status row folds the lanes:\n{dump}"
+        );
+        {
+            let rows = view.last_row_hitboxes.borrow();
+            assert!(!rows.is_empty(), "list rows must stay clickable at 80x24");
+            assert!(
+                rows.iter()
+                    .all(|(rect, _)| rect.width > 20 && rect.height == 1),
+                "row hitboxes are exact rects: {rows:?}"
+            );
+            let strip = view.last_rail_hitboxes.borrow();
+            assert!(!strip.is_empty() && strip.len() <= 8, "{strip:?}");
+            assert!(
+                strip.iter().all(|(rect, _)| rect.y < rows[0].0.y),
+                "strip sits above the list: {strip:?}"
+            );
+        }
+
+        let dump = render_dump(&view, 120, 32);
+        assert!(dump.contains("▸ Appearance"), "vertical rail:\n{dump}");
+        for label in [
+            &en(MessageId::ConfigFactCurrent),
+            &en(MessageId::ConfigFactSaved),
+            &en(MessageId::ConfigFactStartup),
+            &en(MessageId::ConfigFactSource),
+            &en(MessageId::ConfigFactScope),
+            &en(MessageId::ConfigFactApply),
+            &en(MessageId::ConfigFactKind),
+            &en(MessageId::ConfigFactAvailable),
+        ] {
+            assert!(
+                dump.contains(&format!("{label:<10}")),
+                "detail pane missing {label:?}:\n{dump}"
+            );
+        }
+        assert!(
+            dump.contains(&en(MessageId::ConfigSourceUserSettings)),
+            "source names the store:\n{dump}"
+        );
+        assert!(
+            dump.contains(&en(MessageId::ConfigApplyOnSave)),
+            "apply semantics:\n{dump}"
+        );
+        assert!(
+            dump.contains(&en(MessageId::ConfigKindChoice)),
+            "editor kind painted for the theme row:\n{dump}"
+        );
+        assert_eq!(view.last_rail_hitboxes.borrow().len(), 8);
+
+        for (w, h) in [(0u16, 0u16), (20, 4), (44, 12), (60, 18), (300, 60)] {
+            let _ = render_dump(&view, w, h);
+        }
+    }
+
+    #[test]
+    fn config_shell_blocker_sizes_keep_active_category_list_and_affordances() {
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        for (w, h) in [(40u16, 12u16), (80, 24), (100, 30), (120, 32)] {
+            view.category = ConfigCategory::Appearance;
+            view.select_first_visible_row();
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+            let dump = buffer_text(&buf, area);
+            assert!(dump.contains("Appearance"), "{w}x{h}:\n{dump}");
+            assert!(dump.contains("Search:"), "{w}x{h} keeps search:\n{dump}");
+            let rows = view.last_row_hitboxes.borrow().clone();
+            assert!(!rows.is_empty(), "{w}x{h} lists rows:\n{dump}");
+            // Every listed row paints its affordance glyph inside its own
+            // hitbox cells (toggle / choose / edit / open / read-only).
+            for (rect, idx) in rows {
+                let row = &view.rows[idx];
+                let kind = view.editor_kind(row);
+                let line: String = (rect.x..rect.right())
+                    .map(|x| buf[(x, rect.y)].symbol().to_string())
+                    .collect();
+                let glyph = super::setting_affordance(kind, Some(true));
+                let glyph_off = super::setting_affordance(kind, Some(false));
+                assert!(
+                    line.contains(glyph) || line.contains(glyph_off),
+                    "{w}x{h} row {} lacks its {kind:?} affordance: {line:?}",
+                    row.key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn config_shell_short_heights_keep_advanced_reachable_by_keys_and_pointer() {
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        for (w, h) in [(40u16, 12u16), (44, 12), (60, 16)] {
+            view.category = ConfigCategory::Appearance;
+            view.select_first_visible_row();
+            for _ in 0..7 {
+                let _ = view.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+            }
+            assert_eq!(view.category, ConfigCategory::Advanced, "{w}x{h}");
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+            let dump = buffer_text(&buf, area);
+            assert!(
+                dump.contains("Advanced"),
+                "{w}x{h} active category:\n{dump}"
+            );
+            let strip = view.last_rail_hitboxes.borrow().clone();
+            let (advanced, _) = strip
+                .iter()
+                .copied()
+                .find(|(_, category)| *category == ConfigCategory::Advanced)
+                .unwrap_or_else(|| panic!("{w}x{h} Advanced hitbox: {dump}"));
+            let cells: String = (advanced.x..advanced.right())
+                .map(|x| buf[(x, advanced.y)].symbol().to_string())
+                .collect();
+            assert!(
+                cells.contains("Advanced"),
+                "{w}x{h} hitbox cells: {cells:?}"
+            );
+            // Pointer parity: clicking the neighbour chip moves the category
+            // exactly as ← does.
+            let _ = view.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+            let by_key = view.category;
+            let _ = view.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+            let strip = view.last_rail_hitboxes.borrow().clone();
+            let (motion, _) = strip
+                .iter()
+                .copied()
+                .find(|(_, category)| *category == by_key)
+                .unwrap_or_else(|| panic!("{w}x{h} {by_key:?} hitbox"));
+            let action = view.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: motion.x,
+                row: motion.y,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert!(matches!(action, ViewAction::None));
+            assert_eq!(view.category, by_key, "{w}x{h} pointer parity");
+        }
+    }
+
+    #[test]
+    fn config_detail_never_synthesizes_current_from_saved() {
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        let low_motion = view
+            .rows
+            .iter()
+            .position(|row| row.key == "low_motion")
+            .expect("low_motion row");
+        view.rows[low_motion].value = "false".to_string();
+        view.rows[low_motion].facts.effective = Some("true".to_string());
+        // Pin the authority: the host motion-override probe (a legacy console
+        // host, NO_ANIMATIONS, an SSH session, …) would otherwise relabel this
+        // row and make the test host-dependent. The subject here is the
+        // saved/effective synthesis contract, not override detection.
+        view.rows[low_motion].facts.authority = super::SettingAuthority::UserSettings;
+        view.rows[low_motion].facts.authority_detail = None;
+        view.category = ConfigCategory::Motion;
+        view.selected = low_motion;
+
+        let fact = view
+            .setting_fact(&view.rows[low_motion])
+            .expect("setting fact");
+        assert_eq!(fact.effective.as_deref(), Some("On"));
+        assert_eq!(fact.saved.as_deref(), Some("Off"));
+        assert_eq!(fact.startup.as_deref(), Some("Off"));
+        assert_eq!(fact.authority, super::SettingAuthority::UserSettings);
+        assert_eq!(fact.apply, super::SettingApplySemantics::Immediate);
+
+        let dump = render_dump(&view, 120, 32);
+        let lane = |name: &str| {
+            dump.lines()
+                .find(|line| line.contains(&format!("{name:<10}")))
+                .unwrap_or_else(|| panic!("{name} lane:\n{dump}"))
+                .to_string()
+        };
+        assert!(lane("current").contains("On"), "{}", lane("current"));
+        assert!(lane("saved").contains("Off"), "{}", lane("saved"));
+
+        // A saved row with no App observation reports current as unobserved
+        // instead of echoing the persisted value.
+        let calm = view
+            .rows
+            .iter()
+            .find(|row| row.key == "calm_mode")
+            .expect("calm_mode row");
+        let fact = view.setting_fact(calm).expect("setting fact");
+        assert!(fact.effective.is_none() && fact.current.is_none());
+        assert_eq!(
+            fact.saved.as_deref(),
+            Some(config_choice_label(Locale::En, "calm_mode", &calm.value).as_str())
+        );
+        assert!(
+            view.setting_detail_summary(calm)
+                .contains(&en(MessageId::ConfigLaneUnobserved))
+        );
+
+        // Theme and locale report the value the app is actually running
+        // with, from App, not the persisted string.
+        let theme = view
+            .rows
+            .iter()
+            .find(|row| row.key == "theme")
+            .expect("theme row");
+        assert_eq!(
+            theme.facts.effective.as_deref(),
+            Some(app.theme_id.name()),
+            "theme current lane comes from App"
+        );
+        let locale = view
+            .rows
+            .iter()
+            .find(|row| row.key == "locale")
+            .expect("locale row");
+        assert_eq!(locale.facts.effective.as_deref(), Some(app.ui_locale.tag()));
+
+        // Session-owned facts never claim a saved default they did not read.
+        let provider = view
+            .rows
+            .iter()
+            .find(|row| row.key == "provider")
+            .expect("provider row");
+        let fact = view.setting_fact(provider).expect("setting fact");
+        assert_eq!(fact.authority, super::SettingAuthority::Session);
+        assert_eq!(fact.effective, view.snapshot.provider.effective);
+        assert!(fact.saved.is_none() && fact.startup.is_none());
+    }
+
+    #[test]
+    fn config_rows_carry_truthful_apply_semantics_and_kinds() {
+        use super::{ConfigRowKind, SettingApplySemantics, SettingAuthority};
+        let app = create_test_app();
+        let view = ConfigView::new_for_app(&app);
+        let row = |key: &str| {
+            view.rows
+                .iter()
+                .find(|row| row.key == key)
+                .unwrap_or_else(|| panic!("row {key}"))
+        };
+        assert_eq!(
+            row("default_mode").facts.apply,
+            SettingApplySemantics::NextSession
+        );
+        assert_eq!(
+            row("mcp_config_path").facts.apply,
+            SettingApplySemantics::ReloadRequired
+        );
+        assert_eq!(
+            row("workspace_follow_symlinks").facts.apply,
+            SettingApplySemantics::UiNowEngineRestart
+        );
+        assert_eq!(
+            row("session_auto_resume").facts.apply,
+            SettingApplySemantics::NextSession
+        );
+        assert_eq!(row("theme").facts.apply, SettingApplySemantics::Immediate);
+        for key in ["mcp_open", "mcp_reconnect", "mcp_diagnose", "plugins_open"] {
+            let action = row(key);
+            assert_eq!(action.facts.kind, ConfigRowKind::Action, "{key}");
+            assert!(view.setting_fact(action).is_none(), "{key} is not a fact");
+            assert!(
+                view.setting_detail_summary(action)
+                    .contains(&en(MessageId::ConfigRowActionNote)),
+                "{key}"
+            );
+        }
+        for key in ["fast_model", "effective_context_window", "base_url"] {
+            let receipt = row(key);
+            assert_eq!(receipt.facts.kind, ConfigRowKind::Diagnostic, "{key}");
+            assert!(view.setting_fact(receipt).is_none(), "{key}");
+        }
+        assert_eq!(
+            row("permission_posture").facts.authority,
+            SettingAuthority::UserSettings
+        );
+        assert_eq!(
+            row("allow_shell").facts.authority,
+            SettingAuthority::WorkspaceConfiguration
+        );
+        assert_eq!(
+            super::ConfigRowFacts::read_only_setting(SettingAuthority::ManagedPolicy).apply,
+            SettingApplySemantics::ReadOnly
+        );
+        assert_eq!(
+            row("telemetry").facts.authority,
+            SettingAuthority::WorkspaceConfiguration
+        );
+        assert_eq!(
+            super::setting_apply_label(Locale::En, SettingApplySemantics::ReloadRequired),
+            en(MessageId::ConfigApplyReload)
+        );
+        assert_eq!(
+            super::setting_apply_label(Locale::En, SettingApplySemantics::UiNowEngineRestart),
+            en(MessageId::ConfigApplyUiNowEngineRestart)
+        );
+        assert_eq!(
+            super::setting_apply_label(Locale::ZhHans, SettingApplySemantics::ReloadRequired),
+            tr(Locale::ZhHans, MessageId::ConfigApplyReload)
+        );
+    }
+
+    #[test]
+    fn config_list_clicks_outside_row_rects_never_select_or_activate() {
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        let area = Rect::new(0, 0, 120, 32);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        let before = view.selected;
+        let rows = view.last_row_hitboxes.borrow().clone();
+        let (first, _) = rows[0];
+        let list_bottom = rows.iter().map(|(rect, _)| rect.bottom()).max().unwrap();
+        let rail = view.last_rail_hitboxes.borrow().clone();
+        let rail_right = rail.iter().map(|(rect, _)| rect.right()).max().unwrap();
+        assert!(rail_right <= first.x, "rail must not overlap the list");
+
+        let click = |view: &mut ConfigView, column: u16, row: u16| {
+            view.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        // Rail area on a row that is not a category, the divider between
+        // rail and list, the detail pane, the status row, and the footer.
+        let probes = [
+            (first.x.saturating_sub(4), list_bottom.saturating_sub(1)),
+            (first.x.saturating_sub(1), first.y),
+            (first.right().saturating_add(3), first.y),
+            (first.x.saturating_add(2), area.bottom().saturating_sub(4)),
+            (first.x.saturating_add(2), area.bottom().saturating_sub(2)),
+        ];
+        for (column, row) in probes {
+            // Twice: a second click is the activation gesture on a row.
+            let _ = click(&mut view, column, row);
+            let action = click(&mut view, column, row);
+            assert!(matches!(action, ViewAction::None), "({column},{row})");
+            assert_eq!(view.selected, before, "({column},{row}) must not select");
+            assert!(view.editing.is_none(), "({column},{row}) must not activate");
+        }
+        // Inside the rect: selects on the first click.
+        let (rect, idx) = rows[rows.len() - 1];
+        let _ = click(&mut view, rect.x, rect.y);
+        assert_eq!(view.selected, idx);
+    }
+
+    #[test]
+    fn config_search_indexes_categories_and_category_click_clears_filter() {
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        type_filter(&mut view, "pod");
+        assert!(
+            visible_row_keys(&view).contains(&"fleet.exec.max_spawn_depth"),
+            "{:?}",
+            visible_row_keys(&view)
+        );
+        view.clear_filter();
+        type_filter(&mut view, "trust");
+        let keys = visible_row_keys(&view);
+        assert!(keys.contains(&"approval_mode"), "{keys:?}");
+        assert!(keys.contains(&"telemetry"), "{keys:?}");
+
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        // The strip windows from the active (Appearance) chip at 80 columns;
+        // Trust is inside that window.
+        let (rect, category) = view
+            .last_rail_hitboxes
+            .borrow()
             .iter()
             .copied()
-            .find(|(_, _, _, tab)| *tab == ConfigTab::Advanced)
-            .expect("Advanced tab should have a hitbox");
-
+            .find(|(_, category)| *category == ConfigCategory::Trust)
+            .expect("Trust chip visible while filtering");
         let action = view.handle_mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column: x0.saturating_add(1),
-            row: y,
+            column: rect.x,
+            row: rect.y,
             modifiers: KeyModifiers::NONE,
         });
         assert!(matches!(action, ViewAction::None));
-        assert_eq!(tab, ConfigTab::Advanced);
-        assert_eq!(view.active_tab, ConfigTab::Advanced);
+        assert_eq!(category, ConfigCategory::Trust);
+        assert!(view.filter.is_empty(), "category click clears the filter");
+        assert_eq!(view.category, ConfigCategory::Trust);
+        let keys = visible_row_keys(&view);
+        assert!(keys.contains(&"approval_mode"), "{keys:?}");
+        assert!(keys.contains(&"telemetry"), "{keys:?}");
         assert!(
-            view.rows
-                .get(view.selected)
-                .is_some_and(|row| row.section == ConfigSection::Mcp
-                    || row.section == ConfigSection::Fleet
-                    || row.section == ConfigSection::Workflow
-                    || row.section == ConfigSection::Session
-                    || row.section == ConfigSection::Legacy
-                    || row.section == ConfigSection::Experimental)
+            keys.iter().all(|key| ConfigCategory::Trust
+                .contains(view.rows.iter().find(|row| row.key == *key).unwrap())),
+            "only Trust rows remain after the click: {keys:?}"
         );
+    }
+
+    /// Interaction evidence at the blocker sizes: the real `ConfigView`
+    /// driven by keys and pointer at 40x12, 80x24, 100x30, and 120x32. The
+    /// rendered buffers are printed (`--nocapture`) as harness evidence — the
+    /// real renderer into a ratatui `Buffer`, not a terminal capture.
+    #[test]
+    #[allow(
+        clippy::print_stdout,
+        reason = "prints the rendered buffers as interaction evidence under --nocapture"
+    )]
+    fn config_shell_interaction_evidence_at_blocker_sizes() {
+        let app = create_test_app();
+        let key = |view: &mut ConfigView, code: KeyCode| {
+            view.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+        };
+        let click = |view: &mut ConfigView, column: u16, row: u16| {
+            view.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        for (w, h) in [(40u16, 12u16), (80, 24), (100, 30), (120, 32)] {
+            let mut view = ConfigView::new_for_app(&app);
+            let area = Rect::new(0, 0, w, h);
+            let snapshot = |view: &ConfigView, step: &str| {
+                let mut buf = Buffer::empty(area);
+                view.render(area, &mut buf);
+                let dump = buffer_text(&buf, area);
+                println!("== {w}x{h} · {step} ==\n{dump}");
+                dump
+            };
+
+            // Opens on Appearance with the first Appearance row selected.
+            assert_eq!(view.category, ConfigCategory::Appearance);
+            assert_eq!(view.rows[view.selected].key, "theme");
+            let dump = snapshot(&view, "open");
+            assert!(dump.contains("Appearance"), "{w}x{h}:\n{dump}");
+            assert!(dump.contains("Search:"), "{w}x{h}:\n{dump}");
+
+            // → → lands on Pod; the strip/rail follows and the Pod row is the
+            // selection (a read-only config.toml setting).
+            assert!(matches!(key(&mut view, KeyCode::Right), ViewAction::None));
+            assert!(matches!(key(&mut view, KeyCode::Right), ViewAction::None));
+            assert_eq!(view.category, ConfigCategory::Pod);
+            assert_eq!(view.rows[view.selected].key, "fleet.exec.max_spawn_depth");
+            let dump = snapshot(&view, "after → → (Pod)");
+            assert!(dump.contains("Pod"), "{w}x{h}:\n{dump}");
+            assert!(
+                dump.contains(super::setting_affordance(SettingKind::ReadOnly, None)),
+                "{w}x{h} read-only affordance:\n{dump}"
+            );
+            assert!(matches!(key(&mut view, KeyCode::Enter), ViewAction::None));
+            assert!(view.editing.is_none(), "{w}x{h} read-only rows never edit");
+
+            // Tab ×4 → Motion; ↓ → fancy_animations; Space toggles it and
+            // emits the persisted update without opening an editor.
+            for _ in 0..4 {
+                assert!(matches!(key(&mut view, KeyCode::Tab), ViewAction::None));
+            }
+            assert_eq!(view.category, ConfigCategory::Motion);
+            assert_eq!(view.rows[view.selected].key, "low_motion");
+            assert!(matches!(key(&mut view, KeyCode::Down), ViewAction::None));
+            assert_eq!(view.rows[view.selected].key, "fancy_animations");
+            let dump = snapshot(&view, "Motion · ↓ to fancy_animations");
+            assert!(
+                dump.contains(&en(MessageId::ConfigActivateAgain)),
+                "{w}x{h} activation copy:\n{dump}"
+            );
+            match key(&mut view, KeyCode::Char(' ')) {
+                ViewAction::Emit(ViewEvent::ConfigUpdated { key, persist, .. }) => {
+                    assert_eq!(key, "fancy_animations");
+                    assert!(persist);
+                }
+                other => panic!("{w}x{h} Space should toggle, got {other:?}"),
+            }
+            assert!(view.editing.is_none());
+
+            // Pointer parity: click a visible non-active chip, then click the
+            // first listed row once (select) and again (activate).
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+            let (chip, target) = view
+                .last_rail_hitboxes
+                .borrow()
+                .iter()
+                .copied()
+                .find(|(_, category)| *category != ConfigCategory::Motion)
+                .expect("another category chip is painted");
+            assert!(matches!(click(&mut view, chip.x, chip.y), ViewAction::None));
+            assert_eq!(view.category, target, "{w}x{h} chip click");
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+            let (row_rect, row_idx) = view.last_row_hitboxes.borrow()[0];
+            assert!(matches!(
+                click(&mut view, row_rect.x + 1, row_rect.y),
+                ViewAction::None
+            ));
+            assert_eq!(view.selected, row_idx, "{w}x{h} first click selects");
+            let dump = snapshot(
+                &view,
+                &format!("pointer · {} chip, row selected", target.label(Locale::En)),
+            );
+            assert!(dump.contains("▌"), "{w}x{h} selected row rail:\n{dump}");
+            let second = click(&mut view, row_rect.x + 1, row_rect.y);
+            let row = &view.rows[row_idx];
+            match (row.editable, row.facts.command) {
+                (false, _) => {
+                    assert!(matches!(second, ViewAction::None));
+                    assert!(view.editing.is_none());
+                }
+                (true, Some((command, _))) => match second {
+                    ViewAction::Emit(ViewEvent::CommandPaletteSelected {
+                        action: CommandPaletteAction::ExecuteCommand { command: emitted },
+                    }) => assert_eq!(emitted, command),
+                    other => panic!("{w}x{h} second click should open {command}: {other:?}"),
+                },
+                (true, None) => assert!(
+                    view.editing.is_some() || matches!(second, ViewAction::Emit(_)),
+                    "{w}x{h} second click must edit or emit: {second:?}"
+                ),
+            }
+            if view.editing.is_some() {
+                let _ = snapshot(&view, "editor after second click");
+                assert!(matches!(key(&mut view, KeyCode::Esc), ViewAction::None));
+                assert!(view.editing.is_none());
+            }
+
+            // Search: typing filters across categories; Esc clears; Esc again
+            // closes the view.
+            for ch in "telemetry".chars() {
+                assert!(matches!(
+                    key(&mut view, KeyCode::Char(ch)),
+                    ViewAction::None
+                ));
+            }
+            assert_eq!(visible_row_keys(&view), vec!["telemetry"]);
+            let dump = snapshot(&view, "search \"telemetry\"");
+            assert!(dump.contains("telemetry"), "{w}x{h}:\n{dump}");
+            assert!(matches!(key(&mut view, KeyCode::Esc), ViewAction::None));
+            assert!(view.filter.is_empty());
+            assert!(matches!(key(&mut view, KeyCode::Esc), ViewAction::Close));
+        }
+    }
+
+    /// P1.1: a store that fails to load never becomes a default labelled
+    /// saved/startup. The row is unavailable, read-only, and its lanes carry
+    /// the load error; App-observed lanes (low_motion) still render.
+    #[test]
+    fn config_rows_report_unreadable_stores_instead_of_defaults() {
+        let _lock = crate::test_support::lock_test_env();
+        let tmp = TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join(".deepseek").join("config.toml");
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            config_path.parent().unwrap().join("settings.toml"),
+            "theme = [broken\n",
+        )
+        .unwrap();
+        std::fs::write(&config_path, "approval_policy = [broken\n").unwrap();
+        let _guard = crate::test_support::EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let mut app = create_test_app();
+        app.config_path = Some(config_path.clone());
+        let mut view = ConfigView::new_for_app(&app);
+
+        let theme = view.rows.iter().find(|row| row.key == "theme").unwrap();
+        assert!(
+            !theme.editable,
+            "an unreadable store is never written through"
+        );
+        assert_eq!(theme.value, en(MessageId::ConfigUnavailable));
+        let error = theme
+            .facts
+            .store_error
+            .clone()
+            .expect("settings load error is preserved");
+        assert!(!error.is_empty());
+        let fact = view.setting_fact(theme).expect("setting fact");
+        assert!(fact.saved.is_none() && fact.startup.is_none(), "{fact:?}");
+        assert_eq!(
+            fact.effective.as_deref(),
+            Some(app.theme_id.name()),
+            "the live theme is still known from App"
+        );
+        let summary = view.setting_detail_summary(theme);
+        assert!(
+            summary.contains(&en(MessageId::ConfigLaneUnavailable).replace("{error}", &error)),
+            "{summary}"
+        );
+
+        let telemetry = view.rows.iter().find(|row| row.key == "telemetry").unwrap();
+        assert!(!telemetry.editable);
+        assert!(
+            telemetry.facts.store_error.is_some(),
+            "config.toml error is preserved"
+        );
+        let low_motion = view
+            .rows
+            .iter()
+            .find(|row| row.key == "low_motion")
+            .unwrap();
+        let fact = view.setting_fact(low_motion).expect("setting fact");
+        assert!(
+            fact.saved.is_none(),
+            "no persisted lane from a broken store"
+        );
+        assert!(
+            fact.effective.is_some(),
+            "App still supplies the live value"
+        );
+
+        // Rendered: the detail pane names the failure, never a default.
+        view.focus_key("theme");
+        let lines = view.setting_detail_lines(&view.rows[view.selected], 400);
+        let expected = en(MessageId::ConfigLaneUnavailable).replace("{error}", &error);
+        // The lane is one line (the error is folded) and may be ellipsized
+        // past the pane width, so its head is the stable part.
+        assert!(
+            !error.contains('\n'),
+            "store error is folded onto one line: {error:?}"
+        );
+        let head: String = expected.chars().take(60).collect();
+        assert!(
+            lines.iter().any(|line| line.to_string().contains(&head)),
+            "saved lane carries the load error: {expected}"
+        );
+        let dump = render_dump(&view, 120, 32);
+        let head: String = en(MessageId::ConfigUnavailable).chars().take(7).collect();
+        assert!(
+            dump.contains(&head),
+            "unavailable value painted in the list:\n{dump}"
+        );
+        let unavailable_prefix = en(MessageId::ConfigLaneUnavailable)
+            .split("{error}")
+            .next()
+            .unwrap()
+            .to_string();
+        assert!(
+            dump.contains(unavailable_prefix.trim_end()),
+            "unavailable lane painted:\n{dump}"
+        );
+        // Session rows are untouched by store failures.
+        let provider = view.rows.iter().find(|row| row.key == "provider").unwrap();
+        assert!(provider.editable && provider.facts.store_error.is_none());
+    }
+
+    /// An environment/terminal override wins the effective decision but does
+    /// not repair a broken store: the overridden motion row must still report
+    /// the settings.toml load failure instead of synthesizing a saved lane.
+    /// (Windows CI caught this through the legacy-console probe; store truth
+    /// is keyed on the row's store, not its current authority.)
+    #[test]
+    fn overridden_motion_row_still_reports_a_broken_settings_store() {
+        let _lock = crate::test_support::lock_test_env();
+        let tmp = TempDir::new().expect("tempdir");
+        let config_dir = tmp.path().join(".deepseek");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(config_dir.join("settings.toml"), "theme = [broken\n").unwrap();
+        let config_path = config_dir.join("config.toml");
+        std::fs::write(&config_path, "approval_policy = [broken\n").unwrap();
+        let _guard = crate::test_support::EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let _override = crate::test_support::EnvVarGuard::set("NO_ANIMATIONS", "1");
+        let app = create_test_app();
+        let view = ConfigView::new_for_app(&app);
+
+        let row = view
+            .rows
+            .iter()
+            .find(|row| row.key == "low_motion")
+            .expect("low_motion row");
+        assert_eq!(row.facts.authority, super::SettingAuthority::Environment);
+        assert!(
+            row.facts.store_error.is_some(),
+            "the override wins the effective decision; the broken store is still reported"
+        );
+        let fact = view.setting_fact(row).expect("setting fact");
+        assert!(fact.saved.is_none() && fact.startup.is_none(), "{fact:?}");
+        assert!(
+            fact.effective.is_some(),
+            "App still supplies the live value"
+        );
+    }
+
+    /// P1.2: when a runtime overlay forces low motion, the row's source is
+    /// that override, not `settings.toml`.
+    #[test]
+    fn motion_rows_name_the_winning_environment_override() {
+        let _lock = crate::test_support::lock_test_env();
+        let _no_animations = crate::test_support::EnvVarGuard::set("NO_ANIMATIONS", "1");
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        for key in ["low_motion", "fancy_animations"] {
+            let row = view.rows.iter().find(|row| row.key == key).unwrap();
+            assert_eq!(
+                row.facts.authority,
+                super::SettingAuthority::Environment,
+                "{key}"
+            );
+            assert_eq!(row.facts.authority_detail, Some("NO_ANIMATIONS"), "{key}");
+        }
+        let theme = view.rows.iter().find(|row| row.key == "theme").unwrap();
+        assert_eq!(theme.facts.authority, super::SettingAuthority::UserSettings);
+        view.focus_key("low_motion");
+        let expected = en(MessageId::ConfigSourceEnvironment).replace("{name}", "NO_ANIMATIONS");
+        // The detail pane is 39 columns wide at 120x32 and ellipsizes long
+        // values, so the unbounded detail lines carry the full label and the
+        // rendered pane carries its visible head.
+        let lines = view.setting_detail_lines(&view.rows[view.selected], 200);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.to_string().contains(&expected)),
+            "detail names the override: {expected}"
+        );
+        let dump = render_dump(&view, 120, 32);
+        let head: String = expected.chars().take(20).collect();
+        assert!(dump.contains(&head), "source names the override:\n{dump}");
+    }
+
+    /// P1.3: at 40 columns every category is reachable with the pointer alone
+    /// — visible chips are clicked directly, hidden ones through the › and ‹
+    /// overflow markers, which are themselves hitboxes.
+    #[test]
+    fn config_strip_categories_are_reachable_by_pointer_alone_at_40_columns() {
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        let area = Rect::new(0, 0, 40, 12);
+        let click = |view: &mut ConfigView, rect: Rect| {
+            view.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rect.x,
+                row: rect.y,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        let mut reached = vec![view.category];
+        for target in ConfigCategory::ALL {
+            // Walk to `target` using only painted hitboxes.
+            for _ in 0..16 {
+                if view.category == target {
+                    break;
+                }
+                let mut buf = Buffer::empty(area);
+                view.render(area, &mut buf);
+                let chip = view
+                    .last_rail_hitboxes
+                    .borrow()
+                    .iter()
+                    .find(|(_, category)| *category == target)
+                    .map(|(rect, _)| *rect);
+                let step = |step: super::NavStep| {
+                    view.last_nav_controls
+                        .borrow()
+                        .iter()
+                        .find(|(_, s)| *s == step)
+                        .map(|(rect, _)| *rect)
+                };
+                let rect = chip
+                    .or_else(|| step(super::NavStep::Next))
+                    .or_else(|| step(super::NavStep::Previous))
+                    .expect("a chip or an overflow marker is always clickable");
+                // The marker cells are painted, not empty.
+                let cells: String = (rect.x..rect.right())
+                    .map(|x| buf[(x, rect.y)].symbol().to_string())
+                    .collect();
+                assert!(!cells.trim().is_empty(), "{target:?}: {cells:?}");
+                assert!(matches!(click(&mut view, rect), ViewAction::None));
+            }
+            assert_eq!(view.category, target, "pointer-only path to {target:?}");
+            reached.push(target);
+        }
+        for category in ConfigCategory::ALL {
+            assert!(reached.contains(&category));
+        }
+        // And back to the front by pointer only: the Appearance chip once it
+        // scrolls into view, ‹ until then.
+        for _ in 0..16 {
+            if view.category == ConfigCategory::Appearance {
+                break;
+            }
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+            let chip = view
+                .last_rail_hitboxes
+                .borrow()
+                .iter()
+                .find(|(_, category)| *category == ConfigCategory::Appearance)
+                .map(|(rect, _)| *rect);
+            let rect = chip
+                .or_else(|| {
+                    view.last_nav_controls
+                        .borrow()
+                        .iter()
+                        .find(|(_, s)| *s == super::NavStep::Previous)
+                        .map(|(rect, _)| *rect)
+                })
+                .expect("the Appearance chip or ‹ is painted");
+            let _ = click(&mut view, rect);
+        }
+        assert_eq!(view.category, ConfigCategory::Appearance);
+    }
+
+    /// P1.4: choice and text editors expose clickable Apply / Cancel controls
+    /// and exact choice hitboxes at 40x12 and 80x24.
+    #[test]
+    fn config_editors_apply_and_cancel_by_pointer_with_exact_hitboxes() {
+        let app = create_test_app();
+        let click = |view: &mut ConfigView, column: u16, row: u16| {
+            view.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        for (w, h) in [(40u16, 12u16), (80, 24)] {
+            let area = Rect::new(0, 0, w, h);
+            // Choice editor.
+            let mut view = ConfigView::new_for_app(&app);
+            view.focus_key("default_mode");
+            assert!(matches!(
+                view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+                ViewAction::None
+            ));
+            assert!(view.editing.is_some());
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+            let dump = buffer_text(&buf, area);
+            let controls = view.last_editor_controls.borrow().clone();
+            let apply = controls
+                .iter()
+                .find(|(_, c)| *c == super::EditorControl::Apply)
+                .map(|(r, _)| *r)
+                .unwrap_or_else(|| panic!("{w}x{h} Apply control:\n{dump}"));
+            let cancel = controls
+                .iter()
+                .find(|(_, c)| *c == super::EditorControl::Cancel)
+                .map(|(r, _)| *r)
+                .unwrap_or_else(|| panic!("{w}x{h} Cancel control:\n{dump}"));
+            for (rect, id) in [
+                (apply, MessageId::ConfigEditorApply),
+                (cancel, MessageId::ConfigEditorCancel),
+            ] {
+                let cells: String = (rect.x..rect.right())
+                    .map(|x| buf[(x, rect.y)].symbol().to_string())
+                    .collect();
+                assert!(cells.contains(&en(id)), "{w}x{h} {cells:?}");
+                assert!(rect.bottom() <= area.bottom());
+            }
+            assert!(
+                dump.contains(&en(MessageId::ConfigEditChooseLabel)),
+                "{w}x{h}:\n{dump}"
+            );
+            let choices = view.last_choice_hitboxes.borrow().clone();
+            let (operate_rect, operate_idx) = choices
+                .iter()
+                .copied()
+                .find(|(_, idx)| *idx == 2)
+                .unwrap_or_else(|| panic!("{w}x{h} third choice painted:\n{dump}"));
+            // Clicking a choice selects it; clicking beside the controls does
+            // nothing; clicking Apply emits exactly that choice.
+            assert!(matches!(
+                click(&mut view, operate_rect.x + 2, operate_rect.y),
+                ViewAction::None
+            ));
+            assert_eq!(view.editing.as_ref().unwrap().selected_choice, operate_idx);
+            let beside = apply.right().saturating_add(1);
+            if beside < cancel.x {
+                assert!(matches!(
+                    click(&mut view, beside, apply.y),
+                    ViewAction::None
+                ));
+                assert!(view.editing.is_some(), "{w}x{h} gap click is inert");
+            }
+            match click(&mut view, apply.x + 1, apply.y) {
+                ViewAction::Emit(ViewEvent::ConfigUpdated {
+                    key,
+                    value,
+                    persist,
+                }) => {
+                    assert_eq!(key, "default_mode");
+                    assert_eq!(value, "operate");
+                    assert!(persist);
+                }
+                other => panic!("{w}x{h} Apply click should emit: {other:?}"),
+            }
+            assert!(view.editing.is_none());
+
+            // Cancel by pointer.
+            view.focus_key("default_mode");
+            let _ = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+            let cancel = view
+                .last_editor_controls
+                .borrow()
+                .iter()
+                .find(|(_, c)| *c == super::EditorControl::Cancel)
+                .map(|(r, _)| *r)
+                .unwrap();
+            assert!(matches!(
+                click(&mut view, cancel.x, cancel.y),
+                ViewAction::None
+            ));
+            assert!(view.editing.is_none(), "{w}x{h} Cancel leaves the editor");
+            assert_eq!(
+                view.status.as_deref(),
+                Some(en(MessageId::ConfigEditCancelled).as_str())
+            );
+
+            // Text editor: type, then Apply by pointer.
+            view.focus_key("stream_chunk_timeout_secs");
+            let _ = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            for ch in "77".chars() {
+                let _ = view.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+            let dump = buffer_text(&buf, area);
+            let apply = view
+                .last_editor_controls
+                .borrow()
+                .iter()
+                .find(|(_, c)| *c == super::EditorControl::Apply)
+                .map(|(r, _)| *r)
+                .unwrap_or_else(|| panic!("{w}x{h} text editor Apply:\n{dump}"));
+            assert!(
+                dump.contains(&en(MessageId::ConfigEditNewLabel).trim_end().to_string()),
+                "{w}x{h} value line stays visible above the controls:\n{dump}"
+            );
+            match click(&mut view, apply.x, apply.y) {
+                ViewAction::Emit(ViewEvent::ConfigUpdated { key, value, .. }) => {
+                    assert_eq!(key, "stream_chunk_timeout_secs");
+                    assert_eq!(value, "77");
+                }
+                other => panic!("{w}x{h} text Apply should emit: {other:?}"),
+            }
+        }
+    }
+
+    /// P1.5: second-click activation is disarmed by every keyboard step, so no
+    /// single click after navigation can mutate anything.
+    #[test]
+    fn config_second_click_arming_resets_on_every_keyboard_step() {
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        view.category = ConfigCategory::Motion;
+        view.select_first_visible_row();
+        let area = Rect::new(0, 0, 80, 24);
+        let click_row = |view: &mut ConfigView, key: &str| -> ViewAction {
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+            let rect = view
+                .last_row_hitboxes
+                .borrow()
+                .iter()
+                .find(|(_, idx)| view.rows[*idx].key == key)
+                .map(|(rect, _)| *rect)
+                .unwrap_or_else(|| panic!("{key} row painted"));
+            view.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rect.x + 1,
+                row: rect.y,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        let key = |view: &mut ConfigView, code: KeyCode| {
+            view.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+        };
+        let sequences: Vec<Vec<KeyCode>> = vec![
+            vec![KeyCode::Down, KeyCode::Up],
+            vec![KeyCode::Right, KeyCode::Left],
+            vec![KeyCode::Tab, KeyCode::BackTab],
+            vec![KeyCode::Char('x'), KeyCode::Backspace],
+            vec![KeyCode::PageDown, KeyCode::PageUp],
+        ];
+        for sequence in sequences {
+            // The previous iteration's checking click left the row armed; a
+            // keyboard step (like any real navigation) disarms it first.
+            let _ = key(&mut view, KeyCode::Up);
+            assert!(matches!(
+                click_row(&mut view, "low_motion"),
+                ViewAction::None
+            ));
+            for code in &sequence {
+                let _ = key(&mut view, *code);
+            }
+            assert_eq!(view.category, ConfigCategory::Motion, "{sequence:?}");
+            let action = click_row(&mut view, "low_motion");
+            assert!(
+                matches!(action, ViewAction::None),
+                "{sequence:?} then one click must not mutate: {action:?}"
+            );
+            assert!(view.editing.is_none(), "{sequence:?}");
+            assert_eq!(view.rows[view.selected].key, "low_motion");
+        }
+        // Control: two consecutive clicks with nothing in between activate
+        // (the previous check click is disarmed by a keyboard step first).
+        let _ = key(&mut view, KeyCode::Up);
+        assert!(matches!(
+            click_row(&mut view, "low_motion"),
+            ViewAction::None
+        ));
+        assert!(matches!(
+            click_row(&mut view, "low_motion"),
+            ViewAction::Emit(ViewEvent::ConfigUpdated { .. })
+        ));
+        // A rebuilt focus (the host re-renders after applying) is disarmed
+        // even though the emitting click left the row armed.
+        view.focus_key("low_motion");
+        assert!(matches!(
+            click_row(&mut view, "low_motion"),
+            ViewAction::None
+        ));
+    }
+
+    /// P1.6: the reachable editor surface renders from the packs — search
+    /// label, choose label, choice labels and details, footer, controls, and
+    /// hints — with no English fallbacks in zh-Hans.
+    #[test]
+    fn config_editor_surface_is_localized() {
+        let mut app = create_test_app();
+        app.ui_locale = Locale::ZhHans;
+        let mut view = ConfigView::new_for_app(&app);
+        let zh = |id: MessageId| tr(Locale::ZhHans, id).into_owned();
+        let spaced = |text: &str| -> String {
+            text.chars()
+                .map(|ch| {
+                    if UnicodeWidthStr::width(ch.to_string().as_str()) > 1 {
+                        format!("{ch} ")
+                    } else {
+                        ch.to_string()
+                    }
+                })
+                .collect()
+        };
+        let dump = render_dump(&view, 80, 24);
+        assert!(
+            dump.contains(spaced(&zh(MessageId::ConfigSearchLabel)).trim()),
+            "search label:\n{dump}"
+        );
+        view.focus_key("default_mode");
+        let _ = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let dump = render_dump(&view, 80, 24);
+        for id in [
+            MessageId::ConfigEditChooseLabel,
+            MessageId::ConfigChoiceModeAct,
+            MessageId::ConfigChoiceModePlan,
+            MessageId::ConfigChoiceModeOperate,
+            MessageId::ConfigChoiceDetailModeAgent,
+            MessageId::ConfigEditorApply,
+            MessageId::ConfigEditorCancel,
+        ] {
+            let text = zh(id);
+            assert!(
+                dump.contains(spaced(&text).trim_end()),
+                "localized {id:?} = {text}:\n{dump}"
+            );
+        }
+        assert!(
+            dump.contains(spaced(&zh(MessageId::ConfigChoiceFooter)).trim())
+                || dump.contains(spaced(&zh(MessageId::ConfigChoiceFooterCompact)).trim()),
+            "localized choice footer:\n{dump}"
+        );
+        for english in ["Choose:", "Full Access", "Apply", "Cancel", "Search:"] {
+            assert!(!dump.contains(english), "English leaked: {english}\n{dump}");
+        }
+        let _ = view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        view.focus_key("low_motion");
+        let dump = render_dump(&view, 120, 32);
+        let hint = zh(MessageId::ConfigHintLowMotion);
+        assert!(
+            dump.contains(spaced(&hint).trim_end()),
+            "localized hint in the detail pane:\n{dump}"
+        );
+    }
+
+    #[test]
+    fn config_shell_renders_localized_chrome_without_missing_markers() {
+        let mut app = create_test_app();
+        app.ui_locale = Locale::ZhHans;
+        let view = ConfigView::new_for_app(&app);
+        for (w, h) in [(80u16, 24u16), (120, 32)] {
+            let dump = render_dump(&view, w, h);
+            assert!(!dump.contains("MISSING"), "{w}x{h}:\n{dump}");
+            let section = tr(Locale::ZhHans, MessageId::ConfigSectionDisplay);
+            let spaced: String = section.chars().map(|ch| format!("{ch} ")).collect();
+            assert!(
+                dump.contains(spaced.trim_end()),
+                "{w}x{h} localized section label {section}:\n{dump}"
+            );
+            // The new shell chrome renders from the packs too: the active
+            // category chip/rail row and, when wide, the detail fact labels.
+            let category = tr(Locale::ZhHans, MessageId::ConfigCategoryAppearance);
+            let spaced: String = category.chars().map(|ch| format!("{ch} ")).collect();
+            assert!(
+                dump.contains(spaced.trim_end()),
+                "{w}x{h} localized category {category}:\n{dump}"
+            );
+            if w >= 100 {
+                for id in [MessageId::ConfigFactCurrent, MessageId::ConfigFactApply] {
+                    let label = tr(Locale::ZhHans, id);
+                    let spaced: String = label.chars().map(|ch| format!("{ch} ")).collect();
+                    assert!(
+                        dump.contains(spaced.trim_end()),
+                        "{w}x{h} localized fact label {label}:\n{dump}"
+                    );
+                }
+                let unobserved = tr(Locale::ZhHans, MessageId::ConfigLaneUnobserved);
+                let spaced: String = unobserved.chars().map(|ch| format!("{ch} ")).collect();
+                assert!(
+                    dump.contains(spaced.trim_end()),
+                    "{w}x{h} localized unobserved lane:\n{dump}"
+                );
+            }
+            let scope = tr(Locale::ZhHans, MessageId::ConfigScopeSaved);
+            let spaced: String = scope.chars().map(|ch| format!("{ch} ")).collect();
+            assert!(
+                dump.contains(spaced.trim_end()) || dump.contains(scope.as_ref()),
+                "{w}x{h} localized scope badge {scope}:\n{dump}"
+            );
+        }
     }
 
     #[test]
@@ -7423,11 +9720,7 @@ context_window = 262144
     fn config_view_typing_replaces_on_first_char() {
         let app = create_test_app();
         let mut view = ConfigView::new_for_app(&app);
-        view.selected = view
-            .rows
-            .iter()
-            .position(|row| row.key == "stream_chunk_timeout_secs")
-            .expect("editable row on the default tab");
+        view.focus_key("stream_chunk_timeout_secs");
 
         let _ = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let edit = view.editing.as_ref().expect("editing should be active");
@@ -7443,11 +9736,7 @@ context_window = 262144
         let mut app = create_test_app();
         app.ui_locale = Locale::En;
         let mut view = ConfigView::new_for_app(&app);
-        view.selected = view
-            .rows
-            .iter()
-            .position(|row| row.key == "stream_chunk_timeout_secs")
-            .expect("editable row on the default tab");
+        view.focus_key("stream_chunk_timeout_secs");
         let _ = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(view.editing.is_some());
 
@@ -7595,7 +9884,7 @@ context_window = 262144
                         panic!("{label} selected setting should be rendered:\n{dump}")
                     })
             };
-            let row = buffer_row_text(&buf, area, selected_y);
+            let row = buffer_row_text(&buf, area, selected_y.y);
             let row_label = config_label_for_key(&view.rows[selected_idx].key);
             let prefix: String = row_label.chars().take(8).collect();
             assert!(
@@ -7661,46 +9950,57 @@ context_window = 262144
 }
 
 // ---------------------------------------------------------------------------
-// Tideline settings rail + settings stage (spec §5a "Settings rail",
-// "Live preview"; §5b 3-pane settings layout). Translation scaffolding in
-// the topbar mold: pure, deterministic widgets; `ConfigView`'s own nav is
-// untouched and takes over these categories at the landing slice (#5698
-// gate).
+// Tideline settings stage (spec §5a "Settings rail", "Live preview"; §5b
+// 3-pane settings layout): the theme list + live preview composite. It
+// navigates the same `ConfigCategory::ALL` taxonomy as `ConfigView`, through
+// the shared rail/strip painters above, so there is exactly one category set.
 
 #[allow(dead_code)] // Tideline settings rail + preview (spec §5a)
 pub mod tideline_preview;
 
-/// The eight settings categories in rail order (Appearance → Advanced).
+/// The eight settings categories in rail order (Appearance → Advanced),
+/// exactly as `ConfigView` paints them.
 #[must_use]
-#[allow(dead_code)] // translation scaffolding: wired by the landing slice
-pub fn tideline_settings_categories() -> [&'static str; 8] {
-    [
-        "Appearance",
-        "Motion",
-        "Composer",
-        "Notifications",
-        "Provider",
-        "Keybindings",
-        "Privacy",
-        "Advanced",
-    ]
+#[allow(dead_code)] // stage scaffolding: composed by the landing slice
+pub fn tideline_settings_categories(locale: Locale) -> [Cow<'static, str>; 8] {
+    ConfigCategory::ALL.map(|category| category.label(locale))
 }
 
 /// What the caller owes the settings rail.
-#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+#[allow(dead_code)] // stage scaffolding: composed by the landing slice
 pub struct TidelineSettingsRail<'a> {
     pub theme: &'a crate::palette::UiTheme,
+    /// Index into [`ConfigCategory::ALL`].
     pub selected: usize,
     pub ascii_safe: bool,
+    pub locale: Locale,
 }
 
+#[allow(dead_code)] // stage scaffolding: composed by the landing slice
+impl TidelineSettingsRail<'_> {
+    fn category(&self) -> ConfigCategory {
+        ConfigCategory::ALL[self.selected.min(ConfigCategory::ALL.len() - 1)]
+    }
+
+    fn nav_style(&self) -> CategoryNavStyle {
+        use crate::palette::{ChromeInk, chrome_style};
+        CategoryNavStyle {
+            selected: chrome_style(self.theme, ChromeInk::Identity).add_modifier(Modifier::BOLD),
+            normal: chrome_style(self.theme, ChromeInk::MetadataValue),
+            marker: chrome_style(self.theme, ChromeInk::Identity),
+            ascii_safe: self.ascii_safe,
+        }
+    }
+}
+
+#[allow(dead_code)] // stage scaffolding: composed by the landing slice
 fn srail_put(buf: &mut Buffer, x: u16, y: u16, text: &str, style: Style) {
     buf.set_stringn(x, y, text, text.width(), style);
 }
 
-/// Paint the settings rail: 8 categories with the selected `▸`, then the
-/// meta rows (help / file issue / feedback).
-#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+/// Paint the settings rail: the shared category rail with the selected `▸`,
+/// then the meta rows (help / file issue / feedback).
+#[allow(dead_code)] // stage scaffolding: composed by the landing slice
 pub fn render_tideline_settings_rail(
     area: Rect,
     buf: &mut Buffer,
@@ -7709,32 +10009,17 @@ pub fn render_tideline_settings_rail(
     if area.width < 4 || area.height < 4 {
         return;
     }
-    let theme = rail.theme;
-    let categories = tideline_settings_categories();
-    for (index, label) in categories.iter().enumerate() {
-        let y = area.y + index as u16;
-        if y >= area.y + area.height.saturating_sub(3) {
-            break;
-        }
-        let selected = rail.selected == index;
-        let ink = if selected {
-            crate::palette::ChromeInk::Identity
-        } else {
-            crate::palette::ChromeInk::MetadataValue
-        };
-        let mut style = crate::palette::chrome_style(theme, ink);
-        if selected {
-            style = style.add_modifier(Modifier::BOLD);
-            srail_put(
-                buf,
-                area.x,
-                y,
-                "▸",
-                crate::palette::chrome_style(theme, crate::palette::ChromeInk::Identity),
-            );
-        }
-        srail_put(buf, area.x + 2, y, label, style);
-    }
+    let categories = Rect {
+        height: area.height.saturating_sub(3),
+        ..area
+    };
+    render_settings_category_rail(
+        categories,
+        buf,
+        rail.category(),
+        rail.locale,
+        rail.nav_style(),
+    );
     // Meta rows pinned near the bottom (the reference's help/file/feedback).
     let meta_y = area.y + area.height.saturating_sub(3);
     for (offset, meta) in ["? help", "/ file issue", "f feedback"].iter().enumerate() {
@@ -7745,7 +10030,7 @@ pub fn render_tideline_settings_rail(
                 area.x,
                 row_y,
                 meta,
-                crate::palette::chrome_style(theme, crate::palette::ChromeInk::MetadataHint),
+                crate::palette::chrome_style(rail.theme, crate::palette::ChromeInk::MetadataHint),
             );
         }
     }
@@ -7753,13 +10038,13 @@ pub fn render_tideline_settings_rail(
 
 /// Category rects for the rail (spec §6: keyboard + mouse parity).
 #[must_use]
-#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+#[allow(dead_code)] // stage scaffolding: composed by the landing slice
 pub fn tideline_settings_rail_hitboxes(area: Rect, _rail: &TidelineSettingsRail<'_>) -> Vec<Rect> {
     let mut out = Vec::new();
     if area.width < 4 || area.height < 4 {
         return out;
     }
-    for index in 0..tideline_settings_categories().len() {
+    for index in 0..ConfigCategory::ALL.len() {
         let y = area.y + index as u16;
         if y >= area.y + area.height.saturating_sub(3) {
             break;
@@ -7774,10 +10059,27 @@ pub fn tideline_settings_rail_hitboxes(area: Rect, _rail: &TidelineSettingsRail<
     out
 }
 
+/// Paint the narrow-width category strip for the stage and return the
+/// painted rect of every visible category.
+#[allow(dead_code)] // stage scaffolding: composed by the landing slice
+pub fn render_tideline_settings_strip(
+    area: Rect,
+    buf: &mut Buffer,
+    rail: &TidelineSettingsRail<'_>,
+) -> Vec<Rect> {
+    render_settings_category_strip(area, buf, rail.category(), rail.locale, rail.nav_style())
+        .chips
+        .into_iter()
+        .map(|(rect, _)| rect)
+        .collect()
+}
+
 use ratatui::layout::{Constraint, Layout};
 
 /// The settings stage composite (spec §5b): `nav │ form │ preview` at
-/// ≥100 columns; the preview pane sheds below 100.
+/// ≥100 columns; below that the category strip sits over the form and the
+/// preview pane sheds.
+#[allow(dead_code)] // stage scaffolding: composed by the landing slice
 pub struct TidelineSettingsStage<'a> {
     pub rail: TidelineSettingsRail<'a>,
     pub theme_list: crate::tui::theme_picker::TidelineThemeList<'a>,
@@ -7785,7 +10087,7 @@ pub struct TidelineSettingsStage<'a> {
 }
 
 /// Paint the settings stage.
-#[allow(dead_code)] // translation scaffolding: wired by the landing slice
+#[allow(dead_code)] // stage scaffolding: composed by the landing slice
 pub fn render_tideline_settings_stage(
     area: Rect,
     buf: &mut Buffer,
@@ -7796,7 +10098,7 @@ pub fn render_tideline_settings_stage(
     }
     if area.width >= 100 {
         let [nav, form, preview] = Layout::horizontal([
-            Constraint::Length(18),
+            Constraint::Length(CONFIG_SHELL_RAIL_WIDTH),
             Constraint::Min(30),
             Constraint::Percentage(38),
         ])
@@ -7805,9 +10107,9 @@ pub fn render_tideline_settings_stage(
         crate::tui::theme_picker::render_tideline_theme_list(form, buf, &stage.theme_list);
         tideline_preview::render_tideline_settings_preview(preview, buf, &stage.preview);
     } else {
-        let [nav, form] =
-            Layout::horizontal([Constraint::Length(16), Constraint::Min(20)]).areas(area);
-        render_tideline_settings_rail(nav, buf, &stage.rail);
+        let [strip, form] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
+        render_tideline_settings_strip(strip, buf, &stage.rail);
         crate::tui::theme_picker::render_tideline_theme_list(form, buf, &stage.theme_list);
     }
 }

@@ -309,10 +309,25 @@ fn safety_summary(app: &App) -> Cow<'static, str> {
                 MessageId::StatusSafetyWorkspaceWriteNetworkOff
             }
         }
-        crate::sandbox::SandboxPolicy::DangerFullAccess => MessageId::StatusSafetyDisabled,
+        crate::sandbox::SandboxPolicy::DangerFullAccess => {
+            safety_disabled_message(crate::sandbox::process_hardening::no_new_privs_active())
+        }
         crate::sandbox::SandboxPolicy::ExternalSandbox { .. } => MessageId::StatusSafetyExternal,
     };
     tr(app.ui_locale, message)
+}
+
+/// The full-access safety row must disclose the residual setuid block
+/// truthfully (#5723): the no-new-privileges kernel flag is set at startup in
+/// every narrower posture and is irreversible, so "sandbox disabled" alone
+/// would promise `sudo`/setuid workflows the process tree cannot perform.
+/// `None` is a platform without the flag, where the plain label is accurate.
+fn safety_disabled_message(no_new_privs_active: Option<bool>) -> MessageId {
+    match no_new_privs_active {
+        Some(true) => MessageId::StatusSafetyDisabledSetuidBlocked,
+        Some(false) => MessageId::StatusSafetyDisabledSetuidAllowed,
+        None => MessageId::StatusSafetyDisabled,
+    }
 }
 
 fn project_docs(workspace: &Path, locale: Locale) -> String {
@@ -747,6 +762,41 @@ mod tests {
         app.mode = AppMode::Yolo;
         let yolo = format_status(&app);
         assert!(yolo.contains("sandbox disabled, network unrestricted"));
+    }
+
+    #[test]
+    fn status_safety_row_discloses_no_new_privs_flag_state_for_full_access() {
+        // #5723: both flag states get a distinct, truthful row; a platform
+        // without the flag keeps the plain full-access label. The live query
+        // is host-dependent, so the selector is pinned directly.
+        let blocked = tr(Locale::En, safety_disabled_message(Some(true)));
+        assert!(
+            blocked.contains("sandbox disabled, network unrestricted"),
+            "{blocked}"
+        );
+        assert!(blocked.contains("sudo/setuid blocked"), "{blocked}");
+
+        let relaxed = tr(Locale::En, safety_disabled_message(Some(false)));
+        assert!(
+            relaxed.contains("sandbox disabled, network unrestricted"),
+            "{relaxed}"
+        );
+        assert!(relaxed.contains("sudo/setuid allowed"), "{relaxed}");
+
+        let plain = safety_disabled_message(None);
+        assert_eq!(
+            tr(Locale::En, plain),
+            tr(Locale::En, MessageId::StatusSafetyDisabled)
+        );
+
+        // The disclosure is real prose, so every complete pack must carry a
+        // translation rather than a copy of the English string.
+        for id in [
+            safety_disabled_message(Some(true)),
+            safety_disabled_message(Some(false)),
+        ] {
+            assert_ne!(tr(Locale::Ja, id), tr(Locale::En, id), "{id:?}");
+        }
     }
 
     #[test]
