@@ -215,10 +215,11 @@ pub(super) fn requested_sandbox_escalation(
             "danger-full-access",
         ) => crate::sandbox::SandboxPolicy::DangerFullAccess,
         (_, "workspace-write" | "danger-full-access") => {
-            return Err(ToolError::permission_denied(format!(
-                "sandbox escalation to '{requested}' is not strictly wider than this call's current '{}' posture",
-                effective.posture_label()
-            )));
+            return Err(sandbox_escalation_denial(
+                requested,
+                effective,
+                crate::sandbox::process_hardening::no_new_privs_active(),
+            ));
         }
         (_, other) => {
             return Err(ToolError::invalid_input(format!(
@@ -227,6 +228,35 @@ pub(super) fn requested_sandbox_escalation(
         }
     };
     Ok(Some((policy, justification)))
+}
+
+/// Denial for a per-call sandbox escalation that is not strictly wider than
+/// the call's current posture.
+///
+/// When the request aims at `danger-full-access` but the irreversible
+/// no-new-privileges kernel flag was set at startup, even the widest per-call
+/// grant cannot unblock `sudo`/setuid for this process tree — the flag is
+/// process-lifetime and can never be lifted from inside (#5723). Name the two
+/// startup-level paths that actually relax it so the model stops burning
+/// turns on escalation shapes that cannot work.
+pub(super) fn sandbox_escalation_denial(
+    requested: &str,
+    effective: &crate::sandbox::SandboxPolicy,
+    no_new_privs_active: Option<bool>,
+) -> ToolError {
+    let base = format!(
+        "sandbox escalation to '{requested}' is not strictly wider than this call's current '{}' posture",
+        effective.posture_label()
+    );
+    if requested == "danger-full-access" && no_new_privs_active == Some(true) {
+        ToolError::permission_denied(format!(
+            "{base}; sudo/setuid remain blocked by the no-new-privileges kernel flag set at \
+             startup — relaunch with sandbox_mode = \"danger-full-access\" in the config file \
+             or CODEWHALE_NO_NEW_PRIVS=0 to relax it"
+        ))
+    } else {
+        ToolError::permission_denied(base)
+    }
 }
 
 /// Whether a [`Usage`] carries any provider-reported data. The

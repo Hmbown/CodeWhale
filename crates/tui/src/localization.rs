@@ -1499,6 +1499,8 @@ pub enum MessageId {
     StatusSafetyWorkspaceWriteNetworkOn,
     StatusSafetyWorkspaceWriteNetworkOff,
     StatusSafetyDisabled,
+    StatusSafetyDisabledSetuidBlocked,
+    StatusSafetyDisabledSetuidAllowed,
     StatusSafetyExternal,
     StatusPointers,
     // Underwater post-launch empty state.
@@ -3284,6 +3286,8 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::StatusSafetyWorkspaceWriteNetworkOn,
     MessageId::StatusSafetyWorkspaceWriteNetworkOff,
     MessageId::StatusSafetyDisabled,
+    MessageId::StatusSafetyDisabledSetuidBlocked,
+    MessageId::StatusSafetyDisabledSetuidAllowed,
     MessageId::StatusSafetyExternal,
     MessageId::StatusPointers,
     MessageId::EmptyStateNoGit,
