@@ -1106,20 +1106,8 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     // up to three compact rows at the release floor.
     let preview_cap = if size.height >= 20 { 4 } else { 3 };
     let preview_height = desired_preview_height.min(auxiliary_budget.min(preview_cap));
-    let session_boot_height = if mini {
-        0
-    } else {
-        crate::tui::session_boot::receipt_height(
-            app,
-            shell_area.width,
-            auxiliary_budget.saturating_sub(preview_height),
-        )
-    };
-    let workflow_panel_height = desired_workflow_panel_height.min(
-        auxiliary_budget
-            .saturating_sub(preview_height)
-            .saturating_sub(session_boot_height),
-    );
+    let workflow_panel_height =
+        desired_workflow_panel_height.min(auxiliary_budget.saturating_sub(preview_height));
 
     // One pinned footer row brackets the composer from below (spec §3: the
     // activity band and identity band merged into it): phase · live detail ·
@@ -1138,16 +1126,14 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             Constraint::Length(workflow_panel_height), // Workflow panel (#4121)
             Constraint::Length(preview_height),        // Pending input preview (0 if empty)
             Constraint::Length(indicator_height),      // Background-work chip (#5286, 0 if idle)
-            Constraint::Length(session_boot_height),   // MCP+plugin boot receipt (0 if quiet)
             Constraint::Length(plugin_cta_height),     // Live plugin CTA (0 unless matched)
             Constraint::Length(composer_height),       // Composer
             Constraint::Length(footer_height),         // Merged Tideline footer (slots 6+8)
         ])
         .split(body_area);
-    let session_boot_slot = 5;
-    let plugin_cta_slot = 6;
-    let composer_slot = 7;
-    let footer_slot = 8;
+    let plugin_cta_slot = 5;
+    let composer_slot = 6;
+    let footer_slot = 7;
 
     let (work_chat_area, side_work_area) = if mini && !mini_cfg.keep_sidebar {
         // Mini mode without the side rail: the transcript takes the whole
@@ -1313,11 +1299,6 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         crate::tui::background_indicator::render(body_chunks[4], buf, app, &pending_work);
     }
 
-    if session_boot_height > 0 {
-        let buf = f.buffer_mut();
-        crate::tui::session_boot::render(body_chunks[session_boot_slot], buf, app);
-    }
-
     if plugin_cta_height > 0 {
         let buf = f.buffer_mut();
         crate::tui::plugin_suggestions::draw_plugin_cta(app, body_chunks[plugin_cta_slot], buf);
@@ -1440,13 +1421,6 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         column.paint_matching(work_chat_area, f.buffer_mut(), app.ui_theme.surface_bg);
         column.paint_matching(body_chunks[2], f.buffer_mut(), app.ui_theme.surface_bg);
         column.paint_matching(body_chunks[3], f.buffer_mut(), app.ui_theme.surface_bg);
-        if session_boot_height > 0 {
-            column.paint_matching(
-                body_chunks[session_boot_slot],
-                f.buffer_mut(),
-                app.ui_theme.surface_bg,
-            );
-        }
         if plugin_cta_height > 0 {
             column.paint_matching(
                 body_chunks[plugin_cta_slot],

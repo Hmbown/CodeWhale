@@ -4135,6 +4135,63 @@ fn wide_underwater_shell_aligns_transcript_and_composer_on_the_shared_canvas() {
 }
 
 #[test]
+fn failed_mcp_is_a_footer_chip_not_multiline_chat_boot_output() {
+    fn app() -> App {
+        let mut app = create_test_app();
+        app.onboarding_workspace_trust_gate = false;
+        app.onboarding = OnboardingState::None;
+        app.launch.visible = false;
+        app
+    }
+
+    let mut baseline = app();
+    let _ = render_underwater_test_app(&mut baseline, 100, 30);
+    let baseline_composer = baseline
+        .viewport
+        .last_composer_area
+        .expect("baseline composer area");
+
+    let mut failed = app();
+    failed.mcp_snapshot = Some(crate::mcp::McpManagerSnapshot {
+        config_path: PathBuf::from("mcp.json"),
+        config_exists: true,
+        reload_required: false,
+        servers: vec![crate::mcp::McpServerSnapshot {
+            name: "alpha".to_string(),
+            enabled: true,
+            required: false,
+            transport: "stdio".to_string(),
+            command_or_url: "alpha-mcp".to_string(),
+            connect_timeout: 5,
+            execute_timeout: 5,
+            read_timeout: 5,
+            connected: false,
+            error: Some("protocol negotiation timed out".to_string()),
+            capability_metadata: crate::mcp::McpServerCapabilityMetadata::NotObserved,
+            tools: Vec::new(),
+            resources: Vec::new(),
+            prompts: Vec::new(),
+        }],
+    });
+    let rendered = render_underwater_test_app(&mut failed, 100, 30);
+
+    assert_eq!(
+        failed
+            .viewport
+            .last_composer_area
+            .expect("failed-MCP composer area"),
+        baseline_composer,
+        "MCP diagnostics must not reserve chat/composer rows"
+    );
+    assert!(
+        rendered.contains("MCP · 0 connected · 1 failed"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("alpha · failed"), "{rendered}");
+    assert!(!rendered.contains("/mcp retry alpha"), "{rendered}");
+}
+
+#[test]
 fn wide_underwater_canvas_carries_the_ocean_to_both_terminal_edges() {
     let mut app = create_test_app();
     app.ui_theme = crate::palette::UI_THEME;

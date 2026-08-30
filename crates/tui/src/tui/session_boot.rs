@@ -1,24 +1,16 @@
 //! Session-page MCP + plugin boot surface.
 //!
 //! Plugin discovery and every enabled MCP server boot as a **set**, not a
-//! toast per name. The activity strip carries the compact pulse
-//! (`MCP · 4 connecting`); the receipt under it keeps per-server outcomes
-//! and next actions until retry succeeds. Slack is one server in that set.
+//! toast per name. The Tideline footer carries the compact pulse
+//! (`MCP · 4 connecting`); detailed diagnosis and actions belong in `/mcp`,
+//! never as multi-row boot output between the transcript and composer.
 
 use std::borrow::Cow;
 
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::Style,
-    text::{Line, Span},
-    widgets::{Block, Paragraph, Widget},
-};
 use unicode_width::UnicodeWidthStr;
 
 use crate::localization::{Locale, MessageId, tr};
 use crate::mcp::{McpManagerSnapshot, McpServerSnapshot};
-use crate::palette::ChromeInk;
 use crate::plugins::PluginRegistry;
 use crate::plugins::types::{PluginDiagnosticLevel, PluginTrustStatus};
 use crate::tui::app::App;
@@ -185,11 +177,6 @@ impl SessionBootSurface {
     }
 
     #[must_use]
-    pub fn is_hidden(&self) -> bool {
-        self.phase == SessionBootPhase::Hidden
-    }
-
-    #[must_use]
     pub fn activity_chip(&self, locale: Locale, budget: usize) -> Option<String> {
         if self.phase == SessionBootPhase::Hidden || budget == 0 {
             return None;
@@ -342,15 +329,6 @@ impl SessionBootSurface {
         lines.truncate(MAX_RECEIPT_ROWS as usize);
         lines
     }
-
-    #[must_use]
-    pub fn receipt_height(&self, locale: Locale, width: u16) -> u16 {
-        if self.is_hidden() {
-            return 0;
-        }
-        let lines = self.receipt_lines(locale, usize::from(width));
-        (lines.len() as u16).min(MAX_RECEIPT_ROWS)
-    }
 }
 
 fn row_from_snapshot(
@@ -495,55 +473,6 @@ pub fn activity_chip(app: &App, budget: usize) -> Option<String> {
     SessionBootSurface::from_app(app).activity_chip(app.ui_locale, budget)
 }
 
-/// Rows the compact boot receipt wants above the activity band.
-#[must_use]
-pub fn receipt_height(app: &App, width: u16, budget: u16) -> u16 {
-    if budget == 0 {
-        return 0;
-    }
-    SessionBootSurface::from_app(app)
-        .receipt_height(app.ui_locale, width)
-        .min(budget)
-}
-
-/// Paint the compact boot receipt. Text only: Reduced/Still skip any spin.
-pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let surface = SessionBootSurface::from_app(app);
-    let lines = surface.receipt_lines(app.ui_locale, usize::from(area.width));
-    if lines.is_empty() {
-        return;
-    }
-    Block::default()
-        .style(Style::default().bg(app.ui_theme.surface_bg))
-        .render(area, buf);
-    let ink = if surface.servers.iter().any(|row| {
-        matches!(
-            row.state,
-            McpServerBootState::Failed | McpServerBootState::NeedsLogin
-        )
-    }) {
-        ChromeInk::Failure
-    } else if surface.phase == SessionBootPhase::Booting {
-        ChromeInk::Active
-    } else {
-        ChromeInk::Metadata
-    };
-    let rendered: Vec<Line<'static>> = lines
-        .into_iter()
-        .take(area.height as usize)
-        .map(|line| {
-            Line::from(Span::styled(
-                line,
-                Style::default().fg(ink.color(&app.ui_theme)),
-            ))
-        })
-        .collect();
-    Paragraph::new(rendered).render(area, buf);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,7 +519,6 @@ mod tests {
         assert_eq!(surface.phase, SessionBootPhase::Hidden);
         assert!(surface.activity_chip(Locale::En, 80).is_none());
         assert!(surface.receipt_lines(Locale::En, 80).is_empty());
-        assert_eq!(surface.receipt_height(Locale::En, 80), 0);
     }
 
     #[test]
