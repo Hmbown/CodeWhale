@@ -161,11 +161,19 @@ impl ReadDenylist {
     ///   from the built-in defaults only.
     #[must_use]
     pub fn build(include_defaults: bool, extra: &[PathBuf], exempt: &[PathBuf]) -> Self {
+        // Every rule/exempt path is canonicalized (after lexical
+        // normalization) so `check()`'s canonicalized candidates compare
+        // against a canonicalized rule. On macOS this matters because the
+        // system redirects `/var` (and `/tmp`) to their real `/private/...`
+        // locations: a lexical-only rule would silently miss the canonical
+        // candidate and the deny could be walked around (the read_guard
+        // symlink/`..` baseline failures on the macOS CI runner).
         let exempt_normalized: Vec<PathBuf> = exempt
             .iter()
             .cloned()
             .map(expand_home_prefix)
             .map(|p| normalize_lexically(&p))
+            .map(|p| canonicalize_best_effort(&p))
             .collect();
 
         let mut subtrees = Vec::new();
@@ -182,7 +190,7 @@ impl ReadDenylist {
                     .is_some_and(|name| name == std::ffi::OsStr::new(".env"))
             });
             for (raw, label) in default_denied_subtrees() {
-                let path = normalize_lexically(&raw);
+                let path = canonicalize_best_effort(&normalize_lexically(&raw));
                 if exempt_normalized.iter().any(|e| path_is_within(&path, e)) {
                     continue;
                 }
@@ -197,6 +205,7 @@ impl ReadDenylist {
             if path.as_os_str().is_empty() {
                 continue;
             }
+            let path = canonicalize_best_effort(&path);
             subtrees.push(DenyRule::Subtree {
                 path,
                 label: "a path in `sandbox_denied_read_paths`",
@@ -1024,7 +1033,10 @@ mod tests {
         let list = ReadDenylist::build(false, &[tmp.path().to_path_buf()], &[]);
         let paths = list.subtree_paths();
         assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0], normalize_lexically(tmp.path()));
+        // Rules are canonicalized at build (symlinked roots such as macOS
+        // `/var` → `/private/var` must not split the comparison), so the OS
+        // wrapper handoff is the canonical form of the temp dir.
+        assert_eq!(paths[0], canonicalize_best_effort(tmp.path()));
     }
 
     #[test]
@@ -1055,9 +1067,21 @@ mod tests {
 
     #[test]
     fn root_parent_traversal_does_not_escape_above_root() {
+        // Unix: a leading `/` is absolute, so `/../../etc` must clamp to
+        // `/etc` — the root never pops above itself.
+        #[cfg(unix)]
         assert_eq!(
             normalize_lexically(Path::new("/../../etc")),
             PathBuf::from("/etc")
+        );
+        // Windows: a drive-rooted path must clamp to the drive root, never
+        // above it. (A leading `/` alone is not absolute on Windows — it is
+        // drive-relative and joins the current directory, so the Unix
+        // expectation does not hold there.)
+        #[cfg(windows)]
+        assert_eq!(
+            normalize_lexically(Path::new(r"C:\..\..\etc")),
+            PathBuf::from(r"C:\etc")
         );
     }
 
