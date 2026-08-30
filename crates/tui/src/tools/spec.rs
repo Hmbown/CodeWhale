@@ -116,6 +116,11 @@ pub struct RuntimeToolServices {
     pub handle_store: SharedHandleStore,
     /// Per-session persistent RLM kernels, keyed by caller-chosen context name.
     pub rlm_sessions: SharedRlmSessionStore,
+    /// Directory for `read_media`'s content-addressed store of
+    /// pre-compression image originals. `None` (tests and one-off contexts)
+    /// disables persistence so unit tests never touch the real state dir;
+    /// production wiring points it at `<codewhale home>/media-originals`.
+    pub media_originals_dir: Option<PathBuf>,
 }
 
 impl Default for RuntimeToolServices {
@@ -133,6 +138,7 @@ impl Default for RuntimeToolServices {
             hook_executor: None,
             handle_store: new_shared_handle_store(),
             rlm_sessions: new_shared_rlm_session_store(),
+            media_originals_dir: None,
         }
     }
 }
@@ -155,6 +161,7 @@ impl std::fmt::Debug for RuntimeToolServices {
             .field("hook_executor", &self.hook_executor.is_some())
             .field("handle_store", &true)
             .field("rlm_sessions", &true)
+            .field("media_originals_dir", &self.media_originals_dir)
             .finish()
     }
 }
