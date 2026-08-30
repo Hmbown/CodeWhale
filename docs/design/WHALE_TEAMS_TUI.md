@@ -5,6 +5,12 @@ gives every agent role a species-led whale and every whale one of six runtime
 states. This document is the contract for how that identity appears in the
 Codewhale terminal UI. The implementation is `crates/tui/src/tui/whales.rs`.
 
+> **Status — runtime badges current; portrait reference retired.** The current
+> Codewhale product mark is the generated diving whale whose wave forms a
+> `>` prompt, sourced from `designs/brand/20260829-codewhale-mark/`. The old
+> hand-drawn crown/fluke treatment described in the historical portrait record
+> below is not a current product mark and does not render in `underwater.rs`.
+
 The source artwork (six species × six states × four colorways of 384×192
 rasters, plus concept boards and the visual brief) lives in the CWC repository.
 No CWC file is copied here: the terminal whales are authored fresh as glyph
@@ -92,29 +98,24 @@ accents only and must never be used for status, mode, or permission.
 
 ## Art
 
-The drawing decisions — including the empty-state hero mark in
-`underwater.rs`, which shares this glyph vocabulary — live in
-[`WHALE_TEAMS_TUI_ART.md`](WHALE_TEAMS_TUI_ART.md).
+The current startup mark is intentionally separate from Whale Teams artwork:
+it is the approved generated diving-whale terminal projection in
+`underwater.rs`. [`WHALE_TEAMS_TUI_ART.md`](WHALE_TEAMS_TUI_ART.md), its text
+preview, and its generator are retained as an **archived portrait reference**
+for removed artwork; they must not be used as a product-mark source.
 
-Portraits are 3 rows × 14 columns: a two-column state-cue lane on the left,
-the head at the left, the crown fluke `▚△▞` on the right (the same vocabulary
-as the idle Codewhale mark in `underwater.rs`), and a wake lane under the tail.
-Badges are two cells: a species feature glyph in the role accent plus a body
-cell.
-
-Every glyph has a `glyphs::ascii_fallback` entry, and `portrait_ascii` /
-`badge_ascii` expose the narrowed silhouettes. With `CODEWHALE_ASCII_SAFE=1`
-the seven badges stay distinct: `<#` `#]` `#\` `:#` `#-` `*#` `.#`.
+The live runtime uses two-cell badges: a species feature glyph in the role
+accent plus a body cell. With `CODEWHALE_ASCII_SAFE=1` the seven badges stay
+distinct: `<#` `#]` `#\` `:#` `#-` `*#` `.#`.
 
 ## Surfaces
 
-- `/fleet` roster: species badge on every member row; the detail pane opens
-  with the portrait (≥ 60 columns) and the `badge Name · species · job` line
-  — no caption labels.
+- `/fleet` roster: species badge on every member row, with the
+  `badge Name · species · job` line — no retired portrait is rendered.
 - `/fleet` workers (`SubAgentsView`): badge on every worker row, plus a
   second line with the badge and the state cue and word — nothing else.
-- `whales::portrait` / `whales::badge` are public for other surfaces (the
-  Fleet setup role pane is the intended next consumer).
+- `whales::badge` is public for other surfaces (the Fleet setup role pane is
+  the intended next consumer).
 
 Not represented: the deep-current, reef-shift, and night-signal colorways; the
 legacy WhalePet atlas and Rive companion contracts (which have no artwork in

@@ -2892,34 +2892,39 @@ use ratatui::layout::{Constraint, Layout};
 
 use crate::palette::UiTheme;
 
-/// The founder's fluke mark — the generated 12x6 cell rendition from the
-/// brand master path (`designs/brand/20260829-fluke-founder/TUI_GLYPHS.md`,
-/// produced by `build-tui-glyph.py`; never hand-drawn). The hand-projected
-/// three-cell crown was deleted by founder decree; this block is its
-/// replacement everywhere in the startup path. The ASCII-safe projection maps each
-/// quadrant block through its declared `glyphs::ascii_fallback` (`#`, `.`,
-/// `\`) — a legible silhouette, not a smear.
-const FLUKE_BLOCK: [&str; 6] = [
-    "▚▄▄▖    ▗▄▄▟",
-    "▝▜███▙▟███▛▘",
-    "  ▝▀▜██▛▀▘",
-    "     ▜█",
-    "     ██▖",
-    "   ▝▀▜█▙▄▖",
+/// The current Codewhale diving-whale mark — the generated 10x6 cell
+/// rendition from `designs/brand/20260829-codewhale-mark/TUI_GLYPHS.md`,
+/// produced by `build-tui-glyph.py`; never hand-drawn. Its wave is the `>`
+/// shell-prompt motif. The retired fluke-ring proposal is deliberately absent
+/// from this startup path. The ASCII-safe projection maps each quadrant block
+/// through its declared `glyphs::ascii_fallback` — a legible silhouette, not a
+/// smear.
+const CURRENT_MARK_BLOCK: [&str; 6] = [
+    "▄▄▄▄██▌",
+    "▜████▀▘",
+    "   ▟██▄▄",
+    "   ▟█████▖",
+    " ▐█▟▀█████",
+    " ▐█▜██████",
 ];
-/// Rows of fluke-mark ink, one `String` per terminal row. `ascii_safe`
+/// The generated glyph has a seven-cell first row, but all rows share this
+/// ten-cell canvas. Use the canvas for centering and hitboxes so later rows do
+/// not shift or escape their recorded area.
+const CURRENT_MARK_WIDTH: u16 = 10;
+
+/// Rows of current-mark ink, one `String` per terminal row. `ascii_safe`
 /// projects each cell through the declared fallbacks (spec §2: every
 /// authored glyph has one).
-fn fluke_rows(ascii_safe: bool) -> Vec<String> {
-    FLUKE_BLOCK
+fn current_mark_rows(ascii_safe: bool) -> Vec<String> {
+    CURRENT_MARK_BLOCK
         .iter()
-        .map(|row| fluke_row(row, ascii_safe))
+        .map(|row| current_mark_row(row, ascii_safe))
         .collect()
 }
 
 /// Single-row projection: the unicode row verbatim, or each block through
 /// its declared ASCII fallback.
-fn fluke_row(row: &str, ascii_safe: bool) -> String {
+fn current_mark_row(row: &str, ascii_safe: bool) -> String {
     if !ascii_safe {
         return row.to_string();
     }
@@ -3121,8 +3126,8 @@ impl<'a> TidelineStartup<'a> {
             .collect()
     }
 
-    fn fluke(&self) -> Vec<String> {
-        fluke_rows(self.ascii_safe)
+    fn current_mark(&self) -> Vec<String> {
+        current_mark_rows(self.ascii_safe)
     }
 }
 
@@ -3164,8 +3169,9 @@ struct StartupLayout {
     quick_rows_start: u16,
     /// Row within `hero` where the centered hero block starts.
     hero_top: u16,
-    /// Whether the 12x6 fluke mark fits (`FLUKE_BLOCK` + heading + subtitle).
-    fluke_shown: bool,
+    /// Whether the 10x6 current mark fits (the fixed canvas, heading, and
+    /// subtitle).
+    current_mark_shown: bool,
     /// Option-strip column count: 4 tiles need ~14 cells each to name
     /// themselves whole, so below 56 stage columns the strip sheds to 2
     /// (§5b shed ⑩) rather than truncate every label mid-word.
@@ -3194,10 +3200,11 @@ fn startup_layout(stage: Rect) -> StartupLayout {
         height: dock_h,
         ..tail
     };
-    let fluke_h = FLUKE_BLOCK.len() as u16;
-    let fluke_shown = hero.height >= fluke_h.saturating_add(2);
-    let block_h = if fluke_shown {
-        fluke_h + 2
+    let current_mark_h = CURRENT_MARK_BLOCK.len() as u16;
+    let current_mark_shown =
+        hero.width >= CURRENT_MARK_WIDTH && hero.height >= current_mark_h.saturating_add(2);
+    let block_h = if current_mark_shown {
+        current_mark_h + 2
     } else {
         u16::min(hero.height, 2)
     };
@@ -3210,7 +3217,7 @@ fn startup_layout(stage: Rect) -> StartupLayout {
         dock,
         quick_rows_start: quick.height.saturating_sub(3),
         hero_top: hero.height.saturating_sub(block_h) / 2,
-        fluke_shown,
+        current_mark_shown,
         strip_columns: if strip.width < 56 { 2 } else { 4 },
     }
 }
@@ -3224,16 +3231,18 @@ pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &Tideline
     let theme = startup.theme;
     let layout = startup_layout(stage);
 
-    // Hero: the generated fluke mark (when the vertical budget admits it),
-    // the heading, and one dim subtitle (first-run vs returning) as one
-    // vertically centered block.
+    // Hero: the generated current mark (when the cell budget admits it), the
+    // heading, and one dim subtitle (first-run vs returning) as one vertically
+    // centered block. Each mark row is left-aligned on the same fixed-width
+    // canvas, rather than individually centered by its visible ink width.
     let mut hero_row = layout.hero_top;
-    if layout.fluke_shown {
-        for row in startup.fluke() {
-            centered(
+    if layout.current_mark_shown {
+        let mark_x = layout.hero.x + layout.hero.width.saturating_sub(CURRENT_MARK_WIDTH) / 2;
+        for row in startup.current_mark() {
+            set_span(
                 buf,
-                layout.hero,
-                hero_row,
+                mark_x,
+                layout.hero.y + hero_row,
                 &Span::styled(row, chrome(theme, ChromeInk::Attention)),
             );
             hero_row = hero_row.saturating_add(1);
@@ -3423,12 +3432,12 @@ pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &Tideline
     }
 }
 
-/// Recorded hitboxes for the startup stage (spec §6): the hero fluke, each
-/// quick action row, and each option-strip tile. Same shapes as the painted
-/// cells.
+/// Recorded interactive hitboxes for the startup stage (spec §6): each quick
+/// action row and option-strip tile, plus the docked composer's focus and send
+/// targets. The hero brand mark is deliberately decorative; it has no action
+/// or hitbox until the product defines one with keyboard parity.
 #[derive(Debug, Clone, Default)]
 pub struct TidelineStartupHitboxes {
-    pub fluke: Rect,
     pub actions: Vec<Rect>,
     pub options: Vec<Rect>,
     /// The docked composer's input row (click focuses, exactly like Tab).
@@ -3448,15 +3457,6 @@ pub fn tideline_startup_hitboxes(stage: Rect) -> TidelineStartupHitboxes {
     }
     let layout = startup_layout(stage);
 
-    if layout.fluke_shown {
-        let fluke_w = FLUKE_BLOCK[0].width() as u16;
-        out.fluke = Rect {
-            x: layout.hero.x + (layout.hero.width.saturating_sub(fluke_w)) / 2,
-            y: layout.hero.y + layout.hero_top,
-            width: fluke_w,
-            height: FLUKE_BLOCK.len() as u16,
-        };
-    }
     out.actions = (0..3)
         .map(|index| Rect {
             x: layout.quick.x + 2,

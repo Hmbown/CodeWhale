@@ -8,8 +8,8 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
 use super::{
-    FLUKE_BLOCK, LaunchAction, TidelineStartup, handle_launch_key, render_tideline_startup,
-    tideline_startup_hitboxes,
+    CURRENT_MARK_BLOCK, CURRENT_MARK_WIDTH, LaunchAction, TidelineStartup, handle_launch_key,
+    render_tideline_startup, tideline_startup_hitboxes,
 };
 use crate::palette::UI_THEME;
 use crate::tui::golden_harness::{BLOCKER_SIZES, assert_matches_golden, render_golden_text};
@@ -87,7 +87,7 @@ fn startup_matches_golden_at_the_40x12_terminal_floor() {
     // §5b shed order proven at the floor. A 40x12 terminal leaves the stage
     // 10 rows after the topbar and merged footer: the QUICK ACTIONS label
     // row and the wave rules collapse, the hero keeps heading + subtitle
-    // (the 12x6 fluke needs its 8-row budget), and the strip sheds to 2
+    // (the 10x6 current mark needs its 8-row budget), and the strip sheds to 2
     // columns so tile labels stay whole.
     let fixture = returning();
     let startup = fixture.widget(&UI_THEME);
@@ -123,26 +123,29 @@ fn startup_hero_states_first_run_vs_returning() {
 }
 
 #[test]
-fn startup_hero_paints_the_generated_fluke_block_and_sheds_it_at_short_stages() {
-    // The generated 12x6 mark (never a hand-drawn crown): centered, one row
-    // per FLUKE_BLOCK line, above the heading. It sheds below its 8-row
-    // budget instead of being clipped mid-mark.
+fn startup_hero_paints_the_generated_current_mark_on_its_fixed_canvas_and_sheds_it_at_short_stages()
+{
+    // The generated 10x6 current mark: each row starts on the same ten-cell
+    // canvas, above the heading. It sheds below its 8-row budget instead of
+    // being clipped mid-mark.
     let startup = TidelineStartup::new(&UI_THEME, 4, true);
     let wide = draw(80, 24, &startup);
-    for row in FLUKE_BLOCK {
-        let row_w = unicode_width::UnicodeWidthStr::width(row);
-        let expected = format!("{}{row}", " ".repeat((80 - row_w) / 2));
+    for row in CURRENT_MARK_BLOCK {
+        let expected = format!(
+            "{}{row}",
+            " ".repeat((80 - usize::from(CURRENT_MARK_WIDTH)) / 2)
+        );
         assert!(
             wide.lines().any(|line| line.starts_with(&expected)),
-            "fluke row {row:?} must paint centered at 80x24:\n{wide}"
+            "current mark row {row:?} must paint on its fixed canvas at 80x24:\n{wide}"
         );
     }
     // 60x16: stage 14 rows -> hero 5 < 8, mark sheds, heading stays.
     let short = draw(60, 16, &startup);
     assert!(short.contains("What are we working on?"), "{short}");
     assert!(
-        !short.contains(FLUKE_BLOCK[0]),
-        "the fluke must not clip mid-mark at short stages:\n{short}"
+        !short.contains(CURRENT_MARK_BLOCK[0]),
+        "the current mark must not clip mid-mark at short stages:\n{short}"
     );
 }
 
@@ -285,13 +288,26 @@ fn startup_option_strip_sheds_to_two_columns_when_narrow() {
 fn startup_ascii_safe_has_no_wide_or_unsupported_glyphs() {
     let startup = TidelineStartup::new(&UI_THEME, 4, true).ascii_safe(true);
     let text = draw(100, 30, &startup);
-    // The generated fluke projects through the declared quadrant-block
-    // fallbacks (`#`, `.`, `\`) — a legible silhouette, not a smear.
-    assert!(
-        text.lines()
-            .any(|line| line.contains("\\###") || line.contains("###.")),
-        "ascii fluke block must paint:\n{text}"
-    );
+    // The generated current mark projects through the declared quadrant-block
+    // fallbacks — a legible silhouette, not a hand-made ASCII substitute.
+    for row in CURRENT_MARK_BLOCK {
+        let projected: String = row
+            .chars()
+            .map(|ch| {
+                if ch == ' ' {
+                    ch.to_string()
+                } else {
+                    crate::tui::glyphs::ascii_fallback(&ch.to_string())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| ch.to_string())
+                }
+            })
+            .collect();
+        assert!(
+            text.lines().any(|line| line.contains(projected.trim_end())),
+            "ascii current-mark row {projected:?} must paint:\n{text}"
+        );
+    }
     assert!(text.contains(". ~~~ ."), "wave rule projects to ASCII");
     assert!(text.contains("Enter >"), "chevron projects to >");
     for ch in text.chars() {
@@ -311,7 +327,6 @@ fn startup_hitboxes_match_painted_cells() {
     let (w, h) = (100, 30);
     let area = Rect::new(0, 0, w, h);
     let hitboxes = tideline_startup_hitboxes(area);
-    assert!(hitboxes.fluke.width > 0, "fluke is a hitbox at 100x30");
     assert_eq!(hitboxes.actions.len(), 3, "one rect per quick action row");
     assert_eq!(hitboxes.options.len(), 4, "one rect per option tile");
     let mut buf = Buffer::empty(area);
@@ -329,11 +344,6 @@ fn startup_hitboxes_match_painted_cells() {
         assert!(rect.x + rect.width <= w);
         assert!(rect.y + rect.height <= h);
     }
-    let fluke_cells = painted(hitboxes.fluke);
-    assert!(
-        !fluke_cells.trim().is_empty(),
-        "fluke hitbox covers the mark"
-    );
 }
 
 #[test]

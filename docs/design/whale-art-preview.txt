@@ -1,4 +1,8 @@
-Codewhale empty-state whale mark — CURRENT (main) vs NEW (Signal Cut)
+ARCHIVED REFERENCE — removed portrait artwork, not the current Codewhale mark.
+For the approved startup identity, use `designs/brand/20260829-codewhale-mark/`:
+the generated diving whale whose wave forms a `>` prompt.
+
+Former Codewhale empty-state whale portrait — CURRENT (main) vs NEW (Signal Cut)
 
 == classic ==
 
@@ -43,4 +47,3 @@ Codewhale empty-state whale mark — CURRENT (main) vs NEW (Signal Cut)
       .#######.
 
   block width: 21 -> 16 columns
-
