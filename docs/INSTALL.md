@@ -10,7 +10,7 @@ If you just want the short version, see the
 [main README](../README.md#install) or
 [简体中文 README](../README.zh-CN.md#安装).
 
-This branch describes the **v0.9.11 source candidate**. Install commands that use
+This branch describes the **v0.9.12 source candidate**. Install commands that use
 `latest` resolve to the latest published package or GitHub Release, which may
 trail the source candidate. A candidate is not a published install until the
 matching package, tag, checksums, and release assets exist.
@@ -30,7 +30,7 @@ verifies them against `codewhale-artifacts-sha256.txt`, installs to
 ## 1. Supported platforms
 
 Published Codewhale releases ship matched `codewhale` and `codew` prebuilt binaries for their supported platform/architecture
-combinations. The table below is the intended v0.9.11 candidate matrix;
+combinations. The table below is the intended v0.9.12 candidate matrix;
 Android/Termux is preview pending real-device QA. Linux ARM64 is available from
 v0.8.8 onward. Linux RISC-V prebuilts are temporarily paused because the locked
 `rquickjs-sys` dependency does not ship `riscv64gc-unknown-linux-gnu` bindings.
@@ -54,7 +54,7 @@ v0.8.8 onward. Linux RISC-V prebuilts are temporarily paused because the locked
   [Build from source](#7-build-from-source) below.
 ³ RISC-V source builds currently need upstream `rquickjs-sys` RISC-V bindings or
   a bindgen-enabled dependency build.
-⁴ The v0.9.11 source-candidate npm wrapper recognizes Android arm64 and resolves
+⁴ The v0.9.12 source-candidate npm wrapper recognizes Android arm64 and resolves
   the matching `codewhale` and `codew` Android assets. npm
   installation works only for a package version whose GitHub Release publishes
   those matching assets. The Android/Termux path remains preview-only until the
@@ -66,7 +66,7 @@ Linux `codewhale-linux-arm64` archive in Termux; use the Termux-specific
 Android archive when a release or release candidate publishes one, or build
 from source inside Termux.
 
-The Linux **x64 and arm64** v0.9.11 candidate assets are **static musl builds**.
+The Linux **x64 and arm64** v0.9.12 candidate assets are **static musl builds**.
 The x64 release path has used musl since v0.8.65; v0.9.6 extends the same build
 and static-launch check to arm64. These binaries have no glibc dependency and
 run on their matching architecture across Ubuntu, Debian, RHEL/CentOS, and
@@ -84,7 +84,7 @@ version `GLIBC_2.39' not found
 ```
 
 The npm wrapper, `codewhale update`, and the Unix archive installer retain their
-GNU-binary preflight for older releases. The v0.9.11 arm64 candidate instead uses
+GNU-binary preflight for older releases. The v0.9.12 arm64 candidate instead uses
 `aarch64-unknown-linux-musl`, so it has no `GLIBC_*` floor. If you are installing
 an earlier release on an older arm64 distribution, use:
 

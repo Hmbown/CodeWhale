@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
-codewhale-config = { path = "../config", version = "0.9.11" }
+codewhale-config = { path = "../config", version = "0.9.12" }
 fd-lock = "4.0.4"
 serde.workspace = true
 serde_json.workspace = true

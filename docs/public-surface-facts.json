@@ -20,7 +20,7 @@
     ]
   },
   "sourceCandidate": {
-    "version": "0.9.11",
+    "version": "0.9.12",
     "providerCount": 45,
     "toolCount": 75,
     "sandboxBackends": [

@@ -14,8 +14,8 @@ workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
-codewhale-protocol = { path = "../protocol", version = "0.9.11" }
-codewhale-release = { path = "../release", version = "0.9.11" }
+codewhale-protocol = { path = "../protocol", version = "0.9.12" }
+codewhale-release = { path = "../release", version = "0.9.12" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

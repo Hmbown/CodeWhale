@@ -26,7 +26,7 @@ default-members = ["crates/cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.9.11"
+version = "0.9.12"
 edition = "2024"
 # Rust 1.88 stabilized `let_chains` in `if`/`while` conditions, which the
 # codebase relies on extensively. Cargo enforces this so users on older

@@ -12,9 +12,9 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-codewhale-execpolicy = { path = "../execpolicy", version = "0.9.11" }
-codewhale-paths = { path = "../paths", version = "0.9.11" }
-codewhale-secrets = { path = "../secrets", version = "0.9.11" }
+codewhale-execpolicy = { path = "../execpolicy", version = "0.9.12" }
+codewhale-paths = { path = "../paths", version = "0.9.12" }
+codewhale-secrets = { path = "../secrets", version = "0.9.12" }
 fd-lock = "4.0.4"
 libc = "0.2"
 serde.workspace = true
