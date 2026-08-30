@@ -348,7 +348,19 @@ impl SearchBackend for ProviderNativeSearchBackend<'_> {
             .provider_native_search
             .as_ref()
             .ok_or_else(|| ToolError::not_available("provider-native search client unavailable"))?;
-        if let Some(maximum) = client.maximum_domain_count()
+        // Moonshot/Kimi, Z.AI, MiMo, and the Responses-dialect routes cannot
+        // express domain filters in their native wire contracts. Declining
+        // here must not fail the whole search: report this backend unavailable
+        // so the chain falls back to the configured provider or DuckDuckGo,
+        // which honor domains natively or through post-filtering.
+        let domain_limit = client.maximum_domain_count();
+        if !query.domains.is_empty() && domain_limit == Some(0) {
+            return Err(ToolError::not_available(format!(
+                "{} native web search cannot honor domain filters",
+                client.provider().as_str()
+            )));
+        }
+        if let Some(maximum) = domain_limit
             && query.domains.len() > maximum
         {
             return Err(ToolError::invalid_input(format!(
@@ -607,6 +619,105 @@ mod tests {
                     to: BackendId::DuckDuckGo,
                 },
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_domain_native_providers_decline_without_failing_the_chain() {
+        use crate::config::{Config, ProviderConfig, ProvidersConfig};
+
+        let moonshot_config = Config {
+            provider: Some("moonshot".to_string()),
+            providers: Some(ProvidersConfig {
+                moonshot: ProviderConfig {
+                    api_key: Some("moonshot-test-key".to_string()),
+                    base_url: Some("https://api.moonshot.ai/v1".to_string()),
+                    model: Some("kimi-k3".to_string()),
+                    ..ProviderConfig::default()
+                },
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        };
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut context = ToolContext::new(tmp.path().to_path_buf());
+        context.route_capabilities.server_side_web_search =
+            codewhale_config::route::CapabilityState::Supported;
+        context.provider_native_search = Some(
+            crate::client::ProviderNativeSearchClient::new(
+                crate::client::DeepSeekClient::new(&moonshot_config).expect("test Moonshot client"),
+            )
+            .expect("Moonshot native adapter"),
+        );
+        let backend = ProviderNativeSearchBackend { context: &context };
+
+        let domain_query = SearchQuery::new(
+            "bounded chain".to_string(),
+            5,
+            None,
+            vec!["example.com".to_string()],
+            None,
+        );
+        let error = backend
+            .search(&domain_query, Instant::now() + Duration::from_secs(1))
+            .await
+            .expect_err("Moonshot native search must decline domain-filtered queries");
+        assert!(
+            matches!(error, ToolError::NotAvailable { .. }),
+            "declining must stay fallback-shaped, not fail-closed: {error:?}"
+        );
+
+        let xai_config = Config {
+            provider: Some("xai".to_string()),
+            providers: Some(ProvidersConfig {
+                xai: ProviderConfig {
+                    api_key: Some("xai-test-key".to_string()),
+                    base_url: Some("https://api.x.ai/v1".to_string()),
+                    model: Some("grok-4.5".to_string()),
+                    ..ProviderConfig::default()
+                },
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        };
+        let mut xai_context = ToolContext::new(tmp.path().to_path_buf());
+        xai_context.route_capabilities.server_side_web_search =
+            codewhale_config::route::CapabilityState::Supported;
+        xai_context.provider_native_search = Some(
+            crate::client::ProviderNativeSearchClient::new(
+                crate::client::DeepSeekClient::new(&xai_config).expect("test xAI client"),
+            )
+            .expect("xAI native adapter"),
+        );
+        let oversized_domain_query = SearchQuery::new(
+            "bounded chain".to_string(),
+            5,
+            None,
+            [
+                "a.example",
+                "b.example",
+                "c.example",
+                "d.example",
+                "e.example",
+                "f.example",
+            ]
+            .iter()
+            .map(|domain| domain.to_string())
+            .collect(),
+            None,
+        );
+        let error = ProviderNativeSearchBackend {
+            context: &xai_context,
+        }
+        .search(
+            &oversized_domain_query,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .expect_err("too many domains stays a typed user error");
+        assert!(
+            matches!(error, ToolError::InvalidInput { .. }),
+            "over the provider limit must stay fail-closed: {error:?}"
         );
     }
 

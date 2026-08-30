@@ -1731,6 +1731,26 @@ fn replace_binary_with_validation<F>(
 where
     F: FnOnce() -> Result<()>,
 {
+    replace_binary_with_validation_and_permission_setter(
+        target,
+        new_bytes,
+        validate_before_replace,
+        |path, permissions| std::fs::set_permissions(path, permissions),
+    )
+}
+
+/// `apply_permissions` is a seam for `std::fs::set_permissions` so tests can
+/// exercise permission-setup failures without host-specific filesystem state.
+fn replace_binary_with_validation_and_permission_setter<F, P>(
+    target: &Path,
+    new_bytes: &[u8],
+    validate_before_replace: F,
+    apply_permissions: P,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+    P: Fn(&Path, std::fs::Permissions) -> std::io::Result<()>,
+{
     let parent = target
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -1743,16 +1763,64 @@ where
     tmp.write_all(new_bytes)
         .with_context(|| format!("failed to write temp file at {}", tmp.path().display()))?;
 
-    // Preserve permissions from the original binary (if it exists)
+    // Permission setup is part of pre-replacement validation: a staged binary
+    // that cannot receive correct permissions must never replace a working
+    // target, so every failure below aborts before any destructive rename.
     if target.exists() {
-        if let Ok(meta) = std::fs::metadata(target) {
-            let _ = std::fs::set_permissions(tmp.path(), meta.permissions());
-        }
+        // Preserve permissions from the original binary.
+        let meta = std::fs::metadata(target).with_context(|| {
+            format!(
+                "failed to read permissions of update target {}",
+                target.display()
+            )
+        })?;
+        apply_permissions(tmp.path(), meta.permissions()).with_context(|| {
+            format!(
+                "failed to set permissions on staged update {} before replacing {}",
+                tmp.path().display(),
+                target.display()
+            )
+        })?;
     } else {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o755));
+            apply_permissions(tmp.path(), std::fs::Permissions::from_mode(0o755)).with_context(
+                || {
+                    format!(
+                        "failed to set permissions on staged update {} before installing {}",
+                        tmp.path().display(),
+                        target.display()
+                    )
+                },
+            )?;
+        }
+    }
+
+    // Independently verify the staged binary is executable before it may
+    // replace the target; a chmod that silently did not stick would otherwise
+    // install a binary that cannot run.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let staged_mode = tmp
+            .as_file()
+            .metadata()
+            .with_context(|| {
+                format!(
+                    "failed to inspect staged update at {}",
+                    tmp.path().display()
+                )
+            })?
+            .permissions()
+            .mode();
+        if staged_mode & 0o111 == 0 {
+            bail!(
+                "staged update {} is not executable (mode {:03o}); refusing to replace {}",
+                tmp.path().display(),
+                staged_mode & 0o7777,
+                target.display()
+            );
         }
     }
 
@@ -1884,6 +1952,17 @@ mod tests {
         std::fs::write(path, b"test executable").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Write a stand-in installed binary: real update targets carry an
+    /// executable mode on Unix, which the updater now preserves and verifies.
+    fn write_installed_binary(path: &Path, bytes: &[u8]) {
+        std::fs::write(path, bytes).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
     }
 
     /// Verify the arch mapping used when constructing asset names.
@@ -2535,7 +2614,7 @@ mod tests {
             .path()
             .join(format!("codewhale-tui{}", std::env::consts::EXE_SUFFIX));
         for path in [&primary, &codew, &legacy_tui] {
-            std::fs::write(path, b"v0.9.4 old bytes").unwrap();
+            write_installed_binary(path, b"v0.9.4 old bytes");
         }
 
         let plan = update_plan_for_exe(&primary);
@@ -2568,7 +2647,7 @@ mod tests {
             .join(format!("codewhale-tui{}", std::env::consts::EXE_SUFFIX));
         for invoked in [&codew, &legacy_tui] {
             for path in [&primary, &codew, &legacy_tui] {
-                std::fs::write(path, b"old").unwrap();
+                write_installed_binary(path, b"old");
             }
             let plan = update_plan_for_exe(invoked);
             assert_eq!(plan.target_paths.first(), Some(invoked));
@@ -2758,7 +2837,7 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
         let dir = tempfile::TempDir::new().unwrap();
         let target = dir.path().join("codewhale-test");
         // Write initial content
-        std::fs::write(&target, b"old binary").unwrap();
+        write_installed_binary(&target, b"old binary");
 
         replace_binary(&target, b"new binary content").unwrap();
         let content = std::fs::read_to_string(&target).unwrap();
@@ -2773,6 +2852,112 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
         replace_binary(&target, b"fresh binary").unwrap();
         let content = std::fs::read_to_string(&target).unwrap();
         assert_eq!(content, "fresh binary");
+    }
+
+    fn assert_no_staged_temp_files(dir: &Path) {
+        assert!(
+            std::fs::read_dir(dir).unwrap().all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".codewhale-update-")
+            }),
+            "a failed permission setup must clean the staged temp file"
+        );
+    }
+
+    /// Regression test for #5727: a permission-setup failure on the staged
+    /// binary must abort the update before the existing target is replaced.
+    #[test]
+    fn permission_failure_on_existing_target_aborts_before_replacement() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = dir.path().join("codewhale-test");
+        write_installed_binary(&target, b"old binary");
+
+        let error = replace_binary_with_validation_and_permission_setter(
+            &target,
+            b"new binary content",
+            || Ok(()),
+            |_, _| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+        )
+        .expect_err("a chmod failure must fail the update");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to set permissions on staged update"),
+            "unexpected error: {error:#}"
+        );
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"old binary",
+            "the working binary must survive a permission-setup failure"
+        );
+        assert_no_staged_temp_files(dir.path());
+    }
+
+    /// Regression test for #5727, new-target path: when no binary exists yet
+    /// the staged file still needs its 0o755 mode, and a chmod failure must
+    /// abort instead of installing a non-executable file.
+    #[cfg(unix)]
+    #[test]
+    fn permission_failure_on_new_target_aborts_install() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = dir.path().join("codewhale-new-test");
+
+        let error = replace_binary_with_validation_and_permission_setter(
+            &target,
+            b"fresh binary",
+            || Ok(()),
+            |_, _| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+        )
+        .expect_err("a chmod failure must fail a fresh install");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to set permissions on staged update"),
+            "unexpected error: {error:#}"
+        );
+        assert!(
+            !target.exists(),
+            "a failed fresh install must not leave a target behind"
+        );
+        assert_no_staged_temp_files(dir.path());
+    }
+
+    /// Regression test for #5727: even when permission setup reports success,
+    /// a staged binary without an executable mode must never replace the
+    /// working target.
+    #[cfg(unix)]
+    #[test]
+    fn non_executable_staged_update_aborts_before_replacement() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = dir.path().join("codewhale-test");
+        write_test_executable(&target);
+        std::fs::write(&target, b"old binary").unwrap();
+
+        // A no-op setter models a chmod that claims success without sticking,
+        // leaving the staged temp file at its default non-executable 0o600.
+        let error = replace_binary_with_validation_and_permission_setter(
+            &target,
+            b"new binary content",
+            || Ok(()),
+            |_, _| Ok(()),
+        )
+        .expect_err("a non-executable staged binary must fail the update");
+
+        assert!(
+            error.to_string().contains("is not executable"),
+            "unexpected error: {error:#}"
+        );
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"old binary",
+            "the working binary must survive a non-executable staged update"
+        );
+        assert_no_staged_temp_files(dir.path());
     }
 
     /// Mocked GitHub release payload covering the sole implementation binary

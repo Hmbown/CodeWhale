@@ -128,18 +128,18 @@ export function TerminalPlayer({
   const done = shown >= total;
 
   return (
-    <div className="terminal-frame hairline-t hairline-b hairline-l hairline-r bg-ink overflow-hidden">
+    <div className="terminal-frame hairline-t hairline-b hairline-l hairline-r bg-paper overflow-hidden">
       {/* title bar */}
       <div className="px-4 py-2.5 flex items-center justify-between border-b border-white/10">
         <div className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-jade inline-block" />
           <span className="w-2.5 h-2.5 rounded-full bg-ochre inline-block" />
           <span className="w-2.5 h-2.5 rounded-full bg-indigo inline-block" />
-          <span className="ml-2.5 font-mono text-[0.66rem] uppercase tracking-widest text-paper-deep">
+          <span className="ml-2.5 font-mono text-[0.66rem] uppercase tracking-widest text-ink-mute">
             codewhale — thinking
           </span>
         </div>
-        <span className="font-cjk text-[0.6rem] text-paper-deep/70">{traceLabel}</span>
+        <span className="font-cjk text-[0.6rem] text-ink-mute">{traceLabel}</span>
       </div>
 
       {/* scene tabs */}
@@ -164,8 +164,8 @@ export function TerminalPlayer({
             onClick={() => setActive(i)}
             className={`shrink-0 px-3 py-2 font-mono text-[0.62rem] uppercase tracking-widest transition-colors ${
               i === active
-                ? "text-paper bg-white/10 border-b border-indigo"
-                : "text-paper-deep/60 hover:text-paper"
+                ? "text-ink bg-white/10 border-b border-indigo"
+                : "text-ink-mute hover:text-ink"
             }`}
           >
             {String(i + 1).padStart(2, "0")} · {isZh ? s.tab.zh : s.tab.en}

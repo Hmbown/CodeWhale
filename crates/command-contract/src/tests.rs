@@ -344,3 +344,157 @@ fn envelope_rejects_duplicate_new_slots_deterministically() {
     }));
     assert!(result.is_err(), "duplicate media slot must assert");
 }
+
+// Project facet (FEAT-021 D1/D4)
+// ---------------------------------------------------------------------------
+
+/// Deterministic fake project facet over portable values only.
+struct FakeProject {
+    lsp_enabled: bool,
+    share: ProjectShareProjection,
+    goal: ProjectGoalState,
+}
+
+impl FakeProject {
+    fn new() -> Self {
+        Self {
+            lsp_enabled: false,
+            share: ProjectShareProjection {
+                history_is_empty: true,
+                history_len: 0,
+                model: "deepseek-chat".to_string(),
+                mode_label: "ACT".to_string(),
+            },
+            goal: ProjectGoalState {
+                objective: Some("Ship FEAT-021".to_string()),
+                status: ProjectGoalStatus::Active,
+                pause_reason: None,
+                started_at_elapsed_seconds: Some(42),
+                time_used_seconds: 42,
+                token_budget: Some(50_000),
+                tokens_used: 1_000,
+                session_total_tokens: 2_000,
+                continuation_count: 3,
+                pending_controls: false,
+                last_known_objective: None,
+                last_known_status: None,
+                conversation_present: true,
+                is_loading: false,
+                goal_continuation_waiting: false,
+            },
+        }
+    }
+}
+
+impl CommandProjectContext for FakeProject {
+    fn lsp_enabled(&self) -> bool {
+        self.lsp_enabled
+    }
+
+    fn lsp_set(&mut self, enabled: bool) -> Result<(), String> {
+        self.lsp_enabled = enabled;
+        Ok(())
+    }
+
+    fn share_projection(&self) -> ProjectShareProjection {
+        self.share.clone()
+    }
+
+    fn goal_state(&self) -> ProjectGoalState {
+        self.goal.clone()
+    }
+}
+
+#[test]
+fn project_facet_is_object_safe_and_typed() {
+    fn project(_: &dyn CommandProjectContext) {}
+    project(&FakeProject::new());
+
+    let mut project = FakeProject::new();
+    assert!(!project.lsp_enabled());
+    project.lsp_set(true).unwrap();
+    assert!(project.lsp_enabled());
+    project.lsp_set(false).unwrap();
+    assert!(!project.lsp_enabled());
+}
+
+#[test]
+fn project_share_projection_preserves_semantic_values() {
+    let project = FakeProject::new();
+    let share = project.share_projection();
+    assert!(share.history_is_empty);
+    assert_eq!(share.history_len, 0);
+    assert_eq!(share.model, "deepseek-chat");
+    assert_eq!(share.mode_label, "ACT");
+}
+
+#[test]
+fn project_goal_state_preserves_semantic_values() {
+    let project = FakeProject::new();
+    let goal = project.goal_state();
+    assert_eq!(goal.objective.as_deref(), Some("Ship FEAT-021"));
+    assert_eq!(goal.status, ProjectGoalStatus::Active);
+    assert_eq!(goal.pause_reason, None);
+    assert_eq!(goal.started_at_elapsed_seconds, Some(42));
+    assert_eq!(goal.time_used_seconds, 42);
+    assert_eq!(goal.token_budget, Some(50_000));
+    assert_eq!(goal.tokens_used, 1_000);
+    assert_eq!(goal.session_total_tokens, 2_000);
+    assert_eq!(goal.continuation_count, 3);
+    assert!(!goal.pending_controls);
+    assert_eq!(goal.last_known_objective, None);
+    assert_eq!(goal.last_known_status, None);
+    assert!(goal.conversation_present);
+    assert!(!goal.is_loading);
+    assert!(!goal.goal_continuation_waiting);
+}
+
+#[test]
+fn project_goal_status_variants_are_distinguishable() {
+    let paused = ProjectGoalState {
+        status: ProjectGoalStatus::Paused,
+        pause_reason: Some("user".to_string()),
+        ..FakeProject::new().goal
+    };
+    assert_eq!(paused.status, ProjectGoalStatus::Paused);
+    assert_eq!(paused.pause_reason.as_deref(), Some("user"));
+
+    let complete = ProjectGoalState {
+        status: ProjectGoalStatus::Complete,
+        ..paused
+    };
+    assert_eq!(complete.status, ProjectGoalStatus::Complete);
+    assert_ne!(complete.status, ProjectGoalStatus::Blocked);
+}
+
+#[test]
+fn project_facet_transports_through_envelope_when_declared() {
+    let mut project = FakeProject::new();
+    let parts = CommandContexts::empty()
+        .with_project(&mut project)
+        .into_parts();
+    assert!(parts.project.is_some());
+    assert!(parts.session.is_none());
+
+    // PROJECT combined with WORKSPACE (init) and PRESENTATION (goal).
+    let mut workspace = Workspace;
+    let parts = CommandContexts::empty()
+        .with_project(&mut project)
+        .with_workspace(&mut workspace)
+        .into_parts();
+    assert!(parts.project.is_some());
+    assert!(parts.workspace.is_some());
+    assert!(parts.presentation.is_none());
+}
+
+#[test]
+fn envelope_rejects_duplicate_project_slot_deterministically() {
+    let mut a = FakeProject::new();
+    let mut b = FakeProject::new();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CommandContexts::empty()
+            .with_project(&mut a)
+            .with_project(&mut b);
+    }));
+    assert!(result.is_err(), "duplicate project slot must assert");
+}
