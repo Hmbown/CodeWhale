@@ -1583,6 +1583,39 @@ enum SandboxCommand {
 
 const CODEWHALE_MAIN_STACK_BYTES: usize = 16 * 1024 * 1024;
 
+/// Pre-clap seam feeding `apply_process_hardening` (#5723): resolve only the
+/// *startup* sandbox posture — `CODEWHALE_SANDBOX_MODE` /
+/// `DEEPSEEK_SANDBOX_MODE` first, then the config file's `sandbox_mode` key —
+/// so the irreversible `PR_SET_NO_NEW_PRIVS` decision can honor a
+/// `danger-full-access` launch.
+///
+/// This is deliberately a narrow single-key read, not a config-system
+/// reorder: the full pipeline (clap flags such as `--config`/`exec
+/// --sandbox`, profiles, managed and project overlays) cannot run before
+/// process hardening, which must land before Tokio and any worker threads.
+/// What the seam cannot see keeps the hardened default — fail-closed. The
+/// one deliberate gap in the other direction: a later-resolved override that
+/// *tightens* a config-file `danger-full-access` (e.g. managed requirements)
+/// leaves the flag off; `CODEWHALE_NO_NEW_PRIVS=1` remains the explicit
+/// override that forces it on in any posture. The env path override
+/// (`CODEWHALE_CONFIG_PATH`) is honored through `resolve_load_config_path`;
+/// only clap-parsed paths are invisible here.
+fn resolve_startup_sandbox_mode_for_hardening() -> Option<String> {
+    if let Ok(value) =
+        std::env::var("CODEWHALE_SANDBOX_MODE").or_else(|_| std::env::var("DEEPSEEK_SANDBOX_MODE"))
+    {
+        return Some(value);
+    }
+    let path = crate::config::resolve_load_config_path(None)
+        .ok()
+        .flatten()?;
+    let raw = std::fs::read_to_string(path).ok()?;
+    let doc = raw.parse::<toml::Value>().ok()?;
+    doc.get("sandbox_mode")
+        .and_then(toml::Value::as_str)
+        .map(str::to_string)
+}
+
 /// Entry point for the single binary. Takes argv including binary name at 0,
 /// parses with clap, and runs the TUI/runtime dispatch. Returns process exit
 /// code for the caller to exit with.
@@ -1618,7 +1651,11 @@ fn run_with_args(args: Vec<String>) -> Result<()> {
     // ── Process hardening (#2183) ─────────────────────────────────────────
     // MUST run before Tokio is booted and before any threads are spawned.
     // See crates/tui/src/sandbox/process_hardening.rs for ordering rationale.
-    crate::sandbox::process_hardening::apply_process_hardening();
+    // The startup-posture read is the narrow seam documented above: a startup
+    // resolved to danger-full-access skips PR_SET_NO_NEW_PRIVS (#5723), every
+    // other outcome keeps it.
+    let startup_sandbox_mode = resolve_startup_sandbox_mode_for_hardening();
+    crate::sandbox::process_hardening::apply_process_hardening(startup_sandbox_mode.as_deref());
 
     // ── Fatal-signal terminal guard (#5424) ───────────────────────────────
     // Abort-class deaths (stack overflow, allocation failure, double panic)

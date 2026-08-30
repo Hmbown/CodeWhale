@@ -6,7 +6,7 @@ use super::turn_loop::{
     auto_review_block_tool_error, initial_stream_error_user_message, merge_new_runtime_mcp_tools,
     preview_request_error_user_message, registered_tool_approval_required,
     registered_tool_forces_prompt, repo_law_must_block_without_prompt,
-    requested_sandbox_escalation, workspace_write_carve_out_applies,
+    requested_sandbox_escalation, sandbox_escalation_denial, workspace_write_carve_out_applies,
 };
 use crate::config::ApiProvider;
 use crate::models::{SystemBlock, Usage};
@@ -8060,6 +8060,41 @@ fn sandbox_escalation_requires_a_pair_and_a_strictly_wider_mode() {
         .is_none(),
         "field-name collisions on non-shell tools must not create authority"
     );
+}
+
+#[test]
+fn sandbox_escalation_denial_names_no_new_privs_remediation_only_when_flag_active() {
+    use crate::sandbox::SandboxPolicy;
+
+    let full = SandboxPolicy::DangerFullAccess;
+
+    // Flag active + a full-access request: the denial must name both
+    // startup-level remediation paths, because no per-call grant can lift the
+    // irreversible kernel flag (#5723).
+    let error = sandbox_escalation_denial("danger-full-access", &full, Some(true));
+    let message = error.to_string();
+    assert!(message.contains("not strictly wider"), "{message}");
+    assert!(
+        message.contains("sandbox_mode = \"danger-full-access\""),
+        "{message}"
+    );
+    assert!(message.contains("CODEWHALE_NO_NEW_PRIVS=0"), "{message}");
+
+    // Flag relaxed (the startup posture disabled it) or absent (non-Linux):
+    // no remediation clause — sudo works in this tree, or the flag never
+    // applied.
+    for flag in [Some(false), None] {
+        let message = sandbox_escalation_denial("danger-full-access", &full, flag).to_string();
+        assert!(message.contains("not strictly wider"), "{message}");
+        assert!(!message.contains("CODEWHALE_NO_NEW_PRIVS"), "{message}");
+        assert!(!message.contains("sandbox_mode"), "{message}");
+    }
+
+    // The clause attaches only to a full-access request: a workspace-write
+    // denial is about write scope, not privilege transitions.
+    let message = sandbox_escalation_denial("workspace-write", &full, Some(true)).to_string();
+    assert!(message.contains("not strictly wider"), "{message}");
+    assert!(!message.contains("CODEWHALE_NO_NEW_PRIVS"), "{message}");
 }
 
 #[test]

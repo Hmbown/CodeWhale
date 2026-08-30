@@ -1666,6 +1666,8 @@
   "StatusSafetyWorkspaceWriteNetworkOn": "sandbox workspace-write, red activada",
   "StatusSafetyWorkspaceWriteNetworkOff": "sandbox workspace-write, red desactivada",
   "StatusSafetyDisabled": "sandbox desactivado, red sin restricciones",
+  "StatusSafetyDisabledSetuidBlocked": "sandbox desactivado, red sin restricciones; sudo/setuid bloqueado (no-new-privs)",
+  "StatusSafetyDisabledSetuidAllowed": "sandbox desactivado, red sin restricciones; sudo/setuid permitido",
   "StatusSafetyExternal": "sandbox externo, red delegada al host",
   "StatusPointers": "Tokens por turno: /tokens · Elementos del pie: /statusline",
   "AutoReviewReceiptGuardianAllowed": "Auto-Review permitió '{tool}' (riesgo {risk}, guardián del modelo): {reason}",

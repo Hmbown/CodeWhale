@@ -1666,6 +1666,8 @@
   "StatusSafetyWorkspaceWriteNetworkOn": "песочница workspace-write, сеть включена",
   "StatusSafetyWorkspaceWriteNetworkOff": "песочница workspace-write, сеть отключена",
   "StatusSafetyDisabled": "песочница отключена, сеть без ограничений",
+  "StatusSafetyDisabledSetuidBlocked": "песочница отключена, сеть без ограничений; sudo/setuid заблокированы (no-new-privs)",
+  "StatusSafetyDisabledSetuidAllowed": "песочница отключена, сеть без ограничений; sudo/setuid разрешены",
   "StatusSafetyExternal": "внешняя песочница, управление сетью делегировано хосту",
   "StatusPointers": "Токены по ходам: /tokens · Элементы строки состояния: /statusline",
   "AutoReviewReceiptGuardianAllowed": "Auto-Review разрешил '{tool}' (риск {risk}, модельный страж): {reason}",

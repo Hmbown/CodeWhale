@@ -1666,6 +1666,8 @@
   "StatusSafetyWorkspaceWriteNetworkOn": "sandbox workspace-write, mạng bật",
   "StatusSafetyWorkspaceWriteNetworkOff": "sandbox workspace-write, mạng tắt",
   "StatusSafetyDisabled": "sandbox tắt, mạng không giới hạn",
+  "StatusSafetyDisabledSetuidBlocked": "sandbox tắt, mạng không giới hạn; sudo/setuid bị chặn (no-new-privs)",
+  "StatusSafetyDisabledSetuidAllowed": "sandbox tắt, mạng không giới hạn; sudo/setuid được phép",
   "StatusSafetyExternal": "sandbox bên ngoài, mạng do máy chủ quản lý",
   "StatusPointers": "Token từng lượt: /tokens · Mục chân trang: /statusline",
   "AutoReviewReceiptGuardianAllowed": "Auto-Review đã cho phép '{tool}' (rủi ro {risk}, bộ giám hộ mô hình): {reason}",
