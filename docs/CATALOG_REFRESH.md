@@ -36,6 +36,12 @@ pricing-ish metadata). Live wins over bundled when present.
       https://models.dev/catalog.json
       → disk cache ~/.codewhale/catalog/models-dev-catalog.json
       → 24 h TTL
+(1.5) Cloud facts patches — CodeWhale-owned, signed, OFF by default
+      https://codewhale.net/api/facts/v1/<channel>  (docs/CLOUD_FACTS.md)
+      → verified against keys pinned in the binary, field-level patches only
+      → disk cache ~/.codewhale/facts/cloud-facts.json, 6 h TTL
+      → sits above bundled + live Models.dev, below provider /v1/models,
+        config.toml and user overrides (CatalogCompiler layer 15)
 (1) User / custom overrides (pinned models, custom endpoints)
 (0) Special: ChatGPT/Codex OAuth roster
       ~/.codex/models_cache.json
