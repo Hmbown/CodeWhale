@@ -5031,7 +5031,7 @@ fn provider_metadata_registry_covers_every_provider_kind_once() {
     // Full registry keeps legacy dialect/plan kinds for provider_for_kind.
     assert_eq!(providers.len(), 47);
     // Catalog surface is one identity per vendor (no dual-wire / plan rows).
-    assert_eq!(ProviderKind::ALL.len(), 42);
+    assert_eq!(ProviderKind::ALL.len(), 41);
     assert!(ProviderKind::ALL.len() < providers.len());
 
     let mut ids = std::collections::BTreeSet::new();
@@ -5725,6 +5725,50 @@ fn parse_config_identity_preserves_legacy_table_kinds() {
         Some(ProviderKind::Minimax)
     );
     assert_eq!(ProviderKind::parse_config_identity("nope"), None);
+}
+
+#[test]
+fn antigravity_legacy_config_loads_but_new_selection_and_fields_are_rejected() {
+    assert_eq!(ProviderKind::parse("antigravity"), None);
+    assert_eq!(ProviderKind::parse("agy"), None);
+    assert_eq!(
+        ProviderKind::parse_config_identity("antigravity"),
+        Some(ProviderKind::Antigravity)
+    );
+    assert_eq!(
+        ProviderKind::parse_config_identity("agy"),
+        Some(ProviderKind::Antigravity)
+    );
+
+    let loaded: ConfigToml = toml::from_str(
+        r#"
+provider = "antigravity"
+[providers.antigravity]
+base_url = "https://old.example.invalid"
+model = "legacy-model"
+"#,
+    )
+    .expect("legacy tombstone config remains readable for clearing");
+    assert_eq!(loaded.provider, ProviderKind::Antigravity);
+    assert_eq!(
+        loaded.providers.antigravity.model.as_deref(),
+        Some("legacy-model")
+    );
+
+    for (key, value) in [
+        ("provider", "antigravity"),
+        ("provider", "agy"),
+        ("providers.antigravity.model", "gemini-3-pro"),
+        ("providers.agy.base_url", "https://example.invalid"),
+    ] {
+        let mut config = ConfigToml::default();
+        let error = config
+            .set_value(key, value)
+            .expect_err("the tombstone must not accept new runnable configuration")
+            .to_string();
+        assert!(error.contains("non-runnable"), "{key}: {error}");
+        assert!(error.contains("GEMINI_API_KEY"), "{key}: {error}");
+    }
 }
 
 #[test]

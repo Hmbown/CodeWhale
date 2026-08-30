@@ -323,7 +323,6 @@
   "ModelPickerAutoLocalHint": "ターンごと · ローカル判定 · ルーター送信なし",
   "ModelPickerAutoLastRoute": "前回 {provider} · {model}",
   "AutoRouteSelectedToast": "Auto: {provider} / {model}（{source}）· Ctrl+O: ルート詳細",
-  "CloudCodeSystemPromptUnsupported": "この接続はシステム指示にまだ対応していないため、Antigravity cloud-code はこのターンを安全に送信できません。何も送信されていません。別のプロバイダーを選んでください。",
   "HelpTitle": "ヘルプ",
   "HelpFilterPlaceholder": "入力して絞り込み",
   "HelpFilterPrefix": "絞り込み: ",

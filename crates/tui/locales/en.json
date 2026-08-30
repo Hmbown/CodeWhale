@@ -323,7 +323,6 @@
   "ModelPickerAutoLocalHint": "per turn · local heuristic · no router request",
   "ModelPickerAutoLastRoute": "last {provider} · {model}",
   "AutoRouteSelectedToast": "Auto: {provider} / {model} via {source} · Ctrl+O: route details",
-  "CloudCodeSystemPromptUnsupported": "Antigravity cloud-code cannot safely send this turn because this wire does not support system instructions yet. Nothing was sent; choose another provider.",
   "HelpTitle": "Help",
   "HelpFilterPlaceholder": "Type to filter",
   "HelpFilterPrefix": "Filter: ",

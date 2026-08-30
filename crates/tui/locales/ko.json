@@ -323,7 +323,6 @@
   "ModelPickerAutoLocalHint": "턴별 · 로컬 휴리스틱 · 라우터 요청 없음",
   "ModelPickerAutoLastRoute": "최근 {provider} · {model}",
   "AutoRouteSelectedToast": "Auto: {provider} / {model} ({source}) · Ctrl+O: 경로 세부 정보",
-  "CloudCodeSystemPromptUnsupported": "이 연결은 아직 시스템 지시를 지원하지 않으므로 Antigravity cloud-code가 이 턴을 안전하게 보낼 수 없습니다. 아무것도 보내지 않았습니다. 다른 공급자를 선택하세요.",
   "HelpTitle": "도움말",
   "HelpFilterPlaceholder": "입력하여 필터링",
   "HelpFilterPrefix": "필터: ",

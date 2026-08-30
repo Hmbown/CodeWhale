@@ -40,16 +40,6 @@ const REPRESENTATIVE_PROJECT_AUTHORITY_BODY: &str = concat!(
 );
 
 #[test]
-fn cloud_code_system_prompt_rejection_is_localized_from_its_semantic_error() {
-    let error = anyhow::Error::new(
-        crate::client::cloud_code::CloudCodeRequestError::SystemPromptUnsupported,
-    );
-    let message = initial_stream_error_user_message("es-419", &error);
-    assert!(message.contains("No se envió nada"), "{message}");
-    assert!(!message.contains("omit non-empty system"), "{message}");
-}
-
-#[test]
 fn preview_request_error_preserves_non_semantic_context_chain() {
     let error = anyhow::Error::msg("root cause").context("request preparation failed");
     assert_eq!(

@@ -323,7 +323,6 @@
   "ModelPickerAutoLocalHint": "每轮 · 本地启发式 · 不发送路由请求",
   "ModelPickerAutoLastRoute": "上次 {provider} · {model}",
   "AutoRouteSelectedToast": "Auto: {provider} / {model}（{source}）· Ctrl+O：路由详情",
-  "CloudCodeSystemPromptUnsupported": "此连接尚不支持系统指令，因此 Antigravity cloud-code 无法安全发送本轮。未发送任何内容；请选择其他提供商。",
   "HelpTitle": "帮助",
   "HelpFilterPlaceholder": "输入以筛选",
   "HelpFilterPrefix": "筛选: ",

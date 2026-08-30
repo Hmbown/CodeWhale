@@ -20,9 +20,9 @@
 //! 2. An explicit `--api-key` on the active, non-OAuth provider.
 //! 3. `[providers.<name>] api_key_env` — a credential the route *names*.
 //! 4. An ambient provider environment variable (official endpoints only).
-//! 5. Provider-owned login state: an explicitly consented external CLI
-//!    credential file (Codex, DeepSeek Harness, Antigravity) or CodeWhale's own
-//!    xAI OAuth storage.
+//! 5. Provider-owned login state: an explicitly consented supported external
+//!    CLI credential file (Codex or DeepSeek Harness) or CodeWhale's own xAI
+//!    OAuth storage.
 //! 6. A keyless self-hosted / loopback route.
 //! 7. `[providers.<name>] api_key` in the config file.
 //! 8. CodeWhale's durable secret store.
@@ -160,33 +160,6 @@ pub(crate) fn resolve_credential_source_with(
         return CredentialResolution::found(CredentialSource::OAuth {
             flow: "xAI".to_string(),
         });
-    }
-    if provider == ApiProvider::Antigravity && !config.provider_uses_custom_endpoint(provider) {
-        let path = codewhale_config::default_agy_credentials_path();
-        if config
-            .external_credential_read_grant(
-                provider,
-                codewhale_config::ExternalCredentialSource::AgyCli,
-                &path,
-            )
-            .is_ok_and(|grant| {
-                crate::agy_credentials::antigravity_oauth_token_from_grant(&grant)
-                    .ok()
-                    .flatten()
-                    .is_some()
-            })
-        {
-            return CredentialResolution::found(CredentialSource::ExternalGrant {
-                cli: "Antigravity CLI".to_string(),
-                path: path.display().to_string(),
-            });
-        }
-        probed.push(external_grant_probe(
-            "Antigravity CLI",
-            &path,
-            "codewhale auth external-consent --provider antigravity --mode read-only",
-            ctx,
-        ));
     }
     if matches!(
         provider,

@@ -320,7 +320,6 @@
   "ModelPickerAutoLocalHint": "per giliran · heuristik lokal · tanpa permintaan router",
   "ModelPickerAutoLastRoute": "terakhir {provider} · {model}",
   "AutoRouteSelectedToast": "Auto: {provider} / {model} via {source} · Ctrl+O: detail rute",
-  "CloudCodeSystemPromptUnsupported": "Antigravity cloud-code tidak dapat mengirim giliran ini dengan aman karena koneksi ini belum mendukung instruksi sistem. Tidak ada yang dikirim; pilih penyedia lain.",
   "HelpTitle": "Bantuan",
   "HelpFilterPlaceholder": "Ketik untuk menyaring",
   "HelpFilterPrefix": "Saring: ",

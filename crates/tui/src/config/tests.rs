@@ -113,6 +113,30 @@ fn api_provider_metadata_helpers_follow_config_provider_metadata() {
 }
 
 #[test]
+fn retired_antigravity_is_not_selectable_but_has_an_actionable_tombstone() {
+    for identity in ["antigravity", "agy"] {
+        assert_eq!(ApiProvider::parse(identity), None, "{identity}");
+    }
+    assert!(!ApiProvider::catalog().contains(&ApiProvider::Antigravity));
+    assert!(!ApiProvider::sorted_for_display().contains(&ApiProvider::Antigravity));
+
+    let config = Config {
+        provider: Some("antigravity".to_string()),
+        ..Config::default()
+    };
+    let error = config
+        .validate()
+        .expect_err("a persisted legacy selection must fail before runtime setup")
+        .to_string();
+    assert!(error.contains("non-runnable"), "{error}");
+    assert!(
+        error.contains("auth clear --provider antigravity"),
+        "{error}"
+    );
+    assert!(error.contains("GEMINI_API_KEY"), "{error}");
+}
+
+#[test]
 fn every_api_provider_variant_resolves_base_url_without_panicking() {
     // Guard against the historical `.expect("ApiProvider variant missing
     // ProviderKind metadata")` in `default_base_url()`: a provider variant

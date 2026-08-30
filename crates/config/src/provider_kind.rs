@@ -191,9 +191,12 @@ pub enum ProviderKind {
         alias = "alibaba-coding-plan-anthropic"
     )]
     ModelstudioCodingPlanAnthropic,
-    /// Google Antigravity (`agy` CLI) — consent-gated read-only credential
-    /// import only; the cloud-code wire protocol is not implemented and
-    /// requests fail closed with an actionable message.
+    /// Legacy Antigravity configuration identity.
+    ///
+    /// Kept only so existing configuration can be read and cleared. It is not
+    /// a selectable or runnable provider; Gemini users should use [`Google`].
+    ///
+    /// [`Google`]: Self::Google
     #[serde(alias = "agy")]
     Antigravity,
     /// Google — Gemini OpenAI-compatible endpoint. Its own backend, not an
@@ -232,7 +235,7 @@ impl ProviderKind {
     /// stay on the enum for serde and `provider_for_kind`, but they are not
     /// first-class catalog rows. Plan is `mode` / base_url; dialect is
     /// `wire = openai|anthropic` on the primary provider config.
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 41] = [
         Self::Deepseek,
         Self::NvidiaNim,
         Self::Openai,
@@ -272,7 +275,6 @@ impl ProviderKind {
         Self::Telecomjs,
         Self::ModelstudioTokenPlan,
         Self::Google,
-        Self::Antigravity,
         Self::Edenai,
         Self::Custom,
     ];
@@ -299,13 +301,14 @@ impl ProviderKind {
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         let trimmed = value.trim();
-        provider::all_providers()
+        Self::all()
             .iter()
-            .find(|p| {
+            .copied()
+            .find(|kind| {
+                let p = kind.provider();
                 trimmed.eq_ignore_ascii_case(p.id())
                     || p.aliases().iter().any(|a| trimmed.eq_ignore_ascii_case(a))
             })
-            .map(|p| p.kind())
     }
 
     /// Parse a provider identifier for **config-table identity** — the kind

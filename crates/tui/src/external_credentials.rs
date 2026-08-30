@@ -94,18 +94,6 @@ pub(crate) fn read_to_string(grant: &ExternalCredentialReadGrant) -> Result<Opti
     Ok(Some(contents))
 }
 
-/// Open the exact granted file through the secure boundary (regular file
-/// only, no symlink/reparse leaf) without requiring UTF-8. Used by binary
-/// credential stores such as the Antigravity `state.vscdb` reader.
-pub(crate) fn open_external_regular_file(path: &Path) -> Result<std::fs::File> {
-    open_secure_regular_file(path, false).with_context(|| {
-        format!(
-            "securely opening external credential file {}",
-            codewhale_config::quote_os_path(path)
-        )
-    })
-}
-
 /// Read one Codewhale-owned credential file through the same no-follow,
 /// bounded I/O boundary used for external grants. On Unix the opened handle
 /// must belong to the effective user and have no group/other permission bits.

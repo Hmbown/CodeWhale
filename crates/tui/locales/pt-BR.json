@@ -323,7 +323,6 @@
   "ModelPickerAutoLocalHint": "por turno · heurística local · sem solicitação ao roteador",
   "ModelPickerAutoLastRoute": "última {provider} · {model}",
   "AutoRouteSelectedToast": "Auto: {provider} / {model} via {source} · Ctrl+O: detalhes da rota",
-  "CloudCodeSystemPromptUnsupported": "O Antigravity cloud-code não pode enviar este turno com segurança porque esta conexão ainda não aceita instruções de sistema. Nada foi enviado; escolha outro provedor.",
   "HelpTitle": "Ajuda",
   "HelpFilterPlaceholder": "Digite para filtrar",
   "HelpFilterPrefix": "Filtro: ",

@@ -296,21 +296,6 @@ pub(crate) fn credential_state_for_provider(
         return CredentialState::MissingKey;
     }
 
-    if provider == ApiProvider::Antigravity {
-        if crate::config::has_api_key_for(config, provider) {
-            return CredentialState::Saved;
-        }
-        if provider != config.api_provider()
-            && config.external_credential_read_consent_configured(
-                provider,
-                codewhale_config::ExternalCredentialSource::AgyCli,
-            )
-        {
-            return CredentialState::ExternalConsent;
-        }
-        return CredentialState::MissingKey;
-    }
-
     if crate::config::has_api_key_for(config, provider) {
         CredentialState::Saved
     } else if matches!(

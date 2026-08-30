@@ -78,9 +78,8 @@ pub use codewhale_secrets::Secrets;
 pub use external_credentials::{
     EXTERNAL_CREDENTIAL_CONSENT_VERSION, EXTERNAL_CREDENTIAL_READ_ONLY_SEMANTICS,
     ExternalCredentialAccess, ExternalCredentialConsentStatus, ExternalCredentialConsentToml,
-    ExternalCredentialReadGrant, ExternalCredentialSource, default_agy_credentials_path,
-    default_dsh_credentials_path, external_credential_consent_status, quote_os_path,
-    resolve_external_credential_path,
+    ExternalCredentialReadGrant, ExternalCredentialSource, default_dsh_credentials_path,
+    external_credential_consent_status, quote_os_path, resolve_external_credential_path,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -90,6 +89,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 pub const PERMISSIONS_FILE_NAME: &str = "permissions.toml";
+pub const LEGACY_ANTIGRAVITY_TOMBSTONE_MESSAGE: &str = "Antigravity is a retired, non-runnable legacy provider. Clear Codewhale-owned legacy state with `codewhale auth clear --provider antigravity`; this does not alter Google or Antigravity sessions. For Gemini use provider `google` with `GEMINI_API_KEY`.";
 
 /// Secret-store routing metadata; never credential material.
 pub const API_KEYRING_SENTINEL: &str = "__KEYRING__";
@@ -442,8 +442,8 @@ pub struct ProvidersToml {
         alias = "gemini"
     )]
     pub google: ProviderConfigToml,
-    /// Google Antigravity (`agy`) — consent-gated credential import only;
-    /// sends fail closed until the cloud-code wire protocol exists.
+    /// Retired Antigravity configuration. This table exists only so old
+    /// Codewhale-owned state can deserialize and be cleared safely.
     #[serde(
         default,
         skip_serializing_if = "ProviderConfigToml::is_empty",
@@ -645,6 +645,7 @@ impl ProvidersToml {
             && ProviderKind::all()
                 .iter()
                 .all(|provider| self.for_provider(*provider).is_empty())
+            && self.antigravity.is_empty()
     }
 
     #[must_use]
@@ -1022,6 +1023,9 @@ fn set_provider_config_value(
     field: ProviderConfigField,
     value: &str,
 ) -> Result<()> {
+    if provider == ProviderKind::Antigravity {
+        bail!(LEGACY_ANTIGRAVITY_TOMBSTONE_MESSAGE);
+    }
     match field {
         ProviderConfigField::ApiKey => {
             let value = value.to_string();
@@ -2961,6 +2965,11 @@ impl ConfigToml {
     }
 
     pub fn set_value(&mut self, key: &str, value: &str) -> Result<()> {
+        if parse_custom_provider_config_key(key).is_some_and(|(provider_id, _)| {
+            ProviderKind::parse_config_identity(provider_id) == Some(ProviderKind::Antigravity)
+        }) {
+            bail!(LEGACY_ANTIGRAVITY_TOMBSTONE_MESSAGE);
+        }
         if let Some((provider, field)) = parse_provider_config_key(key) {
             return set_provider_config_value(self, provider, field, value);
         }
@@ -2971,6 +2980,9 @@ impl ConfigToml {
         match key {
             "provider" => {
                 if let Some(provider) = ProviderKind::parse_config_identity(value) {
+                    if provider == ProviderKind::Antigravity {
+                        bail!(LEGACY_ANTIGRAVITY_TOMBSTONE_MESSAGE);
+                    }
                     self.provider = provider;
                     self.selected_provider_id = None;
                 } else {
@@ -5461,6 +5473,73 @@ pub fn scrub_plaintext_api_keys_from_config_backup(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Remove only retired Antigravity state from Codewhale's one-time config
+/// backup. This never resolves, reads, writes, or revokes any external Google
+/// or Antigravity session; it edits only the checked sibling `.bak` file owned
+/// by Codewhale.
+pub fn scrub_legacy_antigravity_from_config_backup(path: &Path) -> Result<()> {
+    let backup = checked_config_backup_path(path)?;
+    if !backup.exists() {
+        return Ok(());
+    }
+
+    let raw = read_checked_toml_file(&backup, "config backup")?;
+    let scrubbed = config_toml_without_legacy_antigravity(&raw).with_context(|| {
+        format!(
+            "failed to clear retired provider state from config backup {}",
+            backup.display()
+        )
+    })?;
+    if scrubbed != raw {
+        persistence::atomic_write(&backup, scrubbed.as_bytes()).with_context(|| {
+            format!(
+                "failed to write retired-provider-free config backup {}",
+                backup.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn config_toml_without_legacy_antigravity(raw: &str) -> Result<String> {
+    let mut document = raw.parse::<toml_edit::DocumentMut>().map_err(|_| {
+        anyhow::anyhow!(
+            "failed to parse config TOML while clearing retired provider state; file contents were omitted"
+        )
+    })?;
+    let root = document.as_table_mut();
+
+    if root
+        .get("provider")
+        .and_then(toml_edit::Item::as_str)
+        .is_some_and(is_legacy_antigravity_name)
+    {
+        root.remove("provider");
+    }
+    if let Some(fallbacks) = root
+        .get_mut("fallback_providers")
+        .and_then(toml_edit::Item::as_array_mut)
+    {
+        fallbacks.retain(|value| !value.as_str().is_some_and(is_legacy_antigravity_name));
+        if fallbacks.is_empty() {
+            root.remove("fallback_providers");
+        }
+    }
+    if let Some(providers) = root
+        .get_mut("providers")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        providers.remove("antigravity");
+        providers.remove("agy");
+    }
+
+    Ok(document.to_string())
+}
+
+fn is_legacy_antigravity_name(value: &str) -> bool {
+    value.eq_ignore_ascii_case("antigravity") || value.eq_ignore_ascii_case("agy")
+}
+
 fn write_one_time_config_backup(path: &Path) -> Result<()> {
     let backup = checked_config_backup_path(path)?;
     if backup.exists() {
@@ -6906,8 +6985,6 @@ struct EnvRuntimeOverrides {
     mistral_model: Option<String>,
     google_base_url: Option<String>,
     google_model: Option<String>,
-    antigravity_base_url: Option<String>,
-    antigravity_model: Option<String>,
     telecomjs_base_url: Option<String>,
     telecomjs_model: Option<String>,
     edenai_base_url: Option<String>,
@@ -7226,12 +7303,6 @@ impl EnvRuntimeOverrides {
             xai_model: std::env::var("XAI_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
-            antigravity_base_url: std::env::var("ANTIGRAVITY_BASE_URL")
-                .ok()
-                .filter(|v| !v.trim().is_empty()),
-            antigravity_model: std::env::var("ANTIGRAVITY_MODEL")
-                .ok()
-                .filter(|v| !v.trim().is_empty()),
             google_base_url: std::env::var("GOOGLE_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty())
@@ -7345,7 +7416,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Xai => self.xai_base_url.clone(),
             ProviderKind::Mistral => self.mistral_base_url.clone(),
             ProviderKind::Google => self.google_base_url.clone(),
-            ProviderKind::Antigravity => self.antigravity_base_url.clone(),
+            ProviderKind::Antigravity => None,
             ProviderKind::Telecomjs => self.telecomjs_base_url.clone(),
             ProviderKind::Edenai => self.edenai_base_url.clone(),
             ProviderKind::ModelstudioTokenPlan | ProviderKind::ModelstudioTokenPlanAnthropic => {
@@ -7392,7 +7463,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Xai => self.xai_model.clone(),
             ProviderKind::Mistral => self.mistral_model.clone(),
             ProviderKind::Google => self.google_model.clone(),
-            ProviderKind::Antigravity => self.antigravity_model.clone(),
+            ProviderKind::Antigravity => None,
             ProviderKind::Telecomjs => self.telecomjs_model.clone(),
             ProviderKind::Edenai => self.edenai_model.clone(),
             ProviderKind::ModelstudioTokenPlan | ProviderKind::ModelstudioTokenPlanAnthropic => {

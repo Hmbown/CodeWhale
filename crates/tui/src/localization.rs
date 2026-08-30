@@ -335,7 +335,6 @@ pub enum MessageId {
     ModelPickerAutoLocalHint,
     ModelPickerAutoLastRoute,
     AutoRouteSelectedToast,
-    CloudCodeSystemPromptUnsupported,
     HelpTitle,
     HelpSubtitle,
     HelpFilterPlaceholder,
@@ -2164,7 +2163,6 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ModelPickerAutoLocalHint,
     MessageId::ModelPickerAutoLastRoute,
     MessageId::AutoRouteSelectedToast,
-    MessageId::CloudCodeSystemPromptUnsupported,
     MessageId::HelpTitle,
     MessageId::HelpSubtitle,
     MessageId::HelpFilterPlaceholder,
@@ -4748,7 +4746,6 @@ mod tests {
             MessageId::ProviderCustomFormBaseUrl,
             MessageId::ProviderCustomFormModel,
             MessageId::ConfigHintProviderUrl,
-            MessageId::CloudCodeSystemPromptUnsupported,
             MessageId::SessionsOpenedHistory,
             MessageId::SessionsTimeJustNow,
         ];

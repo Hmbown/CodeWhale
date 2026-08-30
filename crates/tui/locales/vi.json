@@ -323,7 +323,6 @@
   "ModelPickerAutoLocalHint": "mỗi lượt · heuristic cục bộ · không gửi yêu cầu định tuyến",
   "ModelPickerAutoLastRoute": "lần trước {provider} · {model}",
   "AutoRouteSelectedToast": "Auto: {provider} / {model} qua {source} · Ctrl+O: chi tiết tuyến",
-  "CloudCodeSystemPromptUnsupported": "Antigravity cloud-code không thể gửi lượt này an toàn vì kết nối này chưa hỗ trợ chỉ dẫn hệ thống. Chưa gửi gì; hãy chọn nhà cung cấp khác.",
   "HelpTitle": "Trợ giúp",
   "HelpFilterPlaceholder": "Nhập để lọc",
   "HelpFilterPrefix": "Bộ lọc: ",

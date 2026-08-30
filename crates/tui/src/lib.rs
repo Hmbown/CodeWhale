@@ -21,7 +21,6 @@ use rust_i18n::i18n;
 i18n!("locales", fallback = ["en"]);
 
 mod acp_server;
-mod agy_credentials;
 mod approval_log;
 mod artifacts;
 mod audit;
@@ -858,6 +857,9 @@ fn apply_exec_provider_override(config: &mut Config, provider_arg: &str) -> Resu
     let provider_arg = provider_arg.trim();
     if provider_arg.is_empty() {
         return Ok(());
+    }
+    if crate::config::is_legacy_antigravity_identity(provider_arg) {
+        bail!(codewhale_config::LEGACY_ANTIGRAVITY_TOMBSTONE_MESSAGE);
     }
     if config
         .providers

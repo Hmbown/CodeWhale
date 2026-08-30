@@ -320,7 +320,6 @@
   "ModelPickerAutoLocalHint": "pro Zug · lokale Heuristik · keine Router-Anfrage",
   "ModelPickerAutoLastRoute": "zuletzt {provider} · {model}",
   "AutoRouteSelectedToast": "Auto: {provider} / {model} via {source} · Ctrl+O: Routendetails",
-  "CloudCodeSystemPromptUnsupported": "Antigravity cloud-code kann diesen Turn nicht sicher senden, da diese Verbindung noch keine Systemanweisungen unterstützt. Nichts wurde gesendet; wähle einen anderen Anbieter.",
   "HelpTitle": "Hilfe",
   "HelpFilterPlaceholder": "Zum Filtern tippen",
   "HelpFilterPrefix": "Filter: ",

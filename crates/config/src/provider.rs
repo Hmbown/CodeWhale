@@ -448,10 +448,10 @@ pub const fn credential_help(kind: ProviderKind) -> CredentialHelp {
             guidance: "Sign in to Alibaba Cloud Model Studio (Bailian console), create or copy an API key, and select the plan endpoint matching your subscription (Token Plan or Coding Plan).",
         },
         ProviderKind::Antigravity => CredentialHelp {
-            acquisition: OAuth,
+            acquisition: Configuration,
             credential_url: None,
-            docs_url: Some("https://antigravity.google/docs/cli/reference"),
-            guidance: "Sign in with the official agy CLI (1.1.13). Codewhale can read that login's token read-only from the exact pinned state.vscdb after `codewhale auth external-consent`; it never writes or refreshes it. An ANTIGRAVITY_API_KEY or AGY_ADC_AUTH in the process wins over the file.",
+            docs_url: None,
+            guidance: "Legacy configuration only; this route is disabled. Run `codewhale auth clear --provider antigravity` to clear only Codewhale-owned legacy state, then use provider `google` with `GEMINI_API_KEY` for Gemini.",
         },
         ProviderKind::Google => CredentialHelp {
             acquisition: ApiKey,
@@ -1041,10 +1041,10 @@ provider!(
     Antigravity,
     Antigravity,
     "antigravity",
-    "Google Antigravity",
+    "Antigravity (legacy, disabled)",
     DEFAULT_ANTIGRAVITY_BASE_URL,
     DEFAULT_ANTIGRAVITY_MODEL,
-    ["ANTIGRAVITY_API_KEY"],
+    [],
     "antigravity",
     aliases: ["agy"]
 );
@@ -1753,11 +1753,11 @@ static PROVIDER_REGISTRY: [&dyn Provider; 47] = [
     &CUSTOM,
 ];
 
-/// Return all built-in provider metadata entries in `ProviderKind::ALL` order.
+/// Return all built-in and legacy provider metadata entries.
 ///
-/// This insertion order is the stable order used for internal parsing and
-/// default selection. It is intentionally NOT the order user-facing UI should
-/// render; for browsing/picker surfaces use [`providers_sorted_for_display`].
+/// The full registry retains legacy entries needed to read old configuration.
+/// It is intentionally NOT a user-facing provider list; for browsing/picker
+/// surfaces use [`providers_sorted_for_display`].
 #[must_use]
 pub fn all_providers() -> &'static [&'static dyn Provider] {
     &PROVIDER_REGISTRY
@@ -1771,16 +1771,22 @@ pub fn all_providers() -> &'static [&'static dyn Provider] {
 /// happens to sit first in [`ProviderKind::ALL`] (historically DeepSeek). The
 /// ordering policy intentionally differs from internal parsing/default order:
 ///
-/// - [`all_providers`] / [`ProviderKind::ALL`] — stable order for internal
-///   matching, parsing, and default selection. Do not reorder.
+/// - [`all_providers`] — full compatibility registry for internal identity
+///   matching, including legacy entries.
+/// - [`ProviderKind::ALL`] — stable selectable catalog order. Do not reorder.
 /// - [`providers_sorted_for_display`] — neutral alphabetical order for UI
-///   browsing. DeepSeek stays present and searchable but is not hard-coded
-///   first; a caller may still highlight/pin the active provider separately.
+///   browsing, with legacy tombstones omitted. DeepSeek stays present and
+///   searchable but is not hard-coded first; a caller may still highlight/pin
+///   the active provider separately.
 ///
 /// Returns an owned `Vec` because the sorted order is computed, not static.
 #[must_use]
 pub fn providers_sorted_for_display() -> Vec<&'static dyn Provider> {
-    let mut providers = all_providers().to_vec();
+    let mut providers: Vec<_> = all_providers()
+        .iter()
+        .copied()
+        .filter(|provider| provider.kind() != ProviderKind::Antigravity)
+        .collect();
     providers.sort_by(|a, b| {
         a.display_name()
             .to_ascii_lowercase()
@@ -2149,6 +2155,26 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_registry_entry_is_a_non_runnable_legacy_tombstone() {
+        let legacy = provider_for_kind(ProviderKind::Antigravity);
+        assert_eq!(legacy.id(), "antigravity");
+        assert!(legacy.env_vars().is_empty());
+        assert!(legacy.default_base_url().ends_with(".invalid"));
+        assert_eq!(legacy.default_model(), "legacy-antigravity-disabled");
+
+        let help = legacy.credential_help();
+        assert_eq!(help.acquisition, CredentialAcquisition::Configuration);
+        assert_eq!(help.credential_url, None);
+        assert_eq!(help.docs_url, None);
+        assert!(
+            help.guidance
+                .contains("codewhale auth clear --provider antigravity")
+        );
+        assert!(help.guidance.contains("provider `google`"));
+        assert!(help.guidance.contains("GEMINI_API_KEY"));
+    }
+
+    #[test]
     fn live_verified_console_replacements_do_not_regress_to_404_links() {
         let openmodel = provider_for_kind(ProviderKind::Openmodel).credential_help();
         assert_eq!(
@@ -2209,7 +2235,7 @@ mod tests {
     #[test]
     fn display_order_differs_from_internal_all_order() {
         // The whole point of the helper is that UI ordering is NOT the
-        // internal ProviderKind::ALL / all_providers() insertion order.
+        // internal compatibility-registry insertion order.
         let display_ids: Vec<&str> = providers_sorted_for_display()
             .iter()
             .map(|p| p.id())
@@ -2223,12 +2249,25 @@ mod tests {
 
     #[test]
     fn display_order_is_complete_and_unique() {
-        // No provider is dropped or duplicated by the sort.
+        // Every selectable provider is retained exactly once; legacy
+        // configuration tombstones stay in the internal registry only.
         let display = providers_sorted_for_display();
         assert_eq!(
             display.len(),
-            all_providers().len(),
-            "display order must include every built-in provider"
+            all_providers().len() - 1,
+            "display order must include every selectable built-in provider"
+        );
+        assert!(
+            all_providers()
+                .iter()
+                .any(|provider| provider.kind() == ProviderKind::Antigravity),
+            "legacy config identity must remain in the internal registry"
+        );
+        assert!(
+            display
+                .iter()
+                .all(|provider| provider.kind() != ProviderKind::Antigravity),
+            "legacy Antigravity tombstone must not appear in provider pickers"
         );
         let mut ids: Vec<&str> = display.iter().map(|p| p.id()).collect();
         ids.sort_unstable();

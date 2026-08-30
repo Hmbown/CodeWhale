@@ -67,6 +67,12 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
         };
     }
 
+    if crate::config::is_legacy_antigravity_identity(name) {
+        return CommandResult::error(
+            codewhale_config::LEGACY_ANTIGRAVITY_TOMBSTONE_MESSAGE.to_string(),
+        );
+    }
+
     let Some(target) = ApiProvider::parse(name) else {
         return CommandResult::error(format!(
             "Unknown provider '{name}'. Expected: {}.",
@@ -116,6 +122,9 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
 }
 
 pub(in crate::commands) fn provider_setup_action_for_name(raw: &str) -> Result<AppAction, String> {
+    if crate::config::is_legacy_antigravity_identity(raw) {
+        return Err(codewhale_config::LEGACY_ANTIGRAVITY_TOMBSTONE_MESSAGE.to_string());
+    }
     if raw.eq_ignore_ascii_case("ds4") || raw.eq_ignore_ascii_case("dwarfstar") {
         return Ok(AppAction::OpenDs4Setup);
     }

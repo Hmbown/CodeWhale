@@ -142,7 +142,7 @@ pub enum TransportKind {
     ModelAware,
     /// ChatGPT Codex OAuth route.
     Codex,
-    /// Google Antigravity consent-gated OAuth.
+    /// Retired Antigravity identity retained for legacy config inspection.
     Antigravity,
     /// Local runtime (Ollama / vLLM / SGLang).
     LocalRuntime,
@@ -200,6 +200,9 @@ pub fn family_for(kind: ProviderKind) -> &'static str {
 /// Auth methods declared for a provider kind. OAuth is a type, not an adapter.
 #[must_use]
 pub fn auth_methods_for(kind: ProviderKind) -> &'static [AuthMethod] {
+    if kind == ProviderKind::Antigravity {
+        return &[];
+    }
     match kind.provider().credential_help().acquisition {
         CredentialAcquisition::ApiKey => &[AuthMethod::API_KEY],
         CredentialAcquisition::ApiKeyOrOAuth => &[AuthMethod::API_KEY, AuthMethod::OAUTH],

@@ -320,7 +320,6 @@
   "ModelPickerAutoLocalHint": "per torn · heurística local · sense petició al router",
   "ModelPickerAutoLastRoute": "última {provider} · {model}",
   "AutoRouteSelectedToast": "Auto: {provider} / {model} via {source} · Ctrl+O: detalls de la ruta",
-  "CloudCodeSystemPromptUnsupported": "Antigravity cloud-code no pot enviar aquest torn de manera segura perquè aquesta connexió encara no admet instruccions del sistema. No s’ha enviat res; tria un altre proveïdor.",
   "HelpTitle": "Ajuda",
   "HelpFilterPlaceholder": "Escriu per filtrar",
   "HelpFilterPrefix": "Filtre: ",

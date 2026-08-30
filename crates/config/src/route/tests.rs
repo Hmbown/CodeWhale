@@ -1220,6 +1220,22 @@ fn resolver_empty_string_selector_is_empty_model_error() {
 }
 
 #[test]
+fn resolver_rejects_retired_antigravity_before_minting_a_route() {
+    let error = RouteResolver::new()
+        .resolve(&req(Some(ProviderKind::Antigravity), Some("gemini-3-pro")))
+        .expect_err("the legacy tombstone must never produce an executable route");
+    let rendered = error.to_string();
+    assert!(matches!(error, RouteError::InvalidProvider(_)));
+    assert!(rendered.contains("non-runnable"), "{rendered}");
+    assert!(
+        rendered.contains("auth clear --provider antigravity"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("google"), "{rendered}");
+    assert!(rendered.contains("GEMINI_API_KEY"), "{rendered}");
+}
+
+#[test]
 fn resolver_empty_saved_provider_model_is_empty_model_error() {
     // An empty selector from the saved-model fallback must be rejected too, not
     // just an empty explicit selector (the guard covers every selector source).

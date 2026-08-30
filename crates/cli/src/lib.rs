@@ -35,8 +35,18 @@ use codewhale_telemetry::{
     TelemetryDecision, TurnWall,
 };
 
+fn is_antigravity_legacy_selector(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "antigravity" | "agy"
+    )
+}
+
 /// Catalog-backed `--provider` parser. Replaces the closed 47-arm `ProviderArg` enum.
 fn parse_catalog_route(value: &str) -> std::result::Result<ProviderKind, String> {
+    if is_antigravity_legacy_selector(value) {
+        return Err(codewhale_config::LEGACY_ANTIGRAVITY_TOMBSTONE_MESSAGE.to_string());
+    }
     parse_route_kind(value).ok_or_else(|| {
         format!(
             "unknown route '{value}'; expected a catalog route id (see `codewhale providers export --json`)"
@@ -45,7 +55,17 @@ fn parse_catalog_route(value: &str) -> std::result::Result<ProviderKind, String>
 }
 
 fn builtin_provider_arg(value: &str) -> Option<ProviderKind> {
-    parse_route_kind(value)
+    parse_route_kind(value).filter(|provider| *provider != ProviderKind::Antigravity)
+}
+
+/// The legacy tombstone is accepted only by the local Codewhale-state clear
+/// command. Every selectable/auth-consuming parser continues through
+/// [`parse_catalog_route`], which rejects it.
+fn parse_auth_clear_provider(value: &str) -> std::result::Result<ProviderKind, String> {
+    if is_antigravity_legacy_selector(value) {
+        return Ok(ProviderKind::Antigravity);
+    }
+    parse_catalog_route(value)
 }
 
 fn parse_provider_identifier(value: &str) -> std::result::Result<String, String> {
@@ -451,6 +471,9 @@ fn top_level_provider_override(
     let Some(provider) = provider else {
         return Ok(None);
     };
+    if is_antigravity_legacy_selector(provider) {
+        bail!(codewhale_config::LEGACY_ANTIGRAVITY_TOMBSTONE_MESSAGE);
+    }
     if let Some(provider) = builtin_provider_arg(provider) {
         return Ok(Some(provider));
     }
@@ -1503,7 +1526,7 @@ enum AuthCommand {
     },
     /// Delete a provider's key from config and secret-store storage.
     Clear {
-        #[arg(long, value_parser = parse_catalog_route)]
+        #[arg(long, value_parser = parse_auth_clear_provider)]
         provider: ProviderKind,
     },
     /// List all known providers with their runtime-effective auth state,
@@ -2488,6 +2511,9 @@ fn clear_auth_provider(
     secrets: &Secrets,
     provider: ProviderKind,
 ) -> Result<()> {
+    if provider == ProviderKind::Antigravity {
+        return clear_legacy_antigravity_config(store, secrets);
+    }
     let slot = provider_slot(provider);
     let original_config = store.config.clone();
     clear_provider_api_key_from_config(store, provider);
@@ -2507,6 +2533,72 @@ fn clear_auth_provider(
     } else {
         println!("cleared API key for {slot} from config and secret store");
     }
+    Ok(())
+}
+
+/// Remove only Codewhale-owned state for the retired Antigravity route.
+///
+/// This deliberately operates on the already-loaded Codewhale config and its
+/// own secret slot. It never resolves an external credential path, reads an
+/// environment credential, or invokes a Google/Antigravity logout or revoke
+/// flow.
+fn clear_legacy_antigravity_config(store: &mut ConfigStore, secrets: &Secrets) -> Result<()> {
+    let provider = ProviderKind::Antigravity;
+    let slot = provider_slot(provider);
+    let original_config = store.config.clone();
+    let prior_secret = secrets.get(slot).map_err(|error| {
+        anyhow!(
+            "could not snapshot the Codewhale-owned legacy {slot} secret slot before clearing it: {error}; config was not changed"
+        )
+    })?;
+
+    store.config.providers.antigravity = Default::default();
+    store
+        .config
+        .fallback_providers
+        .retain(|fallback| *fallback != provider);
+    if store.config.provider == provider {
+        store.config.provider = ProviderKind::default();
+        store.config.selected_provider_id = None;
+    }
+
+    if let Err(error) = secrets.delete(slot) {
+        store.config = original_config;
+        return Err(anyhow!(
+            "could not clear the Codewhale-owned legacy {slot} secret slot: {error}; config was not changed"
+        ));
+    }
+
+    if let Err(error) = store.save() {
+        store.config = original_config;
+        if let Some(previous) = prior_secret {
+            let current = secrets.get(slot).map_err(|rollback| {
+                anyhow!(
+                    "{error}; additionally could not verify rollback of the Codewhale-owned legacy {slot} secret slot: {rollback}"
+                )
+            })?;
+            match current {
+                None => secrets.set(slot, &previous).map_err(|rollback| {
+                    anyhow!(
+                        "{error}; additionally failed to restore the Codewhale-owned legacy {slot} secret slot: {rollback}"
+                    )
+                })?,
+                Some(current) if current == previous => {}
+                Some(_) => {
+                    return Err(anyhow!(
+                        "{error}; additionally the Codewhale-owned legacy {slot} secret slot changed concurrently and was not overwritten during rollback"
+                    ));
+                }
+            }
+        }
+        return Err(error);
+    }
+
+    codewhale_config::scrub_plaintext_api_keys_from_config_backup(store.path())?;
+    codewhale_config::scrub_legacy_antigravity_from_config_backup(store.path())?;
+    println!(
+        "cleared Codewhale-owned legacy Antigravity config, consent, selection, fallback entries, and secret-store slot; Google and Antigravity sessions were not read, revoked, or changed. For Gemini, configure provider google and set GEMINI_API_KEY"
+    );
     Ok(())
 }
 
@@ -2592,10 +2684,6 @@ fn external_credential_target(
         ProviderKind::Deepseek | ProviderKind::DeepseekAnthropic => (
             codewhale_config::ExternalCredentialSource::DshCli,
             codewhale_config::default_dsh_credentials_path(),
-        ),
-        ProviderKind::Antigravity => (
-            codewhale_config::ExternalCredentialSource::AgyCli,
-            codewhale_config::default_agy_credentials_path(),
         ),
         ProviderKind::Moonshot => bail!(
             "Kimi is API-key-only in Codewhale. Create a key at https://platform.kimi.ai/console/api-keys; Kimi CLI OAuth import is unsupported."
@@ -6301,9 +6389,73 @@ verbosity = "project-imported"
     }
 
     #[test]
-    fn antigravity_provider_aliases_parse_as_builtin() {
+    fn antigravity_provider_aliases_are_clear_only_and_never_raw_custom() {
         for alias in ["antigravity", "agy"] {
-            assert_eq!(builtin_provider_arg(alias), Some(ProviderKind::Antigravity));
+            assert_eq!(builtin_provider_arg(alias), None, "{alias}");
+            assert_eq!(
+                parse_auth_clear_provider(alias),
+                Ok(ProviderKind::Antigravity),
+                "{alias}"
+            );
+            let error = parse_catalog_route(alias).expect_err("legacy route is not selectable");
+            assert!(error.contains("non-runnable legacy provider"), "{error}");
+            assert!(error.contains("--provider antigravity"), "{error}");
+            assert!(error.contains("google"), "{error}");
+            assert!(error.contains("GEMINI_API_KEY"), "{error}");
+
+            let clear = parse_ok(&["codewhale", "auth", "clear", "--provider", alias]);
+            assert!(matches!(
+                clear.command,
+                Some(Commands::Auth(AuthArgs {
+                    command: AuthCommand::Clear {
+                        provider: ProviderKind::Antigravity,
+                    }
+                }))
+            ));
+
+            for argv in [
+                vec!["codewhale", "auth", "set", "--provider", alias],
+                vec!["codewhale", "auth", "get", "--provider", alias],
+                vec!["codewhale", "auth", "print-api-key", "--provider", alias],
+                vec!["codewhale", "auth", "status", "--provider", alias],
+                vec!["codewhale", "auth", "external-revoke", "--provider", alias],
+                vec![
+                    "codewhale",
+                    "auth",
+                    "external-consent",
+                    "--provider",
+                    alias,
+                    "--mode",
+                    "read-only",
+                    "--yes",
+                ],
+                vec!["codewhale", "model", "list", "--provider", alias],
+                vec!["codewhale", "model", "resolve", "--provider", alias],
+            ] {
+                let error = Cli::try_parse_from(argv)
+                    .expect_err("legacy Antigravity route must be rejected outside auth clear");
+                assert_eq!(error.kind(), ErrorKind::ValueValidation);
+                assert!(
+                    error.to_string().contains("non-runnable legacy provider"),
+                    "{error}"
+                );
+            }
+
+            for command in [
+                Commands::Exec(TuiPassthroughArgs {
+                    args: vec!["Reply OK".into()],
+                }),
+                Commands::Fleet(TuiPassthroughArgs {
+                    args: vec!["status".into()],
+                }),
+            ] {
+                let error = top_level_provider_override(Some(alias), Some(&command))
+                    .expect_err("legacy alias must not fall through as a raw custom provider");
+                assert!(
+                    error.to_string().contains("non-runnable legacy provider"),
+                    "{error}"
+                );
+            }
         }
     }
 
@@ -7396,6 +7548,201 @@ verbosity = "project-imported"
         assert_eq!(inner.get("deepseek").unwrap(), None);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn antigravity_clear_removes_only_codewhale_owned_legacy_state() {
+        use codewhale_secrets::{InMemoryKeyringStore, KeyringStore};
+        use std::sync::Arc;
+
+        let dir = tempfile::TempDir::new().expect("isolated legacy fixture");
+        let config_path = dir.path().join("config.toml");
+        let external_session_path = dir.path().join("external-antigravity-session.db");
+        let external_session = b"external session bytes must remain unchanged";
+        std::fs::write(&external_session_path, external_session)
+            .expect("write external session trap");
+
+        let mut store = ConfigStore::load(Some(config_path.clone())).expect("load empty config");
+        store.config.provider = ProviderKind::Antigravity;
+        store.config.fallback_providers = vec![ProviderKind::Antigravity, ProviderKind::Google];
+        {
+            let legacy = &mut store.config.providers.antigravity;
+            legacy.api_key = Some("legacy-codewhale-fixture-key".to_string());
+            legacy.base_url = Some("https://legacy.invalid/v1".to_string());
+            legacy.model = Some("legacy-fixture-model".to_string());
+            legacy.context_window = Some(1234);
+            legacy.mode = Some("legacy-fixture-mode".to_string());
+            legacy.wire = Some("legacy-fixture-wire".to_string());
+            legacy.auth_mode = Some("oauth".to_string());
+            legacy.insecure_skip_tls_verify = Some(true);
+            legacy
+                .http_headers
+                .insert("X-Legacy-Fixture".to_string(), "fixture".to_string());
+            legacy.path_suffix = Some("legacy-fixture-path".to_string());
+            legacy.external_credentials =
+                Some(codewhale_config::ExternalCredentialConsentToml::read_only(
+                    ProviderKind::Antigravity,
+                    codewhale_config::ExternalCredentialSource::AgyCli,
+                    external_session_path.clone(),
+                ));
+            legacy.extras.insert(
+                "legacy_fixture_extra".to_string(),
+                toml::Value::String("remove-me".to_string()),
+            );
+        }
+        store.config.providers.google.api_key = Some("google-fixture-key".to_string());
+        store.config.providers.google.base_url = Some("https://google.example/v1".to_string());
+        store.config.providers.google.model = Some("google-fixture-model".to_string());
+        store.save().expect("save legacy fixture");
+
+        // Released configs accepted the short `[providers.agy]` table alias.
+        // Exercise that on-disk spelling as well as the clear command's alias.
+        let canonical = std::fs::read_to_string(&config_path).expect("read canonical fixture");
+        let alias = canonical.replace("[providers.antigravity", "[providers.agy");
+        std::fs::write(&config_path, alias).expect("write legacy alias fixture");
+        let mut store = ConfigStore::load(Some(config_path.clone())).expect("reload alias fixture");
+
+        let inner = Arc::new(InMemoryKeyringStore::new());
+        inner
+            .set("antigravity", "legacy-codewhale-secret-slot")
+            .expect("seed Codewhale-owned legacy secret slot");
+        let secrets = Secrets::new(inner.clone());
+
+        run_auth_command_with_secrets(
+            &mut store,
+            AuthCommand::Clear {
+                provider: ProviderKind::Antigravity,
+            },
+            &secrets,
+        )
+        .expect("legacy clear should succeed");
+
+        assert_eq!(store.config.provider, ProviderKind::default());
+        assert_eq!(store.config.fallback_providers, vec![ProviderKind::Google]);
+        assert!(store.config.providers.antigravity.is_empty());
+        assert_eq!(inner.get("antigravity").unwrap(), None);
+        assert_eq!(
+            store.config.providers.google.api_key.as_deref(),
+            Some("google-fixture-key")
+        );
+        assert_eq!(
+            store.config.providers.google.base_url.as_deref(),
+            Some("https://google.example/v1")
+        );
+        assert_eq!(
+            store.config.providers.google.model.as_deref(),
+            Some("google-fixture-model")
+        );
+        assert_eq!(
+            std::fs::read(&external_session_path).expect("external session trap still exists"),
+            external_session
+        );
+
+        let raw = std::fs::read_to_string(&config_path).expect("read cleared config");
+        assert!(!raw.contains("[providers.antigravity"), "{raw}");
+        assert!(!raw.contains("[providers.agy"), "{raw}");
+        assert!(!raw.contains("legacy_fixture_extra"), "{raw}");
+        assert!(raw.contains("[providers.google]"), "{raw}");
+
+        let backup_path = config_path.with_file_name(format!(
+            "{}.bak",
+            config_path
+                .file_name()
+                .expect("config fixture has a file name")
+                .to_string_lossy()
+        ));
+        let backup = std::fs::read_to_string(backup_path).expect("read cleared config backup");
+        assert!(!backup.contains("[providers.antigravity"), "{backup}");
+        assert!(!backup.contains("[providers.agy"), "{backup}");
+        assert!(!backup.contains("legacy_fixture_extra"), "{backup}");
+        assert!(
+            !backup.contains(&external_session_path.to_string_lossy().to_string()),
+            "{backup}"
+        );
+        assert!(
+            backup.contains("base_url = \"https://google.example/v1\""),
+            "{backup}"
+        );
+        assert!(
+            backup.contains("model = \"google-fixture-model\""),
+            "{backup}"
+        );
+
+        let reloaded = ConfigStore::load(Some(config_path)).expect("reload cleared config");
+        assert_eq!(reloaded.config.provider, ProviderKind::default());
+        assert!(reloaded.config.providers.antigravity.is_empty());
+        assert_eq!(
+            reloaded.config.providers.google.api_key.as_deref(),
+            Some("google-fixture-key")
+        );
+    }
+
+    #[test]
+    fn antigravity_clear_restores_codewhale_secret_when_config_write_fails() {
+        use codewhale_secrets::{InMemoryKeyringStore, KeyringStore};
+        use std::sync::Arc;
+
+        let dir = tempfile::TempDir::new().expect("isolated rollback fixture");
+        let config_path = dir.path().join("config.toml");
+        let external_session_path = dir.path().join("external-session.db");
+        let external_session = b"external session rollback trap";
+        std::fs::write(&external_session_path, external_session)
+            .expect("write external session trap");
+        let mut store = ConfigStore::load(Some(config_path.clone())).expect("load absent config");
+        store.config.provider = ProviderKind::Antigravity;
+        store.config.fallback_providers = vec![ProviderKind::Antigravity];
+        store.config.providers.antigravity.api_key = Some("legacy-config-fixture".to_string());
+        store.config.providers.antigravity.external_credentials =
+            Some(codewhale_config::ExternalCredentialConsentToml::read_only(
+                ProviderKind::Antigravity,
+                codewhale_config::ExternalCredentialSource::AgyCli,
+                external_session_path.clone(),
+            ));
+        std::fs::create_dir(&config_path).expect("make config target unwritable as a file");
+
+        let inner = Arc::new(InMemoryKeyringStore::new());
+        inner
+            .set("antigravity", "legacy-secret-fixture")
+            .expect("seed Codewhale-owned legacy slot");
+        let secrets = Secrets::new(inner.clone());
+
+        run_auth_command_with_secrets(
+            &mut store,
+            AuthCommand::Clear {
+                provider: ProviderKind::Antigravity,
+            },
+            &secrets,
+        )
+        .expect_err("config failure must fail the clear transaction");
+
+        assert_eq!(store.config.provider, ProviderKind::Antigravity);
+        assert_eq!(
+            store.config.fallback_providers,
+            vec![ProviderKind::Antigravity]
+        );
+        assert_eq!(
+            store.config.providers.antigravity.api_key.as_deref(),
+            Some("legacy-config-fixture")
+        );
+        assert!(
+            store
+                .config
+                .providers
+                .antigravity
+                .external_credentials
+                .is_some()
+        );
+        assert_eq!(
+            inner
+                .get("antigravity")
+                .expect("read restored slot")
+                .as_deref(),
+            Some("legacy-secret-fixture")
+        );
+        assert_eq!(
+            std::fs::read(external_session_path).expect("external session trap still exists"),
+            external_session
+        );
     }
 
     #[test]
@@ -8980,7 +9327,7 @@ verbosity = "project-imported"
             .collect();
         // Full registry keeps legacy dialect/plan kinds; ALL is the catalog surface.
         assert_eq!(registry_kinds.len(), 47);
-        assert_eq!(ProviderKind::ALL.len(), 42);
+        assert_eq!(ProviderKind::ALL.len(), 41);
         for kind in ProviderKind::ALL {
             assert!(
                 registry_kinds.contains(&kind),

@@ -44,8 +44,6 @@ pub(crate) enum WireDialect {
     AnthropicMessages,
     /// OpenAI-style `POST /responses`.
     OpenAiResponses,
-    /// Google Antigravity / `agy` cloud-code (`POST /v1internal:streamGenerateContent`).
-    GoogleCloudCode,
 }
 
 impl WireDialect {
@@ -63,7 +61,6 @@ impl WireDialect {
             Self::ChatCompletions => "chat-completions",
             Self::AnthropicMessages => "anthropic-messages",
             Self::OpenAiResponses => "openai-responses",
-            Self::GoogleCloudCode => "google-cloud-code",
         }
     }
 }
@@ -92,8 +89,6 @@ pub(crate) enum RouteShape {
     OpencodeZen,
     /// A user-configured custom/compatible endpoint on a standard dialect.
     CustomCompatible,
-    /// Google Antigravity / `agy` `/v1internal:streamGenerateContent`.
-    CloudCode,
 }
 
 impl RouteShape {
@@ -106,7 +101,6 @@ impl RouteShape {
             Self::CodexResponses => "codex-responses",
             Self::OpencodeZen => "opencode-zen",
             Self::CustomCompatible => "custom-compatible",
-            Self::CloudCode => "cloud-code",
         }
     }
 }
@@ -169,7 +163,6 @@ impl ReasoningReceipt {
             ],
             WireDialect::AnthropicMessages => &["thinking", "output_config"],
             WireDialect::OpenAiResponses => &["reasoning", "include"],
-            WireDialect::GoogleCloudCode => &[],
         }
     }
 
@@ -545,7 +538,6 @@ impl<'a> WireBodyView<'a> {
             WireDialect::ChatCompletions => (None, "messages"),
             WireDialect::AnthropicMessages => (Some("system"), "messages"),
             WireDialect::OpenAiResponses => (Some("instructions"), "input"),
-            WireDialect::GoogleCloudCode => (None, "request"),
         };
 
         // The system region is accumulated as canonical text so it can be
@@ -638,7 +630,6 @@ fn is_tool_result_item(dialect: WireDialect, item: &Value) -> bool {
         WireDialect::OpenAiResponses => {
             item.get("type").and_then(Value::as_str) == Some("function_call_output")
         }
-        WireDialect::GoogleCloudCode => false,
     }
 }
 
@@ -662,7 +653,6 @@ fn count_attachments(dialect: WireDialect, item: &Value) -> (usize, usize) {
             WireDialect::OpenAiResponses => {
                 matches!(part_type, Some("input_image" | "input_file"))
             }
-            WireDialect::GoogleCloudCode => false,
         };
         if !is_attachment {
             continue;
@@ -1434,25 +1424,6 @@ mod dialect_seam_tests {
             })
             .expect("compaction summary survives");
         assert_eq!(carried["role"], "user");
-    }
-
-    /// Same seam, same rejection, on the wire that has always failed closed.
-    #[test]
-    fn seam_refuses_the_interrupted_sentinel_on_cloud_code() {
-        let client = client("antigravity", |providers| {
-            providers.antigravity = configured("agy-test", None, "gemini-3-pro");
-        });
-        let mut request = request("gemini-3-pro");
-        request.system = None;
-        request.tools = None;
-        request
-            .messages
-            .push(message(Role::InterruptedAssistant, "half a thought"));
-
-        let error = client
-            .prepare_outbound_request(request, true)
-            .expect_err("cloud-code has never accepted the interrupted sentinel");
-        assert!(error.to_string().contains("google-cloud-code"), "{error}");
     }
 
     /// The dialects that have always dropped an unrepresentable role keep

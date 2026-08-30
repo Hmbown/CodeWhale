@@ -649,6 +649,9 @@ pub(crate) fn resolve_runtime_route_for_identity(
     identity: &ProviderIdentity,
     model_selector: Option<&str>,
 ) -> Result<ResolvedRuntimeRoute, String> {
+    if identity.provider == ApiProvider::Antigravity {
+        return Err(codewhale_config::LEGACY_ANTIGRAVITY_TOMBSTONE_MESSAGE.to_string());
+    }
     let identity = config.resolve_persisted_provider_identity(
         Some(identity.provider.as_str()),
         identity.persisted_id(),

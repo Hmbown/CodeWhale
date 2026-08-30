@@ -320,7 +320,6 @@
   "ModelPickerAutoLocalHint": "par tour · heuristique locale · pas de requête au routeur",
   "ModelPickerAutoLastRoute": "dernière {provider} · {model}",
   "AutoRouteSelectedToast": "Auto : {provider} / {model} via {source} · Ctrl+O : détails de la route",
-  "CloudCodeSystemPromptUnsupported": "Antigravity cloud-code ne peut pas envoyer ce tour en toute sécurité, car cette connexion ne prend pas encore en charge les instructions système. Rien n’a été envoyé ; choisissez un autre fournisseur.",
   "HelpTitle": "Aide",
   "HelpFilterPlaceholder": "Taper pour filtrer",
   "HelpFilterPrefix": "Filtre : ",

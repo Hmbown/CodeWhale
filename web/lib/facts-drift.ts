@@ -153,8 +153,8 @@ function deriveProvidersFromConfig(cfg: string): ProviderFact[] {
   // Log loudly on unmapped variants so a new provider can never be silently
   // dropped from the drift-derived facts again. DeepseekCN (#1104), the
   // dynamic Custom meta-provider (#1519, user-defined endpoints), and
-  // Antigravity (off the website 44 until the cloud-code wire is a
-  // first-class advertised outbound route) are the deliberate exclusions.
+  // Antigravity (a non-runnable legacy config tombstone, never a website
+  // provider) are the deliberate exclusions.
   const EXCLUDED = new Set(["DeepseekCN", "Custom", "Antigravity"]);
   const unmapped = variants.filter((v) => !EXCLUDED.has(v) && !labelMap[v]);
   if (unmapped.length > 0) {
@@ -163,7 +163,10 @@ function deriveProvidersFromConfig(cfg: string): ProviderFact[] {
         "Add them to labelMap here AND PROVIDER_LABEL_MAP in web/scripts/facts-lib.mjs (or to EXCLUDED if intentionally hidden).",
     );
   }
-  return variants.map((v) => labelMap[v]).filter(Boolean);
+  return variants
+    .filter((v) => !EXCLUDED.has(v))
+    .map((v) => labelMap[v])
+    .filter(Boolean);
 }
 
 function deriveDefaultModel(cfg: string): string | null {

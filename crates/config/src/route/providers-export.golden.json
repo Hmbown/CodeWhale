@@ -42,24 +42,6 @@
       "transport": "anthropic-messages"
     },
     {
-      "id": "antigravity",
-      "family": "antigravity",
-      "label": "Google Antigravity",
-      "endpoint": "https://cloudcode-pa.googleapis.com/v1internal",
-      "wire": "chat-completions",
-      "defaultModel": "gemini-3-pro-preview",
-      "envVars": [
-        "ANTIGRAVITY_API_KEY"
-      ],
-      "auth": [
-        {
-          "kind": "oauth",
-          "label": "OAuth"
-        }
-      ],
-      "transport": "antigravity"
-    },
-    {
       "id": "arcee",
       "family": "arcee",
       "label": "Arcee AI",

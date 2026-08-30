@@ -320,7 +320,6 @@
   "ModelPickerAutoLocalHint": "за крок · локальна евристика · без запиту до маршрутизатора",
   "ModelPickerAutoLastRoute": "останній {provider} · {model}",
   "AutoRouteSelectedToast": "Auto: {provider} / {model} через {source} · Ctrl+O: деталі маршруту",
-  "CloudCodeSystemPromptUnsupported": "Antigravity cloud-code не може безпечно надіслати цей хід: це з’єднання ще не підтримує системні інструкції. Нічого не надіслано; виберіть іншого провайдера.",
   "HelpTitle": "Довідка",
   "HelpFilterPlaceholder": "Вводьте для фільтра",
   "HelpFilterPrefix": "Фільтр: ",

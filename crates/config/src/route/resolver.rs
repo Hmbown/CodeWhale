@@ -145,6 +145,11 @@ impl RouteResolver {
         // 1. Provider scope from explicit choice only; default otherwise.
         //    The provider is NEVER inferred from a model prefix.
         let provider_kind = req.explicit_provider.unwrap_or_default();
+        if provider_kind == ProviderKind::Antigravity {
+            return Err(RouteError::InvalidProvider(
+                crate::LEGACY_ANTIGRAVITY_TOMBSTONE_MESSAGE.to_string(),
+            ));
+        }
         let descriptor = ProviderDescriptor::for_kind(provider_kind);
         let provider_id = descriptor.id();
         let default_offering = self.default_offering(&provider_id);

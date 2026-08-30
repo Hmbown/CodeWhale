@@ -1,8 +1,8 @@
 //! The one table that answers "where does a message with this role go on this
 //! wire, and when is the pair not representable at all?"
 //!
-//! Before this module existed the question was answered four times, once per
-//! adapter, and the four answers disagreed — not by design, by drift:
+//! Before this module existed the question was answered once per adapter, and
+//! the answers disagreed — not by design, by drift:
 //!
 //! * Chat Completions matched `user`/`assistant`/`system` and let anything
 //!   else fall off the end of an `if`/`else if` chain, silently.
@@ -11,7 +11,6 @@
 //! * Anthropic Messages forwarded `message.role` **verbatim**, so a `system`
 //!   message earned an opaque provider-side 400 that named neither the role
 //!   nor the message.
-//! * Google cloud-code was the only one that failed closed.
 //!
 //! Now each adapter asks [`role_placement`] which channel to render into, and
 //! [`reject_unsupported_roles`] runs at the outbound seam
@@ -33,8 +32,8 @@ use crate::models::{Message, Role};
 /// Which channel of a wire body a message renders into.
 ///
 /// Adapters own the structural rendering for their own dialect — Chat's
-/// `tool_calls` array, Responses' `function_call_output` items, Anthropic's
-/// content blocks, cloud-code's `parts`. This enum only names the channel, so
+/// `tool_calls` array, Responses' `function_call_output` items, and Anthropic's
+/// content blocks. This enum only names the channel, so
 /// that the *choice* of channel is made in exactly one place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RolePlacement {
@@ -76,14 +75,10 @@ pub(crate) fn role_placement(role: &Role, dialect: WireDialect) -> RolePlacement
         // Every dialect carries user input.
         (Role::User, _) => RolePlacement::User,
 
-        // Every dialect carries assistant output. cloud-code calls the
-        // channel "model"; that is the adapter's own name for it.
+        // Every dialect carries assistant output.
         (Role::Assistant, _) => RolePlacement::Assistant,
 
-        // Interrupted assistant text replays as assistant output with a
-        // marker, except on cloud-code, which has never accepted it and
-        // keeps failing closed rather than guessing.
-        (Role::InterruptedAssistant, WireDialect::GoogleCloudCode) => RolePlacement::Rejected,
+        // Interrupted assistant text replays as assistant output with a marker.
         (Role::InterruptedAssistant, _) => RolePlacement::InterruptedAssistant,
 
         // Chat Completions and Responses both accept load-bearing system and
@@ -96,24 +91,20 @@ pub(crate) fn role_placement(role: &Role, dialect: WireDialect) -> RolePlacement
             RolePlacement::System
         }
         (Role::System, WireDialect::AnthropicMessages) => RolePlacement::User,
-        (Role::System, WireDialect::GoogleCloudCode) => RolePlacement::Rejected,
 
         (Role::Developer, WireDialect::ChatCompletions | WireDialect::OpenAiResponses) => {
             RolePlacement::Developer
         }
         (Role::Developer, WireDialect::AnthropicMessages) => RolePlacement::User,
-        (Role::Developer, WireDialect::GoogleCloudCode) => RolePlacement::Rejected,
 
         // A role this build does not know, e.g. from a transcript written by
         // a newer build. The OpenAI-shaped dialects already dropped these;
-        // Anthropic sent them verbatim for the provider to reject, and
-        // cloud-code bailed.
+        // Anthropic sent them verbatim for the provider to reject.
         (Role::Unrecognized(_), WireDialect::ChatCompletions | WireDialect::OpenAiResponses) => {
             RolePlacement::Omitted
         }
         // CHANGED: was a verbatim pass-through ending in a provider 400.
         (Role::Unrecognized(_), WireDialect::AnthropicMessages) => RolePlacement::Rejected,
-        (Role::Unrecognized(_), WireDialect::GoogleCloudCode) => RolePlacement::Rejected,
     }
 }
 
@@ -158,11 +149,10 @@ mod tests {
     use super::{RolePlacement, WireDialect, reject_unsupported_roles, role_placement};
     use crate::models::{ContentBlock, Message, Role};
 
-    const DIALECTS: [WireDialect; 4] = [
+    const DIALECTS: [WireDialect; 3] = [
         WireDialect::ChatCompletions,
         WireDialect::AnthropicMessages,
         WireDialect::OpenAiResponses,
-        WireDialect::GoogleCloudCode,
     ];
 
     fn message(role: Role) -> Message {
@@ -187,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_assistant_replays_everywhere_except_cloud_code() {
+    fn interrupted_assistant_replays_on_every_supported_dialect() {
         for dialect in [
             WireDialect::ChatCompletions,
             WireDialect::AnthropicMessages,
@@ -197,10 +187,6 @@ mod tests {
             assert_eq!(placement, RolePlacement::InterruptedAssistant);
             assert!(placement.is_assistant_channel());
         }
-        assert_eq!(
-            role_placement(&Role::InterruptedAssistant, WireDialect::GoogleCloudCode),
-            RolePlacement::Rejected,
-        );
     }
 
     #[test]
@@ -218,11 +204,6 @@ mod tests {
             RolePlacement::User
         );
         assert_eq!(
-            role_placement(&Role::System, WireDialect::GoogleCloudCode),
-            RolePlacement::Rejected
-        );
-
-        assert_eq!(
             role_placement(&Role::Developer, WireDialect::ChatCompletions),
             RolePlacement::Developer
         );
@@ -233,10 +214,6 @@ mod tests {
         assert_eq!(
             role_placement(&Role::Developer, WireDialect::AnthropicMessages),
             RolePlacement::User
-        );
-        assert_eq!(
-            role_placement(&Role::Developer, WireDialect::GoogleCloudCode),
-            RolePlacement::Rejected
         );
     }
 
@@ -266,15 +243,6 @@ mod tests {
         ];
         reject_unsupported_roles(&messages, WireDialect::AnthropicMessages)
             .expect("Anthropic projects positioned system history onto the user channel");
-    }
-
-    #[test]
-    fn seam_rejects_the_interrupted_sentinel_on_cloud_code() {
-        let messages = vec![message(Role::InterruptedAssistant)];
-        let err = reject_unsupported_roles(&messages, WireDialect::GoogleCloudCode)
-            .expect_err("cloud-code has never accepted the interrupted sentinel");
-        assert_eq!(err.role, "assistant_interrupted");
-        assert_eq!(err.dialect, "google-cloud-code");
     }
 
     #[test]
@@ -316,7 +284,7 @@ mod tests {
 mod adapter_agreement_tests {
     use serde_json::{Value, json};
 
-    use super::super::{anthropic, chat, cloud_code, responses};
+    use super::super::{anthropic, chat, responses};
     use crate::config::ApiProvider;
     use crate::models::{
         ContentBlock, INTERRUPTED_ASSISTANT_CONTEXT_PREFIX, Message, MessageRequest, Role,
@@ -463,38 +431,5 @@ mod adapter_agreement_tests {
             value["content"][0]["text"].as_str().expect("text block"),
             format!("{INTERRUPTED_ASSISTANT_CONTEXT_PREFIX}half an answer"),
         );
-    }
-
-    #[test]
-    fn cloud_code_still_fails_closed_on_everything_it_cannot_represent() {
-        for role in [
-            Role::System,
-            Role::InterruptedAssistant,
-            Role::Developer,
-            Role::Unrecognized("future_role".to_string()),
-        ] {
-            let error = cloud_code::build_generate_content_body(&request(vec![
-                message(Role::User, "ask"),
-                message(role.clone(), "body"),
-            ]))
-            .expect_err("cloud-code fails closed on unrepresentable roles");
-            assert!(
-                error.to_string().contains("does not accept role"),
-                "{role}: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn cloud_code_names_the_assistant_channel_model() {
-        let body = cloud_code::build_generate_content_body(&request(vec![
-            message(Role::User, "ask"),
-            message(Role::Assistant, "answer"),
-        ]))
-        .expect("cloud-code carries user and assistant turns");
-        let contents = body["request"]["contents"]
-            .as_array()
-            .expect("contents array");
-        assert_eq!(roles(contents), vec!["user", "model"]);
     }
 }

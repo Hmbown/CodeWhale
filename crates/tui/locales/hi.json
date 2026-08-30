@@ -320,7 +320,6 @@
   "ModelPickerAutoLocalHint": "प्रति टर्न · लोकल ह्यूरिस्टिक · कोई राउटर अनुरोध नहीं",
   "ModelPickerAutoLastRoute": "अंतिम {provider} · {model}",
   "AutoRouteSelectedToast": "Auto: {provider} / {model} ({source} द्वारा) · Ctrl+O: रूट विवरण",
-  "CloudCodeSystemPromptUnsupported": "यह कनेक्शन अभी सिस्टम निर्देश समर्थित नहीं करता, इसलिए Antigravity cloud-code इस टर्न को सुरक्षित रूप से नहीं भेज सकता। कुछ नहीं भेजा गया; कोई अन्य प्रदाता चुनें।",
   "HelpTitle": "मदद",
   "HelpFilterPlaceholder": "फ़िल्टर करने के लिए टाइप करें",
   "HelpFilterPrefix": "फ़िल्टर: ",

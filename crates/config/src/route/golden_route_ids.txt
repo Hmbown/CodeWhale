@@ -2,7 +2,6 @@
 # Source: ProviderDescriptor registry via ProvidersExport::from_registry.
 # New ids may be appended (sorted); never recycle a retired spelling.
 anthropic
-antigravity
 arcee
 atlascloud
 custom

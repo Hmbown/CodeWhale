@@ -246,8 +246,8 @@ pub const XAI_GROK_4_20_0309_NON_REASONING_MODEL: &str = "grok-4.20-0309-non-rea
 pub const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
 pub const DEFAULT_MISTRAL_MODEL: &str = "mistral-code-latest";
 pub const DEFAULT_MISTRAL_BASE_URL: &str = "https://api.mistral.ai/v1";
-pub const DEFAULT_ANTIGRAVITY_MODEL: &str = "gemini-3-pro-preview";
-pub const DEFAULT_ANTIGRAVITY_BASE_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal";
+pub const DEFAULT_ANTIGRAVITY_MODEL: &str = "legacy-antigravity-disabled";
+pub const DEFAULT_ANTIGRAVITY_BASE_URL: &str = "https://legacy-antigravity.invalid";
 pub const DEFAULT_GOOGLE_MODEL: &str = "gemini-3.1-pro-preview";
 pub const DEFAULT_GOOGLE_BASE_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/openai/";

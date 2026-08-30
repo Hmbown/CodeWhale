@@ -320,7 +320,6 @@
   "ModelPickerAutoLocalHint": "на ход · локальная эвристика · без запроса к маршрутизатору",
   "ModelPickerAutoLastRoute": "последний {provider} · {model}",
   "AutoRouteSelectedToast": "Auto: {provider} / {model} через {source} · Ctrl+O: детали маршрута",
-  "CloudCodeSystemPromptUnsupported": "Antigravity cloud-code не может безопасно отправить этот ход: это подключение пока не поддерживает системные инструкции. Ничего не отправлено; выберите другого провайдера.",
   "HelpTitle": "Справка",
   "HelpFilterPlaceholder": "Введите для фильтра",
   "HelpFilterPrefix": "Фильтр: ",
