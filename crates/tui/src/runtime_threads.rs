@@ -7682,6 +7682,7 @@ impl RuntimeThreadManager {
                     hook_executor: None,
                     handle_store: crate::tools::handle::new_shared_handle_store(),
                     rlm_sessions: crate::rlm::session::new_shared_rlm_session_store(),
+                    media_originals_dir: crate::media_originals::default_store_dir(),
                 },
                 subagent_model_overrides: if isolated_chat {
                     HashMap::new()
