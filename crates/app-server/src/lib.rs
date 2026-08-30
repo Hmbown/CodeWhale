@@ -32,6 +32,7 @@ use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 mod chat_completions;
+pub mod daemon_socket;
 
 /// Legacy DeepSeek-era naming kept for external compatibility.
 ///
@@ -160,6 +161,16 @@ struct JsonRpcRequest {
 const RUNTIME_UNAVAILABLE_CODE: i64 = -32005;
 /// Server error: the named thread does not exist.
 const THREAD_NOT_FOUND_CODE: i64 = -32004;
+/// Server error: a daemon-socket client tried to act before `daemon/attach`.
+const ATTACH_REQUIRED_CODE: i64 = -32010;
+/// Server error: a `daemon/attach` claim lost to a live owner.
+const DAEMON_ALREADY_CLAIMED_CODE: i64 = -32011;
+/// Server error: only the owning client may `shutdown` the daemon.
+const NOT_DAEMON_OWNER_CODE: i64 = -32012;
+/// Server error: the client refused the daemon's version at attach time.
+const DAEMON_VERSION_SKEW_CODE: i64 = -32013;
+/// Server error: `daemon/attach` sent twice on one connection.
+const ALREADY_ATTACHED_CODE: i64 = -32014;
 
 #[derive(Debug)]
 struct JsonRpcError {
@@ -217,6 +228,58 @@ struct TurnTranscript {
 enum AppTransport {
     Http,
     Stdio,
+    /// Unix-domain-socket daemon transport (`daemon_socket`). Speaks the
+    /// stdio JSON-RPC protocol verbatim after a `daemon/attach` handshake.
+    Socket,
+}
+
+impl AppTransport {
+    /// Wire label reported by `healthz` / `capabilities`.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Stdio => "stdio",
+            Self::Socket => "unix-socket",
+        }
+    }
+}
+
+/// Whether the peer driving a JSON-RPC loop may stop the whole server.
+///
+/// The process-owned stdio loop always may (its peer *is* the supervisor).
+/// On the daemon socket only the client that claimed the daemon may; every
+/// other attached client is refused with `not_daemon_owner` — the brief's
+/// "never terminate a daemon the app did not spawn", enforced server-side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShutdownAuthority {
+    Granted,
+    Denied,
+}
+
+/// Per-connection policy for [`run_stdio_loop`].
+#[derive(Debug, Clone, Copy)]
+struct StdioLoopPolicy {
+    transport: AppTransport,
+    shutdown: ShutdownAuthority,
+}
+
+impl StdioLoopPolicy {
+    /// The loop owned by the process's own stdin/stdout.
+    const fn process_stdio() -> Self {
+        Self {
+            transport: AppTransport::Stdio,
+            shutdown: ShutdownAuthority::Granted,
+        }
+    }
+}
+
+/// Why [`run_stdio_loop`] returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StdioLoopExit {
+    /// The peer closed its write side; nothing asked the server to stop.
+    InputClosed,
+    /// The peer sent an honoured `shutdown`.
+    Shutdown,
 }
 
 #[derive(Debug, Deserialize)]
@@ -311,7 +374,9 @@ pub async fn run_stdio(config_path: Option<PathBuf>) -> Result<()> {
     let state = build_state_with_transport(config_path, None, AppTransport::Stdio)?;
     let reader = BufReader::new(tokio::io::stdin()).lines();
     let writer = tokio::io::BufWriter::new(tokio::io::stdout());
-    run_stdio_loop(&state, reader, writer).await
+    run_stdio_loop(&state, reader, writer, StdioLoopPolicy::process_stdio())
+        .await
+        .map(|_exit| ())
 }
 
 /// The stdio JSON-RPC loop, generic over its transport so it can be driven by
@@ -320,7 +385,8 @@ async fn run_stdio_loop<R, W>(
     state: &AppState,
     mut reader: tokio::io::Lines<R>,
     mut writer: W,
-) -> Result<()>
+    policy: StdioLoopPolicy,
+) -> Result<StdioLoopExit>
 where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -340,10 +406,10 @@ where
             Some(PendingStdioWork::Request(request)) => request,
             None => {
                 if !stdin_open {
-                    break;
+                    return Ok(StdioLoopExit::InputClosed);
                 }
                 let Some(line) = reader.next_line().await? else {
-                    break;
+                    return Ok(StdioLoopExit::InputClosed);
                 };
                 match parse_stdio_line(&line) {
                     ParsedStdioLine::Blank => continue,
@@ -357,6 +423,14 @@ where
         };
 
         let id = request.id.clone();
+        if request.method == "shutdown" && policy.shutdown == ShutdownAuthority::Denied {
+            write_stdio_line(
+                &mut writer,
+                &jsonrpc_error(id, JsonRpcError::not_daemon_owner()),
+            )
+            .await?;
+            continue;
+        }
         let dispatched = if request.method == "thread/message" {
             // A turn can run for minutes. Keep reading stdin while it streams
             // so an interrupt (or a shutdown) can actually reach it — with a
@@ -366,6 +440,7 @@ where
                 &mut writer,
                 &request.method,
                 request.params,
+                policy.transport,
             );
             tokio::pin!(dispatch);
             loop {
@@ -375,22 +450,28 @@ where
                         match line? {
                             None => stdin_open = false,
                             Some(line) => {
-                                handle_line_during_turn(state, &line, &mut pending).await;
+                                handle_line_during_turn(state, &line, &mut pending, policy).await;
                             }
                         }
                     }
                 }
             }
         } else {
-            dispatch_stdio_request_with_writer(state, &mut writer, &request.method, request.params)
-                .await
+            dispatch_stdio_request_with_writer(
+                state,
+                &mut writer,
+                &request.method,
+                request.params,
+                policy.transport,
+            )
+            .await
         };
 
         match dispatched {
             Ok(dispatch) => {
                 write_stdio_line(&mut writer, &jsonrpc_result(id, dispatch.result)).await?;
                 if dispatch.should_exit {
-                    break;
+                    return Ok(StdioLoopExit::Shutdown);
                 }
             }
             Err(err) => {
@@ -398,8 +479,6 @@ where
             }
         }
     }
-
-    Ok(())
 }
 
 /// Work deferred until a streaming turn releases the writer.
@@ -454,6 +533,7 @@ async fn handle_line_during_turn(
     state: &AppState,
     line: &str,
     pending: &mut VecDeque<PendingStdioWork>,
+    policy: StdioLoopPolicy,
 ) {
     let request = match parse_stdio_line(line) {
         ParsedStdioLine::Blank => return,
@@ -480,6 +560,14 @@ async fn handle_line_during_turn(
                 Err(err) => jsonrpc_error(id, err),
             };
             pending.push_back(PendingStdioWork::Response(response));
+        }
+        "shutdown" if policy.shutdown == ShutdownAuthority::Denied => {
+            // A non-owner may not even interrupt the live turns: that is the
+            // first half of what shutdown does.
+            pending.push_back(PendingStdioWork::Response(jsonrpc_error(
+                request.id,
+                JsonRpcError::not_daemon_owner(),
+            )));
         }
         "shutdown" => {
             let live: Vec<String> = state.in_flight_turns.lock().await.keys().cloned().collect();
@@ -918,6 +1006,67 @@ impl JsonRpcError {
             code: -32603,
             message: message.into(),
             data: None,
+        }
+    }
+
+    /// Server error (-32000..-32099): the daemon-socket connection has not
+    /// completed `daemon/attach`, so nothing but `healthz` is allowed yet.
+    fn attach_required(method: &str) -> Self {
+        Self {
+            code: ATTACH_REQUIRED_CODE,
+            message: format!("send daemon/attach before `{method}`"),
+            data: Some(json!({
+                "error": "attach_required",
+                "method": method,
+                "attach_method": daemon_socket::ATTACH_METHOD,
+            })),
+        }
+    }
+
+    /// Server error (-32000..-32099): a `claim` attach lost to a live owner.
+    fn daemon_already_claimed(owner: &Value) -> Self {
+        Self {
+            code: DAEMON_ALREADY_CLAIMED_CODE,
+            message: "daemon already claimed by another client; attach with mode=attach"
+                .to_string(),
+            data: Some(json!({
+                "error": "daemon_already_claimed",
+                "owner": owner,
+            })),
+        }
+    }
+
+    /// Server error (-32000..-32099): only the owner may stop the daemon.
+    fn not_daemon_owner() -> Self {
+        Self {
+            code: NOT_DAEMON_OWNER_CODE,
+            message: "only the client that claimed this daemon may shut it down".to_string(),
+            data: Some(json!({ "error": "not_daemon_owner" })),
+        }
+    }
+
+    /// Server error (-32000..-32099): the client's expected daemon version
+    /// does not match the running binary (bundle skew).
+    fn daemon_version_skew(expected: &str, actual: &str) -> Self {
+        Self {
+            code: DAEMON_VERSION_SKEW_CODE,
+            message: format!(
+                "daemon version {actual} does not match the client's expected {expected}"
+            ),
+            data: Some(json!({
+                "error": "daemon_version_skew",
+                "expected": expected,
+                "actual": actual,
+            })),
+        }
+    }
+
+    /// Server error (-32000..-32099): `daemon/attach` after attaching.
+    fn already_attached() -> Self {
+        Self {
+            code: ALREADY_ATTACHED_CODE,
+            message: "this connection is already attached".to_string(),
+            data: Some(json!({ "error": "already_attached" })),
         }
     }
 }
@@ -1692,14 +1841,15 @@ async fn dispatch_stdio_request(
     params: Value,
 ) -> std::result::Result<StdioDispatchResult, JsonRpcError> {
     let mut sink = tokio::io::sink();
-    dispatch_stdio_request_with_writer(state, &mut sink, method, params).await
+    dispatch_stdio_request_with_writer(state, &mut sink, method, params, AppTransport::Stdio).await
 }
 
 async fn dispatch_stdio_app_request(
     state: &AppState,
     request: AppRequest,
+    transport: AppTransport,
 ) -> std::result::Result<StdioDispatchResult, JsonRpcError> {
-    let response = Box::pin(process_app_request(state, request, AppTransport::Stdio)).await;
+    let response = Box::pin(process_app_request(state, request, transport)).await;
     Ok(StdioDispatchResult {
         result: serde_json::to_value(response)
             .map_err(|err| JsonRpcError::internal(err.to_string()))?,
@@ -1712,19 +1862,20 @@ async fn dispatch_stdio_request_with_writer<W: AsyncWrite + Unpin>(
     writer: &mut W,
     method: &str,
     params: Value,
+    transport: AppTransport,
 ) -> std::result::Result<StdioDispatchResult, JsonRpcError> {
     let outcome = match method {
         "healthz" | "app/healthz" => StdioDispatchResult {
             result: json!({
                 "status": "ok",
                 "service": legacy_deepseek_compat::SERVICE_NAME,
-                "transport": "stdio"
+                "transport": transport.label()
             }),
             should_exit: false,
         },
         "capabilities" => StdioDispatchResult {
             result: json!({
-                "transport": "stdio",
+                "transport": transport.label(),
                 "families": ["thread/*", "app/*", "prompt/*"],
                 "methods": [
                     "healthz",
@@ -1965,14 +2116,17 @@ async fn dispatch_stdio_request_with_writer<W: AsyncWrite + Unpin>(
                 should_exit: false,
             }
         }
-        "app/capabilities" => dispatch_stdio_app_request(state, AppRequest::Capabilities).await?,
+        "app/capabilities" => {
+            dispatch_stdio_app_request(state, AppRequest::Capabilities, transport).await?
+        }
         "app/request" => {
             let request: AppRequest = parse_params(params)?;
-            dispatch_stdio_app_request(state, request).await?
+            dispatch_stdio_app_request(state, request, transport).await?
         }
         "app/config/get" => {
             let parsed: ConfigGetParams = parse_params(params_or_object(params))?;
-            dispatch_stdio_app_request(state, AppRequest::ConfigGet { key: parsed.key }).await?
+            dispatch_stdio_app_request(state, AppRequest::ConfigGet { key: parsed.key }, transport)
+                .await?
         }
         "app/config/set" => {
             let parsed: ConfigSetParams = parse_params(params_or_object(params))?;
@@ -1982,18 +2136,28 @@ async fn dispatch_stdio_request_with_writer<W: AsyncWrite + Unpin>(
                     key: parsed.key,
                     value: parsed.value,
                 },
+                transport,
             )
             .await?
         }
         "app/config/unset" => {
             let parsed: ConfigGetParams = parse_params(params_or_object(params))?;
-            dispatch_stdio_app_request(state, AppRequest::ConfigUnset { key: parsed.key }).await?
+            dispatch_stdio_app_request(
+                state,
+                AppRequest::ConfigUnset { key: parsed.key },
+                transport,
+            )
+            .await?
         }
-        "app/config/list" => dispatch_stdio_app_request(state, AppRequest::ConfigList).await?,
-        "app/config/reload" => dispatch_stdio_app_request(state, AppRequest::ConfigReload).await?,
-        "app/models" => dispatch_stdio_app_request(state, AppRequest::Models).await?,
+        "app/config/list" => {
+            dispatch_stdio_app_request(state, AppRequest::ConfigList, transport).await?
+        }
+        "app/config/reload" => {
+            dispatch_stdio_app_request(state, AppRequest::ConfigReload, transport).await?
+        }
+        "app/models" => dispatch_stdio_app_request(state, AppRequest::Models, transport).await?,
         "app/thread_loaded_list" | "app/thread-loaded-list" => {
-            dispatch_stdio_app_request(state, AppRequest::ThreadLoadedList).await?
+            dispatch_stdio_app_request(state, AppRequest::ThreadLoadedList, transport).await?
         }
         "prompt/capabilities" => StdioDispatchResult {
             result: json!({
@@ -2037,6 +2201,9 @@ async fn dispatch_stdio_request_with_writer<W: AsyncWrite + Unpin>(
                 result: json!({"ok": true, "status": "stopped"}),
                 should_exit: true,
             }
+        }
+        daemon_socket::ATTACH_METHOD if transport == AppTransport::Socket => {
+            return Err(JsonRpcError::already_attached());
         }
         _ => return Err(JsonRpcError::method_not_found(method)),
     };
@@ -3099,7 +3266,13 @@ mod tests {
         let loop_state = state.clone();
         let loop_handle = tokio::spawn(async move {
             let (rx, tx) = tokio::io::split(server_side);
-            run_stdio_loop(&loop_state, BufReader::new(rx).lines(), tx).await
+            run_stdio_loop(
+                &loop_state,
+                BufReader::new(rx).lines(),
+                tx,
+                StdioLoopPolicy::process_stdio(),
+            )
+            .await
         });
 
         // Start the runaway turn.
@@ -3443,6 +3616,7 @@ mod tests {
             &mut writer,
             "prompt/request",
             json!({ "prompt": "what is 2+2" }),
+            AppTransport::Stdio,
         )
         .await
         .expect("prompt/request dispatch");
