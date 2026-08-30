@@ -18,7 +18,7 @@ const SPANS: Record<string, string> = {
 };
 
 /** The same security contact the footer publishes (components/footer.tsx). */
-const SECURITY_MAILTO = "mailto:hmbown@gmail.com";
+const SECURITY_MAILTO = "mailto:hunter@codewhale.net";
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;
