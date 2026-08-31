@@ -810,6 +810,43 @@ pub enum MessageId {
     SubagentsCurrentSessionPodWorkersTitle,
     SubagentsCurrentSessionPodWorkerRoles,
     SubagentsCurrentSessionPodWorkersStatus,
+    SubagentsEmptyGuidance,
+    SubagentsStatusRunning,
+    SubagentsStatusCompleted,
+    SubagentsStatusInterrupted,
+    SubagentsStatusFailed,
+    SubagentsStatusCancelled,
+    SubagentsRowStatusInterrupted,
+    SubagentsRowStatusCancelled,
+    SubagentsRowStatusBudgetExhausted,
+    SubagentsSummaryItem,
+    SubagentsGroupHeading,
+    SubagentsHeaderRoster,
+    SubagentsHeaderColumns,
+    SubagentsActionRefresh,
+    SubagentsActionRosterSetup,
+    SubagentsLabelReason,
+    SubagentsLabelRole,
+    SubagentsLabelPosture,
+    SubagentsLabelGit,
+    SubagentsLabelObjective,
+    SubagentsLabelResult,
+    SubagentsPostureDetails,
+    SubagentsValueOn,
+    SubagentsValueOff,
+    SubagentsShellNone,
+    SubagentsShellReadOnly,
+    SubagentsShellFull,
+    SubagentsBranch,
+    SubagentsBranchWithWorkspace,
+    SubagentsRoleWorker,
+    SubagentsRoleScout,
+    SubagentsRolePlanner,
+    SubagentsRoleBuilder,
+    SubagentsRoleVerifier,
+    SubagentsRoleReviewer,
+    SubagentsRoleConsultant,
+    SubagentsRoleCustom,
     HelpUnknownCommand,
     HomeDashboardTitle,
     HomeModel,
@@ -2798,6 +2835,43 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::SubagentsCurrentSessionPodWorkersTitle,
     MessageId::SubagentsCurrentSessionPodWorkerRoles,
     MessageId::SubagentsCurrentSessionPodWorkersStatus,
+    MessageId::SubagentsEmptyGuidance,
+    MessageId::SubagentsStatusRunning,
+    MessageId::SubagentsStatusCompleted,
+    MessageId::SubagentsStatusInterrupted,
+    MessageId::SubagentsStatusFailed,
+    MessageId::SubagentsStatusCancelled,
+    MessageId::SubagentsRowStatusInterrupted,
+    MessageId::SubagentsRowStatusCancelled,
+    MessageId::SubagentsRowStatusBudgetExhausted,
+    MessageId::SubagentsSummaryItem,
+    MessageId::SubagentsGroupHeading,
+    MessageId::SubagentsHeaderRoster,
+    MessageId::SubagentsHeaderColumns,
+    MessageId::SubagentsActionRefresh,
+    MessageId::SubagentsActionRosterSetup,
+    MessageId::SubagentsLabelReason,
+    MessageId::SubagentsLabelRole,
+    MessageId::SubagentsLabelPosture,
+    MessageId::SubagentsLabelGit,
+    MessageId::SubagentsLabelObjective,
+    MessageId::SubagentsLabelResult,
+    MessageId::SubagentsPostureDetails,
+    MessageId::SubagentsValueOn,
+    MessageId::SubagentsValueOff,
+    MessageId::SubagentsShellNone,
+    MessageId::SubagentsShellReadOnly,
+    MessageId::SubagentsShellFull,
+    MessageId::SubagentsBranch,
+    MessageId::SubagentsBranchWithWorkspace,
+    MessageId::SubagentsRoleWorker,
+    MessageId::SubagentsRoleScout,
+    MessageId::SubagentsRolePlanner,
+    MessageId::SubagentsRoleBuilder,
+    MessageId::SubagentsRoleVerifier,
+    MessageId::SubagentsRoleReviewer,
+    MessageId::SubagentsRoleConsultant,
+    MessageId::SubagentsRoleCustom,
     MessageId::HelpUnknownCommand,
     MessageId::HomeDashboardTitle,
     MessageId::HomeModel,
@@ -4701,17 +4775,57 @@ mod tests {
 
     #[test]
     fn current_session_pod_worker_copy_has_complete_locale_and_placeholder_parity() {
-        let ids = [
+        let current_session_ids = [
             MessageId::SubagentsNoCurrentSessionPodWorkers,
             MessageId::SubagentsCurrentSessionPodWorkersTitle,
             MessageId::SubagentsCurrentSessionPodWorkerRoles,
             MessageId::SubagentsCurrentSessionPodWorkersStatus,
         ];
+        let modal_ids = [
+            MessageId::SubagentsEmptyGuidance,
+            MessageId::SubagentsStatusRunning,
+            MessageId::SubagentsStatusCompleted,
+            MessageId::SubagentsStatusInterrupted,
+            MessageId::SubagentsStatusFailed,
+            MessageId::SubagentsStatusCancelled,
+            MessageId::SubagentsRowStatusInterrupted,
+            MessageId::SubagentsRowStatusCancelled,
+            MessageId::SubagentsRowStatusBudgetExhausted,
+            MessageId::SubagentsSummaryItem,
+            MessageId::SubagentsGroupHeading,
+            MessageId::SubagentsHeaderRoster,
+            MessageId::SubagentsHeaderColumns,
+            MessageId::SubagentsActionRefresh,
+            MessageId::SubagentsActionRosterSetup,
+            MessageId::SubagentsLabelReason,
+            MessageId::SubagentsLabelRole,
+            MessageId::SubagentsLabelPosture,
+            MessageId::SubagentsLabelGit,
+            MessageId::SubagentsLabelObjective,
+            MessageId::SubagentsLabelResult,
+            MessageId::SubagentsPostureDetails,
+            MessageId::SubagentsValueOn,
+            MessageId::SubagentsValueOff,
+            MessageId::SubagentsShellNone,
+            MessageId::SubagentsShellReadOnly,
+            MessageId::SubagentsShellFull,
+            MessageId::SubagentsBranch,
+            MessageId::SubagentsBranchWithWorkspace,
+            MessageId::SubagentsRoleWorker,
+            MessageId::SubagentsRoleScout,
+            MessageId::SubagentsRolePlanner,
+            MessageId::SubagentsRoleBuilder,
+            MessageId::SubagentsRoleVerifier,
+            MessageId::SubagentsRoleReviewer,
+            MessageId::SubagentsRoleConsultant,
+            MessageId::SubagentsRoleCustom,
+        ];
         let english = raw_locale_messages(Locale::En);
 
         for locale in Locale::shipped_complete() {
             let pack = raw_locale_messages(*locale);
-            for id in ids {
+            for id in current_session_ids.iter().chain(modal_ids.iter()) {
+                let id = *id;
                 let key = format!("{id:?}");
                 let english_value = english
                     .get(&key)
@@ -4728,7 +4842,7 @@ mod tests {
                     "{} changed placeholders for {key}",
                     locale.tag()
                 );
-                if *locale != Locale::En {
+                if *locale != Locale::En && current_session_ids.contains(&id) {
                     assert_ne!(
                         translated,
                         english_value,
@@ -4738,6 +4852,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn home_subagents_keeps_the_current_session_boundary_in_every_complete_pack() {
+        let expected = [
+            (Locale::Ca, "Treballadors de Pod de la sessió actual:"),
+            (Locale::De, "Pod-Worker der aktuellen Sitzung:"),
+            (Locale::En, "Current-session Pod workers:"),
+            (Locale::Es419, "Workers de Pod de la sesión actual:"),
+            (Locale::Fr, "Workers du Pod de la session actuelle :"),
+            (Locale::Hi, "वर्तमान सत्र के Pod वर्कर:"),
+            (Locale::Id, "Worker Pod sesi saat ini:"),
+            (Locale::Ja, "現在のセッションのPodワーカー："),
+            (Locale::Ko, "현재 세션의 Pod 워커:"),
+            (Locale::PtBr, "Workers do Pod da sessão atual:"),
+            (Locale::Ru, "Воркеры Pod текущего сеанса:"),
+            (Locale::Uk, "Воркери Pod поточного сеансу:"),
+            (Locale::Vi, "Worker Pod của phiên hiện tại:"),
+            (Locale::ZhHans, "当前会话的 Pod 工作器："),
+            (Locale::ZhHant, "目前工作階段的 Pod 工作器："),
+        ];
+        assert_eq!(expected.len(), Locale::shipped_complete().len());
+
+        for (locale, value) in expected {
+            assert_eq!(
+                tr(locale, MessageId::HomeSubagents),
+                value,
+                "{}",
+                locale.tag()
+            );
+        }
+    }
+
+    #[test]
+    fn es_419_setup_review_hint_records_only_the_setup_snapshot() {
+        assert_eq!(
+            tr(Locale::Es419, MessageId::SetupOperateReviewHint),
+            "Enter registra esta instantánea de configuración."
+        );
     }
 
     #[test]

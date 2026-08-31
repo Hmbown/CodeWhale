@@ -1617,20 +1617,20 @@ pub struct RunSummaryDto {
 }
 
 impl RunSummaryDto {
-    /// Full detail rendering, shared by `lane status` and `/lane status`.
+    /// Full stable receipt-detail rendering, shared by status surfaces.
+    ///
+    /// Public commands call the Fleet domain a Pod, but these field labels are
+    /// part of the serialized receipt/detail compatibility boundary. Keep the
+    /// durable domain and `fleet` field spellings here.
     #[must_use]
     pub fn render_detail(&self) -> String {
         let mut out = String::new();
-        out.push_str(&format!(
-            "{}:      {}\n",
-            self.domain.public_name(),
-            self.run_id
-        ));
+        out.push_str(&format!("{}:      {}\n", self.domain.as_str(), self.run_id));
         out.push_str(&format!("status:    {}\n", self.status));
         out.push_str(&format!("lifecycle: {}\n", self.lifecycle_seq.render()));
         out.push_str(&format!("runtime:   {}\n", self.runtime.render()));
         out.push_str(&format!("workflow:  {}\n", self.workflow.render()));
-        out.push_str(&format!("pod:       {}\n", self.fleet.render()));
+        out.push_str(&format!("fleet:     {}\n", self.fleet.render()));
         out.push_str(&format!("issue:     {}\n", self.issue.render()));
         out.push_str(&format!("goal:      {}\n", self.goal.render()));
         out.push_str(&format!("started:   {}\n", self.started_at.render()));
