@@ -156,7 +156,7 @@ pub fn event_label(payload: &FleetWorkerEventPayload) -> String {
 #[must_use]
 pub fn status_lines(status: &FleetStatusSnapshot) -> Vec<String> {
     let mut lines = vec![format!(
-        "fleet: runs={} queued={} running={} completed={} partial={} failed={} restarted={} \
+        "pod: runs={} queued={} running={} completed={} partial={} failed={} restarted={} \
          escalated={} transport_failed={} task_failed={} verifier_failed={} cancelled={} stale={}",
         status.runs,
         status.queued,
@@ -190,7 +190,7 @@ pub fn status_lines(status: &FleetStatusSnapshot) -> Vec<String> {
     lines
 }
 
-/// Exactly the text `codewhale fleet status` has always printed.
+/// Human-readable status shared by `codewhale pod status` and `/pod status`.
 #[must_use]
 pub fn render_fleet_status_snapshot(status: &FleetStatusSnapshot) -> String {
     status_lines(status).join("\n")
@@ -489,7 +489,7 @@ pub fn execute_fleet_control_with(
             None,
             ControlFailure::new(
                 ControlFailureKind::InvalidTarget,
-                format!("{} is not a Fleet verb", descriptor.id),
+                format!("{} is not a Pod verb", descriptor.id),
             ),
         );
     }
@@ -558,7 +558,7 @@ pub fn execute_fleet_control_with(
                             surface,
                             Some(target.clone()),
                             ControlFailure::not_found(format!(
-                                "no fleet worker with id {} in this workspace's ledger",
+                                "no Pod worker with id {} in this workspace's ledger",
                                 target.id
                             )),
                         );
@@ -648,7 +648,7 @@ pub fn execute_fleet_control_with(
                         + report.failed
                         + report.escalated;
                     let detail = [format!(
-                        "fleet resume: {} reclaimed_stale={} restarted={} failed={} escalated={}",
+                        "pod resume: {} reclaimed_stale={} restarted={} failed={} escalated={}",
                         report.run_id.0,
                         report.reclaimed_stale,
                         report.restarted,
@@ -853,7 +853,7 @@ mod tests {
                 receipt
                     .detail
                     .iter()
-                    .any(|line| line.starts_with("fleet: runs=")),
+                    .any(|line| line.starts_with("pod: runs=")),
                 "the durable ledger snapshot must be the payload"
             );
             let mut normalized = receipt.clone();
@@ -884,7 +884,7 @@ mod tests {
                 receipt
                     .availability
                     .hint()
-                    .is_some_and(|hint| hint.contains("codewhale fleet restart"))
+                    .is_some_and(|hint| hint.contains("codewhale pod restart"))
             );
         }
     }

@@ -319,7 +319,8 @@ enum Commands {
     Speech(SpeechArgs),
     /// Run a non-interactive prompt. Use --auto for agent-with-tools mode.
     Exec(ExecArgs),
-    /// Manage local Agent Fleet runs and workers
+    /// Manage local Agent Pod runs and workers (`fleet` is a compatibility alias)
+    #[command(name = "pod", alias = "fleet")]
     Fleet(FleetArgs),
     /// Internal model-free Workflow tool dispatcher used by Lane Runtime.
     #[command(name = "workflow-tool", hide = true)]
@@ -569,54 +570,54 @@ struct FleetArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 enum FleetCommand {
-    /// Initialize the local fleet ledger for this workspace
+    /// Initialize the local Pod ledger for this workspace
     Init,
     /// Create a run from a task spec and start the foreground manager loop
     Run(FleetRunArgs),
-    /// List durable Fleet runs from this workspace's ledger
+    /// List durable Pod runs from this workspace's ledger
     List,
-    /// Show queued/running/completed/failed/stale fleet counts
+    /// Show queued/running/completed/failed/stale Pod counts
     Status,
     /// Inspect one worker's status, heartbeat, latest event, and artifacts
     Inspect {
-        /// Worker id printed by `codewhale fleet run`
+        /// Worker id printed by `codewhale pod run`
         worker_id: String,
     },
     /// Print bounded log artifacts for one worker
     Logs {
-        /// Worker id printed by `codewhale fleet run`
+        /// Worker id printed by `codewhale pod run`
         worker_id: String,
     },
     /// List artifact refs for one worker
     Artifacts {
-        /// Worker id printed by `codewhale fleet run`
+        /// Worker id printed by `codewhale pod run`
         worker_id: String,
     },
     /// Interrupt a running worker task and record a terminal cancellation
     Interrupt {
-        /// Worker id printed by `codewhale fleet run`
+        /// Worker id printed by `codewhale pod run`
         worker_id: String,
     },
     /// Restart the latest task for a worker
     Restart {
-        /// Worker id printed by `codewhale fleet run`
+        /// Worker id printed by `codewhale pod run`
         worker_id: String,
     },
     /// Resume a run from durable ledger state, reconciling orphaned/stale leases
     Resume {
-        /// Run id printed by `codewhale fleet run`
+        /// Run id printed by `codewhale pod run`
         run_id: String,
         /// Seconds without heartbeat before a leased task is treated as stale
         #[arg(long, default_value_t = 300)]
         stale_after_seconds: u64,
     },
-    /// Stop all queued and running fleet work
+    /// Stop all queued and running Pod work
     Stop {
-        /// Confirm stopping all queued and running fleet tasks
+        /// Confirm stopping all queued and running Pod tasks
         #[arg(long, required = true)]
         all: bool,
     },
-    /// Render a redacted fleet alert payload without sending it
+    /// Render a redacted Pod alert payload without sending it
     AlertDryRun(FleetAlertDryRunArgs),
 }
 
@@ -641,7 +642,7 @@ struct FleetAlertDryRunArgs {
     /// Alert event class to render
     #[arg(long, value_enum)]
     event: FleetAlertEventArg,
-    /// Fleet run id
+    /// Pod run id
     #[arg(long)]
     run_id: String,
     /// Worker id, when the event belongs to one worker
@@ -651,7 +652,7 @@ struct FleetAlertDryRunArgs {
     #[arg(long)]
     task_id: Option<String>,
     /// Short human-readable reason for the alert
-    #[arg(long, default_value = "manual fleet alert dry-run")]
+    #[arg(long, default_value = "manual Pod alert dry-run")]
     reason: String,
     /// Status label to include in the payload
     #[arg(long)]
@@ -3096,7 +3097,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
             let path = workspace.join(&artifact.path);
             println!("== {} ==", artifact.path.display());
             let contents = std::fs::read_to_string(&path)
-                .with_context(|| format!("reading fleet log {}", path.display()))?;
+                .with_context(|| format!("reading Pod log {}", path.display()))?;
             let preview: String = contents.chars().take(16 * 1024).collect();
             // Worker logs can contain captured terminal bytes (a child TUI's
             // mouse-tracking handshake, SGR, OSC). Printing them raw would
@@ -3215,7 +3216,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
         .with_route_config(config.clone());
     match args.command {
         FleetCommand::Init => {
-            println!("fleet ledger: {}", manager.ledger_path().display());
+            println!("Pod ledger: {}", manager.ledger_path().display());
             Ok(())
         }
         FleetCommand::Run(args) => {
@@ -3224,7 +3225,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
                 manager.with_stale_after(Duration::from_secs(args.stale_after_seconds.max(1)));
             let report = manager.create_run_from_task_spec_path(&args.task_spec, max_workers)?;
             println!(
-                "fleet run: {} tasks={} leased={} queued={}",
+                "Pod run: {} tasks={} leased={} queued={}",
                 report.run_id.0, report.task_count, report.leased, report.queued
             );
             for warning in &report.warnings {
@@ -3239,7 +3240,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
                 return Ok(());
             }
             println!(
-                "manager loop running; use `codewhale fleet status`, `inspect`, `interrupt`, or `stop --all` from another terminal."
+                "manager loop running; use `codewhale pod status`, `inspect`, `interrupt`, or `stop --all` from another terminal."
             );
             let mut executor = FleetExecutor::new(workspace);
             let codewhale_binary = fleet::executor::configured_codewhale_binary();
@@ -3299,7 +3300,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
             let report = manager.restart_worker(&worker_id)?;
             print_inspection(&report.inspection);
             println!(
-                "manager loop running for restarted run {}; use `codewhale fleet status`, `inspect`, `interrupt`, or `stop --all` from another terminal.",
+                "manager loop running for restarted run {}; use `codewhale pod status`, `inspect`, `interrupt`, or `stop --all` from another terminal.",
                 report.run_id.0
             );
             let mut executor = FleetExecutor::new(workspace);
@@ -3333,7 +3334,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
         }
         FleetCommand::Stop { all } => {
             if !all {
-                bail!("pass --all to stop all fleet work");
+                bail!("pass --all to stop all Pod work");
             }
             let stopped = manager.stop_all()?;
             println!("stopped: {stopped}");
@@ -6004,7 +6005,7 @@ fn print_doctor_setup_report(
         doctor_ready_label(update_ready)
     );
     println!(
-        "  {operate_icon} operate/fleet: {}",
+        "  {operate_icon} operate/pod: {}",
         doctor_ready_label(operate_ready)
     );
     println!(
@@ -6034,7 +6035,7 @@ fn print_doctor_setup_report(
         );
     }
     println!(
-        "  · next actions: /constitution (standing law), /setup report (readiness), /setup provider or /provider setup <name> (provider credentials), /model (route), /config (runtime posture), /setup fleet (Operate/Fleet readiness), /pod setup (explicit profile authoring), /setup hotbar (optional shortcuts), /setup tools (Tools/MCP readiness), /setup remote (remote runtime on-ramp), /setup persistence (path review)"
+        "  · next actions: /constitution (standing law), /setup report (readiness), /setup provider or /provider setup <name> (provider credentials), /model (route), /config (runtime posture), /setup pod (Operate/Pod readiness), /pod setup (explicit profile authoring), /setup hotbar (optional shortcuts), /setup tools (Tools/MCP readiness), /setup remote (remote runtime on-ramp), /setup persistence (path review)"
     );
     for step in codewhale_config::SetupStep::ALL {
         let entry = state.steps.get(&step);
@@ -6061,7 +6062,7 @@ fn print_doctor_fleet_roster_layers(config: &Config, workspace: &Path) {
     let roster =
         crate::fleet::identity::load_effective_roster(&config.fleet_config(), workspace, None);
     println!();
-    println!("{}", "Fleet roster layers:".bold());
+    println!("{}", "Pod roster layers:".bold());
     if let Some(error) = roster.load_error() {
         println!("  ! {error}");
         return;
@@ -6637,7 +6638,7 @@ fn doctor_setup_report_json(config: &Config, workspace: &Path) -> serde_json::Va
             "setup_report": "/setup report",
             "provider_model": "/setup provider, /provider setup <name>, or /model",
             "runtime_posture": "/config",
-            "operate_fleet": "/setup fleet (readiness), /pod setup (explicit profile authoring)",
+            "operate_fleet": "/setup pod (readiness), /pod setup (explicit profile authoring)",
             "hotbar": "/setup hotbar",
             "tools_mcp": "/setup tools",
             "remote_runtime": "/setup remote",
@@ -7949,7 +7950,7 @@ fn apply_selected_fleet_operator_for_launch(
     }
     let Some(selected) = crate::fleet::store::resolve_selected_fleet(workspace).map_err(|_| {
         anyhow!(
-            "Selected Fleet is missing or unreadable; inspect /pod and repair or clear the selection."
+            "Selected Pod is missing or unreadable; inspect /pod and repair or clear the selection."
         )
     })?
     else {
@@ -7958,7 +7959,7 @@ fn apply_selected_fleet_operator_for_launch(
     let fleet_name = crate::safe_label::SafeLabel::phrase(&selected.name);
     let (fleet, _) = crate::fleet::store::load_fleet_at(&selected.path).map_err(|_| {
         anyhow!(
-            "selected Fleet '{}' ({}) is invalid or unreadable; inspect /pod and repair or clear the selection.",
+            "selected Pod '{}' ({}) is invalid or unreadable; inspect /pod and repair or clear the selection.",
             fleet_name,
             selected.scope.label()
         )
@@ -7970,7 +7971,7 @@ fn apply_selected_fleet_operator_for_launch(
     let model_id = operator.model.trim();
     if provider_id.is_empty() || model_id.is_empty() {
         bail!(
-            "selected Fleet '{}' has an incomplete operator route; provider and model must both be non-empty",
+            "selected Pod '{}' has an incomplete operator route; provider and model must both be non-empty",
             fleet_name
         );
     }
@@ -7981,7 +7982,7 @@ fn apply_selected_fleet_operator_for_launch(
         .resolve_provider_pin_identity(provider_id)
         .map_err(|error| {
             anyhow!(
-                "selected Fleet '{}' operator provider '{}' is unavailable: {}",
+                "selected Pod '{}' operator provider '{}' is unavailable: {}",
                 fleet_name,
                 safe_provider_id,
                 crate::safe_label::safe_error_text(&error)
@@ -7991,7 +7992,7 @@ fn apply_selected_fleet_operator_for_launch(
         crate::route_runtime::resolve_runtime_route_for_identity(config, &identity, Some(model_id))
             .map_err(|error| {
                 anyhow!(
-                    "selected Fleet '{}' operator route {}/{} is invalid: {}",
+                    "selected Pod '{}' operator route {}/{} is invalid: {}",
                     fleet_name,
                     safe_provider_id,
                     safe_model_id,
@@ -8009,7 +8010,7 @@ fn apply_selected_fleet_operator_for_launch(
             .filter(|reasoning| !reasoning.is_empty())
         && let Some(reasoning) = normalize_cli_reasoning_effort(reasoning).map_err(|error| {
             anyhow!(
-                "selected Fleet '{}' has invalid operator reasoning: {}",
+                "selected Pod '{}' has invalid operator reasoning: {}",
                 fleet_name,
                 crate::safe_label::safe_error_text(&error.to_string())
             )
@@ -12176,7 +12177,7 @@ fn validate_exec_tool_authority_resume(
 ) -> Result<()> {
     if tool_authority_json.is_some() && resuming {
         bail!(
-            "Fleet tool authority cannot be combined with exec --resume, --session-id, or --continue"
+            "Pod tool authority cannot be combined with exec --resume, --session-id, or --continue"
         );
     }
     Ok(())
@@ -12925,7 +12926,7 @@ mod doctor_setup_state_tests {
         assert_eq!(report["next_actions"]["runtime_posture"], "/config");
         assert_eq!(
             report["next_actions"]["operate_fleet"],
-            "/setup fleet (readiness), /pod setup (explicit profile authoring)"
+            "/setup pod (readiness), /pod setup (explicit profile authoring)"
         );
         assert_eq!(report["next_actions"]["hotbar"], "/setup hotbar");
         assert_eq!(report["next_actions"]["tools_mcp"], "/setup tools");
@@ -13484,7 +13485,7 @@ mod doctor_setup_state_tests {
             .expect("steps array")
             .iter()
             .find(|step| step["step"] == "operate_fleet")
-            .expect("operate/fleet step");
+            .expect("operate/pod step");
         assert_eq!(operate_step["status"], "verified");
         assert!(
             operate_step["result"]
@@ -14515,7 +14516,7 @@ reasoning = "high"
                 true,
                 false,
             )
-            .expect("explicit route bypasses Fleet operator")
+            .expect("explicit route bypasses Pod operator")
         );
         assert_eq!(
             explicit.api_provider(),
@@ -14552,7 +14553,7 @@ reasoning = "high"
             false,
             true,
         )
-        .expect("explicit reasoning coexists with Fleet route");
+        .expect("explicit reasoning coexists with Pod route");
         assert_eq!(
             reasoning_override.default_model(),
             "deepseek-v4-flash-vision-exp"
@@ -14573,12 +14574,12 @@ reasoning = "high"
             fleets.join(format!("{secret_marker}.toml")),
             format!("invalid TOML /Users/operator/private {secret_marker}\n"),
         )
-        .expect("invalid Fleet");
+        .expect("invalid Pod");
 
         let mut config = Config::default();
         let message =
             apply_selected_fleet_operator_for_launch(&mut config, workspace.path(), false, false)
-                .expect_err("invalid selected Fleet must fail")
+                .expect_err("invalid selected Pod must fail")
                 .to_string();
 
         assert!(!message.contains(&workspace.path().display().to_string()));
@@ -16080,7 +16081,7 @@ reasoning = "high"
         assert!(validate_exec_tool_authority_resume(None, true).is_ok());
         assert!(validate_exec_tool_authority_resume(Some("{}"), false).is_ok());
         let error = validate_exec_tool_authority_resume(Some("{}"), true)
-            .expect_err("authority must remain bound to its fresh Fleet launch")
+            .expect_err("authority must remain bound to its fresh Pod launch")
             .to_string();
         assert!(error.contains("cannot be combined with exec --resume"));
     }

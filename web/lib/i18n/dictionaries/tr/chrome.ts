@@ -8,7 +8,7 @@ import type { ChromeDict } from "../types";
  * geliştirici topluluğunun alışıldığı samimi «sen» dili.
  *
  * Modlar ve izin duruşları (posture) literal kalır (Plan / Work / Operate,
- * Ask / Auto-Review / Full Access); `Runtime`, `Fleet` ve `TUI` ürün adı
+ * Ask / Auto-Review / Full Access); `Runtime`, `Pod` ve `TUI` ürün adı
  * olarak kalır, «makbuz» receipt karşılığıdır.
  *
  * İkincil gezinme etiketleri Türkçe birinciyi kısa bir İngilizce eşle

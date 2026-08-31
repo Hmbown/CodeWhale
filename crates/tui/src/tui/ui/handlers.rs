@@ -1358,9 +1358,9 @@ pub(crate) async fn handle_view_events(
                 .await;
             }
             ViewEvent::FleetRosterOpenSetupRequested { member_id } => {
-                // The shared router opens the selected v2 Fleet's exact editor
+                // The shared router opens the selected v2 Pod's exact editor
                 // (focused on this member) or the legacy wizard when no named
-                // Fleet is selected.
+                // Pod is selected.
                 open_fleet_setup_target(app, config, Some(&member_id));
             }
             ViewEvent::FleetRosterOpenModelRequested { member_id } => {
@@ -1375,7 +1375,7 @@ pub(crate) async fn handle_view_events(
                     } else {
                         app.set_sticky_status(
                             format!(
-                                "Could not open Fleet `{name}` ({}) — the file may have moved or                                  become unreadable.",
+                                "Could not open Pod `{name}` ({}) — the file may have moved or become unreadable.",
                                 scope.label()
                             ),
                             crate::tui::app::StatusToastLevel::Error,
@@ -1423,7 +1423,7 @@ pub(crate) async fn handle_view_events(
                 let _ = engine_handle.try_send(Op::ListSubAgents);
             }
             ViewEvent::FleetSetupExternalConsentActivationRequested { provider_id, model } => {
-                // Validate the selected Fleet route by minting the read-only
+                // Validate the selected Pod route by minting the read-only
                 // external credential capability only for this exact
                 // provider/source/path. The check is route-scoped: a cloned
                 // config has the target provider active so credential discovery
@@ -1431,7 +1431,7 @@ pub(crate) async fn handle_view_events(
                 // mutated.
                 let Some(provider) = ApiProvider::parse(&provider_id) else {
                     app.set_sticky_status(
-                        format!("Fleet route activation failed: unknown provider `{provider_id}`"),
+                        format!("Pod route activation failed: unknown provider `{provider_id}`"),
                         crate::tui::app::StatusToastLevel::Error,
                         None,
                     );
@@ -1450,7 +1450,7 @@ pub(crate) async fn handle_view_events(
                             .record_success(&scoped, provider, &validated.model);
                         app.push_status_toast(
                             format!(
-                                "{provider_label} route activated for Fleet: {}",
+                                "{provider_label} route activated for Pod: {}",
                                 validated.model
                             ),
                             crate::tui::app::StatusToastLevel::Success,
@@ -1474,7 +1474,7 @@ pub(crate) async fn handle_view_events(
                         );
                     }
                 }
-                // Refresh the Fleet setup view from a snapshot built against the
+                // Refresh the Pod setup view from a snapshot built against the
                 // updated health state so the activated row becomes Ready
                 // without closing the modal.
                 if app.view_stack.top_kind() == Some(crate::tui::views::ModalKind::FleetSetup)
@@ -1518,7 +1518,7 @@ pub(crate) async fn handle_view_events(
                         Ok(dir) => dir,
                         Err(err) => {
                             app.set_sticky_status(
-                                format!("Fleet {} scope is unavailable: {err:#}", scope.label()),
+                                format!("Pod {} scope is unavailable: {err:#}", scope.label()),
                                 StatusToastLevel::Error,
                                 None,
                             );
@@ -1596,37 +1596,29 @@ pub(crate) async fn handle_view_events(
                         let zh = app.ui_locale == crate::localization::Locale::ZhHans;
                         app.add_message(HistoryCell::System {
                             content: if zh {
-                                format!("已保存 Fleet 配置：{}", target.display())
+                                format!("已保存 Pod 配置：{}", target.display())
                             } else {
-                                format!(
-                                    "Fleet {} profile saved: {}",
-                                    scope.label(),
-                                    target.display()
-                                )
+                                format!("Pod {} profile saved: {}", scope.label(), target.display())
                             },
                         });
                         app.status_message = Some(if zh {
-                            format!("已保存 Fleet 配置：{}", draft.file_name())
+                            format!("已保存 Pod 配置：{}", draft.file_name())
                         } else if roster_refresh_failed {
                             format!(
-                                "Fleet {} profile saved, but the live roster could not refresh; restart before dispatching {}",
+                                "Pod {} profile saved, but the live roster could not refresh; restart before dispatching {}",
                                 scope.label(),
                                 draft.id
                             )
                         } else {
-                            format!(
-                                "Fleet {} profile saved: {}",
-                                scope.label(),
-                                draft.file_name()
-                            )
+                            format!("Pod {} profile saved: {}", scope.label(), draft.file_name())
                         });
                     }
                     Err(err) => {
                         app.status_message =
                             Some(if app.ui_locale == crate::localization::Locale::ZhHans {
-                                format!("无法保存 Fleet 配置：{err:#}")
+                                format!("无法保存 Pod 配置：{err:#}")
                             } else {
-                                format!("Fleet profile could not be saved: {err:#}")
+                                format!("Pod profile could not be saved: {err:#}")
                             });
                     }
                 }

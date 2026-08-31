@@ -82,6 +82,15 @@ fn selected_fleet_view() -> FleetRosterView {
     view
 }
 
+#[test]
+fn session_subagent_tab_is_named_workers_not_durable_runs() {
+    assert_eq!(
+        tr(Locale::En, MessageId::FleetRosterWorkers),
+        "workers",
+        "the w tab opens current-session sub-agents; durable runs belong to /pod runs"
+    );
+}
+
 fn render_through_stack(make: impl Fn() -> FleetRosterView, w: u16, h: u16) -> Vec<String> {
     let area = Rect::new(0, 0, w, h);
     let mut buf = Buffer::empty(area);
@@ -568,7 +577,7 @@ fn fleet_roster_is_usable_and_opaque_at_blocker_sizes() {
             assert!(text.contains("close"), "{label} {w}x{h}: missing footer");
             // The first impression names Pod as the worker/orchestration surface.
             assert!(
-                text.contains("pod") && text.contains("runs"),
+                text.contains("pod") && text.contains("workers"),
                 "{label} {w}x{h}: missing framing"
             );
             // The selected row's detail is on screen.

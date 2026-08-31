@@ -1047,7 +1047,7 @@ fn headless_worker_registration_enforces_live_claims_and_projects_context() {
 
     let overlap = manager
         .preflight_worker_coordination(&worker("worker-b", "src/a/nested"))
-        .expect_err("overlapping live Fleet writer must remain queued");
+        .expect_err("overlapping live Pod writer must remain queued");
     assert!(overlap.contains("worker-a"), "{overlap}");
     assert_eq!(manager.coordination.contentions.len(), 1);
     assert!(manager.get_worker_record("worker-b").is_none());
@@ -2662,13 +2662,13 @@ fn test_implementer_and_verifier_have_distinct_prompts() {
 #[test]
 fn test_agent_type_prompts_include_shared_output_contract_once() {
     for (agent_type, marker) in [
-        (FleetRole::Worker, "Fleet worker"),
-        (FleetRole::Scout, "Fleet scout"),
-        (FleetRole::Planner, "Fleet planner"),
-        (FleetRole::Reviewer, "Fleet reviewer"),
-        (FleetRole::Builder, "Fleet builder"),
-        (FleetRole::Verifier, "Fleet verifier"),
-        (FleetRole::Custom, "custom Fleet worker"),
+        (FleetRole::Worker, "Pod worker"),
+        (FleetRole::Scout, "Pod scout"),
+        (FleetRole::Planner, "Pod planner"),
+        (FleetRole::Reviewer, "Pod reviewer"),
+        (FleetRole::Builder, "Pod builder"),
+        (FleetRole::Verifier, "Pod verifier"),
+        (FleetRole::Custom, "custom Pod worker"),
     ] {
         let prompt = agent_type.system_prompt();
         assert!(prompt.contains(marker));
@@ -2792,7 +2792,7 @@ fn agent_description_explains_background_child_and_transcript_handle() {
     assert!(description.contains("multiple starts"));
     assert!(description.contains("action=wait"));
     assert!(description.contains("action=claim"));
-    assert!(description.contains("Fleet profile"));
+    assert!(description.contains("Pod profile"));
     assert!(
         estimate_tool_description_tokens_conservative(description) <= 1024,
         "agent description exceeds the conservative 1024-token budget"
@@ -3860,7 +3860,7 @@ async fn agent_roster_action_redacts_selected_fleet_load_details() {
         fleets.join("broken.toml"),
         format!("not valid TOML /Users/operator/private {secret_marker}\n"),
     )
-    .expect("broken Fleet");
+    .expect("broken Pod");
 
     let roster = crate::fleet::identity::load_effective_roster(
         &codewhale_config::FleetConfigToml::default(),
@@ -3877,11 +3877,11 @@ async fn agent_roster_action_redacts_selected_fleet_load_details() {
     let message = tool
         .execute(json!({"action": "roster"}), &ToolContext::new(tmp.path()))
         .await
-        .expect_err("invalid selected Fleet must fail visibly")
+        .expect_err("invalid selected Pod must fail visibly")
         .to_string();
 
     assert!(
-        message.contains("Selected folder Fleet `Broken`"),
+        message.contains("Selected folder Pod `Broken`"),
         "{message}"
     );
     assert!(!message.contains(&tmp.path().display().to_string()));
@@ -3899,7 +3899,7 @@ fn test_apply_spawn_profile_unknown_lists_available_members() {
     let err = apply_spawn_profile(&mut request, &roster).expect_err("unknown profile should fail");
     let message = err.to_string();
     assert!(
-        message.contains("Unknown fleet role/profile 'warlock'"),
+        message.contains("Unknown Pod role/profile 'warlock'"),
         "{message}"
     );
     for member in [
@@ -3990,7 +3990,7 @@ fn test_apply_spawn_profile_scout_yields_explore_type_and_inherits_route() {
     assert_eq!(
         selected.model_route,
         ModelRoute::Inherit,
-        "without Fleet setup the scout inherits the active session model"
+        "without Pod setup the scout inherits the active session model"
     );
     assert_eq!(selected.source, SpawnRouteSource::RunModel);
 }
@@ -4423,7 +4423,7 @@ fn named_fleet_profile_rejects_model_override() {
         .expect_err("model override on named profile must fail");
     let message = err.to_string();
     assert!(
-        message.contains("fleet profile 'scout'") && message.contains("'model' may not be set"),
+        message.contains("Pod profile 'scout'") && message.contains("'model' may not be set"),
         "error should name the profile and the forbidden field: {message}"
     );
     assert!(
@@ -4443,7 +4443,7 @@ fn named_fleet_profile_rejects_model_override() {
         .expect_err("model_strength override on named profile must fail");
     let message = err.to_string();
     assert!(
-        message.contains("fleet profile 'builder'")
+        message.contains("Pod profile 'builder'")
             && message.contains("'model_strength' may not be set"),
         "error should name the profile and the forbidden field: {message}"
     );
@@ -4457,7 +4457,7 @@ fn named_fleet_profile_rejects_model_override() {
     .expect("parse should succeed before apply");
     let err = apply_spawn_profile(&mut request, &roster)
         .expect_err("model_strength on reviewer must fail");
-    assert!(err.to_string().contains("fleet profile 'reviewer'"));
+    assert!(err.to_string().contains("Pod profile 'reviewer'"));
 }
 
 /// 'general' is the single escape hatch that accepts model and model_strength.
@@ -4524,7 +4524,7 @@ fn custom_fleet_profile_also_rejects_model_override() {
         .expect_err("model override on custom named profile must fail");
     let message = err.to_string();
     assert!(
-        message.contains("fleet profile 'my-builder'"),
+        message.contains("Pod profile 'my-builder'"),
         "error must name the custom profile: {message}"
     );
     assert!(
@@ -4657,7 +4657,7 @@ fn test_apply_spawn_profile_appends_instruction_overlay() {
         request.prompt
     );
     assert!(
-        request.prompt.contains("Fleet profile: auditor"),
+        request.prompt.contains("Pod profile: auditor"),
         "{}",
         request.prompt
     );
@@ -4907,7 +4907,7 @@ fn test_parse_spawn_request_accepts_human_role_selector_for_runtime_resolution()
     let roster = isolated_fleet_roster_with("flash-scout", profile);
     let member = apply_spawn_profile(&mut parsed, &roster)
         .expect("human role selector should resolve")
-        .expect("matching Fleet member");
+        .expect("matching Pod member");
     assert_eq!(member.id, "flash-scout");
     assert_eq!(parsed.profile.as_deref(), Some("flash-scout"));
 }
@@ -5032,10 +5032,7 @@ fn test_invalid_role_error_lists_real_aliases() {
     let err = apply_spawn_profile(&mut request, &roster)
         .expect_err("unknown fleet role should fail at runtime resolution")
         .to_string();
-    assert!(
-        err.contains("Unknown fleet role/profile 'nonsense'"),
-        "{err}"
-    );
+    assert!(err.contains("Unknown Pod role/profile 'nonsense'"), "{err}");
     assert!(err.contains("scout"), "hint should list scout: {err}");
     assert!(err.contains("reviewer"), "hint should list reviewer: {err}");
     assert!(err.contains("verifier"), "hint should list verifier: {err}");
@@ -5316,15 +5313,15 @@ fn agent_tool_role_schema_is_a_closed_canonical_enum() {
     ]);
     assert_eq!(
         agent_schema["properties"]["type"]["enum"], expected,
-        "model-facing role schema must advertise exactly the canonical Fleet enum"
+        "model-facing role schema must advertise exactly the canonical Pod enum"
     );
 
     // The description teaches each canonical role and never advertises
     // legacy aliases; those stay at replay/deserialization boundaries.
     let description = schema_property_description(&agent_schema, "type");
     assert!(
-        description.starts_with("Fleet role for this delegated worker."),
-        "type description should lead with the Fleet role contract: {description}"
+        description.starts_with("Pod role for this delegated worker."),
+        "type description should lead with the Pod role contract: {description}"
     );
     let lowered = description.to_ascii_lowercase();
     for legacy in [
@@ -6200,7 +6197,7 @@ fn test_parse_spawn_request_rejects_conflicting_type_and_role() {
     let err = parse_spawn_request(&input).expect_err("conflicting type+role should fail");
     assert!(
         err.to_string()
-            .contains("Fleet role conflicts with the explicit legacy agent type")
+            .contains("Pod role conflicts with the explicit legacy agent type")
     );
 }
 
@@ -8094,11 +8091,11 @@ fn every_fleet_role_catalog_advertises_one_executable_load_skill() {
             .count();
         assert_eq!(
             load_skills, 1,
-            "Fleet role {role:?} must advertise exactly one load_skill"
+            "Pod role {role:?} must advertise exactly one load_skill"
         );
         assert!(
             registry.is_tool_allowed("load_skill"),
-            "Fleet role {role:?} must be able to execute the advertised load_skill"
+            "Pod role {role:?} must be able to execute the advertised load_skill"
         );
 
         if matches!(
@@ -8913,7 +8910,7 @@ async fn write_scope_contention_covers_regular_agent_and_active_fleet_writer() {
             tmp.path().to_path_buf(),
             "src/shared",
         ))
-        .expect("active Fleet writer claim");
+        .expect("active Pod writer claim");
 
     let regular_id = inner.insert_test_running_agent("regular", tmp.path());
     inner
@@ -8936,7 +8933,7 @@ async fn write_scope_contention_covers_regular_agent_and_active_fleet_writer() {
             Vec::new(),
             Vec::new(),
         )
-        .expect_err("regular-agent scope expansion must see active Fleet ownership");
+        .expect_err("regular-agent scope expansion must see active Pod ownership");
     assert!(
         expansion.contains("fleet-writer") && expansion.contains("contention"),
         "{expansion}"
@@ -8953,7 +8950,7 @@ async fn write_scope_contention_covers_regular_agent_and_active_fleet_writer() {
             Arc::clone(&manager),
             runtime,
             FleetRole::Builder,
-            "edit Fleet-owned scope".into(),
+            "edit Pod-owned scope".into(),
             make_assignment(),
             Some(vec![]),
             SubAgentSpawnOptions {
@@ -8967,7 +8964,7 @@ async fn write_scope_contention_covers_regular_agent_and_active_fleet_writer() {
                 ..Default::default()
             },
         )
-        .expect_err("regular-agent launch must see active Fleet ownership");
+        .expect_err("regular-agent launch must see active Pod ownership");
     let launch = launch.to_string();
     assert!(
         launch.contains("fleet-writer") && launch.contains("contention"),
@@ -19390,7 +19387,7 @@ fn the_spawn_boundary_fails_closed_on_a_missing_or_mismatched_authority() {
         let error = verify_fleet_authority_input(&fingerprint, &tampered)
             .expect_err("a tampered envelope must fail closed");
         assert!(
-            error.to_string().contains("fleet authority mismatch"),
+            error.to_string().contains("Pod authority mismatch"),
             "{label}: {error}"
         );
     }

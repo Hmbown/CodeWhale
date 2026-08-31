@@ -55,9 +55,9 @@ impl DoctorPathReport {
         let runtime_store = runtime_config.data_dir;
         let runtime_events = runtime_store.join("events");
         let personal_fleet_definitions = crate::fleet::exact::personal_fleet_definitions_dir()
-            .context("could not resolve the personal Fleet definitions directory")?;
+            .context("could not resolve the personal Pod definitions directory")?;
         let personal_fleet_agents = crate::fleet::profile::personal_agent_profile_dir()
-            .context("could not resolve the personal Fleet agent directory")?;
+            .context("could not resolve the personal Pod agent directory")?;
         let (secrets, _) = codewhale_secrets::FileKeyringStore::default_paths_read_only()
             .context("could not resolve the file secret backend path")?;
         Ok(Self {

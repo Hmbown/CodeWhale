@@ -79,7 +79,7 @@ struct Cli {
         long,
         value_name = "PROVIDER",
         value_parser = parse_provider_identifier,
-        help = "Provider selector; exec/fleet also accept configured custom provider identifiers"
+        help = "Provider selector; exec/pod also accept configured custom provider identifiers"
     )]
     provider: Option<String>,
     #[arg(long)]
@@ -186,7 +186,27 @@ non-interactive filesystem/shell tool use, matching the supported automation
 path used by stream-json wrappers.
 ")]
     Exec(TuiPassthroughArgs),
-    /// Manage durable Agent Fleet runs.
+    /// Manage durable Agent Pod runs.
+    ///
+    /// `pod` is the canonical spelling. `codewhale fleet` remains accepted as
+    /// a compatibility alias for the identical command: the durable ledger,
+    /// receipts, config tables, and `--fleet` workflow flag keep the Fleet
+    /// serialization name.
+    #[command(
+        name = "pod",
+        alias = "fleet",
+        after_help = "\
+Examples:
+  codewhale pod init
+  codewhale pod run tasks.json --max-workers 4
+  codewhale pod status
+
+`codewhale fleet` is a compatibility alias for this command and dispatches
+identically, as `/fleet` does for the `/pod` slash command. What keeps the
+Fleet name is everything that has to stay readable across versions: the
+durable ledger `.codewhale/fleet.jsonl`, saved rosters `fleets/<name>.toml`,
+the `[fleet]` and `[fleets.*]` config tables, and `workflow run --fleet`."
+    )]
     Fleet(TuiPassthroughArgs),
     /// Internal model-free Workflow tool dispatcher used by Lane Runtime.
     #[command(name = "workflow-tool", hide = true)]
@@ -460,7 +480,7 @@ fn top_level_provider_override(
 
     let expected = ProviderKind::names_hint();
     bail!(
-        "invalid value '{provider}' for '--provider <PROVIDER>': expected one of {expected}; configured custom providers are accepted only by exec and fleet"
+        "invalid value '{provider}' for '--provider <PROVIDER>': expected one of {expected}; configured custom providers are accepted only by exec and pod"
     )
 }
 
@@ -481,8 +501,8 @@ fn prepare_raw_provider_tui_dispatch(
             reject_exec_global_flags(&args.args)?;
             tui_args("exec", args.clone())
         }
-        Some(Commands::Fleet(args)) => tui_args("fleet", args.clone()),
-        _ => unreachable!("raw provider validation only permits Exec and Fleet"),
+        Some(Commands::Fleet(args)) => tui_args("pod", args.clone()),
+        _ => unreachable!("raw provider validation only permits Exec and Pod"),
     };
 
     // Dynamic provider config belongs to the TUI schema. Do not parse it
@@ -624,7 +644,7 @@ enum LaneCommand {
         /// Workflow name (e.g. `stopship`).
         #[arg(long)]
         workflow: Option<String>,
-        /// Fleet roster name (e.g. `stopship`).
+        /// Pod roster name (e.g. `stopship`); the flag keeps its compatibility spelling.
         #[arg(long)]
         fleet: Option<String>,
         /// Issue id binding.
@@ -667,8 +687,9 @@ enum WorkflowCommand {
     Run {
         /// Workflow name or path. `stopship` maps to workflows/stopship.workflow.js.
         workflow: String,
-        /// Named Fleet roster (e.g. stopship). Optional: without one, roles
-        /// resolve against the built-in roster and the session route.
+        /// Named Pod roster (e.g. stopship). The flag keeps its compatibility
+        /// spelling. Without one, roles resolve against the built-in roster
+        /// and the session route.
         #[arg(long)]
         fleet: Option<String>,
         /// Issue id binding recorded on the Lane and passed into workflow args.
@@ -1039,14 +1060,12 @@ fn run_workflow_command(
             // loaded and validated before the run starts.
             if let Some(name) = fleet.as_deref() {
                 let roots = named_fleet_search_roots(&workspace);
-                let loaded =
-                    codewhale_workflow::load_named_fleet(name, &roots).with_context(|| {
-                        format!("load fleet `{name}` from {}", display_roots(&roots))
-                    })?;
+                let loaded = codewhale_workflow::load_named_fleet(name, &roots)
+                    .with_context(|| format!("load Pod `{name}` from {}", display_roots(&roots)))?;
                 if workflow == "stopship" || name == "stopship" {
                     loaded
                         .validate_stopship_roles()
-                        .with_context(|| format!("validate stopship roles in fleet `{name}`"))?;
+                        .with_context(|| format!("validate stopship roles in Pod `{name}`"))?;
                 }
             }
 
@@ -1877,7 +1896,7 @@ fn run() -> Result<()> {
         }
         Some(Commands::Fleet(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
-            run_tui_in_process(&cli, &resolved_runtime, tui_args("fleet", args))
+            run_tui_in_process(&cli, &resolved_runtime, tui_args("pod", args))
         }
         Some(Commands::WorkflowTool(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
@@ -6246,8 +6265,81 @@ verbosity = "project-imported"
         ));
     }
 
+    /// Pod is the canonical customer-facing top-level command; `fleet` is a
+    /// compatibility alias that must keep dispatching to the same code path.
+    /// The Fleet spelling survives on purpose in the durable ledger, saved
+    /// roster files, config tables, and the `workflow --fleet` flag.
     #[test]
-    fn exec_and_fleet_accept_builtin_and_raw_provider_identifiers() {
+    fn pod_is_the_canonical_top_level_command_and_fleet_stays_a_compatibility_alias() {
+        for tail in [
+            vec!["init"],
+            vec!["status"],
+            vec!["run", "tasks.json", "--max-workers", "2"],
+        ] {
+            let pod = parse_ok(
+                &std::iter::once("codewhale")
+                    .chain(["pod"])
+                    .chain(tail.iter().copied())
+                    .collect::<Vec<_>>(),
+            );
+            let fleet = parse_ok(
+                &std::iter::once("codewhale")
+                    .chain(["fleet"])
+                    .chain(tail.iter().copied())
+                    .collect::<Vec<_>>(),
+            );
+            let (Some(Commands::Fleet(pod_args)), Some(Commands::Fleet(fleet_args))) =
+                (&pod.command, &fleet.command)
+            else {
+                panic!("both spellings must parse into the same command: {tail:?}");
+            };
+            assert_eq!(pod_args.args, tail, "{tail:?}");
+            assert_eq!(pod_args.args, fleet_args.args, "{tail:?}");
+            assert!(pod.prompt.is_empty() && fleet.prompt.is_empty(), "{tail:?}");
+        }
+
+        // Help advertises Pod. The alias still resolves, but discovery has one
+        // canonical answer, so `fleet` must not be listed as its own command.
+        let help = help_for(&["codewhale", "--help"]);
+        let commands = help
+            .lines()
+            .map(str::trim_start)
+            .filter(|line| line.starts_with("pod") || line.starts_with("fleet"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            commands.len(),
+            1,
+            "expected exactly one entry: {commands:?}"
+        );
+        assert!(commands[0].starts_with("pod"), "{commands:?}");
+        assert!(
+            commands[0].contains("Pod"),
+            "help summary should name Pod: {commands:?}"
+        );
+        assert!(
+            !help.contains("Manage durable Agent Fleet runs"),
+            "the old Fleet-led summary must be gone from top-level help"
+        );
+
+        let pod_help = help_for(&["codewhale", "pod", "--help"]);
+        assert!(pod_help.contains("Manage durable Agent Pod runs"));
+        assert!(pod_help.contains("codewhale pod run tasks.json --max-workers 4"));
+        assert!(pod_help.contains("codewhale fleet` is a compatibility alias"));
+
+        // Both spellings normalize to the canonical inner command so receipts
+        // and any echoed invocation never regress to the compatibility name.
+        let args = TuiPassthroughArgs {
+            args: vec!["status".into()],
+        };
+        assert_eq!(
+            tui_args("pod", args.clone()),
+            vec!["pod".to_string(), "status".to_string()]
+        );
+        assert!(command_accepts_raw_provider(Some(&Commands::Fleet(args))));
+    }
+
+    #[test]
+    fn exec_and_pod_accept_builtin_and_raw_provider_identifiers() {
         let builtin = parse_ok(&["codewhale", "--provider", "openrouter", "exec", "Reply OK"]);
         assert_eq!(builtin.provider.as_deref(), Some("openrouter"));
         assert_eq!(
@@ -6269,6 +6361,7 @@ verbosity = "project-imported"
 
         for (provider, command) in [
             ("lm-studio", vec!["exec", "Reply OK"]),
+            ("lm-studio", vec!["pod", "status"]),
             ("lm-studio", vec!["fleet", "status"]),
         ] {
             let argv = std::iter::once("codewhale")
@@ -6352,13 +6445,13 @@ verbosity = "project-imported"
     }
 
     #[test]
-    fn raw_provider_ids_remain_restricted_to_exec_and_fleet() {
+    fn raw_provider_ids_remain_restricted_to_exec_and_pod() {
         let cli = parse_ok(&["codewhale", "--provider", "lm-studio", "model", "list"]);
         let err = top_level_provider_override(cli.provider.as_deref(), cli.command.as_ref())
             .expect_err("model registry commands still require a built-in provider");
         assert!(
             err.to_string()
-                .contains("configured custom providers are accepted only by exec and fleet")
+                .contains("configured custom providers are accepted only by exec and pod")
         );
 
         let err = Cli::try_parse_from(["codewhale", "auth", "set", "--provider", "lm-studio"])

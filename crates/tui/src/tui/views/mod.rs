@@ -944,14 +944,15 @@ pub enum ViewEvent {
         /// identify which row the operator selected.
         member_id: String,
     },
-    /// Open the live workers tab from the unified Fleet surface.
+    /// Open the live workers tab from the unified Pod surface.
     FleetRosterOpenWorkersRequested,
 
-    /// The roster asks the host to open the secondary named-Fleet switcher
-    /// (`/pod fleets`). Editing stays on setup; this is pick/select only.
+    /// The roster asks the host to open the secondary named-Pod switcher
+    /// (`/pod pods`; `/pod fleets` remains compatible). Editing stays on
+    /// setup; this is pick/select only.
     FleetRosterOpenFleetsRequested,
 
-    /// The Fleet list view asks the host to open a saved Fleet's detail view.
+    /// The Pod list view asks the host to open a saved Pod's detail view.
     FleetListOpenDetailRequested {
         name: String,
         scope: crate::fleet::store::FleetScope,
@@ -5614,7 +5615,7 @@ impl ModalView for SubAgentsView {
 
         if self.agents.is_empty() {
             lines.push(Line::from(Span::styled(
-                "No Fleet workers running.",
+                tr(self.locale, MessageId::SubagentsNoCurrentSessionPodWorkers),
                 Style::default().fg(palette::TEXT_MUTED),
             )));
             lines.push(Line::from(Span::styled(
@@ -5638,11 +5639,17 @@ impl ModalView for SubAgentsView {
             ];
 
             lines.push(Line::from(Span::styled(
-                "Fleet workers",
+                tr(
+                    self.locale,
+                    MessageId::SubagentsCurrentSessionPodWorkersTitle,
+                ),
                 Style::default().fg(palette::WHALE_INFO).bold(),
             )));
             lines.push(Line::from(Span::styled(
-                "Sub-agent roles are Fleet worker roles.",
+                tr(
+                    self.locale,
+                    MessageId::SubagentsCurrentSessionPodWorkerRoles,
+                ),
                 Style::default().fg(palette::TEXT_DIM),
             )));
 
@@ -5715,10 +5722,7 @@ impl ModalView for SubAgentsView {
             .split(content);
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled(
-                    "─ fleet ",
-                    Style::default().fg(palette::WHALE_ACTION).bold(),
-                ),
+                Span::styled("─ pod ", Style::default().fg(palette::WHALE_ACTION).bold()),
                 Span::styled(
                     "──────────────────────── ",
                     Style::default().fg(palette::BORDER_COLOR),
@@ -6116,6 +6120,72 @@ mod tests {
         assert_modal_usable_and_opaque(
             || SubAgentsView::new(Vec::new()),
             &["close", "refresh", "setup"],
+        );
+    }
+
+    #[test]
+    fn subagents_modal_names_current_session_pod_workers_in_each_locale() {
+        let area = Rect::new(0, 0, 160, 40);
+        let app = create_test_app();
+
+        let empty = SubAgentsView::for_app(&app, Vec::new());
+        let mut empty_buf = Buffer::empty(area);
+        empty.render(area, &mut empty_buf);
+        let empty_text = buffer_text(&empty_buf, area);
+        assert!(
+            empty_text.contains("No current-session Pod workers."),
+            "{empty_text}"
+        );
+
+        let english = SubAgentsView::for_app(
+            &app,
+            vec![manager_agent("agent_live", SubAgentStatus::Running)],
+        );
+        let mut english_buf = Buffer::empty(area);
+        english.render(area, &mut english_buf);
+        let english_text = buffer_text(&english_buf, area);
+        assert!(
+            english_text.contains("Current-session Pod workers"),
+            "{english_text}"
+        );
+        assert!(
+            english_text.contains("Sub-agent roles are current-session Pod worker roles."),
+            "{english_text}"
+        );
+
+        let mut zh_hans_app = create_test_app();
+        zh_hans_app.ui_locale = Locale::ZhHans;
+        let zh_hans = SubAgentsView::for_app(
+            &zh_hans_app,
+            vec![manager_agent("agent_live", SubAgentStatus::Running)],
+        );
+        let mut zh_hans_buf = Buffer::empty(area);
+        zh_hans.render(area, &mut zh_hans_buf);
+        let zh_hans_text = buffer_text(&zh_hans_buf, area);
+        // Ratatui gives each CJK glyph a trailing buffer cell. Strip those
+        // layout spaces before asserting the actual rendered copy.
+        let zh_hans_compact = zh_hans_text
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>();
+        assert_eq!(
+            tr(
+                Locale::ZhHans,
+                MessageId::SubagentsCurrentSessionPodWorkersTitle
+            ),
+            "当前会话的 Pod 工作器"
+        );
+        assert!(
+            zh_hans_compact.contains("当前会话的Pod工作器"),
+            "{zh_hans_text}"
+        );
+        assert!(
+            zh_hans_compact.contains("子代理角色是当前会话的Pod工作器角色。"),
+            "{zh_hans_text}"
+        );
+        assert!(
+            !zh_hans_text.contains("Current-session Pod workers"),
+            "{zh_hans_text}"
         );
     }
 

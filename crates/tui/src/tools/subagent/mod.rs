@@ -388,7 +388,7 @@ const VALID_SUBAGENT_TYPES: &str = "worker, scout, planner, reviewer, builder, v
 /// resolves to a canonical role (avoids the dual-validation rejection in #2649).
 const VALID_ROLE_ALIASES: &str = "default; worker; scout; planner; reviewer; builder; verifier; consultant; custom \
      (legacy aliases remain accepted)";
-/// Canonical model-facing Fleet role values, in schema order. This is the
+/// Canonical model-facing Pod role values, in schema order. This is the
 /// closed `enum` advertised on the Agent tool's `type` property. Legacy
 /// aliases are accepted only at replay/deserialization boundaries
 /// ([`migrate_legacy_role_token`]) and are never advertised to models.
@@ -402,7 +402,7 @@ const FLEET_ROLE_SCHEMA_VALUES: [&str; 8] = [
     "consultant",
     "custom",
 ];
-const SUBAGENT_TYPE_DESCRIPTION: &str = "Fleet role for this delegated worker. worker: full tool access for multi-step tasks. scout: fast read-only exploration. planner: grounded strategy with read-only probes. reviewer: reads and grades code. builder: lands focused code changes. verifier: runs tests/validation gates and reports evidence. consultant: read-only high-reasoning counsel for judgement calls and design critique. custom: the tools listed in allowed_tools on the parent's posture.";
+const SUBAGENT_TYPE_DESCRIPTION: &str = "Pod role for this delegated worker. worker: full tool access for multi-step tasks. scout: fast read-only exploration. planner: grounded strategy with read-only probes. reviewer: reads and grades code. builder: lands focused code changes. verifier: runs tests/validation gates and reports evidence. consultant: read-only high-reasoning counsel for judgement calls and design critique. custom: the tools listed in allowed_tools on the parent's posture.";
 
 // === Types ===
 
@@ -420,10 +420,10 @@ impl SubAgentAssignment {
     }
 }
 
-/// Canonical Fleet role for a delegated worker, with specialized behavior
+/// Canonical Pod role for a delegated worker, with specialized behavior
 /// and tool access per role.
 ///
-/// **Public vocabulary is Fleet roles** (`worker`, `scout`, `planner`,
+/// **Public vocabulary is Pod roles** (`worker`, `scout`, `planner`,
 /// `reviewer`, `builder`, `verifier`, `custom`) and the variants match that
 /// vocabulary one-to-one. Serialization, prompts, receipts, and UI always
 /// use [`Self::as_str`]. Legacy wire spellings (`general`, `explore`,
@@ -433,7 +433,7 @@ impl SubAgentAssignment {
 /// This is the closed runtime role set. It is distinct from
 /// `codewhale_config::FleetRole`, which is the open config-side role
 /// *declaration* (free-form name plus instruction overlay) carried by a
-/// Fleet profile.
+/// Pod profile. The `FleetRole` type name remains a compatibility identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum FleetRole {
     /// General-purpose worker - full tool access for multi-step tasks.
@@ -512,14 +512,14 @@ pub fn migrate_legacy_role_token(token: &str) -> Option<&'static str> {
 }
 
 impl FleetRole {
-    /// Parse a Fleet role from user input or a serialized boundary.
+    /// Parse a Pod role from user input or a serialized boundary.
     ///
-    /// Accepts Fleet role names and, at this parse boundary only, legacy
+    /// Accepts Pod role names and, at this parse boundary only, legacy
     /// aliases (`explore` → scout, `plan` → planner, …).
     #[must_use]
     pub fn from_str(s: &str) -> Option<Self> {
         let normalized = s.trim().to_ascii_lowercase();
-        // Boundary migration first, then canonical Fleet names.
+        // Boundary migration first, then canonical Pod names.
         let token = migrate_legacy_role_token(&normalized).unwrap_or(normalized.as_str());
         match token {
             "worker" => Some(Self::Worker),
@@ -534,7 +534,7 @@ impl FleetRole {
         }
     }
 
-    /// Canonical Fleet role label for runtime, schemas, prompts, receipts, UI.
+    /// Canonical Pod role label for runtime, schemas, prompts, receipts, UI.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -566,7 +566,7 @@ impl FleetRole {
         }
     }
 
-    /// Get the system prompt for this Fleet role.
+    /// Get the system prompt for this Pod role.
     #[must_use]
     pub fn system_prompt(&self) -> String {
         let role_intro = match self {
@@ -4718,7 +4718,7 @@ impl SubAgentManager {
             target: "subagent",
             finalized,
             released,
-            "finalized sub-agent fleet on session close"
+            "finalized sub-agent pod on session close"
         );
         finalized
     }
@@ -4889,7 +4889,7 @@ impl SubAgentManager {
             self.worker_records = previous_worker_records;
             self.coordination = previous_coordination;
             return Err(format!(
-                "failed to persist Fleet coordination launch record: {error}"
+                "failed to persist Pod coordination launch record: {error}"
             ));
         }
         Ok(())
@@ -4909,7 +4909,7 @@ impl SubAgentManager {
         self.worker_records = snapshot.worker_records;
         self.coordination = snapshot.coordination;
         self.persist_state_synchronously()
-            .map_err(|error| format!("failed to persist Fleet coordination rollback: {error}"))
+            .map_err(|error| format!("failed to persist Pod coordination rollback: {error}"))
     }
 
     /// The single definition of a live coordination claimant.
@@ -5059,7 +5059,7 @@ impl SubAgentManager {
         let record = self
             .worker_records
             .get_mut(&worker_id)
-            .ok_or_else(|| format!("Fleet worker {worker_id} has no registered launch spec"))?;
+            .ok_or_else(|| format!("Pod worker {worker_id} has no registered launch spec"))?;
         record.spec = spec;
         self.persist_state_synchronously()
             .map_err(|error| format!("failed to persist test worker spec: {error}"))
@@ -5080,23 +5080,21 @@ impl SubAgentManager {
             .worker_records
             .get(&worker_id)
             .cloned()
-            .ok_or_else(|| format!("Fleet worker {worker_id} has no registered launch spec"))?;
+            .ok_or_else(|| format!("Pod worker {worker_id} has no registered launch spec"))?;
         let old_generation = previous
             .spec
             .launch_manifest
             .as_ref()
             .map(|manifest| manifest.generation)
-            .ok_or_else(|| format!("Fleet worker {worker_id} has no persisted launch manifest"))?;
+            .ok_or_else(|| format!("Pod worker {worker_id} has no persisted launch manifest"))?;
         let new_generation = spec
             .launch_manifest
             .as_ref()
             .map(|manifest| manifest.generation)
-            .ok_or_else(|| {
-                format!("Fleet worker {worker_id} replacement has no launch manifest")
-            })?;
+            .ok_or_else(|| format!("Pod worker {worker_id} replacement has no launch manifest"))?;
         if new_generation != old_generation.saturating_add(1) {
             return Err(format!(
-                "Fleet worker {worker_id} restart generation must advance from {old_generation} to {}",
+                "Pod worker {worker_id} restart generation must advance from {old_generation} to {}",
                 old_generation.saturating_add(1)
             ));
         }
@@ -5108,7 +5106,7 @@ impl SubAgentManager {
             .generation = new_generation;
         if expected != spec {
             return Err(format!(
-                "Fleet worker {worker_id} restart may change only its launch generation"
+                "Pod worker {worker_id} restart may change only its launch generation"
             ));
         }
 
@@ -5121,7 +5119,7 @@ impl SubAgentManager {
         if let Err(error) = self.persist_state_synchronously() {
             self.worker_records.insert(worker_id, previous);
             return Err(format!(
-                "failed to persist Fleet restart launch generation: {error}"
+                "failed to persist Pod restart launch generation: {error}"
             ));
         }
         Ok(())
@@ -8393,10 +8391,10 @@ impl ToolSpec for AgentTool {
         concat!(
             "Start with action=start and prompt; returns a turn-owned agent_id immediately. Read-only roles need no extra fields. Set detached=true only for work that must remain independently observable after the turn. ",
             "Use multiple starts for independent parallel tasks. ",
-            "type selects the Fleet role: worker (full tool access), scout (fast read-only exploration), planner (grounded strategy, read-only probes), reviewer (reads and grades code), builder (lands focused code changes), verifier (runs tests and reports evidence), consultant (read-only design counsel), or custom (allowed_tools on the parent's posture). ",
-            "profile runs the child as a named Fleet profile (roster member) — its role posture, model route, and thinking tier — so pass a profile only when the task needs that member. Without a profile the child inherits the parent's model; per-call model or thinking overrides are not part of this surface. ",
-            "Use action=roster to inspect the current selected Fleet's member ids, names, roles, and exact provider/model routes before choosing a profile. ",
-            "Child run budgets (model turns, wall time) come from Fleet role defaults and operator [subagents] config, not per-call fields. ",
+            "type selects the Pod role: worker (full tool access), scout (fast read-only exploration), planner (grounded strategy, read-only probes), reviewer (reads and grades code), builder (lands focused code changes), verifier (runs tests and reports evidence), consultant (read-only design counsel), or custom (allowed_tools on the parent's posture). ",
+            "profile runs the child as a named Pod profile (roster member) — its role posture, model route, and thinking tier — so pass a profile only when the task needs that member. Without a profile the child inherits the parent's model; per-call model or thinking overrides are not part of this surface. ",
+            "Use action=roster to inspect the current selected Pod's member ids, names, roles, and exact provider/model routes before choosing a profile. ",
+            "Child run budgets (model turns, wall time) come from Pod role defaults and operator [subagents] config, not per-call fields. ",
             "worktree=true gives the child an isolated git worktree — use it whenever parallel writers must not collide with the parent checkout. ",
             "A write-capable child defaults write scope to the parent workspace; narrow it with write_roots (repo-relative directory trees) so parallel children claim disjoint scope. ",
             "Prefer type=builder for write work and type=verifier (or the Run tool with action=\"verifiers\") after writes settle — dispatch is not completion. ",
@@ -8434,7 +8432,7 @@ impl ToolSpec for AgentTool {
                 "action": {
                     "type": "string",
                     "enum": ["start", "roster", "status", "peek", "message", "followup", "interrupt", "wait", "claim", "cancel"],
-                    "description": "start launches a turn-owned worker and returns immediately. roster lists the current Fleet members and exact routes. status/peek inspect running or retained workers. message queues a note without waking a running child. followup delivers queued notes and wakes a running child for its next user-provenance model turn. interrupt stops the current turn while preserving the child checkpoint. wait only observes; see until. claim widens your own enforced write scope (see write_roots). cancel permanently cancels a running child."
+                    "description": "start launches a turn-owned worker and returns immediately. roster lists the current Pod members and exact routes. status/peek inspect running or retained workers. message queues a note without waking a running child. followup delivers queued notes and wakes a running child for its next user-provenance model turn. interrupt stops the current turn while preserving the child checkpoint. wait only observes; see until. claim widens your own enforced write scope (see write_roots). cancel permanently cancels a running child."
                 },
                 "until": {
                     "type": "string",
@@ -8468,7 +8466,7 @@ impl ToolSpec for AgentTool {
                 },
                 "profile": {
                     "type": "string",
-                    "description": "Optional Fleet member selector. Use an exact member id, unique display name or role, exact pinned model id, offline model name, or route:provider/model; action=roster lists the current choices. Ambiguous labels are refused and require member:<id>. The resolved member supplies role posture, exact model route, thinking tier, instruction overlay, and delegation bounds. Named profiles bind 1:1 to their configured route; there is no per-call model override on this surface."
+                    "description": "Optional Pod member selector. Use an exact member id, unique display name or role, exact pinned model id, offline model name, or route:provider/model; action=roster lists the current choices. Ambiguous labels are refused and require member:<id>. The resolved member supplies role posture, exact model route, thinking tier, instruction overlay, and delegation bounds. Named profiles bind 1:1 to their configured route; there is no per-call model override on this surface."
                 },
                 "worktree": {
                     "type": "boolean",
@@ -9238,7 +9236,7 @@ fn child_provider_binding(
                     .scoped_config_for_provider_id(&pinned_id)
                     .map_err(|err| {
                         ToolError::execution_failed(format!(
-                            "fleet profile pins provider '{}' but its client could not be built \
+                            "Pod profile pins provider '{}' but its client could not be built \
                          ({err}). Configure that provider's credentials/base URL, or drop the \
                          provider pin to inherit the session provider '{}'.",
                             pinned_id,
@@ -9247,7 +9245,7 @@ fn child_provider_binding(
                     })?;
             let client = DeepSeekClient::new(&scoped_config).map_err(|err| {
                 ToolError::execution_failed(format!(
-                    "fleet profile pins provider '{}' but its client could not be built \
+                    "Pod profile pins provider '{}' but its client could not be built \
                      ({err}). Configure that provider's credentials/base URL, or drop the \
                      provider pin to inherit the session provider '{}'.",
                     pinned_id,
@@ -9319,7 +9317,7 @@ fn enforce_fleet_member_route_requirements(
     )
     .map_err(|error| {
         ToolError::execution_failed(format!(
-            "Fleet member '{member_id}' requirements could not be checked against its exact child route: {}",
+            "Pod member '{member_id}' requirements could not be checked against its exact child route: {}",
             crate::safe_label::safe_error_text(&error.to_string())
         ))
     })?;
@@ -9341,14 +9339,14 @@ fn enforce_fleet_member_route_requirements(
                         codewhale_config::route::CapabilityState::Supported => unreachable!(),
                     };
                     return Err(ToolError::execution_failed(format!(
-                        "Fleet member '{member_id}' requires vision, but exact route {provider_id}/{model_id} has image_input={state}. Codewhale will not reroute a capability-bound member; pin an exact route with verified image_input support."
+                        "Pod member '{member_id}' requires vision, but exact route {provider_id}/{model_id} has image_input={state}. Codewhale will not reroute a capability-bound member; pin an exact route with verified image_input support."
                     )));
                 }
             }
             None => {
                 let requirement = crate::fleet::identity::bounded_identity_field(requirement);
                 return Err(ToolError::execution_failed(format!(
-                    "Fleet member '{member_id}' has unknown capability requirement '{}'; valid values: {}",
+                    "Pod member '{member_id}' has unknown capability requirement '{}'; valid values: {}",
                     requirement,
                     crate::fleet::store::MemberCapability::VOCABULARY.join(", ")
                 )));
@@ -9430,7 +9428,7 @@ async fn spawn_subagent_from_input(
         .rebound_for_model_protocol(child_runtime.api_config.as_deref(), &effective_model)
         .map_err(|err| {
             ToolError::execution_failed(format!(
-                "fleet dispatch could not bind the wire protocol for model {effective_model:?}: {err:#}"
+                "Pod dispatch could not bind the wire protocol for model {effective_model:?}: {err:#}"
             ))
         })?
     {
@@ -9952,7 +9950,7 @@ fn verify_fleet_authority_input(expected: &str, input: &Value) -> Result<()> {
         .collect();
     if !expected.starts_with("v1;") || fields.len() < 8 {
         return Err(anyhow!(
-            "fleet authority fingerprint `{expected}` is not a form this build understands; \
+            "Pod authority fingerprint `{expected}` is not a form this build understands; \
              refusing the spawn rather than launching an unverified child"
         ));
     }
@@ -9998,8 +9996,8 @@ fn verify_fleet_authority_input(expected: &str, input: &Value) -> Result<()> {
         let expected_value = fields.get(key).copied().unwrap_or_default();
         if expected_value != actual {
             return Err(anyhow!(
-                "fleet authority mismatch at the spawn boundary: the receipt names {key}=`{expected_value}` \
-                 but the child would be constructed with `{actual}`. Refusing the spawn — a Fleet \
+                "Pod authority mismatch at the spawn boundary: the receipt names {key}=`{expected_value}` \
+                 but the child would be constructed with `{actual}`. Refusing the spawn — a Pod \
                  ceiling that does not reach the runtime is not a ceiling."
             ));
         }
@@ -12624,7 +12622,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         && type_kind != role_kind
     {
         return Err(ToolError::invalid_input(
-            "Fleet role conflicts with the explicit legacy agent type".to_string(),
+            "Pod role conflicts with the explicit legacy agent type".to_string(),
         ));
     }
 
@@ -13219,7 +13217,7 @@ fn apply_spawn_profile(
             String::new()
         };
         return Err(ToolError::invalid_input(format!(
-            "Unknown fleet role/profile '{profile_id}'. Available fleet roster members: {available}. \
+            "Unknown Pod role/profile '{profile_id}'. Available Pod members: {available}. \
              Type aliases: {VALID_ROLE_ALIASES}. See /pod.{truncation}"
         )));
     };
@@ -13274,7 +13272,7 @@ fn apply_spawn_profile(
                     request.model = None;
                 } else {
                     return Err(ToolError::invalid_input(format!(
-                        "fleet profile '{}' pins model '{}', but the caller requested '{}'. \
+                        "Pod profile '{}' pins model '{}', but the caller requested '{}'. \
                          Named agents use exactly their configured model, route, and posture. \
                          Remove 'model' to use the profile pin, or dispatch without a profile \
                          (type: 'worker'/'general'/'planner'/'custom') to use 'model'.",
@@ -13283,8 +13281,8 @@ fn apply_spawn_profile(
                 }
             } else {
                 return Err(ToolError::invalid_input(format!(
-                    "fleet profile '{}' binds a pre-configured route; 'model' may not be set for \
-                     named fleet roles. Named agents use exactly their configured model, route, and \
+                    "Pod profile '{}' binds a pre-configured route; 'model' may not be set for \
+                     named Pod roles. Named agents use exactly their configured model, route, and \
                      posture — the dispatching model cannot override them. Remove 'model', or dispatch \
                      with type: 'worker'/'general'/'planner'/'custom' (the postures with model options).",
                     member.id
@@ -13293,8 +13291,8 @@ fn apply_spawn_profile(
         }
         if request.model_strength_explicit {
             return Err(ToolError::invalid_input(format!(
-                "fleet profile '{}' binds a pre-configured route; 'model_strength' may not be \
-                 set for named fleet roles. Named agents use exactly their configured model, \
+                "Pod profile '{}' binds a pre-configured route; 'model_strength' may not be \
+                 set for named Pod roles. Named agents use exactly their configured model, \
                  route, and posture — the dispatching model cannot override them. Remove \
                  'model_strength', or dispatch with type: 'worker'/'general'/'planner'/'custom' \
                  (the postures with model options).",
@@ -13328,7 +13326,7 @@ fn apply_spawn_profile(
         if !effort.eq_ignore_ascii_case("inherit") {
             request.thinking = SubAgentThinking::parse(&effort).map_err(|_| {
                 ToolError::invalid_input(format!(
-                    "fleet profile '{}' has invalid reasoning_effort '{effort}'; expected \
+                    "Pod profile '{}' has invalid reasoning_effort '{effort}'; expected \
                      inherit, auto, off, low, medium, high, or max",
                     member.id
                 ))
@@ -13354,7 +13352,7 @@ fn spawn_profile_prompt_overlay(member: &crate::fleet::profile::AgentProfile) ->
         return None;
     }
     let mut overlay = String::new();
-    overlay.push_str("\n\nFleet profile: ");
+    overlay.push_str("\n\nPod profile: ");
     overlay.push_str(&member.id);
     if let Some(display_name) = member.display_name.as_deref() {
         overlay.push_str(" (");
@@ -15307,7 +15305,7 @@ impl SubAgentToolRegistry {
             && !self.agent_action_permitted("claim")
         {
             return Err(anyhow!(
-                "agent action=claim widens an enforced write scope, and the Fleet role `{role}` has no write authority to widen. Use a `builder` or `worker` role.",
+                "agent action=claim widens an enforced write scope, and the Pod role `{role}` has no write authority to widen. Use a `builder` or `worker` role.",
                 role = self.agent_type.as_str()
             ));
         }
@@ -15333,12 +15331,12 @@ impl SubAgentToolRegistry {
         if !self.posture_permits_tool(name, Some(&input)) {
             if self.allows_bounded_readonly_bash(name) {
                 return Err(anyhow!(
-                    "[shell.readonly.command] Tool {name} input did not match the bounded read-only shell grammar for Fleet role `{role}`. Use read-only inspection commands, or a `builder`/`worker` role for mutation or arbitrary execution.",
+                    "[shell.readonly.command] Tool {name} input did not match the bounded read-only shell grammar for Pod role `{role}`. Use read-only inspection commands, or a `builder`/`worker` role for mutation or arbitrary execution.",
                     role = self.agent_type.as_str()
                 ));
             }
             return Err(anyhow!(
-                "[role.posture.denied] Tool {name} is not permitted for the read-only Fleet role `{role}`. Use a `builder` or `worker` role (or `custom` with an explicit allowed_tools list) to mutate the workspace or run shell commands.",
+                "[role.posture.denied] Tool {name} is not permitted for the read-only Pod role `{role}`. Use a `builder` or `worker` role (or `custom` with an explicit allowed_tools list) to mutate the workspace or run shell commands.",
                 role = self.agent_type.as_str()
             ));
         }
@@ -16022,7 +16020,7 @@ fn subagent_status_name(status: &SubAgentStatus) -> &'static str {
 use crate::prompts::text::SUBAGENT_OUTPUT_FORMAT;
 
 const GENERAL_AGENT_INTRO: &str = concat!(
-    "You are a trusted Fleet worker. Your job is to complete the one task you were given, end-to-end, and report back concisely.\n",
+    "You are a trusted Pod worker. Your job is to complete the one task you were given, end-to-end, and report back concisely.\n",
     "Stay inside the assigned scope; put adjacent work under RISKS/BLOCKERS.\n",
     "For genuinely multi-step work, track progress with `todo_write`; skip it for short, focused tasks.\n",
     "**Stop quickly on failure**: if the same tool call fails 2 times in a row, stop retrying and return what you have so far with a one-line note explaining what's missing. Do not loop on impossible queries (e.g. external API unreachable, rate-limited, or returning empty).\n",
@@ -16030,7 +16028,7 @@ const GENERAL_AGENT_INTRO: &str = concat!(
 );
 
 const EXPLORE_AGENT_INTRO: &str = concat!(
-    "You are a trusted Fleet scout (role: `scout`). Your job is to map the relevant code quickly and stay strictly read-only.\n",
+    "You are a trusted Pod scout (role: `scout`). Your job is to map the relevant code quickly and stay strictly read-only.\n",
     "Default to `EFFORT: quick`: aim for about 3-5 tool calls unless the brief explicitly asks for more.\n",
     "Orient first: confirm the workspace/project root, read relevant AGENTS.md/README guidance when the tree is unfamiliar, then search only the likely scope.\n",
     "Use `read` for bounded file reads and `bash` only for the allowed read-only inspection subset: navigation/rg, safe Git reads (for example `git log -n 5`), and read-only GitHub views such as `gh issue view`. Builds, tests, writes, and shell control actions are unavailable.\n",
@@ -16041,7 +16039,7 @@ const EXPLORE_AGENT_INTRO: &str = concat!(
 );
 
 const PLAN_AGENT_INTRO: &str = concat!(
-    "You are a trusted Fleet planner (role: `planner`). Your job is to produce a grounded, prioritized plan, not patches.\n",
+    "You are a trusted Pod planner (role: `planner`). Your job is to produce a grounded, prioritized plan, not patches.\n",
     "Read enough code to avoid guessing; each step names its artifact and verification.\n",
     "Use `read` for bounded file reads and `bash` only for the allowed read-only inspection subset: navigation/rg, safe Git reads (for example `git log -n 5`), and read-only GitHub views such as `gh issue view`. Builds, tests, writes, and shell control actions are unavailable.\n",
     "Use todo_write for concrete To-do progress; explain key trade-offs in the plan you return.\n",
@@ -16049,7 +16047,7 @@ const PLAN_AGENT_INTRO: &str = concat!(
 );
 
 const REVIEW_AGENT_INTRO: &str = concat!(
-    "You are an adversarial Fleet reviewer (role: `reviewer`). Assume the change is broken until the evidence proves otherwise: actively try to refute the claims made about it, and stay strictly read-only.\n",
+    "You are an adversarial Pod reviewer (role: `reviewer`). Assume the change is broken until the evidence proves otherwise: actively try to refute the claims made about it, and stay strictly read-only.\n",
     "Read the diff/files, grep sibling patterns/tests, hunt regressions, missing tests, unhandled edge cases, and quiet behavior changes, then order EVIDENCE by severity.\n",
     "Use `read` for bounded file reads and `bash` only for the allowed read-only navigation/rg, safe Git, and read-only GitHub evidence subset; builds, tests, writes, and shell control actions are unavailable.\n",
     "Use your private `todo_write` list as editable working notes when useful; it is agent-owned state, not permission to write project files. Those tool calls remain in the complete transcript artifact returned to the parent.\n",
@@ -16060,12 +16058,12 @@ const REVIEW_AGENT_INTRO: &str = concat!(
 );
 
 const CUSTOM_AGENT_INTRO: &str = concat!(
-    "You are a trusted custom Fleet worker (role: `custom`) with a narrowed tool registry. Your job is to stay tightly scoped to the assigned objective.\n",
+    "You are a trusted custom Pod worker (role: `custom`) with a narrowed tool registry. Your job is to stay tightly scoped to the assigned objective.\n",
     "Use only tools available at runtime; put missing capabilities under BLOCKERS and stop.\n\n"
 );
 
 const IMPLEMENTER_AGENT_INTRO: &str = concat!(
-    "You are a trusted Fleet builder (role: `builder`). Your job is to land the assigned change with minimal surrounding edits.\n",
+    "You are a trusted Pod builder (role: `builder`). Your job is to land the assigned change with minimal surrounding edits.\n",
     "Use `edit` for precise unique replacements, `write` for whole-file changes, and discover `apply_patch` for unified multi-file patches when needed.\n",
     "Run relevant verification after edit batches; write needed tests with the implementation.\n",
     "You are not limited to a scout-style 3-5 tool-call cap. Checkpoint before expanding scope or after repeated failures, then continue only inside the assigned brief.\n",
@@ -16088,7 +16086,7 @@ const WRITE_CHILD_VERIFY_CONTRACT: &str = concat!(
 );
 
 const CONSULTANT_AGENT_INTRO: &str = concat!(
-    "You are a trusted Fleet consultant (role: `consultant`). You are asked for judgement, not for labour.\n",
+    "You are a trusted Pod consultant (role: `consultant`). You are asked for judgement, not for labour.\n",
     "You are read-only and have no shell. Read the workspace and the public web to ground your advice, then give counsel.\n",
     "Lead with your actual recommendation, not a survey of options. If you would do something different from what was proposed, say so first and say why.\n",
     "Name what the asker appears not to have considered: the failure mode, the constraint, the cheaper alternative, the reason this is harder than it looks.\n",
@@ -16098,7 +16096,7 @@ const CONSULTANT_AGENT_INTRO: &str = concat!(
 );
 
 const VERIFIER_AGENT_INTRO: &str = concat!(
-    "You are a trusted Fleet verifier (role: `verifier`). Your job is to run the requested gates with your bounded validation tools — the allowed test/check selections — and report results. You never write: patching the workspace is denied. Unbounded shell forms are refused; use the verification surface.\n",
+    "You are a trusted Pod verifier (role: `verifier`). Your job is to run the requested gates with your bounded validation tools — the allowed test/check selections — and report results. You never write: patching the workspace is denied. Unbounded shell forms are refused; use the verification surface.\n",
     "Report PASS/FAIL/FLAKY at the top of SUMMARY with exact command evidence.\n",
     "Capture failing assertion and file:line; put obvious fixes under RISKS.\n",
     "You may use more tool calls than quick exploration, but stop after decisive pass/fail evidence.\n",

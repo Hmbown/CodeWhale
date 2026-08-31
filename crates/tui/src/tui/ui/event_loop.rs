@@ -20,6 +20,14 @@ pub(super) fn event_owner_is_active(
     !owner_session_id.is_empty() && current_session_id == Some(owner_session_id)
 }
 
+fn current_session_pod_workers_status(locale: crate::localization::Locale, count: usize) -> String {
+    crate::localization::tr(
+        locale,
+        crate::localization::MessageId::SubagentsCurrentSessionPodWorkersStatus,
+    )
+    .replace("{count}", &count.to_string())
+}
+
 /// Bind the Runtime thread store to a session before the process-owner lock
 /// is taken, so a second Codewhale on the same machine does not collide on
 /// the default root (#5630). Resume reuses the loaded id; a fresh session
@@ -2866,8 +2874,10 @@ pub(crate) async fn run_event_loop(
                         reconcile_subagent_activity_state(app);
                         let view_agents = subagent_view_agents(app, &app.subagent_cache);
                         if app.view_stack.update_subagents(&view_agents) {
-                            app.status_message =
-                                Some(format!("Fleet workers: {} total", view_agents.len()));
+                            app.status_message = Some(current_session_pod_workers_status(
+                                app.ui_locale,
+                                view_agents.len(),
+                            ));
                         }
                         // Individual spawn/complete events already log to history;
                         // full list available via /agents command.
@@ -4148,7 +4158,7 @@ pub(crate) async fn run_event_loop(
             // A route change made in-session is temporary and stays that way
             // until the user EXPLICITLY persists it with a command
             // (/fleet save updates the selected Fleet, /fleet save-as saves a
-            // new Fleet, /model save-default remembers the startup default).
+            // new Pod, /model save-default remembers the startup default).
             // Nothing here intercepts keys: a scripted or automated terminal
             // types exactly what it types, and plain typing can never trigger
             // a fleet write by accident.
@@ -6153,7 +6163,7 @@ async fn open_agents_register(app: &mut App, engine_handle: &EngineHandle) {
     if app.view_stack.top_kind() != Some(ModalKind::SubAgents) {
         let agents = subagent_view_agents(app, &app.subagent_cache);
         app.view_stack
-            .push(crate::tui::views::SubAgentsView::new(agents));
+            .push(crate::tui::views::SubAgentsView::for_app(app, agents));
     }
     let _ = engine_handle.send(Op::ListSubAgents).await;
     app.needs_redraw = true;
@@ -6279,6 +6289,20 @@ mod session_boot_event_tests {
                 .and_then(|snapshot| snapshot.servers.first())
                 .map(|server| server.name.as_str()),
             Some("fresh")
+        );
+    }
+}
+
+#[cfg(test)]
+mod pod_workers_status_tests {
+    use super::current_session_pod_workers_status;
+    use crate::localization::Locale;
+
+    #[test]
+    fn current_session_pod_worker_status_keeps_the_english_session_boundary() {
+        assert_eq!(
+            current_session_pod_workers_status(Locale::En, 3),
+            "Current-session Pod workers: 3 total"
         );
     }
 }
