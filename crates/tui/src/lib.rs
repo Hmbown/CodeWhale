@@ -36,6 +36,7 @@ mod commands;
 mod compaction;
 mod composer_history;
 mod composer_stash;
+pub mod computer_meter;
 mod config;
 mod config_persistence;
 mod config_ui;
