@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public roster language is Pod. `/pod` is the customer surface; fleet remains
   the internal wire, storage, and migration name (#5776).
 
+- Provider catalogs: compatible hosts (Baseten, Groq, Cerebras, SenseNova,
+  Command Code) no longer compile a frozen model roster. Descriptors name the
+  wire, URL, and env; live `GET /v1/models` and a Codewhale-owned catalog
+  layer are the offering list. Command Code is a catalog/descriptor row, not
+  a `ProviderKind`.
+
 - TUI: startup no longer presents an approximate ASCII or block-glyph whale as
   the product mark. It keeps the direct Tideline prompt while exact-raster
   surfaces remain responsible for the canonical asset.

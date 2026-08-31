@@ -6,12 +6,15 @@
 //! refresh) and live [`ProviderCatalogDelta`]s; the HTTP `/models` fetch layer
 //! lives above this module. Nothing here performs I/O or reads credentials.
 //!
-//! Layering (lowest precedence first; #4188):
+//! Layering (lowest precedence first):
 //!
 //! ```text
-//! bundled Models.dev snapshot       (offline/stale fallback only — not competing truth)
-//!   < live Models.dev / provider `/models` cache
-//!   < user / custom overrides        (custom endpoints, pinned models, explicit facts)
+//! bundled Models.dev snapshot         (legacy seed, not competing truth)
+//!   < bundled Codewhale catalog       (Codewhale-owned offline snapshot)
+//!   < live Models.dev
+//!   < live provider `/v1/models`      (credential-scoped workspace list)
+//!   < live Codewhale signed catalog   (authority when present)
+//!   < config.toml / user overrides
 //! ```
 //!
 //! After #4187, live Models.dev rows are preferred whenever present. The bundled
@@ -61,6 +64,10 @@ pub enum CatalogSource {
     ModelsDevLive { fetched_at: u64 },
     /// `config.toml` `[providers.*]` override (layer 30).
     ConfigOverride,
+    /// Codewhale-owned bundled catalog snapshot (offline authority seed).
+    CodewhaleBundled { revision: String },
+    /// Live Codewhale signed catalog fetched from CWC / `CODEWHALE_CATALOG_URL`.
+    CodewhaleLive { revision: String, fetched_at: u64 },
 }
 
 /// One catalog-layer offering row.
@@ -625,12 +632,14 @@ impl CatalogSnapshot {
 /// after every layer and is never overridden:
 ///
 /// ```text
-///  0 bundled          committed models.dev-shaped snapshot
-/// 10 live models.dev  models.dev refresh
-/// 20 provider         per-provider /v1/models refresh
-/// 30 config           config.toml [providers.*] overrides
-/// 40 user             user approved set (Phase 3 hook; empty in Phase 1)
-///    policy DENY      last, never overridden
+///  0 bundled              committed models.dev-shaped snapshot
+///  5 codewhale bundled    Codewhale-owned offline snapshot
+/// 10 live models.dev      models.dev refresh
+/// 20 provider             per-provider /v1/models refresh
+/// 25 codewhale live       signed CWC catalog (authority)
+/// 30 config               config.toml [providers.*] overrides
+/// 40 user                 user approved set
+///    policy DENY          last, never overridden
 /// ```
 ///
 /// [`Self::with_live`] remains the combined live bucket so existing callers
@@ -639,9 +648,11 @@ impl CatalogSnapshot {
 #[derive(Debug, Clone, Default)]
 pub struct CatalogCompiler {
     bundled: Vec<CatalogOffering>,
+    codewhale_bundled: Vec<CatalogOffering>,
     models_dev_live: Vec<CatalogOffering>,
     live: Vec<CatalogOffering>,
     provider_live: Vec<CatalogOffering>,
+    codewhale_live: Vec<CatalogOffering>,
     config: Vec<CatalogOffering>,
     overrides: Vec<CatalogOffering>,
     policy: crate::route::CatalogPolicy,
@@ -666,6 +677,20 @@ impl CatalogCompiler {
     pub fn with_models_dev(mut self, catalog: &ModelsDevCatalog) -> Self {
         self.bundled
             .extend(bundled_offerings_from_models_dev(catalog));
+        self
+    }
+
+    /// Add Codewhale-owned bundled catalog rows (layer 5).
+    #[must_use]
+    pub fn with_codewhale_bundled(mut self, rows: Vec<CatalogOffering>) -> Self {
+        self.codewhale_bundled.extend(rows);
+        self
+    }
+
+    /// Add live signed Codewhale catalog rows (layer 25; authority when present).
+    #[must_use]
+    pub fn with_codewhale_live(mut self, rows: Vec<CatalogOffering>) -> Self {
+        self.codewhale_live.extend(rows);
         self
     }
 
@@ -722,9 +747,11 @@ impl CatalogCompiler {
         for row in self
             .bundled
             .into_iter()
+            .chain(self.codewhale_bundled)
             .chain(self.models_dev_live)
             .chain(self.live)
             .chain(self.provider_live)
+            .chain(self.codewhale_live)
             .chain(self.config)
             .chain(self.overrides)
         {
