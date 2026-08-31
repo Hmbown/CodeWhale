@@ -424,6 +424,9 @@ jobs:
       - name: Check TUI locale pack parity
         if: github.event_name != 'schedule'
         run: python3 scripts/check-tui-locale-parity.py
+      - name: Check TUI product vocabulary
+        if: github.event_name != 'schedule'
+        run: sh scripts/check-tui-product-vocabulary.sh
       - name: Check website locale dictionary parity
         if: github.event_name != 'schedule'
         run: node web/scripts/check-locales.mjs

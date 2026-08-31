@@ -1576,6 +1576,9 @@ pub struct App {
     pub launch: LaunchState,
     /// Mouse-selected launch action, consumed by the async UI loop.
     pub pending_launch_action: Option<crate::tui::underwater::LaunchAction>,
+    /// Mouse click on the live composer's `[↑]` send target. The async UI loop
+    /// consumes it through the same submit dispatcher as Enter.
+    pub pending_composer_submit: Option<ComposerSubmitChord>,
     /// Mouse-selected hotbar slot, consumed by the async UI loop.
     pub pending_hotbar_slot: Option<u8>,
     /// Whether the renderer should wrap each frame in DEC mode 2026

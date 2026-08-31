@@ -8,7 +8,7 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
 use super::{
-    FLUKE_BLOCK, LaunchAction, TidelineStartup, handle_launch_key, render_tideline_startup,
+    LaunchAction, TidelineStartup, handle_launch_key, render_tideline_startup,
     tideline_startup_hitboxes,
 };
 use crate::palette::UI_THEME;
@@ -86,23 +86,25 @@ fn startup_matches_goldens_at_blocker_sizes() {
 fn startup_matches_golden_at_the_40x12_terminal_floor() {
     // §5b shed order proven at the floor. A 40x12 terminal leaves the stage
     // 10 rows after the topbar and merged footer: the QUICK ACTIONS label
-    // row and the wave rules collapse, the hero keeps heading + subtitle
-    // (the 12x6 fluke needs its 8-row budget), and the strip sheds to 2
-    // columns so tile labels stay whole.
+    // row and the wave rules collapse, the hero keeps heading + subtitle, and
+    // all four routes keep compact labels.
     let fixture = returning();
     let startup = fixture.widget(&UI_THEME);
     let text = draw(40, 10, &startup);
     assert_matches_golden("startup_40x10", &text);
     assert!(text.contains("What are we working on?"), "{text}");
     assert!(
-        text.contains("New worktree"),
-        "2-column strip keeps tile 1: {text}"
+        text.lines()
+            .any(|line| line.contains("welcome back") && line.contains('…')),
+        "compact subtitle must end deliberately: {text}"
     );
     assert!(
-        text.contains("Chat only"),
-        "2-column strip keeps tile 2: {text}"
+        text.contains("worktree"),
+        "compact strip keeps worktree: {text}"
     );
-    assert!(!text.contains("Theme"), "tiles 3/4 shed: {text}");
+    assert!(text.contains("chat"), "compact strip keeps chat: {text}");
+    assert!(text.contains("Theme"), "compact strip keeps theme: {text}");
+    assert!(text.contains("Help"), "compact strip keeps help: {text}");
 }
 
 #[test]
@@ -123,27 +125,13 @@ fn startup_hero_states_first_run_vs_returning() {
 }
 
 #[test]
-fn startup_hero_paints_the_generated_fluke_block_and_sheds_it_at_short_stages() {
-    // The generated 12x6 mark (never a hand-drawn crown): centered, one row
-    // per FLUKE_BLOCK line, above the heading. It sheds below its 8-row
-    // budget instead of being clipped mid-mark.
-    let startup = TidelineStartup::new(&UI_THEME, 4, true);
-    let wide = draw(80, 24, &startup);
-    for row in FLUKE_BLOCK {
-        let row_w = unicode_width::UnicodeWidthStr::width(row);
-        let expected = format!("{}{row}", " ".repeat((80 - row_w) / 2));
-        assert!(
-            wide.lines().any(|line| line.starts_with(&expected)),
-            "fluke row {row:?} must paint centered at 80x24:\n{wide}"
-        );
-    }
-    // 60x16: stage 14 rows -> hero 5 < 8, mark sheds, heading stays.
-    let short = draw(60, 16, &startup);
-    assert!(short.contains("What are we working on?"), "{short}");
-    assert!(
-        !short.contains(FLUKE_BLOCK[0]),
-        "the fluke must not clip mid-mark at short stages:\n{short}"
-    );
+fn medium_startup_keeps_the_compact_composer_hint() {
+    // A 60x16 terminal gives the startup stage 14 rows after the one-row
+    // topbar and footer. The option strip yields only decorative padding so
+    // the compact composer can preserve both its input and focus hint.
+    let fixture = returning();
+    let text = draw(60, 14, &fixture.widget(&UI_THEME));
+    assert!(text.contains("Tab to type"), "{text}");
 }
 
 #[test]
@@ -268,30 +256,42 @@ fn startup_disabled_rows_render_dimmer_set_not_hidden() {
 }
 
 #[test]
-fn startup_option_strip_sheds_to_two_columns_when_narrow() {
-    let mut startup = TidelineStartup::new(&UI_THEME, 4, true);
+fn startup_option_strip_keeps_all_four_routes_when_narrow() {
+    let mut startup =
+        TidelineStartup::new(&UI_THEME, 4, true).locale(crate::localization::Locale::En);
     startup.selected_option = Some(1);
     let wide = draw(80, 24, &startup);
     for tile in ["New worktree", "Chat only", "Theme", "Help"] {
         assert!(wide.contains(tile), "80 cols shows all four tiles: {wide}");
     }
-    let narrow = draw(30, 20, &startup);
-    assert!(narrow.contains("New worktree"), "narrow keeps tile 1");
-    assert!(narrow.contains("Chat only"), "narrow keeps tile 2");
-    assert!(!narrow.contains("Theme\n"), "narrow sheds tiles 3/4");
+    let narrow = draw(40, 20, &startup);
+    for tile in ["worktree", "chat", "Theme", "Help"] {
+        assert!(narrow.contains(tile), "narrow keeps {tile}: {narrow}");
+    }
+}
+
+#[test]
+fn startup_option_strip_uses_localized_compact_labels_when_narrow() {
+    let mut startup =
+        TidelineStartup::new(&UI_THEME, 4, true).locale(crate::localization::Locale::ZhHans);
+    startup.selected_option = Some(1);
+    let narrow = draw(40, 20, &startup);
+    let compact_cells = narrow.replace(' ', "");
+    assert!(
+        compact_cells.contains("工作树"),
+        "localized worktree: {narrow}"
+    );
+    assert!(compact_cells.contains("聊天"), "localized chat: {narrow}");
+    assert!(
+        !narrow.contains("worktree") && !narrow.contains("chat"),
+        "narrow locale must not fall back to hardcoded English: {narrow}"
+    );
 }
 
 #[test]
 fn startup_ascii_safe_has_no_wide_or_unsupported_glyphs() {
     let startup = TidelineStartup::new(&UI_THEME, 4, true).ascii_safe(true);
     let text = draw(100, 30, &startup);
-    // The generated fluke projects through the declared quadrant-block
-    // fallbacks (`#`, `.`, `\`) — a legible silhouette, not a smear.
-    assert!(
-        text.lines()
-            .any(|line| line.contains("\\###") || line.contains("###.")),
-        "ascii fluke block must paint:\n{text}"
-    );
     assert!(text.contains(". ~~~ ."), "wave rule projects to ASCII");
     assert!(text.contains("Enter >"), "chevron projects to >");
     for ch in text.chars() {
@@ -311,7 +311,6 @@ fn startup_hitboxes_match_painted_cells() {
     let (w, h) = (100, 30);
     let area = Rect::new(0, 0, w, h);
     let hitboxes = tideline_startup_hitboxes(area);
-    assert!(hitboxes.fluke.width > 0, "fluke is a hitbox at 100x30");
     assert_eq!(hitboxes.actions.len(), 3, "one rect per quick action row");
     assert_eq!(hitboxes.options.len(), 4, "one rect per option tile");
     let mut buf = Buffer::empty(area);
@@ -329,11 +328,6 @@ fn startup_hitboxes_match_painted_cells() {
         assert!(rect.x + rect.width <= w);
         assert!(rect.y + rect.height <= h);
     }
-    let fluke_cells = painted(hitboxes.fluke);
-    assert!(
-        !fluke_cells.trim().is_empty(),
-        "fluke hitbox covers the mark"
-    );
 }
 
 #[test]
