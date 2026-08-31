@@ -194,6 +194,17 @@ fn status_toast_ink(level: crate::tui::app::StatusToastLevel) -> ChromeInk {
     }
 }
 
+/// Map the boot surface's typed severity through the same semantic palette as
+/// every other footer fact. Keeping this conversion closed makes the plugin
+/// warning/failure distinction testable without guessing from its text.
+fn boot_activity_ink(level: crate::tui::session_boot::SessionBootActivityLevel) -> ChromeInk {
+    match level {
+        crate::tui::session_boot::SessionBootActivityLevel::Active => ChromeInk::Active,
+        crate::tui::session_boot::SessionBootActivityLevel::Attention => ChromeInk::Attention,
+        crate::tui::session_boot::SessionBootActivityLevel::Failure => ChromeInk::Failure,
+    }
+}
+
 /// Pick the notice a band owes its row to right now, if any. Shared by the
 /// classic activity band and the Tideline merged footer so the two can never
 /// disagree about which toast is live. Completion may land in the same event
@@ -321,6 +332,24 @@ mod tests {
         assert_ne!(
             crate::tui::underwater::phase_ink(ShellPhase::Working).family(),
             crate::palette::SemanticFamily::Failure
+        );
+    }
+
+    #[test]
+    fn boot_activity_levels_keep_plugin_attention_and_failure_distinct() {
+        use crate::tui::session_boot::SessionBootActivityLevel;
+
+        assert_eq!(
+            boot_activity_ink(SessionBootActivityLevel::Active),
+            ChromeInk::Active
+        );
+        assert_eq!(
+            boot_activity_ink(SessionBootActivityLevel::Attention),
+            ChromeInk::Attention
+        );
+        assert_eq!(
+            boot_activity_ink(SessionBootActivityLevel::Failure),
+            ChromeInk::Failure
         );
     }
 
@@ -578,7 +607,7 @@ pub struct TidelineFooter<'a> {
     /// Permission chip (`ask` / `auto review` / `full access`, plus the
     /// filesystem scope notice when it deviates) in its Permission ink.
     pub permission_chip: Option<(&'a str, crate::palette::ChromeInk)>,
-    /// Urgent session notice (status toast / MCP boot chip) that owns the
+    /// Urgent session notice (status toast / boot activity chip) that owns the
     /// right-hand keys slot while it is live.
     pub notice: Option<(&'a str, crate::palette::ChromeInk)>,
     pub ascii_safe: bool,
@@ -930,8 +959,9 @@ pub fn tideline_footer_depth_hitbox(area: Rect, footer: &TidelineFooter<'_>) -> 
 ///   the activity band's `Esc to interrupt` while a turn is live.
 /// - `mode_chip`/`permission_chip` — the old header's posture lockup
 ///   (`underwater::posture_chips`, same words, same inks).
-/// - `notice` — the activity band's status toast, or the MCP boot chip when
-///   no toast is live; it owns the trailing right slot while present.
+/// - `notice` — the activity band's status toast, or the compact MCP/plugin
+///   boot chip when no toast is live; it owns the trailing right slot while
+///   present.
 ///
 /// Session metrics (turns/steps/TTFT/cache) move behind `/cost` per spec §3.
 pub(crate) struct TidelineFooterFacts {
@@ -1029,28 +1059,18 @@ pub(crate) fn tideline_footer_from_app(app: &mut App, width: u16) -> TidelineFoo
         chip.map(|(text, ink)| (text.into_owned(), ink))
     };
 
-    // The notice: the live status toast if one is owed, else the MCP boot
-    // chip (a slow optional server must not look like a hung turn). Clause-
-    // shed against half the row — the depth line owns the other half.
+    // The notice: the live status toast if one is owed, else the compact MCP
+    // or plugin boot chip. A slow optional server must not look like a hung
+    // turn, while plugin diagnostics stay available through `/plugins` rather
+    // than taking rows from the transcript. Clause-shed against half the row
+    // — the depth line owns the other half.
     let notice_budget = (usize::from(width) / 2).max(8);
     let notice = selected_notice(app.active_status_toast(), phase, &phase_word)
         .map(|(text, ink, _urgent)| (text, ink))
         .or_else(|| {
-            crate::tui::session_boot::activity_chip(app, notice_budget).map(|chip| {
-                let boot = crate::tui::session_boot::SessionBootSurface::from_app(app);
-                let ink = if boot.servers.iter().any(|row| {
-                    matches!(
-                        row.state,
-                        crate::tui::session_boot::McpServerBootState::Failed
-                            | crate::tui::session_boot::McpServerBootState::NeedsLogin
-                    )
-                }) {
-                    crate::palette::ChromeInk::Failure
-                } else {
-                    crate::palette::ChromeInk::Active
-                };
-                (chip, ink)
-            })
+            let boot = crate::tui::session_boot::SessionBootSurface::from_app(app);
+            boot.activity_notice(app.ui_locale, notice_budget)
+                .map(|chip| (chip.text, boot_activity_ink(chip.level)))
         })
         .and_then(|(text, ink)| fit_notice(&text, notice_budget).map(|fitted| (fitted, ink)));
 

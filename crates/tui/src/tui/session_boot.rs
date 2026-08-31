@@ -2,8 +2,9 @@
 //!
 //! Plugin discovery and every enabled MCP server boot as a **set**, not a
 //! toast per name. The Tideline footer carries the compact pulse
-//! (`MCP · 4 connecting`); detailed diagnosis and actions belong in `/mcp`,
-//! never as multi-row boot output between the transcript and composer.
+//! (`MCP · 4 connecting` or `Plugins · Problems: 2 · /plugins`); detailed
+//! diagnosis and actions belong in `/mcp` or `/plugins`, never as multi-row
+//! boot output between the transcript and composer.
 
 use unicode_width::UnicodeWidthStr;
 
@@ -49,7 +50,17 @@ pub struct PluginBootSummary {
 impl PluginBootSummary {
     #[must_use]
     pub fn is_quiet(self) -> bool {
-        self.loaded == 0 && self.invalid == 0 && self.duplicate == 0 && self.needs_setup == 0
+        self.problem_count() == 0
+    }
+
+    #[must_use]
+    pub fn problem_count(self) -> usize {
+        self.invalid + self.duplicate + self.needs_setup
+    }
+
+    #[must_use]
+    pub fn has_failures(self) -> bool {
+        self.invalid > 0 || self.duplicate > 0
     }
 
     #[must_use]
@@ -72,10 +83,7 @@ impl PluginBootSummary {
                 .any(|diagnostic| diagnostic.level == PluginDiagnosticLevel::Error)
             {
                 invalid += 1;
-            } else if matches!(
-                plugin.trust_status,
-                PluginTrustStatus::NeverReviewed | PluginTrustStatus::CapabilitiesChanged
-            ) {
+            } else if plugin_trust_needs_setup(plugin.trust_status) {
                 needs_setup += 1;
             }
         }
@@ -86,6 +94,33 @@ impl PluginBootSummary {
             needs_setup,
         }
     }
+}
+
+fn plugin_trust_needs_setup(status: PluginTrustStatus) -> bool {
+    matches!(
+        status,
+        PluginTrustStatus::NeverReviewed
+            | PluginTrustStatus::ContentChanged
+            | PluginTrustStatus::CapabilitiesChanged
+    )
+}
+
+/// Semantic severity for the compact boot activity notice.
+///
+/// The text carries no color names or inferred state. Its consumer maps this
+/// closed state into the Tideline palette, so a plugin warning cannot inherit
+/// an unrelated MCP color merely because both use the same footer slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionBootActivityLevel {
+    Active,
+    Attention,
+    Failure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionBootActivityChip {
+    pub text: String,
+    pub level: SessionBootActivityLevel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,7 +199,11 @@ impl SessionBootSurface {
     }
 
     #[must_use]
-    pub fn activity_chip(&self, locale: Locale, budget: usize) -> Option<String> {
+    pub fn activity_notice(
+        &self,
+        locale: Locale,
+        budget: usize,
+    ) -> Option<SessionBootActivityChip> {
         if self.phase == SessionBootPhase::Hidden || budget == 0 {
             return None;
         }
@@ -190,28 +229,79 @@ impl SessionBootSurface {
             .filter(|row| row.state == McpServerBootState::Connected)
             .count();
 
-        let mut candidates = Vec::new();
         if !connecting.is_empty() {
             let count = connecting.len();
             let named = named_chip_line("MCP", count, "connecting", &connecting);
-            candidates.push(named);
-            candidates.push(format!("MCP{ITEM_SEPARATOR}{count} connecting"));
-        } else if failed > 0 {
-            candidates.push(format!(
-                "MCP{ITEM_SEPARATOR}{connected} {}{ITEM_SEPARATOR}{failed} {}",
-                tr(locale, MessageId::ExtensionsStateConnected),
-                tr(locale, MessageId::PhaseFailed)
-            ));
-            candidates.push(format!("MCP{ITEM_SEPARATOR}{failed} failed"));
-        } else if self.phase == SessionBootPhase::Booting {
+            return activity_notice_from_candidates(
+                SessionBootActivityLevel::Active,
+                vec![named, format!("MCP{ITEM_SEPARATOR}{count} connecting")],
+                budget,
+            );
+        }
+        if failed > 0 {
+            return activity_notice_from_candidates(
+                SessionBootActivityLevel::Failure,
+                vec![
+                    format!(
+                        "MCP{ITEM_SEPARATOR}{connected} {}{ITEM_SEPARATOR}{failed} {}",
+                        tr(locale, MessageId::ExtensionsStateConnected),
+                        tr(locale, MessageId::PhaseFailed)
+                    ),
+                    format!("MCP{ITEM_SEPARATOR}{failed} failed"),
+                ],
+                budget,
+            );
+        }
+        if self.phase == SessionBootPhase::Booting {
             let count = self.servers.len().max(self.unnamed_connecting);
             if count > 0 {
-                candidates.push(format!("MCP{ITEM_SEPARATOR}{count} connecting"));
+                return activity_notice_from_candidates(
+                    SessionBootActivityLevel::Active,
+                    vec![format!("MCP{ITEM_SEPARATOR}{count} connecting")],
+                    budget,
+                );
             }
         }
 
-        candidates.into_iter().find(|line| line.width() <= budget)
+        if self.plugins.is_quiet() {
+            return None;
+        }
+
+        let plugins = tr(locale, MessageId::ExtensionsTabPlugins);
+        let problems = tr(locale, MessageId::ExtensionsGroupProblems);
+        let count = self.plugins.problem_count();
+        let level = if self.plugins.has_failures() {
+            SessionBootActivityLevel::Failure
+        } else {
+            SessionBootActivityLevel::Attention
+        };
+        activity_notice_from_candidates(
+            level,
+            vec![
+                format!("{plugins}{ITEM_SEPARATOR}{problems}: {count}{ITEM_SEPARATOR}/plugins"),
+                format!("{plugins}{ITEM_SEPARATOR}{problems}: {count}"),
+                format!("{plugins}{ITEM_SEPARATOR}{count}"),
+            ],
+            budget,
+        )
     }
+
+    #[must_use]
+    pub fn activity_chip(&self, locale: Locale, budget: usize) -> Option<String> {
+        self.activity_notice(locale, budget)
+            .map(|notice| notice.text)
+    }
+}
+
+fn activity_notice_from_candidates(
+    level: SessionBootActivityLevel,
+    candidates: Vec<String>,
+    budget: usize,
+) -> Option<SessionBootActivityChip> {
+    candidates
+        .into_iter()
+        .find(|line| line.width() <= budget)
+        .map(|text| SessionBootActivityChip { text, level })
 }
 
 fn row_from_snapshot(
@@ -280,12 +370,6 @@ fn named_chip_line(kind: &str, count: usize, verb: &str, names: &[&str]) -> Stri
     line
 }
 
-/// Activity-strip chip for the current session boot set.
-#[must_use]
-pub fn activity_chip(app: &App, budget: usize) -> Option<String> {
-    SessionBootSurface::from_app(app).activity_chip(app.ui_locale, budget)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +415,108 @@ mod tests {
             SessionBootSurface::from_parts(None, false, &[], 0, PluginBootSummary::default());
         assert_eq!(surface.phase, SessionBootPhase::Hidden);
         assert!(surface.activity_chip(Locale::En, 80).is_none());
+    }
+
+    #[test]
+    fn healthy_loaded_plugins_do_not_claim_the_boot_surface() {
+        let surface = SessionBootSurface::from_parts(
+            None,
+            false,
+            &[],
+            0,
+            PluginBootSummary {
+                loaded: 2,
+                ..PluginBootSummary::default()
+            },
+        );
+        assert_eq!(surface.phase, SessionBootPhase::Hidden);
+        assert!(surface.activity_notice(Locale::En, 80).is_none());
+    }
+
+    #[test]
+    fn changed_plugin_content_requires_setup() {
+        assert!(plugin_trust_needs_setup(PluginTrustStatus::ContentChanged));
+        assert!(plugin_trust_needs_setup(PluginTrustStatus::NeverReviewed));
+        assert!(plugin_trust_needs_setup(
+            PluginTrustStatus::CapabilitiesChanged
+        ));
+        assert!(!plugin_trust_needs_setup(PluginTrustStatus::Trusted));
+    }
+
+    #[test]
+    fn plugin_problems_have_a_compact_footer_action() {
+        let surface = SessionBootSurface::from_parts(
+            None,
+            false,
+            &[],
+            0,
+            PluginBootSummary {
+                loaded: 3,
+                invalid: 1,
+                duplicate: 1,
+                needs_setup: 1,
+            },
+        );
+        assert_eq!(surface.phase, SessionBootPhase::Settled);
+        assert_eq!(
+            surface.activity_notice(Locale::En, 40),
+            Some(SessionBootActivityChip {
+                text: "Plugins · Problems: 3 · /plugins".to_string(),
+                level: SessionBootActivityLevel::Failure,
+            })
+        );
+    }
+
+    #[test]
+    fn plugin_review_notice_uses_attention_and_sheds_whole_fields() {
+        let surface = SessionBootSurface::from_parts(
+            None,
+            false,
+            &[],
+            0,
+            PluginBootSummary {
+                loaded: 1,
+                needs_setup: 1,
+                ..PluginBootSummary::default()
+            },
+        );
+        assert_eq!(
+            surface.activity_notice(Locale::En, 40),
+            Some(SessionBootActivityChip {
+                text: "Plugins · Problems: 1 · /plugins".to_string(),
+                level: SessionBootActivityLevel::Attention,
+            })
+        );
+        assert_eq!(
+            surface.activity_chip(Locale::En, 22).as_deref(),
+            Some("Plugins · Problems: 1")
+        );
+        assert_eq!(
+            surface.activity_chip(Locale::En, 12).as_deref(),
+            Some("Plugins · 1")
+        );
+    }
+
+    #[test]
+    fn mcp_activity_outranks_plugin_problems() {
+        let snap = snapshot(vec![server("alpha", true, false, None)]);
+        let surface = SessionBootSurface::from_parts(
+            Some(&snap),
+            true,
+            &["alpha".to_string()],
+            1,
+            PluginBootSummary {
+                invalid: 1,
+                ..PluginBootSummary::default()
+            },
+        );
+        assert_eq!(
+            surface.activity_notice(Locale::En, 80),
+            Some(SessionBootActivityChip {
+                text: "MCP · 1 connecting · alpha".to_string(),
+                level: SessionBootActivityLevel::Active,
+            })
+        );
     }
 
     #[test]
