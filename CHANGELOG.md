@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   target as Startup and clicks it through the existing Enter submit
   dispatcher (#5771). Compact/quiet composers still omit the control.
 
+- TUI/CLI: Pod is the public roster surface. User-facing Fleet wording
+  moves to Pod; durable receipt keys stay compatible (#5776).
+
 ### Added
 
 - Website: the public site moves to the Tideline deep-ocean design language
