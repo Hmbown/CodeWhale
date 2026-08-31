@@ -217,8 +217,11 @@ pub const fn continuation_wait(delay_seconds: u64) -> Option<Duration> {
 /// Wait out the between-continuation quiet period, honoring cancellation.
 /// `None` resolves to `Elapsed` immediately so callers have a single dispatch
 /// gate. Cancellation is biased and always wins over a racing expiry — the
-/// same semantics as the interactive cadence (#5508) for host-managed turns,
-/// where the turn loop is the only continuation dispatcher.
+/// same semantics as the interactive cadence (#5508). Two dispatchers await
+/// this gate: the turn loop's intra-turn passes (every session), and the
+/// runtime host's cross-turn re-arm for host-managed engines
+/// (`RuntimeThreadManager::spawn_goal_continuation`), which never
+/// self-continue.
 pub async fn await_continuation_wait(
     wait: Option<Duration>,
     cancel_token: &tokio_util::sync::CancellationToken,

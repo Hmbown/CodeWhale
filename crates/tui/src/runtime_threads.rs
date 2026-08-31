@@ -2340,6 +2340,11 @@ impl RuntimeTurnInputSource {
             } => Some(persisted_summary.clone()),
             // Continuation prompts embed goal JSON and engine framing, so the
             // same rule applies: persist a bounded marker, not the projection.
+            // Index 0 is the kickoff pass, not a continuation; the summary
+            // must not call it one.
+            Self::GoalContinuation {
+                continuation_index: 0,
+            } => Some("Goal kickoff (host-driven)".to_string()),
             Self::GoalContinuation { continuation_index } => Some(format!(
                 "Goal continuation pass #{continuation_index} (host-driven)"
             )),
@@ -4309,6 +4314,7 @@ impl RuntimeThreadManager {
         thread_id: &str,
         turn: &TurnRecord,
         engine_goal: Option<crate::tools::goal::GoalSnapshot>,
+        turn_tool_catalog: Option<&[codewhale_core::request::Tool]>,
     ) {
         let mut goal = match self.store.load_goal(thread_id) {
             Ok(Some(goal)) => goal,
@@ -4332,6 +4338,21 @@ impl RuntimeThreadManager {
             goal.tokens_used = goal.tokens_used.saturating_add(token_delta);
             goal.time_used_seconds = goal.time_used_seconds.saturating_add(time_delta_seconds);
             goal.updated_at = chrono::Utc::now().timestamp();
+        }
+
+        // The engine snapshot is the authority for the continuation counter:
+        // `record_continuation` counts every intra-turn pass the turn actually
+        // ran, while a flat per-turn increment here would diverge (one turn
+        // with N intra-turn passes would count as 1) and could keep arming
+        // passes the engine's own `ContinuationLimit` gate then refuses.
+        // A rehydrated engine starts from the durable count, so this only
+        // ever moves the record forward.
+        if let Some(snapshot) = engine_goal.as_ref() {
+            let engine_count = i64::from(snapshot.continuation_count);
+            if engine_count > goal.continuation_count {
+                goal.continuation_count = engine_count;
+                goal.updated_at = chrono::Utc::now().timestamp();
+            }
         }
 
         // Mirror the model's terminal decision into the durable record so a
@@ -4367,14 +4388,45 @@ impl RuntimeThreadManager {
             && matches!(goal.status, codewhale_protocol::ThreadGoalStatus::Active)
         {
             let max_continuations = i64::from(self.read_config().goal_max_continuations());
+            // The engine stops its own intra-turn loop at this cap with only
+            // a status line (`goal_continuation_allowed` → Stop), so a
+            // snapshot at or beyond the cap means the engine already refused
+            // the next pass. Mirror that stop as a host-side pause instead of
+            // arming passes that can only trip the same gate; an explicit
+            // PUT resumes the goal.
+            let engine_hit_cap = engine_goal.as_ref().is_some_and(|snapshot| {
+                max_continuations != 0
+                    && i64::from(snapshot.continuation_count) >= max_continuations
+            });
+            // A turn whose catalog lacked `update_goal` (an `allowed_tools`
+            // restriction, or an `isolated_chat` engine) has no tool with
+            // which the model could ever report complete/blocked, so the
+            // engine's own continuation hook skips such turns
+            // (`goal_continuation_message_if_needed`). The host mirrors that
+            // precondition: re-arming would spend one provider call per pass
+            // with no terminal path. A missing catalog means the turn never
+            // reached the request seam, so the same conservative gate holds.
+            let update_goal_available = turn_tool_catalog
+                .is_some_and(|catalog| catalog.iter().any(|tool| tool.name == "update_goal"));
             if max_continuations != 0 && goal.continuation_count >= max_continuations {
                 tracing::info!(
                     "goal for {thread_id} reached the continuation cap ({}); stopping",
                     goal.continuation_count
                 );
-            } else {
-                goal.continuation_count = goal.continuation_count.saturating_add(1);
+                goal.status = codewhale_protocol::ThreadGoalStatus::Paused;
                 goal.updated_at = chrono::Utc::now().timestamp();
+            } else if engine_hit_cap {
+                tracing::info!(
+                    "goal for {thread_id} hit the engine continuation cap ({}); pausing",
+                    goal.continuation_count
+                );
+                goal.status = codewhale_protocol::ThreadGoalStatus::Paused;
+                goal.updated_at = chrono::Utc::now().timestamp();
+            } else if !update_goal_available {
+                tracing::info!(
+                    "goal for {thread_id} stays parked: the finished turn's catalog lacked update_goal"
+                );
+            } else {
                 continue_after = Some(self.read_config().goal_continuation_delay_seconds());
             }
         }
@@ -4391,6 +4443,11 @@ impl RuntimeThreadManager {
         }
     }
 
+    /// Arm one goal continuation pass to run after the quiet period. The
+    /// sleep is deliberately never cancelled: a pause, clear, completion, or
+    /// cap that lands while the timer runs is honored by the re-read inside
+    /// `run_goal_continuation`, which is the cancellation path — `DELETE
+    /// /goal` and status syncs therefore do not need to interrupt this task.
     fn spawn_goal_continuation(&self, thread_id: String, delay_seconds: u64) {
         let manager = self.clone();
         tokio::spawn(async move {
@@ -8399,6 +8456,10 @@ impl RuntimeThreadManager {
         // before TurnComplete, so terminal settlement can mirror it into the
         // durable goal record instead of continuing to spend.
         let mut latest_goal_snapshot: Option<crate::tools::goal::GoalSnapshot> = None;
+        // Tool definitions of the finished turn's request surface, from the
+        // final TurnComplete receipt. Goal settlement uses it to mirror the
+        // engine's own `update_goal` precondition for continuation.
+        let mut turn_tool_catalog: Option<Vec<codewhale_core::request::Tool>> = None;
 
         loop {
             let event = if let Some(event) = pending_event.take() {
@@ -9418,9 +9479,13 @@ impl RuntimeThreadManager {
                     usage,
                     status,
                     error,
+                    tool_catalog,
                     ..
                 } => {
                     turn_usage = Some(usage);
+                    if tool_catalog.is_some() {
+                        turn_tool_catalog = tool_catalog;
+                    }
                     let reported_status = match status {
                         TurnOutcomeStatus::Completed => RuntimeTurnStatus::Completed,
                         TurnOutcomeStatus::Interrupted => RuntimeTurnStatus::Interrupted,
@@ -9610,9 +9675,17 @@ impl RuntimeThreadManager {
         // The same terminal boundary settles the durable goal loop: usage is
         // written back, the model's terminal decision is mirrored, and the
         // next pass is armed while the goal is still Active. Runs after the
-        // active-turn cleanup above so an armed pass sees an idle thread.
-        self.settle_thread_goal_after_turn(&thread_id, &turn, latest_goal_snapshot)
-            .await;
+        // active-turn cleanup above so an armed pass sees an idle thread. A
+        // goal pass and the mail wake below can race for the same durable
+        // claim; a goal pass that loses the race simply re-arms after the
+        // mail turn's own settlement, so no arbitration is needed here.
+        self.settle_thread_goal_after_turn(
+            &thread_id,
+            &turn,
+            latest_goal_snapshot,
+            turn_tool_catalog.as_deref(),
+        )
+        .await;
 
         // A terminal turn is the declared safe boundary. Wake at most the
         // oldest eligible envelope; its own terminal boundary may advance the
