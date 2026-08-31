@@ -145,7 +145,7 @@ pub(crate) fn resolve_credential_source_with(
             codewhale_config::ExternalCredentialSource::CodexCli,
             "Codex CLI",
             "codewhale auth external-consent --provider openai-codex --mode read-only",
-            |grant| crate::oauth::stored_credentials_present(grant),
+            crate::oauth::stored_credentials_present,
         ) {
             Ok(source) => return CredentialResolution::found(source),
             Err(probe) => {
@@ -626,7 +626,7 @@ mod tests {
         std::fs::write(&agy_path, "invalid-agy-credential-bytes").expect("fixture");
         let home = temp.path().join("home");
         let _home = EnvVarGuard::set("HOME", &home);
-        let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", &home.join("codewhale"));
+        let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", home.join("codewhale"));
         let _agy_key = EnvVarGuard::remove("ANTIGRAVITY_API_KEY");
         let _cli_key = EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
         let config = Config {
