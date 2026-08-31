@@ -344,7 +344,7 @@ pub const fn credential_help(kind: ProviderKind) -> CredentialHelp {
             acquisition: OAuth,
             credential_url: None,
             docs_url: Some("https://developers.openai.com/codex/"),
-            guidance: "Run `codex login`, then explicitly grant Codewhale read-only access to that exact Codex credential file; or use a process-scoped token environment variable.",
+            guidance: "Sign in with ChatGPT via `codewhale auth chatgpt` (subscription billing, Codewhale-owned tokens). The openai API-key route is a different billing owner. Codex CLI import remains an explicit alternative after `codex login` plus `codewhale auth external-consent`.",
         },
         ProviderKind::Anthropic => CredentialHelp {
             acquisition: ApiKey,

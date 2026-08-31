@@ -1605,7 +1605,8 @@ mod tests {
         assert!(msg.contains("Baidu Qianfan (qianfan)"));
         assert!(msg.contains("https://cloud.baidu.com/doc/qianfan/index.html"));
         assert!(msg.contains("Local Ollama is keyless by default"));
-        assert!(msg.contains("Run `codex login`"));
+        assert!(msg.contains("codewhale auth chatgpt"));
+        assert!(msg.contains("codex login"));
         assert!(msg.contains("no canonical vendor credential page exists"));
         assert!(msg.contains("OPENAI_API_KEY"));
         assert!(msg.contains("XIAOMI_MIMO_TOKEN_PLAN_API_KEY"));

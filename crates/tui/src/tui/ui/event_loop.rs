@@ -6246,6 +6246,51 @@ pub(crate) async fn run_xai_device_login_from_tui(
     Ok(switched)
 }
 
+pub(crate) async fn run_chatgpt_pkce_login_from_tui(
+    terminal: &mut AppTerminal,
+    app: &mut App,
+    engine_handle: &mut EngineHandle,
+    config: &mut Config,
+) -> Result<bool> {
+    pause_terminal(
+        terminal,
+        app.use_alt_screen,
+        app.use_mouse_capture,
+        app.use_bracketed_paste,
+    )?;
+    let login_result = crate::chatgpt_oauth::pkce_login().await;
+    resume_terminal(
+        terminal,
+        app.use_alt_screen,
+        app.use_mouse_capture,
+        app.use_bracketed_paste,
+        app.synchronized_output_enabled,
+    )?;
+
+    let switched = match login_result {
+        Ok(pending) => {
+            apply_codewhale_owned_chatgpt_login(
+                app,
+                engine_handle,
+                config,
+                pending,
+                "ChatGPT sign-in complete",
+            )
+            .await
+        }
+        Err(err) => {
+            let message = format!("ChatGPT sign-in failed: {err}");
+            app.add_message(HistoryCell::System {
+                content: message.clone(),
+            });
+            app.status_message = Some(message);
+            false
+        }
+    };
+    app.needs_redraw = true;
+    Ok(switched)
+}
+
 /// Move held permission receipts into the transcript: those for `tool_id`
 /// when given, otherwise every remaining one. Returns whether anything moved.
 pub(super) fn flush_gate_receipts_for(app: &mut App, tool_id: Option<&str>) -> bool {

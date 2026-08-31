@@ -51,11 +51,16 @@ pub use user_constitution::{
     UserConstitution, UserConstitutionLoad,
 };
 pub use xai_credentials::{
-    LEGACY_XAI_OAUTH_FILE_NAME, XAI_OAUTH_GENERATION_PREFIX, XAI_OAUTH_GENERATION_SUFFIX,
-    XaiOAuthCredentialStore, XaiOAuthRevocation, clear_all_xai_oauth_credentials,
-    is_valid_xai_oauth_generation, legacy_xai_oauth_path, remove_xai_oauth_generation,
-    validate_xai_oauth_generation, with_xai_oauth_lifecycle_lock,
-    with_xai_oauth_revocation_transaction, xai_oauth_credentials_dir, xai_oauth_generation_path,
+    CHATGPT_OAUTH_GENERATION_PREFIX, CHATGPT_OAUTH_GENERATION_SUFFIX,
+    LEGACY_CHATGPT_OAUTH_FILE_NAME, LEGACY_XAI_OAUTH_FILE_NAME, XAI_OAUTH_GENERATION_PREFIX,
+    XAI_OAUTH_GENERATION_SUFFIX, XaiOAuthCredentialStore, XaiOAuthRevocation,
+    chatgpt_oauth_generation_path, clear_all_chatgpt_oauth_credentials,
+    clear_all_xai_oauth_credentials, is_valid_chatgpt_oauth_generation,
+    is_valid_xai_oauth_generation, legacy_chatgpt_oauth_path, legacy_xai_oauth_path,
+    remove_chatgpt_oauth_generation, remove_xai_oauth_generation,
+    validate_chatgpt_oauth_generation, validate_xai_oauth_generation,
+    with_xai_oauth_lifecycle_lock, with_xai_oauth_revocation_transaction,
+    xai_oauth_credentials_dir, xai_oauth_generation_path,
 };
 
 use std::collections::{BTreeMap, BTreeSet};

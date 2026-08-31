@@ -1810,6 +1810,10 @@ pub(crate) async fn apply_command_result(
                 let _switched =
                     run_xai_device_login_from_tui(terminal, app, engine_handle, config).await?;
             }
+            AppAction::StartChatgptPkceLogin => {
+                let _switched =
+                    run_chatgpt_pkce_login_from_tui(terminal, app, engine_handle, config).await?;
+            }
             AppAction::OpenModePicker => {
                 if app.view_stack.top_kind() != Some(ModalKind::ModePicker) {
                     app.view_stack
@@ -2930,6 +2934,40 @@ pub(crate) async fn apply_codewhale_owned_xai_login(
     }
 
     switch_provider(app, engine_handle, config, ApiProvider::Xai, None).await
+}
+
+pub(crate) async fn apply_codewhale_owned_chatgpt_login(
+    app: &mut App,
+    engine_handle: &mut EngineHandle,
+    config: &mut Config,
+    pending: crate::chatgpt_oauth::PendingChatgptPkceLogin,
+    status_prefix: &str,
+) -> bool {
+    match crate::chatgpt_oauth::activate_pkce_login(
+        pending,
+        app.config_path.as_deref(),
+        Some(&mut *config),
+    ) {
+        Ok(activation) => {
+            app.status_message = Some(format!(
+                "{status_prefix}; activated {} via {}",
+                codewhale_config::quote_os_path(&activation.auth_path),
+                codewhale_config::quote_os_path(&activation.config_path)
+            ));
+            app.api_key_env_only = false;
+        }
+        Err(err) => {
+            app.add_message(HistoryCell::System {
+                content: format!(
+                    "Failed to finalize {} ChatGPT sign-in: {err:#}\nProvider unchanged.",
+                    ApiProvider::OpenaiCodex.as_str()
+                ),
+            });
+            return false;
+        }
+    }
+
+    switch_provider(app, engine_handle, config, ApiProvider::OpenaiCodex, None).await
 }
 
 #[cfg(test)]

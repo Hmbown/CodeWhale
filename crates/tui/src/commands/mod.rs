@@ -661,6 +661,17 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_auth_slash_command_starts_login() {
+        let mut app = create_test_app();
+        let result = execute("/auth chatgpt", &mut app);
+        assert!(!result.is_error);
+        assert!(matches!(
+            result.action,
+            Some(AppAction::StartChatgptPkceLogin)
+        ));
+    }
+
+    #[test]
     fn rlm_slash_command_routes_to_persistent_tool_instruction() {
         let mut app = create_test_app();
         let result = execute("/rlm 2 inspect this long corpus", &mut app);

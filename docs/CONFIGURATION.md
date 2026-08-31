@@ -374,7 +374,8 @@ For the active provider, the runtime resolves the API key in this exact order
 
 1. **Route-specific auth contract.** Routes whose `auth_mode` disables API
    keys stop here with no credential. OAuth routes use their explicitly
-   consented token: `openai-codex` reads `OPENAI_CODEX_ACCESS_TOKEN` or the
+   consented token: `openai-codex` reads `OPENAI_CODEX_ACCESS_TOKEN`, then
+   Codewhale-owned ChatGPT PKCE tokens from `codewhale auth chatgpt`, then the
    consent-granted Codex CLI login (read-only, never refreshed or rewritten);
    `[providers.xai] auth_mode = "oauth"` reads Codewhale's own xAI
    device-login store (or a consent-granted Grok CLI file).

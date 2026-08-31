@@ -27,6 +27,7 @@ mod artifacts;
 mod audit;
 mod auto_reasoning;
 mod automation_manager;
+mod chatgpt_oauth;
 mod child_env;
 mod client;
 pub mod cloud_dispatch;
@@ -498,6 +499,12 @@ enum TuiAuthCommand {
     /// Sign in to xAI/Grok with an SSH-friendly device code.
     #[command(name = "xai-device")]
     XaiDevice,
+    /// Sign in with ChatGPT for Codex subscription access (PKCE loopback).
+    #[command(name = "chatgpt")]
+    Chatgpt,
+    /// Revoke Codewhale-owned ChatGPT tokens. Codex CLI consent is unchanged.
+    #[command(name = "chatgpt-revoke")]
+    ChatgptRevoke,
 }
 
 const CODEWHALE_TOOL_SURFACE_ENV: &str = "CODEWHALE_TOOL_SURFACE";
@@ -2188,6 +2195,8 @@ async fn run_async_main_dispatch(
             Commands::Logout => run_logout(),
             Commands::Auth(args) => match args.command {
                 TuiAuthCommand::XaiDevice => run_xai_device_auth(cli.config.as_deref()).await,
+                TuiAuthCommand::Chatgpt => run_chatgpt_pkce_auth(cli.config.as_deref()).await,
+                TuiAuthCommand::ChatgptRevoke => run_chatgpt_pkce_revoke(cli.config.as_deref()),
             },
             Commands::Models(args) => {
                 let config = load_config_from_cli(&cli)?;
@@ -8087,6 +8096,23 @@ async fn run_xai_device_auth(config_path: Option<&Path>) -> Result<()> {
         codewhale_config::quote_os_path(&activation.auth_path),
         codewhale_config::quote_os_path(&activation.config_path)
     );
+    Ok(())
+}
+
+async fn run_chatgpt_pkce_auth(config_path: Option<&Path>) -> Result<()> {
+    let pending = chatgpt_oauth::pkce_login().await?;
+    let activation = chatgpt_oauth::activate_pkce_login(pending, config_path, None)?;
+    println!(
+        "ChatGPT OAuth is ready; activated {} via {}",
+        codewhale_config::quote_os_path(&activation.auth_path),
+        codewhale_config::quote_os_path(&activation.config_path)
+    );
+    Ok(())
+}
+
+fn run_chatgpt_pkce_revoke(config_path: Option<&Path>) -> Result<()> {
+    chatgpt_oauth::revoke_owned_login(config_path, None)?;
+    println!("Revoked Codewhale-owned ChatGPT tokens. Codex CLI consent is unchanged.");
     Ok(())
 }
 
@@ -14270,6 +14296,24 @@ mod terminal_mode_tests {
             cli.command,
             Some(Commands::Auth(TuiAuthArgs {
                 command: TuiAuthCommand::XaiDevice
+            }))
+        ));
+    }
+
+    #[test]
+    fn chatgpt_auth_subcommand_parses() {
+        let cli = parse_cli(&["codewhale-tui", "auth", "chatgpt"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Auth(TuiAuthArgs {
+                command: TuiAuthCommand::Chatgpt
+            }))
+        ));
+        let cli = parse_cli(&["codewhale-tui", "auth", "chatgpt-revoke"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Auth(TuiAuthArgs {
+                command: TuiAuthCommand::ChatgptRevoke
             }))
         ));
     }

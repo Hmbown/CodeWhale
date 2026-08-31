@@ -839,6 +839,8 @@ pub enum ViewEvent {
     },
     /// Emitted by provider/setup UI when xAI device-code OAuth is requested.
     ProviderPickerXaiOAuthRequested,
+    /// Emitted by provider/setup UI when native ChatGPT PKCE sign-in is requested.
+    ProviderPickerChatgptOAuthRequested,
     /// Emitted only after the picker showed owner, exact path, and the full
     /// read-only side-effect contract and the user explicitly confirmed it.
     ProviderPickerExternalConsentConfirmed {

@@ -165,22 +165,14 @@ pub fn get_credentials(grant: &ExternalCredentialReadGrant) -> Result<CodexCrede
     }
 
     bail!(
-        "Codex access token in {} is expired. Read-only consent never refreshes or rewrites another CLI's credentials. Run `codex login`, or provide OPENAI_CODEX_ACCESS_TOKEN for this process.",
+        "Codex access token in {} is expired. Read-only consent never refreshes or rewrites another CLI's credentials. Sign in with ChatGPT via `codewhale auth chatgpt`, run `codex login` again, or provide OPENAI_CODEX_ACCESS_TOKEN for this process.",
         codewhale_config::quote_os_path(grant.path())
     )
 }
 
 #[must_use]
 pub fn missing_auth_message() -> String {
-    format!(
-        "OpenAI Codex OAuth credentials are unavailable.\n\
-         \n\
-         Codewhale checks OPENAI_CODEX_ACCESS_TOKEN and CODEX_ACCESS_TOKEN automatically.\n\
-         Access to the Codex CLI file is disabled by default. After `codex login`, grant read-only access explicitly with:\n\
-         `codewhale auth external-consent --provider openai-codex --mode read-only --path {}`\n\
-         Read-only access never refreshes or rewrites the Codex CLI file.",
-        codewhale_config::quote_os_path(&auth_file_path())
-    )
+    crate::chatgpt_oauth::missing_auth_message()
 }
 
 /// Read a ChatGPT account id from env overrides only.
@@ -349,9 +341,12 @@ mod tests {
         assert!(message.contains("OPENAI_CODEX_ACCESS_TOKEN"));
         assert!(message.contains("CODEX_ACCESS_TOKEN"));
         assert!(message.contains(&codewhale_config::quote_os_path(&auth_file_path())));
+        assert!(message.contains("codewhale auth chatgpt"));
+        assert!(message.contains("subscription billing"));
+        assert!(message.contains("openai API-key"));
         assert!(message.contains("codex login"));
         assert!(message.contains("external-consent"));
-        assert!(message.contains("disabled by default"));
+        assert!(message.contains("chatgpt-revoke"));
     }
 
     #[test]

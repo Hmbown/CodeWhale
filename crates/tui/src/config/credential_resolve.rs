@@ -125,6 +125,15 @@ pub(crate) fn resolve_credential_source_with(
         return CredentialResolution::missing(probed);
     }
     if provider == ApiProvider::OpenaiCodex && !config.provider_uses_custom_endpoint(provider) {
+        if crate::chatgpt_oauth::credentials_present(config) {
+            return CredentialResolution::found(CredentialSource::OAuth {
+                flow: "ChatGPT".to_string(),
+            });
+        }
+        probed.push(CredentialProbe::with_fix(
+            "Codewhale-owned ChatGPT sign-in",
+            "codewhale auth chatgpt",
+        ));
         // Token env overrides are checked above. An external Codex login is
         // considered only after exact read-only consent has been validated.
         let path = crate::oauth::auth_file_path();

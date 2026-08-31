@@ -2007,6 +2007,15 @@ pub(crate) async fn handle_view_events(
                     run_xai_device_login_from_tui(terminal, app, engine_handle, config).await?;
                 complete_provider_picker_onboarding_if_switched(app, ApiProvider::Xai, switched);
             }
+            ViewEvent::ProviderPickerChatgptOAuthRequested => {
+                let switched =
+                    run_chatgpt_pkce_login_from_tui(terminal, app, engine_handle, config).await?;
+                complete_provider_picker_onboarding_if_switched(
+                    app,
+                    ApiProvider::OpenaiCodex,
+                    switched,
+                );
+            }
             ViewEvent::ProviderPickerExternalConsentConfirmed {
                 provider,
                 consent_provider,

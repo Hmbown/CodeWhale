@@ -355,7 +355,7 @@ impl SetupRuntimeFacts {
             format!("{}; retry or open /provider", readiness.label())
         } else if app.api_provider == crate::config::ApiProvider::OpenaiCodex {
             format!(
-                "{}; run codex login, then grant exact read-only access with `codewhale auth external-consent --provider openai-codex --mode read-only`, or open /provider",
+                "{}; Sign in with ChatGPT via `codewhale auth chatgpt` or /provider setup openai-codex (subscription billing). Codex CLI import remains an explicit alternative.",
                 readiness.label()
             )
         } else if let Some(url) = crate::config::credential_help_for_provider_route(

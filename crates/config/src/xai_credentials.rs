@@ -19,6 +19,9 @@ use anyhow::{Context, Result, bail};
 pub const XAI_OAUTH_GENERATION_PREFIX: &str = "xai-auth-";
 pub const XAI_OAUTH_GENERATION_SUFFIX: &str = ".json";
 pub const LEGACY_XAI_OAUTH_FILE_NAME: &str = "xai-auth.json";
+pub const CHATGPT_OAUTH_GENERATION_PREFIX: &str = "chatgpt-auth-";
+pub const CHATGPT_OAUTH_GENERATION_SUFFIX: &str = ".json";
+pub const LEGACY_CHATGPT_OAUTH_FILE_NAME: &str = "chatgpt-oauth.json";
 const XAI_OAUTH_LIFECYCLE_LOCK_FILE_NAME: &str = ".xai-oauth.lock";
 const XAI_OAUTH_FILE_LIMIT: u64 = 1024 * 1024;
 
@@ -51,23 +54,11 @@ pub struct XaiOAuthRevocation {
 
 #[must_use]
 pub fn is_valid_xai_oauth_generation(value: &str) -> bool {
-    let path = Path::new(value);
-    if path.components().count() != 1
-        || !matches!(path.components().next(), Some(Component::Normal(_)))
-        || path.file_name().and_then(|name| name.to_str()) != Some(value)
-    {
-        return false;
-    }
-    let Some(id) = value
-        .strip_prefix(XAI_OAUTH_GENERATION_PREFIX)
-        .and_then(|value| value.strip_suffix(XAI_OAUTH_GENERATION_SUFFIX))
-    else {
-        return false;
-    };
-    id.len() == 32
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    is_valid_owned_oauth_generation(
+        value,
+        XAI_OAUTH_GENERATION_PREFIX,
+        XAI_OAUTH_GENERATION_SUFFIX,
+    )
 }
 
 pub fn validate_xai_oauth_generation(value: &str) -> Result<&str> {
@@ -77,6 +68,44 @@ pub fn validate_xai_oauth_generation(value: &str) -> Result<&str> {
         );
     }
     Ok(value)
+}
+
+#[must_use]
+pub fn is_valid_chatgpt_oauth_generation(value: &str) -> bool {
+    is_valid_owned_oauth_generation(
+        value,
+        CHATGPT_OAUTH_GENERATION_PREFIX,
+        CHATGPT_OAUTH_GENERATION_SUFFIX,
+    )
+}
+
+pub fn validate_chatgpt_oauth_generation(value: &str) -> Result<&str> {
+    if !is_valid_chatgpt_oauth_generation(value) {
+        bail!(
+            "invalid Codewhale-owned ChatGPT OAuth generation; expected chatgpt-auth-<32 lowercase hex>.json"
+        );
+    }
+    Ok(value)
+}
+
+fn is_valid_owned_oauth_generation(value: &str, prefix: &str, suffix: &str) -> bool {
+    let path = Path::new(value);
+    if path.components().count() != 1
+        || !matches!(path.components().next(), Some(Component::Normal(_)))
+        || path.file_name().and_then(|name| name.to_str()) != Some(value)
+    {
+        return false;
+    }
+    let Some(id) = value
+        .strip_prefix(prefix)
+        .and_then(|value| value.strip_suffix(suffix))
+    else {
+        return false;
+    };
+    id.len() == 32
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 pub fn xai_oauth_credentials_dir() -> Result<PathBuf> {
@@ -113,6 +142,14 @@ pub fn xai_oauth_generation_path(generation: &str) -> Result<PathBuf> {
 
 pub fn legacy_xai_oauth_path() -> Result<PathBuf> {
     Ok(xai_oauth_credentials_dir()?.join(LEGACY_XAI_OAUTH_FILE_NAME))
+}
+
+pub fn chatgpt_oauth_generation_path(generation: &str) -> Result<PathBuf> {
+    Ok(xai_oauth_credentials_dir()?.join(validate_chatgpt_oauth_generation(generation)?))
+}
+
+pub fn legacy_chatgpt_oauth_path() -> Result<PathBuf> {
+    Ok(xai_oauth_credentials_dir()?.join(LEGACY_CHATGPT_OAUTH_FILE_NAME))
 }
 
 /// Serialize every Codewhale-owned xAI OAuth lifecycle mutation across threads
@@ -245,6 +282,16 @@ impl XaiOAuthCredentialStore {
         Ok(removed)
     }
 
+    pub fn clear_chatgpt(&self) -> Result<usize> {
+        let mut removed = 0;
+        for name in chatgpt_auth_names_in_store(self)? {
+            if self.remove(&name)? {
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
     /// Stage every active owned credential before a config mode switch. The
     /// generation basename is the OAuth epoch; the lifecycle lock prevents a
     /// stale Codewhale reader from using it while authority changes.
@@ -352,6 +399,45 @@ fn owned_auth_names_in_store(store: &XaiOAuthCredentialStore) -> Result<Vec<Stri
     Ok(names)
 }
 
+#[cfg(unix)]
+fn chatgpt_auth_names_in_store(store: &XaiOAuthCredentialStore) -> Result<Vec<String>> {
+    use std::ffi::CStr;
+    use std::os::fd::AsRawFd as _;
+
+    let duplicated =
+        unsafe { libc::fcntl(store.directory_handle.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicated < 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("duplicating Codewhale credentials directory handle");
+    }
+    let stream = unsafe { libc::fdopendir(duplicated) };
+    if stream.is_null() {
+        let error = std::io::Error::last_os_error();
+        unsafe { libc::close(duplicated) };
+        return Err(error).context("enumerating Codewhale credentials directory");
+    }
+    let mut names = Vec::new();
+    loop {
+        let entry = unsafe { libc::readdir(stream) };
+        if entry.is_null() {
+            break;
+        }
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        let Ok(name) = name.to_str() else {
+            continue;
+        };
+        if is_chatgpt_owned_auth_name(name) {
+            names.push(name.to_string());
+        }
+    }
+    if unsafe { libc::closedir(stream) } != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("closing Codewhale credentials directory enumeration");
+    }
+    names.sort();
+    Ok(names)
+}
+
 #[cfg(not(unix))]
 fn owned_auth_names_in_store(store: &XaiOAuthCredentialStore) -> Result<Vec<String>> {
     let mut names = Vec::new();
@@ -373,6 +459,34 @@ fn owned_auth_names_in_store(store: &XaiOAuthCredentialStore) -> Result<Vec<Stri
             continue;
         };
         if name == LEGACY_XAI_OAUTH_FILE_NAME || is_valid_xai_oauth_generation(name) {
+            names.push(name.to_string());
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+#[cfg(not(unix))]
+fn chatgpt_auth_names_in_store(store: &XaiOAuthCredentialStore) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    let entries = fs::read_dir(&store.directory).with_context(|| {
+        format!(
+            "failed to inspect Codewhale credentials directory {}",
+            crate::quote_os_path(&store.directory)
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.with_context(|| {
+            format!(
+                "failed to inspect Codewhale credentials directory {}",
+                crate::quote_os_path(&store.directory)
+            )
+        })?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if is_chatgpt_owned_auth_name(name) {
             names.push(name.to_string());
         }
     }
@@ -429,10 +543,17 @@ impl XaiOAuthRevocation {
 
 fn validate_owned_auth_name(name: &str) -> Result<()> {
     anyhow::ensure!(
-        name == LEGACY_XAI_OAUTH_FILE_NAME || is_valid_xai_oauth_generation(name),
-        "invalid Codewhale-owned xAI OAuth basename"
+        name == LEGACY_XAI_OAUTH_FILE_NAME
+            || name == LEGACY_CHATGPT_OAUTH_FILE_NAME
+            || is_valid_xai_oauth_generation(name)
+            || is_valid_chatgpt_oauth_generation(name),
+        "invalid Codewhale-owned OAuth basename"
     );
     Ok(())
+}
+
+fn is_chatgpt_owned_auth_name(name: &str) -> bool {
+    name == LEGACY_CHATGPT_OAUTH_FILE_NAME || is_valid_chatgpt_oauth_generation(name)
 }
 
 fn validate_private_basename(name: &str) -> Result<()> {
@@ -1564,6 +1685,15 @@ pub fn clear_all_xai_oauth_credentials() -> Result<usize> {
     with_xai_oauth_lifecycle_lock(XaiOAuthCredentialStore::clear_all)
 }
 
+pub fn clear_all_chatgpt_oauth_credentials() -> Result<usize> {
+    with_xai_oauth_lifecycle_lock(XaiOAuthCredentialStore::clear_chatgpt)
+}
+
+pub fn remove_chatgpt_oauth_generation(generation: &str) -> Result<bool> {
+    let generation = validate_chatgpt_oauth_generation(generation)?;
+    with_xai_oauth_lifecycle_lock(|store| store.remove(generation))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1596,6 +1726,13 @@ mod tests {
         ] {
             assert!(!is_valid_xai_oauth_generation(invalid), "{invalid}");
         }
+        let chatgpt = "chatgpt-auth-0123456789abcdef0123456789abcdef.json";
+        assert!(is_valid_chatgpt_oauth_generation(chatgpt));
+        assert!(!is_valid_chatgpt_oauth_generation(valid));
+        assert!(!is_valid_xai_oauth_generation(chatgpt));
+        assert!(!is_valid_chatgpt_oauth_generation(
+            "../chatgpt-auth-0123456789abcdef0123456789abcdef.json"
+        ));
     }
 
     #[test]
@@ -1616,6 +1753,25 @@ mod tests {
         assert!(directory.join("other-provider.json").exists());
         assert!(!directory.join(generation).exists());
         assert!(!directory.join("xai-auth.json").exists());
+    }
+
+    #[test]
+    fn logout_cleanup_removes_chatgpt_files_without_touching_xai() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = directory.path().canonicalize().expect("canonical temp dir");
+        let store = open_owned_credentials_directory(&directory).expect("open store");
+        let chatgpt = "chatgpt-auth-0123456789abcdef0123456789abcdef.json";
+        let xai = "xai-auth-0123456789abcdef0123456789abcdef.json";
+        store.write(chatgpt, b"chatgpt", false).expect("chatgpt");
+        store.write(xai, b"xai", false).expect("xai");
+        store
+            .write(LEGACY_CHATGPT_OAUTH_FILE_NAME, b"legacy", false)
+            .expect("legacy chatgpt");
+
+        assert_eq!(store.clear_chatgpt().expect("clear chatgpt"), 2);
+        assert!(directory.join(xai).exists());
+        assert!(!directory.join(chatgpt).exists());
+        assert!(!directory.join(LEGACY_CHATGPT_OAUTH_FILE_NAME).exists());
     }
 
     #[cfg(unix)]

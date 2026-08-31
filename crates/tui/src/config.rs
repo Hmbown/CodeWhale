@@ -5672,6 +5672,26 @@ impl Config {
         entry.external_credentials = None;
     }
 
+    /// Mirror a successful native ChatGPT PKCE login into the live Codex route.
+    /// Codewhale-owned OAuth storage supersedes any dormant Codex CLI consent.
+    pub(crate) fn mark_codewhale_owned_chatgpt_oauth(&mut self, generation: String) {
+        let entry = self.provider_config_for_mut(ApiProvider::OpenaiCodex);
+        entry.auth_mode = Some("oauth".to_string());
+        entry.oauth_credential_generation = Some(generation);
+        entry.external_credentials = None;
+    }
+
+    pub(crate) fn clear_codewhale_owned_chatgpt_oauth(&mut self) {
+        let entry = self.provider_config_for_mut(ApiProvider::OpenaiCodex);
+        if entry
+            .oauth_credential_generation
+            .as_deref()
+            .is_some_and(codewhale_config::is_valid_chatgpt_oauth_generation)
+        {
+            entry.oauth_credential_generation = None;
+        }
+    }
+
     /// Refresh only model-provider route material from a newly loaded disk
     /// snapshot. The receiver is the already-effective interactive Config,
     /// including CLI feature toggles and workspace/project permission overlays;
@@ -11187,9 +11207,12 @@ pub fn active_provider_has_config_api_key(config: &Config) -> bool {
         return false;
     }
     if provider == ApiProvider::OpenaiCodex && !custom_endpoint {
-        // The persistent Codex login is the OAuth credential file, analogous to
-        // a stored config key. Token env overrides are scored separately by
-        // active_provider_has_env_api_key.
+        if crate::chatgpt_oauth::credentials_valid(config) {
+            return true;
+        }
+        // External Codex CLI login is analogous to a stored config key only
+        // after exact read-only consent. Token env overrides are scored
+        // separately by active_provider_has_env_api_key.
         let path = crate::oauth::auth_file_path();
         return config
             .external_credential_read_grant(
@@ -11336,6 +11359,13 @@ impl Config {
                 && !self.provider_uses_custom_endpoint(ApiProvider::OpenaiCodex),
             "Codex OAuth credentials are only available on the official OpenAI Codex route"
         );
+        if crate::chatgpt_oauth::credentials_valid(self) {
+            let owned = crate::chatgpt_oauth::get_owned_credentials(self)?;
+            return Ok(crate::oauth::CodexCredentials {
+                access_token: owned.access_token,
+                account_id: owned.account_id,
+            });
+        }
         let path = crate::oauth::auth_file_path();
         let grant = self.external_credential_read_grant(
             ApiProvider::OpenaiCodex,
@@ -11495,7 +11525,7 @@ fn save_api_key_for_identity_unlocked(
     let provider = identity.provider;
     if provider == ApiProvider::OpenaiCodex {
         anyhow::bail!(
-            "OpenAI Codex uses OAuth. Run `codex login`, then grant exact read-only access with `codewhale auth external-consent --provider openai-codex --mode read-only`, or set OPENAI_CODEX_ACCESS_TOKEN for this process; Codewhale does not store an API key for this provider."
+            "OpenAI Codex uses OAuth. Sign in with ChatGPT via `codewhale auth chatgpt` (subscription billing, Codewhale-owned tokens). The openai API-key route is a different billing owner. Alternatively run `codex login`, then grant exact read-only access with `codewhale auth external-consent --provider openai-codex --mode read-only`, or set OPENAI_CODEX_ACCESS_TOKEN for this process; Codewhale does not store an API key for this provider."
         );
     }
     let is_legacy_literal_custom = provider == ApiProvider::Custom

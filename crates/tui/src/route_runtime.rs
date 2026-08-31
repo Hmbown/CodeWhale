@@ -292,7 +292,7 @@ fn classify_provider_route_preflight_next_step(identity_key: &str, reason: &str)
         || lower.contains("codex access token")
     {
         return Some(format!(
-            "Run `codex login`, then retry {identity_key}; Codewhale reads that official CLI login without modifying it."
+            "Run `codewhale auth chatgpt` or /provider setup {identity_key} to Sign in with ChatGPT; Codex CLI import remains an explicit alternative."
         ));
     }
     if lower.contains("api key not found")
@@ -941,7 +941,7 @@ mod tests {
         let missing_formatted =
             format_provider_route_preflight_error("openai-codex", "gpt-5.6-sol", &missing);
         assert!(missing_formatted.contains(
-            "Next step: Run `codex login`, then retry openai-codex; Codewhale reads that official CLI login without modifying it."
+            "Next step: Run `codewhale auth chatgpt` or /provider setup openai-codex to Sign in with ChatGPT; Codex CLI import remains an explicit alternative."
         ));
 
         let custom = anyhow::anyhow!(

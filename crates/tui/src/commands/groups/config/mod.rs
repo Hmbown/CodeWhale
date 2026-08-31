@@ -66,7 +66,7 @@ static LOGIN_INFO: CommandInfo = CommandInfo {
 static AUTH_INFO: CommandInfo = CommandInfo {
     name: "auth",
     aliases: &[],
-    usage: "/auth xai-device",
+    usage: "/auth xai-device|chatgpt|chatgpt-revoke",
     description_id: MessageId::CmdAuthDescription,
 };
 static RAIL_INFO: CommandInfo = CommandInfo {
@@ -185,7 +185,18 @@ pub(in crate::commands) fn dispatch(
             Some("xai-device") | Some("xai_device") => {
                 CommandResult::action(crate::tui::app::AppAction::StartXaiDeviceLogin)
             }
-            _ => CommandResult::error("Usage: /auth xai-device"),
+            Some("chatgpt") | Some("openai-codex") | Some("openai_codex") => {
+                CommandResult::action(crate::tui::app::AppAction::StartChatgptPkceLogin)
+            }
+            Some("chatgpt-revoke") | Some("chatgpt_revoke") => {
+                match crate::chatgpt_oauth::revoke_owned_login(None, None) {
+                    Ok(()) => CommandResult::message(
+                        "Revoked Codewhale-owned ChatGPT tokens. Codex CLI consent is unchanged.",
+                    ),
+                    Err(err) => CommandResult::error(format!("ChatGPT revoke failed: {err:#}")),
+                }
+            }
+            _ => CommandResult::error("Usage: /auth xai-device|chatgpt|chatgpt-revoke"),
         },
         "rail" | "sidebar" => config::sidebar(app, arg),
         "settings" => config::settings_command(app, arg),
