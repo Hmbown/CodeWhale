@@ -285,12 +285,6 @@ impl SessionBootSurface {
             budget,
         )
     }
-
-    #[must_use]
-    pub fn activity_chip(&self, locale: Locale, budget: usize) -> Option<String> {
-        self.activity_notice(locale, budget)
-            .map(|notice| notice.text)
-    }
 }
 
 fn activity_notice_from_candidates(
@@ -414,7 +408,12 @@ mod tests {
         let surface =
             SessionBootSurface::from_parts(None, false, &[], 0, PluginBootSummary::default());
         assert_eq!(surface.phase, SessionBootPhase::Hidden);
-        assert!(surface.activity_chip(Locale::En, 80).is_none());
+        assert!(
+            surface
+                .activity_notice(Locale::En, 80)
+                .map(|notice| notice.text)
+                .is_none()
+        );
     }
 
     #[test]
@@ -488,11 +487,17 @@ mod tests {
             })
         );
         assert_eq!(
-            surface.activity_chip(Locale::En, 22).as_deref(),
+            surface
+                .activity_notice(Locale::En, 22)
+                .map(|notice| notice.text)
+                .as_deref(),
             Some("Plugins · Problems: 1")
         );
         assert_eq!(
-            surface.activity_chip(Locale::En, 12).as_deref(),
+            surface
+                .activity_notice(Locale::En, 12)
+                .map(|notice| notice.text)
+                .as_deref(),
             Some("Plugins · 1")
         );
     }
@@ -532,7 +537,10 @@ mod tests {
         assert_eq!(surface.phase, SessionBootPhase::Booting);
         assert_eq!(surface.servers.len(), 1);
         assert_eq!(surface.servers[0].state, McpServerBootState::Connecting);
-        let chip = surface.activity_chip(Locale::En, 80).expect("chip");
+        let chip = surface
+            .activity_notice(Locale::En, 80)
+            .map(|notice| notice.text)
+            .expect("chip");
         assert!(chip.contains("alpha"), "{chip}");
         assert!(!chip.to_ascii_lowercase().contains("slack"), "{chip}");
     }
@@ -557,7 +565,10 @@ mod tests {
             PluginBootSummary::default(),
         );
         assert_eq!(surface.phase, SessionBootPhase::Booting);
-        let chip = surface.activity_chip(Locale::En, 80).expect("chip");
+        let chip = surface
+            .activity_notice(Locale::En, 80)
+            .map(|notice| notice.text)
+            .expect("chip");
         assert!(chip.contains("4 connecting"), "{chip}");
         assert!(chip.contains("alpha"), "{chip}");
         assert!(chip.contains("docs"), "{chip}");
@@ -621,7 +632,10 @@ mod tests {
             3,
             PluginBootSummary::default(),
         );
-        let chip = surface.activity_chip(Locale::En, 22).expect("chip");
+        let chip = surface
+            .activity_notice(Locale::En, 22)
+            .map(|notice| notice.text)
+            .expect("chip");
         assert_eq!(chip, "MCP · 3 connecting");
     }
 
@@ -647,7 +661,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["alpha", "docs", "gamma"]
         );
-        let chip = surface.activity_chip(Locale::En, 80).expect("chip");
+        let chip = surface
+            .activity_notice(Locale::En, 80)
+            .map(|notice| notice.text)
+            .expect("chip");
         assert!(chip.contains("3 connecting"), "{chip}");
         assert!(chip.contains("alpha"), "{chip}");
         assert!(chip.contains("gamma"), "{chip}");
@@ -661,7 +678,10 @@ mod tests {
         assert_eq!(surface.phase, SessionBootPhase::Booting);
         assert!(surface.servers.is_empty());
         assert_eq!(
-            surface.activity_chip(Locale::En, 80).as_deref(),
+            surface
+                .activity_notice(Locale::En, 80)
+                .map(|notice| notice.text)
+                .as_deref(),
             Some("MCP · 4 connecting")
         );
     }

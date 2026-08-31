@@ -6214,7 +6214,8 @@ mod session_boot_event_tests {
         assert_eq!(app.mcp_configured_count, 2);
         let surface = crate::tui::session_boot::SessionBootSurface::from_app(&app);
         let chip = surface
-            .activity_chip(crate::localization::Locale::En, 80)
+            .activity_notice(crate::localization::Locale::En, 80)
+            .map(|notice| notice.text)
             .expect("chip");
         assert!(chip.contains("alpha"), "{chip}");
         assert!(chip.contains("beta"), "{chip}");
