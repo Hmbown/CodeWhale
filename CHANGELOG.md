@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public roster language is Pod. `/pod` is the customer surface; fleet remains
   the internal wire, storage, and migration name (#5776).
 
+- Provider selection no longer probes or adopts an external CLI credential on
+  ordinary picker use. Reuse requires an explicit "Use external CLI credentials"
+  choice, exact-path confirmation, and Codewhale-owned revoke (#5772).
+
 - TUI: startup no longer presents an approximate ASCII or block-glyph whale as
   the product mark. It keeps the direct Tideline prompt while exact-raster
   surfaces remain responsible for the canonical asset.
