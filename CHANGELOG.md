@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Cloud facts channel (`facts/v1`), behind `[cloud_facts].enabled` (default
+  **off**): a signed (Ed25519, keys pinned in the binary), versioned, ETag +
+  TTL cached overlay for model catalog deltas, provider defaults, release
+  truth, and one-line announcements. Bundled facts remain the floor; a
+  missing, rejected, or out-of-scope payload changes nothing, and the fetch
+  is never a startup dependency. New crate `codewhale-cloud-facts`,
+  `codewhale_config::cloud_facts`, catalog layer 15
+  (`CatalogSource::CloudFacts`), `/status` rows `Catalog:` and
+  `Cloud facts:`. Website route `/api/facts/v1/<channel>` (Supabase
+  `facts_*` tables, anon read-only, RLS forced) and the authoring tool
+  `web/scripts/facts-publish.mjs`. Note: codewhale.net is served by a
+  Cloudflare Worker (OpenNext), not Vercel as the PRD states; the route is
+  host-agnostic. See [CLOUD_FACTS.md](docs/CLOUD_FACTS.md).
 - Website: the public site moves to the Tideline deep-ocean design language
   (dark by default with an opt-in light documentation sheet, palette grounded
   in the TUI's WHALE_* tokens) and the new whale brand mark across the favicon,

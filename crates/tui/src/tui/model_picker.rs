@@ -2320,6 +2320,9 @@ fn render_picker_model_hint(
             parts.push("live".to_string())
         }
         Some(CatalogSource::Bundled) => parts.push("bundled".to_string()),
+        Some(CatalogSource::CloudFacts { facts_version, .. }) => {
+            parts.push(format!("cloud v{facts_version}"))
+        }
         Some(CatalogSource::ConfigOverride | CatalogSource::UserOverride) => {
             parts.push("override".to_string())
         }

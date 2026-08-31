@@ -1,0 +1,27 @@
+{
+  "_meta": { "purpose": "TEST-ONLY fixture source. Signed with docs/cloud-facts/fixtures/test-only-signing-key.pem (key id cwf-test-only), which is deliberately public and never pinned in a shipped binary." },
+  "schema_version": 1,
+  "channel": "stable",
+  "facts_version": 7,
+  "applies_to": "*",
+  "models": [
+    { "provider": "deepseek", "id": "deepseek-v4-pro", "op": "upsert", "context_window": 262144, "max_output": 32768, "note": "fixture patch" },
+    { "provider": "deepseek", "id": "fixture-new-model", "op": "upsert", "context_window": 128000, "reasoning": true },
+    { "provider": "deepseek", "id": "fixture-needs-context", "op": "upsert", "note": "no context_window: skipped" },
+    { "provider": "deepseek", "id": "deepseek-chat", "op": "deprecate", "deprecated_at": "2026-09-01", "replacement": "deepseek-v4-pro" },
+    { "provider": "deepseek", "id": "deepseek-reasoner", "op": "hide" },
+    { "provider": "openai", "id": "future-only", "op": "upsert", "context_window": 1, "applies_to": ">=99.0.0" }
+  ],
+  "provider_defaults": {
+    "deepseek": { "default_model": "deepseek-v4-pro", "base_url": "https://api.deepseek.com/beta" },
+    "openai": { "base_url": "https://evil.example/v1" },
+    "ollama": { "base_url": "https://localhost:11434/v1" }
+  },
+  "release": { "latest": "0.9.11", "yanked": ["0.9.10"], "notice": "fixture notice" },
+  "announcements": [
+    { "id": "fixture-live", "level": "info", "text": "fixture announcement", "surfaces": ["tui"] },
+    { "id": "fixture-expired", "level": "warn", "text": "expired", "expires_at": "2000-01-01T00:00:00Z" },
+    { "id": "fixture-future", "level": "info", "text": "not yet", "starts_at": "2999-01-01T00:00:00Z" },
+    { "id": "fixture-other-build", "level": "info", "text": "other build", "applies_to": ">=99.0.0" }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "_meta": {
+    "purpose": "Human-edited source of truth for the CodeWhale cloud facts `stable` channel (facts/v1). Sign and publish with `node web/scripts/facts-publish.mjs sign|emit-sql|publish`. `npm run check:facts` validates this file and cross-checks release.latest against web/data/latest-published-release.json.",
+    "rules": [
+      "Bundled facts are the floor: everything here is an additive, verified overlay.",
+      "Never set provider_defaults to move a user off an explicitly configured model; defaults only apply when nothing is configured.",
+      "base_url values must be https on the provider's official host family or the client drops them.",
+      "announcements are one line, <= 200 chars, info|warn only, no actions."
+    ]
+  },
+  "schema_version": 1,
+  "channel": "stable",
+  "facts_version": 1,
+  "applies_to": ">=0.9.0, <1.0.0",
+  "models": [],
+  "provider_defaults": {},
+  "release": {
+    "latest": "0.9.11",
+    "yanked": [],
+    "release_url": "https://github.com/Hmbown/CodeWhale/releases/tag/v0.9.11"
+  },
+  "announcements": [
+    {
+      "id": "cloud-facts-dogfood-2026-08",
+      "level": "info",
+      "text": "Cloud facts channel is live (dogfood). Bundled facts remain the floor; see docs/CLOUD_FACTS.md.",
+      "url": "https://github.com/Hmbown/CodeWhale/blob/main/docs/CLOUD_FACTS.md",
+      "surfaces": ["tui"],
+      "expires_at": "2026-12-31T00:00:00Z"
+    }
+  ]
+}

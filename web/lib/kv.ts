@@ -21,10 +21,15 @@ interface CloudflareEnv {
   GITHUB_TOKEN?: string;
   CRON_SECRET?: string;
   GITHUB_REPO?: string;
+  /** Cloud facts (facts/v1): Supabase Data API URL + publishable (anon) key. Never a service key. */
+  SUPABASE_URL?: string;
+  SUPABASE_PUBLISHABLE_KEY?: string;
 }
 
 function envFromProcess(): CloudflareEnv {
   return {
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    SUPABASE_PUBLISHABLE_KEY: process.env.SUPABASE_PUBLISHABLE_KEY,
     DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
     DEEPSEEK_BASE_URL: process.env.DEEPSEEK_BASE_URL,
     DEEPSEEK_MODEL: process.env.DEEPSEEK_MODEL,

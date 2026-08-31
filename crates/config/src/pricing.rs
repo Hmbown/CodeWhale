@@ -51,6 +51,8 @@ pub enum PricingProvenance {
     ProviderDocs,
     /// User-supplied override (custom endpoint, enterprise terms, local route).
     UserOverride,
+    /// Verified cloud facts patch (signed, versioned; see `cloud_facts`).
+    CloudFacts,
     /// No sourced price.
     Unknown,
 }
@@ -64,6 +66,7 @@ impl PricingProvenance {
             Self::ProviderLive => "provider_live",
             Self::ProviderDocs => "provider_docs",
             Self::UserOverride => "user_override",
+            Self::CloudFacts => "cloud_facts",
             Self::Unknown => "unknown",
         }
     }
@@ -79,7 +82,7 @@ impl PricingProvenance {
     pub fn is_authoritative_without_freshness_check(&self) -> bool {
         matches!(
             self,
-            Self::ModelsDevBundled | Self::ProviderDocs | Self::UserOverride
+            Self::ModelsDevBundled | Self::ProviderDocs | Self::UserOverride | Self::CloudFacts
         )
     }
 }
@@ -505,14 +508,15 @@ fn provenance_from_source(source: &CatalogSource) -> PricingProvenance {
         CatalogSource::ConfigOverride | CatalogSource::UserOverride => {
             PricingProvenance::UserOverride
         }
+        CatalogSource::CloudFacts { .. } => PricingProvenance::CloudFacts,
     }
 }
 
 fn effective_at_from_source(source: &CatalogSource) -> Option<u64> {
     match source {
-        CatalogSource::Live { fetched_at, .. } | CatalogSource::ModelsDevLive { fetched_at } => {
-            Some(*fetched_at)
-        }
+        CatalogSource::Live { fetched_at, .. }
+        | CatalogSource::ModelsDevLive { fetched_at }
+        | CatalogSource::CloudFacts { fetched_at, .. } => Some(*fetched_at),
         CatalogSource::Bundled | CatalogSource::ConfigOverride | CatalogSource::UserOverride => {
             None
         }
@@ -527,6 +531,7 @@ fn endpoint_fingerprint_from_source(source: &CatalogSource) -> Option<String> {
         } => Some(base_url_fingerprint.clone()),
         CatalogSource::Bundled
         | CatalogSource::ModelsDevLive { .. }
+        | CatalogSource::CloudFacts { .. }
         | CatalogSource::ConfigOverride
         | CatalogSource::UserOverride => None,
     }

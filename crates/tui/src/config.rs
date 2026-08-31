@@ -2751,6 +2751,70 @@ impl UpdateConfig {
     }
 }
 
+fn default_cloud_facts_channel() -> String {
+    "stable".to_string()
+}
+
+fn default_cloud_facts_ttl_hours() -> u64 {
+    codewhale_cloud_facts::DEFAULT_TTL_SECS / 3600
+}
+
+/// Cloud facts overlay (`[cloud_facts]` table in config.toml). Off by default;
+/// see `docs/CLOUD_FACTS.md`. Env: `CODEWHALE_CLOUD_FACTS=1|0` overrides
+/// `enabled`, `CODEWHALE_DISABLE_CLOUD_FACTS=1` is a hard kill switch.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct CloudFactsConfig {
+    /// When false (default), no cloud facts are read or fetched; the binary
+    /// behaves exactly as it ships.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Channel slug (`stable` / `beta`).
+    #[serde(default = "default_cloud_facts_channel")]
+    pub channel: String,
+    /// Optional endpoint override (`{channel}` placeholder allowed).
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Hours between refreshes of a verified payload.
+    #[serde(default = "default_cloud_facts_ttl_hours")]
+    pub ttl_hours: u64,
+}
+
+impl Default for CloudFactsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            channel: default_cloud_facts_channel(),
+            url: None,
+            ttl_hours: default_cloud_facts_ttl_hours(),
+        }
+    }
+}
+
+impl CloudFactsConfig {
+    /// Runtime settings with env overrides applied.
+    #[must_use]
+    pub fn settings(&self) -> codewhale_cloud_facts::Settings {
+        let channel = self.channel.trim();
+        codewhale_cloud_facts::Settings {
+            enabled: self.enabled,
+            channel: if codewhale_cloud_facts::valid_channel(channel) {
+                channel.to_string()
+            } else {
+                default_cloud_facts_channel()
+            },
+            url: self
+                .url
+                .as_deref()
+                .map(str::trim)
+                .filter(|u| !u.is_empty())
+                .map(str::to_string),
+            ttl_secs: self.ttl_hours.max(1).saturating_mul(3600),
+            ..codewhale_cloud_facts::Settings::default()
+        }
+        .resolve()
+    }
+}
+
 /// Which approval option a freshly rendered approval card highlights.
 #[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -3128,6 +3192,10 @@ pub struct Config {
     /// fire-and-forget latest-release check.
     #[serde(default)]
     pub update: Option<UpdateConfig>,
+
+    /// Cloud facts overlay (`[cloud_facts]`). Absent/false = off.
+    #[serde(default)]
+    pub cloud_facts: Option<CloudFactsConfig>,
 
     /// Post-edit LSP diagnostics injection (#136). When absent, the engine
     /// applies the defaults documented in [`LspConfigToml`].
@@ -7572,6 +7640,12 @@ impl Config {
         self.update.clone().unwrap_or_default()
     }
 
+    /// Resolve cloud facts settings with defaults applied (off by default).
+    #[must_use]
+    pub fn cloud_facts_config(&self) -> CloudFactsConfig {
+        self.cloud_facts.clone().unwrap_or_default()
+    }
+
     /// Resolve durable hotbar bindings for render/dispatch layers.
     #[must_use]
     pub fn resolve_hotbar_bindings(
@@ -10347,6 +10421,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         auto: override_cfg.auto.or(base.auto),
         hotbar: override_cfg.hotbar.or(base.hotbar),
         update: override_cfg.update.or(base.update),
+        cloud_facts: override_cfg.cloud_facts.or(base.cloud_facts),
         lsp: override_cfg.lsp.or(base.lsp),
         context: ContextConfig {
             enabled: override_cfg.context.enabled.or(base.context.enabled),

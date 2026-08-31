@@ -61,6 +61,13 @@ pub enum CatalogSource {
     ModelsDevLive { fetched_at: u64 },
     /// `config.toml` `[providers.*]` override (layer 30).
     ConfigOverride,
+    /// Verified cloud facts patch (layer 15): above bundled / live models.dev,
+    /// below provider `/v1/models`, config, and user rows.
+    CloudFacts {
+        facts_version: u64,
+        key_id: String,
+        fetched_at: u64,
+    },
 }
 
 /// One catalog-layer offering row.
@@ -627,6 +634,7 @@ impl CatalogSnapshot {
 /// ```text
 ///  0 bundled          committed models.dev-shaped snapshot
 /// 10 live models.dev  models.dev refresh
+/// 15 cloud facts      verified, signed field-level patches (off by default)
 /// 20 provider         per-provider /v1/models refresh
 /// 30 config           config.toml [providers.*] overrides
 /// 40 user             user approved set (Phase 3 hook; empty in Phase 1)
@@ -641,6 +649,7 @@ pub struct CatalogCompiler {
     bundled: Vec<CatalogOffering>,
     models_dev_live: Vec<CatalogOffering>,
     live: Vec<CatalogOffering>,
+    cloud_facts: Option<(crate::cloud_facts::ScopedFacts, u64)>,
     provider_live: Vec<CatalogOffering>,
     config: Vec<CatalogOffering>,
     overrides: Vec<CatalogOffering>,
@@ -687,6 +696,18 @@ impl CatalogCompiler {
         self
     }
 
+    /// Apply verified cloud facts patches (layer 15). `fetched_at` stamps the
+    /// resulting rows' provenance.
+    #[must_use]
+    pub fn with_cloud_facts(
+        mut self,
+        facts: &crate::cloud_facts::ScopedFacts,
+        fetched_at: u64,
+    ) -> Self {
+        self.cloud_facts = Some((facts.clone(), fetched_at));
+        self
+    }
+
     /// Add per-provider `/v1/models` refresh rows (layer 20).
     #[must_use]
     pub fn with_provider_live(mut self, rows: Vec<CatalogOffering>) -> Self {
@@ -724,7 +745,19 @@ impl CatalogCompiler {
             .into_iter()
             .chain(self.models_dev_live)
             .chain(self.live)
-            .chain(self.provider_live)
+        {
+            merged.insert(row.merge_key(), row);
+        }
+        if let Some((facts, fetched_at)) = &self.cloud_facts {
+            let _skipped = crate::cloud_facts::catalog_patch::apply_model_patches(
+                &mut merged,
+                facts,
+                *fetched_at,
+            );
+        }
+        for row in self
+            .provider_live
+            .into_iter()
             .chain(self.config)
             .chain(self.overrides)
         {

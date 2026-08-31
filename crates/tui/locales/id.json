@@ -1669,6 +1669,8 @@
   "StatusLabelContextWindow": "Jendela konteks",
   "StatusLabelWindowSource": "Sumber jendela",
   "StatusLabelWindowOverride": "Penyesuaian jendela",
+  "StatusLabelCatalog": "Katalog",
+  "StatusLabelCloudFacts": "Fakta cloud",
   "StatusLabelSession": "Sesi",
   "StatusLabelSessionTokens": "Token sesi",
   "StatusLabelSessionCost": "Biaya sesi",

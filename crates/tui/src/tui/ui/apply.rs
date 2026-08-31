@@ -1460,6 +1460,26 @@ pub(crate) async fn apply_command_result(
                     content: message.clone(),
                 });
                 app.status_message = Some(message);
+                // `/model refresh` also forces the cloud facts overlay when the
+                // (off-by-default) channel is enabled.
+                let cloud_settings = config.cloud_facts_config().settings();
+                if cloud_settings.enabled {
+                    let now = codewhale_config::catalog::now_unix();
+                    let cloud = match codewhale_cloud_facts::refresh(&cloud_settings, true).await {
+                        Ok(outcome) => {
+                            crate::provider_lake::note_cloud_facts_updated();
+                            format!(
+                                "Cloud facts refreshed: {outcome:?} ({})",
+                                codewhale_cloud_facts::status().label(now)
+                            )
+                        }
+                        Err(err) => format!(
+                            "Cloud facts refresh failed ({err}); {}",
+                            codewhale_cloud_facts::status().label(now)
+                        ),
+                    };
+                    app.add_message(HistoryCell::System { content: cloud });
+                }
             }
             AppAction::CacheWarmup => {
                 app.status_message = Some("Warming prompt cache...".to_string());

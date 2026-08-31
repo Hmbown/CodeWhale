@@ -1669,6 +1669,8 @@
   "StatusLabelContextWindow": "Вікно контексту",
   "StatusLabelWindowSource": "Джерело вікна",
   "StatusLabelWindowOverride": "Налаштування вікна",
+  "StatusLabelCatalog": "Каталог",
+  "StatusLabelCloudFacts": "Хмарні факти",
   "StatusLabelSession": "Сесія",
   "StatusLabelSessionTokens": "Токени сесії",
   "StatusLabelSessionCost": "Вартість сесії",

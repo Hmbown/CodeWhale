@@ -1669,6 +1669,8 @@
   "StatusLabelContextWindow": "Context window",
   "StatusLabelWindowSource": "Window source",
   "StatusLabelWindowOverride": "Window override",
+  "StatusLabelCatalog": "Catalog",
+  "StatusLabelCloudFacts": "Cloud facts",
   "StatusLabelSession": "Session",
   "StatusLabelSessionTokens": "Session tokens",
   "StatusLabelSessionCost": "Session cost",

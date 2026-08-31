@@ -10755,6 +10755,22 @@ async fn run_interactive_with_notice(
     // Failures are quiet: bundled catalog rows always remain available.
     crate::models_dev_live::maybe_load_persisted_cache();
     crate::models_dev_live::spawn_background_refresh();
+    // Cloud facts (signed, versioned, off by default): seed from the
+    // re-verified disk cache, then refresh in the background. Bundled facts
+    // stay the floor; a missing/rejected payload changes nothing.
+    {
+        let settings = config.cloud_facts_config().settings();
+        codewhale_cloud_facts::maybe_load_persisted_cache(&settings);
+        if settings.enabled {
+            crate::provider_lake::note_cloud_facts_updated();
+            codewhale_cloud_facts::spawn_background_refresh(
+                settings,
+                Some(std::sync::Arc::new(
+                    crate::provider_lake::note_cloud_facts_updated,
+                )),
+            );
+        }
+    }
     // Best-effort per-provider catalog refresh: fetches the active provider's
     // own /v1/models endpoint and merges live rows into the provider lake
     // alongside the Models.dev snapshot. Currently active for TelecomJS, whose

@@ -4,6 +4,7 @@ members = [
     "crates/app-server",
     "crates/build-support",
     "crates/cli",
+    "crates/cloud-facts",
     "crates/command-contract",
     "crates/config",
     "crates/core",

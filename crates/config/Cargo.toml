@@ -12,11 +12,15 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+base64 = "0.22.1"
 codewhale-execpolicy = { path = "../execpolicy", version = "0.9.11" }
 codewhale-paths = { path = "../paths", version = "0.9.11" }
 codewhale-secrets = { path = "../secrets", version = "0.9.11" }
 fd-lock = "4.0.4"
 libc = "0.2"
+# Ed25519 verification for cloud facts; already in the graph via rustls.
+ring = "0.17.14"
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

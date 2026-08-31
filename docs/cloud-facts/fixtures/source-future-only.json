@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "channel": "stable",
+  "facts_version": 8,
+  "applies_to": ">=99.0.0",
+  "release": { "latest": "99.0.0" }
+}

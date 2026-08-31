@@ -831,6 +831,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codewhale-cloud-facts"
+version = "0.9.11"
+dependencies = [
+ "codewhale-config",
+ "codewhale-release",
+ "reqwest 0.13.4",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "codewhale-command-contract"
 version = "0.9.11"
 dependencies = [
@@ -842,11 +857,14 @@ name = "codewhale-config"
 version = "0.9.11"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "codewhale-execpolicy",
  "codewhale-paths",
  "codewhale-secrets",
  "fd-lock",
  "libc",
+ "ring",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -1044,6 +1062,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "codewhale-build-support",
+ "codewhale-cloud-facts",
  "codewhale-command-contract",
  "codewhale-config",
  "codewhale-core",

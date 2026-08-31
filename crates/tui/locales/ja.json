@@ -1669,6 +1669,8 @@
   "StatusLabelContextWindow": "コンテキストウィンドウ",
   "StatusLabelWindowSource": "ウィンドウの根拠",
   "StatusLabelWindowOverride": "ウィンドウ設定",
+  "StatusLabelCatalog": "カタログ",
+  "StatusLabelCloudFacts": "クラウドファクト",
   "StatusLabelSession": "セッション",
   "StatusLabelSessionTokens": "セッショントークン",
   "StatusLabelSessionCost": "セッション費用",

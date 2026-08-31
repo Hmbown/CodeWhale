@@ -1669,6 +1669,8 @@
   "StatusLabelContextWindow": "Janela de contexto",
   "StatusLabelWindowSource": "Origem da janela",
   "StatusLabelWindowOverride": "Ajuste da janela",
+  "StatusLabelCatalog": "Catálogo",
+  "StatusLabelCloudFacts": "Fatos na nuvem",
   "StatusLabelSession": "Sessão",
   "StatusLabelSessionTokens": "Tokens da sessão",
   "StatusLabelSessionCost": "Custo da sessão",

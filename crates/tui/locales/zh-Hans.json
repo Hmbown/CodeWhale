@@ -1669,6 +1669,8 @@
   "StatusLabelContextWindow": "上下文窗口",
   "StatusLabelWindowSource": "窗口来源",
   "StatusLabelWindowOverride": "窗口覆盖",
+  "StatusLabelCatalog": "目录",
+  "StatusLabelCloudFacts": "云端事实",
   "StatusLabelSession": "会话",
   "StatusLabelSessionTokens": "会话令牌",
   "StatusLabelSessionCost": "会话费用",

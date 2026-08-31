@@ -10,3 +10,4 @@ node_modules
 next-env.d.ts
 .vercel
 tsconfig.tsbuildinfo
+.dev.vars

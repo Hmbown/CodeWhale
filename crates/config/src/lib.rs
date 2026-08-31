@@ -2,6 +2,7 @@ pub mod app_mode;
 pub mod auth_source;
 pub mod auto_model;
 pub mod catalog;
+pub mod cloud_facts;
 mod config_document;
 pub mod device_code;
 pub mod external_credentials;
@@ -3370,7 +3371,12 @@ impl ConfigToml {
                 {
                     DEFAULT_KIMI_CODE_MODEL.to_string()
                 } else {
-                    default_model_for_provider(provider).to_string()
+                    // Cloud facts (verified, off by default) may supply a
+                    // provider default only when nothing above configured one;
+                    // the compiled constant remains the floor.
+                    cloud_facts::cloud_default_model(provider.as_str())
+                        .map(|(model, _source)| model)
+                        .unwrap_or_else(|| default_model_for_provider(provider).to_string())
                 }
             });
         let model = if provider == ProviderKind::OpencodeGo {

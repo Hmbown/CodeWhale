@@ -1,0 +1,10 @@
+# GitGuardian scan configuration.
+# paths-ignore entries are deliberate, documented test fixtures — never real
+# credentials. Each entry must name its reason inline.
+paths-ignore:
+  # Deliberately public TEST-ONLY Ed25519 keypair committed as a fixture for the
+  # signed cloud-facts envelope tests (Rust + web). It is never pinned in
+  # crates/config/src/cloud_facts/keys.rs or web/lib/cloud-facts/keys.ts, signs
+  # nothing outside tests, and exists so the suites share one stable fixture.
+  # Introduced in 9e83f8184 with its rationale in the commit message.
+  - docs/cloud-facts/fixtures/test-only-signing-key.pem

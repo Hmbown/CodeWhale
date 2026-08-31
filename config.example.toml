@@ -124,6 +124,22 @@ check_interval_hours = 24
 # update_uri = "https://internal.mirror.example/codewhale/releases/latest"
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Cloud facts (docs/CLOUD_FACTS.md) — OFF by default
+# ─────────────────────────────────────────────────────────────────────────────────
+# A signed, versioned overlay of facts that move faster than releases (model
+# catalog deltas, provider defaults, release truth, one-line notices). Bundled
+# facts are always the floor; a rejected or unreachable payload changes nothing.
+# Env: CODEWHALE_CLOUD_FACTS=1|0 overrides `enabled`; CODEWHALE_DISABLE_CLOUD_FACTS=1
+# is a hard kill switch; CODEWHALE_CLOUD_FACTS_URL / _CHANNEL / _PATH override
+# the endpoint, channel, or read a local envelope (air-gapped). `/status` shows
+# the provenance ("Cloud facts:" row).
+[cloud_facts]
+enabled = false
+channel = "stable"
+ttl_hours = 6
+# url = "https://codewhale.net/api/facts/v1/{channel}"
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Hotbar slots (#2061 / #2064)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Optional 1-8 sidebar hotbar bindings. Since #3807 a missing `hotbar` key

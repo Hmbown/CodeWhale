@@ -1669,6 +1669,8 @@
   "StatusLabelContextWindow": "Cửa sổ ngữ cảnh",
   "StatusLabelWindowSource": "Nguồn cửa sổ",
   "StatusLabelWindowOverride": "Ghi đè cửa sổ",
+  "StatusLabelCatalog": "Danh mục",
+  "StatusLabelCloudFacts": "Dữ kiện đám mây",
   "StatusLabelSession": "Phiên",
   "StatusLabelSessionTokens": "Token phiên",
   "StatusLabelSessionCost": "Chi phí phiên",

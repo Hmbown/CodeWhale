@@ -1669,6 +1669,8 @@
   "StatusLabelContextWindow": "上下文視窗",
   "StatusLabelWindowSource": "視窗來源",
   "StatusLabelWindowOverride": "視窗覆寫",
+  "StatusLabelCatalog": "目錄",
+  "StatusLabelCloudFacts": "雲端事實",
   "StatusLabelSession": "工作階段",
   "StatusLabelSessionTokens": "工作階段權杖",
   "StatusLabelSessionCost": "工作階段費用",

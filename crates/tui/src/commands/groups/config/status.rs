@@ -16,6 +16,41 @@ pub fn status(app: &mut App) -> CommandResult {
     CommandResult::message(format_status(app))
 }
 
+/// Models.dev live-layer freshness: source, row count, and age (#4187).
+fn catalog_summary() -> String {
+    use crate::models_dev_live::ModelsDevFreshness;
+    let st = crate::models_dev_live::status();
+    let now = codewhale_config::catalog::now_unix();
+    let mut out = match st.freshness {
+        ModelsDevFreshness::Bundled => "bundled".to_string(),
+        ModelsDevFreshness::Live => "models.dev live".to_string(),
+        ModelsDevFreshness::Stale => "models.dev stale".to_string(),
+        ModelsDevFreshness::Failed => "models.dev refresh failed".to_string(),
+    };
+    if st.offering_count > 0 {
+        let _ = write!(out, " · {} offerings", st.offering_count);
+    }
+    if let Some(fetched_at) = st.fetched_at {
+        let _ = write!(
+            out,
+            " · fetched {}",
+            codewhale_config::cloud_facts::provenance::age_label(fetched_at, now)
+        );
+    }
+    if let Some(err) = st.last_error.as_deref().filter(|e| !e.is_empty())
+        && st.freshness == ModelsDevFreshness::Failed
+    {
+        let _ = write!(out, " ({err})");
+    }
+    out
+}
+
+/// Cloud facts provenance: channel, version, key, age, origin — or why the
+/// bundled facts are in use. Off by default.
+fn cloud_facts_summary() -> String {
+    codewhale_cloud_facts::status().label(codewhale_config::catalog::now_unix())
+}
+
 /// Row label column, in columns. English's widest label is `Context window:`
 /// (15); the tail space in [`push_row`] makes its value start at column 19.
 /// Longer localized labels extend naturally rather than being truncated.
@@ -98,6 +133,18 @@ fn format_status(app: &App) -> String {
     if let Some(key) = context_window_override_key(app, locale) {
         push_row(&mut out, locale, MessageId::StatusLabelWindowOverride, &key);
     }
+    push_row(
+        &mut out,
+        locale,
+        MessageId::StatusLabelCatalog,
+        &catalog_summary(),
+    );
+    push_row(
+        &mut out,
+        locale,
+        MessageId::StatusLabelCloudFacts,
+        &cloud_facts_summary(),
+    );
     push_row(
         &mut out,
         locale,

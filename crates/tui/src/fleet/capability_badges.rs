@@ -97,6 +97,7 @@ const fn catalog_provenance(source: &CatalogSource) -> &'static str {
     match source {
         CatalogSource::Bundled => "bundled catalog",
         CatalogSource::Live { .. } | CatalogSource::ModelsDevLive { .. } => "live catalog",
+        CatalogSource::CloudFacts { .. } => "cloud facts",
         CatalogSource::ConfigOverride | CatalogSource::UserOverride => "override",
     }
 }
