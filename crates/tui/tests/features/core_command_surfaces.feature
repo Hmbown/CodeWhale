@@ -40,4 +40,4 @@ Feature: Core command visible surfaces
     Then the message window should include "Loading that into a persistent working context"
   When the user runs the core command "/pod help"
   Then the message window should include "/pod workers (and /subagents) shows sub-agents in the current TUI session only"
-    And the message window should include "CLI: codewhale fleet status"
+    And the message window should include "CLI: codewhale pod status"

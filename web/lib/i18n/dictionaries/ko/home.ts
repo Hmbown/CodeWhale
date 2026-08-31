@@ -7,7 +7,7 @@ import type { HomeDict } from "../types";
  * people" framing is intentionally gone.
  *
  * Product terms stay literal, matching `crates/tui/locales/ko.json`:
- * Plan / Work / Operate, Ask / Auto-Review / Full Access, Codewhale, Fleet,
+ * Plan / Work / Operate, Ask / Auto-Review / Full Access, Codewhale, Pod,
  * `codewhale exec`. "permission posture" renders as 권한 상태 everywhere;
  * "provider route" as 프로바이더 경로 (the TUI pack uses 경로 for route);
  * "receipt" as 기록, the reading the TUI pack uses in prose.
@@ -74,7 +74,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "Codewhale이 처음인가요? 네 단계면 끝입니다.",
   startLede:
-    "설치 → 키 없는 첫 세션 → 프로바이더 연결 → 첫 Fleet 워크플로. 용어는 용어 페이지에 정의되어 있습니다.",
+    "설치 → 키 없는 첫 세션 → 프로바이더 연결 → 첫 Pod 워크플로. 용어는 용어 페이지에 정의되어 있습니다.",
   startGuideLink: "시작 가이드 읽기 →",
   startVocabularyLink: "제품 용어 보기 →",
 
@@ -95,7 +95,7 @@ export const home: HomeDict = {
     ["codewhale exec", "스크립트와 CI"],
     ["웹 클라이언트", "루프백 전용 브라우저 클라이언트"],
     ["Runtime API + MCP", "로컬 통합"],
-    ["Fleet", "지속형 멀티 에이전트 작업"],
+    ["Pod", "지속형 멀티 에이전트 작업"],
   ],
   runtimeLink: "런타임 인터페이스와 안정성 노트 보기 →",
 

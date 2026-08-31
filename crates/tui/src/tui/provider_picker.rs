@@ -83,6 +83,9 @@ enum Stage {
     ExternalConsentChoice,
     /// Full owner/path/side-effect disclosure before a read grant is saved.
     ExternalConsentConfirm,
+    /// Explicit confirmation before revoking external access; revocation
+    /// clears only Codewhale-owned consent state (#5772).
+    ExternalConsentRevokeConfirm,
     /// Default model pick after a key has been live-validated (#3875).
     ModelPick,
     /// Kimi Code membership plan selection for the exact `api.kimi.com` route.
@@ -184,6 +187,10 @@ pub struct ProviderPickerView {
     locale: Locale,
     xai_auth_choice: XaiAuthChoice,
     external_consent_choice: ExternalConsentChoice,
+    /// Where Esc returns from the revoke confirmation. Revocation is reachable
+    /// both from the list (`x`) and from the policy choice, and "back" has to
+    /// mean the step the user actually came from.
+    external_revoke_return: Stage,
     /// Validated key held only in memory until the confirm stage persists it.
     pending_api_key: Option<String>,
     /// Catalog models offered during the model-pick stage.
@@ -535,7 +542,15 @@ impl ProviderDashboardRow {
         } else {
             credential_resolution.is_present()
         };
-        let credential_source = credential_resolution.source.label().into_owned();
+        // #5772: normal picker copy never carries an external file path —
+        // the exact path is disclosed only inside the explicit reuse
+        // confirmation.
+        let credential_source = match &credential_resolution.source {
+            crate::credentials::CredentialSource::ExternalGrant { cli, .. } => {
+                format!("{cli} credentials (read-only)")
+            }
+            other => other.label().into_owned(),
+        };
         let credential_state = credential_state_for_provider(config, provider);
         let auth_mode = config.auth_mode_for_provider(provider);
         let no_auth = crate::config::auth_mode_disables_api_key(auth_mode.as_deref());
@@ -758,7 +773,14 @@ impl ProviderDashboardRow {
             capabilities.context_window = Some(context_window);
         }
         capabilities.context_window_source = route_context_window_source;
-        let external_credential_status = config.external_credential_consent_status(provider);
+        // #5772: the status projection needs an ambient candidate path to
+        // report `ambient_path_changed`, so resolving it for a provider the
+        // user never consented to would derive (and then render) another CLI's
+        // credential location during ordinary browsing. Ask for it only once a
+        // consent record exists.
+        let external_credential_status = configured
+            .and_then(|entry| entry.external_credentials.as_ref())
+            .and_then(|_| config.external_credential_consent_status(provider));
 
         Self {
             provider,
@@ -1456,10 +1478,25 @@ fn compact_base_url(base_url: &str) -> String {
     crate::tui::ui_text::truncate_line_to_width(stripped, 24)
 }
 
+/// Whether a provider has a supported external credential owner at all.
+///
+/// Pure provider metadata. Unlike [`external_consent_target_for_provider`] it
+/// resolves no path, so deciding whether to *offer* the reuse action never
+/// derives a HOME-based candidate location (#5772).
+#[must_use]
+pub(crate) fn provider_supports_external_consent(provider: ApiProvider) -> bool {
+    matches!(provider, ApiProvider::OpenaiCodex | ApiProvider::Xai)
+}
+
 /// Resolve the external credential target for a provider that supports
 /// read-only external consent. This is the same lower-level fact the
 /// provider picker uses to build its consent flow; Fleet setup reuses it
 /// for route-scoped activation without switching the parent session.
+///
+/// #5772: only the disclosure and confirmation steps may call this. Ordinary
+/// browsing and key entry must use [`provider_supports_external_consent`],
+/// because the resolved candidate is exactly what the confirmation exists to
+/// disclose.
 #[must_use]
 pub(crate) fn external_consent_target_for_provider(
     provider: ApiProvider,
@@ -1483,66 +1520,6 @@ pub(crate) fn external_consent_target_for_provider(
     };
     let path = codewhale_config::resolve_external_credential_path(path).ok()?;
     Some((consent_provider, source, path))
-}
-
-/// #5243: grant-time validation — does the external file that the user wants
-/// to read actually exist and hold a fresh, usable token? The old picker only
-/// lexically normalized the path (`resolve_external_credential_path`) and
-/// deferred the check to the first request, which produced
-/// `auth:oauth-consented-select-to-check` and required a second `e` trip after
-/// a just-minted OAuth. Validating here fails fast and, when the check passes,
-/// the token is adopted automatically as part of the same grant.
-pub(crate) fn external_consent_target_is_grantable(provider: ApiProvider) -> bool {
-    let Some((_, _, path)) = external_consent_target_for_provider(provider) else {
-        return false;
-    };
-    match provider {
-        ApiProvider::Xai => crate::xai_oauth::external_file_is_fresh(&path),
-        ApiProvider::OpenaiCodex => codex_external_file_is_fresh(&path),
-        _ => false,
-    }
-}
-
-fn codex_external_file_is_fresh(path: &std::path::Path) -> bool {
-    let raw = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    let value: Value = match serde_json::from_str(&raw) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    let token = value
-        .get("tokens")
-        .and_then(|t| t.get("access_token"))
-        .and_then(|v| v.as_str())
-        .filter(|t| !t.trim().is_empty());
-    let Some(token) = token else {
-        return false;
-    };
-    // Reuse the same 60s skew the runtime uses: token with valid JWT exp is fresh.
-    if let Some(exp) = codex_jwt_expiry(token) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        return now + 60 < exp;
-    }
-    // If we cannot parse expiry, fail closed — external Codex credentials are
-    // never refreshed by Codewhale, so an opaque token must be treated as stale.
-    false
-}
-
-fn codex_jwt_expiry(token: &str) -> Option<u64> {
-    use base64::Engine as _;
-    let mut parts = token.split('.');
-    let _header = parts.next()?;
-    let payload = parts.next()?;
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload)
-        .ok()?;
-    let claims: Value = serde_json::from_slice(&decoded).ok()?;
-    claims.get("exp")?.as_u64()
 }
 
 impl ProviderPickerView {
@@ -1631,6 +1608,7 @@ impl ProviderPickerView {
             locale: Locale::En,
             xai_auth_choice: XaiAuthChoice::ApiKey,
             external_consent_choice: ExternalConsentChoice::Disabled,
+            external_revoke_return: Stage::List,
             pending_api_key: None,
             model_options: Vec::new(),
             model_selected_idx: 0,
@@ -2025,7 +2003,9 @@ impl ProviderPickerView {
     }
 
     fn enter_external_consent_choice(&mut self) {
-        if self.selected_external_consent_target().is_some() {
+        // Capability only (#5772): the candidate path stays unresolved until
+        // the user picks ReadOnly and the confirmation discloses it.
+        if provider_supports_external_consent(self.selected_provider()) {
             self.external_consent_choice = ExternalConsentChoice::Disabled;
             self.stage = Stage::ExternalConsentChoice;
         }
@@ -2571,6 +2551,7 @@ impl ProviderPickerView {
                     ActionHint::new("P", self.tr(MessageId::PickerActionTemplates)),
                     ActionHint::new("C-t", self.tr(MessageId::PickerActionTestConnection)),
                     ActionHint::new("R", self.tr(MessageId::PickerActionEditKey)),
+                    ActionHint::new("E", self.tr(MessageId::ProviderExternalActionChoices)),
                     ActionHint::new("X", self.tr(MessageId::ProviderExternalActionRevoke)),
                     ActionHint::new("M", self.tr(MessageId::PickerActionModels)),
                     ActionHint::new("Esc", self.tr(MessageId::PickerActionCancel)),
@@ -2780,6 +2761,11 @@ impl ProviderPickerView {
                 Style::default().fg(palette::STATUS_WARNING),
             )));
         }
+        // #5772: the external block exists only for a persisted consent record
+        // (see the row constructor), and it names the owning CLI without the
+        // file path. The exact path is disclosed solely inside the explicit
+        // reuse confirmation; a dormant candidate must never leak HOME-derived
+        // locations into ordinary browsing.
         if let Some(status) = row.external_credential_status.as_ref() {
             let state = if status.route_state == "active" {
                 self.tr(MessageId::CtxInspActive)
@@ -2797,29 +2783,27 @@ impl ProviderPickerView {
                 scope,
                 Style::default().fg(palette::TEXT_MUTED),
             )));
-            let owner_path = self
-                .tr(MessageId::ProviderExternalOwnerPath)
-                .replace("{owner}", status.owner)
-                .replace("{path}", &codewhale_config::quote_os_path(&status.path));
-            let mut owner_path_spans = vec![Span::styled(
-                owner_path,
+            let owner = self
+                .tr(MessageId::ProviderExternalOwnerOnly)
+                .replace("{owner}", status.owner);
+            let mut owner_spans = vec![Span::styled(
+                owner,
                 Style::default().fg(palette::TEXT_MUTED),
             )];
             if status.ambient_path_changed {
                 let warning = self
-                    .tr(MessageId::ProviderExternalPinnedPathWarning)
-                    .replace("{owner}", status.owner)
-                    .replace("{path}", &codewhale_config::quote_os_path(&status.path));
-                owner_path_spans.push(Span::styled(
+                    .tr(MessageId::ProviderExternalPinnedPathChanged)
+                    .replace("{owner}", status.owner);
+                owner_spans.push(Span::styled(
                     " | ",
                     Style::default().fg(palette::TEXT_MUTED),
                 ));
-                owner_path_spans.push(Span::styled(
+                owner_spans.push(Span::styled(
                     warning,
                     Style::default().fg(palette::STATUS_WARNING),
                 ));
             }
-            lines.push(Line::from(owner_path_spans));
+            lines.push(Line::from(owner_spans));
             let semantics = match status.access {
                 codewhale_config::ExternalCredentialAccess::Disabled => {
                     self.tr(MessageId::ProviderExternalDisabledDetail)
@@ -3166,12 +3150,22 @@ impl ProviderPickerView {
             ],
         );
         let provider_label = self.tr(MessageId::RouteProviderLabel);
+        let route_label = self.tr(MessageId::ProviderExternalRouteLabel);
         let owner_label = self.tr(MessageId::ProviderExternalOwnerLabel);
         let exact_path_label = self.tr(MessageId::ProviderExternalExactPathLabel);
         let semantics_label = self.tr(MessageId::ProviderExternalSemanticsLabel);
         let revoke_label = self.tr(MessageId::ProviderExternalRevokeLabel);
+        // #5772: the disclosure names the exact route (endpoint + default
+        // model), the source adapter, the custody boundary (local device
+        // only), the credential/billing owner, and the local-only revoke
+        // consequence before any validate/read/persist may run.
+        let row = &self.rows[self.selected_idx];
         Paragraph::new(vec![
             Line::from(format!("{provider_label}: {}", provider.as_str())),
+            Line::from(format!(
+                "{route_label}: {} · {}",
+                row.base_url, row.default_route.logical_model
+            )),
             Line::from(format!(
                 "{owner_label}: {} ({})",
                 source.owner_label(),
@@ -3186,11 +3180,63 @@ impl ProviderPickerView {
                 "{semantics_label}: {}.",
                 self.tr(MessageId::ProviderExternalReadOnlySemantics)
             )),
+            Line::from(self.tr(MessageId::ProviderExternalCustodyLine).into_owned()),
+            Line::from(
+                self.tr(MessageId::ProviderExternalBillingLine)
+                    .replace("{owner}", source.owner_label()),
+            ),
             Line::from(self.tr(MessageId::ProviderExternalRejectUnsafe)),
+            Line::from(
+                self.tr(MessageId::ProviderExternalRevokeScope)
+                    .replace("{owner}", source.owner_label()),
+            ),
             Line::from(format!(
                 "{revoke_label}: codewhale auth external-revoke --provider {}",
                 provider.as_str()
             )),
+        ])
+        .wrap(Wrap { trim: false })
+        .render(content, buf);
+    }
+
+    /// Revocation disclosure (#5772): names what is cleared (only the
+    /// Codewhale-owned consent record on this device) and what is never
+    /// touched (the external CLI's file). Enter revokes; Esc goes back.
+    fn render_external_consent_revoke_confirm(&self, area: Rect, buf: &mut Buffer) {
+        let provider_name = self.rows[self.selected_idx].display_name.clone();
+        let outer = Block::default()
+            .title(Line::from(Span::styled(
+                self.tr(MessageId::ProviderExternalRevokeConfirmTitle),
+                Style::default()
+                    .fg(palette::WHALE_INFO)
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(palette::BORDER_COLOR))
+            .style(Style::default().bg(palette::WHALE_BG));
+        let inner = outer.inner(area);
+        outer.render(area, buf);
+        let content = render_modal_footer(
+            inner,
+            buf,
+            &[
+                ActionHint::new("Enter", self.tr(MessageId::ProviderExternalActionRevoke)),
+                ActionHint::new("Esc", self.tr(MessageId::SetupActionBack)),
+            ],
+        );
+        let provider_label = self.tr(MessageId::RouteProviderLabel);
+        let owner = self
+            .rows
+            .get(self.selected_idx)
+            .and_then(|row| row.external_credential_status.as_ref())
+            .map(|status| status.owner)
+            .unwrap_or(self.selected_provider().display_name());
+        Paragraph::new(vec![
+            Line::from(format!("{provider_label}: {provider_name}")),
+            Line::from(
+                self.tr(MessageId::ProviderExternalRevokeScope)
+                    .replace("{owner}", owner),
+            ),
         ])
         .wrap(Wrap { trim: false })
         .render(content, buf);
@@ -3776,6 +3822,7 @@ impl ModalView for ProviderPickerView {
             | Stage::XaiAuthChoice
             | Stage::ExternalConsentChoice
             | Stage::ExternalConsentConfirm
+            | Stage::ExternalConsentRevokeConfirm
             | Stage::ModelPick
             | Stage::PlanTier
             | Stage::StepfunBillingRoute
@@ -3825,18 +3872,11 @@ impl ModalView for ProviderPickerView {
                             provider,
                             provider_id,
                         })
-                    } else if external_consent_target_is_grantable(provider) {
-                        // #5243: token already stored externally and the user
-                        // pressed Enter on the provider (says they want it
-                        // read) — adopt it automatically in the same chord,
-                        // no second `e` trip. Validated at grant time.
-                        if let Some(event) = self.build_external_consent_event() {
-                            ViewAction::EmitAndClose(event)
-                        } else {
-                            self.begin_setup();
-                            ViewAction::None
-                        }
                     } else {
+                        // #5772: plain Enter never inspects or adopts an
+                        // external CLI credential. Reuse starts only from the
+                        // explicit `e` action, which discloses the exact path
+                        // and requires its own confirmation.
                         self.begin_setup();
                         ViewAction::None
                     }
@@ -3849,22 +3889,25 @@ impl ModalView for ProviderPickerView {
                         && self.rows[self.selected_idx].credential_state
                             == CredentialState::ExternalConsent =>
                 {
-                    ViewAction::EmitAndClose(ViewEvent::ProviderPickerExternalConsentRevoked {
-                        provider: self.selected_provider(),
-                    })
+                    // #5772: revoking external access asks first; only an
+                    // affirmative Enter on the revoke confirmation clears the
+                    // Codewhale-owned consent record.
+                    self.external_revoke_return = Stage::List;
+                    self.stage = Stage::ExternalConsentRevokeConfirm;
+                    ViewAction::None
                 }
                 KeyCode::Char(c)
                     if key.modifiers.is_empty()
                         && c.eq_ignore_ascii_case(&'e')
                         && self.query.is_empty()
                         && self.row_visible(self.selected_idx)
-                        && self.selected_external_consent_target().is_some() =>
+                        && provider_supports_external_consent(self.selected_provider()) =>
                 {
-                    // #5243: one-chord external consent from the list — no
-                    // second trip through XaiAuthChoice/KeyEntry. The confirm
-                    // step validates at grant time and the token is adopted
-                    // automatically; a just-minted OAuth never requires a
-                    // follow-up `e`.
+                    // #5772: `e` is the one explicit "use external CLI
+                    // credentials" action. It only opens the policy choice;
+                    // the exact path is disclosed at the confirmation step
+                    // and nothing is validated, read, or persisted before an
+                    // affirmative Enter there.
                     self.enter_external_consent_choice();
                     ViewAction::None
                 }
@@ -4118,9 +4161,12 @@ impl ModalView for ProviderPickerView {
                 }
                 KeyCode::Enter => match self.external_consent_choice {
                     ExternalConsentChoice::Disabled => {
-                        ViewAction::EmitAndClose(ViewEvent::ProviderPickerExternalConsentRevoked {
-                            provider: self.selected_provider(),
-                        })
+                        // #5772: revocation is destructive to Codewhale-owned
+                        // state, so it gets its own confirmation instead of a
+                        // one-key commit.
+                        self.external_revoke_return = Stage::ExternalConsentChoice;
+                        self.stage = Stage::ExternalConsentRevokeConfirm;
+                        ViewAction::None
                     }
                     ExternalConsentChoice::ReadOnly => {
                         self.stage = Stage::ExternalConsentConfirm;
@@ -4139,6 +4185,18 @@ impl ModalView for ProviderPickerView {
                     .build_external_consent_event()
                     .map(ViewAction::EmitAndClose)
                     .unwrap_or(ViewAction::None),
+                _ => ViewAction::None,
+            },
+            Stage::ExternalConsentRevokeConfirm => match key.code {
+                KeyCode::Esc => {
+                    self.stage = self.external_revoke_return;
+                    ViewAction::None
+                }
+                KeyCode::Enter => {
+                    ViewAction::EmitAndClose(ViewEvent::ProviderPickerExternalConsentRevoked {
+                        provider: self.selected_provider(),
+                    })
+                }
                 _ => ViewAction::None,
             },
             Stage::ModelPick => match key.code {
@@ -4334,6 +4392,7 @@ impl ModalView for ProviderPickerView {
             | Stage::KeyEntry
             | Stage::ExternalConsentChoice
             | Stage::ExternalConsentConfirm
+            | Stage::ExternalConsentRevokeConfirm
             | Stage::Confirm
             | Stage::CustomForm => {}
         }
@@ -4349,7 +4408,11 @@ impl ModalView for ProviderPickerView {
             // visible instead of special-casing whichever route clipped last.
             Stage::KeyEntry => 14,
             Stage::ExternalConsentChoice => 12,
-            Stage::ExternalConsentConfirm => 13,
+            // The disclosure is deliberately long (route, owner, exact path,
+            // semantics, custody, billing owner, revoke scope) and every line
+            // wraps; it gets the height it needs so nothing is clipped.
+            Stage::ExternalConsentConfirm => 20,
+            Stage::ExternalConsentRevokeConfirm => 12,
             Stage::ModelPick => 12,
             Stage::PlanTier => 10,
             Stage::StepfunBillingRoute => 11,
@@ -4367,6 +4430,9 @@ impl ModalView for ProviderPickerView {
             Stage::KeyEntry => self.render_key_entry(popup_area, buf),
             Stage::ExternalConsentChoice => self.render_external_consent_choice(popup_area, buf),
             Stage::ExternalConsentConfirm => self.render_external_consent_confirm(popup_area, buf),
+            Stage::ExternalConsentRevokeConfirm => {
+                self.render_external_consent_revoke_confirm(popup_area, buf)
+            }
             Stage::ModelPick => self.render_model_pick(popup_area, buf),
             Stage::PlanTier => self.render_plan_tier(popup_area, buf),
             Stage::StepfunBillingRoute => self.render_stepfun_billing_route(popup_area, buf),
@@ -7844,8 +7910,14 @@ mod tests {
         assert_eq!(picker.stage, Stage::ExternalConsentChoice);
         let choices = render_text(&picker, 100, 20);
         assert!(choices.contains("Disabled (default)"), "{choices}");
-        assert!(choices.contains("Read-only"), "{choices}");
+        assert!(
+            choices.contains("Use external CLI credentials (read-only)"),
+            "{choices}"
+        );
         assert!(choices.contains("Managed (unavailable)"), "{choices}");
+        // #5772: the choice stage must not disclose the candidate path; only
+        // the confirmation step may.
+        assert!(!choices.contains("Exact resolved path:"), "{choices}");
 
         picker.handle_key(key(KeyCode::Char('2')));
         picker.handle_key(key(KeyCode::Enter));
@@ -7853,9 +7925,25 @@ mod tests {
         let confirm = render_text(&picker, 120, 22);
         assert!(confirm.contains("Owning CLI: Codex CLI"), "{confirm}");
         assert!(confirm.contains("Exact resolved path:"), "{confirm}");
+        assert!(confirm.contains("Route:"), "{confirm}");
+        assert!(confirm.contains("local device only"), "{confirm}");
+        assert!(confirm.contains("billing owner"), "{confirm}");
         assert!(confirm.contains("no refresh, identity-provider or discovery requests"));
         assert!(confirm.contains("normal requests to the selected provider"));
+        assert!(
+            confirm.contains("clears only Codewhale's consent record"),
+            "{confirm}"
+        );
         assert!(confirm.contains("external-revoke --provider openai-codex"));
+        // Confirmation is escapable without any event being emitted.
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Esc)),
+            ViewAction::None
+        ));
+        assert_eq!(picker.stage, Stage::ExternalConsentChoice);
+        picker.handle_key(key(KeyCode::Char('2')));
+        picker.handle_key(key(KeyCode::Enter));
+        assert_eq!(picker.stage, Stage::ExternalConsentConfirm);
         assert!(matches!(
             picker.handle_key(key(KeyCode::Enter)),
             ViewAction::EmitAndClose(ViewEvent::ProviderPickerExternalConsentConfirmed {
@@ -8077,7 +8165,19 @@ mod tests {
             picker.selected_idx = index;
             let visible = render_text(&picker, 140, 32);
             assert!(visible.contains("External: access=read_only"), "{visible}");
-            assert!(visible.contains("Owner/path:"), "{visible}");
+            // #5772: the row names the owning CLI but never the file path —
+            // the exact path is disclosed only inside the explicit reuse
+            // confirmation.
+            assert!(visible.contains("Owner:"), "{visible}");
+            assert!(!visible.contains("Owner/path:"), "{visible}");
+            let pinned = codewhale_config::quote_os_path(match provider {
+                ApiProvider::OpenaiCodex => &codex_path,
+                _ => &grok_path,
+            });
+            assert!(
+                !visible.contains(&pinned),
+                "ordinary browsing must not disclose {pinned}: {visible}"
+            );
             assert!(
                 visible.contains("revoke: codewhale auth external-revoke"),
                 "{visible}"
@@ -8094,8 +8194,35 @@ mod tests {
                 }) if selected == provider
             ));
         }
+        // #5772: revocation requires its own confirmation and clears only
+        // Codewhale-owned consent state.
         assert!(matches!(
             picker.handle_key(key(KeyCode::Char('x'))),
+            ViewAction::None
+        ));
+        assert_eq!(picker.stage, Stage::ExternalConsentRevokeConfirm);
+        let revoke_render = render_text(&picker, 120, 16);
+        assert!(
+            revoke_render.contains("clears only Codewhale's consent record"),
+            "{revoke_render}"
+        );
+        assert!(
+            !revoke_render.contains(&codewhale_config::quote_os_path(&grok_path)),
+            "revocation never inspects or names the external file: {revoke_render}"
+        );
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Esc)),
+            ViewAction::None
+        ));
+        // `x` was pressed from the list, so Esc returns to the list — "back"
+        // means the step the user actually came from (#5772).
+        assert_eq!(picker.stage, Stage::List);
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Char('x'))),
+            ViewAction::None
+        ));
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Enter)),
             ViewAction::EmitAndClose(ViewEvent::ProviderPickerExternalConsentRevoked {
                 provider: ApiProvider::Xai
             })
@@ -8127,6 +8254,193 @@ mod tests {
             grok_raw
         );
         assert!(!owned_home.join("credentials/xai-auth.json").exists());
+    }
+
+    /// Modal body text with layout removed: ratatui word-wraps a long path
+    /// across rows and pads each row to the modal edge, so a `contains` check
+    /// against a full path is a check on the terminal width, not on what was
+    /// disclosed. Strip whitespace and box-drawing glyphs so the assertion is
+    /// about the content.
+    fn unwrapped_modal_text(rendered: &str) -> String {
+        rendered
+            .chars()
+            .filter(|ch| !ch.is_whitespace() && !('\u{2500}'..='\u{257f}').contains(ch))
+            .collect()
+    }
+
+    /// #5772: with reuse off, ordinary browsing and plain Enter perform zero
+    /// external I/O and never mint, persist, or reveal an external credential
+    /// grant; only the explicit `e` action discloses the exact path, and only
+    /// its confirmation emits the grant event.
+    #[test]
+    fn unconsented_external_row_performs_no_io_and_grants_only_after_confirmation() {
+        // Constructing and rendering the full provider picker is intentionally
+        // broad: the regression has to prove that ordinary catalog browsing,
+        // key entry, and both consent modals all preserve the same no-I/O
+        // boundary. That state is larger than libtest's default thread stack,
+        // while the product TUI runs on a deliberately larger stack. Mirror
+        // the product/test precedent instead of requiring RUST_MIN_STACK in CI.
+        std::thread::Builder::new()
+            .name("provider-consent-no-io".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(unconsented_external_row_performs_no_io_on_sized_stack)
+            .expect("spawn provider-consent regression thread")
+            .join()
+            .expect("provider-consent regression thread");
+    }
+
+    fn unconsented_external_row_performs_no_io_on_sized_stack() {
+        let _env = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("external reuse fixtures");
+        let codex_path = temp
+            .path()
+            .canonicalize()
+            .expect("canonical temp root")
+            .join("auth.json");
+        // A fresh-looking token file exists on disk; nothing may look at it.
+        let codex_raw = "{\"tokens\":{\"access_token\":\"header.eyJleHAiOjk5OTk5OTk5OTl9.sig\"}}";
+        std::fs::write(&codex_path, codex_raw).expect("write Codex trap");
+
+        let _codex_home =
+            crate::test_support::EnvVarGuard::set("OPENAI_CODEX_AUTH_FILE", &codex_path);
+        let _codex_access = crate::test_support::EnvVarGuard::remove("OPENAI_CODEX_ACCESS_TOKEN");
+        let _legacy_access = crate::test_support::EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
+        let _cli_key = crate::test_support::EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
+
+        let config = Config {
+            provider: Some(ApiProvider::Deepseek.as_str().to_string()),
+            ..Default::default()
+        };
+
+        crate::external_credentials::reset_side_effect_trap();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        move_to_provider(&mut picker, ApiProvider::OpenaiCodex);
+        let quoted = codewhale_config::quote_os_path(&codex_path);
+        let quoted_unwrapped = unwrapped_modal_text(&quoted);
+
+        // Ordinary browsing reveals neither the path nor the file's existence.
+        let visible = render_text(&picker, 140, 32);
+        assert!(
+            !unwrapped_modal_text(&visible).contains(&quoted_unwrapped),
+            "ordinary browsing must not disclose {quoted}: {visible}"
+        );
+
+        // Plain Enter begins ordinary setup; it must not read the external
+        // file, mint a grant, or emit the consent-confirmed event.
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Enter)),
+            ViewAction::None
+        ));
+        assert_eq!(picker.stage, Stage::KeyEntry);
+        assert_eq!(
+            crate::external_credentials::complete_side_effect_trap_counts(),
+            (0, 0, 0, 0, 0),
+            "ordinary selection must not touch external credential state"
+        );
+
+        // The explicit reuse flow: choice stage still hides the path…
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Enter)),
+            ViewAction::None
+        ));
+        assert_eq!(picker.stage, Stage::ExternalConsentChoice);
+        let choices = render_text(&picker, 100, 20);
+        assert!(
+            choices.contains("Use external CLI credentials (read-only)"),
+            "{choices}"
+        );
+        assert!(
+            !unwrapped_modal_text(&choices).contains(&quoted_unwrapped),
+            "the choice stage must not disclose {quoted}: {choices}"
+        );
+
+        // …the confirmation stage discloses the exact candidate path…
+        picker.handle_key(key(KeyCode::Char('2')));
+        picker.handle_key(key(KeyCode::Enter));
+        assert_eq!(picker.stage, Stage::ExternalConsentConfirm);
+        let confirm = render_text(&picker, 120, 30);
+        assert!(
+            unwrapped_modal_text(&confirm).contains(&quoted_unwrapped),
+            "confirmation must name the exact path: {confirm}"
+        );
+        // …and even rendering the confirmation performed no external I/O.
+        assert_eq!(
+            crate::external_credentials::complete_side_effect_trap_counts(),
+            (0, 0, 0, 0, 0),
+            "disclosure must not validate or read before affirmative confirmation"
+        );
+
+        // Only the affirmative Enter on the confirmation emits the grant event.
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Enter)),
+            ViewAction::EmitAndClose(ViewEvent::ProviderPickerExternalConsentConfirmed {
+                provider: ApiProvider::OpenaiCodex,
+                ..
+            })
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&codex_path).expect("Codex trap unchanged"),
+            codex_raw
+        );
+    }
+
+    /// #5772: revoking external access requires its own confirmation; a bare
+    /// `x` chord only opens the disclosure.
+    #[test]
+    fn revoke_requires_confirmation() {
+        let _env = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("revoke fixtures");
+        let codex_path = temp
+            .path()
+            .canonicalize()
+            .expect("canonical temp root")
+            .join("auth.json");
+        std::fs::write(&codex_path, "codex-external-file-must-not-be-read").expect("trap");
+        let _codex_home =
+            crate::test_support::EnvVarGuard::set("OPENAI_CODEX_AUTH_FILE", &codex_path);
+        let _codex_access = crate::test_support::EnvVarGuard::remove("OPENAI_CODEX_ACCESS_TOKEN");
+        let _legacy_access = crate::test_support::EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
+        let _cli_key = crate::test_support::EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
+
+        let config = Config {
+            provider: Some(ApiProvider::Deepseek.as_str().to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                openai_codex: crate::config::ProviderConfig {
+                    auth_mode: Some("oauth".to_string()),
+                    external_credentials: Some(
+                        codewhale_config::ExternalCredentialConsentToml::read_only(
+                            codewhale_config::ProviderKind::OpenaiCodex,
+                            codewhale_config::ExternalCredentialSource::CodexCli,
+                            codex_path.clone(),
+                        ),
+                    ),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        crate::external_credentials::reset_side_effect_trap();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        move_to_provider(&mut picker, ApiProvider::OpenaiCodex);
+
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Char('x'))),
+            ViewAction::None
+        ));
+        assert_eq!(picker.stage, Stage::ExternalConsentRevokeConfirm);
+        assert_eq!(
+            crate::external_credentials::complete_side_effect_trap_counts(),
+            (0, 0, 0, 0, 0),
+            "revocation disclosure must not inspect the external file"
+        );
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Enter)),
+            ViewAction::EmitAndClose(ViewEvent::ProviderPickerExternalConsentRevoked {
+                provider: ApiProvider::OpenaiCodex
+            })
+        ));
     }
 
     #[test]

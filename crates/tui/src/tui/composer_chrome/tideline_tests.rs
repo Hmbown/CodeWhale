@@ -59,6 +59,21 @@ fn composer_border_is_rounded_with_send_hitbox_and_no_crown() {
 }
 
 #[test]
+fn composer_send_hitbox_survives_a_long_draft() {
+    let draft = "x".repeat(240);
+    let text = draw_docked(
+        80,
+        24,
+        &TidelineComposer::new(&UI_THEME, &draft).focused(true),
+    );
+    let send_row = text.lines().nth(22).unwrap_or_default();
+    assert!(
+        send_row.contains("[↑]"),
+        "caller-owned text must not overwrite the submit target: {send_row:?}"
+    );
+}
+
+#[test]
 fn composer_focus_states_change_ink_not_cells() {
     let draft = "same draft";
     let rest = draw_docked(80, 24, &TidelineComposer::new(&UI_THEME, draft));
@@ -126,6 +141,10 @@ fn composer_hitboxes_match_painted_cells() {
         let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
         render_tideline_composer(area, &mut buf, &composer);
         let hitboxes = tideline_composer_hitboxes(area);
+        assert_eq!(
+            hitboxes.border, area,
+            "focus hitbox must cover the full rounded shell at {w}x{h}"
+        );
         let submit: String = (hitboxes.submit.x..hitboxes.submit.x + hitboxes.submit.width)
             .map(|x| buf[(x, hitboxes.submit.y)].symbol().to_string())
             .collect();

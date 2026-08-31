@@ -1,4 +1,5 @@
-//! `/setup` command.
+//! `/setup` command. `/setup pod` opens the saved-Pod readiness step; Fleet
+//! spellings remain compatibility aliases.
 
 use crate::commands::traits::{CommandInfo, RegisterCommand};
 #[cfg(test)]
@@ -12,7 +13,7 @@ use codewhale_config::SetupStep;
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "setup",
     aliases: &[],
-    usage: "/setup",
+    usage: "/setup [pod|provider|runtime|constitution|status|hotbar|tools|remote|persistence]",
     description_id: MessageId::CmdSetupDescription,
 };
 
@@ -64,7 +65,7 @@ impl RegisterCommand for SetupCmd {
                     step: SetupStep::Verification,
                 })
             }
-            Some("operate" | "fleet" | "operate-fleet" | "operate_fleet") => {
+            Some("pod" | "operate" | "fleet" | "operate-fleet" | "operate_fleet") => {
                 CommandResult::action(AppAction::OpenSetupWizardAt {
                     step: SetupStep::OperateFleet,
                 })
@@ -91,7 +92,8 @@ impl RegisterCommand for SetupCmd {
                 })
             }
             Some(other) => CommandResult::error(format!(
-                "Unknown /setup target '{other}'. Try `/setup` to open the setup wizard."
+                "Unknown /setup target '{other}'. Try `/setup pod` to configure saved Pods, or \
+                 `/setup` to open the full setup wizard."
             )),
         }
     }
@@ -183,18 +185,59 @@ mod tests {
     }
 
     #[test]
-    fn setup_fleet_opens_operate_readiness_step() {
-        let mut app = test_app();
+    fn setup_pod_is_canonical_and_fleet_spellings_remain_aliases() {
+        for target in ["pod", "fleet", "operate", "operate-fleet", "operate_fleet"] {
+            let mut app = test_app();
+            let result = SetupCmd::execute(&mut app, Some(target));
 
-        let result = SetupCmd::execute(&mut app, Some("fleet"));
+            assert_eq!(
+                result.action,
+                Some(AppAction::OpenSetupWizardAt {
+                    step: SetupStep::OperateFleet
+                }),
+                "{target}"
+            );
+            assert!(result.message.is_none(), "{target}");
+        }
+    }
+
+    #[test]
+    fn setup_pod_and_legacy_fleet_invocations_dispatch_identically() {
+        let mut pod_app = test_app();
+        let mut fleet_app = test_app();
+
+        let pod = crate::commands::execute("/setup pod", &mut pod_app);
+        let fleet = crate::commands::execute("/setup fleet", &mut fleet_app);
 
         assert_eq!(
-            result.action,
+            pod.action,
             Some(AppAction::OpenSetupWizardAt {
                 step: SetupStep::OperateFleet
             })
         );
-        assert!(result.message.is_none());
+        assert_eq!(pod.action, fleet.action);
+        assert_eq!(pod.message, fleet.message);
+        assert_eq!(pod.is_error, fleet.is_error);
+    }
+
+    #[test]
+    fn setup_usage_advertises_the_canonical_pod_target() {
+        assert!(SetupCmd::info().usage.contains("pod"));
+        assert!(!SetupCmd::info().usage.contains("fleet"));
+    }
+
+    #[test]
+    fn setup_unknown_target_points_to_pod_setup() {
+        let mut app = test_app();
+        let result = SetupCmd::execute(&mut app, Some("bogus"));
+
+        assert!(result.is_error);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("/setup pod"))
+        );
     }
 
     #[test]

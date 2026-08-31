@@ -1,21 +1,21 @@
 //! `/pod` roster — the barracks view of the saved agent party.
 //!
 //! The roster view is the primary `/pod` face. The first row is the
-//! **operator** — the Fleet leader (your live session model). When a user
+//! **operator** — the Pod leader (your live session model). When a user
 //! picks a session model they are picking the operator, and every member
-//! below is that leader's team. The header names the selected saved Fleet and
+//! below is that leader's team. The header names the selected saved Pod and
 //! whether it is user-global or folder-scoped, so scope is never ambiguous.
 //! Below the operator sits the merged [`FleetRoster`] (built-in <
 //! `[fleet.profiles]` config < `$CODEWHALE_HOME/agents/*.toml` personal <
 //! `.codewhale/agents/*.toml` project members)
 //! as a scrollable list with a detail pane for the selected row. The view
 //! never writes anything; `s` / Enter on a selected-v2 member opens that
-//! Fleet's exact editor, while the legacy profile wizard is used only when no
-//! named Fleet is selected (the operator row is display-only). Switch named
-//! Fleets with `/pod fleets`.
+//! Pod's exact editor, while the legacy profile wizard is used only when no
+//! named Pod is selected (the operator row is display-only). Switch named
+//! saved Pods with `/pod pods` (`/pod fleets` remains compatible).
 //!
 //! NOTE: like `fleet_setup.rs`, the copy below is intentionally English for
-//! now (#3167 reworks Fleet UI localization); the command entry
+//! now (#3167 reworks Pod UI localization); the command entry
 //! (`CmdFleetDescription`) is already localized.
 
 use std::cell::RefCell;

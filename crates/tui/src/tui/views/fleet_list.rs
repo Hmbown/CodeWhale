@@ -1,10 +1,11 @@
-//! `/pod fleets` — named saved-Fleet picker (secondary surface).
+//! `/pod pods` — named saved-Pod picker (secondary surface; `/pod fleets`
+//! remains a compatibility alias).
 //!
-//! Bare `/pod` opens the roster/setup face for the selected Fleet. This view
-//! is only for switching between named configurations. One row per saved Fleet
+//! Bare `/pod` opens the roster/setup face for the selected Pod. This view
+//! is only for switching between named configurations. One row per saved Pod
 //! across both scopes: user-global (`$CODEWHALE_HOME/fleets/`) and folder
 //! (`.codewhale/fleets/`). Rows show name, scope badge, and operator summary —
-//! not filesystem paths (paths belong in receipts). Same-name Fleets in both
+//! not filesystem paths (paths belong in receipts). Same-name Pods in both
 //! scopes are two rows, never a silent shadow. Legacy per-role profiles get
 //! one migration banner, not a pile of shadow badges.
 //!
@@ -118,7 +119,7 @@ impl FleetListView {
         hints
     }
 
-    /// Select the highlighted Fleet in `scope` and close with a receipt that
+    /// Select the highlighted Pod in `scope` and close with a receipt that
     /// names the exact file written. Editing stays on `/pod setup` / roster —
     /// this surface is a switcher, not a file manager.
     fn select_highlighted(&self, scope: FleetScope) -> Option<FleetListOutcome> {
@@ -129,7 +130,7 @@ impl FleetListView {
         match set_selected(&entry.name, scope, &self.workspace) {
             Ok(path) => Some(FleetListOutcome::Done {
                 message: format!(
-                    "Selected Fleet `{}` ({}) — wrote {}",
+                    "Selected Pod `{}` ({}) — wrote {}",
                     entry.name,
                     scope.long_label(),
                     path.display()
@@ -149,7 +150,7 @@ impl FleetListView {
         match delete_fleet(&name, scope, &self.workspace) {
             Ok(path) => Some(FleetListOutcome::Done {
                 message: format!(
-                    "Deleted Fleet `{name}` ({}) — removed {}",
+                    "Deleted Pod `{name}` ({}) — removed {}",
                     scope.label(),
                     path.display()
                 ),
@@ -201,11 +202,11 @@ impl ModalView for FleetListView {
                 };
                 if entry.legacy {
                     return ViewAction::Emit(ViewEvent::OpenTextPager {
-                        title: format!("Fleet `{}` — legacy format", entry.name),
+                        title: format!("Pod `{}` — legacy format", entry.name),
                         content: format!(
-                            "This Fleet file predates the named-Fleet format ({}).\n\n\
+                            "This Pod file predates the named-Pod format ({}).\n\n\
                              It is listed so nothing you saved disappears, but it is \
-                             read-only here. To edit it, create a new Fleet and copy \
+                             read-only here. To edit it, create a new Pod and copy \
                              the settings you want; legacy files are never migrated \
                              silently.\n\nParse error: {}",
                             entry.path.display(),
@@ -238,7 +239,7 @@ impl ModalView for FleetListView {
                 ) {
                     Ok(receipt) => {
                         let mut content = format!(
-                            "Migrated {} legacy role profiles into Fleet `Default` \
+                            "Migrated {} legacy role profiles into Pod `Default` \
                              (user-global) — wrote {}\n\n",
                             receipt.rows.len(),
                             receipt.saved_to.display()
@@ -258,13 +259,13 @@ impl ModalView for FleetListView {
                         }
                         content.push_str(
                             "\nLegacy profile files were left untouched — they are no \
-                             longer live configuration once a Fleet is selected.",
+                             longer live configuration once a Pod is selected.",
                         );
                         if let Ok(path) =
                             set_selected("Default", FleetScope::Personal, &self.workspace)
                         {
                             content.push_str(&format!(
-                                "\n\nFleet `Default` is now your user-global default — wrote {}.",
+                                "\n\nPod `Default` is now your user-global default — wrote {}.",
                                 path.display()
                             ));
                         }
@@ -326,16 +327,16 @@ impl ModalView for FleetListView {
         // Header: name + selected summary.
         let selected_line = match &self.selected {
             Some(sel) => format!("Selected: `{}` ({})", sel.name, sel.scope.label()),
-            None => "No Fleet selected — built-in team".to_string(),
+            None => "No Pod selected — built-in team".to_string(),
         };
         let mut header = vec![
             Line::from(vec![
                 Span::styled(
-                    "─ Saved Fleets ",
+                    "─ Saved Pods ",
                     Style::default().fg(palette::WHALE_ACTION).bold(),
                 ),
                 Span::styled(
-                    "· pick which named Fleet the session uses",
+                    "· pick which named Pod the session uses",
                     Style::default().fg(palette::TEXT_MUTED),
                 ),
             ]),
@@ -349,7 +350,7 @@ impl ModalView for FleetListView {
             header.push(Line::from(vec![Span::styled(
                 format!(
                     "  ⚠ {} legacy role profile(s) found — press m to migrate them into a \
-                         Fleet (nothing is changed until you do)",
+                         Pod (nothing is changed until you do)",
                     self.legacy_profile_count
                 ),
                 Style::default().fg(palette::WHALE_HUMAN),
@@ -371,7 +372,7 @@ impl FleetListView {
         if self.entries.is_empty() {
             Paragraph::new(Line::from(vec![
                 Span::styled(
-                    "  No saved Fleets yet.",
+                    "  No saved Pods yet.",
                     Style::default().fg(palette::TEXT_MUTED),
                 ),
                 Span::styled(
@@ -661,29 +662,21 @@ mod tests {
         let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
         let ws = tempfile::TempDir::new().unwrap();
 
-        save_in(ws.path(), FleetScope::Workspace, "Temp Fleet");
+        save_in(ws.path(), FleetScope::Workspace, "Temp Pod");
         let mut view = FleetListView::new(&app_in(ws.path().to_path_buf()), &Config::default());
         assert_eq!(view.entries.len(), 1);
-        assert_eq!(view.entries[0].name, "Temp Fleet");
+        assert_eq!(view.entries[0].name, "Temp Pod");
 
         // 'd' arms the confirmation; the file is still there.
         assert!(matches!(
             view.handle_key(key(KeyCode::Char('d'))),
             ViewAction::None
         ));
-        assert!(
-            list_fleets(ws.path())
-                .iter()
-                .any(|e| e.name == "Temp Fleet")
-        );
+        assert!(list_fleets(ws.path()).iter().any(|e| e.name == "Temp Pod"));
 
         // 'n' cancels.
         view.handle_key(key(KeyCode::Char('n')));
-        assert!(
-            list_fleets(ws.path())
-                .iter()
-                .any(|e| e.name == "Temp Fleet")
-        );
+        assert!(list_fleets(ws.path()).iter().any(|e| e.name == "Temp Pod"));
 
         // 'd' then 'y' deletes and emits a receipt naming the removed path.
         view.handle_key(key(KeyCode::Char('d')));
@@ -691,7 +684,7 @@ mod tests {
         let ViewAction::EmitAndClose(ViewEvent::FleetStoreChanged { message }) = action else {
             panic!("expected FleetStoreChanged, got {action:?}");
         };
-        assert!(message.contains("Deleted Fleet `Temp Fleet`"), "{message}");
+        assert!(message.contains("Deleted Pod `Temp Pod`"), "{message}");
         assert!(list_fleets(ws.path()).is_empty());
     }
 
@@ -703,12 +696,12 @@ mod tests {
         unsafe { std::env::set_var("CODEWHALE_HOME", sealed_home()) };
         let ws = tempfile::TempDir::new().unwrap();
 
-        save_in(ws.path(), FleetScope::Workspace, "Folder Fleet");
+        save_in(ws.path(), FleetScope::Workspace, "Folder Pod");
         let mut view = FleetListView::new(&app_in(ws.path().to_path_buf()), &Config::default());
         let idx = view
             .entries
             .iter()
-            .position(|e| e.name == "Folder Fleet")
+            .position(|e| e.name == "Folder Pod")
             .expect("workspace fleet listed");
         view.row = idx;
 
@@ -716,10 +709,10 @@ mod tests {
         let ViewAction::EmitAndClose(ViewEvent::FleetStoreChanged { message }) = action else {
             panic!("Enter must select and close, not open detail: {action:?}");
         };
-        assert!(message.contains("Folder Fleet"), "{message}");
+        assert!(message.contains("Folder Pod"), "{message}");
         assert!(message.contains("folder"), "{message}");
         let sel = crate::fleet::store::selected_fleet(ws.path()).expect("selection");
-        assert_eq!(sel.name, "Folder Fleet");
+        assert_eq!(sel.name, "Folder Pod");
         assert_eq!(sel.scope, FleetScope::Workspace);
 
         // SAFETY: serialised by lock_test_env.
@@ -761,10 +754,12 @@ members = []"#,
         assert!(entry.legacy);
 
         let action = view.handle_key(key(KeyCode::Enter));
-        assert!(
-            matches!(action, ViewAction::Emit(ViewEvent::OpenTextPager { .. })),
-            "legacy entry must open a read-only pager: {action:?}"
-        );
+        let ViewAction::Emit(ViewEvent::OpenTextPager { title, content }) = action else {
+            panic!("legacy entry must open a read-only pager: {action:?}");
+        };
+        assert_eq!(title, "Pod `stopship` — legacy format");
+        assert!(content.contains("This Pod file predates the named-Pod format"));
+        assert!(content.contains("create a new Pod"));
 
         // SAFETY: serialised by lock_test_env.
         unsafe {
@@ -807,12 +802,14 @@ provider = "deepseek"
         );
 
         let action = view.handle_key(key(KeyCode::Char('m')));
-        assert!(
-            matches!(action, ViewAction::Emit(ViewEvent::OpenTextPager { .. })),
-            "migration must open the receipt pager: {action:?}"
-        );
+        let ViewAction::Emit(ViewEvent::OpenTextPager { title, content }) = action else {
+            panic!("migration must open the receipt pager: {action:?}");
+        };
+        assert_eq!(title, "Legacy migration receipt");
+        assert!(content.contains("Pod `Default`"));
+        assert!(content.contains("once a Pod is selected"));
 
-        // The Default fleet now exists and is the user-global selection.
+        // The Default Pod now exists and is the user-global selection.
         let entries = list_fleets(ws.path());
         assert!(
             entries.iter().any(|e| e.name == "Default" && !e.legacy),

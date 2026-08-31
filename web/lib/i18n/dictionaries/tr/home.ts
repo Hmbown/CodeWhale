@@ -6,7 +6,7 @@ import type { HomeDict } from "../types";
  * Güncel İngilizce yönünde özgün yeniden yazım: modelini kendin getir,
  * her şey senin makinende olur. Ürün sözlüğü TUI paketiyle aynı kalır:
  * Plan / Work / Operate, Ask / Auto-Review / Full Access, Codewhale, TUI,
- * `codewhale exec`, Runtime API + MCP, Fleet, Node 18+, Rust, MIT.
+ * `codewhale exec`, Runtime API + MCP, Pod, Node 18+, Rust, MIT.
  *
  * Bölüm mühürleri (法, 行, …) İngilizce baskıyla paylaşılan gliflerdir —
  * işaretlerdir, düzyazı değil.
@@ -69,7 +69,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "Codewhale’a yeni misin? Baştan sona dört adım.",
   startLede:
-    "Kur → anahtarsız ilk oturum → bir sağlayıcı bağla → Fleet’ini kur. Terimler sözlük sayfasında tanımlı.",
+    "Kur → anahtarsız ilk oturum → bir sağlayıcı bağla → Pod’ini kur. Terimler sözlük sayfasında tanımlı.",
   startGuideLink: "Başlangıç kılavuzunu oku →",
   startVocabularyLink: "Ürün sözlüğünü gör →",
 
@@ -90,7 +90,7 @@ export const home: HomeDict = {
     ["codewhale exec", "Betikler ve CI"],
     ["Web istemcisi", "Yalnızca geri döngülü tarayıcı istemcisi"],
     ["Runtime API + MCP", "Yerel entegrasyonlar"],
-    ["Fleet", "Kalıcı çok ajanlı iş"],
+    ["Pod", "Kalıcı çok ajanlı iş"],
   ],
   runtimeLink: "Çalışma zamanı yüzeylerini ve kararlılık notlarını gör →",
 

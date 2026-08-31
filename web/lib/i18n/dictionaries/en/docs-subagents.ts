@@ -8,13 +8,13 @@ import type { DocsSubagentsDict } from "../types";
 export const docsSubagents: DocsSubagentsDict = {
   metaTitle: "Sub-Agents · Codewhale Docs",
   metaDescription:
-    "The agent tool, Fleet roles, context forking, worktree isolation, and concurrency caps.",
+    "The agent tool, Pod roles, context forking, worktree isolation, and concurrency caps.",
   bodyClassName: "text-ink-soft leading-relaxed",
   overviewTitle: "Sub-Agents",
   overviewLead:
     "A parent session launches one focused sub-agent through the agent tool and immediately gets back an agent_id, a compact receipt, and a transcript handle while the worker runs in the background. Sub-agents inherit the parent's tool registry by default, but they are leaf workers: they do not receive agent or nested lifecycle tools. agent launches detached background work — cancelling the parent turn stops the parent's wait path, but it does not kill already-opened child runs.",
   overviewFleetNote:
-    "For work that must survive process restarts, sleep, or remote execution, prefer Fleet or a Workflow-backed fleet run over a short in-session agent call.",
+    "For work that must survive process restarts, sleep, or remote execution, prefer a Pod or a Workflow-backed pod run over a short in-session agent call.",
   roles: [
     [
       "worker",

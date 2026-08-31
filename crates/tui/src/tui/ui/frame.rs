@@ -127,22 +127,29 @@ pub(crate) fn topbar_segments(app: &App, width: u16) -> Vec<TopbarSegment> {
     segments
 }
 
+/// The topbar controls that actually painted in this frame.
+///
+/// The route target intentionally contains no copied route metadata. The
+/// provider picker retains catalog, readiness, credential, and apply
+/// authority; chrome only exposes its entry point.
+#[derive(Debug, Clone, Copy, Default)]
+struct TopbarInteractionHitboxes {
+    context: Option<Rect>,
+    route: Option<Rect>,
+}
+
 /// Render the Tideline topbar into one header row and record its segment
 /// hitboxes (spec §5b `Constraint::Length(1)`). The ONE header on every
 /// screen: the session shell and the launch screen both call this, so the
 /// brand lockup, contextual segments, and the pinned meter + clock never
 /// change identity between pre- and post-session states. Segment rects are
 /// recorded for hover (this frame's highlight resolves against the previous
-/// frame's rects, the standard one-frame-lag registry pattern) and for click
-/// routing in a follow-up slice.
-/// Render the Tideline topbar row and record its segment hitboxes. Returns
-/// the pinned context meter's hitbox — the chrome row's one always-present
-/// inspector target (`Alt+C`'s mouse route) — or `None` when the meter could
-/// not paint whole and clear of the brand at this width.
-pub(crate) fn render_topbar_row(f: &mut Frame, app: &mut App, area: Rect) -> Option<Rect> {
+/// frame's rects, the standard one-frame-lag registry pattern) and for typed
+/// click routing.
+fn render_topbar_row(f: &mut Frame, app: &mut App, area: Rect) -> TopbarInteractionHitboxes {
     if area.height == 0 {
         app.viewport.last_topbar_hitboxes.clear();
-        return None;
+        return TopbarInteractionHitboxes::default();
     }
     let segments = topbar_segments(app, area.width);
     let clock = topbar_clock();
@@ -150,7 +157,12 @@ pub(crate) fn render_topbar_row(f: &mut Frame, app: &mut App, area: Rect) -> Opt
         app.viewport
             .last_topbar_hitboxes
             .iter()
-            .find(|hb| hb.area.x <= mx && mx < hb.area.right() && hb.area.y == my)
+            .find(|hb| {
+                hb.id == TopbarSegmentId::Model
+                    && hb.area.x <= mx
+                    && mx < hb.area.right()
+                    && hb.area.y == my
+            })
             .map(|hb| hb.id)
     });
     let topbar = Topbar::new(
@@ -162,7 +174,13 @@ pub(crate) fn render_topbar_row(f: &mut Frame, app: &mut App, area: Rect) -> Opt
     .ascii_safe(crate::tui::color_compat::ascii_safe_enabled())
     .hovered(hovered);
     let hitboxes = topbar_hitboxes(&topbar, area);
-    let context_hitbox = crate::tui::topbar::context_meter_hitbox(&topbar, area);
+    let interaction_hitboxes = TopbarInteractionHitboxes {
+        context: crate::tui::topbar::context_meter_hitbox(&topbar, area),
+        route: hitboxes
+            .iter()
+            .find(|hitbox| hitbox.id == TopbarSegmentId::Model)
+            .map(|hitbox| hitbox.area),
+    };
     // Keep the header row's quiet background under the widget itself.
     let buf = f.buffer_mut();
     Block::default()
@@ -170,7 +188,75 @@ pub(crate) fn render_topbar_row(f: &mut Frame, app: &mut App, area: Rect) -> Opt
         .render(area, buf);
     ratatui::widgets::Widget::render(topbar, area, buf);
     app.viewport.last_topbar_hitboxes = hitboxes;
-    context_hitbox
+    interaction_hitboxes
+}
+
+/// Register the topbar's drawn controls as one typed input surface.
+///
+/// Both the launch stage and a live session use this exact registration, so
+/// mouse routing cannot advertise a header segment on only one shell state.
+fn register_topbar_interaction_targets(app: &mut App, hitboxes: TopbarInteractionHitboxes) {
+    if let (Some(hitbox), Some(context_budget)) = (
+        hitboxes.context,
+        crate::tui::tideline::ContextBudgetSnapshot::from_app(app),
+    ) {
+        app.viewport
+            .interaction_targets
+            .register(crate::tui::tideline::InteractionTarget {
+                id: crate::tui::tideline::InteractionTargetId::HEADER_CONTEXT,
+                area: hitbox,
+                focus: crate::tui::tideline::InteractionFocus::Direct,
+                keyboard_action: Some(crate::tui::tideline::InteractionAction::InspectContext),
+                mouse_action: Some(crate::tui::tideline::InteractionAction::InspectContext),
+                inspect_detail: crate::tui::tideline::InspectDetail::ContextBudget(context_budget),
+            });
+    }
+    if let Some(hitbox) = hitboxes.route {
+        app.viewport
+            .interaction_targets
+            .register(crate::tui::tideline::InteractionTarget {
+                id: crate::tui::tideline::InteractionTargetId::HEADER_ROUTE,
+                area: hitbox,
+                focus: crate::tui::tideline::InteractionFocus::Direct,
+                keyboard_action: Some(crate::tui::tideline::InteractionAction::OpenProviderPicker),
+                mouse_action: Some(crate::tui::tideline::InteractionAction::OpenProviderPicker),
+                inspect_detail: crate::tui::tideline::InspectDetail::Route,
+            });
+    }
+
+    for target in app.viewport.interaction_targets.iter() {
+        let label = match target.mouse_action {
+            Some(crate::tui::tideline::InteractionAction::InspectContext) => format!(
+                "{} · {}",
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::CtxMenuContextInspector,
+                ),
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::CtxMenuContextInspectorDesc,
+                ),
+            ),
+            Some(crate::tui::tideline::InteractionAction::OpenProviderPicker) => format!(
+                "{} · {}",
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::RoutePanelHeader,
+                ),
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::CmdProviderDescription,
+                ),
+            ),
+            None => continue,
+        };
+        crate::tui::hover_layer::register_rect(
+            crate::tui::hover_hit::HoverTargetKind::Link,
+            target.area,
+            label,
+            false,
+        );
+    }
 }
 
 /// Map the host terminal rect onto the session shell canvas.
@@ -917,15 +1003,20 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
                 Constraint::Length(1), // merged footer (slots 6+8)
             ])
             .areas(size);
-        render_topbar_row(f, app, topbar_area);
+        let topbar_interactions = render_topbar_row(f, app, topbar_area);
+        register_topbar_interaction_targets(app, topbar_interactions);
         let startup = crate::tui::underwater::tideline_startup_from_app(app);
-        let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage_area);
+        let hitboxes = if startup.composer.enclosed {
+            crate::tui::underwater::tideline_startup_hitboxes(stage_area)
+        } else {
+            crate::tui::underwater::tideline_startup_hitboxes_with_composer(stage_area, false)
+        };
         crate::tui::underwater::render_tideline_startup(stage_area, f.buffer_mut(), &startup);
         // The completion popup paints above the docked composer's input row,
         // over the stage rows it needs — the same caller-computed entries
         // the session popup rides.
         if let Some(input_row) = hitboxes
-            .composer
+            .input
             .map(|area| area.y.saturating_sub(stage_area.y))
         {
             crate::tui::underwater::render_launch_completion_popup(
@@ -1063,7 +1154,9 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     // shed chat/composer space. Mini mode hides it with the rest of the
     // chrome.
     let pending_work = crate::tui::background_indicator::pending_work_from_app(app);
-    let composer_floor = MIN_COMPOSER_HEIGHT.saturating_add(u16::from(app.composer_border));
+    let composer_floor = MIN_COMPOSER_HEIGHT.saturating_add(u16::from(
+        crate::tui::widgets::composer_enclosure_enabled(app),
+    ));
     let indicator_height = if mini {
         0
     } else {
@@ -1106,20 +1199,8 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     // up to three compact rows at the release floor.
     let preview_cap = if size.height >= 20 { 4 } else { 3 };
     let preview_height = desired_preview_height.min(auxiliary_budget.min(preview_cap));
-    let session_boot_height = if mini {
-        0
-    } else {
-        crate::tui::session_boot::receipt_height(
-            app,
-            shell_area.width,
-            auxiliary_budget.saturating_sub(preview_height),
-        )
-    };
-    let workflow_panel_height = desired_workflow_panel_height.min(
-        auxiliary_budget
-            .saturating_sub(preview_height)
-            .saturating_sub(session_boot_height),
-    );
+    let workflow_panel_height =
+        desired_workflow_panel_height.min(auxiliary_budget.saturating_sub(preview_height));
 
     // One pinned footer row brackets the composer from below (spec §3: the
     // activity band and identity band merged into it): phase · live detail ·
@@ -1138,16 +1219,14 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             Constraint::Length(workflow_panel_height), // Workflow panel (#4121)
             Constraint::Length(preview_height),        // Pending input preview (0 if empty)
             Constraint::Length(indicator_height),      // Background-work chip (#5286, 0 if idle)
-            Constraint::Length(session_boot_height),   // MCP+plugin boot receipt (0 if quiet)
             Constraint::Length(plugin_cta_height),     // Live plugin CTA (0 unless matched)
             Constraint::Length(composer_height),       // Composer
             Constraint::Length(footer_height),         // Merged Tideline footer (slots 6+8)
         ])
         .split(body_area);
-    let session_boot_slot = 5;
-    let plugin_cta_slot = 6;
-    let composer_slot = 7;
-    let footer_slot = 8;
+    let plugin_cta_slot = 5;
+    let composer_slot = 6;
+    let footer_slot = 7;
 
     let (work_chat_area, side_work_area) = if mini && !mini_cfg.keep_sidebar {
         // Mini mode without the side rail: the transcript takes the whole
@@ -1162,55 +1241,18 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     } else if let Some(work_area) = side_work_area {
         crate::tui::work_surface::render(f, work_area, app);
     }
-
     // The Tideline topbar owns the header slot (spec §3: it replaces
     // `underwater::render_header`). One row: brand wordmark, contextual
     // segments, then the pinned context meter + clock. The route identity
     // the old identity band carried below the composer now lives here as
     // the Model segment — its new permanent home.
-    let mut topbar_context_hitbox = None;
+    let mut topbar_interactions = TopbarInteractionHitboxes::default();
     if header_height > 0 {
-        topbar_context_hitbox = render_topbar_row(f, app, header_area);
+        topbar_interactions = render_topbar_row(f, app, header_area);
     } else {
         app.viewport.last_topbar_hitboxes.clear();
     }
-    if let (Some(hitbox), Some(context_budget)) = (
-        topbar_context_hitbox,
-        crate::tui::tideline::ContextBudgetSnapshot::from_app(app),
-    ) {
-        app.viewport
-            .interaction_targets
-            .register(crate::tui::tideline::InteractionTarget {
-                id: crate::tui::tideline::InteractionTargetId::HEADER_CONTEXT,
-                area: hitbox,
-                focus: crate::tui::tideline::InteractionFocus::Direct,
-                keyboard_action: Some(crate::tui::app::HeaderActionTarget::InspectContext),
-                mouse_action: Some(crate::tui::app::HeaderActionTarget::InspectContext),
-                inspect_detail: crate::tui::tideline::InspectDetail::ContextBudget(context_budget),
-            });
-    }
-    for target in app.viewport.interaction_targets.iter() {
-        let label = match target.mouse_action {
-            Some(crate::tui::tideline::InteractionAction::InspectContext) => format!(
-                "{} · {}",
-                crate::localization::tr(
-                    app.ui_locale,
-                    crate::localization::MessageId::CtxMenuContextInspector,
-                ),
-                crate::localization::tr(
-                    app.ui_locale,
-                    crate::localization::MessageId::CtxMenuContextInspectorDesc,
-                ),
-            ),
-            None => continue,
-        };
-        crate::tui::hover_layer::register_rect(
-            crate::tui::hover_hit::HoverTargetKind::Link,
-            target.area,
-            label,
-            false,
-        );
-    }
+    register_topbar_interaction_targets(app, topbar_interactions);
 
     // Render the transcript and optional file-tree sidecar. The underwater
     // default deliberately has no legacy right sidebar: Tasks and To-do own
@@ -1313,11 +1355,6 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         crate::tui::background_indicator::render(body_chunks[4], buf, app, &pending_work);
     }
 
-    if session_boot_height > 0 {
-        let buf = f.buffer_mut();
-        crate::tui::session_boot::render(body_chunks[session_boot_slot], buf, app);
-    }
-
     if plugin_cta_height > 0 {
         let buf = f.buffer_mut();
         crate::tui::plugin_suggestions::draw_plugin_cta(app, body_chunks[plugin_cta_slot], buf);
@@ -1348,24 +1385,16 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             &slash_menu_entries,
             &mention_menu_entries,
         );
-        let inner = if composer_widget.has_panel(area) {
-            ratatui::widgets::Block::default()
-                .borders(ratatui::widgets::Borders::TOP | ratatui::widgets::Borders::BOTTOM)
-                .inner(area)
-        } else if area.height >= 2 {
-            ratatui::widgets::Block::default()
-                .borders(ratatui::widgets::Borders::TOP)
-                .inner(area)
-        } else {
-            area
-        };
-        app.viewport.last_composer_content = Some(inner);
+        let input_plane = composer_widget.inner_area(area);
+        app.viewport.last_composer_content = Some(input_plane);
 
         // Compute scroll offset and top padding for mouse coordinate mapping.
         let input_text = app.composer_display_input();
         let input_cursor = app.composer_display_cursor();
-        let content_geometry =
-            crate::tui::widgets::composer_content_geometry(inner, app.is_history_search_active());
+        let content_geometry = crate::tui::widgets::composer_content_geometry(
+            input_plane,
+            app.is_history_search_active(),
+        );
         let content_width = content_geometry.text_width();
         let menu_lines = ComposerWidget::new(
             app,
@@ -1374,7 +1403,8 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             &mention_menu_entries,
         )
         .active_menu_reserved_rows();
-        let budget = crate::tui::widgets::composer_input_rows_budget(inner.height, menu_lines);
+        let budget =
+            crate::tui::widgets::composer_input_rows_budget(input_plane.height, menu_lines);
         let (_, _, _, scroll_offset) = crate::tui::widgets::layout_input_with_scroll(
             input_text,
             input_cursor,
@@ -1440,13 +1470,6 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         column.paint_matching(work_chat_area, f.buffer_mut(), app.ui_theme.surface_bg);
         column.paint_matching(body_chunks[2], f.buffer_mut(), app.ui_theme.surface_bg);
         column.paint_matching(body_chunks[3], f.buffer_mut(), app.ui_theme.surface_bg);
-        if session_boot_height > 0 {
-            column.paint_matching(
-                body_chunks[session_boot_slot],
-                f.buffer_mut(),
-                app.ui_theme.surface_bg,
-            );
-        }
         if plugin_cta_height > 0 {
             column.paint_matching(
                 body_chunks[plugin_cta_slot],
@@ -1745,7 +1768,48 @@ pub(crate) fn workflow_tool_is_running(app: &App) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::short_title_truncate;
+    use super::{register_topbar_interaction_targets, render_topbar_row, short_title_truncate};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn topbar_route_segment_registers_interaction_target() {
+        let mut app =
+            crate::test_support::test_app_with_options(crate::test_support::test_tui_options("."));
+        let mut terminal =
+            Terminal::new(TestBackend::new(160, 1)).expect("topbar test terminal should build");
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let hitboxes = render_topbar_row(frame, &mut app, area);
+                register_topbar_interaction_targets(&mut app, hitboxes);
+            })
+            .expect("topbar should render");
+
+        let segment = app
+            .viewport
+            .last_topbar_hitboxes
+            .iter()
+            .find(|hitbox| hitbox.id == crate::tui::topbar::TopbarSegmentId::Model)
+            .expect("wide topbar should paint its model segment");
+        let target = app
+            .viewport
+            .interaction_targets
+            .iter()
+            .find(|target| target.id == crate::tui::tideline::InteractionTargetId::HEADER_ROUTE)
+            .expect("painted route segment should have a typed target");
+
+        assert_eq!(target.area, segment.area);
+        assert_eq!(
+            target.keyboard_action,
+            Some(crate::tui::tideline::InteractionAction::OpenProviderPicker)
+        );
+        assert_eq!(target.mouse_action, target.keyboard_action);
+        assert_eq!(
+            target.inspect_detail,
+            crate::tui::tideline::InspectDetail::Route
+        );
+    }
 
     #[test]
     fn truncates_at_ascii_word_boundary() {
