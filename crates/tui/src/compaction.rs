@@ -18,11 +18,11 @@ mod last_round;
 #[cfg(test)]
 #[path = "compaction/survival_contract.rs"]
 mod survival_contract;
+pub(crate) use last_round::last_round_start;
 pub use last_round::{
     CompactionCoverage, CompactionKeep, CompactionPath, LastCompactionSnapshot,
     inspect_compaction_keep, last_round_kept_count, pinned_anchors_text,
 };
-pub(crate) use last_round::{last_round_start, validate_last_round_coverage};
 
 /// Configuration for conversation compaction behavior.
 ///
@@ -2037,7 +2037,8 @@ mod tests {
             user_text_of(retained.last().unwrap()).as_deref(),
             Some(text.as_str())
         );
-        validate_last_round_coverage(&messages, &retained[..retained.len() - 1]).unwrap();
+        last_round::validate_last_round_coverage(&messages, &retained[..retained.len() - 1])
+            .unwrap();
     }
 
     #[test]
@@ -2047,7 +2048,7 @@ mod tests {
             msg("assistant", "session_store::roundtrip panics on reload."),
         ];
         let gutting = vec![msg("user", "What failed?")];
-        let error = validate_last_round_coverage(&original, &gutting)
+        let error = last_round::validate_last_round_coverage(&original, &gutting)
             .expect_err("dropping last-round assistant text must fail closed");
         assert!(error.to_string().contains("assistant"), "{error}");
     }

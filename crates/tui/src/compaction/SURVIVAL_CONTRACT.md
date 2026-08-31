@@ -67,7 +67,9 @@ work.
 Rust now:
 
 - `last_round::build_replacement_history` keeps the bounded last user round
-  (assistant + tool results) and appends one checkpoint receipt.
+  (assistant + tool results) and appends one checkpoint receipt. A trailing
+  toolless user/assistant tail still walks back to the last tool-bearing
+  round; chat-only sessions keep only the latest user turn.
 - `validate_last_round_coverage` refuses the rewrite if that round's user
   text, tool-result ids, or assistant output would vanish.
 - `validate_survival_contract` also refuses a missing checkpoint receipt,
@@ -75,5 +77,12 @@ Rust now:
   checkpoint.
 - `compact_messages_safe` never mutates the caller's live history; the host
   commits only after `Ok`.
+
+The language-invariant fixture matrix is
+`crates/tui/src/compaction/fixtures/matrix.json`. Rust loads it in
+`last_round` tests. `validate_survival_contract.mjs` is the same coverage
+floor for a later TypeScript strategy (`node validate_survival_contract.mjs`).
+There is no Go runtime in this repository yet; a Go validator remains a
+follow-up when a Go strategy exists.
 
 `/context` names the compaction path and `/anchor` survival.

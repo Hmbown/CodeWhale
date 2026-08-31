@@ -101,41 +101,49 @@ pub fn pinned_anchors_text(workspace: Option<&std::path::Path>) -> Option<String
         .filter(|contents| !contents.is_empty())
 }
 
-#[must_use]
-pub(crate) fn last_round_start(messages: &[Message]) -> usize {
-    let last_user = messages
+fn is_plain_user_text(message: &Message) -> bool {
+    !is_compaction_checkpoint_message(message) && user_text_of(message).is_some()
+}
+
+fn last_plain_user_index(messages: &[Message], end: usize) -> Option<usize> {
+    messages[..end]
         .iter()
         .enumerate()
         .rev()
-        .find_map(|(idx, message)| {
-            if is_compaction_checkpoint_message(message) {
-                return None;
-            }
-            user_text_of(message).map(|_| idx)
-        })
-        .unwrap_or(0);
-    let tail_has_tools = messages[last_user..].iter().any(|message| {
+        .find_map(|(idx, message)| is_plain_user_text(message).then_some(idx))
+}
+
+fn slice_has_tool_result(messages: &[Message], start: usize) -> bool {
+    messages[start..].iter().any(|message| {
         message
             .content
             .iter()
             .any(|block| matches!(block, ContentBlock::ToolResult { .. }))
-    });
-    if tail_has_tools {
+    })
+}
+
+#[must_use]
+pub(crate) fn last_round_start(messages: &[Message]) -> usize {
+    let Some(last_user) = last_plain_user_index(messages, messages.len()) else {
+        return 0;
+    };
+    if slice_has_tool_result(messages, last_user) {
         return last_user;
     }
-    // A trailing user/assistant pair with no tools still needs the previous
-    // tool-bearing round; otherwise the last results vanish behind the summary.
-    messages[..last_user]
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(idx, message)| {
-            if is_compaction_checkpoint_message(message) {
-                return None;
-            }
-            user_text_of(message).map(|_| idx)
-        })
-        .unwrap_or(last_user)
+    // Trailing toolless user/assistant turns still need the previous
+    // tool-bearing round; otherwise those results vanish behind the summary.
+    // If no tool round exists, keep only the latest user turn so chat-only
+    // sessions can still summarize older text.
+    let mut candidate = last_user;
+    loop {
+        let Some(prev) = last_plain_user_index(messages, candidate) else {
+            return last_user;
+        };
+        if slice_has_tool_result(messages, prev) {
+            return prev;
+        }
+        candidate = prev;
+    }
 }
 
 #[must_use]
@@ -467,6 +475,97 @@ mod tests {
                 )
             })
         }));
+    }
+
+    #[test]
+    fn last_round_walks_back_through_toolless_tails_to_the_tool_round() {
+        let original = vec![
+            msg("user", "Run the failing test."),
+            msg("assistant", "Running."),
+            tool_use("live", "Bash", json!({"command": "cargo test"})),
+            tool_result("live", "test session_store::roundtrip ... FAILED"),
+            msg("user", "ok thanks"),
+            msg("assistant", "you're welcome"),
+            msg("user", "one more thing"),
+            msg("assistant", "sure"),
+        ];
+        assert_eq!(last_round_start(&original), 0);
+        let next = format!("{COMPACTION_SUMMARY_MARKER}: keep the failing test result");
+        let replaced = build_replacement_history(&original, &next, None)
+            .expect("toolless tails must not drop the last tool result");
+        assert!(replaced.iter().any(|message| {
+            message.content.iter().any(|block| {
+                matches!(
+                    block,
+                    ContentBlock::ToolResult { tool_use_id, content, .. }
+                        if tool_use_id == "live" && content.contains("FAILED")
+                )
+            })
+        }));
+    }
+
+    #[test]
+    fn chat_only_history_keeps_the_latest_user_round() {
+        let messages = vec![
+            msg("user", "hello"),
+            msg("assistant", "hi"),
+            msg("user", "how are you"),
+            msg("assistant", "fine"),
+        ];
+        assert_eq!(last_round_start(&messages), 2);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct FixtureMatrix {
+        schema_version: u32,
+        cases: Vec<FixtureCase>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct FixtureCase {
+        id: String,
+        expect: String,
+        #[serde(default)]
+        anchors: Option<String>,
+        original: Vec<Message>,
+        replacement: Vec<Message>,
+        #[serde(default)]
+        last_round_start: Option<usize>,
+    }
+
+    #[test]
+    fn fixture_matrix_enforces_survival_contract() {
+        let matrix: FixtureMatrix =
+            serde_json::from_str(include_str!("fixtures/matrix.json")).expect("matrix.json");
+        assert_eq!(matrix.schema_version, 1);
+        assert!(
+            matrix.cases.len() >= 8,
+            "fixture matrix must cover last-round, toolless-tail, chat-only, anchor, and receipt cases"
+        );
+        for case in &matrix.cases {
+            if let Some(start) = case.last_round_start {
+                assert_eq!(
+                    last_round_start(&case.original),
+                    start,
+                    "{} last_round_start",
+                    case.id
+                );
+            }
+            let result = validate_survival_contract(
+                &case.original,
+                &case.replacement,
+                case.anchors.as_deref(),
+            );
+            match case.expect.as_str() {
+                "pass" => {
+                    result.unwrap_or_else(|error| panic!("{} should pass: {error}", case.id));
+                }
+                "fail" => {
+                    result.expect_err(&format!("{} should fail closed", case.id));
+                }
+                other => panic!("{}: unknown expect {other}", case.id),
+            }
+        }
     }
 
     #[test]

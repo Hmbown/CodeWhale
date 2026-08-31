@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Compaction replacement history keeps a bounded last user round (assistant +
   tool results) instead of dropping them behind a summary. `/context` names
-  the compaction path and `/anchor` survival (#4394).
+  the compaction path and `/anchor` survival. Failed compact still does not
+  replace live history (#4394).
 
 - TUI: startup no longer presents an approximate ASCII or block-glyph whale as
   the product mark. It keeps the direct Tideline prompt while exact-raster
@@ -27,8 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Compaction publishes a structured survival contract for session-tree
-  journal entry types (`src/compaction/SURVIVAL_CONTRACT.md`) and fails
-  closed when the last user round, tool results, `/anchor` text, or
+  journal entry types (`crates/tui/src/compaction/SURVIVAL_CONTRACT.md`) and
+  fails closed when the last user round, tool results, `/anchor` text, or
   checkpoint receipt would vanish (#4394).
 
 - Website: the public site moves to the Tideline deep-ocean design language

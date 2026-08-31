@@ -1,5 +1,7 @@
 //! Schema table for the compaction survival contract.
 //!
+//! Compiled only under `cfg(test)`: this is compile-time documentation of
+//! the field table, not the runtime enforcement path (`last_round.rs`).
 //! Field names and locations are language-invariant protocol data. The B1
 //! strategy (Rust compaction path) enforces them over the session-tree
 //! journal / API transcript. See [`SURVIVAL_CONTRACT.md`](./SURVIVAL_CONTRACT.md).
