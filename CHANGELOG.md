@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Public roster language is Pod. `/pod` is the customer surface; fleet remains
+  the internal wire, storage, and migration name (#5776).
+
 - TUI: startup no longer presents an approximate ASCII or block-glyph whale as
   the product mark. It keeps the direct Tideline prompt while exact-raster
   surfaces remain responsible for the canonical asset.
