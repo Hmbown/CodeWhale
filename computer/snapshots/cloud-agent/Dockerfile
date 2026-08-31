@@ -5,20 +5,26 @@
 # binary (static musl, no glibc floor) from the GitHub release by exact URL,
 # verifies its sha256 against codewhale-artifacts-sha256.txt, and records the
 # commit + digest as OCI labels (PRD 4.5: commit- and digest-pinned Linux
-# binary inside the Computer). No secrets are baked in: provider keys and the
-# account machine token arrive only through sandbox create-time env injection.
+# binary inside the Computer). No secrets are baked in. Daytona create-time
+# environment is server-visible, so a provider key must never be injected at
+# create time. A future dispatcher must deliver provider secrets only after
+# creation, over a post-create execution channel from stdin (never argv), and
+# remove them during teardown. `CODEWHALE_API_KEY` is an account/machine token,
+# not an inference-provider credential; current cloud dispatch has no
+# server-side account-token-to-provider-key resolution.
 #
 # Build (Daytona, amd64 only; daytona snapshot create has no --build-arg, so
 # every pin is inline):
 #   daytona snapshot create codewhale-cloud-agent \
 #     -f Dockerfile --cpu 4 --memory 8 --disk 10   (plan max; resources bind to the snapshot)
 #
-# Compatibility with #5712 (crates/tui/src/cloud_dispatch.rs):
-#   - snapshot name must match DEFAULT_CLOUD_AGENT_SNAPSHOT = "codewhale-cloud-agent"
-#     (or CODEWHALE_DISPATCH_SNAPSHOT override; slug charset, <=64 chars)
-#   - runner clones into SANDBOX_WORKSPACE = /workspace and runs
-#     `codewhale exec --auto "<prompt>"` there via the toolbox process/execute
-#   - the only env the runner injects is CODEWHALE_API_KEY (account machine token)
+# Current dispatcher boundary: this is an image definition, not a wired cloud
+# execution path. `crates/tui/src/cloud_dispatch.rs` currently creates a
+# Daytona sandbox with a name and labels only; it does not select this snapshot,
+# clone a repository, inject any sandbox environment, or execute `codewhale`.
+# A manual image build or Daytona probe is therefore not Cloud Agent launch
+# evidence. Do not add a create-time provider-key shortcut while that product
+# wiring is built.
 
 FROM debian:bookworm-slim
 

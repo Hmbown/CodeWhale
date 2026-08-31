@@ -8815,38 +8815,29 @@ async fn spawn_session_name_held_by_prior_session_agent_does_not_collide() {
     runtime.context = ToolContext::new(tmp.path());
     let spawned = {
         let mut guard = manager.write().await;
-        guard.spawn_background_with_assignment_options(
-            manager.clone(),
-            runtime,
-            FleetRole::Scout,
-            "new work".to_string(),
-            make_assignment(),
-            Some(vec!["read_file".to_string()]),
-            SubAgentSpawnOptions {
-                name: Some("researcher".to_string()),
-                ..Default::default()
-            },
-        )
+        guard
+            .spawn_background_with_assignment_options(
+                manager.clone(),
+                runtime,
+                FleetRole::Scout,
+                "new work".to_string(),
+                make_assignment(),
+                Some(vec!["read_file".to_string()]),
+                SubAgentSpawnOptions {
+                    name: Some("researcher".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("a prior-session holder must not reject a fresh same-name spawn")
     };
-    match spawned {
-        Ok(result) => {
-            assert_ne!(result.agent_id, stale_id);
-            let guard = manager.read().await;
-            let fresh = guard
-                .agents
-                .get(&result.agent_id)
-                .expect("fresh agent registered");
-            assert_eq!(fresh.session_name, "researcher");
-            assert!(!guard.is_from_prior_session(fresh));
-        }
-        Err(err) => {
-            let msg = err.to_string();
-            assert!(
-                !msg.contains("already in use"),
-                "a prior-session holder must not reserve the name: {msg}"
-            );
-        }
-    }
+    assert_ne!(spawned.agent_id, stale_id);
+    let guard = manager.read().await;
+    let fresh = guard
+        .agents
+        .get(&spawned.agent_id)
+        .expect("fresh agent registered");
+    assert_eq!(fresh.session_name, "researcher");
+    assert!(!guard.is_from_prior_session(fresh));
 }
 
 #[tokio::test]

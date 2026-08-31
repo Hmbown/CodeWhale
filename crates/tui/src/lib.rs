@@ -15031,6 +15031,73 @@ reasoning = "high"
     }
 
     #[test]
+    fn exec_resume_uses_dispatcher_env_route_loaded_by_config() {
+        // Exercise the production sequence without starting an Engine turn:
+        // `Config::load` applies the dispatcher-forwarded environment, then
+        // the resume seam must treat the same launch env as explicit and skip
+        // the unavailable persisted route rather than restoring it.
+        let _env_lock = crate::test_support::lock_test_env();
+        let _legacy_provider = crate::test_support::EnvVarGuard::remove("DEEPSEEK_PROVIDER");
+        let _legacy_model = crate::test_support::EnvVarGuard::remove("DEEPSEEK_MODEL");
+        let _provider = crate::test_support::EnvVarGuard::set("CODEWHALE_PROVIDER", "launch-route");
+        let _model = crate::test_support::EnvVarGuard::set("CODEWHALE_MODEL", "dispatcher-model");
+        let tmp = tempfile::tempdir().expect("config tempdir");
+        let codewhale_home = tmp.path().join("codewhale-home");
+        std::fs::create_dir_all(&codewhale_home).expect("isolated Codewhale home");
+        let _codewhale_home =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &codewhale_home);
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"provider = "stored-route"
+
+[providers.launch-route]
+kind = "openai-compatible"
+base_url = "https://launch.example.test/v1"
+model = "configured-launch-model"
+api_key = "test-only-key"
+"#,
+        )
+        .expect("write config");
+
+        let mut config = Config::load(Some(config_path), None).expect("load launch config");
+        assert_eq!(config.provider.as_deref(), Some("launch-route"));
+        assert_eq!(config.default_model(), "dispatcher-model");
+
+        // The saved route deliberately has no live config table. This control
+        // proves that a non-explicit resume would fail closed instead of
+        // silently falling back; the dispatcher overrides must prevent that
+        // restore attempt.
+        let saved = saved_exec_session("stored-route", "stored-model");
+        let mut restore_attempt = config.clone();
+        let restore_error = resolve_exec_resume_route(&mut restore_attempt, &saved, false, None)
+            .expect_err("unavailable saved route must not be restored");
+        assert!(
+            restore_error.to_string().contains("stored-route"),
+            "{restore_error}"
+        );
+
+        let (explicit_provider, explicit_model) = exec_resume_route_overrides(
+            None,
+            None,
+            crate::config::explicit_launch_provider_override().as_deref(),
+            crate::config::explicit_launch_model_override().as_deref(),
+        );
+        assert!(explicit_provider);
+        assert_eq!(explicit_model.as_deref(), Some("dispatcher-model"));
+
+        let model = resolve_exec_resume_route(
+            &mut config,
+            &saved,
+            explicit_provider,
+            explicit_model.as_deref(),
+        )
+        .expect("dispatcher environment must keep the launch route on resume");
+        assert_eq!(config.provider.as_deref(), Some("launch-route"));
+        assert_eq!(model, "dispatcher-model");
+    }
+
+    #[test]
     fn exec_model_reads_wait_for_foreign_test_env_overrides_to_restore() {
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (tx, rx) = std::sync::mpsc::channel();
