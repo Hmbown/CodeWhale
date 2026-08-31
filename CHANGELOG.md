@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Public roster language is Pod. `/pod` is the customer surface; fleet remains
+  the internal wire, storage, and migration name (#5776).
+
 - TUI: startup no longer presents an approximate ASCII or block-glyph whale as
   the product mark. It keeps the direct Tideline prompt while exact-raster
   surfaces remain responsible for the canonical asset.
@@ -205,6 +208,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Website: `/signin`, `/signup`, and `/auth/callback` are locale-aware public
+  routes instead of localized 404s. Sign-in and create-account send the person
+  to the CWC app; OAuth callbacks hop to `app.codewhale.net` with the query
+  intact; `/login` and `/register` are aliases. Local CLI use is not presented
+  as requiring an account (#5767).
 - The sandbox read deny-list matches a rule's resolved path as well as its
   literal spelling. On macOS `/etc` and `/var` are symlinks into `/private`,
   so a read of `/private/etc/sudoers` walked around the `/etc/sudoers` rule,
