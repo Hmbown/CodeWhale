@@ -97,7 +97,10 @@ mod tests {
     #[test]
     fn descriptors_parse_and_command_code_is_a_row_not_a_kind() {
         let rows = bundled_provider_descriptors();
-        assert!(rows.len() >= 5, "expected compatible hosts plus command-code");
+        assert!(
+            rows.len() >= 5,
+            "expected compatible hosts plus command-code"
+        );
         for row in rows {
             assert!(row.base_url.starts_with("https://"), "{}", row.id);
             assert!(!row.api_key_env.is_empty(), "{}", row.id);
