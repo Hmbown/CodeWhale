@@ -2958,6 +2958,7 @@ impl Engine {
                         // history revision was current before the sync — a
                         // stale number can flow into capacity checkpoints.
                         self.session.bump_messages_revision();
+                        self.session.latest_parent_input_tokens = None;
                         self.session.compaction_summary_prompt = compaction_checkpoint;
                         self.session.system_prompt =
                             crate::compaction::strip_compaction_summaries(system_prompt.as_ref());
@@ -5375,6 +5376,7 @@ impl Engine {
                     }
                     let messages_after = result.messages.len();
                     let retries_used = result.retries_used;
+                    let coverage_clause = result.coverage.receipt_clause();
                     self.session.replace_messages(result.messages);
                     if let Some(pm) = self.session.prefix_stability.as_mut() {
                         pm.note_history_reset("compaction");
@@ -5385,11 +5387,11 @@ impl Engine {
                     let tokens_after = self.estimated_input_tokens();
                     let message = if retries_used > 0 {
                         format!(
-                            "Compaction complete: {messages_before} → {messages_after} messages ({removed} removed, {retries_used} retries), ~{tokens_before} → ~{tokens_after} tokens"
+                            "Compaction complete: {messages_before} → {messages_after} messages ({removed} removed, {retries_used} retries), ~{tokens_before} → ~{tokens_after} tokens ({coverage_clause})"
                         )
                     } else {
                         format!(
-                            "Compaction complete: {messages_before} → {messages_after} messages ({removed} removed), ~{tokens_before} → ~{tokens_after} tokens"
+                            "Compaction complete: {messages_before} → {messages_after} messages ({removed} removed), ~{tokens_before} → ~{tokens_after} tokens ({coverage_clause})"
                         )
                     };
                     self.emit_compaction_completed(

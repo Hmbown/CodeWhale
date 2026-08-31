@@ -1973,6 +1973,9 @@ pub struct App {
     /// compaction rewrites history, since the receipt describes the
     /// pre-compaction context.
     pub last_billed_input_tokens: Option<u32>,
+    /// Last successful compaction, so `/context` and the inspector can name
+    /// the path and the last-round floor instead of looking empty.
+    pub last_compaction: Option<crate::compaction::LastCompactionSnapshot>,
     /// Accumulated reasoning text
     pub reasoning_buffer: String,
     /// Live reasoning header extracted from bold text

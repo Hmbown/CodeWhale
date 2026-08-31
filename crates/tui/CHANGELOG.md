@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public roster language is Pod. `/pod` is the customer surface; fleet remains
   the internal wire, storage, and migration name (#5776).
 
+- Compaction replacement history keeps a bounded last user round (assistant +
+  tool results) instead of dropping them behind a summary. `/context` names
+  the compaction path and `/anchor` survival (#4394).
+
 - TUI: startup no longer presents an approximate ASCII or block-glyph whale as
   the product mark. It keeps the direct Tideline prompt while exact-raster
   surfaces remain responsible for the canonical asset.
@@ -21,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dispatcher (#5771). Compact/quiet composers still omit the control.
 
 ### Added
+
+- Compaction publishes a structured survival contract for session-tree
+  journal entry types (`src/compaction/SURVIVAL_CONTRACT.md`) and fails
+  closed when the last user round, tool results, `/anchor` text, or
+  checkpoint receipt would vanish (#4394).
 
 - Website: the public site moves to the Tideline deep-ocean design language
   (dark by default with an opt-in light documentation sheet, palette grounded

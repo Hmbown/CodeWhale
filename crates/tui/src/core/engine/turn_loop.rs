@@ -883,7 +883,8 @@ impl Engine {
             // Billing usage accumulates every parent step and child-model
             // call. Only the most recent parent-route request describes the
             // live message list whose pressure we are checking here.
-            let billed_input_tokens = turn.latest_parent_input_tokens.map(u64::from);
+            let billed_input_tokens =
+                turn.billed_input_tokens_for_compaction(self.session.latest_parent_input_tokens);
             let prepared = if crate::compaction::compaction_pressure_reached_with_billed(
                 &self.session.messages,
                 self.session.system_prompt.as_ref(),
@@ -1006,7 +1007,9 @@ impl Engine {
                             }
                             let auto_messages_after = result.messages.len();
                             let retries_used = result.retries_used;
+                            let coverage_clause = result.coverage.receipt_clause();
                             self.session.replace_messages(result.messages);
+                            turn.clear_parent_input_tokens();
                             if let Some(pm) = self.session.prefix_stability.as_mut() {
                                 pm.note_history_reset("compaction");
                             }
@@ -1016,11 +1019,11 @@ impl Engine {
                             let auto_tokens_after = self.estimated_input_tokens();
                             let status = if retries_used > 0 {
                                 format!(
-                                    "Auto-compaction complete: {auto_messages_before} → {auto_messages_after} messages ({removed} removed, {retries_used} retries), ~{auto_tokens_before} → ~{auto_tokens_after} tokens"
+                                    "Auto-compaction complete: {auto_messages_before} → {auto_messages_after} messages ({removed} removed, {retries_used} retries), ~{auto_tokens_before} → ~{auto_tokens_after} tokens ({coverage_clause})"
                                 )
                             } else {
                                 format!(
-                                    "Auto-compaction complete: {auto_messages_before} → {auto_messages_after} messages ({removed} removed), ~{auto_tokens_before} → ~{auto_tokens_after} tokens"
+                                    "Auto-compaction complete: {auto_messages_before} → {auto_messages_after} messages ({removed} removed), ~{auto_tokens_before} → ~{auto_tokens_after} tokens ({coverage_clause})"
                                 )
                             };
                             self.emit_compaction_completed(
@@ -1447,6 +1450,7 @@ impl Engine {
             // transport error is still a billed, incomplete response; it must
             // not be discarded and re-issued.
             turn.add_parent_usage(&usage);
+            self.session.latest_parent_input_tokens = turn.latest_parent_input_tokens;
             if usage_reported {
                 let _ = self
                     .tx_event

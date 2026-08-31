@@ -9379,6 +9379,9 @@ fn deferred_manual_compaction_is_superseded_by_a_live_pass() {
         "compact-x",
         true,
         "Auto-compaction complete".to_string(),
+        None,
+        None,
+        None,
     );
     assert!(app.deferred_manual_compaction.is_none());
     assert!(!app.manual_compaction_queued);
@@ -9422,6 +9425,9 @@ fn compaction_lifecycle_keeps_truthful_auto_label_until_matching_completion() {
         "compact-stale",
         true,
         "stale completion".to_string(),
+        None,
+        None,
+        None,
     );
     assert!(app.is_compacting, "stale id must not clear newer activity");
     assert_eq!(
@@ -9434,6 +9440,9 @@ fn compaction_lifecycle_keeps_truthful_auto_label_until_matching_completion() {
         "compact-new",
         true,
         "Auto-compaction complete: 126 → 12 messages".to_string(),
+        None,
+        None,
+        None,
     );
     assert!(!app.is_compacting);
     assert!(app.active_compaction.is_none());
