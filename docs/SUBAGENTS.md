@@ -1,22 +1,22 @@
-# Fleet Workers and Sub-Agent Compatibility
+# Pod Workers and Sub-Agent Compatibility
 
 > 阅读简体中文版：[zh_hans/SUBAGENTS.md](zh_hans/SUBAGENTS.md)
 
-Fleet roles are the user-facing vocabulary for delegated work: a parent
+Pod roles are the user-facing vocabulary for delegated work: a parent
 launches a focused `worker`, `scout`, `planner`, `reviewer`, `builder`,
 `verifier`, or `consultant` through `agent` and gets back an `agent_id` plus transcript handle
 while the worker runs. The internal runtime type is `FleetRole` (formerly
 `SubAgentType`); the older role spellings (`general`, `explore`, `plan`,
 `review`, `implementer`, `oracle`, …) remain accepted only as a persisted/deserialize
-compatibility adapter during v0.9.x. New prompts and config should use Fleet
+compatibility adapter during v0.9.x. New prompts and config should use Pod
 names.
 
 Architecturally, sub-agents should not be a second execution substrate. The
-durable primitive is the fleet-backed worker run described in
+durable primitive is the Pod-backed worker run described in
 [`AGENT_RUNTIME.md`](AGENT_RUNTIME.md): retries, terminal status, receipts,
 artifact refs, inspection, and restart behavior belong there. The
 model-facing launcher is the single `agent` tool and detached work should
-converge on the same lifecycle as Agent Fleet.
+converge on the same lifecycle as Agent Pod.
 
 The current `agent` implementation delegates to the durable sub-agent runtime
 while that cutover completes. It can still be useful for short in-session
@@ -25,7 +25,7 @@ backoff inside the child runtime before the worker is marked interrupted; if the
 retry budget is exhausted, Codewhale preserves a checkpoint and returns a
 continuation handle instead of leaving the parent to infer what happened. For
 work that must survive process restarts, sleep, or remote execution, prefer
-Fleet or a Workflow-backed fleet run.
+Pod or a Workflow-backed Pod run.
 
 Sub-agents inherit the parent's tool registry by default, and that includes
 `agent` itself: children are built with `with_full_agent_surface_options`
@@ -47,7 +47,7 @@ tool description.
 
 ## Role taxonomy
 
-The `type` field on `agent` selects a Fleet posture for the child
+The `type` field on `agent` selects a Pod posture for the child
 (`agent_type` is accepted as a compatibility alias). Each role is a distinct
 stance toward the work — not just a different label.
 
@@ -164,7 +164,7 @@ To-do: with many workers behind one card there is no truthful place to hang a
 single list. A child To-do appears only when the runtime already represents
 that child as its own delegate card.
 
-The durable Runtime ledger (projected through Fleet task status) still owns
+The durable Runtime ledger (projected through Pod task status) still owns
 lifecycle state. `update_plan` is no
 longer reachable by a model: `model_visible()` returns `false`
 (`crates/tui/src/tools/plan.rs:408-413`), so it is filtered out of the API tool
@@ -398,7 +398,7 @@ session (docs/CACHE.md; accepted at the v0.9.9 boundary).
 
 **Parse-accepted but unadvertised (compat).** The following inputs were
 removed from the advertised schema but remain accepted for saved transcripts,
-ACP/MCP clients, Fleet execution data, and internal/operator compatibility.
+ACP/MCP clients, Pod execution data, and internal/operator compatibility.
 They are never advertised to the model; Runtime still validates, clamps, and
 intersects them with live policy:
 
@@ -429,7 +429,7 @@ from, in order:
    (replay compat),
 2. the operator defaults `[subagents] default_max_steps` and
    `[subagents] default_wall_time_secs`,
-3. Fleet role defaults: **unbounded model turns** for every role
+3. Pod role defaults: **unbounded model turns** for every role
    (`WorkerRuntimeProfile::default_max_steps` returns zero), plus a **1800 s**
    wall-clock default.
 
@@ -511,7 +511,7 @@ network router and keep children on the session model.
 ## Per-profile provider routes (#3965)
 
 `[subagents.models]` changes the child model within the active provider. To pin
-a child to a different provider, use a Fleet/AgentProfile and pass it to the
+a child to a different provider, use a Pod/AgentProfile and pass it to the
 model-facing `agent` tool with `profile`. The profile's explicit `provider` +
 `model` fields win over the parent session route; omitting `provider` preserves
 the existing inherit behavior.
@@ -546,7 +546,7 @@ text = "Use small, local edits. Keep formatting changes mechanical."
 ```
 
 Then call `agent(profile: "local-formatter", prompt: "...")`. In-process
-children build a client for `lm-studio`; Fleet workers forward
+children build a client for `lm-studio`; Pod workers forward
 `--provider lm-studio` to `codewhale exec`, which resolves the same
 `[providers.lm-studio]` table. Unknown or unconfigured provider ids fail the
 spawn rather than silently falling back to the parent provider.
@@ -622,7 +622,7 @@ manager can't match them to the current boot.
 
 Each compatibility sub-agent has a persisted worker record in
 `.codewhale/state/subagents.v1.json`. The record is the current run-ledger
-slice for sub-agent lanes until those lanes are backed directly by the fleet
+slice for sub-agent lanes until those lanes are backed directly by the Pod
 ledger: it stores `run_id`, objective, role/model,
 workspace/branch, lifecycle events, artifact refs, follow-up target, takeover
 target, usage provenance, and verification provenance.

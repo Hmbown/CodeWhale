@@ -134,6 +134,10 @@ fn initial_input_prefill_waits_for_manual_submit() {
 
     let app = App::new(options, &Config::default());
 
+    assert!(
+        !app.launch.visible,
+        "an intentional prefilled prompt must enter the live composer instead of the startup hero"
+    );
     assert_eq!(app.input, "review this PR");
     assert_eq!(app.cursor_position, "review this PR".chars().count());
     assert!(!app.auto_submit_initial_input);
@@ -148,12 +152,70 @@ fn initial_input_submit_marks_startup_dispatch() {
 
     let app = App::new(options, &Config::default());
 
+    assert!(
+        !app.launch.visible,
+        "an intentional submitted prompt must bypass the startup hero"
+    );
     assert_eq!(app.input, "阅读项目 and wait for instructions");
     assert_eq!(
         app.cursor_position,
         "阅读项目 and wait for instructions".chars().count()
     );
     assert!(app.auto_submit_initial_input);
+}
+
+#[test]
+fn clean_launch_keeps_startup_hero_despite_a_startup_notice() {
+    let _env_lock = lock_test_env();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+    std::fs::write(tmp.path().join("settings.toml"), "launch_screen = false\n")
+        .expect("legacy settings");
+    let mut options = test_options(false);
+    options.startup_notice =
+        Some("Provider route changed; inspect the route before sending".into());
+
+    let app = App::new(options, &Config::default());
+
+    assert!(
+        app.launch.visible,
+        "a fresh interactive launch must keep the Tideline startup hero visible; a notice is not an intentional resume or prompt"
+    );
+}
+
+#[test]
+fn explicit_resume_bypasses_startup_hero() {
+    let _env_lock = lock_test_env();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+    let mut options = test_options(false);
+    options.resume_session_id = Some("explicit-resume".into());
+
+    let app = App::new(options, &Config::default());
+
+    assert!(
+        !app.launch.visible,
+        "an explicit resume must preserve the existing session path"
+    );
+}
+
+#[test]
+fn remote_control_initial_input_bypasses_startup_hero() {
+    let _env_lock = lock_test_env();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+    let mut options = test_options(false);
+    options.initial_input = Some(InitialInput::RemoteControl);
+
+    let app = App::new(options, &Config::default());
+
+    assert!(
+        !app.launch.visible,
+        "an intentional remote-control launch must preserve its existing direct-session path"
+    );
 }
 
 #[test]

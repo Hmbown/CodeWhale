@@ -11189,13 +11189,20 @@ pub fn active_provider_has_config_api_key(config: &Config) -> bool {
     if provider == ApiProvider::OpenaiCodex && !custom_endpoint {
         // The persistent Codex login is the OAuth credential file, analogous to
         // a stored config key. Token env overrides are scored separately by
-        // active_provider_has_env_api_key.
-        let path = crate::oauth::auth_file_path();
+        // active_provider_has_env_api_key. #5772: a consent record alone is not
+        // a credential — the exact consented path (never an ambient candidate)
+        // is read through the secure adapter and must still hold a live token.
+        let Some(consent) = config
+            .provider_config_for(provider)
+            .and_then(|entry| entry.external_credentials.as_ref())
+        else {
+            return false;
+        };
         return config
             .external_credential_read_grant(
                 provider,
                 codewhale_config::ExternalCredentialSource::CodexCli,
-                &path,
+                &consent.path,
             )
             .is_ok_and(|grant| crate::oauth::stored_credentials_present(&grant));
     }
@@ -11795,9 +11802,58 @@ pub(crate) fn save_provider_context_window_for_identity(
     Ok(config_path)
 }
 
+/// Grant-time validation (#5772): read the exact file the user just confirmed,
+/// through the same secure adapter the request path uses, and require it to
+/// hold a usable credential.
+///
+/// This runs *after* the confirmation disclosure and *before* any consent
+/// record is written, which is the whole ordering the consent model depends
+/// on. Persisting first would leave a record claiming a credential exists for
+/// a file that is missing, malformed, or expired — and every status surface
+/// downstream would then have to trust it. Nothing here refreshes, rewrites,
+/// or makes a network request, and no credential value escapes this function.
+fn validate_external_credential_before_consent(
+    consent_provider: codewhale_config::ProviderKind,
+    source: codewhale_config::ExternalCredentialSource,
+    path: &Path,
+) -> Result<()> {
+    let grant = codewhale_config::ExternalCredentialConsentToml::read_only(
+        consent_provider,
+        source,
+        path.to_path_buf(),
+    )
+    .read_grant(consent_provider, source, path)?;
+    match source {
+        codewhale_config::ExternalCredentialSource::CodexCli => {
+            crate::oauth::get_credentials(&grant).map(|_| ())
+        }
+        codewhale_config::ExternalCredentialSource::GrokCli => {
+            crate::xai_oauth::validate_external_credentials(&grant)
+        }
+        codewhale_config::ExternalCredentialSource::DshCli => {
+            crate::dsh_credentials::deepseek_api_key_from_grant(&grant)?
+                .map(|_| ())
+                .context("the DeepSeek Harness credentials file holds no DEEPSEEK_API_KEY")
+        }
+        codewhale_config::ExternalCredentialSource::AgyCli => {
+            crate::agy_credentials::antigravity_oauth_token_from_grant(&grant)?
+                .map(|_| ())
+                .context("the Antigravity credential store holds no OAuth token")
+        }
+        codewhale_config::ExternalCredentialSource::KimiCodeCli => anyhow::bail!(
+            "Kimi CLI credentials are never imported; configure a Kimi API key instead"
+        ),
+    }
+}
+
 /// Persist an explicitly confirmed read-only external credential grant and
 /// update the live mirror only after the comment-preserving disk mutation
-/// succeeds. This function never inspects the external path.
+/// succeeds.
+///
+/// Order is load-bearing (#5772): the caller has already shown the
+/// confirmation disclosure, this function then reads and validates the exact
+/// consented file, and only a usable credential is allowed to produce a
+/// persisted consent record.
 pub(crate) fn persist_external_credential_consent_for_at(
     config_path: Option<&Path>,
     live_config: &mut Config,
@@ -11828,6 +11884,14 @@ pub(crate) fn persist_external_credential_consent_for_at(
     let path = codewhale_config::resolve_external_credential_path(path)?;
     let path_value = path.to_str().context(
         "external credential path cannot be persisted losslessly because it is not valid UTF-8",
+    )?;
+    validate_external_credential_before_consent(consent_provider, source, &path).with_context(
+        || {
+            format!(
+                "no usable {} credential was found, so read-only consent was not saved",
+                source.owner_label()
+            )
+        },
     )?;
     let config_path = match config_path {
         Some(path) => path.to_path_buf(),

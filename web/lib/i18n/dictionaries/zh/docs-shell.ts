@@ -12,7 +12,7 @@ export const docsShell: DocsShellDict = {
   portalMark: "Codewhale 文档",
   heroTitle: "查找准确的使用说明。",
   heroLead:
-    "从新手指引和安装开始，或直接查看名词、模式、权限、工具、提供商、Fleet、钩子、MCP 与运行时 API。每页都链接到仓库中的源文档。",
+    "从新手指引和安装开始，或直接查看名词、模式、权限、工具、提供商、Pod、钩子、MCP 与运行时 API。每页都链接到仓库中的源文档。",
   installCta: "安装 Codewhale",
   sourceDocsCta: "浏览源文档 ↗",
 };

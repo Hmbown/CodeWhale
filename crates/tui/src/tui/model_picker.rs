@@ -2457,7 +2457,9 @@ impl ModalView for ModelPickerView {
             {
                 self.explain_unselectable_selection()
             }
-            KeyCode::Char('p') if key.modifiers.is_empty() && self.query.is_empty() => {
+            // Pinning must never steal the first character of a route search:
+            // use the explicitly shifted key advertised in the footer.
+            KeyCode::Char('P') if key.modifiers == KeyModifiers::SHIFT && self.query.is_empty() => {
                 let rows = self.visible_model_rows();
                 let Some(row) = rows.get(self.selected_model_idx) else {
                     return ViewAction::None;
@@ -2477,13 +2479,9 @@ impl ModalView for ModelPickerView {
             KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) && self.query.is_empty() => {
                 self.emit_pin_move(1)
             }
-            // Cycle catalog views (#4115). Handled before the query-typing arm
-            // so `a`/`A` always advances the view instead of filtering.
-            KeyCode::Char(c)
-                if key.modifiers.is_empty()
-                    && self.query.is_empty()
-                    && c.eq_ignore_ascii_case(&'a') =>
-            {
+            // Cycle catalog views (#4115) without shadowing a typed provider
+            // name such as `anthropic` or `azure`.
+            KeyCode::Char('A') if key.modifiers == KeyModifiers::SHIFT && self.query.is_empty() => {
                 self.toggle_view();
                 ViewAction::None
             }
@@ -2555,11 +2553,9 @@ impl ModalView for ModelPickerView {
                 ViewAction::None
             }
             // Explicit readiness + catalog refresh (safe, non-destructive).
+            // Plain `r` remains a route-search character.
             KeyCode::Char('r') | KeyCode::Char('R')
-                if key
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL)
-                    || (key.modifiers.is_empty() && self.query.is_empty()) =>
+                if key.modifiers == crossterm::event::KeyModifiers::CONTROL =>
             {
                 ViewAction::Emit(ViewEvent::ModelPickerRefresh)
             }
@@ -2643,25 +2639,33 @@ impl ModelPickerView {
             ModelListView::Configured => tr(self.locale, MessageId::RouteBrowseCatalog),
             other => other.next().title_label().into(),
         };
-        let content = render_modal_footer(
-            inner,
-            buf,
-            &[
-                ActionHint::new("↑↓", tr(self.locale, MessageId::PickerActionMove)),
-                ActionHint::new("Tab", tr(self.locale, MessageId::PickerActionSwitch)),
-                ActionHint::new(
-                    tr(self.locale, MessageId::RouteActionType),
-                    tr(self.locale, MessageId::RouteActionSearchAnyModel),
-                ),
-                ActionHint::new("Enter", tr(self.locale, MessageId::PickerActionApply)),
-                ActionHint::new(
-                    "⇧D",
-                    tr(self.locale, MessageId::PickerActionSetStartupDefault),
-                ),
-                ActionHint::new("A", view_action),
-                ActionHint::new("Esc", tr(self.locale, MessageId::PickerActionCancel)),
-            ],
-        );
+        let mut footer_hints = vec![
+            ActionHint::new("↑↓", tr(self.locale, MessageId::PickerActionMove)),
+            ActionHint::new("Tab", tr(self.locale, MessageId::PickerActionSwitch)),
+            ActionHint::new(
+                tr(self.locale, MessageId::RouteActionType),
+                tr(self.locale, MessageId::RouteActionSearchAnyModel),
+            ),
+            ActionHint::new("Enter", tr(self.locale, MessageId::PickerActionApply)),
+            ActionHint::new(
+                "⇧D",
+                tr(self.locale, MessageId::PickerActionSetStartupDefault),
+            ),
+            ActionHint::new("⇧A", view_action),
+        ];
+        // Keep compact route modals focused on the core browse/apply actions;
+        // wider shells have room to disclose the pin action too.
+        if inner.width >= 72 {
+            footer_hints.push(ActionHint::new(
+                "⇧P",
+                tr(self.locale, MessageId::PickerActionPin),
+            ));
+        }
+        footer_hints.push(ActionHint::new(
+            "Esc",
+            tr(self.locale, MessageId::PickerActionCancel),
+        ));
+        let content = render_modal_footer(inner, buf, &footer_hints);
 
         let shell = ratatui::layout::Layout::default()
             .direction(ratatui::layout::Direction::Vertical)
@@ -2992,6 +2996,45 @@ mod tests {
         }
     }
 
+    fn test_picker() -> ModelPickerView {
+        ModelPickerView {
+            initial_model: "model".to_string(),
+            previous_model: "model".to_string(),
+            initial_provider: ApiProvider::Openai,
+            initial_effort: ReasoningEffort::Auto,
+            selected_effort_request: ReasoningEffort::Auto,
+            active_accepts_custom_model_ids: false,
+            query: String::new(),
+            selected_model_idx: 0,
+            selected_effort_idx: 0,
+            focus: Pane::Model,
+            show_custom_model_row: false,
+            model_rows: vec![model_row(ApiProvider::Openai, true)],
+            route_config: Config::default(),
+            provider_health: Default::default(),
+            view: ModelListView::Configured,
+            configured_providers: Vec::new(),
+            row_hitboxes: RefCell::new(Vec::new()),
+            last_mouse_selected: None,
+            locale: Locale::En,
+            pinned_models: Vec::new(),
+        }
+    }
+
+    fn render_text(picker: &ModelPickerView, width: u16, height: u16) -> String {
+        let area = Rect::new(0, 0, width, height);
+        let mut buffer = Buffer::empty(area);
+        picker.render(area, &mut buffer);
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn deepseek_picker_heading_hides_legacy_family_metadata() {
         assert_eq!(
@@ -3006,5 +3049,54 @@ mod tests {
 
         assert!(model_row_visible_by_default(&row, ApiProvider::Deepseek));
         assert!(!model_row_visible_by_default(&row, ApiProvider::Openai));
+    }
+
+    #[test]
+    fn lowercase_picker_action_letters_begin_a_model_search() {
+        for ch in ['a', 'p', 'r'] {
+            let mut picker = test_picker();
+            assert!(matches!(
+                picker.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+                ViewAction::None
+            ));
+            assert_eq!(picker.query, ch.to_string(), "{ch} must begin a search");
+            assert_eq!(picker.view, ModelListView::Configured);
+        }
+    }
+
+    #[test]
+    fn shifted_picker_actions_cycle_views_pin_and_refresh_explicitly() {
+        let mut picker = test_picker();
+
+        assert!(matches!(
+            picker.handle_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT)),
+            ViewAction::None
+        ));
+        assert_eq!(picker.view, ModelListView::Catalog);
+        assert!(picker.query.is_empty());
+
+        assert!(matches!(
+            picker.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT)),
+            ViewAction::Emit(ViewEvent::ModelPickerTogglePin {
+                provider: ApiProvider::Openai,
+                provider_id: None,
+                model,
+            }) if model == "model"
+        ));
+        assert!(picker.query.is_empty());
+
+        assert!(matches!(
+            picker.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)),
+            ViewAction::Emit(ViewEvent::ModelPickerRefresh)
+        ));
+    }
+
+    #[test]
+    fn wide_picker_footer_advertises_shifted_view_and_pin_actions() {
+        let picker = test_picker();
+        let text = render_text(&picker, 100, 30);
+
+        assert!(text.contains("⇧A"), "missing shifted view hint: {text}");
+        assert!(text.contains("⇧P"), "missing shifted pin hint: {text}");
     }
 }

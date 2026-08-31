@@ -17,7 +17,7 @@ impl Default for SetupOperateFacts {
             runtime_ready: false,
             runtime_result: "worker runtime not loaded".to_string(),
             roster_ready: false,
-            roster_result: "Fleet roster not loaded".to_string(),
+            roster_result: "Pod roster not loaded".to_string(),
             concurrency_result: "concurrency not loaded".to_string(),
             result: "operate readiness not loaded".to_string(),
         }
@@ -97,9 +97,9 @@ impl SetupOperateFacts {
             .map(|(label, count)| format!("{label}={count}"))
             .collect::<Vec<_>>()
             .join(", ");
-            format!("{roster_members} Fleet members (custom: {origins})")
+            format!("{roster_members} Pod members (custom: {origins})")
         } else {
-            format!("{roster_members} built-in Fleet members; starter roster available")
+            format!("{roster_members} built-in Pod members; starter roster available")
         };
 
         let concurrency_result = format!(

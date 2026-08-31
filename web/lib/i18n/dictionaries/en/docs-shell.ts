@@ -13,7 +13,7 @@ export const docsShell: DocsShellDict = {
   portalMark: "Codewhale documentation",
   heroTitle: "Find the guidance you need.",
   heroLead:
-    "Start with the guide and install pages, or go straight to vocabulary, modes, permissions, tools, providers, Fleet, hooks, MCP, and the Runtime API. Each page links to its source document in the repository.",
+    "Start with the guide and install pages, or go straight to vocabulary, modes, permissions, tools, providers, Pod, hooks, MCP, and the Runtime API. Each page links to its source document in the repository.",
   installCta: "Install Codewhale",
   sourceDocsCta: "Browse source docs ↗",
 };

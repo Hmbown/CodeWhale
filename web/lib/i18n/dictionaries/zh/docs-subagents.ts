@@ -3,13 +3,13 @@ import type { DocsSubagentsDict } from "../types";
 /** 中文对照见 `en/docs-subagents.ts`,文案自页面的 `isZh` 三元逐字迁入。 */
 export const docsSubagents: DocsSubagentsDict = {
   metaTitle: "子 Agent · Codewhale 文档",
-  metaDescription: "agent 工具、Fleet 角色、上下文分叉、worktree 隔离和并发上限。",
+  metaDescription: "agent 工具、Pod 角色、上下文分叉、worktree 隔离和并发上限。",
   bodyClassName: "text-ink-soft leading-[1.9] tracking-wide",
   overviewTitle: "子 Agent",
   overviewLead:
     "父会话通过 agent 工具启动一个有明确职责的子 Agent，并立即拿回 agent_id、compact 收据和 transcript 句柄；子 Agent 在后台运行。子 Agent 默认继承父级的工具注册表，但它们是叶子 worker：不会再拿到 agent 或嵌套生命周期工具。agent 启动的是分离的后台工作——取消父回合会停止父级的等待路径，但不会杀死已经启动的子运行。",
   overviewFleetNote:
-    "对于必须跨进程重启、睡眠或远程执行存活的工作，优先选择 Fleet 或 Workflow 支撑的 Fleet 运行，而不是会话内的短寿命 agent 调用。",
+    "对于必须跨进程重启、睡眠或远程执行存活的工作，优先选择 Pod 或 Workflow 支撑的 Pod 运行，而不是会话内的短寿命 agent 调用。",
   roles: [
     ["worker", "灵活执行父级交代的多步任务；可写、可用 shell。默认角色。"],
     ["scout", "只读，快速摸清相关代码——例如“找出 Foo 的所有调用点”。"],
