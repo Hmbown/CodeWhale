@@ -4,7 +4,7 @@ import { SITE_URL } from "@/lib/page-meta";
 
 // Public, indexable routes (locale-prefixed). /admin and /api are
 // intentionally excluded; see app/robots.ts.
-const PATHS = ["", "/install", "/constitution", "/models", "/runtime", "/docs", "/docs/configuration", "/docs/constitution", "/docs/guide", "/docs/hooks", "/docs/mcp", "/docs/modes", "/docs/pod", "/docs/runtime-api", "/docs/sandbox", "/docs/subagents", "/docs/tools", "/docs/troubleshooting", "/docs/vocabulary", "/docs/web", "/docs/work", "/faq", "/roadmap", "/feed", "/digest", "/contribute", "/community", "/pricing", "/legal/terms", "/legal/privacy"];
+const PATHS = ["", "/install", "/constitution", "/models", "/runtime", "/docs", "/docs/configuration", "/docs/constitution", "/docs/guide", "/docs/hooks", "/docs/mcp", "/docs/modes", "/docs/pod", "/docs/runtime-api", "/docs/sandbox", "/docs/subagents", "/docs/tools", "/docs/troubleshooting", "/docs/vocabulary", "/docs/web", "/docs/work", "/faq", "/roadmap", "/feed", "/digest", "/contribute", "/community", "/pricing", "/signin", "/signup", "/legal/terms", "/legal/privacy"];
 
 export default function sitemap(): MetadataRoute.Sitemap {
   return PATHS.flatMap((path) =>
