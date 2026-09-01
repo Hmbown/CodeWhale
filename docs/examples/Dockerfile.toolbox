@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# Opt-in CodeWhale toolbox image.
+# Opt-in Codewhale toolbox image.
 #
 # The published ghcr.io/hmbown/codewhale:latest image intentionally stays
 # minimal, non-root, and without passwordless sudo. Use this Dockerfile only for

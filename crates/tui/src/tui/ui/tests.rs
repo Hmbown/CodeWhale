@@ -296,6 +296,7 @@ fn cjk_composer_cursor_and_mouse_geometry_agree_in_compact_and_wide_frames() {
         let mut app = create_test_app();
         app.onboarding = OnboardingState::None;
         app.launch.visible = false;
+        app.composer_border = true;
         app.input = "ab中文".to_string();
         app.cursor_position = app.input.chars().count();
         let config = Config::default();
@@ -317,6 +318,17 @@ fn cjk_composer_cursor_and_mouse_geometry_agree_in_compact_and_wide_frames() {
             .last_composer_content
             .expect("render records composer content geometry");
         let text_area = crate::tui::widgets::composer_content_geometry(inner, false).text_area;
+        let composer = app
+            .viewport
+            .last_composer_area
+            .expect("render records composer area");
+        let submit = crate::tui::widgets::active_composer_submit_rect(&app, composer)
+            .expect("enclosed composer exposes submit geometry");
+        assert_eq!(
+            text_area.right(),
+            submit.x.saturating_sub(1),
+            "{width}x{height}: frame must retain one blank cell before submit"
+        );
         assert_eq!(
             first_cursor.0,
             text_area.x + 6,
@@ -326,6 +338,12 @@ fn cjk_composer_cursor_and_mouse_geometry_agree_in_compact_and_wide_frames() {
             first_cursor.1 >= text_area.y
                 && first_cursor.1 < text_area.y.saturating_add(text_area.height),
             "{width}x{height}: cursor must remain inside composer content: {first_cursor:?}"
+        );
+        assert!(
+            first_cursor.0 < submit.x
+                || first_cursor.0 >= submit.right()
+                || first_cursor.1 != submit.y,
+            "{width}x{height}: cursor must stay outside submit: {first_cursor:?} vs {submit:?}"
         );
 
         frame::finish_frame_cursor(&mut terminal, Some(first_cursor)).unwrap();
@@ -1374,7 +1392,7 @@ fn coordination_handover_within_this_process_does_not_toast() {
     assert!(
         toast
             .text
-            .starts_with("Another CodeWhale session in this workspace"),
+            .starts_with("Another Codewhale session in this workspace"),
         "the toast must lead with the fact that explains the state: {}",
         toast.text
     );
@@ -4136,6 +4154,63 @@ fn wide_underwater_shell_aligns_transcript_and_composer_on_the_shared_canvas() {
 }
 
 #[test]
+fn failed_mcp_is_a_footer_chip_not_multiline_chat_boot_output() {
+    fn app() -> App {
+        let mut app = create_test_app();
+        app.onboarding_workspace_trust_gate = false;
+        app.onboarding = OnboardingState::None;
+        app.launch.visible = false;
+        app
+    }
+
+    let mut baseline = app();
+    let _ = render_underwater_test_app(&mut baseline, 100, 30);
+    let baseline_composer = baseline
+        .viewport
+        .last_composer_area
+        .expect("baseline composer area");
+
+    let mut failed = app();
+    failed.mcp_snapshot = Some(crate::mcp::McpManagerSnapshot {
+        config_path: PathBuf::from("mcp.json"),
+        config_exists: true,
+        reload_required: false,
+        servers: vec![crate::mcp::McpServerSnapshot {
+            name: "alpha".to_string(),
+            enabled: true,
+            required: false,
+            transport: "stdio".to_string(),
+            command_or_url: "alpha-mcp".to_string(),
+            connect_timeout: 5,
+            execute_timeout: 5,
+            read_timeout: 5,
+            connected: false,
+            error: Some("protocol negotiation timed out".to_string()),
+            capability_metadata: crate::mcp::McpServerCapabilityMetadata::NotObserved,
+            tools: Vec::new(),
+            resources: Vec::new(),
+            prompts: Vec::new(),
+        }],
+    });
+    let rendered = render_underwater_test_app(&mut failed, 100, 30);
+
+    assert_eq!(
+        failed
+            .viewport
+            .last_composer_area
+            .expect("failed-MCP composer area"),
+        baseline_composer,
+        "MCP diagnostics must not reserve chat/composer rows"
+    );
+    assert!(
+        rendered.contains("MCP · 0 connected · 1 failed"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("alpha · failed"), "{rendered}");
+    assert!(!rendered.contains("/mcp retry alpha"), "{rendered}");
+}
+
+#[test]
 fn wide_underwater_canvas_carries_the_ocean_to_both_terminal_edges() {
     let mut app = create_test_app();
     app.ui_theme = crate::palette::UI_THEME;
@@ -5033,8 +5108,8 @@ async fn session_denied_cache_auto_deny_explains_the_cached_rejection() {
     assert_eq!(toast.level, StatusToastLevel::Warning);
     assert_eq!(toast.ttl_ms, Some(12_000));
     assert!(toast.text.contains("matching request was denied earlier"));
-    assert!(toast.text.contains("during this CodeWhale run"));
-    assert!(toast.text.contains("Restart CodeWhale"));
+    assert!(toast.text.contains("during this Codewhale run"));
+    assert!(toast.text.contains("Restart Codewhale"));
     assert!(toast.text.contains("exec_shell"));
     let history_notice = app
         .history
@@ -5060,7 +5135,7 @@ async fn session_denied_cache_auto_deny_explains_the_cached_rejection() {
     let rendered = render_underwater_test_app(&mut app, 40, 12);
     assert!(rendered.contains("Auto-denied"), "{rendered:?}");
     assert!(
-        rendered.contains("Restart") && rendered.contains("CodeWhale"),
+        rendered.contains("Restart") && rendered.contains("Codewhale"),
         "{rendered:?}"
     );
 }
@@ -5287,7 +5362,7 @@ async fn session_denied_cache_notice_renders_host_scope_in_zh_hans() {
             _ => None,
         })
         .expect("localized persistent auto-deny explanation");
-    assert!(notice.contains("本次 CodeWhale 运行期间"));
+    assert!(notice.contains("本次 Codewhale 运行期间"));
     assert!(notice.contains("匹配请求"));
     assert!(!notice.contains("example.com"));
 
@@ -5299,7 +5374,7 @@ async fn session_denied_cache_notice_renders_host_scope_in_zh_hans() {
     assert!(rendered_compact.contains("已自动拒绝"), "{rendered:?}");
     assert!(rendered_compact.contains("匹配请求"), "{rendered:?}");
     assert!(
-        rendered_compact.contains("重启") && rendered_compact.contains("CodeWhale"),
+        rendered_compact.contains("重启") && rendered_compact.contains("Codewhale"),
         "{rendered:?}"
     );
 }
@@ -5311,8 +5386,8 @@ fn session_denied_notice_explains_cached_decision_and_recovery() {
 
     assert!(notice.contains("exec_shell"));
     assert!(notice.contains("matching request was denied earlier"));
-    assert!(notice.contains("during this CodeWhale run"));
-    assert!(notice.contains("Restart CodeWhale"));
+    assert!(notice.contains("during this Codewhale run"));
+    assert!(notice.contains("Restart Codewhale"));
 }
 
 #[tokio::test]
@@ -5381,7 +5456,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
                 cell,
                 HistoryCell::System { content }
                     if content.contains("Auto-denied exec_shell")
-                        && content.contains("Restart CodeWhale")
+                        && content.contains("Restart Codewhale")
             )
         })
         .expect("cached denial must leave a durable recovery receipt");
@@ -5418,7 +5493,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
         "cached-decision explanation disappeared after completion:\n{rendered}"
     );
     assert!(
-        rendered.contains("Restart CodeWhale"),
+        rendered.contains("Restart Codewhale"),
         "cached-denial recovery path disappeared after completion:\n{rendered}"
     );
     assert_eq!(
@@ -9305,6 +9380,9 @@ fn deferred_manual_compaction_is_superseded_by_a_live_pass() {
         "compact-x",
         true,
         "Auto-compaction complete".to_string(),
+        None,
+        None,
+        None,
     );
     assert!(app.deferred_manual_compaction.is_none());
     assert!(!app.manual_compaction_queued);
@@ -9348,6 +9426,9 @@ fn compaction_lifecycle_keeps_truthful_auto_label_until_matching_completion() {
         "compact-stale",
         true,
         "stale completion".to_string(),
+        None,
+        None,
+        None,
     );
     assert!(app.is_compacting, "stale id must not clear newer activity");
     assert_eq!(
@@ -9360,6 +9441,9 @@ fn compaction_lifecycle_keeps_truthful_auto_label_until_matching_completion() {
         "compact-new",
         true,
         "Auto-compaction complete: 126 → 12 messages".to_string(),
+        None,
+        None,
+        None,
     );
     assert!(!app.is_compacting);
     assert!(app.active_compaction.is_none());
@@ -13559,6 +13643,33 @@ fn ctrl_c_disposition_loading_beats_armed_quit() {
     app.arm_quit();
     app.is_loading = true;
     assert_eq!(ctrl_c_disposition(&app), CtrlCDisposition::CancelTurn);
+}
+
+#[test]
+fn ctrl_c_disposition_launch_screen_arms_exit_prompt() {
+    // The pre-session launch menu has no transcript selection and no turn in
+    // flight, so Ctrl+C there must follow the same two-tap contract as the
+    // session shell: arm first, confirm inside the window.
+    let mut app = create_test_app();
+    app.launch.visible = true;
+    assert!(!app.is_loading);
+    assert_eq!(ctrl_c_disposition(&app), CtrlCDisposition::ArmExit);
+    app.arm_quit();
+    assert_eq!(ctrl_c_disposition(&app), CtrlCDisposition::ConfirmExit);
+}
+
+#[test]
+fn arm_quit_shows_press_again_hint() {
+    // The armed state must be visible: the first Ctrl+C surfaces the
+    // localized "Press Ctrl+C again to quit" hint, not a silent redraw.
+    let mut app = create_test_app();
+    app.arm_quit();
+    let hint = app.tr(MessageId::FooterPressCtrlCAgain).into_owned();
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some(hint.as_str()),
+        "arming the quit prompt must show the press-again hint"
+    );
 }
 
 #[test]
@@ -23031,6 +23142,7 @@ mod work_surface {
 
     fn idle_rail_app(panel: RailPanel) -> App {
         let mut app = create_test_app();
+        app.ui_locale = crate::localization::Locale::En;
         // Pin the chrome the budget charges for: `App::new` reads the developer's
         // real settings.toml, and a host with `composer_border = false` would
         // shift every threshold below by a row.
@@ -23928,4 +24040,129 @@ fn focused_agent_transcript_receives_wheel_scroll_through_the_frame() {
         app.viewport.transcript_scroll.is_at_tail(),
         "the invisible main transcript must not consume the focused pane's scroll"
     );
+}
+
+#[test]
+fn fresh_launch_engine_adopts_the_app_session_id() {
+    // Regression for phantom duplicate sessions: a fresh interactive launch
+    // claimed session id A in the App (Runtime store lock, turn-start crash
+    // checkpoint) while the engine minted its own id B. The first
+    // `SessionUpdated` re-keyed the App to B, the completion commit cleared
+    // only `checkpoints/<B>.json`, and `--continue` later "recovered" the
+    // orphaned `checkpoints/<A>.json` (one user message, no reply) instead of
+    // the real session. The engine must adopt the App's id at spawn.
+    let mut app = create_test_app();
+    app.current_session_id = None;
+    let config = Config::default();
+
+    let session_id = super::event_loop::ensure_runtime_session_id(&mut app);
+    assert_eq!(app.current_session_id.as_deref(), Some(session_id.as_str()));
+    assert!(
+        uuid::Uuid::parse_str(&session_id).is_ok(),
+        "fresh launch claims a uuid, got {session_id:?}"
+    );
+
+    let engine_config = build_engine_config(&app, &config);
+    assert_eq!(
+        engine_config.session_id.as_deref(),
+        Some(session_id.as_str()),
+        "the engine config must carry the App session id"
+    );
+    let (engine, _handle) = crate::core::engine::Engine::new(engine_config, &config);
+    assert_eq!(
+        engine.session_id(),
+        session_id,
+        "the engine must run the conversation the App persists"
+    );
+}
+
+#[test]
+fn fresh_session_turn_lifecycle_leaves_no_orphan_checkpoint() {
+    // Store-level regression for the phantom duplicate sessions: walk the
+    // persistence lifecycle of one fresh interactive turn against an
+    // isolated session store and require that the turn-start checkpoint and
+    // the completion commit are keyed by the same id. Before the fix the
+    // engine minted its own id, `SessionUpdated` re-keyed the App to it, and
+    // `checkpoints/<app id>.json` survived every completed turn; `--continue`
+    // then "recovered" that one-message orphan as a duplicate session.
+    //
+    // `build_session_snapshot` calls `set_live_session`, which writes the
+    // process-global LIVE_SESSIONS registry. Without this lock the test races
+    // the other live-session tests under the default multi-thread runner.
+    let _lock = crate::test_support::lock_test_env();
+    let mut app = create_test_app();
+    app.current_session_id = None;
+    app.current_session_metadata = None;
+    let config = Config::default();
+    let store = TempDir::new().expect("sessions tempdir");
+    let manager = crate::session_manager::SessionManager::new(store.path().join("sessions"))
+        .expect("manager");
+
+    // Fresh launch (event_loop::run_tui): the App claims the id, the engine
+    // adopts it.
+    let app_session_id = super::event_loop::ensure_runtime_session_id(&mut app);
+    let (engine, _handle) =
+        crate::core::engine::Engine::new(build_engine_config(&app, &config), &config);
+
+    // Turn start (dispatch.rs): crash checkpoint under the App id.
+    app.api_messages.push(crate::models::Message {
+        role: Role::User,
+        content: vec![crate::models::ContentBlock::Text {
+            text: "please answer".to_string(),
+            cache_control: None,
+        }],
+    });
+    let checkpoint = build_session_snapshot(&mut app, &manager).expect("turn-start snapshot");
+    assert_eq!(checkpoint.metadata.id, app_session_id);
+    manager
+        .save_checkpoint(&checkpoint)
+        .expect("save turn-start checkpoint");
+
+    // The engine reports its conversation id (`SessionUpdated` handler).
+    app.current_session_id = Some(engine.session_id().to_string());
+
+    // Turn completion (`PersistRequest::CompletedCommit`): save the session,
+    // then clear the checkpoint of the id the snapshot carries.
+    app.api_messages.push(crate::models::Message {
+        role: Role::Assistant,
+        content: vec![crate::models::ContentBlock::Text {
+            text: "answer".to_string(),
+            cache_control: None,
+        }],
+    });
+    let completed = build_session_snapshot(&mut app, &manager).expect("completed snapshot");
+    manager.save_session(&completed).expect("save session");
+    manager
+        .clear_session_checkpoint(&completed.metadata.id)
+        .expect("clear checkpoint");
+
+    assert_eq!(
+        completed.metadata.id, app_session_id,
+        "the completed turn must commit under the id the checkpoint was written with"
+    );
+    let orphans = manager.list_checkpoints().expect("list checkpoints");
+    assert!(
+        orphans.is_empty(),
+        "a completed turn must leave no checkpoint behind, found {:?}",
+        orphans.iter().map(|c| c.path.clone()).collect::<Vec<_>>()
+    );
+    let sessions = manager.list_sessions().expect("list sessions");
+    assert_eq!(sessions.len(), 1, "exactly one session file: {sessions:?}");
+    assert_eq!(sessions[0].id, app_session_id);
+    assert_eq!(sessions[0].message_count, 2);
+    crate::session_manager::set_live_session(None);
+}
+
+#[test]
+fn resumed_launch_keeps_the_loaded_session_id_for_the_engine() {
+    let mut app = create_test_app();
+    app.current_session_id = Some("800596e6-56fd-477c-9a0f-13ada7846194".to_string());
+    let config = Config::default();
+
+    let session_id = super::event_loop::ensure_runtime_session_id(&mut app);
+    assert_eq!(session_id, "800596e6-56fd-477c-9a0f-13ada7846194");
+
+    let (engine, _handle) =
+        crate::core::engine::Engine::new(build_engine_config(&app, &config), &config);
+    assert_eq!(engine.session_id(), "800596e6-56fd-477c-9a0f-13ada7846194");
 }

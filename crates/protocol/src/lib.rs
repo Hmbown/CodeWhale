@@ -1,3 +1,9 @@
+// Serde-only leaf crate shared by every surface, including the TUI
+// alt-screen. Raw stdio prints must never appear here (spec §7,
+// `no_stdout_from_core`).
+#![deny(clippy::print_stdout)]
+#![deny(clippy::print_stderr)]
+
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};

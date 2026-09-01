@@ -129,9 +129,10 @@ where
             .iter()
             .filter(|route| route_matches(route, event.class))
         {
-            let adapter = self.config.adapters.get(&route.adapter).ok_or_else(|| {
-                anyhow!("fleet alert adapter {} is not configured", route.adapter)
-            })?;
+            let adapter =
+                self.config.adapters.get(&route.adapter).ok_or_else(|| {
+                    anyhow!("Pod alert adapter {} is not configured", route.adapter)
+                })?;
             let prepared = prepare_alert(&route.adapter, adapter, event, self.config.dry_run)?;
             let sent = if self.config.dry_run {
                 false
@@ -246,9 +247,9 @@ impl FleetAlertEvent {
     }
 
     pub fn inspection_commands(&self) -> Vec<String> {
-        let mut commands = vec!["codewhale fleet status".to_string()];
+        let mut commands = vec!["codewhale pod status".to_string()];
         if let Some(worker_id) = &self.worker_id {
-            commands.push(format!("codewhale fleet inspect {worker_id}"));
+            commands.push(format!("codewhale pod inspect {worker_id}"));
         }
         commands
     }
@@ -338,7 +339,7 @@ where
     let client = crate::tls::reqwest_blocking_client_builder()
         .timeout(Duration::from_secs(DEFAULT_ALERT_TIMEOUT_SECONDS))
         .build()
-        .context("building fleet alert HTTP client")?;
+        .context("building Pod alert HTTP client")?;
     match adapter {
         FleetAlertAdapterConfig::Slack { webhook_env, .. } => {
             let url = required_https_url(resolver, webhook_env)?;
@@ -346,7 +347,7 @@ where
                 .post(url)
                 .json(redacted_body)
                 .send()
-                .context("sending fleet Slack alert")?
+                .context("sending Pod Slack alert")?
                 .error_for_status()
                 .context("Slack alert rejected")?;
         }
@@ -364,7 +365,7 @@ where
             }
             request
                 .send()
-                .context("sending fleet webhook alert")?
+                .context("sending Pod webhook alert")?
                 .error_for_status()
                 .context("webhook alert rejected")?;
         }
@@ -384,7 +385,7 @@ where
                 .post("https://events.pagerduty.com/v2/enqueue")
                 .json(&body)
                 .send()
-                .context("sending fleet PagerDuty alert")?
+                .context("sending Pod PagerDuty alert")?
                 .error_for_status()
                 .context("PagerDuty alert rejected")?;
         }
@@ -410,7 +411,7 @@ fn safe_event_payload(event: &FleetAlertEvent) -> Value {
 
 fn slack_body(event: &FleetAlertEvent, channel: Option<&str>) -> Value {
     let text = format!(
-        "Codewhale fleet {}: run={} task={} reason={}",
+        "Codewhale Pod {}: run={} task={} reason={}",
         alert_class_label(event.class),
         event.run_id.0,
         event.task_id.as_deref().unwrap_or("-"),
@@ -450,7 +451,7 @@ fn pagerduty_body(event: &FleetAlertEvent, severity: &str, routing_key: String) 
         "routing_key": routing_key,
         "event_action": "trigger",
         "payload": {
-            "summary": format!("Codewhale fleet {}: {}", alert_class_label(event.class), short_reason(&event.reason)),
+            "summary": format!("Codewhale Pod {}: {}", alert_class_label(event.class), short_reason(&event.reason)),
             "severity": severity,
             "source": "codewhale",
             "custom_details": safe_event_payload(event),
@@ -486,7 +487,7 @@ where
 {
     resolver
         .resolve(name)
-        .ok_or_else(|| anyhow!("fleet alert secret {name} is not configured"))
+        .ok_or_else(|| anyhow!("Pod alert secret {name} is not configured"))
 }
 
 fn required_https_url<R>(resolver: &R, name: &str) -> Result<String>
@@ -495,16 +496,16 @@ where
 {
     let url = resolver
         .resolve(name)
-        .ok_or_else(|| anyhow!("fleet alert URL {name} is not configured"))?;
+        .ok_or_else(|| anyhow!("Pod alert URL {name} is not configured"))?;
     validate_https_alert_url(name, &url)?;
     Ok(url)
 }
 
 fn validate_https_alert_url(name: &str, url: &str) -> Result<()> {
     let parsed = reqwest::Url::parse(url)
-        .with_context(|| format!("fleet alert URL from {name} is not a valid URL"))?;
+        .with_context(|| format!("Pod alert URL from {name} is not a valid URL"))?;
     if parsed.scheme() != "https" {
-        return Err(anyhow!("fleet alert URL from {name} must use https"));
+        return Err(anyhow!("Pod alert URL from {name} must use https"));
     }
     Ok(())
 }
@@ -643,7 +644,7 @@ mod tests {
 
         assert!(payload.contains("<redacted:env:FLEET_PD_ROUTING_KEY>"));
         assert!(!payload.contains("real-routing-key-secret"));
-        assert!(payload.contains("codewhale fleet inspect worker-1"));
+        assert!(payload.contains("codewhale pod inspect worker-1"));
     }
 
     #[test]
@@ -691,8 +692,8 @@ mod tests {
         assert_eq!(
             alert.inspection_commands(),
             vec![
-                "codewhale fleet status".to_string(),
-                "codewhale fleet inspect worker-1".to_string()
+                "codewhale pod status".to_string(),
+                "codewhale pod inspect worker-1".to_string()
             ]
         );
     }

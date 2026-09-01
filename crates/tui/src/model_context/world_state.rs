@@ -18,28 +18,6 @@ pub struct WorldStateDiff {
     pub cleared: Vec<String>,
 }
 
-impl WorldStateDiff {
-    /// Materialize only the updated fragments (retain-unchanged contract).
-    #[must_use]
-    #[allow(dead_code)] // incremental text for inspectors / streaming cutover (TUI-DOG-011)
-    pub fn render_incremental_text(&self) -> String {
-        let mut parts = Vec::with_capacity(self.updated.len() + self.cleared.len());
-        for fragment in &self.updated {
-            parts.push(fragment.render_marked());
-        }
-        for marker in &self.cleared {
-            parts.push(format!("{marker}\n[cleared]"));
-        }
-        parts.join("\n\n")
-    }
-
-    #[must_use]
-    #[allow(dead_code)] // noop probe for retain-unchanged hosts (TUI-DOG-011)
-    pub fn is_noop(&self) -> bool {
-        self.updated.is_empty() && self.cleared.is_empty()
-    }
-}
-
 /// Mutable mid-session context layer living below the constitution prefix.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorldState {
@@ -276,12 +254,5 @@ impl WorldStateSnapshot {
         } else {
             format!("{}\n\n{}", self.constitution.trim(), world)
         }
-    }
-
-    /// Incremental world-state update text (constitution omitted — stable).
-    #[must_use]
-    #[allow(dead_code)] // incremental WorldState for streaming cutover (TUI-DOG-011)
-    pub fn render_world_diff(&self, previous: Option<&WorldState>) -> WorldStateDiff {
-        self.world_state.render_diff(previous)
     }
 }

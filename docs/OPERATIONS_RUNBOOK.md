@@ -56,7 +56,9 @@ Expected behavior:
 - Startup begins a fresh session unless `--resume`/`--continue` is supplied
 
 Actions:
-1. Resume prior work explicitly via `codewhale --resume <id>` or `Ctrl+R` in TUI
+1. Resume prior work explicitly via `codewhale --resume <id>` (alias
+   `codewhale resume <id>`; `codewhale --continue` recovers the newest
+   interrupted checkpoint for the workspace) or `Ctrl+R` in TUI
 2. If checkpoint inspection is needed, inspect `latest.json` for schema mismatch/details
 3. If schema is newer than binary supports, upgrade binary or remove stale checkpoint
 

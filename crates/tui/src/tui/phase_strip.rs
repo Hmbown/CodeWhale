@@ -194,6 +194,17 @@ fn status_toast_ink(level: crate::tui::app::StatusToastLevel) -> ChromeInk {
     }
 }
 
+/// Map the boot surface's typed severity through the same semantic palette as
+/// every other footer fact. Keeping this conversion closed makes the plugin
+/// warning/failure distinction testable without guessing from its text.
+fn boot_activity_ink(level: crate::tui::session_boot::SessionBootActivityLevel) -> ChromeInk {
+    match level {
+        crate::tui::session_boot::SessionBootActivityLevel::Active => ChromeInk::Active,
+        crate::tui::session_boot::SessionBootActivityLevel::Attention => ChromeInk::Attention,
+        crate::tui::session_boot::SessionBootActivityLevel::Failure => ChromeInk::Failure,
+    }
+}
+
 /// Pick the notice a band owes its row to right now, if any. Shared by the
 /// classic activity band and the Tideline merged footer so the two can never
 /// disagree about which toast is live. Completion may land in the same event
@@ -321,6 +332,24 @@ mod tests {
         assert_ne!(
             crate::tui::underwater::phase_ink(ShellPhase::Working).family(),
             crate::palette::SemanticFamily::Failure
+        );
+    }
+
+    #[test]
+    fn boot_activity_levels_keep_plugin_attention_and_failure_distinct() {
+        use crate::tui::session_boot::SessionBootActivityLevel;
+
+        assert_eq!(
+            boot_activity_ink(SessionBootActivityLevel::Active),
+            ChromeInk::Active
+        );
+        assert_eq!(
+            boot_activity_ink(SessionBootActivityLevel::Attention),
+            ChromeInk::Attention
+        );
+        assert_eq!(
+            boot_activity_ink(SessionBootActivityLevel::Failure),
+            ChromeInk::Failure
         );
     }
 
@@ -578,7 +607,7 @@ pub struct TidelineFooter<'a> {
     /// Permission chip (`ask` / `auto review` / `full access`, plus the
     /// filesystem scope notice when it deviates) in its Permission ink.
     pub permission_chip: Option<(&'a str, crate::palette::ChromeInk)>,
-    /// Urgent session notice (status toast / MCP boot chip) that owns the
+    /// Urgent session notice (status toast / boot activity chip) that owns the
     /// right-hand keys slot while it is live.
     pub notice: Option<(&'a str, crate::palette::ChromeInk)>,
     pub ascii_safe: bool,
@@ -699,6 +728,25 @@ fn tput(buf: &mut Buffer, x: u16, y: u16, text: &str, style: Style) {
     buf.set_stringn(x, y, text, text.width(), style);
 }
 
+const COMPACT_KEYS_LEGEND: &str = "? help";
+
+struct TrailingExtra {
+    text: String,
+    ink: ChromeInk,
+    append_help: bool,
+}
+
+impl TrailingExtra {
+    fn width(&self, footer: &TidelineFooter<'_>) -> usize {
+        self.text.width()
+            + if self.append_help {
+                ITEM_SEPARATOR_WIDTH + footer.sym(COMPACT_KEYS_LEGEND).width()
+            } else {
+                0
+            }
+    }
+}
+
 /// Paint the merged footer band (spec §5b: `Constraint::Length(1)`).
 ///
 /// Left half: still-frame echolocation chip, phase word, live detail, the
@@ -723,28 +771,15 @@ pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFoo
         right = format!("{} {right}", footer.sym("▲"));
     }
     let right_base_w = right.width() as u16;
-    let warn_text = footer.sym(DEPTH_WARN);
-    let keys = footer.sym(footer.keys_legend);
-    let notice_text = footer.notice.map(|(text, ink)| (footer.sym(text), ink));
     let depth_ink = footer.depth_ink();
 
     // Trailing-slot precedence: a live notice outranks the cap warning,
     // which outranks the posture chips, which outrank the key chorus (the
-    // classic bands' own rule that identity outranks hints). A notice was
-    // clause-fitted at build time, so the whole phrase lands or the band
-    // was too narrow for it anyway.
-    let extra: (&str, crate::palette::ChromeInk) = if let Some((text, ink)) = &notice_text {
-        (text.as_str(), *ink)
-    } else if warn {
-        (warn_text.as_str(), crate::palette::ChromeInk::Attention)
-    } else if trailing_extra_width(footer, area.width) > 0 {
-        (keys.as_str(), crate::palette::ChromeInk::MetadataHint)
-    } else {
-        // The chorus stands down so the posture chips fit beside the depth
-        // line; if even that is not enough, the chips stand down below.
-        ("", crate::palette::ChromeInk::MetadataHint)
-    };
-    let right_width = right_base_w + 1 + extra.0.width() as u16 + 1;
+    // classic bands' own rule that identity outranks hints). A non-urgent
+    // notice may keep the compact help route when both fit beside the minimum
+    // phase/depth floor; warnings and failures remain undiluted.
+    let extra = trailing_extra(footer, area.width, usize::from(right_base_w));
+    let right_width = right_base_w + 1 + extra.width(footer) as u16 + 1;
 
     // Left: still-frame echolocation chip + phase word + live detail + cost.
     let chip = footer.sym("<·>");
@@ -828,13 +863,31 @@ pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFoo
     tput(buf, sx, area.y, &right, tchrome(theme, depth_ink));
     sx += right.width() as u16 + 1;
     let budget = (area.x + area.width).saturating_sub(sx) as usize;
-    tput(
-        buf,
-        sx,
-        area.y,
-        &truncate_owned(extra.0, budget),
-        tchrome(theme, extra.1),
-    );
+    let text_budget = budget.saturating_sub(if extra.append_help {
+        ITEM_SEPARATOR_WIDTH + footer.sym(COMPACT_KEYS_LEGEND).width()
+    } else {
+        0
+    });
+    let painted = truncate_owned(&extra.text, text_budget);
+    tput(buf, sx, area.y, &painted, tchrome(theme, extra.ink));
+    sx += painted.width() as u16;
+    if extra.append_help {
+        tput(
+            buf,
+            sx,
+            area.y,
+            ITEM_SEPARATOR,
+            tchrome(theme, ChromeInk::MetadataDim),
+        );
+        sx += ITEM_SEPARATOR_WIDTH as u16;
+        tput(
+            buf,
+            sx,
+            area.y,
+            &footer.sym(COMPACT_KEYS_LEGEND),
+            tchrome(theme, ChromeInk::MetadataHint),
+        );
+    }
 }
 
 fn truncate_owned(text: &str, width: usize) -> String {
@@ -851,27 +904,20 @@ fn truncate_owned(text: &str, width: usize) -> String {
     out
 }
 
-/// The trailing right-slot's width at this row width, shared by the render
-/// and the depth hitbox so the two can never disagree. A live notice or the
-/// cap warning keeps its full width; the key chorus keeps its width only
-/// while the posture chips still fit beside it — otherwise it stands down
-/// and the width is zero.
-fn trailing_extra_width(footer: &TidelineFooter<'_>, area_width: u16) -> usize {
+/// Pick the full key chorus when it fits without displacing posture. When it
+/// does not, keep the pinned help route if the minimum phase/depth facts still
+/// fit; small terminals should not lose every discoverable keyboard action.
+fn trailing_keys_legend(footer: &TidelineFooter<'_>, area_width: u16) -> String {
     let pct = footer.context_percent.clamp(0, 100);
-    let keys_w = footer.sym(footer.keys_legend).width();
-    if let Some((text, _)) = footer.notice {
-        return footer.sym(text).width();
-    }
-    if pct >= 80 {
-        return footer.sym(DEPTH_WARN).width();
-    }
+    let keys = footer.sym(footer.keys_legend);
+    let keys_w = keys.width();
     let posture_w: usize = [footer.mode_chip, footer.permission_chip]
         .into_iter()
         .flatten()
         .map(|(text, _)| ITEM_SEPARATOR_WIDTH + footer.sym(text).width())
         .sum();
     if posture_w == 0 {
-        return keys_w;
+        return keys;
     }
     // The left half's standing width before the posture chips: chip, phase
     // word, live detail, divider, cost.
@@ -889,10 +935,72 @@ fn trailing_extra_width(footer: &TidelineFooter<'_>, area_width: u16) -> usize {
         .saturating_sub(right_base_w + 1 + keys_w + 1)
         .saturating_sub(1);
     if prefix_w + posture_w <= available {
-        keys_w
-    } else {
-        0
+        return keys;
     }
+
+    let compact = footer.sym(COMPACT_KEYS_LEGEND);
+    let compact_floor =
+        chip.width() + 1 + phase.width() + 1 + right_base_w + 1 + compact.width() + 1;
+    if compact_floor <= usize::from(area_width) {
+        compact
+    } else {
+        String::new()
+    }
+}
+
+fn minimum_footer_width(footer: &TidelineFooter<'_>, right_base_w: usize, extra_w: usize) -> usize {
+    let chip = footer.sym("<·>");
+    let phase = footer.sym(footer.phase_word);
+    let detail_w = footer
+        .live_detail
+        .map(|detail| footer.sym(detail).width() + 1)
+        .unwrap_or(0);
+    let left_floor = chip.width() + 1 + phase.width() + 1 + detail_w;
+    let right = right_base_w + 1 + extra_w + 1;
+    left_floor + 1 + right
+}
+
+fn trailing_extra(
+    footer: &TidelineFooter<'_>,
+    area_width: u16,
+    right_base_w: usize,
+) -> TrailingExtra {
+    if let Some((text, ink)) = footer.notice {
+        let text = footer.sym(text);
+        let help = footer.sym(COMPACT_KEYS_LEGEND);
+        let can_append_help = !matches!(ink, ChromeInk::Attention | ChromeInk::Failure)
+            && minimum_footer_width(
+                footer,
+                right_base_w,
+                text.width() + ITEM_SEPARATOR_WIDTH + help.width(),
+            ) <= usize::from(area_width);
+        return TrailingExtra {
+            text,
+            ink,
+            append_help: can_append_help,
+        };
+    }
+    if footer.context_percent.clamp(0, 100) >= 80 {
+        return TrailingExtra {
+            text: footer.sym(DEPTH_WARN),
+            ink: ChromeInk::Attention,
+            append_help: false,
+        };
+    }
+    TrailingExtra {
+        text: trailing_keys_legend(footer, area_width),
+        ink: ChromeInk::MetadataHint,
+        append_help: false,
+    }
+}
+
+/// The trailing right-slot's width at this row width, shared by the render
+/// and the depth hitbox so the two can never disagree.
+fn trailing_extra_width(footer: &TidelineFooter<'_>, area_width: u16) -> usize {
+    let pct = footer.context_percent.clamp(0, 100);
+    let depth = footer.depth_cells();
+    let right_base_w = format!("{depth} {pct}%").width();
+    trailing_extra(footer, area_width, right_base_w).width(footer)
 }
 
 /// Depth-segment hitbox → context inspector (spec §6). Returns the rect
@@ -930,8 +1038,9 @@ pub fn tideline_footer_depth_hitbox(area: Rect, footer: &TidelineFooter<'_>) -> 
 ///   the activity band's `Esc to interrupt` while a turn is live.
 /// - `mode_chip`/`permission_chip` — the old header's posture lockup
 ///   (`underwater::posture_chips`, same words, same inks).
-/// - `notice` — the activity band's status toast, or the MCP boot chip when
-///   no toast is live; it owns the trailing right slot while present.
+/// - `notice` — the activity band's status toast, or the compact MCP/plugin
+///   boot chip when no toast is live; it owns the trailing right slot while
+///   present.
 ///
 /// Session metrics (turns/steps/TTFT/cache) move behind `/cost` per spec §3.
 pub(crate) struct TidelineFooterFacts {
@@ -1029,28 +1138,18 @@ pub(crate) fn tideline_footer_from_app(app: &mut App, width: u16) -> TidelineFoo
         chip.map(|(text, ink)| (text.into_owned(), ink))
     };
 
-    // The notice: the live status toast if one is owed, else the MCP boot
-    // chip (a slow optional server must not look like a hung turn). Clause-
-    // shed against half the row — the depth line owns the other half.
+    // The notice: the live status toast if one is owed, else the compact MCP
+    // or plugin boot chip. A slow optional server must not look like a hung
+    // turn, while plugin diagnostics stay available through `/plugins` rather
+    // than taking rows from the transcript. Clause-shed against half the row
+    // — the depth line owns the other half.
     let notice_budget = (usize::from(width) / 2).max(8);
     let notice = selected_notice(app.active_status_toast(), phase, &phase_word)
         .map(|(text, ink, _urgent)| (text, ink))
         .or_else(|| {
-            crate::tui::session_boot::activity_chip(app, notice_budget).map(|chip| {
-                let boot = crate::tui::session_boot::SessionBootSurface::from_app(app);
-                let ink = if boot.servers.iter().any(|row| {
-                    matches!(
-                        row.state,
-                        crate::tui::session_boot::McpServerBootState::Failed
-                            | crate::tui::session_boot::McpServerBootState::NeedsLogin
-                    )
-                }) {
-                    crate::palette::ChromeInk::Failure
-                } else {
-                    crate::palette::ChromeInk::Active
-                };
-                (chip, ink)
-            })
+            let boot = crate::tui::session_boot::SessionBootSurface::from_app(app);
+            boot.activity_notice(app.ui_locale, notice_budget)
+                .map(|chip| (chip.text, boot_activity_ink(chip.level)))
         })
         .and_then(|(text, ink)| fit_notice(&text, notice_budget).map(|fitted| (fitted, ink)));
 

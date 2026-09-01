@@ -125,6 +125,11 @@ pub(crate) const OPENCODE_ZEN_RESPONSES_MODELS: &[&str] = &[
     "gpt-5",
     "gpt-5-codex",
     "gpt-5-nano",
+    // Muse Spark via OpenCode Zen gateway — Responses-only (reported
+    // 2026-08-29: muse-spark-1.2-contributor-free rejects Chat Completions).
+    "muse-spark-1.2",
+    "muse-spark-1.2-contributor",
+    "muse-spark-1.2-contributor-free",
 ];
 
 pub(crate) const OPENCODE_ZEN_MESSAGES_MODELS: &[&str] = &[

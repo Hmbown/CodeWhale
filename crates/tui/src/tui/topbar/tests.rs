@@ -241,6 +241,33 @@ fn topbar_hitboxes_match_painted_cells() {
     }
 }
 
+#[test]
+fn topbar_hitboxes_follow_the_same_shed_pass_as_paint() {
+    let segments = work_segments();
+    for width in [120u16, 80, 60, 44, 30, 20] {
+        let topbar = Topbar::new(&UI_THEME, CLOCK, 61, &segments);
+        let hitboxes = super::topbar_hitboxes(&topbar, ratatui::layout::Rect::new(0, 0, width, 1));
+        let cells = render_cells(&UI_THEME, width, &segments, 61);
+        for hitbox in hitboxes {
+            assert!(
+                hitbox.area.right() <= width,
+                "{width}: hitbox {:?} escapes the row: {:?}",
+                hitbox.id,
+                hitbox.area
+            );
+            let text: String = (hitbox.area.x..hitbox.area.right())
+                .filter_map(|x| cells.get(usize::from(x)))
+                .cloned()
+                .collect();
+            assert!(
+                !text.trim().is_empty(),
+                "{width}: hitbox {:?} covers unpainted cells",
+                hitbox.id
+            );
+        }
+    }
+}
+
 /// Per-cell symbols of one rendered row (the golden dump, before joining).
 fn render_cells(theme: &UiTheme, width: u16, segments: &[TopbarSegment], pct: u8) -> Vec<String> {
     let backend = TestBackend::new(width, 1);

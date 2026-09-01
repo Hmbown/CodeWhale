@@ -592,7 +592,7 @@ impl HotbarActionSource for BuiltinHotbarActionSource {
             "mode.operate",
             "operate",
             "Operate mode",
-            "Send tasks while Fleet workers run in parallel.",
+            "Send tasks while Pod workers run in parallel.",
             AppHotbarKind::Mode(AppMode::Operate),
         ));
         registry.register(AppHotbarAction::new(

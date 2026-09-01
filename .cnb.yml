@@ -56,6 +56,12 @@
     cpus: 16
   docker:
     image: rust:1.88-bookworm
+  # codewhale-cnb-bridge GitHub App credentials from the CNB KeyStore
+  # (codewhale.net/codewhale-ci-secrets, github-bridge.yml), injected as
+  # environment variables. Values are never printed.
+  # https://docs.cnb.cool/en/repo/secret.html
+  imports:
+    - https://cnb.cool/codewhale.net/codewhale-ci-secrets/-/blob/main/github-bridge.yml
   stages:
     - name: install linux dependencies
       script: |
@@ -83,6 +89,29 @@
         node scripts/release/npm-wrapper-smoke.js
         ./target/release/codewhale --version
         ./target/release/codew --version
+
+  # Shadow-parity bridge (ops design: CNB-PRIMARY-CI-DESIGN-20260830). Post one
+  # non-required "-cnb" Check Run on the exact GitHub SHA being built so the
+  # CNB verdict is visible on GitHub while GitHub Actions stays the canonical,
+  # required CI. endStages always run and cannot fail the pipeline, so a
+  # bridge outage never turns a green CNB build red (and vice versa: the CNB
+  # verdict is reported from CNB_PIPELINE_STATUS, not from this stage).
+  endStages:
+    - name: github shadow check run
+      script: |
+        set -eu
+        case "${CNB_PIPELINE_STATUS:-error}" in
+          success) conclusion="success" ;;
+          cancel)  conclusion="cancelled" ;;
+          *)       conclusion="failure" ;;
+        esac
+        node scripts/ci/cnb-github-checkrun.mjs \
+          --name "linux rust gates -cnb" \
+          --sha "${CNB_COMMIT}" \
+          --status completed \
+          --conclusion "${conclusion}" \
+          --details-url "${CNB_BUILD_WEB_URL:-https://cnb.cool/${CNB_REPO_SLUG}}" \
+          --summary "CNB pipeline '${CNB_PIPELINE_NAME:-linux rust gates}' finished with status ${CNB_PIPELINE_STATUS:-unknown} on ${CNB_BRANCH:-unknown branch} (${CNB_COMMIT}). Shadow lane per the CNB-primary CI design: GitHub Actions remains canonical and required; nothing is gated on this check."
 
 .linux_release_preflight: &linux_release_preflight
   name: linux release preflight

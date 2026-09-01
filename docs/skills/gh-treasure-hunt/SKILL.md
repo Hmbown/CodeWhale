@@ -69,7 +69,7 @@ alone, and never merge/close/tag without Hunter's approval.
    The `Harvested from PR #N by @handle` line lets `auto-close-harvested.yml`
    close the PR with credit once the commit reaches `main`. Validate trailers:
    ```bash
-   python3 scripts/check-coauthor-trailers.py --author-map .github/AUTHOR_MAP --range BASE..HEAD --check-authors
+   git log BASE..HEAD --format='%h %an <%ae>%n%(trailers:key=Co-authored-by)'  # credit the human, from .github/AUTHOR_MAP
    ```
 8. Sanity-check anything you would actually land locally before recommending it:
    ```bash

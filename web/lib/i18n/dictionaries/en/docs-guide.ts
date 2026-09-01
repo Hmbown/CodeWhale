@@ -8,11 +8,11 @@ import type { DocsGuideDict } from "../types";
 export const docsGuide: DocsGuideDict = {
   metaTitle: "Getting started · Codewhale Docs",
   metaDescription:
-    "The full path from install to your ideal fleet: install, a first keyless session, provider connection, and fleet setup.",
+    "The full path from install to your ideal pod: install, a first keyless session, provider connection, and pod setup.",
   bodyClassName: "text-ink-soft leading-relaxed",
   overviewTitle: "Getting started",
   overviewLead:
-    "Four steps from one install command to a fleet set up for your work.",
+    "Four steps from one install command to a pod set up for your work.",
   sessionTitle: "Watch a real session",
   sessionLead:
     "A recording of a real session will go here. There is no recording yet, so nothing is shown.",

@@ -806,6 +806,47 @@ pub enum MessageId {
     LinksKimiCodeRouteNote,
     LinksTip,
     SubagentsFetching,
+    SubagentsNoCurrentSessionPodWorkers,
+    SubagentsCurrentSessionPodWorkersTitle,
+    SubagentsCurrentSessionPodWorkerRoles,
+    SubagentsCurrentSessionPodWorkersStatus,
+    SubagentsEmptyGuidance,
+    SubagentsStatusRunning,
+    SubagentsStatusCompleted,
+    SubagentsStatusInterrupted,
+    SubagentsStatusFailed,
+    SubagentsStatusCancelled,
+    SubagentsRowStatusInterrupted,
+    SubagentsRowStatusCancelled,
+    SubagentsRowStatusBudgetExhausted,
+    SubagentsSummaryItem,
+    SubagentsGroupHeading,
+    SubagentsHeaderRoster,
+    SubagentsHeaderColumns,
+    SubagentsActionRefresh,
+    SubagentsActionRosterSetup,
+    SubagentsLabelReason,
+    SubagentsLabelRole,
+    SubagentsLabelPosture,
+    SubagentsLabelGit,
+    SubagentsLabelObjective,
+    SubagentsLabelResult,
+    SubagentsPostureDetails,
+    SubagentsValueOn,
+    SubagentsValueOff,
+    SubagentsShellNone,
+    SubagentsShellReadOnly,
+    SubagentsShellFull,
+    SubagentsBranch,
+    SubagentsBranchWithWorkspace,
+    SubagentsRoleWorker,
+    SubagentsRoleScout,
+    SubagentsRolePlanner,
+    SubagentsRoleBuilder,
+    SubagentsRoleVerifier,
+    SubagentsRoleReviewer,
+    SubagentsRoleConsultant,
+    SubagentsRoleCustom,
     HelpUnknownCommand,
     HomeDashboardTitle,
     HomeModel,
@@ -1371,6 +1412,8 @@ pub enum MessageId {
     LaunchProviderSetupShort,
     LaunchMenuNewSession,
     LaunchMenuNewWorktree,
+    LaunchMenuWorktreeCompact,
+    LaunchMenuChatCompact,
     LaunchMenuResumeSession,
     LaunchMenuChangelog,
     LaunchMenuQuit,
@@ -1572,6 +1615,16 @@ pub enum MessageId {
     CtxInspUsedTokens,
     CtxInspAutoCompactAt,
     CtxInspRowTokens,
+    CtxInspRowCompaction,
+    CtxInspRowAnchors,
+    CtxInspCompactionNever,
+    CtxInspCompactionDetail,
+    CtxInspCompactionRestored,
+    CtxInspCompactionPathSummary,
+    CtxInspCompactionPathPrune,
+    CtxInspCompactionAssistantKept,
+    CtxInspAnchorsNone,
+    CtxInspAnchorsPresent,
     // Model picker route surface.
     RouteSurfaceTitle,
     RouteBrowseCatalog,
@@ -1584,6 +1637,7 @@ pub enum MessageId {
     PickerActionSwitch,
     PickerActionApply,
     PickerActionSetStartupDefault,
+    PickerActionPin,
     PickerActionCancel,
     PickerActionClear,
     PickerActionClearSearch,
@@ -1637,6 +1691,13 @@ pub enum MessageId {
     ProviderExternalSemanticsLabel,
     ProviderExternalRejectUnsafe,
     ProviderExternalRevokeLabel,
+    ProviderExternalRouteLabel,
+    ProviderExternalCustodyLine,
+    ProviderExternalBillingLine,
+    ProviderExternalRevokeScope,
+    ProviderExternalOwnerOnly,
+    ProviderExternalPinnedPathChanged,
+    ProviderExternalRevokeConfirmTitle,
     ProviderExternalGrantedToast,
     ProviderExternalSaveFailedToast,
     ProviderExternalRevokedToast,
@@ -2790,6 +2851,47 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::LinksKimiCodeRouteNote,
     MessageId::LinksTip,
     MessageId::SubagentsFetching,
+    MessageId::SubagentsNoCurrentSessionPodWorkers,
+    MessageId::SubagentsCurrentSessionPodWorkersTitle,
+    MessageId::SubagentsCurrentSessionPodWorkerRoles,
+    MessageId::SubagentsCurrentSessionPodWorkersStatus,
+    MessageId::SubagentsEmptyGuidance,
+    MessageId::SubagentsStatusRunning,
+    MessageId::SubagentsStatusCompleted,
+    MessageId::SubagentsStatusInterrupted,
+    MessageId::SubagentsStatusFailed,
+    MessageId::SubagentsStatusCancelled,
+    MessageId::SubagentsRowStatusInterrupted,
+    MessageId::SubagentsRowStatusCancelled,
+    MessageId::SubagentsRowStatusBudgetExhausted,
+    MessageId::SubagentsSummaryItem,
+    MessageId::SubagentsGroupHeading,
+    MessageId::SubagentsHeaderRoster,
+    MessageId::SubagentsHeaderColumns,
+    MessageId::SubagentsActionRefresh,
+    MessageId::SubagentsActionRosterSetup,
+    MessageId::SubagentsLabelReason,
+    MessageId::SubagentsLabelRole,
+    MessageId::SubagentsLabelPosture,
+    MessageId::SubagentsLabelGit,
+    MessageId::SubagentsLabelObjective,
+    MessageId::SubagentsLabelResult,
+    MessageId::SubagentsPostureDetails,
+    MessageId::SubagentsValueOn,
+    MessageId::SubagentsValueOff,
+    MessageId::SubagentsShellNone,
+    MessageId::SubagentsShellReadOnly,
+    MessageId::SubagentsShellFull,
+    MessageId::SubagentsBranch,
+    MessageId::SubagentsBranchWithWorkspace,
+    MessageId::SubagentsRoleWorker,
+    MessageId::SubagentsRoleScout,
+    MessageId::SubagentsRolePlanner,
+    MessageId::SubagentsRoleBuilder,
+    MessageId::SubagentsRoleVerifier,
+    MessageId::SubagentsRoleReviewer,
+    MessageId::SubagentsRoleConsultant,
+    MessageId::SubagentsRoleCustom,
     MessageId::HelpUnknownCommand,
     MessageId::HomeDashboardTitle,
     MessageId::HomeModel,
@@ -3314,6 +3416,8 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::LaunchProviderSetupShort,
     MessageId::LaunchMenuNewSession,
     MessageId::LaunchMenuNewWorktree,
+    MessageId::LaunchMenuWorktreeCompact,
+    MessageId::LaunchMenuChatCompact,
     MessageId::LaunchMenuResumeSession,
     MessageId::LaunchMenuChangelog,
     MessageId::LaunchMenuQuit,
@@ -3503,6 +3607,16 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxInspUsedTokens,
     MessageId::CtxInspAutoCompactAt,
     MessageId::CtxInspRowTokens,
+    MessageId::CtxInspRowCompaction,
+    MessageId::CtxInspRowAnchors,
+    MessageId::CtxInspCompactionNever,
+    MessageId::CtxInspCompactionDetail,
+    MessageId::CtxInspCompactionRestored,
+    MessageId::CtxInspCompactionPathSummary,
+    MessageId::CtxInspCompactionPathPrune,
+    MessageId::CtxInspCompactionAssistantKept,
+    MessageId::CtxInspAnchorsNone,
+    MessageId::CtxInspAnchorsPresent,
     MessageId::RouteSurfaceTitle,
     MessageId::RouteBrowseCatalog,
     MessageId::RouteActionType,
@@ -3514,6 +3628,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::PickerActionSwitch,
     MessageId::PickerActionApply,
     MessageId::PickerActionSetStartupDefault,
+    MessageId::PickerActionPin,
     MessageId::PickerActionCancel,
     MessageId::PickerActionClear,
     MessageId::PickerActionClearSearch,
@@ -3566,6 +3681,13 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ProviderExternalSemanticsLabel,
     MessageId::ProviderExternalRejectUnsafe,
     MessageId::ProviderExternalRevokeLabel,
+    MessageId::ProviderExternalRouteLabel,
+    MessageId::ProviderExternalCustodyLine,
+    MessageId::ProviderExternalBillingLine,
+    MessageId::ProviderExternalRevokeScope,
+    MessageId::ProviderExternalOwnerOnly,
+    MessageId::ProviderExternalPinnedPathChanged,
+    MessageId::ProviderExternalRevokeConfirmTitle,
     MessageId::ProviderExternalGrantedToast,
     MessageId::ProviderExternalSaveFailedToast,
     MessageId::ProviderExternalRevokedToast,
@@ -4692,6 +4814,126 @@ mod tests {
     }
 
     #[test]
+    fn current_session_pod_worker_copy_has_complete_locale_and_placeholder_parity() {
+        let current_session_ids = [
+            MessageId::SubagentsNoCurrentSessionPodWorkers,
+            MessageId::SubagentsCurrentSessionPodWorkersTitle,
+            MessageId::SubagentsCurrentSessionPodWorkerRoles,
+            MessageId::SubagentsCurrentSessionPodWorkersStatus,
+        ];
+        let modal_ids = [
+            MessageId::SubagentsEmptyGuidance,
+            MessageId::SubagentsStatusRunning,
+            MessageId::SubagentsStatusCompleted,
+            MessageId::SubagentsStatusInterrupted,
+            MessageId::SubagentsStatusFailed,
+            MessageId::SubagentsStatusCancelled,
+            MessageId::SubagentsRowStatusInterrupted,
+            MessageId::SubagentsRowStatusCancelled,
+            MessageId::SubagentsRowStatusBudgetExhausted,
+            MessageId::SubagentsSummaryItem,
+            MessageId::SubagentsGroupHeading,
+            MessageId::SubagentsHeaderRoster,
+            MessageId::SubagentsHeaderColumns,
+            MessageId::SubagentsActionRefresh,
+            MessageId::SubagentsActionRosterSetup,
+            MessageId::SubagentsLabelReason,
+            MessageId::SubagentsLabelRole,
+            MessageId::SubagentsLabelPosture,
+            MessageId::SubagentsLabelGit,
+            MessageId::SubagentsLabelObjective,
+            MessageId::SubagentsLabelResult,
+            MessageId::SubagentsPostureDetails,
+            MessageId::SubagentsValueOn,
+            MessageId::SubagentsValueOff,
+            MessageId::SubagentsShellNone,
+            MessageId::SubagentsShellReadOnly,
+            MessageId::SubagentsShellFull,
+            MessageId::SubagentsBranch,
+            MessageId::SubagentsBranchWithWorkspace,
+            MessageId::SubagentsRoleWorker,
+            MessageId::SubagentsRoleScout,
+            MessageId::SubagentsRolePlanner,
+            MessageId::SubagentsRoleBuilder,
+            MessageId::SubagentsRoleVerifier,
+            MessageId::SubagentsRoleReviewer,
+            MessageId::SubagentsRoleConsultant,
+            MessageId::SubagentsRoleCustom,
+        ];
+        let english = raw_locale_messages(Locale::En);
+
+        for locale in Locale::shipped_complete() {
+            let pack = raw_locale_messages(*locale);
+            for id in current_session_ids.iter().chain(modal_ids.iter()) {
+                let id = *id;
+                let key = format!("{id:?}");
+                let english_value = english
+                    .get(&key)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_else(|| panic!("English pack is missing {key}"));
+                let translated = pack
+                    .get(&key)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_else(|| panic!("{} is missing {key}", locale.tag()));
+
+                assert_eq!(
+                    message_placeholders(translated),
+                    message_placeholders(english_value),
+                    "{} changed placeholders for {key}",
+                    locale.tag()
+                );
+                if *locale != Locale::En && current_session_ids.contains(&id) {
+                    assert_ne!(
+                        translated,
+                        english_value,
+                        "{} must translate {key} instead of copying English",
+                        locale.tag()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn home_subagents_keeps_the_current_session_boundary_in_every_complete_pack() {
+        let expected = [
+            (Locale::Ca, "Treballadors de Pod de la sessió actual:"),
+            (Locale::De, "Pod-Worker der aktuellen Sitzung:"),
+            (Locale::En, "Current-session Pod workers:"),
+            (Locale::Es419, "Workers de Pod de la sesión actual:"),
+            (Locale::Fr, "Workers du Pod de la session actuelle :"),
+            (Locale::Hi, "वर्तमान सत्र के Pod वर्कर:"),
+            (Locale::Id, "Worker Pod sesi saat ini:"),
+            (Locale::Ja, "現在のセッションのPodワーカー："),
+            (Locale::Ko, "현재 세션의 Pod 워커:"),
+            (Locale::PtBr, "Workers do Pod da sessão atual:"),
+            (Locale::Ru, "Воркеры Pod текущего сеанса:"),
+            (Locale::Uk, "Воркери Pod поточного сеансу:"),
+            (Locale::Vi, "Worker Pod của phiên hiện tại:"),
+            (Locale::ZhHans, "当前会话的 Pod 工作器："),
+            (Locale::ZhHant, "目前工作階段的 Pod 工作器："),
+        ];
+        assert_eq!(expected.len(), Locale::shipped_complete().len());
+
+        for (locale, value) in expected {
+            assert_eq!(
+                tr(locale, MessageId::HomeSubagents),
+                value,
+                "{}",
+                locale.tag()
+            );
+        }
+    }
+
+    #[test]
+    fn es_419_setup_review_hint_records_only_the_setup_snapshot() {
+        assert_eq!(
+            tr(Locale::Es419, MessageId::SetupOperateReviewHint),
+            "Enter registra esta instantánea de configuración."
+        );
+    }
+
+    #[test]
     fn status_report_copy_has_placeholder_parity_across_complete_packs() {
         let english = raw_locale_messages(Locale::En);
         let status_ids = ALL_MESSAGE_IDS
@@ -5030,6 +5272,7 @@ mod tests {
             MessageId::PickerActionSwitch,
             MessageId::PickerActionApply,
             MessageId::PickerActionSetStartupDefault,
+            MessageId::PickerActionPin,
             MessageId::PickerActionCancel,
             MessageId::PickerActionClear,
             MessageId::PickerActionClearSearch,
@@ -5162,6 +5405,8 @@ mod tests {
             MessageId::LaunchMenuConnect,
             MessageId::LaunchMenuWork,
             MessageId::LaunchMenuChat,
+            MessageId::LaunchMenuWorktreeCompact,
+            MessageId::LaunchMenuChatCompact,
             MessageId::LaunchMenuTheme,
             MessageId::LaunchMenuHelp,
             MessageId::LaunchWorkDescription,

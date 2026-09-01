@@ -66,16 +66,21 @@ jobs:
     env:
       # `secrets` is unavailable in a job-level `if:` but allowed here; these
       # are booleans about presence, never key material.
-      HAS_ANY_KEY: ${{ secrets.CODEWHALE_API_KEY != '' || secrets.ZAI_API_KEY != '' || secrets.DEEPSEEK_API_KEY != '' || secrets.OPENROUTER_API_KEY != '' || secrets.ANTHROPIC_API_KEY != '' }}
+      HAS_ANY_KEY: ${{ secrets.CODEWHALE_API_KEY != '' || secrets.ZAI_API_KEY != '' || secrets.MODELSTUDIO_API_KEY != '' || secrets.DEEPSEEK_API_KEY != '' || secrets.OPENROUTER_API_KEY != '' || secrets.ANTHROPIC_API_KEY != '' }}
       HAS_APP_KEY: ${{ secrets.CODEWHALE_APP_PRIVATE_KEY != '' }}
     permissions:
       contents: read
       pull-requests: write
+      # `gh api .../issues/comments/{id}` PATCH/DELETE below is the issue-comment
+      # endpoint. Every call is `|| true` or `|| echo ::warning::`, so a missing
+      # permission would fail silently — the exact "non-run passes for a clean
+      # review" failure this workflow exists to close.
+      issues: write
     steps:
       - name: Skip when no review key is configured
         if: env.HAS_ANY_KEY != 'true'
         run: |
-          echo "::notice::No Codewhale review key is set — skipping. Add repository secret CODEWHALE_API_KEY (or a provider key: ZAI_API_KEY / DEEPSEEK_API_KEY / OPENROUTER_API_KEY / ANTHROPIC_API_KEY) to enable it."
+          echo "::notice::No Codewhale review key is set — skipping. Add repository secret CODEWHALE_API_KEY (or a provider key: ZAI_API_KEY / MODELSTUDIO_API_KEY / DEEPSEEK_API_KEY / OPENROUTER_API_KEY / ANTHROPIC_API_KEY) to enable it."
 
       - name: Checkout repository
         if: env.HAS_ANY_KEY == 'true'
@@ -122,6 +127,9 @@ jobs:
           CODEWHALE_API_KEY: ${{ secrets.CODEWHALE_API_KEY }}
           # BYOK fallbacks: a provider key used directly, no mapping needed.
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          # Alibaba Model Studio Token Plan (DeepSeek V4 Pro / Qwen 3.8 on the
+          # founder's credit); all Model Studio kinds read MODELSTUDIO_API_KEY.
+          MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -141,6 +149,7 @@ jobs:
           if [ -z "$PROVIDER" ]; then
             if   [ -n "${CODEWHALE_API_KEY:-}" ];  then PROVIDER=zai
             elif [ -n "${ZAI_API_KEY:-}" ];        then PROVIDER=zai
+            elif [ -n "${MODELSTUDIO_API_KEY:-}" ]; then PROVIDER=modelstudio-token-plan
             elif [ -n "${DEEPSEEK_API_KEY:-}" ];   then PROVIDER=deepseek
             elif [ -n "${OPENROUTER_API_KEY:-}" ]; then PROVIDER=openrouter
             elif [ -n "${ANTHROPIC_API_KEY:-}" ];  then PROVIDER=anthropic
@@ -222,13 +231,35 @@ jobs:
               echo "::error::Codewhale review produced empty output with exit 0. If the model is a reasoning model, raise CODEWHALE_REVIEW_MAX_OUTPUT_TOKENS."
               exit 1
             fi
+            MARK="<!-- codewhale-review-nonrun -->"
+            STALE=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate --jq ".[] | select(.body | startswith(\"${MARK}\")) | .id" 2>/dev/null | head -1 || true)
+            if [ -n "$STALE" ]; then
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${STALE}" >/dev/null 2>&1 || true
+            fi
             exit 0
           fi
           # The review is advisory: a provider-side outage (balance, auth,
           # rate limit, upstream 5xx) must not block the PR. Real review
           # failures still fail the job with the original exit status.
           if echo "$OUTPUT" | grep -qE 'LLM error: HTTP (401|402|403|408|429|5[0-9][0-9])'; then
-            echo "::warning::Codewhale review could not run (provider error; see log above). The PR is not blocked — provider funding/config is founder-gated."
+            REASON=$(echo "$OUTPUT" | grep -oE 'LLM error: HTTP (401|402|403|408|429|5[0-9][0-9])[^"]{0,80}' | head -1)
+            echo "::warning::Codewhale review could not run (${REASON}). The PR is not blocked — provider funding/config is founder-gated."
+            # Silence is not success: leave one visible, idempotent note on the
+            # PR so a non-run never passes for a clean review. Only the HTTP
+            # status line is quoted, never the model output.
+            MARK="<!-- codewhale-review-nonrun -->"
+            # Single printf: column-0 continuation lines would terminate the
+            # YAML block scalar (actionlint syntax-check failure at :249).
+            # The backticks below are literal Markdown for the PR comment, not
+            # command substitution; the format string must stay single-quoted.
+            # shellcheck disable=SC2016
+            BODY=$(printf '%s\n\n## Codewhale review did not run\n\n`codewhale review --pr %s` (provider: `%s`) could not reach the model: `%s`.\n%s' "$MARK" "$PR_NUMBER" "$PROVIDER" "$REASON" "This is a provider funding/config problem, not a finding about this PR. The check stays advisory; a maintainer with secret access needs to fund or rotate the review key (see \`.github/workflows/codewhale-review.yml\`). Re-run the workflow after that.")
+            EXISTING=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate --jq ".[] | select(.body | startswith(\"${MARK}\")) | .id" 2>/dev/null | head -1 || true)
+            if [ -n "$EXISTING" ]; then
+              gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING}" -f body="$BODY" >/dev/null 2>&1 || echo "::warning::could not update the non-run note"
+            else
+              gh pr comment "$PR_NUMBER" --body "$BODY" >/dev/null 2>&1 || echo "::warning::could not post the non-run note"
+            fi
             exit 0
           fi
           exit "$STATUS"

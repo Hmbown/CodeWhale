@@ -56,7 +56,7 @@
 | `Shift-Home` / `Shift-End` | 把选区扩展到行首 / 行尾 |
 | `Ctrl-Shift-Home` / `Ctrl-Shift-End` | 把选区扩展到草稿开头 / 结尾 |
 | `Ctrl-Shift-A` / `Cmd-A` | 选择整个草稿（参见下方说明） |
-| `Ctrl-Shift-U` | 从键盘运行 `/update install`：无需离开 TUI 即可检查并安装最新的 CodeWhale 版本。托管安装（Homebrew/npm/cargo）保留其包管理器门槛；已是最新版本时显示更新器的 "Already up to date." 结果，不做任何更改 |
+| `Ctrl-Shift-U` | 从键盘运行 `/update install`：无需离开 TUI 即可检查并安装最新的 Codewhale 版本。托管安装（Homebrew/npm/cargo）保留其包管理器门槛；已是最新版本时显示更新器的 "Already up to date." 结果，不做任何更改 |
 | 鼠标拖动 | 选择 composer 文本；点击移动光标 |
 | `Cmd-V` / `Ctrl-Shift-V` | 终端本地粘贴（在支持时以括号粘贴形式到达） |
 | `Ctrl-V` | 在本地或转发的图形会话中直接粘贴剪贴板 |

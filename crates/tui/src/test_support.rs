@@ -324,10 +324,17 @@ pub(crate) fn test_tui_options(workspace: impl AsRef<Path>) -> crate::tui::app::
 /// `App::new` consults real persisted settings (provider/model maps,
 /// auto-model, route limits, locale, currency), so an un-pinned fixture
 /// computes against whatever the developer last configured. Every pin below
-/// exists because some test was observed to depend on it.
+/// exists because some test was observed to depend on it. This fixture models
+/// a session after the user has chosen a Startup action; direct `App::new`
+/// tests remain the clean-launch authority.
 pub(crate) fn test_app_with_options(options: crate::tui::app::TuiOptions) -> crate::tui::app::App {
     let config = crate::config::Config::default();
     let mut app = crate::tui::app::App::new(options, &config);
+
+    // Shared behavior tests operate on the live session surface. Do not make
+    // the production startup conditional for them: clean launches are covered
+    // by direct `App::new` tests that retain the Tideline Startup Hero.
+    app.launch.visible = false;
 
     // Deterministic presentation regardless of host locale.
     app.cost_currency = crate::pricing::CostCurrency::Usd;

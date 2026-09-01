@@ -5,9 +5,9 @@ Read the repository guidance first.
 
 ## UI contracts
 
-- One owner per fact: mode/permission/context in the header; work in the top
-  strip; receipts and the active row in the transcript; phase, route identity,
-  cost, and detail controls in the footer.
+- One owner per fact: route and context in the Tideline topbar; work in the top
+  strip; receipts and the active row in the transcript; phase, cost, detail,
+  mode, and permission in the merged footer.
 - Status-bar ink goes through `palette::grammar` (`docs/design/STATUS_BAR_COLOR_GRAMMAR.md`).
   Do not invent an eighth semantic or spend Failure red on non-failure chrome.
 - Derive state from typed enums such as `ShellPhase` and `OceanTreatment`.

@@ -7,7 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- First run paints the composer immediately: the Welcome/language/provider/
+  trust gates no longer precede the first keystroke. Missing-key and
+  workspace-trust recovery stay for returning users; language and provider
+  remain in `/setup`.
+- The canonical whale-tile mark propagates beyond web to the exact-raster
+  surfaces that can carry it (#5738).
+- Dead-code sweep: delete proven-unreferenced helpers (unused builders,
+  wrappers, and leftover identifiers) and drop stale `#[allow(dead_code)]`
+  where the item is production-called or test-exercised. No runtime behavior
+  change (#5791, #5587).
+- Remote-control recovery gives every fresh pre-dispatch attempt a new lease
+  generation while preserving that generation across its typed start (#5605).
+
+- Public roster language is Pod. `/pod` is the customer surface; fleet remains
+  the internal wire, storage, and migration name (#5776).
+
+- Compaction replacement history keeps a bounded last user round (assistant +
+  tool results) instead of dropping them behind a summary. `/context` names
+  the compaction path and `/anchor` survival. Failed compact still does not
+  replace live history (#4394).
+- Provider catalogs: compatible hosts (Baseten, Groq, Cerebras, SenseNova,
+  Command Code) no longer compile a frozen model roster. Descriptors name the
+  wire, URL, and env; live `GET /v1/models` and a Codewhale-owned catalog
+  layer are the offering list. Command Code is a catalog/descriptor row, not
+  a `ProviderKind`. Catalog presence is not an availability, entitlement, or
+  provider-acceptance claim (#5783).
+
+- Provider selection no longer probes or adopts an external CLI credential on
+  ordinary picker use. Reuse requires an explicit "Use external CLI credentials"
+  choice, exact-path confirmation, and Codewhale-owned revoke (#5772).
+
+- TUI: startup no longer presents an approximate ASCII or block-glyph whale as
+  the product mark. It keeps the direct Tideline prompt while exact-raster
+  surfaces remain responsible for the canonical asset.
+
+- TUI: the active-session composer paints the same three-cell `[↑]` send
+  target as Startup and clicks it through the existing Enter submit
+  dispatcher (#5771). Compact/quiet composers still omit the control.
+
+- TUI/CLI: Pod is the public roster surface. User-facing Fleet wording
+  moves to Pod; durable receipt keys stay compatible (#5776).
+
 ### Added
+
+- The app-server can listen on a unix domain socket and advertise a
+  `daemon/attach` handshake, so a local client can attach to an already-running
+  engine instead of spawning its own. The socket is created with
+  owner-only permissions and stale sockets are reclaimed on start. Non-unix
+  hosts return a typed unsupported-platform refusal; the Windows named-pipe
+  endpoint is named but not yet implemented (#5749).
+- The engine's internal `Op`/`Event` types and the wire protocol's `Op`/
+  `EventMsg` now carry a compile-enforced twin for every variant: adding an
+  engine variant without a protocol counterpart fails the build instead of
+  drifting silently. Internal durability work — no user-visible surface
+  change yet (#5751).
+- Machine tokens: with `CODEWHALE_API_KEY` set, the CLI authenticates as the
+  Codewhale account with no local session file and no browser — the CI
+  authentication path, with a typed token shape and redaction (#5721).
+- Compaction publishes a structured survival contract for session-tree
+  journal entry types (`crates/tui/src/compaction/SURVIVAL_CONTRACT.md`) and
+  fails closed when the last user round, tool results, `/anchor` text, or
+  checkpoint receipt would vanish (#4394).
+- Internal: `codewhale-config` gains `RouteAuthoritySnapshot`, one immutable
+  authority that owns a compiled provider catalog together with the route
+  resolver projected from it, so a picker, a readiness view, and an execution
+  path can no longer resolve against different catalog snapshots without a
+  type-level signal. Resolution still goes through the sole resolver; the
+  returned receipt distinguishes an exact catalog row, a custom-endpoint route
+  whose provider facts are deliberately not reused, and an allowed
+  pass-through route with no catalog row. All state is secret-free. No call
+  site changed and no user-visible behaviour changed yet (#5766).
+
+- Computer session records now count only time a provider actually accepted the
+  session as active, at per-second granularity. Idle, queued, stopped, and
+  teardown time are excluded, and a session whose allocation does not match a
+  standard profile is refused rather than recorded approximately. Covered by
+  hermetic fixtures; no live provider call and no deploy (#5781).
 
 - Website: the public site moves to the Tideline deep-ocean design language
   (dark by default with an opt-in light documentation sheet, palette grounded
@@ -22,11 +100,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `/login` reports the Codewhale account session and provider-key next
   steps. The internal cloud-agent credential is not user surface: there is
   no `auth set-slot`/`auth clear-slot` command, no hint, and no completion
-  entry for it — membership (`codewhale login`) is the only door.
+  entry for it — signing in with `codewhale login` is the only door.
 - Add the Tideline component family from the ratatui translation spec
   (#5698's screens, riding the #5699 work-strip layout): hero startup
-  surface with quick actions and option strip, composer restyle with the
-  fluke cap, notifications inbox, merged footer band, pod ledger, receipt
+  surface with quick actions and option strip, notifications inbox, merged
+  footer band, pod ledger, receipt
   stream, theme list with motion toggles, live preview, settings rail,
   and the left rail — each a standalone render module pinned by 28 new
   byte-exact golden buffers. Frame wiring follows the Tideline acceptance
@@ -195,6 +273,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fast typing no longer corrupts the composer. The paste-burst heuristic ran
+  on every session until a real bracketed paste arrived, holding, buffering,
+  retro-grabbing, and absorbing Enter on timing guesses; it is now
+  fallback-only (gated off when the terminal provides bracketed paste), the
+  retro-grab is deleted, and Enter on held command text flushes and submits.
+- Ctrl+C works on the pre-session launch menu and speaks everywhere: the
+  first press arms the two-second exit window with a visible localized
+  "Press Ctrl+C again to quit" hint (previously silent), the second exits.
+  The worktree name input keeps Ctrl+C as cancel-input.
+- Fresh interactive sessions no longer leave a phantom one-message duplicate
+  behind. The TUI claimed one session id (Runtime store lock, turn-start crash
+  checkpoint) while the engine minted a second one; the first `SessionUpdated`
+  re-keyed the App, the completion commit cleared only the engine id's
+  checkpoint, and `codewhale --continue` later "recovered" the orphaned
+  checkpoint as a duplicate session instead of the real one. The engine now
+  adopts the host-owned id at spawn (`EngineConfig::session_id`) and `/clear`
+  mints the next id in the App like `/new`. A non-TTY `--continue` no longer
+  promotes and consumes the crash checkpoint before failing the terminal
+  check, and the root `codewhale --resume <id>` / `--session-id <id>` flags
+  documented in the operations runbook now parse instead of being swallowed
+  as a prompt.
+- Website: `/signin`, `/signup`, and `/auth/callback` are locale-aware public
+  routes instead of localized 404s. Sign-in and create-account send the person
+  to the CWC app; OAuth callbacks hop to `app.codewhale.net` with the query
+  intact; `/login` and `/register` are aliases. Local CLI use is not presented
+  as requiring an account (#5767).
 - The sandbox read deny-list matches a rule's resolved path as well as its
   literal spelling. On macOS `/etc` and `/var` are symlinks into `/private`,
   so a read of `/private/etc/sudoers` walked around the `/etc/sudoers` rule,
