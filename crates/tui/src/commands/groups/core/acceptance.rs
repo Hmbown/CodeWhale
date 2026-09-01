@@ -174,9 +174,10 @@ fn visible_message_window(world: &CoreCommandWorld) -> String {
             HistoryCell::User { content }
             | HistoryCell::Assistant { content, .. }
             | HistoryCell::System { content }
-            | HistoryCell::Thinking { content, .. } => Some(content.as_str()),
-            HistoryCell::Error { message, .. } => Some(message.as_str()),
-            HistoryCell::ArchivedContext { summary, .. } => Some(summary.as_str()),
+            | HistoryCell::Thinking { content, .. } => Some(content.clone()),
+            HistoryCell::Error { message, .. } => Some(message.clone()),
+            HistoryCell::ArchivedContext { summary, .. } => Some(summary.clone()),
+            HistoryCell::Automation(cell) => Some(cell.plain_summary()),
             HistoryCell::Tool(_) | HistoryCell::SubAgent(_) => None,
         })
         .collect::<Vec<_>>()

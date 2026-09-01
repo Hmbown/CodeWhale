@@ -1054,6 +1054,8 @@ impl App {
             workspace_context_refreshed_at: None,
             memory_size_hint: None,
             task_panel: Vec::new(),
+            automation_panel: crate::tui::automation_panel::AutomationPanelState::default(),
+            automation_scan: None,
             behavioral_tips: crate::tui::behavioral_tips::BehavioralTipState::default(),
             workflow_panel: None,
             session_started_at: chrono::Utc::now(),

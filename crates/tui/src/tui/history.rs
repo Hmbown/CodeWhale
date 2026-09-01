@@ -21,6 +21,7 @@ use crate::tui::ui_text::CopyLineSeparator;
 
 mod agent_activity;
 mod archived_context;
+mod automation;
 mod checklist;
 mod constants;
 mod file_mutation;
@@ -32,6 +33,7 @@ mod tool_output;
 mod tool_run;
 
 use archived_context::{parse_archived_context, render_archived_context};
+pub use automation::{AutomationCell, AutomationCellKind};
 use checklist::{
     is_checklist_tool_name, parse_checklist_snapshot, parse_update_prefix, render_checklist_card,
     render_checklist_change_card,
@@ -157,6 +159,11 @@ pub enum HistoryCell {
         summary: String,
     },
     Tool(ToolCell),
+    /// Typed receipt for durable scheduled automations (fired / started /
+    /// completed / failed / coalesced / missed / expired / mutated) — the
+    /// one-line bulleted card that replaced bare-String `System` receipts
+    /// (AUTOMATION-VISIBILITY-SPEC §2.2).
+    Automation(AutomationCell),
     /// Live in-transcript card for sub-agent activity (issue #128). Owns
     /// either a single `DelegateCard` or a multi-worker `FanoutCard`; the
     /// UI re-binds it from the mailbox stream as envelopes arrive.
@@ -272,6 +279,7 @@ impl HistoryCell {
             | HistoryCell::Error { .. }
             | HistoryCell::Thinking { .. }
             | HistoryCell::ArchivedContext { .. }
+            | HistoryCell::Automation(_)
             | HistoryCell::SubAgent(_) => false,
         }
     }
@@ -380,6 +388,7 @@ impl HistoryCell {
             } => render_thinking(content, width, *streaming, *duration_secs, false, false),
             HistoryCell::Tool(cell) => cell.lines_with_motion(width, false),
             HistoryCell::SubAgent(cell) => cell.lines(width),
+            HistoryCell::Automation(cell) => cell.render(width),
             HistoryCell::ArchivedContext { .. } => render_archived_context(self, width, false),
         }
     }
@@ -498,6 +507,7 @@ impl HistoryCell {
                 render_error_message(message, *severity, width, true)
             }
             HistoryCell::SubAgent(cell) => cell.lines(width),
+            HistoryCell::Automation(cell) => cell.render(width),
             HistoryCell::ArchivedContext { .. } => {
                 render_archived_context(self, width, options.low_motion)
             }
@@ -630,6 +640,7 @@ impl HistoryCell {
             ),
             HistoryCell::Tool(cell) => cell.transcript_lines(width),
             HistoryCell::SubAgent(cell) => cell.lines(width),
+            HistoryCell::Automation(cell) => cell.render(width),
             HistoryCell::ArchivedContext { .. } => render_archived_context(self, width, true),
         }
     }

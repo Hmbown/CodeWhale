@@ -288,6 +288,11 @@ pub struct EngineConfig {
     pub notes_path: PathBuf,
     /// Path to the MCP configuration file.
     pub mcp_config_path: PathBuf,
+    /// OAuth callback overrides (`mcp_oauth_callback_port` / `_url`) so the
+    /// self-serve MCP login tool honors a pre-registered redirect URI the
+    /// same way `/mcp login` does.
+    pub mcp_oauth_callback_port: Option<u16>,
+    pub mcp_oauth_callback_url: Option<String>,
     /// Directory containing discoverable skills.
     pub skills_dir: PathBuf,
     /// Restrict skill discovery to CodeWhale-owned roots plus explicit
@@ -508,6 +513,8 @@ impl Default for EngineConfig {
             trust_mode: false,
             notes_path: PathBuf::from("notes.txt"),
             mcp_config_path: PathBuf::from("mcp.json"),
+            mcp_oauth_callback_port: None,
+            mcp_oauth_callback_url: None,
             skills_dir: crate::skills::default_skills_dir(),
             skills_scan_codewhale_only: false,
             plugin_registry: None,
@@ -6140,6 +6147,13 @@ impl Engine {
         if let Some(decider) = self.config.network_policy.as_ref() {
             pool = pool.with_network_policy(decider.clone());
         }
+        // The self-serve login tool honors the same pre-registered redirect
+        // overrides `/mcp login` uses, or providers with pinned callback
+        // URIs reject its ephemeral loopback.
+        pool = pool.with_oauth_callback(
+            self.config.mcp_oauth_callback_port,
+            self.config.mcp_oauth_callback_url.clone(),
+        );
         let pool = Arc::new(AsyncMutex::new(pool));
         self.mcp_pool = Some(Arc::clone(&pool));
         Ok(pool)
@@ -6443,6 +6457,7 @@ impl Engine {
                         match result {
                             Ok(connection) => pool.store_ready_connection(name, connection),
                             Err(error) => {
+                                pool.note_connect_failure(&name, &error);
                                 connection_errors
                                     .insert(name, crate::mcp::format_mcp_error_for_display(&error));
                             }

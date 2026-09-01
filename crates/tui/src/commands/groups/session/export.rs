@@ -610,6 +610,9 @@ fn render_history_fallback(out: &mut String, history: &[HistoryCell]) {
                 "sub-agent",
                 sanitize_text(&render_lines(subagent.lines(120))),
             ),
+            HistoryCell::Automation(cell) => {
+                ("automation", sanitize_text(&render_lines(cell.render(120))))
+            }
             HistoryCell::ArchivedContext {
                 level,
                 range,

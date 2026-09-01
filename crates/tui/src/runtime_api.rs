@@ -17,7 +17,7 @@ use axum::middleware;
 use axum::response::Html;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
 use codewhale_protocol::agent_mail::{
@@ -1164,6 +1164,18 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/automations/{id}/pause", post(pause_automation))
         .route("/v1/automations/{id}/resume", post(resume_automation))
         .route("/v1/automations/{id}/runs", get(list_automation_runs))
+        .route(
+            "/v1/operate",
+            get(get_operate).post(start_operate).patch(patch_operate),
+        )
+        .route("/v1/operate/keepalive", post(keepalive_operate))
+        .route("/v1/operate/plan", put(put_operate_plan))
+        .route("/v1/operate/cancel", post(cancel_operate))
+        .route("/v1/operate/stop", post(cancel_operate))
+        .route(
+            "/v1/operate/auto-merge/check",
+            post(check_operate_auto_merge),
+        )
         .route("/v1/usage", get(get_usage))
         .route("/v1/snapshots", get(list_snapshots))
         .route("/v1/snapshots/{id}/restore", post(restore_snapshot))
@@ -2175,6 +2187,20 @@ async fn get_fleet_run_receipt(
     Ok(Json(fleet_receipt_json(receipt)))
 }
 
+/// Receipt artifact paths are recorded relative to the workspace; an absolute
+/// path (including Windows drive prefixes and root-relative paths) or any `..`
+/// component would escape it.
+fn receipt_evidence_path_is_confined(path: &std::path::Path) -> bool {
+    use std::path::Component;
+    !path.is_absolute()
+        && !path.components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+}
+
 async fn inspect_fleet_run_receipt_evidence(
     State(state): State<RuntimeApiState>,
     Path((run_id, task_id)): Path<(String, String)>,
@@ -2199,6 +2225,20 @@ async fn inspect_fleet_run_receipt_evidence(
                 "no verifier evidence file for run '{run_id}' task '{task_id}'"
             ))
         })?;
+    // Receipt artifacts are workspace-relative paths recorded by the verifier;
+    // reject absolute paths and `..` escapes before joining onto the workspace.
+    // An EMPTY recorded path is not a path at all: joining it would resolve
+    // to the workspace directory itself and read it as a file.
+    if receipt_artifact.path.as_os_str().is_empty() {
+        return Err(ApiError::not_found(format!(
+            "no verifier evidence file recorded for run '{run_id}' task '{task_id}'"
+        )));
+    }
+    if !receipt_evidence_path_is_confined(&receipt_artifact.path) {
+        return Err(ApiError::bad_request(format!(
+            "evidence path for run '{run_id}' task '{task_id}' escapes the workspace"
+        )));
+    }
     let abs_path = state.workspace.join(&receipt_artifact.path);
     let metadata = std::fs::metadata(&abs_path).map_err(|err| {
         ApiError::not_found(format!(
@@ -3769,6 +3809,264 @@ async fn list_automation_runs(
         .list_runs(&id, query.limit)
         .map_err(map_automation_err)?;
     Ok(Json(runs))
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct StartOperateRequest {
+    #[serde(default)]
+    direction: Option<String>,
+    /// CWC `OperateBurnRate` object, positive $/hr number, or null (unbounded).
+    #[serde(default)]
+    burn_rate: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct KeepAliveOperateRequest {
+    #[serde(default)]
+    spent_usd: Option<f64>,
+    #[serde(default)]
+    observed_burn_usd_per_hour: Option<f64>,
+    #[serde(default)]
+    credentials_present: Option<bool>,
+    #[serde(default)]
+    human_gated: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct OperateView {
+    /// `None` until an operation is actually started — a GET before that
+    /// must not fabricate an identity the client can never mutate.
+    operation: Option<crate::operate::Operation>,
+    board: String,
+}
+
+fn operate_store() -> Result<crate::operate::OperationStore, ApiError> {
+    crate::operate::OperationStore::open(crate::operate::default_operate_dir())
+        .map_err(|e| ApiError::internal(format!("Failed to open operate store: {e}")))
+}
+
+fn operate_credentials_present(config: &Config) -> bool {
+    crate::operate::operate_credentials_present(config)
+}
+
+fn operate_view(operation: crate::operate::Operation) -> Json<OperateView> {
+    Json(OperateView {
+        board: crate::operate::render_plan_board(&operation),
+        operation: Some(operation),
+    })
+}
+
+fn load_operate(
+    store: &crate::operate::OperationStore,
+) -> Result<Option<crate::operate::Operation>, ApiError> {
+    store
+        .load()
+        .map_err(|e| ApiError::internal(format!("Failed to load operate: {e}")))
+}
+
+fn parse_request_burn_rate(value: Option<&serde_json::Value>) -> Result<Option<f64>, ApiError> {
+    Ok(crate::operate::parse_burn_rate(value)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?
+        .map(|rate| rate.amount_usd_per_hour))
+}
+
+async fn get_operate(State(_state): State<RuntimeApiState>) -> Result<Json<OperateView>, ApiError> {
+    let store = operate_store()?;
+    match load_operate(&store)? {
+        Some(operation) => Ok(operate_view(operation)),
+        // No operation has been started: a fabricated `Operation::new` would
+        // mint a fresh id and timestamps on every poll — phantom records the
+        // client can neither patch nor cancel. `operation: null` is the
+        // stable no-operation answer.
+        None => Ok(Json(OperateView {
+            operation: None,
+            board: String::new(),
+        })),
+    }
+}
+
+async fn start_operate(
+    State(state): State<RuntimeApiState>,
+    Json(req): Json<StartOperateRequest>,
+) -> Result<Json<OperateView>, ApiError> {
+    let store = operate_store()?;
+    let burn = parse_request_burn_rate(req.burn_rate.as_ref())?;
+    // Keepalive first: a persisted operation without its keepalive is not
+    // always-on, and a fresh operation has no lead plan yet — kick the first
+    // lead run to the next scheduler tick instead of waiting out the hourly
+    // recurrence.
+    {
+        let manager = state.automations.lock().await;
+        crate::operate::upsert_keepalive(&manager, &state.workspace, true)
+            .map_err(|e| ApiError::internal(format!("Failed to keep operate alive: {e}")))?;
+    }
+    let config = state.config.read();
+    let operation = crate::operate::start_operation(
+        &store,
+        &state.workspace,
+        req.direction,
+        burn,
+        operate_credentials_present(&config),
+    )
+    .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok(operate_view(operation))
+}
+
+async fn patch_operate(
+    State(state): State<RuntimeApiState>,
+    Json(patch): Json<serde_json::Value>,
+) -> Result<Json<OperateView>, ApiError> {
+    let store = operate_store()?;
+    let credentials = {
+        let config = state.config.read();
+        operate_credentials_present(&config)
+    };
+    // Read-merge-write under the operate store lock: a concurrent keepalive
+    // or plan save can no longer be lost by a stale read.
+    let direction_changed = std::cell::Cell::new(false);
+    let operation = store
+        .mutate(|op| {
+            let before = op.direction.clone();
+            crate::operate::apply_operate_patch(op, &patch)?;
+            direction_changed.set(op.direction != before);
+            op.credentials_present = credentials;
+            op.project();
+            Ok(())
+        })
+        .map_err(|e| {
+            if e.to_string().contains("cancelled") {
+                ApiError::conflict(e.to_string())
+            } else {
+                ApiError::bad_request(e.to_string())
+            }
+        })?
+        .ok_or_else(|| ApiError::not_found("Unknown Operation."))?;
+    // A changed direction invalidated the lead plan; pull the keepalive lead
+    // run forward so the operation does not idle until the next recurrence.
+    if direction_changed.get() {
+        let manager = state.automations.lock().await;
+        crate::operate::kick_keepalive(&manager)
+            .map_err(|e| ApiError::internal(format!("Failed to reschedule operate: {e}")))?;
+    }
+    Ok(operate_view(operation))
+}
+
+async fn keepalive_operate(
+    State(state): State<RuntimeApiState>,
+    Json(req): Json<KeepAliveOperateRequest>,
+) -> Result<Json<OperateView>, ApiError> {
+    let store = operate_store()?;
+    let config = state.config.read();
+    let credentials = req
+        .credentials_present
+        .unwrap_or_else(|| operate_credentials_present(&config));
+    drop(config);
+    let operation = store
+        .mutate(|op| {
+            crate::operate::keep_alive_observation(
+                op,
+                req.observed_burn_usd_per_hour,
+                req.spent_usd,
+                Some(credentials),
+                req.human_gated,
+            );
+            Ok(())
+        })
+        .map_err(|e| ApiError::internal(format!("Failed to keep operate alive: {e}")))?
+        .ok_or_else(|| ApiError::not_found("Unknown Operation."))?;
+    Ok(operate_view(operation))
+}
+
+async fn put_operate_plan(
+    Json(plan): Json<serde_json::Value>,
+) -> Result<Json<OperateView>, ApiError> {
+    let store = operate_store()?;
+    let patch = serde_json::json!({ "leadPlan": plan });
+    let operation = store
+        .mutate(|op| crate::operate::apply_operate_patch(op, &patch))
+        .map_err(|e| {
+            if e.to_string().contains("cancelled") {
+                ApiError::conflict(e.to_string())
+            } else if e.to_string().contains("leadPlan") {
+                ApiError::bad_request(e.to_string())
+            } else {
+                ApiError::internal(format!("Failed to save operate plan: {e}"))
+            }
+        })?
+        .ok_or_else(|| ApiError::not_found("Unknown Operation."))?;
+    Ok(operate_view(operation))
+}
+
+async fn cancel_operate(
+    State(state): State<RuntimeApiState>,
+) -> Result<Json<OperateView>, ApiError> {
+    let store = operate_store()?;
+    let operation = crate::operate::cancel_operation(&store)
+        .map_err(|e| ApiError::internal(format!("Failed to cancel operate: {e}")))?
+        .ok_or_else(|| ApiError::not_found("Unknown Operation."))?;
+    // Cancel tears down the keepalive too: an unattended hourly lead run
+    // after cancel is pure cost.
+    {
+        let manager = state.automations.lock().await;
+        crate::operate::pause_keepalive(&manager)
+            .map_err(|e| ApiError::internal(format!("Failed to pause operate keepalive: {e}")))?;
+    }
+    Ok(operate_view(operation))
+}
+
+#[derive(Debug, Deserialize)]
+struct OperateAutoMergeCheckRequest {
+    repo: String,
+    pr: String,
+    agent: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OperateAutoMergeCheckView {
+    allow: bool,
+    reason: Option<String>,
+    checker: Option<String>,
+    check_args: Vec<String>,
+    merge_args: Vec<String>,
+}
+
+async fn check_operate_auto_merge(
+    State(state): State<RuntimeApiState>,
+    Json(req): Json<OperateAutoMergeCheckRequest>,
+) -> Result<Json<OperateAutoMergeCheckView>, ApiError> {
+    let checker = crate::operate::discover_auto_merge_checker(&state.workspace);
+    let repo = req.repo.clone();
+    let pr = req.pr.clone();
+    let agent = req.agent.clone();
+    let checker_for_task = checker.clone();
+    // The checker shells out synchronously (`python3 …; .status()`); run it on
+    // the blocking pool so a slow `gh`/network wait cannot pin a Tokio worker.
+    let decision = tokio::task::spawn_blocking(move || {
+        crate::operate::evaluate_auto_merge(
+            crate::operate::AutoMergeRequest {
+                repo: &repo,
+                pr: &pr,
+                role: &agent,
+            },
+            checker_for_task.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| ApiError::internal(format!("auto-merge check join failed: {e}")))?;
+    let (allow, reason) = match decision {
+        crate::operate::AutoMergeDecision::Allow => (true, None),
+        crate::operate::AutoMergeDecision::Deny { reason } => (false, Some(reason)),
+    };
+    Ok(Json(OperateAutoMergeCheckView {
+        allow,
+        reason,
+        checker: checker.as_ref().map(|path| path.display().to_string()),
+        check_args: crate::operate::check_auto_merge_args(&req.repo, &req.pr, &req.agent),
+        merge_args: crate::operate::auto_merge_pr_args(&req.repo, &req.pr, &req.agent),
+    }))
 }
 
 async fn get_thread(

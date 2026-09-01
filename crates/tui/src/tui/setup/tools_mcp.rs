@@ -956,6 +956,7 @@ mod tests {
                     read_timeout: 10,
                     connected: true,
                     error: None,
+                    auth_required: false,
                     capability_metadata: crate::mcp::McpServerCapabilityMetadata::LegacyFallback,
                     tools: vec![McpDiscoveredItem {
                         name: "tool_a".into(),
@@ -976,6 +977,7 @@ mod tests {
                     read_timeout: 10,
                     connected: false,
                     error: Some("spawn failed: connection refused".into()),
+                    auth_required: false,
                     capability_metadata: crate::mcp::McpServerCapabilityMetadata::NotObserved,
                     tools: Vec::new(),
                     resources: Vec::new(),

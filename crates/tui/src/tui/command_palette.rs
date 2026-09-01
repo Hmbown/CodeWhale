@@ -1952,6 +1952,7 @@ mod tests {
                     read_timeout: 120,
                     connected: true,
                     error: None,
+                    auth_required: false,
                     capability_metadata: crate::mcp::McpServerCapabilityMetadata::LegacyFallback,
                     tools: vec![crate::mcp::McpDiscoveredItem {
                         name: "read".to_string(),
@@ -1972,6 +1973,7 @@ mod tests {
                     read_timeout: 120,
                     connected: false,
                     error: Some("connect failed".to_string()),
+                    auth_required: false,
                     capability_metadata: crate::mcp::McpServerCapabilityMetadata::NotObserved,
                     tools: Vec::new(),
                     resources: Vec::new(),
@@ -2029,6 +2031,7 @@ mod tests {
                 read_timeout: 120,
                 connected: false,
                 error: None,
+                auth_required: false,
                 capability_metadata: crate::mcp::McpServerCapabilityMetadata::NotObserved,
                 tools: Vec::new(),
                 resources: Vec::new(),

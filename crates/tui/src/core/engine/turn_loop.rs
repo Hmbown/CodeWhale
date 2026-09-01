@@ -333,23 +333,31 @@ fn registered_tool_requires_non_bypassable_approval(tool_name: &str) -> bool {
     matches!(tool_name, "rlm_eval" | "rlm" | "start_mcp_server")
 }
 
-pub(super) fn merge_new_runtime_mcp_tools(
+/// Replace the runtime-MCP slice of the tool catalog wholesale. An additive
+/// merge could never remove anything: the synthetic `mcp_<server>_
+/// authenticate` entry would survive its own successful login, and tools
+/// killed by a live 401 would stay callable in name. `universe` is every
+/// name the pool can own; entries inside it are the pool's to manage, and
+/// the refreshed list is the new truth.
+pub(super) fn replace_runtime_mcp_tools(
     tool_catalog: &mut Vec<Tool>,
     active_tool_names: &mut std::collections::HashSet<String>,
+    universe: &std::collections::HashSet<String>,
     refreshed: Vec<Tool>,
 ) -> usize {
-    let mut merged = 0;
-    for tool in refreshed {
-        if !tool_catalog
-            .iter()
-            .any(|existing| existing.name == tool.name)
-        {
-            active_tool_names.insert(tool.name.clone());
-            tool_catalog.push(tool);
-            merged += 1;
+    let before = tool_catalog.len();
+    tool_catalog.retain(|tool| {
+        let owned = universe.contains(&tool.name);
+        if owned {
+            active_tool_names.remove(&tool.name);
         }
+        !owned
+    });
+    for tool in refreshed {
+        active_tool_names.insert(tool.name.clone());
+        tool_catalog.push(tool);
     }
-    merged
+    tool_catalog.len().abs_diff(before)
 }
 
 impl Engine {
@@ -3961,25 +3969,29 @@ impl Engine {
                                 &outcome.name,
                             );
                     }
-                    // A runtime MCP connection changes the callable tool
-                    // surface. Merge the complete schemas into this turn's
-                    // catalog before the next model request; waiting for the
-                    // next user turn leaves the model with names it cannot
-                    // legally call through the provider API.
+                    // A runtime MCP connection change — a completed login OR
+                    // a live 401 that dropped one — rewrites the callable
+                    // tool surface. Replace the pool's whole slice before
+                    // the next model request: an additive merge would keep
+                    // the synthetic authenticate tool after its own login
+                    // and keep dead real tools after a rejection.
                     let mcp_catalog_changed = output
                         .metadata
                         .as_ref()
                         .and_then(|metadata| metadata.get("mcp_catalog_changed"))
                         .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false);
-                    if output.success
-                        && mcp_catalog_changed
-                        && let Some(pool) = self.mcp_pool.as_ref().cloned()
-                    {
-                        let refreshed = pool.lock().await.to_api_tools();
-                        tool_surface_changed |=
-                            merge_new_runtime_mcp_tools(tool_catalog, active_tool_names, refreshed)
-                                > 0;
+                    if mcp_catalog_changed && let Some(pool) = self.mcp_pool.as_ref().cloned() {
+                        let (universe, refreshed) = {
+                            let pool = pool.lock().await;
+                            (pool.model_tool_names(), pool.to_api_tools())
+                        };
+                        tool_surface_changed |= replace_runtime_mcp_tools(
+                            tool_catalog,
+                            active_tool_names,
+                            &universe,
+                            refreshed,
+                        ) > 0;
                     }
                     // Any of the legitimate mid-turn tool-surface changes above
                     // re-pin the header under a declared `change:tool_surface`

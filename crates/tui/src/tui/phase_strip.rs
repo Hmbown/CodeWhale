@@ -444,6 +444,40 @@ mod tests {
         );
     }
 
+    /// The merged footer owns phase/cost/detail only: scheduled automation
+    /// work is the TOP strip's fact (TUI band contract), so the footer facts
+    /// must never carry an automation slot. The topbar-side rendering is
+    /// pinned by `ui/frame.rs` tests (`topbar_segments` reads the same
+    /// `AutomationPanelState` projection).
+    #[test]
+    fn the_footer_does_not_carry_automation_work() {
+        let mut app = test_app();
+        app.ui_locale = crate::localization::Locale::En;
+        app.automation_panel.active_automations = 2;
+        app.automation_panel.live_runs = 1;
+
+        // The projection still speaks; the footer just does not own it.
+        assert_eq!(
+            app.automation_panel
+                .activity_slot(crate::localization::Locale::En),
+            Some("⏱ 2 scheduled · 1 running".to_string())
+        );
+        assert_eq!(
+            app.automation_panel.activity_slot_compact(),
+            Some("⏱ 2·1".to_string())
+        );
+
+        // Zero-suppressed: no Active automations, no slot — the count never
+        // becomes permanent furniture.
+        app.automation_panel.active_automations = 0;
+        app.automation_panel.live_runs = 0;
+        assert_eq!(
+            app.automation_panel
+                .activity_slot(crate::localization::Locale::En),
+            None
+        );
+    }
+
     /// The keys legend (the merged footer's right side) advertises chords
     /// you cannot discover any other way; a slash command announces itself
     /// the moment you type `/`, so it must not pay columns to advertise
@@ -782,6 +816,7 @@ pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFoo
     let right_width = right_base_w + 1 + extra.width(footer) as u16 + 1;
 
     // Left: still-frame echolocation chip + phase word + live detail + cost.
+    // Scheduled automation work lives on the top strip, not this footer.
     let chip = footer.sym("<·>");
     let phase = footer.sym(footer.phase_word);
     let cost = footer.sym(footer.cost_label);
@@ -795,6 +830,7 @@ pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFoo
         tchrome(theme, footer.phase_ink).add_modifier(Modifier::BOLD),
     );
     x += phase.width() as u16 + 1;
+    let left_edge_end = (area.x + area.width).saturating_sub(right_width + 1);
     if let Some(detail) = footer.live_detail {
         let detail = footer.sym(detail);
         tput(
@@ -806,7 +842,6 @@ pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFoo
         );
         x += detail.width() as u16 + 1;
     }
-    let left_edge_end = (area.x + area.width).saturating_sub(right_width + 1);
     if x + 2 <= left_edge_end {
         tput(
             buf,
@@ -931,10 +966,10 @@ fn trailing_keys_legend(footer: &TidelineFooter<'_>, area_width: u16) -> String 
     let prefix_w = chip.width() + 1 + phase.width() + 1 + detail_w + 2 + cost.width();
     let depth = footer.depth_cells();
     let right_base_w = format!("{depth} {pct}%").width();
-    let available = usize::from(area_width)
+    let available_with_keys = usize::from(area_width)
         .saturating_sub(right_base_w + 1 + keys_w + 1)
         .saturating_sub(1);
-    if prefix_w + posture_w <= available {
+    if prefix_w + posture_w <= available_with_keys {
         return keys;
     }
 
@@ -1137,6 +1172,10 @@ pub(crate) fn tideline_footer_from_app(app: &mut App, width: u16) -> TidelineFoo
     let map_chip = |chip: Option<(Cow<'static, str>, crate::palette::ChromeInk)>| {
         chip.map(|(text, ink)| (text.into_owned(), ink))
     };
+
+    // Scheduled automation work is NOT a footer fact: the TUI band contract
+    // puts work in the top strip, so `topbar_segments` reads the
+    // `AutomationPanelState` projection directly.
 
     // The notice: the live status toast if one is owed, else the compact MCP
     // or plugin boot chip. A slow optional server must not look like a hung

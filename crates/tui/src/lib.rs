@@ -86,6 +86,7 @@ mod models_dev_live;
 mod native_memory;
 mod network_policy;
 mod oauth;
+mod operate;
 mod palette;
 mod plugins;
 mod prefix_cache;

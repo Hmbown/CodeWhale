@@ -3,9 +3,9 @@ use super::*;
 use super::context::COMPACTION_SUMMARY_MARKER;
 use super::streaming::{TOOL_CALL_END_MARKERS, TOOL_CALL_MARKER_PAIRS};
 use super::turn_loop::{
-    auto_review_block_tool_error, initial_stream_error_user_message, merge_new_runtime_mcp_tools,
+    auto_review_block_tool_error, initial_stream_error_user_message,
     preview_request_error_user_message, registered_tool_approval_required,
-    registered_tool_forces_prompt, repo_law_must_block_without_prompt,
+    registered_tool_forces_prompt, replace_runtime_mcp_tools, repo_law_must_block_without_prompt,
     requested_sandbox_escalation, sandbox_escalation_denial, workspace_write_carve_out_applies,
 };
 use crate::config::ApiProvider;
@@ -7867,22 +7867,65 @@ fn non_bypassable_registered_tools_auto_approve_in_full_access() {
 }
 
 #[test]
-fn runtime_mcp_refresh_only_activates_new_catalog_entries() {
+fn runtime_mcp_refresh_replaces_the_pool_slice() {
     let mut existing = api_tool("mcp_static_read");
     existing.defer_loading = Some(true);
-    let mut catalog = vec![existing.clone()];
+    let mut catalog = vec![
+        existing,
+        api_tool("mcp_alpha_authenticate"),
+        api_tool("exec_shell"), // engine-owned: never the pool's to remove
+    ];
     let mut active = HashSet::new();
 
-    merge_new_runtime_mcp_tools(
+    // The pool's universe owns the static read (still live) and the
+    // synthetic authenticate entry (its login just succeeded — it must
+    // LEAVE). The refreshed surface adds a new tool and keeps the static
+    // one; the engine tool is untouched.
+    let universe: HashSet<String> = ["mcp_static_read", "mcp_alpha_authenticate"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    replace_runtime_mcp_tools(
         &mut catalog,
         &mut active,
+        &universe,
         vec![api_tool("mcp_static_read"), api_tool("mcp_dynamic_render")],
     );
 
-    assert_eq!(catalog.len(), 2);
-    assert!(!active.contains("mcp_static_read"));
+    let names: Vec<&str> = catalog.iter().map(|tool| tool.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["exec_shell", "mcp_static_read", "mcp_dynamic_render"],
+        "the synthetic authenticate tool leaves after its own login; engine tools stay"
+    );
+    assert!(active.contains("mcp_static_read"));
     assert!(active.contains("mcp_dynamic_render"));
-    assert_eq!(catalog[0].defer_loading, Some(true));
+    assert!(!active.contains("mcp_alpha_authenticate"));
+
+    // The mirror transition: a live 401 kills the pool's real tools and
+    // re-offers the synthetic login tool.
+    let universe: HashSet<String> = [
+        "mcp_static_read",
+        "mcp_dynamic_render",
+        "mcp_alpha_authenticate",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    replace_runtime_mcp_tools(
+        &mut catalog,
+        &mut active,
+        &universe,
+        vec![api_tool("mcp_alpha_authenticate")],
+    );
+    let names: Vec<&str> = catalog.iter().map(|tool| tool.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["exec_shell", "mcp_alpha_authenticate"],
+        "dead real tools leave after a live 401; the synthetic login tool arrives"
+    );
+    assert!(active.contains("mcp_alpha_authenticate"));
+    assert!(!active.contains("mcp_dynamic_render"));
 }
 
 #[test]
