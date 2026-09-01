@@ -229,11 +229,6 @@ impl HandleStore {
         }
     }
 
-    /// Bytes currently held across every session.
-    #[must_use]
-    pub fn retained_bytes(&self) -> usize {
-        self.retained_bytes
-    }
 }
 
 pub struct HandleReadTool;

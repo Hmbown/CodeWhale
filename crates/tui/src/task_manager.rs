@@ -1188,6 +1188,8 @@ impl TaskManager {
         Ok(manager)
     }
 
+    /// Only exercised from automation_manager tests today.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn shutdown(&self) {
         self.cancel_token.cancel();
     }
