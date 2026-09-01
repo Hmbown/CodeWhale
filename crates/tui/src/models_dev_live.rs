@@ -668,8 +668,10 @@ mod tests {
             honor_bundled_staleness(bundled, false).freshness,
             ModelsDevFreshness::Bundled
         );
-        let mut live = ModelsDevStatus::default();
-        live.freshness = ModelsDevFreshness::Live;
+        let live = ModelsDevStatus {
+            freshness: ModelsDevFreshness::Live,
+            ..ModelsDevStatus::default()
+        };
         assert_eq!(
             honor_bundled_staleness(live, true).freshness,
             ModelsDevFreshness::Live

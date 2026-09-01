@@ -175,6 +175,7 @@ pub fn bundled_catalog() -> CatalogCache {
 
 /// Whether the bundled offline snapshot is past its TTL right now.
 #[must_use]
+#[cfg_attr(test, allow(dead_code))]
 pub fn bundled_catalog_is_stale() -> bool {
     active_catalog()
         .read()
