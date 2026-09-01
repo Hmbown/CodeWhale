@@ -672,6 +672,16 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_revoke_slash_command_defers_to_the_event_loop() {
+        // The remote revoke is a blocking round trip; the command must hand it
+        // to the loop instead of doing it inline (#5784 review).
+        let mut app = create_test_app();
+        let result = execute("/auth chatgpt-revoke", &mut app);
+        assert!(!result.is_error);
+        assert!(matches!(result.action, Some(AppAction::StartChatgptRevoke)));
+    }
+
+    #[test]
     fn rlm_slash_command_routes_to_persistent_tool_instruction() {
         let mut app = create_test_app();
         let result = execute("/rlm 2 inspect this long corpus", &mut app);

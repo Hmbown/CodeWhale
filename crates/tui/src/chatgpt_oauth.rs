@@ -851,6 +851,20 @@ fn revoke_owned_login_locked(
             document,
             &["providers", key_inside, "oauth_credential_generation"],
         )?;
+        let auth_mode_is_oauth = document
+            .get("providers")
+            .and_then(toml_edit::Item::as_table_like)
+            .and_then(|providers| providers.get(key_inside))
+            .and_then(toml_edit::Item::as_table_like)
+            .and_then(|provider| provider.get("auth_mode"))
+            .and_then(toml_edit::Item::as_str)
+            == Some("oauth");
+        if auth_mode_is_oauth {
+            codewhale_config::unset_config_document_value(
+                document,
+                &["providers", key_inside, "auth_mode"],
+            )?;
+        }
         Ok(previous)
     })?;
     if let Some(config) = live_config {

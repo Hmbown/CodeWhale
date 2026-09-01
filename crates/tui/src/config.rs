@@ -5750,6 +5750,9 @@ impl Config {
             .is_some_and(codewhale_config::is_valid_chatgpt_oauth_generation)
         {
             entry.oauth_credential_generation = None;
+            if entry.auth_mode.as_deref() == Some("oauth") {
+                entry.auth_mode = None;
+            }
         }
     }
 

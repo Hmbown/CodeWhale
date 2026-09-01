@@ -189,12 +189,7 @@ pub(in crate::commands) fn dispatch(
                 CommandResult::action(crate::tui::app::AppAction::StartChatgptPkceLogin)
             }
             Some("chatgpt-revoke") | Some("chatgpt_revoke") => {
-                match crate::chatgpt_oauth::revoke_owned_login(None, None) {
-                    Ok(()) => CommandResult::message(
-                        "Revoked Codewhale-owned ChatGPT tokens. Codex CLI consent is unchanged.",
-                    ),
-                    Err(err) => CommandResult::error(format!("ChatGPT revoke failed: {err:#}")),
-                }
+                CommandResult::action(crate::tui::app::AppAction::StartChatgptRevoke)
             }
             _ => CommandResult::error("Usage: /auth xai-device|chatgpt|chatgpt-revoke"),
         },

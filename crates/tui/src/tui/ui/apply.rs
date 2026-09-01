@@ -1886,6 +1886,9 @@ pub(crate) async fn apply_command_result(
                 let _switched =
                     run_chatgpt_pkce_login_from_tui(terminal, app, engine_handle, config).await?;
             }
+            AppAction::StartChatgptRevoke => {
+                run_chatgpt_revoke_from_tui(app, config).await;
+            }
             AppAction::OpenModePicker => {
                 if app.view_stack.top_kind() != Some(ModalKind::ModePicker) {
                     app.view_stack
@@ -3040,6 +3043,32 @@ pub(crate) async fn apply_codewhale_owned_chatgpt_login(
     }
 
     switch_provider(app, engine_handle, config, ApiProvider::OpenaiCodex, None).await
+}
+
+/// `/auth chatgpt-revoke`. The remote revoke is one blocking HTTP round trip
+/// per stored token under the OAuth lifecycle lock, so it runs on the blocking
+/// pool instead of the event loop. It targets the session's own config file
+/// and clears the live route afterwards so the header stops claiming OAuth.
+pub(crate) async fn run_chatgpt_revoke_from_tui(app: &mut App, config: &mut Config) {
+    let config_path = app.config_path.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::chatgpt_oauth::revoke_owned_login(config_path.as_deref(), None)
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("ChatGPT revoke task was lost: {err}"))
+    .and_then(|result| result);
+    let message = match outcome {
+        Ok(()) => {
+            config.clear_codewhale_owned_chatgpt_oauth();
+            "Revoked Codewhale-owned ChatGPT tokens. Codex CLI consent is unchanged.".to_string()
+        }
+        Err(err) => format!("ChatGPT revoke failed: {err:#}"),
+    };
+    app.add_message(HistoryCell::System {
+        content: message.clone(),
+    });
+    app.status_message = Some(message);
+    app.needs_redraw = true;
 }
 
 #[cfg(test)]

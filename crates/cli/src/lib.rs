@@ -2434,6 +2434,9 @@ fn run_logout_command_with_secrets_unlocked(
         .is_some_and(codewhale_config::is_valid_chatgpt_oauth_generation)
     {
         openai_codex.oauth_credential_generation = None;
+        if openai_codex.auth_mode.as_deref() == Some("oauth") {
+            openai_codex.auth_mode = None;
+        }
     }
     store.config.auth_mode = None;
     if let Err(error) = store.save() {
