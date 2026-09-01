@@ -4418,7 +4418,8 @@ impl ModalView for ProviderPickerView {
             Stage::StepfunBillingRoute => 11,
             Stage::Confirm => 10,
             Stage::CustomForm => 12,
-            Stage::TemplateList => 16,
+            // Catalog rows + descriptor detail (URL, env, default, docs).
+            Stage::TemplateList => 18,
         };
         let popup_area = centered_modal_area(area, 120, preferred_height, 64, 8);
 
@@ -6108,10 +6109,15 @@ mod tests {
         assert!(rendered.contains("OpenCode Zen"), "{rendered}");
         assert!(rendered.contains("OpenCode Go"), "{rendered}");
         assert!(rendered.contains("SenseNova"), "{rendered}");
+        assert!(rendered.contains("Command Code"), "{rendered}");
         assert!(rendered.contains("Agnes"), "{rendered}");
         assert!(
             rendered.contains("no published") || rendered.contains("unpublished"),
             "{rendered}"
+        );
+        assert!(
+            rendered.contains("https://opencode.ai/zen/v1"),
+            "descriptor endpoint missing: {rendered}"
         );
         assert!(
             rendered.contains("https://opencode.ai/docs/zen/"),
