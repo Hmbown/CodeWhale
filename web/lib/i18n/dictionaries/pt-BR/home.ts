@@ -64,7 +64,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "Novo no Codewhale? Quatro passos de ponta a ponta.",
   startLede:
-    "Instalação → primeira sessão sem chave → conectar um provedor → primeiro workflow com a Fleet. Os termos estão definidos na página de vocabulário.",
+    "Instalação → primeira sessão sem chave → conectar um provedor → primeiro workflow com a Pod. Os termos estão definidos na página de vocabulário.",
   startGuideLink: "Ler o guia de primeiros passos →",
   startVocabularyLink: "Ver o vocabulário do produto →",
 
@@ -85,7 +85,7 @@ export const home: HomeDict = {
     ["codewhale exec", "Scripts e CI"],
     ["Cliente web", "Cliente de navegador, somente loopback"],
     ["Runtime API + MCP", "Integrações locais"],
-    ["Fleet", "Trabalho multiagente duradouro"],
+    ["Pod", "Trabalho multiagente duradouro"],
   ],
   runtimeLink: "Ver interfaces de runtime e notas de estabilidade →",
 

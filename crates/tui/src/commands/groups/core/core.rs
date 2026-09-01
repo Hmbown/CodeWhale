@@ -1592,7 +1592,7 @@ mod tests {
         assert_eq!(app.view_stack.top_kind(), Some(ModalKind::SubAgents));
         assert_eq!(
             app.status_message,
-            Some("Fetching Fleet status...".to_string())
+            Some("Fetching current-session sub-agents...".to_string())
         );
     }
 

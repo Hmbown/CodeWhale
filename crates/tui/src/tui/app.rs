@@ -1206,7 +1206,7 @@ pub type DispatchApplyFn = Box<
 #[allow(clippy::struct_excessive_bools)]
 /// A route change made in-session that the user has not yet decided how to
 /// save. Route changes are temporary by default; persisting them requires an
-/// explicit choice (Update this Fleet / Save as a new Fleet / Remember as my
+/// explicit choice (Update this Pod / Save as a new Pod / Remember as my
 /// default / Keep for this session only).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingRouteSave {
@@ -1576,6 +1576,9 @@ pub struct App {
     pub launch: LaunchState,
     /// Mouse-selected launch action, consumed by the async UI loop.
     pub pending_launch_action: Option<crate::tui::underwater::LaunchAction>,
+    /// Mouse click on the live composer's `[↑]` send target. The async UI loop
+    /// consumes it through the same submit dispatcher as Enter.
+    pub pending_composer_submit: Option<ComposerSubmitChord>,
     /// Mouse-selected hotbar slot, consumed by the async UI loop.
     pub pending_hotbar_slot: Option<u8>,
     /// Whether the renderer should wrap each frame in DEC mode 2026
@@ -2305,8 +2308,8 @@ impl App {
         match choice {
             RouteSaveChoice::UpdateFleet => {
                 let Some((name, scope)) = pending.fleet.clone() else {
-                    return "Nothing to update — no Fleet is selected. Use /pod save-as to \
-                             save this route as a new Fleet."
+                    return "Nothing to update — no Pod is selected. Use /pod save-as to \
+                             save this route as a new Pod."
                         .to_string();
                 };
                 match crate::fleet::store::load_fleet_in_scope(&name, scope, &self.workspace) {
@@ -2318,15 +2321,15 @@ impl App {
                         });
                         match save_fleet(&fleet, scope, &self.workspace) {
                             Ok(path) => format!(
-                                "Fleet `{}` now runs on {route} — wrote {}",
+                                "Pod `{}` now runs on {route} — wrote {}",
                                 fleet.name,
                                 path.display()
                             ),
-                            Err(err) => format!("Fleet update failed: {err}"),
+                            Err(err) => format!("Pod update failed: {err}"),
                         }
                     }
                     Err(err) => format!(
-                        "Fleet update failed: {err} — the saved Fleet may have moved. Use \
+                        "Pod update failed: {err} — the saved Pod may have moved. Use \
                          /pod save-as to persist the route."
                     ),
                 }
@@ -2343,7 +2346,7 @@ impl App {
                     display.clone(),
                     Some("Saved from a session route choice.".to_string()),
                 ) else {
-                    return "Could not create the Fleet.".to_string();
+                    return "Could not create the Pod.".to_string();
                 };
                 fleet.operator = Some(FleetOperator {
                     provider: pending.provider_identity.clone(),
@@ -2368,7 +2371,7 @@ impl App {
                             Err(err) => format!(" — selection failed: {err}"),
                         };
                         format!(
-                            "Saved route {route} as new Fleet `{}` — wrote {}{selected_note}",
+                            "Saved route {route} as new Pod `{}` — wrote {}{selected_note}",
                             display,
                             path.display()
                         )

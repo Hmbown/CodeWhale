@@ -2908,7 +2908,7 @@ impl Engine {
                         let _ = self
                             .tx_event
                             .send(Event::status(
-                                "Fleet roster refreshed for subsequent turns".to_string(),
+                                "Pod roster refreshed for subsequent turns".to_string(),
                             ))
                             .await;
                     }
@@ -2957,7 +2957,7 @@ impl Engine {
                                 tracing::info!(
                                     target: "subagent",
                                     finalized,
-                                    "finalized sub-agent fleet for closed session"
+                                    "finalized sub-agent pod for closed session"
                                 );
                             }
                         }

@@ -3,6 +3,7 @@ pub mod auth_source;
 pub mod auto_model;
 pub mod catalog;
 mod config_document;
+pub mod descriptors;
 pub mod device_code;
 pub mod external_credentials;
 mod harness;
@@ -31,12 +32,11 @@ pub(crate) use provider_defaults::*;
 pub use provider_kind::ProviderKind;
 pub use provider_templates::{
     AGNES_TEMPLATE_ID, BASETEN_API_KEY_ENV, BASETEN_BASE_URL, BASETEN_DEFAULT_MODEL,
-    BASETEN_MODELS, BASETEN_TEMPLATE_ID, CEREBRAS_API_KEY_ENV, CEREBRAS_BASE_URL,
-    CEREBRAS_DEFAULT_MODEL, CEREBRAS_MODELS, CEREBRAS_TEMPLATE_ID, GROQ_API_KEY_ENV, GROQ_BASE_URL,
-    GROQ_DEFAULT_MODEL, GROQ_MODELS, GROQ_TEMPLATE_ID, ProviderSetupApply, ProviderSetupTemplate,
-    SENSENOVA_API_KEY_ENV, SENSENOVA_BASE_URL, SENSENOVA_DEFAULT_MODEL, SENSENOVA_MODELS,
-    SENSENOVA_TEMPLATE_ID, compatible_provider_setup_templates, provider_setup_template,
-    provider_setup_templates,
+    BASETEN_TEMPLATE_ID, CEREBRAS_API_KEY_ENV, CEREBRAS_BASE_URL, CEREBRAS_DEFAULT_MODEL,
+    CEREBRAS_TEMPLATE_ID, COMMAND_CODE_TEMPLATE_ID, GROQ_API_KEY_ENV, GROQ_BASE_URL,
+    GROQ_DEFAULT_MODEL, GROQ_TEMPLATE_ID, ProviderSetupApply, ProviderSetupTemplate,
+    SENSENOVA_API_KEY_ENV, SENSENOVA_BASE_URL, SENSENOVA_DEFAULT_MODEL, SENSENOVA_TEMPLATE_ID,
+    compatible_provider_setup_templates, provider_setup_template, provider_setup_templates,
 };
 pub use setup_state::{
     ConstitutionAuthoring, ConstitutionChoice, ConstitutionSource, ConstitutionValidity,

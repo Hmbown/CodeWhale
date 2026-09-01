@@ -98,7 +98,7 @@ elapsed: 18m
 [█████████░░░░░░░░░░░] 45%
 50% settled (2/4)
 [✓] #1 Read docs-map.ts and the Modes page pattern
-[✓] #2 Draft the Fleet and Sandbox pages
+[✓] #2 Draft the Pod and Sandbox pages
 [~] #3 Write the Work surface page
 [ ] #4 Run check:docs, tests, and the build`}</pre>
         <p className={`${bodyClass} mt-3`}>
