@@ -458,7 +458,8 @@ mod tests {
 
         // The projection still speaks; the footer just does not own it.
         assert_eq!(
-            app.automation_panel.activity_slot(crate::localization::Locale::En),
+            app.automation_panel
+                .activity_slot(crate::localization::Locale::En),
             Some("⏱ 2 scheduled · 1 running".to_string())
         );
         assert_eq!(
@@ -471,7 +472,8 @@ mod tests {
         app.automation_panel.active_automations = 0;
         app.automation_panel.live_runs = 0;
         assert_eq!(
-            app.automation_panel.activity_slot(crate::localization::Locale::En),
+            app.automation_panel
+                .activity_slot(crate::localization::Locale::En),
             None
         );
     }

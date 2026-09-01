@@ -2939,8 +2939,7 @@ mod tests {
         long_running.started_at = Some(base - Duration::minutes(60));
         manager.save_run(&long_running).expect("save live run");
         for i in 0..25 {
-            let mut newer =
-                run_created_at(&automation, base - Duration::minutes(30 - i as i64));
+            let mut newer = run_created_at(&automation, base - Duration::minutes(30 - i as i64));
             newer.status = AutomationRunStatus::Completed;
             newer.ended_at = Some(base - Duration::minutes(29 - i as i64));
             manager.save_run(&newer).expect("save newer settled run");

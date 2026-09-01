@@ -484,9 +484,7 @@ pub(crate) fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> b
         HistoryCell::Thinking { .. } => "Reasoning".to_string(),
         HistoryCell::Tool(_) => "Message".to_string(),
         HistoryCell::SubAgent(_) => "Sub-agent".to_string(),
-        HistoryCell::Automation(_) => {
-            tr(app.ui_locale, MessageId::AutomationNoun).into_owned()
-        }
+        HistoryCell::Automation(_) => tr(app.ui_locale, MessageId::AutomationNoun).into_owned(),
         HistoryCell::ArchivedContext { .. } => "Archived Context".to_string(),
     };
     let width = app
@@ -522,9 +520,7 @@ pub(crate) fn open_focused_cell_pager(app: &mut App) -> bool {
         HistoryCell::Thinking { .. } => "Reasoning".to_string(),
         HistoryCell::Tool(_) => "Tool".to_string(),
         HistoryCell::SubAgent(_) => "Sub-agent".to_string(),
-        HistoryCell::Automation(_) => {
-            tr(app.ui_locale, MessageId::AutomationNoun).into_owned()
-        }
+        HistoryCell::Automation(_) => tr(app.ui_locale, MessageId::AutomationNoun).into_owned(),
         HistoryCell::ArchivedContext { .. } => "Archived Context".to_string(),
     };
     let width = app

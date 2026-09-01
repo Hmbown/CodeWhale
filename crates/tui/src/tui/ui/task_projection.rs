@@ -237,10 +237,7 @@ const STARTUP_SCAN_LOCK_RETRY_DELAY: std::time::Duration = std::time::Duration::
 /// frequent automation can stack newer runs behind a long-running task,
 /// and neither the live count nor the settle receipt may depend on the
 /// task staying inside the newest window.
-fn start_automation_scan(
-    app: &App,
-    full: bool,
-) -> Option<tokio::task::JoinHandle<AutomationScan>> {
+fn start_automation_scan(app: &App, full: bool) -> Option<tokio::task::JoinHandle<AutomationScan>> {
     let automations = app.runtime_services.automations.as_ref()?;
     let manager = automations.try_lock().ok()?.clone();
     let live_owners = app.automation_panel.live_run_owners();

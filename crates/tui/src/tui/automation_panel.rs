@@ -478,7 +478,11 @@ mod tests {
         assert_eq!(panel.activity_ink(), ChromeInk::Active);
 
         // Both counts at zero: the slot vanishes.
-        panel.fold_scan(&[record("a1", AutomationStatus::Paused)], &[], session_started_at);
+        panel.fold_scan(
+            &[record("a1", AutomationStatus::Paused)],
+            &[],
+            session_started_at,
+        );
         assert_eq!(panel.activity_slot(Locale::En), None);
         assert_eq!(panel.activity_slot_compact(), None);
     }

@@ -1793,7 +1793,8 @@ pub(crate) fn workflow_tool_is_running(app: &App) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        register_topbar_interaction_targets, render_topbar_row, short_title_truncate, topbar_segments,
+        register_topbar_interaction_targets, render_topbar_row, short_title_truncate,
+        topbar_segments,
     };
     use ratatui::{Terminal, backend::TestBackend};
 
