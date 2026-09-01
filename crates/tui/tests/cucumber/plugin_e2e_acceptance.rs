@@ -16,8 +16,7 @@ use cucumber::{World as _, given, then, when, writer::Stats as _};
 use tempfile::TempDir;
 
 #[cfg(all(unix, feature = "long-running-tests"))]
-#[path = "../support/qa_harness/mod.rs"]
-mod qa_harness;
+use super::qa_harness;
 
 #[cfg(all(unix, feature = "long-running-tests"))]
 use qa_harness::harness::{Harness, make_sealed_workspace};
@@ -795,6 +794,29 @@ fn wait_for_composer_ready(tui: &mut Harness) {
     }
 }
 
+/// This acceptance starts as a fresh interactive launch. Select the real
+/// Startup "New session" action before testing commands that belong to a
+/// live conversation; a focused pre-session composer is not itself a session.
+#[cfg(all(unix, feature = "long-running-tests"))]
+fn begin_new_session_from_startup(tui: &mut Harness) {
+    expect_visible(tui, "What are we working on?", "show Tideline Startup");
+    tui.send(keys::key::ch('w'))
+        .expect("choose Startup New session");
+    if tui
+        .wait_for(
+            |frame| !frame.text().contains("What are we working on?"),
+            BINARY_ACCEPTANCE_TIMEOUT,
+        )
+        .is_err()
+    {
+        panic!(
+            "Startup New session did not enter the live shell within {:?}\n{}",
+            qa_harness::harness::ci_scaled(BINARY_ACCEPTANCE_TIMEOUT),
+            short_diagnostics(tui, None)
+        );
+    }
+}
+
 #[cfg(all(unix, feature = "long-running-tests"))]
 fn wait_for_log(tui: &mut Harness, path: &std::path::Path, needle: &str) {
     let budget = qa_harness::harness::ci_scaled(BINARY_ACCEPTANCE_TIMEOUT);
@@ -851,6 +873,9 @@ async fn plugin_toml_binary_lifecycle_skill_and_stdio_mcp_acceptance() {
         .expect("start distributed TUI binary");
 
     // Readiness is a painted, focused composer—not localized placeholder copy.
+    // The binary begins at Tideline Startup, so choose its real New Session
+    // action before exercising the existing-session plugin contract.
+    begin_new_session_from_startup(&mut tui);
     wait_for_composer_ready(&mut tui);
     submit_tui_command(&mut tui, "/plugin show demo");
     expect_visible(

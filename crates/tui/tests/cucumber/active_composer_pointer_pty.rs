@@ -1,0 +1,329 @@
+//! Real-PTY regression for the active composer's painted `[↑]` submit
+//! affordance (#5773, TUI-UX-01 active-work half).
+//!
+//! The session is driven through the real onboarding flow into deterministic
+//! offline-explore mode, so bare submit resolves to Queue: no provider, no
+//! credentials, no network. The user types a draft and clicks the painted
+//! send cell with SGR mouse down/up. The click must reach the same queued
+//! keyboard-submit path as Enter — proven by the offline queue receipt toast
+//! and the durable `Queued #1:` pending-input preview, which renders directly
+//! from `app.queued_messages` — rather than leaving the draft untouched as a
+//! no-op click.
+
+#![cfg(all(unix, feature = "long-running-tests"))]
+
+use std::time::{Duration, Instant};
+
+use super::qa_harness;
+use qa_harness::Frame;
+use qa_harness::harness::{Harness, make_sealed_workspace};
+use qa_harness::keys;
+use qa_harness::modes::mode;
+
+/// (rows, cols): the release acceptance matrix for compact through wide terminals.
+const SIZES: [(u16, u16); 5] = [(12, 40), (16, 60), (24, 80), (32, 100), (40, 140)];
+
+const STARTUP_WAIT: Duration = Duration::from_secs(15);
+const SETTLE_WAIT: Duration = Duration::from_secs(5);
+
+/// Offline-queue receipt toast (MessageId::ToastQueuedOffline, en).
+const QUEUE_RECEIPT_TOAST: &str = "Saved for later. Connect a provider to send.";
+/// Compact-width prefix of that toast: the footer truncates the tail when the
+/// row cannot hold the full sentence next to the posture chips (deterministic
+/// layout boundary, observed painted as "Saved for later." at 40 and 60
+/// cols).
+const QUEUE_RECEIPT_TOAST_COMPACT: &str = "Saved for later.";
+
+/// The receipt needle this width can actually paint: full toast where the
+/// footer row fits it, its unwrapped prefix on compact layouts.
+fn queue_receipt_needle(cols: u16) -> &'static str {
+    if cols >= 100 {
+        QUEUE_RECEIPT_TOAST
+    } else {
+        QUEUE_RECEIPT_TOAST_COMPACT
+    }
+}
+
+#[test]
+fn active_composer_pointer_submit_queues_without_provider() {
+    for (rows, cols) in SIZES {
+        run_pointer_submit_case(rows, cols);
+    }
+}
+
+fn run_pointer_submit_case(rows: u16, cols: u16) {
+    let size = format!("{cols}x{rows}");
+    let workspace = make_sealed_workspace().expect("sealed workspace");
+    // Seed only the two first-run markers: prior onboarding completed
+    // ($HOME/.codewhale/.onboarded) and this workspace is trusted
+    // (<workspace>/.deepseek/trusted). No provider, key, or route is seeded.
+    std::fs::write(workspace.home().join(".codewhale/.onboarded"), "").expect("onboarded marker");
+    let trust_dir = workspace.workspace().join(".deepseek");
+    std::fs::create_dir_all(&trust_dir).expect("workspace trust dir");
+    std::fs::write(trust_dir.join("trusted"), "").expect("workspace trust marker");
+
+    let mut tui = Harness::builder(Harness::cargo_bin("codewhale-tui"))
+        .cwd(workspace.workspace())
+        .clear_env()
+        .seal_home(workspace.home())
+        .env("CODEWHALE_DISABLE_MODELS_DEV_FETCH", "1")
+        .env("CODEWHALE_NO_UPDATE_CHECK", "1")
+        .env("NO_ANIMATIONS", "1")
+        .env("RUST_LOG", "warn")
+        .args([
+            "--workspace",
+            workspace.workspace().to_str().expect("workspace UTF-8"),
+            "--no-project-config",
+            "--fresh",
+            "--mouse-capture",
+        ])
+        .size(rows, cols)
+        .spawn()
+        .expect("start distributed TUI binary");
+
+    // Walk the real onboarding: provider choice → Explore Offline (Ctrl+O)
+    // → ready screen → Enter into Tideline Startup → New session.
+    wait_or_panic(
+        &mut tui,
+        "Choose your model provider",
+        STARTUP_WAIT,
+        &format!("{size}: onboarding provider choice"),
+    );
+    tui.send(keys::key::ctrl('o'))
+        .expect("choose Explore Offline");
+    wait_or_panic(
+        &mut tui,
+        "You're ready.",
+        SETTLE_WAIT,
+        &format!("{size}: offline explore ready"),
+    );
+    tui.send(keys::key::enter()).expect("leave onboarding");
+    wait_or_panic(
+        &mut tui,
+        "What are we working on?",
+        STARTUP_WAIT,
+        &format!("{size}: show Tideline Startup"),
+    );
+    tui.pump();
+    assert_startup_contract(tui.frame(), rows, cols, &size);
+    tui.send(keys::key::ch('w'))
+        .expect("choose Startup New session");
+    if tui
+        .wait_for(
+            |frame| !frame.text().contains("What are we working on?"),
+            STARTUP_WAIT,
+        )
+        .is_err()
+    {
+        panic!(
+            "{size}: Startup New session did not enter the live shell\n{}",
+            tui.diagnostics()
+        );
+    }
+    tui.wait_for_idle(Duration::from_millis(300), SETTLE_WAIT)
+        .expect("session shell settles");
+    // Prove the steady shell before clearing the onboarding seed. The clear
+    // action intentionally emits a transient `Ctrl+Z restores` receipt, and
+    // live receipts outrank the footer's key hint while present.
+    tui.pump();
+    assert_live_shell_contract(tui.frame(), cols, &size);
+
+    // Clear the onboarding seed so the unique pointer-test draft starts from
+    // an empty composer.
+    tui.send(keys::key::ctrl('u')).expect("clear seeded input");
+    tui.wait_for_idle(Duration::from_millis(200), SETTLE_WAIT)
+        .expect("composer cleared");
+
+    // Mouse capture must be live before the click, or the SGR bytes would
+    // test nothing. Readiness comes from the control stream, not the frame.
+    wait_for_mouse_capture(&mut tui, &size);
+
+    // Type a unique draft and let the composer settle before recording
+    // coordinates, so no late layout shift moves the cells under us.
+    let draft = format!("qa pointer draft {size}");
+    tui.send(keys::key::text(&draft)).expect("type draft");
+    wait_or_panic(
+        &mut tui,
+        &draft,
+        SETTLE_WAIT,
+        &format!("{size}: draft echo"),
+    );
+    tui.wait_for_idle(Duration::from_millis(200), SETTLE_WAIT)
+        .expect("composer settles with draft");
+
+    // The paste-burst window treats input arriving within ~150ms of the
+    // keystrokes as paste; stay clearly outside it before clicking.
+    std::thread::sleep(Duration::from_millis(200));
+
+    tui.pump();
+    let (send_row, send_col) = tui.frame().find_text("[↑]").unwrap_or_else(|| {
+        panic!(
+            "{size}: [↑] submit affordance not painted\n{}",
+            tui.diagnostics()
+        )
+    });
+    // Baseline: no queue receipt and no queued preview exist before the
+    // click, so both signals below can only be produced by this gesture.
+    let receipt = queue_receipt_needle(cols);
+    let preview = format!("Queued #1: {draft}");
+    tui.pump();
+    let before = normalized_text(tui.frame());
+    assert!(
+        !before.contains(receipt) && !before.contains("Queued #1:"),
+        "{size}: queue receipt/preview already visible before any submit\n{}",
+        tui.diagnostics()
+    );
+
+    // Click the middle cell of the three-cell `[↑]` affordance: SGR down,
+    // settle, SGR up — the sequence a real terminal sends for one click.
+    tui.send(keys::mouse::down(send_row, send_col + 1))
+        .expect("SGR mouse down on [↑]");
+    tui.wait_for_idle(Duration::from_millis(150), Duration::from_secs(2))
+        .expect("down settles");
+    tui.send(keys::mouse::up(send_row, send_col + 1))
+        .expect("SGR mouse up on [↑]");
+
+    // Distinguishing assertion: a real submit — the pointer click or keyboard
+    // Enter alike — consumes the draft into the deterministic offline queue
+    // and paints the queue receipt toast. A no-op click paints no receipt
+    // and times out here.
+    if tui
+        .wait_for(
+            |frame| normalized_text(frame).contains(receipt),
+            SETTLE_WAIT,
+        )
+        .is_err()
+    {
+        panic!(
+            "{size}: click on [↑] at ({send_row},{}) produced no queue receipt \
+             {receipt:?} — pointer submit did not reach the keyboard-submit \
+             dispatch path\n{}",
+            send_col + 1,
+            tui.diagnostics()
+        );
+    }
+
+    // Durable queue proof at every size: the pending-input preview renders
+    // straight from `app.queued_messages`, so `Queued #1:` plus the unique
+    // draft is the real queue state — no slash-menu navigation needed.
+    tui.pump();
+    let after = normalized_text(tui.frame());
+    assert!(
+        after.contains(&preview),
+        "{size}: queued preview {preview:?} not visible after pointer submit\n{}",
+        tui.diagnostics()
+    );
+
+    let modes = tui.terminal_modes();
+    assert_eq!(
+        modes.state(mode::MOUSE_SGR),
+        Some(true),
+        "{size}: SGR mouse encoding must be enabled for the click to be meaningful\n{}",
+        modes.debug_dump()
+    );
+    assert!(
+        modes.was_ever_enabled(mode::MOUSE_BUTTON),
+        "{size}: mouse button tracking was never enabled\n{}",
+        modes.debug_dump()
+    );
+
+    let _ = tui.shutdown();
+}
+
+/// Frame text with rows joined on single spaces, so assertions survive a
+/// narrow-terminal wrap of the needle across two painted rows.
+fn normalized_text(frame: &Frame) -> String {
+    frame
+        .text()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn assert_startup_contract(frame: &Frame, rows: u16, cols: u16, size: &str) {
+    let text = frame.text();
+    for needle in ["CODEWHALE", "What are we working on?", "Theme", "Help"] {
+        assert!(
+            text.contains(needle),
+            "{size}: startup misses {needle:?}\n{}",
+            frame.debug_dump()
+        );
+    }
+    for needle in if cols < 56 {
+        ["worktree", "chat"]
+    } else {
+        ["New worktree", "Chat only"]
+    } {
+        assert!(
+            text.contains(needle),
+            "{size}: startup misses {needle:?}\n{}",
+            frame.debug_dump()
+        );
+    }
+    for retired_mark_row in ["▄▄▄▄██▌", "▜████▀▘"] {
+        assert!(
+            !text.contains(retired_mark_row),
+            "{size}: startup still paints the retired approximate mark\n{}",
+            frame.debug_dump()
+        );
+    }
+    assert_eq!(frame.rows(), rows, "{size}: PTY row count drift");
+    assert_eq!(frame.cols(), cols, "{size}: PTY column count drift");
+    assert!(
+        frame.max_row_width() <= usize::from(cols),
+        "{size}: startup row overflow\n{}",
+        frame.debug_dump()
+    );
+}
+
+fn assert_live_shell_contract(frame: &Frame, cols: u16, size: &str) {
+    let text = frame.text();
+    assert!(
+        text.contains("CODEWHALE"),
+        "{size}: live shell misses wordmark\n{}",
+        frame.debug_dump()
+    );
+    assert!(
+        text.contains("? help"),
+        "{size}: live shell hides help\n{}",
+        frame.debug_dump()
+    );
+    assert!(
+        !text.contains("RUNS") || cols < 100,
+        "{size}: passive duplicate Tideline rail is still visible\n{}",
+        frame.debug_dump()
+    );
+    assert!(
+        frame.max_row_width() <= usize::from(cols),
+        "{size}: live-shell row overflow\n{}",
+        frame.debug_dump()
+    );
+}
+
+fn wait_or_panic(tui: &mut Harness, needle: &str, timeout: Duration, label: &str) {
+    if tui.wait_for_text(needle, timeout).is_err() {
+        panic!("{label}: {needle:?} not visible\n{}", tui.diagnostics());
+    }
+}
+
+fn wait_for_mouse_capture(tui: &mut Harness, size: &str) {
+    let deadline = Instant::now() + qa_harness::harness::ci_scaled(STARTUP_WAIT);
+    loop {
+        tui.pump();
+        let modes = tui.terminal_modes();
+        if modes.state(mode::MOUSE_SGR) == Some(true)
+            && modes.state(mode::MOUSE_BUTTON) == Some(true)
+        {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "{size}: mouse capture never enabled in the control stream\n{}",
+                tui.diagnostics()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+}

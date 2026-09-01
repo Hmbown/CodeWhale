@@ -214,7 +214,7 @@ pub struct ToolAuthorityEnvelope {
     pub owner: String,
     pub authority: ToolMutationAuthority,
     /// Optional outer network cap for headless workers. `None` preserves the
-    /// behavior of v1 envelopes written before this field existed; new Fleet
+    /// behavior of v1 envelopes written before this field existed; new Pod
     /// launches always carry the resolved worker permission explicitly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_access: Option<bool>,

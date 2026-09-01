@@ -1,21 +1,21 @@
 ---
 name: fleet-manager
-description: Use when managing, triaging, restarting, escalating, or summarizing Codewhale Agent Fleet runs and workers.
+description: Use when managing, triaging, restarting, escalating, or summarizing Codewhale Pod runs and workers.
 metadata:
-  short-description: Triage Codewhale Agent Fleet runs
+  short-description: Triage Codewhale Pod runs
 ---
 
-# Fleet Manager
+# Pod Manager
 
-Use this skill when acting as a manager agent for Codewhale Agent Fleet runs.
+Use this skill when acting as a manager agent for Codewhale Pod runs.
 Your job is to classify worker state, choose the narrowest safe typed action,
 and leave a ledgered receipt or a safe escalation draft.
 
 ## Authority Boundary
 
-- Prefer typed fleet surfaces over shell spelunking: `codewhale fleet status`,
+- Prefer typed Pod surfaces over shell spelunking: `codewhale pod status`,
   `inspect`, `logs`, `artifacts`, `interrupt`, `restart`, `stop`, and the
-  Runtime API fleet endpoints.
+  Runtime API endpoints.
 - Do not read `.codewhale/fleet.jsonl`, host logs, or remote files directly
   unless the typed command or API is missing required evidence.
 - Do not send Slack, webhook, PagerDuty, email, or chat messages unless the
@@ -25,12 +25,12 @@ and leave a ledgered receipt or a safe escalation draft.
 
 ## Triage Loop
 
-1. Identify the run and worker from the user request, run receipt, or fleet
-   status output. If no worker is named, start with `codewhale fleet status`.
-2. Inspect the worker with `codewhale fleet inspect <worker-id>` or the matching
+1. Identify the run and worker from the user request, run receipt, or Pod
+   status output. If no worker is named, start with `codewhale pod status`.
+2. Inspect the worker with `codewhale pod inspect <worker-id>` or the matching
    Runtime API worker endpoint.
-3. Review bounded evidence with `codewhale fleet logs <worker-id>` and
-   `codewhale fleet artifacts <worker-id>`. Summarize artifact refs, not full
+3. Review bounded evidence with `codewhale pod logs <worker-id>` and
+   `codewhale pod artifacts <worker-id>`. Summarize artifact refs, not full
    payloads.
 4. Classify the state before acting:
    - `transient failure`: transport error, timeout, stale heartbeat, host
@@ -43,7 +43,7 @@ and leave a ledgered receipt or a safe escalation draft.
      action, repeated restart exhaustion, ambiguous product decision, or
      conflict between artifacts and verifier.
 5. Choose one typed action:
-   - transient and retry budget remains: `codewhale fleet restart <worker-id>`.
+   - transient and retry budget remains: `codewhale pod restart <worker-id>`.
    - transient but unsafe to retry: draft escalation and mark needs-human.
    - task failure: preserve artifacts, summarize the failure, and avoid restart
      unless the task spec says retrying can produce new evidence.
@@ -79,23 +79,23 @@ Use this shape for Slack/PagerDuty drafts. Keep logs to three short lines or an
 artifact ref.
 
 ```text
-Codewhale fleet needs attention
+Codewhale Pod needs attention
 Run: <run-id>
 Worker: <worker-id>
 Task: <task-id or unknown>
 Classification: <transient failure | task failure | verifier failure | needs-human>
 Reason: <one sentence, no secrets>
-Latest typed evidence: codewhale fleet inspect <worker-id>; codewhale fleet artifacts <worker-id>
+Latest typed evidence: codewhale pod inspect <worker-id>; codewhale pod artifacts <worker-id>
 Safe log excerpt: <3 lines max or "see artifact <ref>">
 Requested decision: <restart approval | verifier review | task owner review | permission decision>
 ```
 
 ## Post-Run Receipt
 
-End every fleet-manager response with a compact receipt:
+End every Pod Manager response with a compact receipt:
 
 ```text
-Fleet receipt
+Pod receipt
 Run: <run-id>
 Workers checked: <count/list>
 Classification: <state>

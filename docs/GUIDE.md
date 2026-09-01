@@ -135,7 +135,7 @@ boundary. JSON remains offline and does not accept live flags.
 
 JSON reports credential `source` separately from literal `availability`.
 Configured environment, external-auth, OAuth, consent, and secret-store sources
-remain `not_probed`; their declaration alone does not make Setup or Fleet ready.
+remain `not_probed`; their declaration alone does not make Setup or Pod ready.
 Only a structurally present literal config value, or a route where credentials
 are not required, certifies offline readiness. A legacy secret-store sentinel on
 a route that cannot use the shared store is reported separately as
@@ -293,7 +293,7 @@ run checks, and edit files while keeping risky actions behind approval gates.
 
 Operate keeps that direct tool surface and its approval, sandbox, shell,
 ask-rule, and repository protections. Its difference is orchestration emphasis:
-Codewhale prefers Fleet workers for independent, parallel, background, or
+Codewhale prefers Pod workers for independent, parallel, background, or
 long-running work, while small or tightly coupled work can remain in the parent.
 Heavy work can also be proposed to a Daytona cloud agent with `codewhale
 dispatch` or `/dispatch` (explicit confirmation; remotes are `github` / `cnb` /
@@ -326,7 +326,8 @@ Common commands for first-time users:
 | `/mode` | Open the mode picker or switch with `/mode agent` |
 | `/model` | Select a model or use `/model auto` |
 | `/provider` | Pick the active API provider |
-| `/fleet` | Configure Fleet roles or open worker status |
+| `/pod` | Open the selected Pod's member roster (`/fleet` is a compatibility alias) |
+| `/pod pods` | Pick or switch among named saved Pods (`/pod fleets` remains accepted) |
 | `/goal` | Set a persistent objective the agent works toward across turns; bare `/goal` shows progress |
 | `/workflow` | Orchestrate the current work as a Workflow; `status`, `cancel`, `settings` answer without a model turn |
 | `/workflows` | Open the live Workflow run dashboard: every run this workspace's journal keeps, with phases, children, progress, and host-side cancel |
@@ -355,7 +356,14 @@ Posting Codewhale PR reviews as a bot identity:
 [GITHUB_APP.md](GITHUB_APP.md).
 
 Next for durable multi-worker work: [FLEET_WORKFLOW_TUTORIAL.md](FLEET_WORKFLOW_TUTORIAL.md)
-walks through Fleet task specs, monitoring, and Workflow authoring.
+walks through Pod task specs, monitoring, and Workflow authoring.
+
+Pod is the customer-facing name for the durable roster. `codewhale pod …` is
+the canonical command and `/pod` the canonical slash command; `codewhale fleet`
+and `/fleet` remain accepted compatibility spellings. The Fleet name is kept
+deliberately in what has to stay stable across versions: the durable ledger
+`.codewhale/fleet.jsonl`, saved rosters `fleets/<name>.toml`, the `[fleet]` and
+`[fleets.*]` config tables, and the `codewhale workflow run --fleet` flag.
 
 Use `/model auto` when you want Codewhale to choose the model and thinking
 level per turn. When the DeepSeek routing model is available, Auto may select

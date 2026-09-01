@@ -6,22 +6,20 @@
 //! caller owns facts; this module owns cells.
 //!
 //! The brand lockup is the `CODEWHALE` wordmark alone, in the sanctioned
-//! whale-mark gold. There is no glyph before it by founder decree: terminal
-//! marks must be generated from the brand master path, the generated mark is
-//! 12x6+ cells, and every attempt to shrink it into one row was judged
-//! illegible — a one-row topbar cannot carry it. The hand-drawn crown glyph
-//! (and its ASCII projection) was ordered deleted everywhere and is gone
-//! from this module.
+//! whale-mark gold. There is no glyph before it by founder decree: the
+//! canonical mark is a raster asset with no approved ASCII or block-glyph
+//! substitute, and a one-row topbar cannot carry it faithfully. The retired
+//! hand-drawn crown glyph is absent from this module.
 //!
 //! Segment grammar (left → right): brand lockup, then contextual segments as
 //! `label value` pairs joined by `│`, then the pinned right side — context
 //! meter and clock. Segments shed in a declared order as width drops; brand,
 //! context meter, and clock are the guaranteed floor (spec §5b shed order).
 //!
-//! Clickability: every segment records a `Rect` hitbox so `mouse_ui` can map
-//! a click to its action (spec §5a). Hitboxes are collected through
-//! [`render_topbar`] into any sink — the live shell stores them on
-//! `ViewportState` exactly like `last_workflow_panel_area`.
+//! Interaction: segment geometry is recorded for parity tests, but only the
+//! effective model/route segment and the pinned context meter advertise an
+//! action in the live shell. Status-only facts do not brighten on hover or
+//! pretend to be controls.
 //!
 //! Color: semantic ink only ([`ChromeInk`]); no hex, per the status-bar color
 //! grammar. ASCII-safe mode substitutes every glyph through
@@ -49,23 +47,23 @@ const METER_CELLS: usize = 5;
 /// module docs). Pure ASCII, so it never widens under ascii-safe mode.
 const WORDMARK: &str = "CODEWHALE";
 
-/// Identity of a clickable topbar segment. One variant per action the
-/// approved screens expose (spec §5a: every segment has an owner action).
+/// Identity of a topbar segment. Most variants are status facts; the live
+/// shell currently registers an action only for [`Self::Model`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TopbarSegmentId {
-    /// The brand lockup — click opens the product menu.
+    /// The brand lockup — status-only until a product menu exists.
     Brand,
-    /// Workspace path (startup) — click opens the workspace details.
+    /// Workspace path (startup).
     Workspace,
-    /// Current run (work screen) — click opens the run dashboard.
+    /// Current run (work screen).
     Run,
-    /// Active pod (work screen) — click opens the pod ledger.
+    /// Active pod (work screen).
     Pod,
-    /// Whale capacity `n/m` (work screen) — click opens the pod roster.
+    /// Whale capacity `n/m` (work screen).
     Whales,
     /// Effective model / route — click opens the provider inspector.
     Model,
-    /// Theme name (startup) — click opens the theme picker.
+    /// Theme name (startup).
     Theme,
     /// Settings breadcrumb (settings screen) — click walks up one category.
     /// Not constructed by the main shell yet: the settings screen is a
@@ -137,7 +135,8 @@ pub struct Topbar<'a> {
     pub context_percent: u8,
     /// Contextual segments in display order.
     pub segments: &'a [TopbarSegment],
-    /// Segment under the mouse (hover affordance: value brightens).
+    /// Actionable segment under the mouse. Only [`TopbarSegmentId::Model`]
+    /// currently advertises hover feedback in the live shell.
     pub hovered: Option<TopbarSegmentId>,
     /// ASCII-safe / NO_COLOR mode: every glyph goes through
     /// [`glyphs::ascii_fallback`].
@@ -368,7 +367,8 @@ impl Widget for Topbar<'_> {
                 );
                 x += SEGMENT_JOIN.width();
             }
-            let hovered = self.hovered == Some(segment.id);
+            let hovered = segment.id == TopbarSegmentId::Model
+                && self.hovered == Some(TopbarSegmentId::Model);
             let mut style = chrome(theme, segment.ink);
             if hovered {
                 style = style
@@ -428,9 +428,8 @@ pub struct TopbarHitbox {
 
 /// Compute the hitbox `Rect` for each kept segment. Must be called with the
 /// same inputs as the render so the rects match the painted cells exactly.
-/// The brand lockup and the pinned right block are hitboxes too (brand opens
-/// the product menu; context opens the context inspector) — returned first
-/// and last respectively.
+/// The brand lockup is included as recorded geometry, though it is status-only
+/// in the live shell. The context meter has its own exact hitbox helper.
 #[must_use]
 pub fn topbar_hitboxes(topbar: &Topbar<'_>, area: Rect) -> Vec<TopbarHitbox> {
     let mut out = Vec::new();
@@ -438,31 +437,37 @@ pub fn topbar_hitboxes(topbar: &Topbar<'_>, area: Rect) -> Vec<TopbarHitbox> {
         return out;
     }
     let brand_w = brand_width();
-    out.push(TopbarHitbox {
-        id: TopbarSegmentId::Brand,
-        area: Rect {
-            x: area.x,
-            y: area.y,
-            width: brand_w as u16,
-            height: 1,
-        },
-    });
+    if brand_w <= usize::from(area.width) {
+        out.push(TopbarHitbox {
+            id: TopbarSegmentId::Brand,
+            area: Rect {
+                x: area.x,
+                y: area.y,
+                width: brand_w as u16,
+                height: 1,
+            },
+        });
+    }
     let mut x = area.x as usize + brand_w + BRAND_GAP.width();
     let join_w = SEGMENT_JOIN.width();
-    for (index, segment) in topbar.segments.iter().enumerate() {
+    let shed = shed_pass(topbar, area);
+    let right_start = usize::from(area.x + area.width).saturating_sub(shed.right_width);
+    for (index, segment) in shed.kept.iter().enumerate() {
         if index > 0 {
             x += join_w;
         }
         let w = segment.rendered_width();
-        out.push(TopbarHitbox {
-            id: segment.id,
-            area: Rect {
-                x: x as u16,
-                y: area.y,
-                width: w as u16,
-                height: 1,
-            },
-        });
+        if x + w <= right_start && x + w <= usize::from(area.x + area.width) {
+            out.push(TopbarHitbox {
+                id: segment.id,
+                area: Rect {
+                    x: x as u16,
+                    y: area.y,
+                    width: w as u16,
+                    height: 1,
+                },
+            });
+        }
         x += w;
     }
     out

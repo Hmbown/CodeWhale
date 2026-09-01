@@ -131,7 +131,7 @@ impl ControlExecution {
 pub enum ControlDomain {
     /// One running Workflow, recorded in `$CODEWHALE_HOME/lanes/`.
     Lane,
-    /// Fleet workers and runs, recorded in `<workspace>/.codewhale/fleet.jsonl`.
+    /// Pod workers and runs, recorded in `<workspace>/.codewhale/fleet.jsonl`.
     Fleet,
 }
 
@@ -141,6 +141,15 @@ impl ControlDomain {
         match self {
             Self::Lane => "lane",
             Self::Fleet => "fleet",
+        }
+    }
+
+    /// Customer-facing spelling. `as_str` remains the durable wire/storage key.
+    #[must_use]
+    pub const fn public_name(self) -> &'static str {
+        match self {
+            Self::Lane => "lane",
+            Self::Fleet => "pod",
         }
     }
 }
@@ -574,7 +583,7 @@ impl OperationDescriptor {
                 Availability::unavailable(
                     UnavailableReason::NoFleetLedger,
                     "this workspace has no .codewhale/fleet.jsonl; create it with \
-                     `codewhale fleet init`",
+                     `codewhale pod init`",
                 )
             }
             _ => Availability::Available,
@@ -586,8 +595,8 @@ const LANE_RESTART_HINT: &str = "Lane restart has no backend: a Lane is one runn
      `codewhale lane start` / `codewhale workflow run`, not restarted in place.";
 const LANE_RESUME_HINT: &str = "Lane resume has no backend: a stopped Lane's Runtime session is gone, so there is \
      nothing to resume. Start a new Lane against the same issue/goal.";
-const FLEET_RESTART_HINT: &str = "Fleet restart re-leases a task and then drives the manager loop to completion, which \
-     only the CLI runs. Use `codewhale fleet restart <worker-id>`.";
+const FLEET_RESTART_HINT: &str = "Pod restart re-leases a task and then drives the manager loop to completion, which \
+     only the CLI runs. Use `codewhale pod restart <worker-id>`.";
 /// Lane interrupt tears down the Runtime (tmux kill-session, worktree TTL
 /// cleanup), which must never run on the TUI composer thread. It is *not*
 /// CLI-only: the slash surface submits it to an off-loop worker and returns a
@@ -700,8 +709,8 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         reconciles: false,
         hotbar_bare_dispatch: false,
         slash_command: "pod",
-        cli_invocation: "codewhale fleet list",
-        summary: "List durable Fleet runs from the workspace ledger.",
+        cli_invocation: "codewhale pod list",
+        summary: "List durable Pod runs from the workspace ledger.",
     },
     OperationDescriptor {
         operation: ControlOperation::FleetStatus,
@@ -717,8 +726,8 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         reconciles: false,
         hotbar_bare_dispatch: false,
         slash_command: "pod",
-        cli_invocation: "codewhale fleet status",
-        summary: "Show durable Fleet run/worker counts from the workspace ledger.",
+        cli_invocation: "codewhale pod status",
+        summary: "Show durable Pod run/worker counts from the workspace ledger.",
     },
     OperationDescriptor {
         operation: ControlOperation::FleetInterrupt,
@@ -734,8 +743,8 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         reconciles: false,
         hotbar_bare_dispatch: false,
         slash_command: "pod",
-        cli_invocation: "codewhale fleet interrupt <worker-id>",
-        summary: "Cancel a Fleet worker's active task in the durable ledger.",
+        cli_invocation: "codewhale pod interrupt <worker-id>",
+        summary: "Cancel a Pod worker's active task in the durable ledger.",
     },
     OperationDescriptor {
         operation: ControlOperation::FleetRestart,
@@ -754,8 +763,8 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         reconciles: false,
         hotbar_bare_dispatch: false,
         slash_command: "pod",
-        cli_invocation: "codewhale fleet restart <worker-id>",
-        summary: "Re-lease a Fleet worker's task and drive the manager loop.",
+        cli_invocation: "codewhale pod restart <worker-id>",
+        summary: "Re-lease a Pod worker's task and drive the manager loop.",
     },
     OperationDescriptor {
         operation: ControlOperation::FleetResume,
@@ -771,8 +780,8 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         reconciles: false,
         hotbar_bare_dispatch: false,
         slash_command: "pod",
-        cli_invocation: "codewhale fleet resume <run-id>",
-        summary: "Reconcile a durable Fleet run's orphaned leases after a manager restart.",
+        cli_invocation: "codewhale pod resume <run-id>",
+        summary: "Reconcile a durable Pod run's orphaned leases after a manager restart.",
     },
 ];
 
@@ -1580,7 +1589,7 @@ pub struct RunSummaryDto {
     pub runtime: Known<String>,
     /// Workflow = order.
     pub workflow: Known<String>,
-    /// Fleet = who.
+    /// Pod = who. The field name stays `fleet` for serialized compatibility.
     pub fleet: Known<String>,
     pub issue: Known<String>,
     pub goal: Known<String>,
@@ -1608,7 +1617,11 @@ pub struct RunSummaryDto {
 }
 
 impl RunSummaryDto {
-    /// Full detail rendering, shared by `lane status` and `/lane status`.
+    /// Full stable receipt-detail rendering, shared by status surfaces.
+    ///
+    /// Public commands call the Fleet domain a Pod, but these field labels are
+    /// part of the serialized receipt/detail compatibility boundary. Keep the
+    /// durable domain and `fleet` field spellings here.
     #[must_use]
     pub fn render_detail(&self) -> String {
         let mut out = String::new();
@@ -2380,11 +2393,13 @@ mod tests {
                 "{} needs an exact CLI invocation",
                 descriptor.id
             );
+            // The CLI and slash surfaces must name the same canonical noun.
+            // `domain.as_str()` is the serialization key ("fleet"), which the
+            // ledger, receipts, and config tables still use; the customer-
+            // facing spelling is the slash command ("pod").
             assert!(
-                descriptor
-                    .cli_invocation
-                    .contains(descriptor.domain.as_str()),
-                "{} CLI invocation must name its domain",
+                descriptor.cli_invocation.contains(descriptor.slash_command),
+                "{} CLI invocation must name the same canonical noun as its slash command",
                 descriptor.id
             );
             assert!(
@@ -2424,6 +2439,16 @@ mod tests {
         assert_eq!(
             ControlOperation::parse_verb(ControlDomain::Fleet, "nope"),
             None
+        );
+    }
+
+    #[test]
+    fn pod_is_public_while_fleet_remains_the_durable_domain_key() {
+        assert_eq!(ControlDomain::Fleet.public_name(), "pod");
+        assert_eq!(ControlDomain::Fleet.as_str(), "fleet");
+        assert_eq!(
+            serde_json::to_string(&ControlDomain::Fleet).expect("serialize durable domain"),
+            "\"fleet\""
         );
     }
 
@@ -2544,7 +2569,7 @@ mod tests {
             assert!(
                 availability
                     .hint()
-                    .is_some_and(|hint| hint.contains("codewhale fleet restart")),
+                    .is_some_and(|hint| hint.contains("codewhale pod restart")),
                 "an unavailable surface must point at the one that works"
             );
         }

@@ -242,6 +242,13 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Submission,
     },
     KeybindingEntry {
+        // `/provider` remains the portable command route; F3 mirrors the
+        // clickable topbar route segment without consuming composer text.
+        chord: "F3 / /provider",
+        description_id: crate::localization::MessageId::CmdProviderDescription,
+        section: KeybindingSection::Submission,
+    },
+    KeybindingEntry {
         chord: "Alt+L",
         description_id: crate::localization::MessageId::KbLastMessagePager,
         section: KeybindingSection::Submission,
@@ -531,10 +538,15 @@ mod tests {
             binding(ShellBindingId::ContextInspector).catalog_chord,
             "/context"
         );
+        assert_eq!(
+            binding(ShellBindingId::ProviderRoute).catalog_chord,
+            "F3 / /provider"
+        );
         assert_eq!(binding(ShellBindingId::Help).catalog_chord, "F1 / Ctrl+/");
         for id in [
             ShellBindingId::ToolDetails,
             ShellBindingId::ContextInspector,
+            ShellBindingId::ProviderRoute,
             ShellBindingId::Help,
         ] {
             let chord = binding(id).catalog_chord;

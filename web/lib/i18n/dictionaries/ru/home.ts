@@ -7,7 +7,7 @@ import type { HomeDict } from "../types";
  * `npm run check:locales` and `dictionaries.test.ts`.
  *
  * Fixed product vocabulary stays Latin and matches the TUI ru locale pack:
- * Plan / Work / Operate, Ask / Auto-Review / Full Access, Codewhale, Fleet.
+ * Plan / Work / Operate, Ask / Auto-Review / Full Access, Codewhale, Pod.
  * "receipt" is rendered "квитанция", as in `crates/tui/locales/ru.json`.
  * The `seal*` values are the paper's marks, shared across locales.
  */
@@ -69,7 +69,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "Впервые в Codewhale? Четыре шага от начала до конца.",
   startLede:
-    "Установка → первый сеанс без ключей → подключение провайдера → первый воркфлоу Fleet. Термины — на странице словаря.",
+    "Установка → первый сеанс без ключей → подключение провайдера → первый воркфлоу Pod. Термины — на странице словаря.",
   startGuideLink: "Читать руководство «С чего начать» →",
   startVocabularyLink: "Посмотреть словарь продукта →",
 
@@ -90,7 +90,7 @@ export const home: HomeDict = {
     ["codewhale exec", "Скрипты и CI"],
     ["Веб-клиент", "Клиент в браузере, только через loopback"],
     ["Runtime API + MCP", "Локальные интеграции"],
-    ["Fleet", "Длительная работа нескольких агентов"],
+    ["Pod", "Длительная работа нескольких агентов"],
   ],
   runtimeLink: "Интерфейсы рантайма и заметки о стабильности →",
 

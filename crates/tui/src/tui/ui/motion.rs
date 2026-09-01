@@ -117,7 +117,9 @@ pub(crate) fn rail_row_budget(
     } else {
         MIN_CHAT_HEIGHT
     };
-    let composer_floor = MIN_COMPOSER_HEIGHT.saturating_add(u16::from(app.composer_border));
+    let composer_floor = MIN_COMPOSER_HEIGHT.saturating_add(u16::from(
+        crate::tui::widgets::composer_enclosure_enabled(app),
+    ));
     terminal_height
         .saturating_sub(header_height_for(terminal_height))
         // The merged Tideline footer is one row (spec §3: slots 6+8
