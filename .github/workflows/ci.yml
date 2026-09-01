@@ -196,7 +196,12 @@ jobs:
         with:
           node-version: 20
       - name: Check version drift
-        run: ./scripts/release/check-versions.sh
+        # Checks 7 and 12 audit the previous-tag..HEAD commit range, not this
+        # tree, so a receipt another merge forgot reddens every open PR. They
+        # report here and block on every release path (release-candidate.yml,
+        # auto-tag.yml, release.yml, prepare-release.sh), which is where a
+        # missing receipt actually matters.
+        run: ./scripts/release/check-versions.sh --range-audit-advisory
       - name: Check OHOS dependency graph
         run: ./scripts/release/check-ohos-deps.sh
       - name: Check release helper contracts
@@ -382,6 +387,11 @@ jobs:
       # refusing to let the `#[allow(dead_code)]` total rise (#4785).
       - name: Check dead-code budget
         if: needs.changes.outputs.heavy == 'true'
+        # Advisory on pull requests: this asserts a whole-repo property, so a
+        # branch can fail it for debt it inherited rather than added, and the
+        # fix would be rebasing instead of editing code. It stays blocking on
+        # pushes to main, where the number is actually actionable.
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         run: python3 scripts/check-dead-code-budget.py
       - name: Test runtime-contract measurement harness
         if: needs.changes.outputs.heavy == 'true'
@@ -403,6 +413,11 @@ jobs:
       # the measurement script runs only locked, ignored Rust metric tests.
       - name: Check runtime-contract budget
         if: needs.changes.outputs.heavy == 'true'
+        # Advisory on pull requests: this asserts a whole-repo property, so a
+        # branch can fail it for debt it inherited rather than added, and the
+        # fix would be rebasing instead of editing code. It stays blocking on
+        # pushes to main, where the number is actually actionable.
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         run: python3 scripts/check-runtime-contract-budget.py
       # Provider-free paused-consumer measurement of the production
       # persistence request channel. RSS is sampled only on macOS; every host
@@ -414,6 +429,11 @@ jobs:
           python3 scripts/test_check_persistence_backlog_budget.py
       - name: Check persistence-backlog budget
         if: needs.changes.outputs.heavy == 'true'
+        # Advisory on pull requests: this asserts a whole-repo property, so a
+        # branch can fail it for debt it inherited rather than added, and the
+        # fix would be rebasing instead of editing code. It stays blocking on
+        # pushes to main, where the number is actually actionable.
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         run: python3 scripts/check-persistence-backlog-budget.py
       - name: Check README translations stay in sync
         if: github.event_name != 'schedule'
@@ -432,6 +452,11 @@ jobs:
         run: node web/scripts/check-locales.mjs
       - name: Check harvested contributor credit
         if: github.event_name != 'schedule'
+        # Advisory on pull requests: this asserts a whole-repo property, so a
+        # branch can fail it for debt it inherited rather than added, and the
+        # fix would be rebasing instead of editing code. It stays blocking on
+        # pushes to main, where the number is actually actionable.
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}

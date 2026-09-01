@@ -8724,6 +8724,7 @@ async fn spawn_duplicate_session_name_error_names_conflicting_agent() {
     // #2656: the duplicate-name error must identify the conflicting agent so a
     // model can recover deterministically (reuse the id, or pick a new name).
     let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 5)));
+    let boot_id = manager.read().await.session_boot_id().to_string();
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut existing = SubAgent::new(
         "test_agent_existing".to_string(),
@@ -8735,7 +8736,7 @@ async fn spawn_duplicate_session_name_error_names_conflicting_agent() {
         Some(vec!["read_file".to_string()]),
         input_tx,
         PathBuf::from("."),
-        "boot_test".to_string(),
+        boot_id,
     );
     existing.session_name = "researcher".to_string();
     existing.status = SubAgentStatus::Running;
@@ -8777,6 +8778,66 @@ async fn spawn_duplicate_session_name_error_names_conflicting_agent() {
         msg.contains("started ") && msg.contains(" ago"),
         "includes elapsed time since spawn: {msg}"
     );
+}
+
+#[tokio::test]
+async fn spawn_session_name_held_by_prior_session_agent_does_not_collide() {
+    // A completed worker hydrated from an earlier session's ledger is not
+    // addressable by `status`/`peek`/`followup` in this session, so it must
+    // not reserve its name either: a fresh `codewhale exec` in the same
+    // workspace has to be able to spawn `researcher` again.
+    let tmp = tempdir().expect("tempdir");
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 5);
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut stale = SubAgent::new(
+        "test_agent_stale".to_string(),
+        FleetRole::Scout,
+        "scan".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["read_file".to_string()]),
+        input_tx,
+        tmp.path().to_path_buf(),
+        "boot_stale_other".to_string(),
+    );
+    stale.session_name = "researcher".to_string();
+    stale.status = SubAgentStatus::Completed;
+    let stale_id = stale.id.clone();
+    {
+        let mut guard = manager.write().await;
+        guard.agents.insert(stale_id.clone(), stale);
+        assert!(guard.is_from_prior_session(&guard.agents[&stale_id]));
+    }
+
+    let mut runtime = stub_runtime();
+    runtime.manager = Arc::clone(&manager);
+    runtime.context = ToolContext::new(tmp.path());
+    let spawned = {
+        let mut guard = manager.write().await;
+        guard
+            .spawn_background_with_assignment_options(
+                manager.clone(),
+                runtime,
+                FleetRole::Scout,
+                "new work".to_string(),
+                make_assignment(),
+                Some(vec!["read_file".to_string()]),
+                SubAgentSpawnOptions {
+                    name: Some("researcher".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("a prior-session holder must not reject a fresh same-name spawn")
+    };
+    assert_ne!(spawned.agent_id, stale_id);
+    let guard = manager.read().await;
+    let fresh = guard
+        .agents
+        .get(&spawned.agent_id)
+        .expect("fresh agent registered");
+    assert_eq!(fresh.session_name, "researcher");
+    assert!(!guard.is_from_prior_session(fresh));
 }
 
 #[tokio::test]

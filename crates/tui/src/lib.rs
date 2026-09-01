@@ -37,6 +37,7 @@ mod commands;
 mod compaction;
 mod composer_history;
 mod composer_stash;
+pub mod computer_meter;
 mod config;
 mod config_persistence;
 mod config_ui;
@@ -981,6 +982,31 @@ fn resolve_exec_resume_route(
         return Ok(resolve_exec_model(config, None));
     }
     Ok(saved.metadata.model.clone())
+}
+
+/// Fold the dispatcher-forwarded launch overrides (`CODEWHALE_PROVIDER` /
+/// `CODEWHALE_MODEL`, set by `codewhale --provider X --model Y exec ...`)
+/// into the explicit route signals `exec --resume`/`--continue` honour.
+///
+/// Exec-level flags win when both are present; either source counts as
+/// "the user named a route for this run", so a resume must not silently
+/// restore the saved provider/model over it.
+fn exec_resume_route_overrides(
+    exec_provider: Option<&str>,
+    exec_model: Option<&str>,
+    launch_provider: Option<&str>,
+    launch_model: Option<&str>,
+) -> (bool, Option<String>) {
+    let non_empty = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let explicit_provider =
+        non_empty(exec_provider).is_some() || non_empty(launch_provider).is_some();
+    let explicit_model = non_empty(exec_model).or_else(|| non_empty(launch_model));
+    (explicit_provider, explicit_model)
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -2286,12 +2312,24 @@ async fn run_async_main_dispatch(
                         explicit_reasoning.is_some(),
                     )?;
                 }
+                // The `codewhale` dispatcher refuses `--provider`/`--model`
+                // after `exec` and forwards the top-level flags as
+                // `CODEWHALE_PROVIDER` / `CODEWHALE_MODEL` instead, so a
+                // resume must treat those launch overrides as explicit or it
+                // silently restores the saved route (cloud-agent e2e,
+                // 2026-08-30).
+                let (resume_explicit_provider, resume_explicit_model) = exec_resume_route_overrides(
+                    explicit_provider,
+                    explicit_model,
+                    crate::config::explicit_launch_provider_override().as_deref(),
+                    crate::config::explicit_launch_model_override().as_deref(),
+                );
                 let model = if let Some(saved) = resume_session.as_ref() {
                     resolve_exec_resume_route(
                         &mut config,
                         saved,
-                        explicit_provider.is_some(),
-                        explicit_model,
+                        resume_explicit_provider,
+                        resume_explicit_model.as_deref(),
                     )?
                 } else {
                     resolve_exec_model(&config, explicit_model)
@@ -7025,7 +7063,14 @@ fn provider_capability_report(config: &Config) -> serde_json::Value {
     let resolved_model = route
         .as_ref()
         .map_or(configured_model.as_str(), |route| route.model.as_str());
-    let cap = crate::config::provider_capability(provider, resolved_model);
+    // Wire-aware so a custom provider's `wire = "responses" | "anthropic"`
+    // reports the payload mode the client will actually speak instead of the
+    // static Chat default.
+    let cap = crate::config::provider_capability_with_wire(
+        provider,
+        resolved_model,
+        config.provider_wire_dialect(provider),
+    );
     let route_profile = route.as_ref().map(|route| {
         crate::model_profile::resolved_capability_profile_for_route(
             provider,
@@ -14964,6 +15009,144 @@ reasoning = "high"
             .expect_err("removed saved provider must fail closed");
         assert!(err.to_string().contains("will not fall back"), "{err}");
         assert_eq!(missing.provider, before);
+    }
+
+    #[test]
+    fn exec_resume_honours_dispatcher_forwarded_launch_overrides() {
+        // `codewhale --provider X --model Y exec --resume ID ...` reaches this
+        // binary with X/Y only in CODEWHALE_PROVIDER / CODEWHALE_MODEL; a
+        // resume must treat them as explicit instead of restoring the saved
+        // route.
+        assert_eq!(
+            exec_resume_route_overrides(None, None, None, None),
+            (false, None)
+        );
+        assert_eq!(
+            exec_resume_route_overrides(None, None, Some("modelstudio-token-plan"), None),
+            (true, None)
+        );
+        assert_eq!(
+            exec_resume_route_overrides(None, None, None, Some("qwen3.8-flash")),
+            (false, Some("qwen3.8-flash".to_string()))
+        );
+        assert_eq!(
+            exec_resume_route_overrides(
+                None,
+                None,
+                Some("modelstudio-token-plan"),
+                Some(" qwen3.8-flash ")
+            ),
+            (true, Some("qwen3.8-flash".to_string()))
+        );
+        // Exec-level flags still win over the forwarded launch env.
+        assert_eq!(
+            exec_resume_route_overrides(
+                Some("deepseek"),
+                Some("deepseek-v4-pro"),
+                Some("x"),
+                Some("y")
+            ),
+            (true, Some("deepseek-v4-pro".to_string()))
+        );
+        // Blank values are not overrides.
+        assert_eq!(
+            exec_resume_route_overrides(None, None, Some("  "), Some("")),
+            (false, None)
+        );
+
+        let saved = saved_exec_session("custom-a", crate::config::ZAI_GLM_5_2_MODEL);
+        let mut launch_model_only = custom_exec_config("custom-b");
+        let (explicit_provider, explicit_model) =
+            exec_resume_route_overrides(None, None, None, Some("override-model"));
+        let model = resolve_exec_resume_route(
+            &mut launch_model_only,
+            &saved,
+            explicit_provider,
+            explicit_model.as_deref(),
+        )
+        .expect("launch model override keeps saved provider");
+        assert_eq!(launch_model_only.provider.as_deref(), Some("custom-a"));
+        assert_eq!(model, "override-model");
+
+        let mut launch_provider = custom_exec_config("custom-b");
+        let (explicit_provider, explicit_model) =
+            exec_resume_route_overrides(None, None, Some("custom-b"), None);
+        let model = resolve_exec_resume_route(
+            &mut launch_provider,
+            &saved,
+            explicit_provider,
+            explicit_model.as_deref(),
+        )
+        .expect("launch provider override keeps the launched route");
+        assert_eq!(launch_provider.provider.as_deref(), Some("custom-b"));
+        assert_eq!(model, "model-b");
+    }
+
+    #[test]
+    fn exec_resume_uses_dispatcher_env_route_loaded_by_config() {
+        // Exercise the production sequence without starting an Engine turn:
+        // `Config::load` applies the dispatcher-forwarded environment, then
+        // the resume seam must treat the same launch env as explicit and skip
+        // the unavailable persisted route rather than restoring it.
+        let _env_lock = crate::test_support::lock_test_env();
+        let _legacy_provider = crate::test_support::EnvVarGuard::remove("DEEPSEEK_PROVIDER");
+        let _legacy_model = crate::test_support::EnvVarGuard::remove("DEEPSEEK_MODEL");
+        let _provider = crate::test_support::EnvVarGuard::set("CODEWHALE_PROVIDER", "launch-route");
+        let _model = crate::test_support::EnvVarGuard::set("CODEWHALE_MODEL", "dispatcher-model");
+        let tmp = tempfile::tempdir().expect("config tempdir");
+        let codewhale_home = tmp.path().join("codewhale-home");
+        std::fs::create_dir_all(&codewhale_home).expect("isolated Codewhale home");
+        let _codewhale_home =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &codewhale_home);
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"provider = "stored-route"
+
+[providers.launch-route]
+kind = "openai-compatible"
+base_url = "https://launch.example.test/v1"
+model = "configured-launch-model"
+api_key = "test-only-key"
+"#,
+        )
+        .expect("write config");
+
+        let mut config = Config::load(Some(config_path), None).expect("load launch config");
+        assert_eq!(config.provider.as_deref(), Some("launch-route"));
+        assert_eq!(config.default_model(), "dispatcher-model");
+
+        // The saved route deliberately has no live config table. This control
+        // proves that a non-explicit resume would fail closed instead of
+        // silently falling back; the dispatcher overrides must prevent that
+        // restore attempt.
+        let saved = saved_exec_session("stored-route", "stored-model");
+        let mut restore_attempt = config.clone();
+        let restore_error = resolve_exec_resume_route(&mut restore_attempt, &saved, false, None)
+            .expect_err("unavailable saved route must not be restored");
+        assert!(
+            restore_error.to_string().contains("stored-route"),
+            "{restore_error}"
+        );
+
+        let (explicit_provider, explicit_model) = exec_resume_route_overrides(
+            None,
+            None,
+            crate::config::explicit_launch_provider_override().as_deref(),
+            crate::config::explicit_launch_model_override().as_deref(),
+        );
+        assert!(explicit_provider);
+        assert_eq!(explicit_model.as_deref(), Some("dispatcher-model"));
+
+        let model = resolve_exec_resume_route(
+            &mut config,
+            &saved,
+            explicit_provider,
+            explicit_model.as_deref(),
+        )
+        .expect("dispatcher environment must keep the launch route on resume");
+        assert_eq!(config.provider.as_deref(), Some("launch-route"));
+        assert_eq!(model, "dispatcher-model");
     }
 
     #[test]

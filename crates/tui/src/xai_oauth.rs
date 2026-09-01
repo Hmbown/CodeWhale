@@ -308,33 +308,6 @@ pub fn codewhale_auth_file_path() -> Result<PathBuf> {
     codewhale_config::legacy_xai_oauth_path()
 }
 
-/// #5243: validate an external Grok CLI credential file *before* consent is
-/// persisted. The old path only lexically normalized the path
-/// (`resolve_external_credential_path`) and deferred the existence/freshness
-/// check to the first request, producing `auth:oauth-consented-select-to-check`
-/// and a second trip to the picker. Grant-time validation fails fast and the
-/// token — whether just minted by device OAuth or already stored — is adopted
-/// automatically without a follow-up `e`.
-#[must_use]
-pub fn external_file_is_fresh(path: &Path) -> bool {
-    // Read without a grant: this is the grant-time check, so no capability
-    // exists yet. Use the same secure reader the runtime uses for owned files
-    // when possible, falling back to a direct read for the external path.
-    let raw = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    let file = match parse_auth_file(&raw, path) {
-        Ok(f) => f,
-        Err(_) => return false,
-    };
-    let mut file = file;
-    let Some((_, entry)) = select_entry(&mut file) else {
-        return false;
-    };
-    entry_access_token_is_fresh(&entry)
-}
-
 fn configured_owned_auth_file_path(config: &Config) -> Result<Option<PathBuf>> {
     let generation = config
         .provider_config_for(ApiProvider::Xai)
@@ -382,7 +355,8 @@ pub fn credentials_present(config: &Config) -> bool {
 
 /// Prompt-free structural check for xAI OAuth material. Never refreshes,
 /// writes, or makes network requests. External storage is not inspected until
-/// exact read-only consent has been validated.
+/// exact read-only consent has been persisted, and then only at the exact
+/// consented path — no ambient candidate is ever resolved or opened (#5772).
 #[must_use]
 pub fn credentials_valid(config: &Config) -> bool {
     // Codewhale-owned OAuth bytes are inert until the xAI provider explicitly
@@ -427,11 +401,20 @@ pub fn credentials_valid(config: &Config) -> bool {
         return true;
     }
 
-    let path = auth_file_path();
+    // #5772: with no persisted consent record there is no external path to
+    // resolve and nothing to open. Deriving the Grok CLI candidate from `HOME`
+    // just to fail the grant would disclose that location for free.
+    let Some(consent_path) = config
+        .provider_config_for(ApiProvider::Xai)
+        .and_then(|entry| entry.external_credentials.as_ref())
+        .map(|consent| consent.path.clone())
+    else {
+        return false;
+    };
     let Ok(grant) = config.external_credential_read_grant(
         ApiProvider::Xai,
         codewhale_config::ExternalCredentialSource::GrokCli,
-        &path,
+        &consent_path,
     ) else {
         return false;
     };
@@ -439,6 +422,31 @@ pub fn credentials_valid(config: &Config) -> bool {
         return false;
     };
     select_entry(&mut file).is_some_and(|(_, entry)| entry_access_token_is_fresh(&entry))
+}
+
+/// Grant-time validation for an external Grok CLI credential file (#5772).
+///
+/// Reads exactly the granted path through the secure adapter and requires a
+/// usable, unexpired entry. Never refreshes, rewrites, or makes a network
+/// request. Consent is persisted only after this succeeds, so a consent record
+/// can never be written for a file that holds nothing usable.
+pub fn validate_external_credentials(
+    grant: &codewhale_config::ExternalCredentialReadGrant,
+) -> Result<()> {
+    let mut file = load_external_auth_file(grant)?;
+    let (_, entry) = select_entry(&mut file).ok_or_else(|| {
+        anyhow::anyhow!(
+            "xAI OAuth credentials at {} have no usable entry. Run `grok login` again or use `codewhale auth xai-device` for Codewhale-owned storage.",
+            codewhale_config::quote_os_path(grant.path())
+        )
+    })?;
+    if !entry_access_token_is_fresh(&entry) {
+        bail!(
+            "xAI OAuth access token in {} is expired. Read-only consent never refreshes or rewrites another CLI's credentials. Run `grok login` again or use `codewhale auth xai-device`.",
+            codewhale_config::quote_os_path(grant.path())
+        );
+    }
+    Ok(())
 }
 
 /// Load xAI OAuth credentials. Codewhale-owned credentials may refresh and
@@ -1617,14 +1625,15 @@ mod tests {
         );
     }
 
-    /// #4763 root trigger. A returning xAI-OAuth user whose only material is
-    /// an external Grok CLI grant loses readiness the moment that CLI's
-    /// short-lived access token expires, even though a refresh token sits
-    /// right beside it — read-only consent deliberately never refreshes or
-    /// rewrites another CLI's file, so there is nothing to renew it with.
-    /// `needs_api_key` therefore flips to true and onboarding reopens. That
-    /// is the intended invariant, not a leak; this test pins it so the
-    /// onboarding entry point stays explainable.
+    /// #4763 root trigger, re-pinned for #5772. A returning xAI-OAuth user
+    /// whose only material is an external Grok CLI grant loses readiness the
+    /// moment that CLI's short-lived access token expires, even though a
+    /// refresh token sits right beside it — read-only consent deliberately
+    /// never refreshes or rewrites another CLI's file, so there is nothing to
+    /// renew it with. `needs_api_key` therefore flips to true and onboarding
+    /// reopens. That is the intended invariant, not a leak, and it is what
+    /// stops a surviving consent record from reading as a stored credential;
+    /// this test pins it so the onboarding entry point stays explainable.
     #[test]
     fn expired_external_grok_grant_reads_as_missing_key_despite_refresh_token() {
         let _guard = crate::test_support::lock_test_env();
@@ -1668,6 +1677,7 @@ mod tests {
             ..Default::default()
         };
 
+        crate::external_credentials::reset_side_effect_trap();
         assert!(
             !credentials_present(&config),
             "an expired external access token is not usable material"
@@ -1675,6 +1685,16 @@ mod tests {
         assert!(
             !crate::config::has_api_key_for(&config, ApiProvider::Xai),
             "expired external xAI OAuth must fall through to the missing-key path"
+        );
+        assert_eq!(
+            crate::external_credentials::complete_side_effect_trap_counts().2,
+            0,
+            "a consented read never rewrites Codewhale-owned storage"
+        );
+        assert_eq!(
+            crate::external_credentials::complete_side_effect_trap_counts().3,
+            0,
+            "a consented read never refreshes another CLI's token"
         );
 
         // The same file with a live access token is ready, so the check is
