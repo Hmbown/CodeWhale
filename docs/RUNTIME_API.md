@@ -28,6 +28,7 @@ local supervisor / SDK / automation harness
         ├─ codewhale app-server --http     → HTTP/SSE runtime API (/v1/*)        [canonical]
         ├─ codewhale app-server --mobile   → runtime API + mobile control page
         ├─ codewhale app-server --stdio    → JSON-RPC control transport over stdio
+        ├─ codewhale app-server --socket   → same JSON-RPC over a unix domain socket (desktop daemon)
         ├─ codewhale doctor --json         → machine-readable health & capability
         ├─ codewhale serve --acp           → ACP stdio agent for editors such as Zed
         ├─ codewhale serve --mcp           → MCP stdio server
@@ -50,6 +51,7 @@ CLI/API surfaces are not implemented yet.
 | `codewhale app-server --http` | HTTP/SSE on `127.0.0.1:7878` | Full `/v1/*` runtime API (canonical) |
 | `codewhale app-server --mobile` | HTTP/SSE on `0.0.0.0:7878` + `/mobile` | Runtime API + phone control page |
 | `codewhale app-server --stdio` | JSON-RPC 2.0 over stdio | Local SDK / control probe (no listener) |
+| `codewhale app-server --socket [--socket-path P]` | JSON-RPC 2.0 over a `0600` unix domain socket | Desktop daemon: multi-client, peer-uid checked, `daemon/attach` claim handshake (macOS/Linux; Windows named pipe reserved, not implemented) |
 | `codewhale app-server` | HTTP on `127.0.0.1:8787` | Legacy in-process app-server (`/healthz`, `/thread`, `/app`, `/prompt`, `/tool`, `/jobs`); `/prompt` and `/thread` messages execute real turns via the runtime bridge |
 | `codewhale serve --http` / `--mobile` | same server as `app-server --http`/`--mobile` | Compatibility aliases |
 
@@ -117,6 +119,60 @@ printf '%s\n' \
 `app/capabilities`, and `prompt/capabilities` scope it per family. The method
 set is pinned by a drift test in `crates/app-server/src/lib.rs`, so SDK and
 local integration clients can rely on it not changing silently.
+
+### Daemon socket: `codewhale app-server --socket`
+
+The desktop shell (DESKTOP-APP-BRIEF §2) attaches to a long-lived daemon over
+a unix domain socket. The wire is the `--stdio` transport verbatim — the same
+newline-delimited JSON-RPC 2.0 methods, dispatched by the same code — with one
+handshake in front of it.
+
+**Endpoint.** `--socket-path` if given; else `$CODEWHALE_HOME/run/daemon.sock`
+when `CODEWHALE_HOME` is set (an explicit home is an isolation boundary); else
+`$XDG_RUNTIME_DIR/codewhale/daemon.sock`; else
+`~/Library/Application Support/codewhale/daemon.sock` on macOS or
+`~/.codewhale/run/daemon.sock` elsewhere. The directory is created `0700`, the
+socket is `0600`, and every accepted peer must present the daemon's own uid.
+On start, a socket file nobody answers on is removed; a live one makes the new
+daemon exit with `a live listener already answers on <path>; refusing to
+replace it`; a non-socket file at the path is never touched. On Windows `--socket` fails with a typed
+`UnsupportedPlatform` error naming the reserved pipe `\\.\pipe\codewhale-daemon`
+— there is no silent TCP fallback. The daemon prints
+`codewhale daemon: listening on <path>` to stderr once it is accepting.
+
+**Handshake.** The first request on a connection must be `daemon/attach`
+(`healthz` is also allowed beforehand, so a shell can probe liveness). Every
+other method is refused with `-32010 attach_required` until then.
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"daemon/attach","params":{
+  "client":{"name":"codewhale-desktop","version":"1.2.3","pid":4242},
+  "mode":"claim",
+  "expect_daemon_version":"0.9.11"}}
+```
+
+`mode` is `"claim"` (this client spawned the daemon and manages its lifetime)
+or `"attach"` (default: a guest that found a healthy daemon). A claim while
+another connection owns the daemon fails with `-32011 daemon_already_claimed`
+(`data.owner` names the holder) and the client should retry with `attach`.
+`expect_daemon_version`, when present, must equal the daemon's crate version
+or the attach fails with `-32013 daemon_version_skew` (the bundle-skew guard).
+The reply reports the granted `role` (`owner` / `attached`), the daemon's
+`pid`, `version`, `socket_path`, and `uptime_ms`, the current `owner`, and the
+live `connections` count. A second `daemon/attach` on an attached connection
+is `-32014 already_attached`.
+
+**Capabilities.** On this transport `capabilities.methods` is the pinned stdio
+set plus `daemon/attach` (second entry, after `healthz`); `transport` reads
+`unix-socket`. `shutdown` is advertised to every connection because the method
+exists, but only the owner may call it (below).
+
+**Ownership.** Only the owner may `shutdown`; a guest's `shutdown` is refused
+with `-32012 not_daemon_owner` and does not interrupt anyone's turn. When the
+owner disconnects the slot frees, so a relaunched shell re-claims the daemon it
+left running. The owner's `shutdown` stops the listener, closes every
+connection, and removes the socket file. Journal replay from a client's
+last-seen `seq` is not part of this transport yet.
 
 ### Interrupting a turn
 

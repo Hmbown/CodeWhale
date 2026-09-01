@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Preview the Codewhale empty-state whale mark: before vs after.
+"""Preview archived Codewhale empty-state portrait art: before vs after.
 
-Reads the live art constants out of `crates/tui/src/tui/underwater.rs` so the
-preview cannot drift from what the TUI actually renders, and prints them beside
-the art this branch replaced.
+This script is historical comparison evidence only. It is not a preview of the
+current Codewhale mark: the canonical mark is a raster asset with no approved
+ASCII or block-glyph substitute. The historical rows are held below as a fixed record because the live
+`underwater.rs` constants were intentionally deleted with the old artwork.
 
     python3 scripts/preview-whale-art.py            # ANSI true colour
     python3 scripts/preview-whale-art.py --plain    # no escape codes
@@ -16,12 +17,6 @@ Colours are the real palette tokens: Signal Gold #F6C453 body, Signal Current
 from __future__ import annotations
 
 import argparse
-import pathlib
-import re
-import sys
-
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-UNDERWATER = ROOT / "crates" / "tui" / "src" / "tui" / "underwater.rs"
 
 GOLD = (246, 196, 83)  # WHALE_HUMAN_RGB  — Signal Gold
 CYAN = (72, 215, 255)  # WHALE_CYAN_RGB   — Signal Current
@@ -44,6 +39,22 @@ BEFORE = {
     ]),
 }
 
+# The former Signal Cut revision, kept as a static record. It must not be
+# inferred from live source: the runtime portrait constants were deliberately
+# removed when the product mark changed.
+AFTER = {
+    "classic": ("    ˚", [
+        "  ▗▄▄▟▄▄▄▄▄▖  ▚△▞",
+        " ▐█·████████▙▄▄▞",
+        "  ▝▀▀▀▀▀▀▀▀▘",
+    ]),
+    "uwu": ("    ˚✦", [
+        "  ▗▄▄▟▄▄▄▄▖  ▚△▞",
+        " ▐█░·░█████▙▄▄▞",
+        "  ▝▀▀▀▀▀▀▀▘",
+    ]),
+}
+
 # Same table the TUI narrows through (`glyphs::ascii_fallback`).
 ASCII_FALLBACK = {
     "━": "-", "▐": "|", "█": "#", "▄": "#", "▟": "#",
@@ -53,28 +64,6 @@ ASCII_FALLBACK = {
 }
 
 CURRENT_ROW = 2  # IDLE_WHALE_CURRENT_ROW
-
-
-def parse_art() -> dict[str, tuple[str, list[str]]]:
-    """Pull the four art constants out of underwater.rs."""
-    src = UNDERWATER.read_text(encoding="utf-8")
-
-    def one(name: str) -> str:
-        match = re.search(rf'const {name}: &str = "(.*?)";', src)
-        if not match:
-            sys.exit(f"could not find {name} in {UNDERWATER}")
-        return match.group(1)
-
-    def rows(name: str) -> list[str]:
-        match = re.search(rf"const {name}: \[&str; 3\] = \[(.*?)\];", src, re.S)
-        if not match:
-            sys.exit(f"could not find {name} in {UNDERWATER}")
-        return re.findall(r'"(.*?)"', match.group(1))
-
-    return {
-        "classic": (one("IDLE_WHALE_SPOUT_ROW"), rows("IDLE_WHALE_ROWS")),
-        "uwu": (one("UWU_IDLE_WHALE_SPOUT_ROW"), rows("UWU_IDLE_WHALE_ROWS")),
-    }
 
 
 def ink(variant: str, row: int, ch: str, old: bool = False) -> tuple[int, int, int]:
@@ -156,7 +145,7 @@ def render_png(after: dict[str, tuple[str, list[str]]], path: str) -> None:
     cell_w, cell_h, pad = 18, 34, 30
     panels = [
         ("BEFORE  ·  main", BEFORE["classic"], True),
-        ("AFTER  ·  Signal Cut", after["classic"], False),
+        ("ARCHIVED AFTER  ·  Signal Cut", after["classic"], False),
     ]
     cols = max(len(row) for _, (spout, body), _ in panels for row in [spout] + body)
     width = pad * 2 + cols * cell_w
@@ -210,8 +199,8 @@ def main() -> None:
     args = parser.parse_args()
     colour = not args.plain and sys.stdout.isatty()
 
-    after = parse_art()
-    print("Codewhale empty-state whale mark — CURRENT (main) vs NEW (Signal Cut)\n")
+    after = AFTER
+    print("ARCHIVED: former Codewhale empty-state portrait — main vs Signal Cut\n")
     for variant in ("classic", "uwu"):
         label = "classic" if variant == "classic" else "uwu"
         print(f"== {label} ==\n")

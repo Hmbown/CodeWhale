@@ -1652,6 +1652,13 @@ impl Provider for Custom {
     }
 
     fn wire_policy(&self) -> WirePolicy {
+        // Static default remains Chat Completions for backward compatibility.
+        // Per-config `wire = "responses" | "anthropic" | "chat"` overrides are
+        // honored in `crates/tui/src/client.rs::provider_wire_format_for_config`
+        // and `crates/tui/src/config.rs::provider_capability`, which read
+        // `ProviderConfig::wire` for the `Custom` catalog identity. This keeps
+        // the `Provider` trait `Fixed` while giving custom endpoints the same
+        // three-way switch (`responses` / `anthropic` / `chat`) as built-ins.
         WirePolicy::Fixed(WireFormat::ChatCompletions)
     }
 }

@@ -111,22 +111,6 @@ impl ToolRegistry {
             .map(crate::image_attach::bound_rich_tool_result)
     }
 
-    /// Execute a tool with an optional context override.
-    ///
-    /// This is used for retrying tools with elevated sandbox policies.
-    /// After execution, results are stamped with adaptive evidence routing.
-    #[allow(dead_code)] // compatibility seam for text-only internal callers
-    pub async fn execute_full_with_context(
-        &self,
-        name: &str,
-        input: Value,
-        context_override: Option<&ToolContext>,
-    ) -> Result<ToolResult, ToolError> {
-        self.execute_rich_full_with_context(name, input, context_override)
-            .await
-            .map(RichToolResult::into_result)
-    }
-
     pub(crate) async fn execute_rich_full_with_context(
         &self,
         name: &str,

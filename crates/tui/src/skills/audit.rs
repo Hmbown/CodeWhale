@@ -22,12 +22,6 @@ use super::{SkillRegistry, normalize_skill_name_for_lookup};
 
 /// Max bytes of `SKILL.md` the auditor will read into memory.
 pub const AUDIT_MAX_SKILL_MD_BYTES: u64 = 512 * 1024;
-/// Max total package bytes considered for digest / integrity.
-#[allow(dead_code)] // re-exported bound for callers / docs
-pub const AUDIT_MAX_PACKAGE_BYTES: u64 = package_digest::PACKAGE_DIGEST_MAX_BYTES;
-/// Max regular files included in a package digest walk.
-#[allow(dead_code)]
-pub const AUDIT_MAX_FILES: usize = package_digest::PACKAGE_DIGEST_MAX_FILES;
 /// Max directory depth under a skill package (and under a root when locating packages).
 pub const AUDIT_MAX_DEPTH: usize = package_digest::PACKAGE_DIGEST_MAX_DEPTH;
 

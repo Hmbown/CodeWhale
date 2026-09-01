@@ -146,6 +146,27 @@ impl TurnContext {
         self.latest_parent_input_tokens = (usage.input_tokens > 0).then_some(usage.input_tokens);
         self.add_usage(usage);
     }
+
+    /// Billed prompt the compaction gate should honor: this turn's latest
+    /// parent request, else the session-carried receipt from the previous
+    /// turn. A fresh `TurnContext` starts empty, so without the session
+    /// fallback an 842k DeepSeek bill dies at the turn boundary and the
+    /// next send never auto-compacts (#5577).
+    #[must_use]
+    pub(crate) fn billed_input_tokens_for_compaction(
+        &self,
+        session_billed: Option<u32>,
+    ) -> Option<u64> {
+        self.latest_parent_input_tokens
+            .or(session_billed)
+            .map(u64::from)
+    }
+
+    /// Drop the turn-local billed receipt after history is rewritten so the
+    /// next step cannot compact again on the pre-compaction prompt.
+    pub(crate) fn clear_parent_input_tokens(&mut self) {
+        self.latest_parent_input_tokens = None;
+    }
 }
 
 fn add_optional_usage(total: Option<u32>, delta: Option<u32>) -> Option<u32> {
@@ -234,6 +255,36 @@ mod usage_tests {
         assert_eq!(turn.usage.input_tokens, 320_000);
         assert_eq!(turn.latest_parent_input_tokens, Some(70_000));
         assert!(below_threshold(&[], &turn));
+    }
+
+    #[test]
+    fn fresh_turn_inherits_session_billed_prompt_for_compaction() {
+        let turn = TurnContext::new(4);
+        assert_eq!(turn.latest_parent_input_tokens, None);
+        assert_eq!(
+            turn.billed_input_tokens_for_compaction(Some(842_000)),
+            Some(842_000)
+        );
+        assert_eq!(turn.billed_input_tokens_for_compaction(None), None);
+    }
+
+    #[test]
+    fn live_turn_billed_outranks_stale_session_billed() {
+        let mut turn = TurnContext::new(4);
+        turn.add_parent_usage(&Usage {
+            input_tokens: 12_000,
+            ..Usage::default()
+        });
+        assert_eq!(
+            turn.billed_input_tokens_for_compaction(Some(842_000)),
+            Some(12_000)
+        );
+        turn.clear_parent_input_tokens();
+        assert_eq!(turn.latest_parent_input_tokens, None);
+        assert_eq!(
+            turn.billed_input_tokens_for_compaction(Some(842_000)),
+            Some(842_000)
+        );
     }
 }
 

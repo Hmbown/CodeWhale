@@ -1,7 +1,7 @@
-//! Fleet detail — open a saved named Fleet and edit it.
+//! Pod detail — open a saved named Pod and edit it.
 //!
 //! Row 0 is the Coordinator's own model; below it one row per member.
-//! Editing a Fleet edits that Fleet's file — never the live session route and
+//! Editing a Pod edits that Pod's file — never the live session route and
 //! never a global collection of role profiles. Every write goes through
 //! [`crate::fleet::store`] with an atomic save and a receipt naming the exact
 //! file and scope.
@@ -29,7 +29,7 @@ use crate::tui::views::{
 };
 
 /// The built-in role vocabulary offered when adding a member, in a useful
-/// order. A Fleet member is a role; the user can name anything, these are the
+/// order. A Pod member is a role; the user can name anything, these are the
 /// known postures.
 const KNOWN_ROLES: [&str; 8] = [
     "scout",
@@ -89,13 +89,13 @@ pub struct FleetDetailView {
 }
 
 impl FleetDetailView {
-    /// Open a saved Fleet by name and scope. The caller (the list view) names
+    /// Open a saved Pod by name and scope. The caller (the list view) names
     /// the scope explicitly, so ambiguity is impossible here.
     pub fn open(app: &App, config: &Config, name: &str, scope: FleetScope) -> Option<Self> {
         Self::open_for_member(app, config, name, scope, None)
     }
 
-    /// Open the exact named Fleet and, when the request came from a roster
+    /// Open the exact named Pod and, when the request came from a roster
     /// member, focus that member in the v2 editor.
     pub(crate) fn open_for_member(
         app: &App,
@@ -216,7 +216,7 @@ impl FleetDetailView {
             self.rename_mode = false;
             return Some(ViewAction::None);
         }
-        // The rename must not collide with a different Fleet of the same slug
+        // The rename must not collide with a different Pod of the same slug
         // in this scope (the store refuses that at save).
         let old_name = self.fleet.name.clone();
         self.fleet.name = new_name.clone();
@@ -224,7 +224,7 @@ impl FleetDetailView {
         match save_fleet(&self.fleet, self.scope, &self.workspace) {
             Ok(path) => Some(ViewAction::EmitAndClose(ViewEvent::FleetStoreChanged {
                 message: format!(
-                    "Renamed Fleet `{old_name}` → `{new_name}` ({}) — wrote {}",
+                    "Renamed Pod `{old_name}` → `{new_name}` ({}) — wrote {}",
                     self.scope.label(),
                     path.display()
                 ),
@@ -414,7 +414,7 @@ impl FleetDetailView {
         match save_fleet(&self.fleet, self.scope, &self.workspace) {
             Ok(path) => Some(ViewAction::EmitAndClose(ViewEvent::FleetStoreChanged {
                 message: format!(
-                    "Saved Fleet `{}` ({}) — wrote {}",
+                    "Saved Pod `{}` ({}) — wrote {}",
                     self.fleet.name,
                     self.scope.long_label(),
                     path.display()
@@ -434,7 +434,7 @@ impl FleetDetailView {
         match save_fleet(&self.fleet, target, &self.workspace) {
             Ok(path) => Some(ViewAction::EmitAndClose(ViewEvent::FleetStoreChanged {
                 message: format!(
-                    "Copied Fleet `{}` to {} scope — wrote {}",
+                    "Copied Pod `{}` to {} scope — wrote {}",
                     self.fleet.name,
                     target.label(),
                     path.display()
@@ -451,7 +451,7 @@ impl FleetDetailView {
         match set_selected(&self.fleet.name, scope, &self.workspace) {
             Ok(path) => Some(ViewAction::EmitAndClose(ViewEvent::FleetStoreChanged {
                 message: format!(
-                    "Selected Fleet `{}` as {} default — wrote {}",
+                    "Selected Pod `{}` as {} default — wrote {}",
                     self.fleet.name,
                     scope.label(),
                     path.display()
@@ -630,7 +630,7 @@ impl ModalView for FleetDetailView {
             format!("Renaming: {}▏", self.rename_input)
         } else {
             format!(
-                "Fleet `{}` · {} scope · {}",
+                "Pod `{}` · {} scope · {}",
                 self.fleet.name,
                 self.scope.label(),
                 self.source.display()
@@ -638,10 +638,7 @@ impl ModalView for FleetDetailView {
         };
         let mut header = vec![
             Line::from(vec![
-                Span::styled(
-                    "─ Fleet ",
-                    Style::default().fg(palette::WHALE_ACTION).bold(),
-                ),
+                Span::styled("─ Pod ", Style::default().fg(palette::WHALE_ACTION).bold()),
                 Span::styled(title, Style::default().fg(palette::TEXT_SECONDARY)),
             ]),
             Line::from(""),
@@ -941,7 +938,7 @@ mod tests {
             requires: Vec::new(),
         });
         save_fleet(&duplicate_roles, FleetScope::Workspace, ws.path())
-            .expect("save duplicate-role Fleet");
+            .expect("save duplicate-role Pod");
         let focused = FleetDetailView::open_for_member(
             &app,
             &Config::default(),
@@ -992,7 +989,7 @@ mod tests {
             panic!("expected FleetStoreChanged, got {action:?}");
         };
         assert!(
-            message.contains("Renamed Fleet `Old Name` → `New Name`"),
+            message.contains("Renamed Pod `Old Name` → `New Name`"),
             "{message}"
         );
         // The on-disk file now carries the new name.
@@ -1005,13 +1002,13 @@ mod tests {
     #[test]
     fn operator_route_pick_pins_and_inherit_clears() {
         let ws = tempfile::TempDir::new().unwrap();
-        let fleet = sample_fleet("Fleet A");
+        let fleet = sample_fleet("Pod A");
         save_fleet(&fleet, FleetScope::Workspace, ws.path()).unwrap();
 
         let mut view = FleetDetailView::open(
             &app_in(ws.path().to_path_buf()),
             &Config::default(),
-            "Fleet A",
+            "Pod A",
             FleetScope::Workspace,
         )
         .expect("open");
@@ -1036,13 +1033,13 @@ mod tests {
     #[test]
     fn member_edit_pins_route_and_toggles_vision() {
         let ws = tempfile::TempDir::new().unwrap();
-        let fleet = sample_fleet("Fleet B");
+        let fleet = sample_fleet("Pod B");
         save_fleet(&fleet, FleetScope::Workspace, ws.path()).unwrap();
 
         let mut view = FleetDetailView::open(
             &app_in(ws.path().to_path_buf()),
             &Config::default(),
-            "Fleet B",
+            "Pod B",
             FleetScope::Workspace,
         )
         .expect("open");
@@ -1075,13 +1072,13 @@ mod tests {
     #[test]
     fn save_writes_the_file_and_receipt_names_the_path() {
         let ws = tempfile::TempDir::new().unwrap();
-        let fleet = sample_fleet("Fleet C");
+        let fleet = sample_fleet("Pod C");
         save_fleet(&fleet, FleetScope::Workspace, ws.path()).unwrap();
 
         let mut view = FleetDetailView::open(
             &app_in(ws.path().to_path_buf()),
             &Config::default(),
-            "Fleet C",
+            "Pod C",
             FleetScope::Workspace,
         )
         .expect("open");
@@ -1096,19 +1093,19 @@ mod tests {
         let ViewAction::EmitAndClose(ViewEvent::FleetStoreChanged { message }) = action else {
             panic!("expected FleetStoreChanged, got {action:?}");
         };
-        assert!(message.contains("Saved Fleet `Fleet C`"), "{message}");
+        assert!(message.contains("Saved Pod `Pod C`"), "{message}");
         // The receipt names the path as this platform writes it, so build the
         // expected tail the same way instead of hard-coding `/` — on Windows
         // `Path::display` renders the separators as `\`.
         let expected_tail = std::path::Path::new(".codewhale")
             .join("fleets")
-            .join("fleet-c.toml")
+            .join("pod-c.toml")
             .display()
             .to_string();
         assert!(message.contains(&expected_tail), "{message}");
 
         let (loaded, _) =
-            crate::fleet::store::load_fleet_in_scope("Fleet C", FleetScope::Workspace, ws.path())
+            crate::fleet::store::load_fleet_in_scope("Pod C", FleetScope::Workspace, ws.path())
                 .expect("reload");
         let op = loaded.operator.expect("operator");
         assert_eq!(op.model, "deepseek-v4-pro");
@@ -1118,13 +1115,13 @@ mod tests {
     #[test]
     fn add_member_uses_an_unused_known_role() {
         let ws = tempfile::TempDir::new().unwrap();
-        let fleet = sample_fleet("Fleet D");
+        let fleet = sample_fleet("Pod D");
         save_fleet(&fleet, FleetScope::Workspace, ws.path()).unwrap();
 
         let mut view = FleetDetailView::open(
             &app_in(ws.path().to_path_buf()),
             &Config::default(),
-            "Fleet D",
+            "Pod D",
             FleetScope::Workspace,
         )
         .expect("open");

@@ -7,7 +7,7 @@ cloud plus chat bridge deployments, and `--apply` is still not implemented.
 
 ## Goal
 
-Give users a guided, education-forward way to reach a local-first CodeWhale
+Give users a guided, education-forward way to reach a local-first Codewhale
 runtime from another surface without accidentally publishing their agent.
 
 Default posture:
@@ -18,7 +18,7 @@ Default posture:
 
 The wizard should ask:
 
-> How do you want to reach CodeWhale?
+> How do you want to reach Codewhale?
 
 and offer these paths, in this order:
 
@@ -124,7 +124,7 @@ curl -fsS \
 
 Runtime mental model:
 
-- Exposed by CodeWhale: only the address it binds. The recommended bind is
+- Exposed by Codewhale: only the address it binds. The recommended bind is
   `127.0.0.1:7878`.
 - Auth token: `CODEWHALE_RUNTIME_TOKEN`, passed as `Authorization: Bearer ...`
   by clients and bridges. Legacy `DEEPSEEK_RUNTIME_TOKEN` remains a fallback.
@@ -136,7 +136,7 @@ Runtime mental model:
 ### 1. This machine only (localhost)
 
 Use this when the TUI, SDK, browser, or local script runs on the same machine as
-CodeWhale.
+Codewhale.
 
 Setup:
 
@@ -176,8 +176,8 @@ Trust boundary:
 
 ### 2. Private devices with Tailscale (Recommended)
 
-Use this to reach CodeWhale from your phone or laptop without opening a LAN or
-public port. Tailscale authenticates devices in your tailnet; CodeWhale still
+Use this to reach Codewhale from your phone or laptop without opening a LAN or
+public port. Tailscale authenticates devices in your tailnet; Codewhale still
 binds to localhost.
 
 Target setup to feature in the wizard:
@@ -195,7 +195,7 @@ tailscale serve --bg --https=443 localhost:7878
 ```
 
 Then open the Tailscale Serve URL from a phone or laptop in the same tailnet.
-For the current binary's mobile page, start CodeWhale with the verified mobile
+For the current binary's mobile page, start Codewhale with the verified mobile
 variant:
 
 ```bash
@@ -237,15 +237,15 @@ tailscale serve status
 Trust boundary:
 
 - Exposed: an HTTPS endpoint reachable by devices authorized in your tailnet.
-- Not exposed: the raw CodeWhale listener; it stays on `127.0.0.1`.
-- Token used: Tailscale identity gates network reachability; CodeWhale still
+- Not exposed: the raw Codewhale listener; it stays on `127.0.0.1`.
+- Token used: Tailscale identity gates network reachability; Codewhale still
   uses `CODEWHALE_RUNTIME_TOKEN` for runtime control.
 - Caveat: Tailscale Serve is private to the tailnet. Tailscale Funnel is public
   internet exposure and belongs only in the advanced path below.
 
 ### 3. Telegram bot
 
-Use this when a Telegram DM should control a local CodeWhale runtime. The bridge
+Use this when a Telegram DM should control a local Codewhale runtime. The bridge
 uses Telegram Bot API long polling, so it does not require a public webhook URL
 or inbound port.
 
@@ -315,8 +315,8 @@ npm run validate:config -- \
 
 Trust boundary:
 
-- Exposed: no inbound CodeWhale port. Telegram sees messages sent to the bot.
-- Not exposed: CodeWhale remains on `127.0.0.1`; provider keys stay in the
+- Exposed: no inbound Codewhale port. Telegram sees messages sent to the bot.
+- Not exposed: Codewhale remains on `127.0.0.1`; provider keys stay in the
   runtime env, not the Telegram env.
 - Tokens used: `TELEGRAM_BOT_TOKEN` for Telegram, `CODEWHALE_RUNTIME_TOKEN` for
   bridge-to-runtime calls, and `TELEGRAM_CHAT_ALLOWLIST` for user/chat gating.
@@ -392,8 +392,8 @@ npm run validate:config -- \
 
 Trust boundary:
 
-- Exposed: no inbound CodeWhale port. Feishu/Lark sees messages sent to the app.
-- Not exposed: CodeWhale remains on `127.0.0.1`; provider keys stay in runtime
+- Exposed: no inbound Codewhale port. Feishu/Lark sees messages sent to the app.
+- Not exposed: Codewhale remains on `127.0.0.1`; provider keys stay in runtime
   config.
 - Tokens used: `FEISHU_APP_ID` / `FEISHU_APP_SECRET` for the platform,
   `CODEWHALE_RUNTIME_TOKEN` for bridge-to-runtime calls, and
@@ -459,9 +459,9 @@ npm run check
 
 Trust boundary:
 
-- Exposed: no inbound CodeWhale port. The personal Weixin session and the
+- Exposed: no inbound Codewhale port. The personal Weixin session and the
   bridge state directory become sensitive local state.
-- Not exposed: CodeWhale remains on `127.0.0.1`; provider keys stay in runtime
+- Not exposed: Codewhale remains on `127.0.0.1`; provider keys stay in runtime
   config.
 - Tokens used: the scanned Weixin login/session state for platform access,
   `CODEWHALE_RUNTIME_TOKEN` for bridge-to-runtime calls, and
@@ -512,11 +512,11 @@ tailscale funnel status
 Trust boundary:
 
 - Exposed: a public HTTPS endpoint, not just your tailnet.
-- Not exposed by CodeWhale directly: the backend still binds to `127.0.0.1`,
+- Not exposed by Codewhale directly: the backend still binds to `127.0.0.1`,
   but the fronting layer makes selected routes reachable from the internet.
 - Token used: `CODEWHALE_RUNTIME_TOKEN` remains mandatory for control routes.
 - Caveat: public does not mean safe. Do not use `--insecure-no-auth`, do not bind
-  CodeWhale to `0.0.0.0`, and do not call this the default.
+  Codewhale to `0.0.0.0`, and do not call this the default.
 
 ## Cloud/VPS posture
 
@@ -539,7 +539,7 @@ choices, not the default cloud path.
 ## Prior art: Hermes Agent (reference only - do not copy)
 
 Nous Research's Hermes Agent validates the table-driven part of this design.
-Use it for ideas; keep CodeWhale's style: Rust core, local runtime, zero-dep
+Use it for ideas; keep Codewhale's style: Rust core, local runtime, zero-dep
 Node bridges where possible, and plain-text replies.
 
 - `gateway/platform_registry.py` maps to our `BridgeSpec` / access-path
@@ -683,7 +683,7 @@ Existing cloud target design remains accurate:
 - Azure VM: Docker image plus Key Vault, managed identity at boot.
 - DigitalOcean Droplet: native plus systemd, env-file secrets, `doctl` plan.
 
-All cloud plans should bind CodeWhale to `127.0.0.1` and then layer one of the
+All cloud plans should bind Codewhale to `127.0.0.1` and then layer one of the
 reachability paths above.
 
 ## Namespace migration: `DEEPSEEK_*` to `CODEWHALE_*`
@@ -739,7 +739,7 @@ New tests for this revision:
 
 ## Command verification ledger
 
-Verified against CodeWhale code/docs in this worktree:
+Verified against Codewhale code/docs in this worktree:
 
 - `codewhale app-server --http --host 127.0.0.1 --port 7878 --auth-token TOKEN`
 - `codewhale app-server --mobile --host 127.0.0.1 --port 7878 --auth-token TOKEN`
@@ -756,4 +756,4 @@ Marked proposed or external:
 - `--apply` execution
 - Tailscale CLI commands (`tailscale serve ...`, `tailscale funnel ...`) are
   external Tailscale commands. They are the intended RFC examples, but they are
-  not CodeWhale CLI flags.
+  not Codewhale CLI flags.

@@ -21433,3 +21433,40 @@ async fn per_step_stream_content_cap_is_overridable_and_fires() {
         "a stream cut off by the content cap must not report a clean completion"
     );
 }
+
+#[test]
+fn engine_adopts_host_owned_session_id_from_config() {
+    // Interactive hosts claim the session id before the engine exists (the
+    // per-session Runtime store lock and the turn-start crash checkpoint are
+    // keyed by it). The engine must run that same conversation, not a second
+    // generated id the host only learns about from `SessionUpdated`.
+    let config = Config::default();
+    let (engine, _handle) = Engine::new(
+        EngineConfig {
+            session_id: Some("host-owned-session".to_string()),
+            ..EngineConfig::default()
+        },
+        &config,
+    );
+    assert_eq!(engine.session_id(), "host-owned-session");
+
+    let (engine, _handle) = Engine::new(
+        EngineConfig {
+            session_id: Some("   ".to_string()),
+            ..EngineConfig::default()
+        },
+        &config,
+    );
+    assert!(
+        uuid::Uuid::parse_str(engine.session_id()).is_ok(),
+        "a blank host id must keep a generated uuid, got {:?}",
+        engine.session_id()
+    );
+
+    let (engine, _handle) = Engine::new(EngineConfig::default(), &config);
+    assert!(
+        uuid::Uuid::parse_str(engine.session_id()).is_ok(),
+        "headless callers keep the generated uuid, got {:?}",
+        engine.session_id()
+    );
+}

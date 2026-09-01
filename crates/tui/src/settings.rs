@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{ApiProvider, expand_path, normalize_model_name};
+use crate::config::{expand_path, normalize_model_name};
 use crate::localization::normalize_configured_locale;
 use crate::palette::{normalize_hex_rgb_color, normalize_theme_setting};
 use crate::tui::app::ReasoningEffort;
@@ -82,10 +82,6 @@ impl InlineDiffMode {
 /// new_line = "enter"
 /// ```
 //
-// NOTE: the loader is defined but not yet called from startup — wiring is
-// deferred to a later settings pass (#657). The `#[allow(dead_code)]` suppresses the CI
-// `-D warnings` failure until the call site lands.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TuiPrefs {
@@ -112,7 +108,6 @@ impl Default for TuiPrefs {
 }
 
 /// Per-action keybinding overrides stored inside [`TuiPrefs`].
-#[allow(dead_code)] // see TuiPrefs note above; deferred to a later settings pass (#657).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct KeybindPrefs {
@@ -133,7 +128,6 @@ pub struct KeybindPrefs {
     pub toggle_sidebar: Option<String>,
 }
 
-#[allow(dead_code)] // see TuiPrefs note above; deferred to a later settings pass (#657).
 impl TuiPrefs {
     /// Return the canonical path of the TUI preferences file:
     /// `~/.codewhale/tui.toml`, or legacy `~/.deepseek/tui.toml` when present.
@@ -164,6 +158,7 @@ impl TuiPrefs {
     /// If the file does not exist the struct defaults are returned — no error
     /// is produced. Parse errors surface as `Err` so the caller can warn the
     /// user without crashing the session.
+    #[allow(dead_code)] // Startup currently only validates tui.toml parse; load is the persistence API.
     pub fn load() -> Result<Self> {
         let path = Self::path()?;
         #[cfg(test)]
@@ -192,6 +187,7 @@ impl TuiPrefs {
 
     /// Save TUI preferences to `~/.codewhale/tui.toml` (or a legacy file when
     /// it already exists), creating the target directory if needed.
+    #[allow(dead_code)] // Persistence API; no settings UI write path yet.
     pub fn save(&self) -> Result<()> {
         let path = Self::path()?;
         #[cfg(test)]
@@ -228,6 +224,7 @@ impl TuiPrefs {
     ///
     /// Returns `Err` if an unrecognised `theme` value is found so callers can
     /// surface a helpful message rather than silently ignoring a typo.
+    #[allow(dead_code)] // Persistence API; no settings UI write path yet.
     pub fn validate(&mut self) -> Result<()> {
         self.theme = normalize_theme_setting(&self.theme).map_err(anyhow::Error::msg)?;
         Ok(())
@@ -421,10 +418,6 @@ pub struct Settings {
     pub composer_vim_mode: String,
     /// Transcript spacing rhythm: compact, comfortable, spacious
     pub transcript_spacing: String,
-    /// Show the pre-session launch menu. When false, Codewhale enters a new
-    /// session directly; resume remains available in-session.
-    #[serde(default)]
-    pub launch_screen: bool,
     /// Default mode: "agent" (Act), "plan", or "operate". Legacy permission
     /// shorthands are accepted for migration but never advertised as modes.
     pub default_mode: String,
@@ -608,7 +601,6 @@ impl Default for Settings {
             composer_multiline_mode: false,
             composer_vim_mode: "normal".to_string(),
             transcript_spacing: "comfortable".to_string(),
-            launch_screen: false,
             default_mode: "agent".to_string(),
             sidebar_width_percent: 28,
             sidebar_focus: "auto".to_string(),
@@ -1482,9 +1474,6 @@ impl Settings {
                 }
                 self.transcript_spacing = normalized.to_string();
             }
-            "launch_screen" | "launch" => {
-                self.launch_screen = parse_bool(value)?;
-            }
             "status_indicator" | "indicator" => {
                 let normalized = normalize_status_indicator(value);
                 if !["cw", "whale", "dots", "off"].contains(&normalized) {
@@ -1698,7 +1687,6 @@ impl Settings {
             self.workspace_follow_symlinks
         ));
         lines.push(format!("  default_mode:       {}", self.default_mode));
-        lines.push(format!("  launch_screen:      {}", self.launch_screen));
         lines.push(format!("  context_panel:      {}", self.context_panel));
         lines.push(format!("  cost_currency:      {}", self.cost_currency));
         lines.push(format!("  max_history:        {}", self.max_input_history));
@@ -1752,7 +1740,6 @@ impl Settings {
     }
 
     /// Get available setting keys and their descriptions
-    #[allow(dead_code)]
     pub fn available_settings() -> Vec<(&'static str, &'static str)> {
         vec![
             (
@@ -1875,10 +1862,6 @@ impl Settings {
             (
                 "transcript_spacing",
                 "Transcript spacing: compact, comfortable, spacious",
-            ),
-            (
-                "launch_screen",
-                "Show the pre-session launch menu on startup: on/off",
             ),
             (
                 "status_indicator",
@@ -2010,49 +1993,6 @@ impl Settings {
         let pin = self.pinned_models.remove(index);
         self.pinned_models.insert(target, pin);
         true
-    }
-
-    /// Persist a provider's model selection.
-    ///
-    /// `persist_as_default` controls the blast radius (#3227):
-    ///
-    /// - `false` (session-local, the default for `/model` and the model
-    ///   picker): record the model only under that provider's scoped entry in
-    ///   [`Self::provider_models`]. The shared `default_provider` and global
-    ///   `default_model` are left untouched, so a model change in one terminal
-    ///   no longer rewrites the global default that a second terminal reads on
-    ///   startup. This is what stopped a GLM/Z.ai session from being dragged
-    ///   onto a DeepSeek model (and vice-versa).
-    /// - `true` (explicit "save as default"): also pin `default_provider`, and
-    ///   for DeepSeek providers the global `default_model`, to this tuple.
-    pub fn set_provider_model_selection(
-        &mut self,
-        provider: ApiProvider,
-        model: &str,
-        persist_as_default: bool,
-    ) -> Result<()> {
-        let model = model.trim();
-        if model.is_empty() {
-            anyhow::bail!("model cannot be empty");
-        }
-        self.set_model_for_provider(provider.as_str(), model);
-        if persist_as_default {
-            self.default_provider = Some(provider.as_str().to_string());
-            if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
-                self.set("default_model", model)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Load, update, and save a provider/model tuple as the global default
-    /// (the explicit "save as default" path).
-    #[allow(dead_code)] // wired to an explicit save-as-default action in a later UX pass (#3227).
-    pub fn persist_provider_model_selection_as_default(
-        provider: ApiProvider,
-        model: &str,
-    ) -> Result<()> {
-        Self::transact(|settings| settings.set_provider_model_selection(provider, model, true))
     }
 
     /// Resolved boolean for whether the renderer should wrap each frame in
@@ -3588,9 +3528,24 @@ mod tests {
         );
         assert!(!settings.low_motion);
         assert_eq!(settings.transcript_spacing, "comfortable");
+    }
+
+    #[test]
+    fn retired_launch_screen_setting_is_accepted_and_dropped_on_save() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("settings.toml");
+        std::fs::write(&path, "launch_screen = false\n").expect("legacy settings");
+
+        let settings = Settings::load_persisted_from_candidates(Some(path.clone()), None, None)
+            .expect("legacy setting must remain readable");
+        settings
+            .save_to_path(&path)
+            .expect("save normalized settings");
+
+        let saved = std::fs::read_to_string(&path).expect("read normalized settings");
         assert!(
-            !settings.launch_screen,
-            "returning users enter a session directly"
+            !saved.contains("launch_screen"),
+            "the retired setting must not be written back: {saved}"
         );
     }
 

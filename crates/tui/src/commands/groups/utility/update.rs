@@ -127,8 +127,8 @@ pub(super) fn resolve_updater(
 /// Instructions for an install this command must not update in place.
 pub(super) fn managed_install_message(method: InstallMethod) -> String {
     format!(
-        "CodeWhale was installed with {label}, which owns this binary.\n\
-         Run `{command}` in a shell, then restart CodeWhale.\n\n\
+        "Codewhale was installed with {label}, which owns this binary.\n\
+         Run `{command}` in a shell, then restart Codewhale.\n\n\
          /update deliberately will not self-update here: replacing a binary {label} manages \
          leaves its metadata describing a version that is no longer on disk, and the next \
          upgrade silently reverts you.",
@@ -142,7 +142,7 @@ pub(super) fn no_updater_message(exe: &Path) -> String {
     format!(
         "No `{UPDATER_BIN_STEM}` updater was found for this install ({exe}).\n\
          The updater ships in the `{UPDATER_BIN_STEM}` CLI. Install or locate it, run \
-         `{UPDATER_BIN_STEM} update` in a shell, then restart CodeWhale.",
+         `{UPDATER_BIN_STEM} update` in a shell, then restart Codewhale.",
         exe = exe.display(),
     )
 }
@@ -153,7 +153,7 @@ fn install_preamble(updater: &Path) -> String {
         "`/update install` will run `{updater} update`: it resolves the latest release, \
          downloads the binary for this platform, verifies its SHA256 checksum, and atomically \
          replaces {updater}.\n\
-         It does not restart CodeWhale — you will need to do that yourself once it finishes. \
+         It does not restart Codewhale — you will need to do that yourself once it finishes. \
          The UI is paused while the updater runs.",
         updater = updater.display(),
     )
@@ -189,7 +189,7 @@ fn run_updater(updater: &Path, mode: UpdateMode) -> CommandResult {
         Ok(output) => output,
         Err(err) => {
             return CommandResult::error(format!(
-                "Failed to run `{} update`: {err}\nRun it in a shell instead, then restart CodeWhale.",
+                "Failed to run `{} update`: {err}\nRun it in a shell instead, then restart Codewhale.",
                 updater.display()
             ));
         }
@@ -208,7 +208,7 @@ fn run_updater(updater: &Path, mode: UpdateMode) -> CommandResult {
             CommandResult::message(format!("{}\n\n{transcript}", install_preamble(updater)))
         }
         UpdateMode::Install => CommandResult::message(format!(
-            "{transcript}\n\nRestart CodeWhale to run the updated binary."
+            "{transcript}\n\nRestart Codewhale to run the updated binary."
         )),
     }
 }
@@ -274,7 +274,7 @@ mod tests {
                 "{method:?} message must name its own update command: {message}"
             );
             assert!(
-                message.contains("restart CodeWhale"),
+                message.contains("restart Codewhale"),
                 "{method:?} message must tell the user to restart: {message}"
             );
         }
@@ -293,7 +293,7 @@ mod tests {
 
         let message = no_updater_message(exe);
         assert!(message.contains("codewhale update"), "{message}");
-        assert!(message.contains("restart CodeWhale"), "{message}");
+        assert!(message.contains("restart Codewhale"), "{message}");
         assert!(message.contains("codewhale-tui"), "{message}");
     }
 

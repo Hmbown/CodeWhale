@@ -971,7 +971,7 @@ impl ToolSpec for WorkflowTool {
 
     fn description(&self) -> &'static str {
         concat!(
-            "Start, run, inspect, or cancel a Workflow. Workflows execute deterministic JS with args, phase/log progress, and task(...) calls that dispatch real sub-agents through Fleet/sub-agent scheduling. ",
+            "Start, run, inspect, or cancel a Workflow. Workflows execute deterministic JS with args, phase/log progress, and task(...) calls that dispatch real sub-agents through Pod/sub-agent scheduling. ",
             "For parallel fan-out, pass an array of zero-argument thunks exactly like `await parallel([() => task({...}), () => task({...})])`; do not pass task promises as variadic arguments. ",
             "Provide exactly one of script, source_path, or plan (structured planner JSON). ",
             "Use action=start for detached orchestration and action=status with run_id to inspect progress. Use action=run when the model needs the final result before continuing. ",
@@ -1002,7 +1002,7 @@ impl ToolSpec for WorkflowTool {
                 },
                 "fleet": {
                     "type": "string",
-                    "description": "Named Fleet from $CODEWHALE_HOME/fleets/ or workspace fleets/; qualified origin/name accepted. Exact Fleets freeze member identity, route, and reasoning. Runtime derives authority from role and live parent; per-task route/authority overrides are rejected."
+                    "description": "Named Pod from $CODEWHALE_HOME/fleets/ or workspace fleets/; qualified origin/name accepted. Exact Pods freeze member identity, route, and reasoning. Runtime derives authority from role and live parent; per-task route/authority overrides are rejected."
                 },
                 "plan": {
                     "type": "object",
@@ -1569,7 +1569,7 @@ fn workflow_fleet_binding(
     let (document, id) = crate::fleet::exact::load_fleet_document(&name, &context.workspace)
         .map_err(|err| {
             ToolError::invalid_input(format!(
-                "Failed to load workflow fleet '{name}' from {}: {err}",
+                "Failed to load workflow Pod '{name}' from {}: {err}",
                 roots
                     .iter()
                     .map(|root| format!("{}/{}", root.origin, root.root.display()))
@@ -1639,7 +1639,7 @@ fn bind_exact_fleet_task_request(
 ) -> Result<crate::fleet::exact::ExactMemberBinding, DriverError> {
     let fleet = operation.snapshot().fleet().qualified();
 
-    // The exact Fleet owns member identity, route, and reasoning. Runtime owns
+    // The exact Pod owns member identity, route, and reasoning. Runtime owns
     // authority: after selection it derives the closed role posture and
     // intersects it with the live parent. A task may override neither side of
     // that boundary; `subagent_type`, tool lists, and write authority would
@@ -1654,10 +1654,10 @@ fn bind_exact_fleet_task_request(
     ] {
         if present {
             return Err(DriverError::Rejected(format!(
-                "fleet `{fleet}` is an exact fleet: task option `{field}` is not allowed. Every \
-                 member's identity, provider, model, and reasoning are fixed by the saved Fleet, \
+                "Pod `{fleet}` is an exact Pod: task option `{field}` is not allowed. Every \
+                 member's identity, provider, model, and reasoning are fixed by the saved Pod, \
                  while Runtime derives authority from its role and the live parent. Switch \
-                 Fleets/edit the Fleet for identity or route changes; do not override either \
+                 Pods/edit the Pod for identity or route changes; do not override either \
                  contract per task."
             )));
         }
@@ -1665,12 +1665,12 @@ fn bind_exact_fleet_task_request(
 
     let binding = operation
         .bind_member(request.profile.as_deref(), request.role.as_deref(), session)
-        .map_err(|err| DriverError::Rejected(format!("fleet `{fleet}`: {err}")))?;
+        .map_err(|err| DriverError::Rejected(format!("Pod `{fleet}`: {err}")))?;
 
     // Id and role are stamped **separately and semantically**. The member id
     // addresses the run-scoped roster profile projected from the snapshot,
     // which carries the exact provider pin and canonical wire model. The role
-    // stays the Fleet's semantic role, because that is what gates, handoffs,
+    // stays the Pod's semantic role, because that is what gates, handoffs,
     // and records key on — overwriting it with the profile id (as an earlier
     // pass did) silently broke every gate whose member id differs from its
     // role.
@@ -1732,7 +1732,7 @@ fn orphaned_fleet_receipt_line(
     error: &str,
 ) -> String {
     format!(
-        "fleet route {} spawn_failed=true reason={}",
+        "Pod route {} spawn_failed=true reason={}",
         receipt.line(),
         error.replace('\n', " ")
     )
@@ -1790,7 +1790,7 @@ async fn route_admitted_exact_task(
     let launch = operation
         .route_admitted_task(binding, &request.description)
         .await
-        .map_err(|err| DriverError::Rejected(format!("fleet `{fleet}`: {err}")))?;
+        .map_err(|err| DriverError::Rejected(format!("Pod `{fleet}`: {err}")))?;
 
     request.thinking = Some(launch.thinking.clone());
     // **The launch authority is what the child runs under.** Binding stamped a
@@ -3863,7 +3863,7 @@ impl SubAgentWorkflowDriver {
             self.record_run_event(WorkflowUiEvent::new(
                 &self.owner_session_id,
                 WorkflowUiEventKind::Log {
-                    message: format!("fleet route {}", receipt.line()),
+                    message: format!("Pod route {}", receipt.line()),
                 },
             ));
         }
@@ -4147,7 +4147,7 @@ impl SubAgentWorkflowDriver {
                 |err| {
                     if let Some(fleet) = self.fleet_name.as_deref() {
                         DriverError::Rejected(format!(
-                            "fleet `{fleet}` role resolution failed: {err}"
+                            "Pod `{fleet}` role resolution failed: {err}"
                         ))
                     } else {
                         err
@@ -7227,7 +7227,7 @@ workflow({
             conflicting_payload["error"]
                 .as_str()
                 .is_some_and(|error| error
-                    .contains("Fleet role conflicts with the explicit legacy agent type")),
+                    .contains("Pod role conflicts with the explicit legacy agent type")),
             "{conflicting_payload}"
         );
         assert_eq!(

@@ -94,7 +94,7 @@ pub(crate) fn apply_coordination_detail_projection(
         let message = if note.contains(crate::tools::subagent::COORDINATION_LOCK_TIMEOUT_MARKER) {
             "Timed out claiming delegated coordination for this workspace — job rows still settle locally.".to_string()
         } else {
-            "Another CodeWhale session in this workspace owns delegated coordination — job rows still settle locally.".to_string()
+            "Another Codewhale session in this workspace owns delegated coordination — job rows still settle locally.".to_string()
         };
         // Demoted from sticky 30s to transient 5s — two sessions in same workspace
         // should not feel broken; job rows still settle locally. The detail view
@@ -1788,28 +1788,7 @@ pub(crate) async fn apply_command_result(
                 }
             }
             AppAction::OpenProviderPicker => {
-                if app.onboarding == OnboardingState::Provider {
-                    let recover_configured_route = app.onboarding_missing_key_recovery;
-                    open_onboarding_provider_picker(
-                        app,
-                        config,
-                        engine_handle,
-                        recover_configured_route,
-                    )
-                    .await;
-                } else if app.view_stack.top_kind() != Some(ModalKind::ProviderPicker) {
-                    let runtime_status = query_provider_runtime_status(engine_handle).await;
-                    app.view_stack.push(
-                        crate::tui::provider_picker::ProviderPickerView::new_with_runtime_status_and_memory(
-                            app.api_provider,
-                            config,
-                            runtime_status,
-                            app.provider_picker_memory.as_ref(),
-                        )
-                        .with_locale(app.ui_locale)
-                        .with_provider_health(&app.provider_health),
-                    );
-                }
+                open_provider_picker(app, config, engine_handle).await;
             }
             AppAction::OpenProviderSetup { provider } => {
                 if app.view_stack.top_kind() != Some(ModalKind::ProviderPicker) {
