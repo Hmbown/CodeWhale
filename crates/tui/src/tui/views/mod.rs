@@ -2173,13 +2173,6 @@ impl ConfigView {
                         .category(ConfigCategory::Motion)
                         .effective(app.fancy_animations.to_string()),
                 ),
-            ConfigRow {
-                section: ConfigSection::Display,
-                key: "launch_screen".to_string(),
-                value: settings.launch_screen.to_string(),
-                editable: true,
-                scope: ConfigScope::Saved,
-                facts: ConfigRowFacts::saved_setting().apply(SettingApplySemantics::NextSession),
             },
             // `launch_screen` is a retired setting: accepted on load, dropped
             // on save — no config row (main's retirement wins over the
