@@ -611,12 +611,6 @@ impl HooksConfig {
         self.hooks.iter().filter(|h| h.event == event).collect()
     }
 
-    /// Check if hooks are configured and enabled
-    #[allow(dead_code)] // Public API for hook system consumers
-    pub fn has_hooks(&self) -> bool {
-        self.enabled && !self.hooks.is_empty()
-    }
-
     /// The timeout the runtime will actually apply to `hook`.
     ///
     /// `[hooks].default_timeout_secs` *replaces* the per-hook value when set.

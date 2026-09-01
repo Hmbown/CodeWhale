@@ -93,6 +93,23 @@ struct PersistedModelsDevCache {
     body: String,
 }
 
+/// Metadata header for the v2 cache format.
+///
+/// v1 serialized the whole cache as one JSON envelope with the catalog body
+/// escaped inside it, so loading parsed ~5MB twice (envelope, then body) plus
+/// a full-body copy on every interactive boot. v2 stores the metadata as a
+/// single JSON header line followed by the raw catalog body bytes, so boot
+/// performs exactly one catalog parse and zero body copies.
+const CACHE_SCHEMA_VERSION_V2: u32 = 2;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedModelsDevCacheV2 {
+    schema_version: u32,
+    fetched_at: u64,
+    source_fingerprint: String,
+    source_label: String,
+}
+
 /// Why a Models.dev refresh did not publish new rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelsDevRefreshError {
@@ -192,26 +209,27 @@ pub fn maybe_load_persisted_cache() {
     let Some(path) = cache_path() else {
         return;
     };
-    if let Some(cache) = load_cache_file(&path) {
-        let age = now_unix().saturating_sub(cache.fetched_at);
-        let freshness = if age > DEFAULT_MODELS_DEV_TTL_SECS {
-            ModelsDevFreshness::Stale
-        } else {
-            ModelsDevFreshness::Live
-        };
-        if let Err(err) = publish_from_body(
-            &cache.body,
-            &cache.source_fingerprint,
-            cache.fetched_at,
-            &cache.source_label,
-            freshness,
-        ) {
-            tracing::debug!(
-                target: "models_dev_live",
-                error = %err,
-                "persisted Models.dev cache failed to publish; keeping bundled"
-            );
-        }
+    let Some(cache) = load_cache_file(&path) else {
+        return;
+    };
+    let age = now_unix().saturating_sub(cache.fetched_at);
+    let freshness = if age > DEFAULT_MODELS_DEV_TTL_SECS {
+        ModelsDevFreshness::Stale
+    } else {
+        ModelsDevFreshness::Live
+    };
+    if let Err(err) = publish_from_body(
+        &cache.body,
+        &cache.source_fingerprint,
+        cache.fetched_at,
+        cache.source_label.as_str(),
+        freshness,
+    ) {
+        tracing::debug!(
+            target: "models_dev_live",
+            error = %err,
+            "persisted Models.dev cache failed to publish; keeping bundled"
+        );
     }
 }
 
@@ -401,8 +419,32 @@ fn mark_failed(err: ModelsDevRefreshError) {
     set_status(next);
 }
 
+/// Load the on-disk Models.dev cache.
+///
+/// Reads v2 (single-parse: one header line + raw body) and v1 (JSON envelope
+/// with an escaped body) formats. Returns metadata and the *unescaped* body
+/// without copying it in the v2 path.
 fn load_cache_file(path: &Path) -> Option<PersistedModelsDevCache> {
     let bytes = std::fs::read(path).ok()?;
+    // v2: single-line JSON header terminated by a newline, then the verbatim
+    // catalog body. One small parse, zero body copies.
+    if bytes.first() == Some(&b'{') && bytes.contains(&b'\n') {
+        let split = bytes.iter().position(|b| *b == b'\n')?;
+        if let Ok(header) = serde_json::from_slice::<PersistedModelsDevCacheV2>(&bytes[..split])
+            && header.schema_version == CACHE_SCHEMA_VERSION_V2
+            && !bytes[split + 1..].is_empty()
+        {
+            let body = String::from_utf8(bytes[split + 1..].to_vec()).ok()?;
+            return Some(PersistedModelsDevCache {
+                schema_version: CACHE_SCHEMA_VERSION,
+                fetched_at: header.fetched_at,
+                source_fingerprint: header.source_fingerprint,
+                source_label: header.source_label,
+                body,
+            });
+        }
+    }
+    // v1 fallback: whole-file JSON envelope with the body escaped inside.
     let cache: PersistedModelsDevCache = serde_json::from_slice(&bytes).ok()?;
     if cache.schema_version != CACHE_SCHEMA_VERSION {
         return None;
@@ -417,9 +459,19 @@ fn save_cache_file(
     path: &Path,
     cache: &PersistedModelsDevCache,
 ) -> Result<(), ModelsDevRefreshError> {
-    let bytes =
-        serde_json::to_vec(cache).map_err(|err| ModelsDevRefreshError::Io(err.to_string()))?;
-    atomic_write(path, &bytes).map_err(|err| ModelsDevRefreshError::Io(err.to_string()))
+    // Write the single-parse format so the next boot parses the catalog once.
+    let header = PersistedModelsDevCacheV2 {
+        schema_version: CACHE_SCHEMA_VERSION_V2,
+        fetched_at: cache.fetched_at,
+        source_fingerprint: cache.source_fingerprint.clone(),
+        source_label: cache.source_label.clone(),
+    };
+    let mut header_line =
+        serde_json::to_vec(&header).map_err(|err| ModelsDevRefreshError::Io(err.to_string()))?;
+    header_line.push(b'\n');
+    let mut payload = header_line;
+    payload.extend_from_slice(cache.body.as_bytes());
+    atomic_write(path, &payload).map_err(|err| ModelsDevRefreshError::Io(err.to_string()))
 }
 
 /// Compile helper exposed for unit tests: body → live offerings with normalized

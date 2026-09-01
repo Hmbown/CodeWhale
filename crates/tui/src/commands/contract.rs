@@ -33,8 +33,9 @@ use std::rc::Rc;
 
 use codewhale_command_contract::facets::{
     CommandCostContext, CommandMediaContext, CommandModePolicyContext, CommandModelContext,
-    CommandPresentationContext, CommandSessionContext, CommandSkillsContext,
-    CommandSystemPromptContext, CommandWorkspaceContext, MediaAttachmentReceipt,
+    CommandPresentationContext, CommandProjectContext, CommandSessionContext, CommandSkillsContext,
+    CommandSystemPromptContext, CommandWorkspaceContext, MediaAttachmentReceipt, ProjectGoalState,
+    ProjectGoalStatus, ProjectShareProjection,
 };
 use codewhale_command_contract::handler::CommandContexts;
 #[cfg(test)]
@@ -64,7 +65,7 @@ use crate::tui::app::{App, ReasoningEffort};
 /// declaration by source regex and the Rust frontier tests assert it.
 #[allow(dead_code)]
 pub(crate) const PENDING_GROUPS: &[&str] = &[
-    "config", "core", "debug", "memory", "plugins", "project", "session", "skills",
+    "config", "core", "debug", "memory", "plugins", "session", "skills",
 ];
 
 // ---------------------------------------------------------------------------
@@ -181,6 +182,7 @@ pub(crate) fn key_to_message_id(key: &'static str) -> Option<MessageId> {
         "cmd_hotbar_description" => MessageId::CmdHotbarDescription,
         "cmd_init_description" => MessageId::CmdInitDescription,
         "cmd_jobs_description" => MessageId::CmdJobsDescription,
+        "cmd_dispatch_description" => MessageId::CmdDispatchDescription,
         "cmd_lane_description" => MessageId::CmdLaneDescription,
         "cmd_links_description" => MessageId::CmdLinksDescription,
         "cmd_load_description" => MessageId::CmdLoadDescription,
@@ -517,7 +519,9 @@ pub(crate) struct PresentationAdapter<'a> {
 
 impl CommandPresentationContext for PresentationAdapter<'_> {
     fn translate(&self, key: &str, replacements: &[(&str, &str)]) -> Result<String, String> {
-        let Some(message_id) = key_to_utility_message_id(key) else {
+        let Some(message_id) =
+            key_to_utility_message_id(key).or_else(|| key_to_project_message_id(key))
+        else {
             return Err("unknown translation key".to_string());
         };
         let locale = self.host.app.borrow().ui_locale;
@@ -539,6 +543,20 @@ fn key_to_utility_message_id(key: &str) -> Option<MessageId> {
         "mcp_recommendation_playwright" => MessageId::McpRecommendationPlaywright,
         "mcp_recommendation_cua" => MessageId::McpRecommendationCua,
         "mcp_recommendation_container_use" => MessageId::McpRecommendationContainerUse,
+        _ => return None,
+    })
+}
+
+/// Resolve a stable project message key to the current catalog id (FEAT-021 D5).
+///
+/// Only `/goal` uses runtime translations (`GoalControlAccepted`,
+/// `GoalStatusIdleHint`); all four description keys resolve through the
+/// metadata bridge (`key_to_message_id`) and do not require the presentation
+/// facet.
+pub(crate) fn key_to_project_message_id(key: &str) -> Option<MessageId> {
+    Some(match key {
+        "goal_control_accepted" => MessageId::GoalControlAccepted,
+        "goal_status_idle_hint" => MessageId::GoalStatusIdleHint,
         _ => return None,
     })
 }
@@ -624,10 +642,100 @@ fn media_kind(path: &Path) -> Option<&'static str> {
 }
 
 // ---------------------------------------------------------------------------
+// Project host adapter (FEAT-021 D1/D3)
+// ---------------------------------------------------------------------------
+
+/// Concrete TUI host mapping for the project command group (FEAT-021 D1/D3).
+///
+/// The only place that touches `App` goal/share/LSP state, `config::config`
+/// (cross-group LSP bridge), and the session manager. Every method borrows
+/// `App` for one call and converts host values to portable contract values
+/// before returning; the `/init` workspace path flows through the existing
+/// `WORKSPACE` facet (D2), so no init-specific method exists here.
+pub(crate) struct ProjectAdapter<'a> {
+    host: SharedCommandHost<'a>,
+}
+
+/// Map the TUI-owned goal status onto the portable project status.
+fn portable_goal_status(status: crate::tools::goal::GoalStatus) -> ProjectGoalStatus {
+    match status {
+        crate::tools::goal::GoalStatus::Active => ProjectGoalStatus::Active,
+        crate::tools::goal::GoalStatus::Paused => ProjectGoalStatus::Paused,
+        crate::tools::goal::GoalStatus::Complete => ProjectGoalStatus::Complete,
+        crate::tools::goal::GoalStatus::Blocked => ProjectGoalStatus::Blocked,
+    }
+}
+
+/// Map the durable session goal status onto the portable project status.
+fn portable_session_goal_status(
+    status: crate::session_manager::SessionGoalStatus,
+) -> ProjectGoalStatus {
+    match status {
+        crate::session_manager::SessionGoalStatus::Active => ProjectGoalStatus::Active,
+        crate::session_manager::SessionGoalStatus::Paused => ProjectGoalStatus::Paused,
+        crate::session_manager::SessionGoalStatus::Complete => ProjectGoalStatus::Complete,
+        crate::session_manager::SessionGoalStatus::Blocked => ProjectGoalStatus::Blocked,
+    }
+}
+
+impl CommandProjectContext for ProjectAdapter<'_> {
+    fn lsp_enabled(&self) -> bool {
+        self.host.app.borrow().lsp_enabled
+    }
+
+    fn lsp_set(&mut self, enabled: bool) -> Result<(), String> {
+        // Cross-group LSP behavior stays host-side (D3): the adapter owns the
+        // `config::config::lsp_command` invocation. The portable handler
+        // composes the byte-identical user-facing message from the typed
+        // state, so the formatted result is intentionally not forwarded.
+        let mut app = self.host.app.borrow_mut();
+        let arg = if enabled { "on" } else { "off" };
+        let _ = crate::commands::groups::config::config::lsp_command(&mut app, Some(arg));
+        Ok(())
+    }
+
+    fn share_projection(&self) -> ProjectShareProjection {
+        let app = self.host.app.borrow();
+        ProjectShareProjection {
+            history_is_empty: app.history.is_empty(),
+            history_len: app.history.len(),
+            model: app.model.clone(),
+            mode_label: app.mode.label().to_string(),
+        }
+    }
+
+    fn goal_state(&self) -> ProjectGoalState {
+        let app = self.host.app.borrow();
+        let pending_controls = !app.pending_goal_controls.is_empty();
+        let last_known = app.last_known_goal_state.as_ref();
+        ProjectGoalState {
+            objective: app.goal.objective.clone(),
+            status: portable_goal_status(app.goal.status),
+            pause_reason: app
+                .goal
+                .pause_reason
+                .map(|reason| reason.label().to_string()),
+            started_at_elapsed_seconds: app.goal.started_at.map(|t| t.elapsed().as_secs()),
+            time_used_seconds: app.goal.time_used_seconds,
+            token_budget: app.goal.token_budget,
+            tokens_used: app.goal.tokens_used,
+            session_total_tokens: app.session.total_conversation_tokens,
+            continuation_count: app.goal.continuation_count,
+            pending_controls,
+            last_known_objective: last_known.map(|goal| goal.objective.clone()),
+            last_known_status: last_known.map(|goal| portable_session_goal_status(goal.status)),
+            conversation_present: !app.api_messages.is_empty(),
+            is_loading: app.is_loading,
+            goal_continuation_waiting: app.goal_continuation_waiting,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Envelope construction (D1)
 // ---------------------------------------------------------------------------
 
-/// Owns seven facet objects sharing one synchronous TUI host proxy.
+/// Owns ten facet objects sharing one synchronous TUI host proxy.
 ///
 /// Handlers borrow only these adapters. Every method delegates to the real App
 /// authority and releases its `RefCell` borrow before returning, so facets can
@@ -642,6 +750,7 @@ pub(crate) struct CommandContextBundle<'a> {
     workspace: WorkspaceAdapter<'a>,
     presentation: PresentationAdapter<'a>,
     media: MediaAdapter<'a>,
+    project: ProjectAdapter<'a>,
 }
 
 impl<'a> CommandContextBundle<'a> {
@@ -656,6 +765,7 @@ impl<'a> CommandContextBundle<'a> {
             .with_workspace(&mut self.workspace)
             .with_presentation(&mut self.presentation)
             .with_media(&mut self.media)
+            .with_project(&mut self.project)
     }
 
     /// Test-only: consume the bundle into independent facet parts.
@@ -681,6 +791,7 @@ impl App {
             skills: SkillsAdapter { host: host.clone() },
             workspace: WorkspaceAdapter { host: host.clone() },
             presentation: PresentationAdapter { host: host.clone() },
+            project: ProjectAdapter { host: host.clone() },
             media: MediaAdapter { host },
         }
     }
@@ -1151,5 +1262,192 @@ mod tests {
             let _ = parts.presentation.is_some();
         }
         assert_eq!(app.input, input_before, "no eager composer mutation");
+    }
+
+    // ---------------------------------------------------------------------
+    // FEAT-021 project adapter tests
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn key_to_project_message_id_resolves_goal_runtime_keys_and_rejects_unknown() {
+        // FEAT-021 D5: only /goal uses runtime translations via the project
+        // key map; unknown keys fail safely.
+        assert_eq!(
+            key_to_project_message_id("goal_control_accepted"),
+            Some(MessageId::GoalControlAccepted)
+        );
+        assert_eq!(
+            key_to_project_message_id("goal_status_idle_hint"),
+            Some(MessageId::GoalStatusIdleHint)
+        );
+        assert_eq!(key_to_project_message_id("goal_bogus_key"), None);
+        assert_eq!(key_to_project_message_id(""), None);
+    }
+
+    #[test]
+    fn presentation_translate_resolves_project_keys_with_locale_and_fallback() {
+        // The presentation facet resolves the project runtime keys through the
+        // current catalog (authoritative English fallback preserved).
+        let mut app = test_app();
+        let mut bundle = app.command_contexts();
+        let mut parts = bundle.parts();
+        let presentation = parts.presentation.as_mut().expect("presentation facet");
+        let accepted = presentation
+            .translate("goal_control_accepted", &[])
+            .expect("goal_control_accepted must resolve");
+        assert!(
+            accepted.contains("Goal control saved"),
+            "English fallback text expected: {accepted}"
+        );
+        let hint = presentation
+            .translate("goal_status_idle_hint", &[])
+            .expect("goal_status_idle_hint must resolve");
+        assert!(hint.contains("not running now"), "hint: {hint}");
+        assert!(
+            presentation.translate("goal_bogus", &[]).is_err(),
+            "unknown key must fail safely"
+        );
+    }
+
+    #[test]
+    fn project_adapter_maps_lsp_state() {
+        let mut app = test_app();
+        app.lsp_enabled = false;
+        assert!(!app.lsp_enabled);
+        {
+            let mut bundle = app.command_contexts();
+            let project = bundle
+                .parts()
+                .project
+                .expect("project facet must be present");
+            assert!(!project.lsp_enabled());
+
+            project.lsp_set(true).unwrap();
+            assert!(project.lsp_enabled());
+            project.lsp_set(false).unwrap();
+            assert!(!project.lsp_enabled());
+        }
+        assert!(!app.lsp_enabled);
+    }
+
+    #[test]
+    fn project_adapter_share_projection_maps_history_model_and_mode() {
+        let mut app = test_app();
+        app.model = "deepseek-v4-pro".to_string();
+        app.mode = crate::tui::app::AppMode::Agent;
+        let mut bundle = app.command_contexts();
+        let project = bundle
+            .parts()
+            .project
+            .expect("project facet must be present");
+
+        // Empty history → empty share branch.
+        let share = project.share_projection();
+        assert!(share.history_is_empty);
+        assert_eq!(share.history_len, 0);
+
+        // Populated history → length and labels match host exactly.
+        app.history.push(crate::tui::history::HistoryCell::User {
+            content: "hello".to_string(),
+        });
+        app.history
+            .push(crate::tui::history::HistoryCell::Assistant {
+                content: "world".to_string(),
+                streaming: false,
+            });
+        let mut bundle = app.command_contexts();
+        let project = bundle
+            .parts()
+            .project
+            .expect("project facet must be present");
+        let share = project.share_projection();
+        assert!(!share.history_is_empty);
+        assert_eq!(share.history_len, 2);
+        assert_eq!(share.model, "deepseek-v4-pro");
+        assert_eq!(share.mode_label, crate::tui::app::AppMode::Agent.label());
+    }
+
+    #[test]
+    fn project_adapter_goal_projection_preserves_visible_and_effective_state() {
+        let mut app = test_app();
+        app.goal.objective = Some("Ship FEAT-021".to_string());
+        app.goal.status = crate::tools::goal::GoalStatus::Active;
+        app.goal.time_used_seconds = 42;
+        app.goal.token_budget = Some(50_000);
+        app.goal.tokens_used = 1_000;
+        app.goal.continuation_count = 3;
+        app.session.total_conversation_tokens = 2_000;
+        app.goal_continuation_waiting = true;
+        app.is_loading = false;
+        app.api_messages.push(crate::models::Message {
+            role: crate::models::Role::User,
+            content: vec![crate::models::ContentBlock::Text {
+                text: "work".to_string(),
+                cache_control: None,
+            }],
+        });
+
+        let mut bundle = app.command_contexts();
+        let project = bundle
+            .parts()
+            .project
+            .expect("project facet must be present");
+        let goal = project.goal_state();
+        assert_eq!(goal.objective.as_deref(), Some("Ship FEAT-021"));
+        assert_eq!(goal.status, ProjectGoalStatus::Active);
+        assert_eq!(goal.time_used_seconds, 42);
+        assert_eq!(goal.token_budget, Some(50_000));
+        assert_eq!(goal.tokens_used, 1_000);
+        assert_eq!(goal.session_total_tokens, 2_000);
+        assert_eq!(goal.continuation_count, 3);
+        assert!(!goal.pending_controls);
+        assert!(goal.goal_continuation_waiting);
+        assert!(goal.conversation_present);
+
+        // Pending controls flip the effective source to the durable state.
+        app.pending_goal_controls
+            .push_back(crate::tui::app::PendingGoalControl {
+                intent: crate::tui::app::GoalControlIntent::SetStatus {
+                    status: crate::tools::goal::GoalStatus::Paused,
+                    clear: false,
+                },
+                dispatched: false,
+            });
+        app.last_known_goal_state = Some(crate::session_manager::SessionGoalState {
+            schema_version: 1,
+            objective: "Durable objective".to_string(),
+            status: crate::session_manager::SessionGoalStatus::Paused,
+            token_budget: None,
+            tokens_used: 0,
+            time_used_seconds: 0,
+            continuation_count: 0,
+            elapsed_seconds: 0,
+            pause_reason: None,
+        });
+        let mut bundle = app.command_contexts();
+        let project = bundle
+            .parts()
+            .project
+            .expect("project facet must be present");
+        let goal = project.goal_state();
+        assert!(goal.pending_controls);
+        assert_eq!(
+            goal.last_known_objective.as_deref(),
+            Some("Durable objective")
+        );
+        assert_eq!(goal.last_known_status, Some(ProjectGoalStatus::Paused));
+    }
+
+    #[test]
+    fn project_adapter_exposure_matches_main_envelope_model() {
+        // main's envelope always populates every adapter (no capability
+        // bitmask yet); the project facet is present and usable, and the
+        // handlers destructure only the facets they need.
+        let mut app = test_app();
+        let mut bundle = app.command_contexts();
+        let parts = bundle.parts();
+        assert!(parts.project.is_some());
+        assert!(parts.workspace.is_some());
+        assert!(parts.presentation.is_some());
     }
 }

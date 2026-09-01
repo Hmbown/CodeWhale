@@ -13,6 +13,17 @@ use crate::models::{
     CacheControl, ContentBlock, Message, MessageRequest, SystemBlock, SystemPrompt,
 };
 
+#[path = "compaction/last_round.rs"]
+mod last_round;
+#[cfg(test)]
+#[path = "compaction/survival_contract.rs"]
+mod survival_contract;
+pub(crate) use last_round::last_round_start;
+pub use last_round::{
+    CompactionCoverage, CompactionKeep, CompactionPath, LastCompactionSnapshot,
+    inspect_compaction_keep, last_round_kept_count, pinned_anchors_text,
+};
+
 /// Configuration for conversation compaction behavior.
 ///
 /// v0.8.11 simplified this from the prior token-OR-message-count trigger
@@ -126,7 +137,7 @@ const RETAINED_TOOL_RESULT_MAX_CHARS: usize = 64 * 1024;
 const RETAINED_THINKING_MAX_CHARS: usize = 16 * 1024;
 /// Token budget for the recent user messages retained verbatim in the
 /// replacement history (Codex parity: COMPACT_USER_MESSAGE_MAX_TOKENS).
-const COMPACT_RETAINED_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
+pub(crate) const COMPACT_RETAINED_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 /// Handoff summarization prompt, appended to the live conversation as the
 /// final user message (ported from Codex `templates/compact/prompt.md`).
 const COMPACT_PROMPT: &str = "You are performing a context checkpoint compaction. Create a \
@@ -283,7 +294,7 @@ pub(crate) fn is_compaction_checkpoint_message(message: &Message) -> bool {
     user_text_of(message).is_some_and(|text| is_compaction_summary_text(&text))
 }
 
-fn estimate_tokens_for_message(message: &Message, include_thinking: bool) -> usize {
+pub(crate) fn estimate_tokens_for_message(message: &Message, include_thinking: bool) -> usize {
     message
         .content
         .iter()
@@ -340,14 +351,14 @@ pub fn estimate_tokens(messages: &[Message]) -> usize {
         .sum()
 }
 
-fn message_has_tool_use(message: &Message) -> bool {
+pub(crate) fn message_has_tool_use(message: &Message) -> bool {
     message
         .content
         .iter()
         .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
 }
 
-pub fn estimate_text_tokens_conservative(text: &str) -> usize {
+pub(crate) fn estimate_text_tokens_conservative(text: &str) -> usize {
     text.chars().count().div_ceil(3)
 }
 
@@ -455,10 +466,18 @@ pub fn compaction_pressure_reached_with_billed(
     if !config.enabled {
         return false;
     }
-    let estimated = estimate_input_tokens_for_pressure(messages, system_prompt);
     let billed = billed_input_tokens
         .and_then(|tokens| usize::try_from(tokens).ok())
         .unwrap_or(0);
+    // Billing alone proving pressure short-circuits the walk (#perf-r5):
+    // `estimated.max(billed) >= threshold` is unconditionally true when
+    // `billed >= threshold`, so estimating cannot change the answer and the
+    // O(transcript) pass is skipped. Over-pressure sessions pay this check
+    // multiple times per step (pressure gate + decision re-check).
+    if billed >= config.token_threshold {
+        return true;
+    }
+    let estimated = estimate_input_tokens_for_pressure(messages, system_prompt);
     estimated.max(billed) >= config.token_threshold
 }
 
@@ -472,6 +491,32 @@ pub fn should_compact(
     should_compact_with_billed(messages, system_prompt, prepared, None)
 }
 
+/// Why an over-pressure context still did not start an automatic pass.
+///
+/// A refusal is not a bug by itself — each guard exists for a reason — but a
+/// silent refusal is: the user watches a full context meter while
+/// auto-compaction appears broken (#5577). Callers surface these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionRefusal {
+    /// Too few messages for a summary pass to mean anything.
+    TooFewMessages { count: usize },
+    /// The conservative retained floor (system prompt + kept messages +
+    /// summary allowance) cannot get below the trigger, so a pass would
+    /// recur on every step without relieving pressure.
+    RetainedFloor { floor: usize, threshold: usize },
+}
+
+/// Outcome of the automatic-compaction eligibility check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionDecision {
+    /// Disabled, or pressure not reached: nothing to do, nothing to explain.
+    NotNeeded,
+    /// Start a pass.
+    Compact,
+    /// Pressure is real but a guard declined; the reason names the guard.
+    Refused(CompactionRefusal),
+}
+
 /// Eligibility check that honors provider-billed prompt tokens for the
 /// pressure gate, mirroring [`compaction_pressure_reached_with_billed`].
 pub fn should_compact_with_billed(
@@ -480,39 +525,83 @@ pub fn should_compact_with_billed(
     prepared: &PreparedCompactionEnvelope,
     billed_input_tokens: Option<u64>,
 ) -> bool {
+    matches!(
+        compaction_decision_with_billed(messages, system_prompt, prepared, billed_input_tokens),
+        CompactionDecision::Compact
+    )
+}
+
+/// Full eligibility decision, including *why* an over-pressure context was
+/// refused, so hosts can tell the user instead of silently holding.
+#[must_use]
+pub fn compaction_decision_with_billed(
+    messages: &[Message],
+    system_prompt: Option<&SystemPrompt>,
+    prepared: &PreparedCompactionEnvelope,
+    billed_input_tokens: Option<u64>,
+) -> CompactionDecision {
     let config = &prepared.config;
     if !config.enabled {
-        return false;
+        return CompactionDecision::NotNeeded;
     }
-    if !compaction_pressure_reached_with_billed(
-        messages,
-        system_prompt,
-        config,
-        billed_input_tokens,
-    ) {
-        return false;
-    }
+    // Pressure gate + prune projection share one estimate (#perf-r5): both
+    // consume `estimate_input_tokens_for_pressure` over the same
+    // `(messages, system_prompt)`, a pure function, so it is computed at
+    // most once. `billed >= threshold` proves pressure without estimating
+    // (max is unconditionally >= threshold then); the estimate is deferred
+    // until something actually needs it — the prune projection below — so
+    // the billed-corner still reaches the TooFew and RetainedFloor guards
+    // unchanged, and skips the walk entirely when no prune candidates exist.
+    let billed = billed_input_tokens
+        .and_then(|tokens| usize::try_from(tokens).ok())
+        .unwrap_or(0);
+    let estimated: Option<usize> = if billed < config.token_threshold {
+        let estimate = estimate_input_tokens_for_pressure(messages, system_prompt);
+        if estimate.max(billed) < config.token_threshold {
+            return CompactionDecision::NotNeeded;
+        }
+        Some(estimate)
+    } else {
+        None
+    };
 
     // The execution path mechanically prunes old verbose tool results before
     // asking the model for a summary. Local pruning alone may be enough to
     // clear pressure even when the transcript is too small for an LLM pass.
-    let mut projected_messages = messages.to_vec();
-    let pruned_bytes =
-        prune_tool_results_until(&mut projected_messages, KEEP_RECENT_MESSAGES, |_, _| false);
-    if pruned_bytes > 0 && !compaction_pressure_reached(&projected_messages, system_prompt, config)
-    {
-        return true;
+    // Project that outcome from the measured plan — per-block deltas use the
+    // estimator's own arithmetic, so this equals re-estimating a pruned copy
+    // without cloning a multi-megabyte transcript on every step.
+    let prune_plan = plan_tool_result_prunes(messages, KEEP_RECENT_MESSAGES);
+    if !prune_plan.is_empty() {
+        let estimate = match estimated {
+            Some(value) => value,
+            None => estimate_input_tokens_for_pressure(messages, system_prompt),
+        };
+        let reclaimed_tokens: usize = prune_plan.iter().map(PlannedPrune::tokens_reclaimed).sum();
+        let projected = estimate.saturating_sub(reclaimed_tokens);
+        if projected < config.token_threshold {
+            return CompactionDecision::Compact;
+        }
     }
 
     if messages.len() < MIN_SUMMARIZE_MESSAGES {
-        return false;
+        return CompactionDecision::Refused(CompactionRefusal::TooFewMessages {
+            count: messages.len(),
+        });
     }
 
     // Reclaimability guard: do not start a pass whose replacement request
     // (system prompt + retained user messages + summary allowance)
     // cannot get below the trigger, or a large stable prefix would cause
     // auto-compaction on every tool step.
-    estimate_retained_floor_conservative(messages, system_prompt, prepared) < config.token_threshold
+    let floor = estimate_retained_floor_conservative(messages, system_prompt, prepared);
+    if floor >= config.token_threshold {
+        return CompactionDecision::Refused(CompactionRefusal::RetainedFloor {
+            floor,
+            threshold: config.token_threshold,
+        });
+    }
+    CompactionDecision::Compact
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> &str {
@@ -617,9 +706,68 @@ fn prune_tool_results_until<F>(
 where
     F: FnMut(&[Message], usize) -> bool,
 {
+    let plan = plan_tool_result_prunes(messages, protected_window);
+    let mut bytes_saved = 0usize;
+    for planned in plan {
+        if let ContentBlock::ToolResult {
+            content,
+            content_blocks,
+            ..
+        } = &mut messages[planned.message_idx].content[planned.block_idx]
+        {
+            bytes_saved = bytes_saved.saturating_add(planned.bytes_reclaimed());
+            *content = planned.summary;
+            *content_blocks = None;
+
+            if should_stop(messages, bytes_saved) {
+                break;
+            }
+        }
+    }
+    bytes_saved
+}
+
+/// One tool-result replacement the pruner has decided on, measured up front
+/// so eligibility checks can project the outcome without cloning a
+/// multi-megabyte transcript ([`compaction_decision_with_billed`] used to
+/// copy the entire message list every over-pressure step just to ask "would
+/// pruning be enough?").
+struct PlannedPrune {
+    message_idx: usize,
+    block_idx: usize,
+    summary: String,
+    content_len: usize,
+    blocks_len: usize,
+    image_count: usize,
+}
+
+impl PlannedPrune {
+    /// Byte reduction this replacement realizes, matching the pruner's
+    /// accounting exactly.
+    fn bytes_reclaimed(&self) -> usize {
+        self.content_len
+            .saturating_sub(self.summary.len())
+            .saturating_add(self.blocks_len)
+    }
+
+    /// Estimator-token reduction, using the same per-block arithmetic as
+    /// [`estimate_tokens_for_message`] so a projection built from these
+    /// deltas equals re-estimating the pruned transcript.
+    fn tokens_reclaimed(&self) -> usize {
+        let before = self.content_len / 4 + self.image_count * IMAGE_TOKEN_ESTIMATE;
+        let after = self.summary.len() / 4;
+        before.saturating_sub(after)
+    }
+}
+
+/// Decide, without mutating anything, which old tool results pruning would
+/// replace. The most recent `protected_window` messages stay untouched; older
+/// duplicate results keep the freshest full body; non-duplicates are replaced
+/// only when they exceed the summary snippet size.
+fn plan_tool_result_prunes(messages: &[Message], protected_window: usize) -> Vec<PlannedPrune> {
     let cutoff = messages.len().saturating_sub(protected_window);
     if cutoff == 0 {
-        return 0;
+        return Vec::new();
     }
 
     let tool_uses = collect_tool_uses(messages);
@@ -656,13 +804,13 @@ where
         }
     }
 
-    // The maps above are fully populated before pruning starts, so the order below
-    // only changes which message bytes are rewritten first. Pruning from newest to
-    // oldest lets callers stop as soon as enough bytes were saved, preserving the
-    // earlier JSON request prefix for byte-level KV caches.
+    // The maps above are fully populated before planning completes, so the order
+    // below only changes which message bytes are rewritten first. Planning from
+    // newest to oldest lets the pruner stop as soon as enough bytes were saved,
+    // preserving the earlier JSON request prefix for byte-level KV caches.
     candidates.reverse();
 
-    let mut bytes_saved = 0usize;
+    let mut plan = Vec::new();
     for candidate in candidates {
         let duplicate_count = count_by_key.get(&candidate.key).copied().unwrap_or(0);
         let is_latest_duplicate = duplicate_count > 1
@@ -682,25 +830,31 @@ where
             continue;
         }
 
-        if let ContentBlock::ToolResult {
+        let ContentBlock::ToolResult {
             content,
             content_blocks,
             ..
-        } = &mut messages[candidate.message_idx].content[candidate.block_idx]
-        {
-            bytes_saved = bytes_saved
-                .saturating_add(content.len().saturating_sub(summary.len()))
-                .saturating_add(tool_result_content_blocks_len(content_blocks.as_deref()));
-            *content = summary;
-            *content_blocks = None;
-
-            if should_stop(messages, bytes_saved) {
-                break;
-            }
-        }
+        } = &messages[candidate.message_idx].content[candidate.block_idx]
+        else {
+            continue;
+        };
+        plan.push(PlannedPrune {
+            message_idx: candidate.message_idx,
+            block_idx: candidate.block_idx,
+            summary,
+            content_len: content.len(),
+            blocks_len: tool_result_content_blocks_len(content_blocks.as_deref()),
+            image_count: content_blocks.as_ref().map_or(0, |blocks| {
+                blocks
+                    .iter()
+                    .filter(|block| {
+                        block.get("type").and_then(serde_json::Value::as_str) == Some("image")
+                    })
+                    .count()
+            }),
+        });
     }
-
-    bytes_saved
+    plan
 }
 
 fn truncate_retained_block(label: &str, content: &mut String, max_chars: usize) -> bool {
@@ -769,6 +923,8 @@ pub struct CompactionResult {
     pub summary_prompt: Option<SystemPrompt>,
     /// Number of retries used before success
     pub retries_used: u32,
+    /// Last-round coverage for inspector receipts.
+    pub coverage: CompactionCoverage,
 }
 
 /// Classify a compaction LLM failure for the retry / input-ladder policy.
@@ -932,10 +1088,21 @@ pub async fn compact_messages_safe(
             "Local tool-result prune saved {pruned_bytes} bytes before LLM compaction"
         ));
         if was_over_threshold && now_under_threshold {
+            let kept = sanitize_retained_messages(pruned_messages);
+            last_round::validate_last_round_coverage(messages, &kept)?;
+            let coverage = last_round::measure_coverage(
+                messages,
+                &kept,
+                CompactionPath::PruneOnly,
+                pinned_anchors_text(config.workspace.as_deref())
+                    .map(|text| text.chars().count())
+                    .unwrap_or(0),
+            );
             return Ok(CompactionResult {
-                messages: sanitize_retained_messages(pruned_messages),
+                messages: kept,
                 summary_prompt: None,
                 retries_used: 0,
+                coverage,
             });
         }
         &pruned_messages
@@ -956,12 +1123,18 @@ pub async fn compact_messages_safe(
         match compact_messages_with_metadata(client, compaction_input, config, &mut quality_retries)
             .await
         {
-            Ok((msgs, prompt, removed)) => {
-                drop(removed);
+            Ok((msgs, prompt, mut coverage)) => {
+                let kept = sanitize_retained_messages(msgs);
+                last_round::validate_last_round_coverage(compaction_input, &kept)?;
+                let keep: CompactionKeep = inspect_compaction_keep(&kept);
+                coverage.last_round_messages = keep.last_round_messages;
+                coverage.last_round_tool_results = keep.last_round_tool_results;
+                coverage.last_round_assistant = keep.last_round_assistant;
                 return Ok(CompactionResult {
-                    messages: sanitize_retained_messages(msgs),
+                    messages: kept,
                     summary_prompt: prompt,
                     retries_used: attempt.saturating_add(quality_retries),
+                    coverage,
                 });
             }
             Err(e) => {
@@ -994,7 +1167,7 @@ fn build_compaction_summary_block_text(summary: &str, anchors: &str) -> String {
 /// selected newest-first within a fixed token budget and restored to
 /// transcript order. The oldest selected message is truncated to fit rather
 /// than dropped whole.
-fn retained_user_messages(messages: &[Message], max_tokens: usize) -> Vec<Message> {
+pub(crate) fn retained_user_messages(messages: &[Message], max_tokens: usize) -> Vec<Message> {
     let mut selected: Vec<Message> = Vec::new();
     let mut remaining = max_tokens;
     for msg in messages.iter().rev() {
@@ -1032,20 +1205,9 @@ fn retained_user_messages(messages: &[Message], max_tokens: usize) -> Vec<Messag
 /// user's own words, re-stated after the summary because the command promises
 /// they survive compaction.
 fn user_anchors_section(workspace: Option<&std::path::Path>) -> String {
-    let Some(workspace) = workspace else {
-        return String::new();
-    };
-    let primary = workspace.join(".codewhale").join("anchors.md");
-    let path = if primary.exists() {
-        primary
-    } else {
-        workspace.join(".deepseek").join("anchors.md")
-    };
-    match std::fs::read_to_string(path) {
-        Ok(contents) if !contents.trim().is_empty() => {
-            format!("\n\nUser-pinned anchors (verbatim):\n{}", contents.trim())
-        }
-        _ => String::new(),
+    match pinned_anchors_text(workspace) {
+        Some(contents) => format!("\n\nUser-pinned anchors (verbatim):\n{contents}"),
+        None => String::new(),
     }
 }
 
@@ -1056,9 +1218,9 @@ async fn compact_messages(
     config: &CompactionConfig,
 ) -> Result<(Vec<Message>, Option<SystemPrompt>, Vec<Message>)> {
     let mut quality_retries = 0;
-    let (messages, summary_prompt, removed) =
+    let (messages, summary_prompt, _coverage) =
         compact_messages_with_metadata(client, messages, config, &mut quality_retries).await?;
-    Ok((messages, summary_prompt, removed))
+    Ok((messages, summary_prompt, Vec::new()))
 }
 
 async fn compact_messages_with_metadata(
@@ -1066,9 +1228,9 @@ async fn compact_messages_with_metadata(
     messages: &[Message],
     config: &CompactionConfig,
     quality_retries: &mut u32,
-) -> Result<(Vec<Message>, Option<SystemPrompt>, Vec<Message>)> {
+) -> Result<(Vec<Message>, Option<SystemPrompt>, CompactionCoverage)> {
     if messages.is_empty() {
-        return Ok((Vec::new(), None, Vec::new()));
+        return Ok((Vec::new(), None, CompactionCoverage::default()));
     }
 
     let summary = create_summary(client, messages, config, quality_retries).await?;
@@ -1082,14 +1244,23 @@ async fn compact_messages_with_metadata(
         }),
     };
 
-    let mut retained = retained_user_messages(messages, COMPACT_RETAINED_USER_MESSAGE_MAX_TOKENS);
-    retained.push(compaction_checkpoint_message(&SystemPrompt::Text(
-        checkpoint_text,
-    )));
+    let retained = last_round::build_replacement_history(
+        messages,
+        &checkpoint_text,
+        pinned_anchors_text(config.workspace.as_deref()).as_deref(),
+    )?;
+    let coverage = last_round::measure_coverage(
+        messages,
+        &retained,
+        CompactionPath::Summary,
+        pinned_anchors_text(config.workspace.as_deref())
+            .map(|text| text.chars().count())
+            .unwrap_or(0),
+    );
     Ok((
         retained,
         Some(SystemPrompt::Blocks(vec![summary_block])),
-        Vec::new(),
+        coverage,
     ))
 }
 
@@ -1832,21 +2003,54 @@ mod tests {
         assert!(text.contains(FIXED_SUMMARY));
         assert!(text.contains("Another language model"));
 
-        // Replacement history is the recent plain user messages followed by
-        // one Codex-style checkpoint. Tool calls, results, and assistant text
-        // do not survive verbatim.
-        assert_eq!(retained.len(), 3);
-        assert!(retained.iter().all(|message| message.role == "user"));
-        assert!(retained[0].content.iter().any(|block| matches!(
-            block,
-            ContentBlock::Text { text, .. } if text.contains("Objective: migrate")
-        )));
-        assert!(retained[1].content.iter().any(|block| matches!(
-            block,
-            ContentBlock::Text { text, .. } if text == "Sounds good, do it"
-        )));
-        assert!(is_compaction_checkpoint_message(&retained[2]));
-        assert_eq!(user_text_of(&retained[2]).as_deref(), Some(text.as_str()));
+        // Replacement history keeps older user turns, then the open round
+        // verbatim (user + assistant + tools), then one checkpoint.
+        assert!(retained.iter().any(|message| {
+            user_text_of(message).is_some_and(|text| text.contains("Objective: migrate"))
+        }));
+        assert!(
+            retained
+                .iter()
+                .any(|message| { user_text_of(message).as_deref() == Some("Sounds good, do it") })
+        );
+        assert!(retained.iter().any(|message| {
+            message.role.is_assistant_like()
+                && message.content.iter().any(|block| {
+                    matches!(
+                        block,
+                        ContentBlock::Text { text, .. }
+                            if text.contains("Nearly done, rerunning the suite.")
+                    )
+                })
+        }));
+        assert!(retained.iter().any(|message| {
+            message.content.iter().any(|block| {
+                matches!(
+                    block,
+                    ContentBlock::ToolResult { content, .. }
+                        if content.contains("session_store::roundtrip")
+                )
+            })
+        }));
+        assert!(is_compaction_checkpoint_message(retained.last().unwrap()));
+        assert_eq!(
+            user_text_of(retained.last().unwrap()).as_deref(),
+            Some(text.as_str())
+        );
+        last_round::validate_last_round_coverage(&messages, &retained[..retained.len() - 1])
+            .unwrap();
+    }
+
+    #[test]
+    fn coverage_floor_rejects_a_replacement_that_drops_last_round_assistant() {
+        let original = vec![
+            msg("user", "What failed?"),
+            msg("assistant", "session_store::roundtrip panics on reload."),
+        ];
+        let gutting = vec![msg("user", "What failed?")];
+        let error = last_round::validate_last_round_coverage(&original, &gutting)
+            .expect_err("dropping last-round assistant text must fail closed");
+        assert!(error.to_string().contains("assistant"), "{error}");
     }
 
     #[test]
@@ -2254,6 +2458,89 @@ mod tests {
         assert!(!should_compact(&messages, None, &prepared(&config)));
     }
 
+    /// The #5577 acceptance case: a session whose provider bills 842K prompt
+    /// tokens on a 1M window (threshold 800K) MUST compact even when the
+    /// local estimate is far lower — the bounded working list undercounts
+    /// what the provider actually saw, and billed truth wins.
+    #[test]
+    fn billed_842k_on_a_1m_window_compacts_despite_a_small_estimate() {
+        let config = CompactionConfig {
+            enabled: true,
+            token_threshold: 800_000,
+            ..Default::default()
+        };
+        let messages: Vec<Message> = (0..40)
+            .map(|i| Message {
+                role: if i % 2 == 0 {
+                    Role::User
+                } else {
+                    Role::Assistant
+                },
+                content: vec![ContentBlock::Text {
+                    text: format!("short message {i}"),
+                    cache_control: None,
+                }],
+            })
+            .collect();
+        // Estimate alone stays far under the trigger…
+        assert!(!should_compact(&messages, None, &prepared(&config)));
+        // …but the provider's billed prompt total decides.
+        assert_eq!(
+            compaction_decision_with_billed(&messages, None, &prepared(&config), Some(842_000)),
+            CompactionDecision::Compact
+        );
+    }
+
+    /// A refusal under real pressure must name its guard so the host can
+    /// tell the user, instead of the silent hold that reads as a broken
+    /// auto-compactor (#5577).
+    #[test]
+    fn refusals_under_pressure_name_their_guard() {
+        let config = CompactionConfig {
+            enabled: true,
+            token_threshold: 100,
+            ..Default::default()
+        };
+        // Too few messages to summarize: over-pressure, short transcript.
+        let few: Vec<Message> = (0..3)
+            .map(|i| Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: format!("message {i} {}", "x".repeat(300)),
+                    cache_control: None,
+                }],
+            })
+            .collect();
+        assert_eq!(
+            compaction_decision_with_billed(&few, None, &prepared(&config), None),
+            CompactionDecision::Refused(CompactionRefusal::TooFewMessages { count: few.len() })
+        );
+
+        // Retained floor above the trigger: a giant system prompt no pass
+        // can reclaim. The refusal carries the numbers the user needs.
+        let many: Vec<Message> = (0..12)
+            .map(|i| Message {
+                role: if i % 2 == 0 {
+                    Role::User
+                } else {
+                    Role::Assistant
+                },
+                content: vec![ContentBlock::Text {
+                    text: format!("message {i} {}", "y".repeat(200)),
+                    cache_control: None,
+                }],
+            })
+            .collect();
+        let system = SystemPrompt::Text("s".repeat(4_000));
+        match compaction_decision_with_billed(&many, Some(&system), &prepared(&config), None) {
+            CompactionDecision::Refused(CompactionRefusal::RetainedFloor { floor, threshold }) => {
+                assert_eq!(threshold, 100);
+                assert!(floor >= threshold, "floor {floor} must be over {threshold}");
+            }
+            other => panic!("expected a retained-floor refusal, got {other:?}"),
+        }
+    }
+
     /// v0.8.11: message-count is no longer a compaction trigger. Long
     /// chats of small messages stay uncompacted because rewriting the
     /// prefix cache for a tiny budget reclaim is net-negative. Only token
@@ -2447,6 +2734,7 @@ mod tests {
             messages: vec![],
             summary_prompt: None,
             retries_used: 2,
+            coverage: CompactionCoverage::default(),
         };
 
         assert_eq!(result.retries_used, 2);

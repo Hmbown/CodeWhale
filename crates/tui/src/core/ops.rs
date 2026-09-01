@@ -41,8 +41,24 @@ pub struct ProviderRuntimeStatus {
     pub active_provider_requests: usize,
 }
 
+/// Engine-owned MCP snapshot plus the exact event generation it supersedes.
+/// The TUI uses the receipt to reject already-queued boot events even when it
+/// had not rendered that generation before the direct `/mcp` action.
+#[derive(Debug, Clone)]
+pub struct McpManagerUpdate {
+    pub snapshot: crate::mcp::McpManagerSnapshot,
+    pub generation: u64,
+}
+
 /// Result of rebuilding the engine-owned MCP pool in process.
-pub type McpReloadResult = Result<crate::mcp::McpManagerSnapshot, String>;
+pub type McpReloadResult = Result<McpManagerUpdate, String>;
+
+/// Result of the one-shot boot connection pass for the engine-owned MCP pool.
+///
+/// This shares the reload result shape while remaining a separate operation:
+/// boot may fill an empty live pool, but it must not force a config reload or
+/// invalidate already-ready connections.
+pub type McpBootstrapResult = Result<McpManagerUpdate, String>;
 
 /// Origin of text being introduced as a user-role turn.
 ///
@@ -291,6 +307,25 @@ pub enum Op {
     GetProviderRuntimeStatus {
         tx: std::sync::Arc<
             std::sync::Mutex<Option<tokio::sync::oneshot::Sender<ProviderRuntimeStatus>>>,
+        >,
+    },
+
+    /// Populate the engine-owned MCP pool once at UI boot and return a
+    /// snapshot from that exact pool. This is not a config reload and never
+    /// constructs a UI-owned discovery pool. Optional servers never block
+    /// the first model turn: that turn snapshots currently-ready tools.
+    BootstrapMcp {
+        tx: std::sync::Arc<
+            std::sync::Mutex<Option<tokio::sync::oneshot::Sender<McpBootstrapResult>>>,
+        >,
+    },
+
+    /// Retry one failed MCP server on the existing engine pool and return a
+    /// full snapshot. Ready siblings are never invalidated or reconnected.
+    RetryMcpServer {
+        name: String,
+        tx: std::sync::Arc<
+            std::sync::Mutex<Option<tokio::sync::oneshot::Sender<McpBootstrapResult>>>,
         >,
     },
 

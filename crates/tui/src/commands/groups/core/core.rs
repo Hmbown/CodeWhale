@@ -161,7 +161,12 @@ pub fn clear(app: &mut App) -> CommandResult {
             tr(app.ui_locale, MessageId::ClearConversationBusy).to_string(),
         );
     }
-    app.current_session_id = None;
+    // The App owns the session id: it keys the turn-start crash checkpoint
+    // and every autosave, so mint the next id here (as `/new` does) rather
+    // than letting the engine generate one the App only learns about from
+    // `SessionUpdated`. Two ids for one conversation orphan the checkpoint.
+    let new_id = uuid::Uuid::new_v4().to_string();
+    app.current_session_id = Some(new_id.clone());
     app.current_session_metadata = None;
     app.session_title = None;
     app.window_title = None;
@@ -170,7 +175,7 @@ pub fn clear(app: &mut App) -> CommandResult {
     CommandResult::with_message_and_action(
         message,
         AppAction::SyncSession {
-            session_id: None,
+            session_id: Some(new_id),
             messages: Vec::new(),
             system_prompt: None,
             model: app.model.clone(),
@@ -201,6 +206,7 @@ pub(crate) fn reset_conversation_state(app: &mut App) -> bool {
     app.queued_draft = None;
     app.session.total_tokens = 0;
     app.session.total_conversation_tokens = 0;
+    app.last_billed_input_tokens = None;
     app.session.reset_token_breakdown();
     app.session.session_cost = 0.0;
     app.session.session_cost_cny = 0.0;
@@ -277,7 +283,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
                 .replace("{old}", &old_model)
                 .replace("{new}", "auto");
             message.push_str(
-                " (session only — /fleet save updates this Fleet, /fleet save-as saves a new Fleet, /model save-default remembers the default)",
+                " (session only — /pod save updates this Pod, /pod save-as saves a new Pod, /model save-default remembers the default)",
             );
             return CommandResult::with_message_and_action(
                 message,
@@ -370,7 +376,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
             .replace("{old}", &old_model)
             .replace("{new}", &model_id);
         message.push_str(
-            " (session only — /fleet save updates this Fleet, /fleet save-as saves a new Fleet, /model save-default remembers the default)",
+            " (session only — /pod save updates this Pod, /pod save-as saves a new Pod, /model save-default remembers the default)",
         );
         CommandResult::with_message_and_action(
             message,
@@ -610,7 +616,7 @@ pub fn home_dashboard(app: &mut App) -> CommandResult {
 
     // Session stats
     let history_count = app.history.len();
-    let total_tokens = app.session.total_conversation_tokens;
+    let total_tokens = app.session.displayed_total_conversation_tokens();
     let queued_messages = app.queued_messages.len();
     let _ = writeln!(
         stats,
@@ -932,8 +938,25 @@ mod tests {
         assert!(app.tool_cells.is_empty());
         assert!(app.tool_details_by_cell.is_empty());
         assert!(app.session_artifacts.is_empty());
-        assert!(app.current_session_id.is_none());
-        assert!(matches!(result.action, Some(AppAction::SyncSession { .. })));
+        // The App mints the next session id itself so the engine and every
+        // checkpoint/autosave share one id (no orphaned checkpoint).
+        let next_id = app
+            .current_session_id
+            .clone()
+            .expect("/clear claims the next session id");
+        assert_ne!(next_id, "existing-session");
+        assert!(uuid::Uuid::parse_str(&next_id).is_ok(), "{next_id}");
+        match result.action {
+            Some(AppAction::SyncSession {
+                session_id,
+                messages,
+                ..
+            }) => {
+                assert_eq!(session_id.as_deref(), Some(next_id.as_str()));
+                assert!(messages.is_empty());
+            }
+            other => panic!("expected SyncSession, got {other:?}"),
+        }
     }
 
     #[test]
@@ -996,7 +1019,9 @@ mod tests {
         app.session.subagent_cost_cny = 0.80;
         app.session
             .subagent_usage_sources
-            .insert(("agent-test".to_string(), "response-test".to_string()));
+            .insert(crate::cost_status::usage_source_fingerprint(
+                "response-test",
+            ));
         app.session.displayed_cost_high_water = 0.53;
         app.session.displayed_cost_high_water_cny = 3.85;
         app.session.last_prompt_cache_hit_tokens = Some(70);
@@ -1567,7 +1592,7 @@ mod tests {
         assert_eq!(app.view_stack.top_kind(), Some(ModalKind::SubAgents));
         assert_eq!(
             app.status_message,
-            Some("Fetching Fleet status...".to_string())
+            Some("Fetching current-session sub-agents...".to_string())
         );
     }
 

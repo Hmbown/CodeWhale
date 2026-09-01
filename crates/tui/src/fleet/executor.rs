@@ -1,9 +1,9 @@
-//! Fleet executor — runs a fleet worker as a real `codewhale exec` subprocess.
+//! Pod executor — runs a Pod worker as a real `codewhale exec` subprocess.
 //!
-//! A fleet worker IS a headless `codewhale exec` run. There is no separate
-//! "fleet worker" execution engine: the sub-agent runtime, full tool surface,
+//! A Pod worker IS a headless `codewhale exec` run. There is no separate
+//! "Pod worker" execution engine: the sub-agent runtime, full tool surface,
 //! and recursion depth all come from the one `codewhale exec` runtime, so
-//! fleet and sub-agents are one substrate (not two moving targets).
+//! Pods and sub-agents are one substrate (not two moving targets).
 //!
 //! This module is the bridge:
 //! - [`build_worker_exec_command`] turns a `FleetTaskSpec` + `FleetExecConfig`
@@ -217,7 +217,7 @@ pub(crate) fn authority_envelope_for_worker(
         if spec.runtime_profile.permissions.write {
             let manifest = spec.launch_manifest.as_ref().ok_or_else(|| {
                 anyhow::anyhow!(
-                    "write-capable Fleet worker '{}' has no launch manifest",
+                    "write-capable Pod worker '{}' has no launch manifest",
                     spec.worker_id
                 )
             })?;
@@ -306,6 +306,8 @@ fn build_worker_exec_command_from_prompt(
         "--auto".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
+        // R7: the worker shuts itself down when the manager dies (stdin EOF).
+        "--parent-death-watch".to_string(),
     ]);
 
     // Non-secret thinking tier only (#4137). This is profile metadata and
@@ -345,7 +347,7 @@ fn build_worker_exec_command_from_prompt(
         args.push("--tool-authority-json".to_string());
         args.push(
             serde_json::to_string(authority)
-                .expect("validated Fleet tool authority envelope must serialize"),
+                .expect("validated Pod tool authority envelope must serialize"),
         );
     }
 
@@ -379,11 +381,30 @@ pub fn map_exec_stream_line(line: &str) -> Option<FleetWorkerEventPayload> {
             workflow_run_id: value.get("run_id")?.as_str()?.to_string(),
             event: value.get("event")?.clone(),
         }),
-        // Streaming model output / tool results / per-step usage receipts mean
-        // the worker is alive and making progress; surface a coarse Running
-        // heartbeat. `turn_usage` covers thinking-heavy model calls that
-        // produce no visible content between tool calls.
-        "content" | "tool_result" | "turn_usage" => Some(FleetWorkerEventPayload::Running),
+        // Streaming model output / tool results mean the worker is alive and
+        // making progress; surface a coarse Running heartbeat.
+        "content" | "tool_result" => Some(FleetWorkerEventPayload::Running),
+        // Per-step usage receipts feed the run-level accumulator behind the
+        // fleet usage ceiling (R6, #5567); a malformed line still counts as
+        // liveness.
+        "turn_usage" => {
+            let tokens = |field: &str| {
+                value
+                    .get(field)
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0)
+            };
+            let input_tokens = tokens("input_tokens");
+            let output_tokens = tokens("output_tokens");
+            if input_tokens == 0 && output_tokens == 0 {
+                Some(FleetWorkerEventPayload::Running)
+            } else {
+                Some(FleetWorkerEventPayload::UsageReport {
+                    input_tokens,
+                    output_tokens,
+                })
+            }
+        }
         "done" => Some(FleetWorkerEventPayload::Completed {
             exit_code: Some(0),
             summary: None,
@@ -524,6 +545,8 @@ struct WorkerStream {
     pending: Vec<u8>,
     terminal: bool,
     terminal_route: TerminalRouteEvidence,
+    /// When this worker process was started, for per-task wall-clock limits (R5).
+    started_at: std::time::Instant,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -672,7 +695,7 @@ impl FleetExecutor {
             FleetHostSpec::Docker { image, .. } => {
                 return Err(super::host::FleetHostError {
                     kind: super::host::FleetHostErrorKind::Configuration,
-                    message: format!("docker fleet workers are not wired yet (image {image})"),
+                    message: format!("docker Pod workers are not wired yet (image {image})"),
                 });
             }
         };
@@ -686,6 +709,7 @@ impl FleetExecutor {
                 pending: Vec::new(),
                 terminal: false,
                 terminal_route: TerminalRouteEvidence::default(),
+                started_at: std::time::Instant::now(),
             },
         );
         Ok(handle)
@@ -705,6 +729,15 @@ impl FleetExecutor {
             .and_then(|stream| stream.attempt.clone())
     }
 
+    /// Wall-clock time this worker process has been running (R5). `None` when
+    /// the worker is not tracked.
+    #[must_use]
+    pub fn worker_running_for(&self, worker_id: &str) -> Option<std::time::Duration> {
+        self.streams
+            .get(worker_id)
+            .map(|stream| stream.started_at.elapsed())
+    }
+
     /// Stop a tracked worker at the host boundary.
     ///
     /// Operator controls run in a separate process from the foreground Fleet
@@ -720,7 +753,7 @@ impl FleetExecutor {
         };
         if let Some(key) = ssh_key {
             let adapter = self.ssh_adapters.get_mut(&key).ok_or_else(|| {
-                anyhow::anyhow!("tracked SSH Fleet worker {worker_id} has no host adapter")
+                anyhow::anyhow!("tracked SSH Pod worker {worker_id} has no host adapter")
             })?;
             adapter.stop_worker(worker_id)?;
         } else {
@@ -958,6 +991,7 @@ mod tests {
                 pending: Vec::new(),
                 terminal: false,
                 terminal_route: TerminalRouteEvidence::default(),
+                started_at: std::time::Instant::now(),
             },
         );
     }
@@ -1109,7 +1143,7 @@ mod tests {
         .unwrap();
         let prompt = cmd.args.last().unwrap();
 
-        assert!(prompt.contains("Fleet profile: reviewer"));
+        assert!(prompt.contains("Pod profile: reviewer"));
         assert!(prompt.contains("Focus on defects, regressions, and missing tests."));
     }
 
@@ -1335,8 +1369,14 @@ mod tests {
             cmd.args
         );
         assert_eq!(
-            &cmd.args[exec_idx..exec_idx + 4],
-            ["exec", "--auto", "--output-format", "stream-json"],
+            &cmd.args[exec_idx..exec_idx + 5],
+            [
+                "exec",
+                "--auto",
+                "--output-format",
+                "stream-json",
+                "--parent-death-watch"
+            ],
             "exec flags must remain behind the subcommand: {:?}",
             cmd.args
         );

@@ -188,6 +188,19 @@ Use clear, descriptive commit messages following conventional commits:
 
 Example: `feat: add doctor subcommand for system diagnostics`
 
+**AI-assistant co-author trailers are fine.** Using an assistant is welcome and
+needs no disclosure, and CI no longer rejects an auto-appended
+`Co-authored-by: <some tool>` line. What we do care about is that the humans who
+did the work are named — `Co-authored-by` feeds the GitHub contribution graph.
+Remove an auto-appended line only if you want to:
+
+```bash
+git rebase -i origin/main   # reword each commit, delete the Co-authored-by line
+```
+
+Co-author a *person* freely; the address must be their GitHub-linked one
+(`id+login@users.noreply.github.com`) or the credit does not register.
+
 When a commit harvests code from a community PR (see "How Your Contribution
 Lands" below), include a `Harvested from PR #N by @author` line in the commit
 body. An auto-close workflow watches for this pattern and closes the

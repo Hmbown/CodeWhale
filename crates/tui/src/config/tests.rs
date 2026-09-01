@@ -745,6 +745,36 @@ web_search = true
 }
 
 #[test]
+fn tui_config_parses_lifecycle_outbox_table() {
+    let raw = r#"
+[lifecycle_outbox]
+path = "~/.codewhale/notifications/outbox.jsonl"
+webhook_url = "https://example.com/hooks/codewhale"
+webhook_token = "secret-token"
+"#;
+    let parsed: ConfigFile = toml::from_str(raw).expect("parse lifecycle_outbox config");
+
+    let outbox = parsed
+        .base
+        .lifecycle_outbox
+        .expect("lifecycle_outbox table should parse");
+    assert_eq!(
+        outbox.path,
+        Some(PathBuf::from("~/.codewhale/notifications/outbox.jsonl"))
+    );
+    assert_eq!(
+        outbox.webhook_url.as_deref(),
+        Some("https://example.com/hooks/codewhale")
+    );
+    assert_eq!(outbox.webhook_token.as_deref(), Some("secret-token"));
+
+    // Off by default: a config without the table leaves the feature off.
+    let absent: ConfigFile =
+        toml::from_str("model = \"demo\"").expect("parse config without outbox table");
+    assert!(absent.base.lifecycle_outbox.is_none());
+}
+
+#[test]
 fn tui_config_parses_hotbar_bindings() {
     let raw = r#"
 [[hotbar]]
@@ -1294,9 +1324,15 @@ fn live_search_provider_update_preserves_environment_precedence() {
 fn notification_defaults_and_live_updates_share_one_consistent_model() {
     let mut notifications = NotificationsConfig::default();
     assert_eq!(notifications.threshold_secs, 30);
+    assert_eq!(notifications.completion_sound, CompletionSound::Off);
     assert_eq!(
         Config::default().notifications_config().threshold_secs,
         notifications.threshold_secs
+    );
+    assert_eq!(
+        Config::default().notifications_config().completion_sound,
+        CompletionSound::Off,
+        "a fresh install must never opt itself into an audible completion cue"
     );
 
     notifications.apply_update(NotificationConfigUpdate::Method(NotificationMethod::Osc9));
@@ -1307,6 +1343,22 @@ fn notification_defaults_and_live_updates_share_one_consistent_model() {
     assert_eq!(
         notifications.threshold_secs, 30,
         "field deltas must preserve both defaults and earlier live edits"
+    );
+}
+
+#[test]
+fn notification_condition_accepts_background_only_policy() {
+    let config: Config = toml::from_str(
+        r#"
+        [tui]
+        notification_condition = "unfocused"
+        "#,
+    )
+    .expect("unfocused attention policy should parse");
+
+    assert_eq!(
+        config.tui.and_then(|tui| tui.notification_condition),
+        Some(NotificationCondition::Unfocused)
     );
 }
 
@@ -2773,6 +2825,10 @@ fn tui_stream_chunk_timeout_defaults_env_and_clamps() {
     let zero = Config {
         tui: Some(TuiConfig {
             stream_chunk_timeout_secs: Some(0),
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             ..TuiConfig::default()
         }),
         ..Config::default()
@@ -2785,6 +2841,10 @@ fn tui_stream_chunk_timeout_defaults_env_and_clamps() {
     let explicit_min = Config {
         tui: Some(TuiConfig {
             stream_chunk_timeout_secs: Some(MIN_STREAM_CHUNK_TIMEOUT_SECS),
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             ..TuiConfig::default()
         }),
         ..Config::default()
@@ -2797,6 +2857,10 @@ fn tui_stream_chunk_timeout_defaults_env_and_clamps() {
     let high = Config {
         tui: Some(TuiConfig {
             stream_chunk_timeout_secs: Some(MAX_STREAM_CHUNK_TIMEOUT_SECS + 1),
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             ..TuiConfig::default()
         }),
         ..Config::default()
@@ -3800,8 +3864,8 @@ fn deepseek_dispatcher_env_key_overrides_config_key() -> Result<()> {
 #[test]
 fn provider_neutral_cli_key_wins_after_profile_provider_switch() -> Result<()> {
     let _lock = lock_test_env();
-    let _source = EnvVarGuard::set("DEEPSEEK_API_KEY_SOURCE", "cli");
-    let _cli_key = EnvVarGuard::set("CODEWHALE_CLI_API_KEY", "explicit-profile-key");
+    let _source = EnvVarGuard::set(codewhale_config::CLI_API_KEY_SOURCE_ENV, "cli");
+    let _cli_key = EnvVarGuard::set(codewhale_config::CLI_API_KEY_ENV, "explicit-profile-key");
     let _anthropic_env = EnvVarGuard::remove("ANTHROPIC_API_KEY");
     let mut providers = ProvidersConfig::default();
     providers.anthropic.api_key = Some("saved-anthropic-key".to_string());
@@ -3820,8 +3884,9 @@ fn provider_neutral_cli_key_wins_after_profile_provider_switch() -> Result<()> {
 #[test]
 fn provider_neutral_cli_key_requires_dispatcher_source_marker() -> Result<()> {
     let _lock = lock_test_env();
-    let _source = EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
-    let _cli_key = EnvVarGuard::set("CODEWHALE_CLI_API_KEY", "untrusted-generic-key");
+    let _source = EnvVarGuard::remove(codewhale_config::CLI_API_KEY_SOURCE_ENV);
+    let _legacy_source = EnvVarGuard::remove(codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV);
+    let _cli_key = EnvVarGuard::set(codewhale_config::CLI_API_KEY_ENV, "untrusted-generic-key");
     let _anthropic_env = EnvVarGuard::remove("ANTHROPIC_API_KEY");
     let mut providers = ProvidersConfig::default();
     providers.anthropic.api_key = Some("saved-anthropic-key".to_string());
@@ -4911,8 +4976,8 @@ default_text_model = "deepseek-chat"
         "DEEPSEEK_BASE_URL",
         "https://explicit-cli-gateway.example.test/v1",
     );
-    let _source = EnvVarGuard::set("DEEPSEEK_API_KEY_SOURCE", "cli");
-    let _cli_key = EnvVarGuard::set("CODEWHALE_CLI_API_KEY", "explicit-cli-key");
+    let _source = EnvVarGuard::set(codewhale_config::CLI_API_KEY_SOURCE_ENV, "cli");
+    let _cli_key = EnvVarGuard::set(codewhale_config::CLI_API_KEY_ENV, "explicit-cli-key");
 
     let config = Config::load(Some(config_path), None)?;
     assert_eq!(config.deepseek_api_key()?, "explicit-cli-key");
@@ -6149,6 +6214,29 @@ fn retired_deepseek_aliases_do_not_escape_provider_owned_namespaces() {
 }
 
 #[test]
+fn openrouter_hunyuan_aliases_resolve_to_hy3_preview() {
+    for alias in [
+        "tencent/hy3-preview",
+        "hy3-preview",
+        "hy3",
+        "hunyuan",
+        "tencent-hunyuan",
+        "hunyuan-hy3",
+    ] {
+        assert_eq!(
+            canonical_model_id_for_provider(ApiProvider::Openrouter, alias).as_deref(),
+            Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL),
+            "{alias} should select the public Hy3 preview id"
+        );
+    }
+    assert_ne!(
+        canonical_model_id_for_provider(ApiProvider::Openrouter, "hy4").as_deref(),
+        Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL),
+        "hy4 is not a released public model id"
+    );
+}
+
+#[test]
 fn deepseek_default_model_canonicalizes_provider_prefixed_ids() {
     let _lock = lock_test_env();
     let temp_root = tempfile::tempdir().unwrap();
@@ -6537,6 +6625,22 @@ fn model_completion_names_for_deepseek_api_are_deduplicated_bare_ids() {
 }
 
 #[test]
+fn model_completion_names_for_openai_are_native_to_its_default_endpoint() {
+    let models = model_completion_names_for_provider(ApiProvider::Openai);
+
+    assert_eq!(models.first().copied(), Some("gpt-5.6"));
+    assert!(models.iter().all(|model| !model.contains("deepseek")));
+}
+
+#[test]
+fn model_completion_names_for_atlascloud_keep_its_provider_owned_default() {
+    assert_eq!(
+        model_completion_names_for_provider(ApiProvider::Atlascloud),
+        vec![DEFAULT_ATLASCLOUD_MODEL]
+    );
+}
+
+#[test]
 fn model_completion_names_for_together_include_provider_owned_models() {
     assert_eq!(
         model_completion_names_for_provider(ApiProvider::Together),
@@ -6618,6 +6722,7 @@ fn model_completion_names_for_zai_lists_default_5_1_and_turbo() {
     assert_eq!(models.first().copied(), Some(DEFAULT_ZAI_MODEL));
     assert_eq!(DEFAULT_ZAI_MODEL, ZAI_GLM_5_3_MODEL);
     assert!(models.contains(&ZAI_GLM_5_1_MODEL));
+    assert!(models.contains(&ZAI_GLM_5_3_FLASH_MODEL));
     assert!(models.contains(&ZAI_GLM_5_TURBO_MODEL));
     // GLM-5.2 is still offered alongside the others but no longer takes the
     // default slot; explicit 5.2 routes are untouched.
@@ -6641,6 +6746,9 @@ fn normalize_model_name_for_zai_canonicalizes_current_glm_models() {
         ("glm-5.3", DEFAULT_ZAI_MODEL),
         ("glm-5-3", ZAI_GLM_5_3_MODEL),
         ("zai-glm-5-3", ZAI_GLM_5_3_MODEL),
+        ("glm-5.3-flash", ZAI_GLM_5_3_FLASH_MODEL),
+        ("glm-5-3-flash", ZAI_GLM_5_3_FLASH_MODEL),
+        ("zai-glm-5.3-flash", ZAI_GLM_5_3_FLASH_MODEL),
         ("glm-5-turbo", ZAI_GLM_5_TURBO_MODEL),
         ("zai-glm-5-turbo", ZAI_GLM_5_TURBO_MODEL),
     ] {
@@ -7387,8 +7495,13 @@ fn openai_provider_uses_openai_compatible_defaults() -> Result<()> {
 
     config.validate()?;
     assert_eq!(config.api_provider(), ApiProvider::Openai);
-    assert_eq!(config.default_model(), DEFAULT_OPENAI_MODEL);
-    assert_eq!(config.deepseek_base_url(), DEFAULT_OPENAI_BASE_URL);
+    assert_eq!(config.default_model(), "gpt-5.6");
+    assert_eq!(config.deepseek_base_url(), "https://api.openai.com/v1");
+    assert_eq!(
+        codewhale_config::provider::provider_for_kind(codewhale_config::ProviderKind::Openai)
+            .default_model(),
+        DEFAULT_OPENAI_MODEL
+    );
     Ok(())
 }
 
@@ -10975,7 +11088,14 @@ fn provider_capability_zai_defaults_to_5_3_and_tracks_5_2_5_1_and_turbo() {
     assert_eq!(v51.max_output, Some(131_072));
     assert!(v51.thinking_supported);
 
-    // GLM-5-Turbo is the faster sub-agent sibling.
+    // GLM-5.3-Flash is the published 1M multimodal sibling.
+    let flash = provider_capability(ApiProvider::Zai, ZAI_GLM_5_3_FLASH_MODEL);
+    assert_eq!(flash.resolved_model, ZAI_GLM_5_3_FLASH_MODEL);
+    assert_eq!(flash.context_window, 1_000_000);
+    assert_eq!(flash.max_output, Some(131_072));
+    assert!(flash.thinking_supported);
+
+    // GLM-5-Turbo is the faster sub-agent sibling of GLM-5.2.
     let turbo = provider_capability(ApiProvider::Zai, ZAI_GLM_5_TURBO_MODEL);
     assert_eq!(turbo.resolved_model, ZAI_GLM_5_TURBO_MODEL);
 }
@@ -12221,6 +12341,19 @@ fn picker_consent_persists_only_confirmed_exact_scope_and_revoke_is_one_step() {
         "# preserve operator comment\n[providers.openai_codex]\nmodel = \"gpt-5-codex\" # preserve model\n",
     )
     .expect("seed config");
+    // #5772: persistence now reads and validates the exact confirmed file
+    // before any consent record is written, so the fixture must hold a live
+    // token (far-future JWT exp) for the grant to be saved at all.
+    std::fs::write(
+        &external_path,
+        "{\"tokens\":{\"access_token\":\"header.eyJleHAiOjk5OTk5OTk5OTl9.sig\"}}",
+    )
+    .expect("seed external credential");
+    // The secure adapter rejects symlinked path components; macOS `/var` is
+    // one, so the confirmed path must be the canonical one.
+    let external_path = external_path
+        .canonicalize()
+        .expect("canonical external credential path");
     let mut live = Config {
         provider: Some(ApiProvider::OpenaiCodex.as_str().to_string()),
         ..Config::default()
@@ -12249,10 +12382,12 @@ fn picker_consent_persists_only_confirmed_exact_scope_and_revoke_is_one_step() {
     assert_eq!(consent.path, external_path);
     assert_eq!(
         crate::external_credentials::complete_side_effect_trap_counts(),
-        (0, 0, 0, 0, 0),
-        "grant persistence must not inspect the disclosed external path"
+        (1, 1, 0, 0, 0),
+        "grant persistence performs exactly the confirmed read (one secure open, one \
+         bounded read) and never writes, refreshes, or reaches the network"
     );
 
+    crate::external_credentials::reset_side_effect_trap();
     revoke_external_credential_consent_for_at(
         Some(&config_path),
         &mut live,
@@ -12783,6 +12918,16 @@ fn k3_and_kimi_k3_never_cross_products_and_fail_visibly() {
         ApiProvider::Moonshot,
         DEFAULT_KIMI_CODE_BASE_URL,
         KIMI_CODE_K3_MODEL
+    ));
+    assert!(is_exact_kimi_code_k3_route(
+        ApiProvider::Moonshot,
+        DEFAULT_KIMI_CODE_BASE_URL,
+        KIMI_CODE_K3_256K_MODEL
+    ));
+    assert!(!is_exact_kimi_code_bare_k3_route(
+        ApiProvider::Moonshot,
+        DEFAULT_KIMI_CODE_BASE_URL,
+        KIMI_CODE_K3_256K_MODEL
     ));
     assert!(!is_exact_direct_moonshot_k3_route(
         ApiProvider::Moonshot,

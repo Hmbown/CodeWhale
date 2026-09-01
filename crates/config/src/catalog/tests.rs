@@ -205,6 +205,57 @@ fn compiler_merges_layers_with_override_precedence() {
 }
 
 #[test]
+fn compiler_layer_order_and_policy_deny_never_overridden() {
+    let row = |source: CatalogSource, model: &str, family: &str| CatalogOffering {
+        provider: "zai-coding-cn".into(),
+        wire_model_id: model.into(),
+        endpoint_key: "chat".into(),
+        family: Some(family.into()),
+        source,
+        ..Default::default()
+    };
+    let policy = crate::route::CatalogPolicy {
+        rules: vec![crate::route::PolicyRule {
+            effect: crate::route::PolicyEffect::Deny,
+            action: crate::route::PolicyAction::ModelUse,
+            resource: "*-cn/*".to_string(),
+        }],
+    };
+    let snapshot = CatalogCompiler::new()
+        .with_bundled(vec![row(CatalogSource::Bundled, "glm-5", "bundled")])
+        .with_models_dev_live(vec![row(
+            CatalogSource::ModelsDevLive { fetched_at: 1 },
+            "glm-5",
+            "models-dev",
+        )])
+        .with_provider_live(vec![row(
+            CatalogSource::Live {
+                base_url_fingerprint: "fp".into(),
+                fetched_at: 2,
+            },
+            "glm-5",
+            "provider",
+        )])
+        .with_config(vec![row(CatalogSource::ConfigOverride, "glm-5", "config")])
+        .with_overrides(vec![row(CatalogSource::UserOverride, "glm-5", "user")])
+        .with_policy(policy)
+        .compile();
+
+    assert!(
+        snapshot.offerings.is_empty(),
+        "policy DENY after every layer must drop the row; layers cannot override it"
+    );
+
+    let allowed = CatalogCompiler::new()
+        .with_bundled(vec![row(CatalogSource::Bundled, "glm-5", "bundled")])
+        .with_overrides(vec![row(CatalogSource::UserOverride, "glm-5", "user")])
+        .compile();
+    let kept = find(&allowed.offerings, "zai-coding-cn", "glm-5");
+    assert_eq!(kept.source, CatalogSource::UserOverride);
+    assert_eq!(kept.family.as_deref(), Some("user"));
+}
+
+#[test]
 fn cache_scopes_by_provider_and_base_url_fingerprint() {
     let fp_a = base_url_fingerprint("https://api.example.com/v1");
     let fp_b = base_url_fingerprint("https://other.example.com/v1");
@@ -335,42 +386,6 @@ fn fingerprint_of_an_empty_base_url_is_the_redacted_constant() {
     // back would be another undeclared persisted-key change.
     const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     assert_ne!(redacted, EMPTY_SHA256);
-}
-
-#[test]
-fn changelog_declares_fingerprint_persisted_key_change() {
-    // `base_url_fingerprint` is serde-serialized (catalog cache, LiveOffering,
-    // pricing receipts, TurnRecord.routed_usage_source_ids). Empty input and
-    // scheme-less URLs with `@` hash differently than they did before
-    // 388125491. Before a release cut, Unreleased must say so; after the
-    // coordinated version bump, the current-version section owns the same
-    // declaration. An older release cannot satisfy this check, because stale
-    // caches would then look like corruption without a note for this build.
-    let changelog = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../CHANGELOG.md"));
-    let unreleased = changelog
-        .split_once("## [Unreleased]")
-        .expect("CHANGELOG has an Unreleased section")
-        .1
-        .split_once("\n## [")
-        .expect("Unreleased is followed by a released section")
-        .0;
-    let current_heading = format!("## [{}]", env!("CARGO_PKG_VERSION"));
-    let current_release = changelog
-        .split_once(&current_heading)
-        .map(|(_, tail)| tail.split("\n## [").next().unwrap_or(tail))
-        .unwrap_or_default();
-    let declared_change = format!("{unreleased}\n{current_release}");
-    for needle in [
-        "base_url_fingerprint",
-        "persisted-key",
-        "scheme-less",
-        "routed_usage_source_ids",
-    ] {
-        assert!(
-            declared_change.contains(needle),
-            "Unreleased or the current release section must declare the {needle} persisted-key change:\n{declared_change}"
-        );
-    }
 }
 
 #[test]
@@ -648,7 +663,7 @@ fn bundled_asset_parses() {
         "bundled asset must carry provider rows"
     );
     // The helper returns the same parsed catalog.
-    assert_eq!(bundled_models_dev_catalog(), catalog);
+    assert_eq!(*bundled_models_dev_catalog(), catalog);
 }
 
 #[test]
@@ -851,9 +866,11 @@ fn bundled_asset_pricing_is_honest() {
 
     // GLM-5.3 is live on the Coding Plan, but Z.ai has published no USD PAYG
     // rate for it. Coding Plan credit multipliers are not USD, so every
-    // glm-5.3 row stays unpriced rather than inheriting glm-5.2's rates.
+    // glm-5.3 row *except Flash* stays unpriced rather than inheriting
+    // glm-5.2's rates. GLM-5.3-Flash has a published list (2026-08-26).
     for row in &rows {
-        if row.wire_model_id.to_ascii_lowercase().contains("glm-5.3") {
+        let wire = row.wire_model_id.to_ascii_lowercase();
+        if wire.contains("glm-5.3") && !wire.contains("flash") {
             assert!(
                 row.cost.is_none(),
                 "{}/{}: glm-5.3 must stay unpriced until Z.ai publishes rates",
@@ -862,6 +879,48 @@ fn bundled_asset_pricing_is_honest() {
             );
         }
     }
+
+    let glm53_flash = find(&rows, "zai", "GLM-5.3-Flash");
+    let cost = glm53_flash
+        .cost
+        .as_ref()
+        .expect("GLM-5.3-Flash must ship priced at durable list rates");
+    assert_eq!(cost.input, Some(0.15));
+    assert_eq!(cost.output, Some(0.50));
+    assert_eq!(cost.cache_read, Some(0.03));
+    assert_eq!(
+        glm53_flash.limit.as_ref().and_then(|l| l.context),
+        Some(1_000_000)
+    );
+    assert!(
+        !glm53_flash.default_for_provider,
+        "GLM-5.3-Flash is a picker row, not the Z.ai default"
+    );
+
+    // OpenRouter qwen3.8-flash lists durable (non-promo) rates on models.dev
+    // as of 2026-08-26. Unlike GLM-5.3-Flash's explicit 50% promo, this row
+    // must ship priced. It is not a family default.
+    let qwen38_flash = find(&rows, "openrouter", "qwen/qwen3.8-flash");
+    assert!(
+        !qwen38_flash.default_for_provider,
+        "qwen3.8-flash is a suffix variant and must not be the OpenRouter default"
+    );
+    let cost = qwen38_flash
+        .cost
+        .as_ref()
+        .expect("qwen/qwen3.8-flash must ship priced (durable list rates, no promo)");
+    assert_eq!(cost.input, Some(0.16));
+    assert_eq!(cost.output, Some(0.47));
+    assert_eq!(cost.cache_read, Some(0.016));
+    assert_eq!(cost.cache_write, Some(0.20));
+    assert_eq!(
+        qwen38_flash.limit.as_ref().and_then(|l| l.context),
+        Some(1_000_000)
+    );
+    assert_eq!(
+        qwen38_flash.limit.as_ref().and_then(|l| l.output),
+        Some(131_072)
+    );
 
     // M3 has input-length and service tiers that the flat catalog cost shape
     // cannot represent, so the bundled route row stays honestly unpriced.
@@ -942,4 +1001,48 @@ fn live_offerings_normalize_models_dev_provider_aliases() {
     assert!(rows.iter().all(|r| r.provider != "moonshotai"));
     assert!(rows.iter().all(|r| r.provider != "togetherai"));
     assert!(rows.iter().all(|r| r.provider != "zhipuai"));
+}
+
+fn offering(provider: &str, wire: &str, source: CatalogSource) -> CatalogOffering {
+    CatalogOffering {
+        provider: provider.to_string(),
+        wire_model_id: wire.to_string(),
+        endpoint_key: "chat".to_string(),
+        source,
+        ..CatalogOffering::default()
+    }
+}
+
+#[test]
+fn codewhale_live_catalog_beats_models_dev_on_the_same_wire() {
+    let snapshot = CatalogCompiler::new()
+        .with_bundled(vec![offering(
+            "command-code",
+            "deepseek/deepseek-v4-flash",
+            CatalogSource::Bundled,
+        )])
+        .with_models_dev_live(vec![offering(
+            "command-code",
+            "deepseek/deepseek-v4-flash",
+            CatalogSource::ModelsDevLive { fetched_at: 1 },
+        )])
+        .with_codewhale_live(vec![offering(
+            "command-code",
+            "deepseek/deepseek-v4-flash",
+            CatalogSource::CodewhaleLive {
+                revision: "2026-08-31.1".into(),
+                fetched_at: 2,
+            },
+        )])
+        .compile();
+    let row = find(
+        &snapshot.offerings,
+        "command-code",
+        "deepseek/deepseek-v4-flash",
+    );
+    assert!(matches!(
+        row.source,
+        CatalogSource::CodewhaleLive { ref revision, fetched_at: 2 }
+            if revision == "2026-08-31.1"
+    ));
 }

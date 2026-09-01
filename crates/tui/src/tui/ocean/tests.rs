@@ -57,7 +57,7 @@ fn whale_column_stays_blue_and_gently_banded_at_full_screen_depth() {
             "row {row} lost the authored blue-ocean ordering: {current:?}"
         );
         assert!(
-            relative_luminance(current) > relative_luminance(theme.surface_bg),
+            relative_luminance(current) > relative_luminance(crate::palette::WHALE_BG),
             "row {row} fell back into the near-black shell field"
         );
         assert!(
@@ -160,7 +160,7 @@ fn light_ocean_and_selection_keep_text_and_semantic_roles_readable() {
 fn whale_custom_background_uses_the_configured_surface() {
     let custom = Color::Rgb(0x12, 0x1a, 0x2d);
     let theme = crate::palette::UI_THEME.with_background_color(custom);
-    let ramp = OceanRamp::for_theme(&theme).expect("custom backgrounds retain ombre");
+    let ramp = OceanRamp::for_theme(&theme).expect("custom backgrounds retain Deepsea");
 
     assert_ne!(ramp.surface, Color::Rgb(0x0e, 0x17, 0x29));
     assert_ne!(ramp.surface, ramp.deep);
@@ -168,9 +168,10 @@ fn whale_custom_background_uses_the_configured_surface() {
 
 #[test]
 fn inherited_terminal_background_reports_no_ramp() {
-    let mut theme = crate::palette::UI_THEME;
-    theme.surface_bg = Color::Reset;
-    assert_eq!(OceanRamp::for_theme(&theme), None);
+    assert_eq!(
+        OceanRamp::for_theme(&crate::palette::TERMINAL_UI_THEME),
+        None
+    );
 }
 
 #[test]
@@ -182,10 +183,10 @@ fn solarized_light_preserves_its_canonical_base3_background() {
 }
 
 #[test]
-fn solarized_light_custom_background_preserves_ombre() {
+fn solarized_light_custom_background_preserves_deepsea() {
     let custom = Color::Rgb(0x1a, 0x1b, 0x26);
     let theme = crate::palette::SOLARIZED_LIGHT_UI_THEME.with_background_color(custom);
-    let ramp = OceanRamp::for_theme(&theme).expect("custom backgrounds retain ombre");
+    let ramp = OceanRamp::for_theme(&theme).expect("custom backgrounds retain Deepsea");
 
     assert_ne!(ramp.surface, custom);
     assert_ne!(ramp.surface, ramp.deep);
@@ -217,34 +218,67 @@ fn every_shipped_theme_has_an_intentional_ocean_treatment() {
 }
 
 #[test]
-fn treatment_parses_saved_values_and_defaults_to_ombre() {
+fn treatment_parses_saved_values_and_migrates_legacy_ombre_values() {
     assert_eq!(OceanTreatment::parse("flat"), OceanTreatment::Flat);
     assert_eq!(OceanTreatment::parse(" FLAT "), OceanTreatment::Flat);
-    assert_eq!(OceanTreatment::parse("ombre"), OceanTreatment::Ombre);
-    assert_eq!(OceanTreatment::parse("kelp"), OceanTreatment::Ombre);
-    assert_eq!(OceanTreatment::parse(""), OceanTreatment::Ombre);
-    // Migration shim: settings saved by pre-0.9.4 builds may still carry the
-    // removed classic shell; they load as the default ombre treatment.
-    assert_eq!(OceanTreatment::parse("classic"), OceanTreatment::Ombre);
+    assert_eq!(OceanTreatment::parse("deepsea"), OceanTreatment::Deepsea);
+    assert_eq!(OceanTreatment::parse("ombre"), OceanTreatment::Deepsea);
+    assert_eq!(OceanTreatment::parse("kelp"), OceanTreatment::Flat);
+    assert_eq!(OceanTreatment::parse(""), OceanTreatment::Flat);
+    // Migration aliases remain deterministic for older persisted settings.
+    assert_eq!(OceanTreatment::parse("classic"), OceanTreatment::Deepsea);
 }
 
 #[test]
-fn every_underwater_treatment_keeps_ambient_life() {
-    // The classic shell was the only treatment that stilled ambient life; with
-    // it removed there is no per-treatment ambient-life flag left to test.
-    // What remains worth pinning: both live treatments stay distinct so the
-    // flat/ombre choice keeps its meaning.
-    assert_ne!(OceanTreatment::Ombre, OceanTreatment::Flat);
-    assert!(OceanTreatment::Ombre.is_ombre());
+fn deepsea_is_the_explicit_underwater_treatment() {
+    // The ordinary terminal must not be turned into an aquarium by default.
+    // Flat and Deepsea stay distinct so the user can deliberately opt into the
+    // underwater field.
+    assert_eq!(OceanTreatment::default(), OceanTreatment::Flat);
+    assert_ne!(OceanTreatment::Deepsea, OceanTreatment::Flat);
+    assert!(OceanTreatment::Deepsea.is_deepsea());
     assert!(OceanTreatment::Flat.is_flat());
 }
 
 #[test]
+fn whale_pair_flat_shells_reset_while_deepsea_paints_the_shared_column() {
+    assert!(OceanTreatment::Flat.is_flat());
+    assert!(OceanTreatment::Deepsea.is_deepsea());
+
+    for theme in [crate::palette::UI_THEME, crate::palette::LIGHT_UI_THEME] {
+        for shell_surface in [
+            theme.surface_bg,
+            theme.panel_bg,
+            theme.composer_bg,
+            theme.header_bg,
+            theme.footer_bg,
+        ] {
+            assert_eq!(shell_surface, Color::Reset, "{} Flat shell", theme.name);
+        }
+
+        let ramp = OceanRamp::for_theme(&theme).expect("built-in Deepsea ramp");
+        for painted in [ramp.surface, ramp.middle, ramp.deep, ramp.ambient] {
+            assert_ne!(painted, Color::Reset, "{} Deepsea paint", theme.name);
+        }
+
+        let area = Rect::new(0, 0, 4, 4);
+        let mut buf = Buffer::empty(area);
+        let column = OceanColumn::new(ramp, area, 0, None, ShellPhase::Idle, false, 0);
+        column.paint_matching(area, &mut buf, theme.surface_bg);
+        assert_ne!(buf[(0, 0)].bg, Color::Reset);
+        assert_ne!(buf[(0, area.height - 1)].bg, Color::Reset);
+        assert_ne!(buf[(0, 0)].bg, buf[(0, area.height - 1)].bg);
+    }
+}
+
+#[test]
 fn ambient_ink_matches_sunk_sky_shades_and_survives_reset_surfaces() {
-    // RGB themes: fish wear two sunk sky shades; seafoam remains live-work ink.
+    // Deepsea's authored RGB ramp gives the terminal-native Whale shell two
+    // sunk sky shades; seafoam remains live-work ink.
     let theme = crate::palette::UI_THEME;
     let ramp = OceanRamp::for_theme(&theme).expect("RGB theme");
-    let (primary, secondary) = ambient_inks(&theme);
+    let baseline = crate::tui::ambient_life::AmbientActivity::Baseline;
+    let (primary, secondary) = ambient_inks_for_activity(&theme, baseline);
     assert_ne!(primary, ramp.ambient);
     assert_ne!(primary, secondary);
     assert_ne!(primary, theme.accent_secondary);
@@ -252,7 +286,52 @@ fn ambient_ink_matches_sunk_sky_shades_and_survives_reset_surfaces() {
     // Terminal-owned surfaces have no RGB base; the raw secondary accent
     // lets the terminal's own palette color the life.
     let terminal = crate::palette::TERMINAL_UI_THEME;
-    assert_eq!(ambient_inks(&terminal), (terminal.info, terminal.info));
+    assert_eq!(
+        ambient_inks_for_activity(&terminal, baseline),
+        (terminal.info, terminal.info)
+    );
+}
+
+#[test]
+fn ambient_ink_reads_the_activity_at_a_glance() {
+    use crate::tui::ambient_life::AmbientActivity;
+    let theme = crate::palette::UI_THEME;
+    let baseline = ambient_inks_for_activity(&theme, AmbientActivity::Baseline);
+    let reasoning = ambient_inks_for_activity(&theme, AmbientActivity::Reasoning);
+    let tools = ambient_inks_for_activity(&theme, AmbientActivity::Tools);
+    let subagents = ambient_inks_for_activity(&theme, AmbientActivity::Subagents);
+
+    // Each activity wears its own water: dim deep for reasoning, bright
+    // current for tools, seafoam for orchestration.
+    assert_ne!(reasoning, baseline);
+    assert_ne!(tools, baseline);
+    assert_ne!(subagents, baseline);
+    assert_ne!(subagents, tools);
+    // Verifying keeps the metered baseline treatment.
+    assert_eq!(
+        ambient_inks_for_activity(&theme, AmbientActivity::Verifying),
+        baseline
+    );
+}
+
+#[test]
+fn attention_phases_tint_the_water_even_when_life_has_settled() {
+    let viewport = Rect::new(0, 0, 80, 24);
+    let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
+    // presence 0 + animated false is the fully settled, reduced-motion case —
+    // exactly where the old treatment went neutral and a blocked session was
+    // indistinguishable from an idle one across the room.
+    let waiting = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Approval, false, 0);
+    let failed = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Failed, false, 0);
+    let idle = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Idle, false, 0);
+
+    assert_ne!(waiting.color_at_y(0), idle.color_at_y(0));
+    assert_ne!(failed.color_at_y(0), idle.color_at_y(0));
+    assert_ne!(waiting.color_at_y(0), failed.color_at_y(0));
+
+    // The tint is steady across time and motion settings alike.
+    let later = OceanColumn::new(ramp, viewport, 700, None, ShellPhase::Approval, true, 0);
+    assert_eq!(waiting.color_at_y(0), later.color_at_y(0));
 }
 
 #[test]
@@ -275,8 +354,11 @@ fn shimmer_is_subtle_and_concentrated_near_the_surface() {
 }
 
 #[test]
-fn attention_phases_are_still_and_work_phases_have_distinct_depth_bias() {
+fn attention_phases_carry_their_own_water_and_work_phases_have_distinct_depth_bias() {
     let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
+    // Attention tints are steady — the color itself is the signal, and a
+    // slow breath read as flicker rather than intent — but never neutral:
+    // each attention phase differs from the plain water.
     for phase in [
         ShellPhase::Waiting,
         ShellPhase::Approval,
@@ -286,11 +368,29 @@ fn attention_phases_are_still_and_work_phases_have_distinct_depth_bias() {
             ramp.color_at_phase(4, 20, 0, phase),
             ramp.color_at_phase(4, 20, 45_000, phase)
         );
+        assert_ne!(ramp.color_at_phase(4, 20, 0, phase), ramp.color_at(4, 20));
     }
     assert_ne!(
         ramp.color_at_phase(10, 20, 22_500, ShellPhase::Working),
         ramp.color_at_phase(10, 20, 22_500, ShellPhase::Verifying)
     );
+}
+
+#[test]
+fn tall_columns_darken_continuously_without_an_anchor_shelf() {
+    // The old two-segment ramp met at 0.42 with zero color velocity on both
+    // sides: on a tall window that shelf read as a horizontal seam. The
+    // Bézier column must keep moving through the former anchor zone.
+    let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
+    let height = 120;
+    let anchor = 50; // ~0.42 of 120
+    let above = ramp.color_at(anchor - 6, height);
+    let at = ramp.color_at(anchor, height);
+    let below = ramp.color_at(anchor + 6, height);
+    assert_ne!(above, at, "water must still darken entering the old anchor");
+    assert_ne!(at, below, "water must still darken leaving the old anchor");
+    assert_eq!(ramp.color_at(0, height), ramp.surface);
+    assert_eq!(ramp.color_at(height - 1, height), ramp.deep);
 }
 
 #[test]
@@ -312,12 +412,16 @@ fn cache_fingerprint_changes_when_only_ramp_colors_change() {
         middle: Color::Rgb(4, 5, 6),
         deep: Color::Rgb(7, 8, 9),
         ambient: Color::Rgb(10, 11, 12),
+        attention: Color::Rgb(240, 180, 60),
+        failure: Color::Rgb(220, 80, 80),
     };
     let second_ramp = OceanRamp {
         surface: Color::Rgb(21, 22, 23),
         middle: Color::Rgb(24, 25, 26),
         deep: Color::Rgb(27, 28, 29),
         ambient: Color::Rgb(30, 31, 32),
+        attention: Color::Rgb(240, 180, 60),
+        failure: Color::Rgb(220, 80, 80),
     };
     let first = OceanColumn::new(
         first_ramp,
@@ -354,6 +458,8 @@ fn each_ramp_color_participates_in_the_typed_cache_identity() {
         middle: Color::Rgb(4, 5, 6),
         deep: Color::Rgb(7, 8, 9),
         ambient: Color::Rgb(10, 11, 12),
+        attention: Color::Rgb(240, 180, 60),
+        failure: Color::Rgb(220, 80, 80),
     };
     let baseline = OceanColumn::new(
         ramp,
@@ -379,6 +485,14 @@ fn each_ramp_color_participates_in_the_typed_cache_identity() {
         },
         OceanRamp {
             ambient: Color::Rgb(110, 11, 12),
+            ..ramp
+        },
+        OceanRamp {
+            attention: Color::Rgb(255, 200, 90),
+            ..ramp
+        },
+        OceanRamp {
+            failure: Color::Rgb(255, 90, 90),
             ..ramp
         },
     ];
@@ -458,7 +572,7 @@ fn split_shell_surfaces_share_one_absolute_row_column() {
     assert_eq!(
         buf[(4, 10)].bg,
         theme.selection_bg,
-        "semantic surfaces must survive the shell ombre pass"
+        "semantic surfaces must survive the shell Deepsea pass"
     );
 }
 

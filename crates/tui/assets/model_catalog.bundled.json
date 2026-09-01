@@ -170,6 +170,17 @@
       "supported_parameters": [],
       "provenance": "bundled"
     },
+    "z-ai/glm-5.3-flash": {
+      "id": "z-ai/glm-5.3-flash",
+      "context_window": 1000000,
+      "max_output": 131072,
+      "supports_reasoning": true,
+      "input_usd_per_million": 0.15,
+      "output_usd_per_million": 0.5,
+      "modalities": ["text", "image", "video"],
+      "supported_parameters": ["reasoning"],
+      "provenance": "bundled"
+    },
     "glm-5.2": {
       "id": "glm-5.2",
       "context_window": 1000000,
@@ -188,6 +199,17 @@
       "supports_reasoning": true,
       "modalities": ["text"],
       "supported_parameters": [],
+      "provenance": "bundled"
+    },
+    "glm-5.3-flash": {
+      "id": "glm-5.3-flash",
+      "context_window": 1000000,
+      "max_output": 131072,
+      "supports_reasoning": true,
+      "input_usd_per_million": 0.15,
+      "output_usd_per_million": 0.5,
+      "modalities": ["text", "image", "video"],
+      "supported_parameters": ["reasoning"],
       "provenance": "bundled"
     },
     "minimax/minimax-m3": {

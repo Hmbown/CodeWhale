@@ -1,8 +1,17 @@
 //! Native git status / worktree surface for the TUI chrome.
 //!
-//! Fast, cached, non-blocking: probes run off the render path and results
-//! are read from a small snapshot. Prefer `gix` when available at build time;
-//! fall back to a single short-lived `git` invocation with a hard timeout.
+//! Cached and non-blocking: probes run off the render path on a background
+//! thread and the renderer only ever reads [`cached_status`].
+//!
+//! A probe shells out to the real `git` binary — up to six invocations
+//! (`rev-parse --show-toplevel`, `rev-parse --git-common-dir`,
+//! `symbolic-ref --short HEAD` or its `rev-parse --short HEAD` fallback,
+//! `status --porcelain`, `rev-list --left-right --count`, and
+//! `worktree list --porcelain`). There is no `gix` dependency and no
+//! per-invocation timeout; the earlier claim of both here was wrong, and it
+//! misled a contributor reasoning about probe cost in #5617. All of these
+//! run with `GIT_OPTIONAL_LOCKS=0` so a read never contends for
+//! `.git/index.lock` in the user's repository.
 //!
 //! This module owns capability and state outside the renderer so
 //! `widgets/mod.rs` / `ui.rs` stay projection-only.
@@ -26,6 +35,11 @@ pub struct GitStatusSnapshot {
     pub worktrees: Vec<WorktreeEntry>,
     pub fetched_at: Option<Instant>,
     pub error: Option<String>,
+    /// The workspace this snapshot was probed *from*, which is not the same
+    /// as [`Self::root`]: launching in a subdirectory gives a `root` of the
+    /// repository top level while the workspace stays the subdirectory.
+    /// Staleness must compare the probe's own input, not its result.
+    pub probed_workspace: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,13 +66,24 @@ pub fn cached_status() -> GitStatusSnapshot {
 
 /// Refresh status if the cache is stale. Safe to call from a background
 /// worker; the render path should only read [`cached_status`].
+/// Whether `snap` must be re-probed for `workspace`.
+///
+/// Split out and pure so the cache contract is testable without spawning
+/// git. The workspace comparison uses [`GitStatusSnapshot::probed_workspace`]
+/// deliberately: comparing `root` instead meant that any session launched
+/// below the repository top level saw `root != workspace` forever, so this
+/// returned `true` on every call and `CACHE_TTL` never applied. That turned
+/// the two-second chrome tick into an unconditional six-command probe —
+/// including the `git status` that contends for `.git/index.lock` (#5617).
+fn snapshot_is_stale(snap: &GitStatusSnapshot, workspace: &Path) -> bool {
+    snap.fetched_at.is_none_or(|t| t.elapsed() > CACHE_TTL)
+        || snap.probed_workspace.as_deref() != Some(workspace)
+}
+
 pub fn refresh_if_stale(workspace: &Path) {
     let stale = cache()
         .lock()
-        .map(|g| {
-            g.fetched_at.is_none_or(|t| t.elapsed() > CACHE_TTL)
-                || g.root.as_deref() != Some(workspace)
-        })
+        .map(|g| snapshot_is_stale(&g, workspace))
         .unwrap_or(true);
     if !stale {
         return;
@@ -80,8 +105,20 @@ pub fn force_refresh(workspace: &Path) {
 fn probe_status(workspace: &Path) -> GitStatusSnapshot {
     let mut snap = GitStatusSnapshot {
         fetched_at: Some(Instant::now()),
+        probed_workspace: Some(workspace.to_path_buf()),
         ..GitStatusSnapshot::default()
     };
+
+    // Fast-fail outside a repository. Without this a non-git workspace
+    // spawns a doomed `git` process on every tick forever. `find_git_root`
+    // walks parents and understands the `gitdir:` pointer file, so linked
+    // worktrees and submodules are still recognised — a bare `.git`
+    // directory test would not be (#5617). The `rev-parse` below still runs
+    // for the cases this cannot see, such as bare repositories.
+    if crate::project_context::find_git_root(workspace).is_none() {
+        snap.error = Some("not a git repository".into());
+        return snap;
+    }
 
     // Resolve git root.
     let root = git_output(workspace, &["rev-parse", "--show-toplevel"])
@@ -158,6 +195,12 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
 fn git_output(cwd: &Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .args(args)
+        // This probe runs against the user's own repository every two
+        // seconds. `git status` opportunistically refreshes the index, and
+        // that refresh takes `.git/index.lock` — colliding with a `git
+        // commit` the user runs in their own shell (#5617). Optional locks
+        // are exactly what we do not want here: we only ever read.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .current_dir(cwd)
         .output()
         .map_err(|e| e.to_string())?;
@@ -251,16 +294,63 @@ pub fn create_worktree(
     Ok(())
 }
 
-/// List worktrees from the cache (refresh first if needed).
-#[must_use]
-pub fn list_worktrees(workspace: &Path) -> Vec<WorktreeEntry> {
-    refresh_if_stale(workspace);
-    cached_status().worktrees
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn probed(workspace: &Path, root: &Path) -> GitStatusSnapshot {
+        GitStatusSnapshot {
+            root: Some(root.to_path_buf()),
+            probed_workspace: Some(workspace.to_path_buf()),
+            fetched_at: Some(Instant::now()),
+            ..GitStatusSnapshot::default()
+        }
+    }
+
+    /// The cache TTL must actually apply when the session was launched below
+    /// the repository top level. Comparing `root` to the workspace made this
+    /// permanently stale, so the two-second chrome probe ran unconditionally
+    /// and `git status` contended for the user's index lock (#5617).
+    #[test]
+    fn fresh_snapshot_from_a_subdirectory_is_not_stale() {
+        let root = PathBuf::from("/repo");
+        let workspace = PathBuf::from("/repo/crates/tui");
+        let snap = probed(&workspace, &root);
+        assert_ne!(snap.root.as_deref(), Some(workspace.as_path()));
+        assert!(
+            !snapshot_is_stale(&snap, &workspace),
+            "a fresh probe from a subdirectory must satisfy the TTL"
+        );
+    }
+
+    #[test]
+    fn a_different_workspace_is_always_stale() {
+        let snap = probed(Path::new("/repo/crates/tui"), Path::new("/repo"));
+        assert!(snapshot_is_stale(&snap, Path::new("/other")));
+    }
+
+    #[test]
+    fn an_unprobed_snapshot_is_stale() {
+        assert!(snapshot_is_stale(
+            &GitStatusSnapshot::default(),
+            Path::new("/repo")
+        ));
+    }
+
+    /// A workspace outside any repository must resolve without spawning git,
+    /// and must record its own input so the TTL suppresses the next tick.
+    #[test]
+    fn non_git_workspace_fast_fails_and_caches_its_workspace() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let snap = probe_status(dir.path());
+        assert_eq!(snap.error.as_deref(), Some("not a git repository"));
+        assert_eq!(snap.root, None);
+        assert_eq!(snap.probed_workspace.as_deref(), Some(dir.path()));
+        assert!(
+            !snapshot_is_stale(&snap, dir.path()),
+            "the negative result must be cached, not re-probed every tick"
+        );
+    }
 
     #[test]
     fn parse_worktree_porcelain() {

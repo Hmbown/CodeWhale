@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::{ApiProvider, Config, ProviderConfig, ProvidersConfig};
+use crate::models::Usage;
 use crate::settings::Settings;
 use crate::test_support::{EnvVarGuard, lock_test_env};
 use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
@@ -106,7 +107,7 @@ fn feature_intro_shows_once_persists_then_is_idempotent() {
     assert!(
         app.status_message
             .as_deref()
-            .is_some_and(|message| message.contains("Fleet") && message.contains("/fleet setup"))
+            .is_some_and(|message| message.contains("Pod") && message.contains("/pod setup"))
     );
 
     // Persisted flag now set → a second call is a no-op.
@@ -133,6 +134,10 @@ fn initial_input_prefill_waits_for_manual_submit() {
 
     let app = App::new(options, &Config::default());
 
+    assert!(
+        !app.launch.visible,
+        "an intentional prefilled prompt must enter the live composer instead of the startup hero"
+    );
     assert_eq!(app.input, "review this PR");
     assert_eq!(app.cursor_position, "review this PR".chars().count());
     assert!(!app.auto_submit_initial_input);
@@ -147,12 +152,70 @@ fn initial_input_submit_marks_startup_dispatch() {
 
     let app = App::new(options, &Config::default());
 
+    assert!(
+        !app.launch.visible,
+        "an intentional submitted prompt must bypass the startup hero"
+    );
     assert_eq!(app.input, "阅读项目 and wait for instructions");
     assert_eq!(
         app.cursor_position,
         "阅读项目 and wait for instructions".chars().count()
     );
     assert!(app.auto_submit_initial_input);
+}
+
+#[test]
+fn clean_launch_keeps_startup_hero_despite_a_startup_notice() {
+    let _env_lock = lock_test_env();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+    std::fs::write(tmp.path().join("settings.toml"), "launch_screen = false\n")
+        .expect("legacy settings");
+    let mut options = test_options(false);
+    options.startup_notice =
+        Some("Provider route changed; inspect the route before sending".into());
+
+    let app = App::new(options, &Config::default());
+
+    assert!(
+        app.launch.visible,
+        "a fresh interactive launch must keep the Tideline startup hero visible; a notice is not an intentional resume or prompt"
+    );
+}
+
+#[test]
+fn explicit_resume_bypasses_startup_hero() {
+    let _env_lock = lock_test_env();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+    let mut options = test_options(false);
+    options.resume_session_id = Some("explicit-resume".into());
+
+    let app = App::new(options, &Config::default());
+
+    assert!(
+        !app.launch.visible,
+        "an explicit resume must preserve the existing session path"
+    );
+}
+
+#[test]
+fn remote_control_initial_input_bypasses_startup_hero() {
+    let _env_lock = lock_test_env();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+    let mut options = test_options(false);
+    options.initial_input = Some(InitialInput::RemoteControl);
+
+    let app = App::new(options, &Config::default());
+
+    assert!(
+        !app.launch.visible,
+        "an intentional remote-control launch must preserve its existing direct-session path"
+    );
 }
 
 #[test]
@@ -1863,6 +1926,97 @@ fn app_new_respects_explicit_auto_compact_false_for_v4_class_models() {
 }
 
 #[test]
+fn pending_turn_cost_moves_displayed_total_mid_turn() {
+    let mut app = App::new(test_options(false), &Config::default());
+
+    // Two model calls land per-step receipts while the turn is still running:
+    // the displayed total must move now, not at TurnComplete (#5578).
+    app.accrue_pending_turn_cost_estimate(CostEstimate::usd_only(0.06));
+    app.accrue_pending_turn_cost_estimate(CostEstimate::usd_only(0.04));
+    assert_eq!(
+        app.displayed_session_cost_for_currency(CostCurrency::Usd),
+        0.1
+    );
+    assert_eq!(app.session_cost_for_currency(CostCurrency::Usd), 0.1);
+
+    // TurnComplete: provisional hands off to the authoritative cumulative
+    // price. A slightly lower settled figure must not make the display
+    // reverse (#244), and nothing may count twice.
+    app.clear_pending_turn_cost();
+    app.accrue_session_cost_estimate(CostEstimate::usd_only(0.09));
+    assert_eq!(app.session.session_cost, 0.09);
+    assert_eq!(
+        app.displayed_session_cost_for_currency(CostCurrency::Usd),
+        0.1
+    );
+}
+
+#[test]
+fn pending_turn_usage_moves_token_surfaces_without_double_counting() {
+    let mut app = App::new(test_options(false), &Config::default());
+    let usage = Usage {
+        input_tokens: 100,
+        output_tokens: 20,
+        prompt_cache_hit_tokens: Some(60),
+        prompt_cache_miss_tokens: Some(40),
+        prompt_cache_write_tokens: Some(5),
+        ..Usage::default()
+    };
+
+    app.session.accrue_pending_turn_usage(&usage);
+    assert_eq!(app.session.displayed_total_tokens(), 120);
+    assert_eq!(app.session.displayed_total_input_tokens(), 100);
+    assert_eq!(app.session.displayed_total_output_tokens(), 20);
+    assert_eq!(app.session.displayed_total_cache_hit_tokens(), 60);
+    assert_eq!(app.session.displayed_total_cache_miss_tokens(), 35);
+    assert_eq!(app.session.displayed_total_cache_write_tokens(), 5);
+
+    app.session.clear_pending_turn_usage();
+    app.session.total_tokens = 120;
+    app.session.total_input_tokens = 100;
+    app.session.total_output_tokens = 20;
+    app.session.total_cache_hit_tokens = 60;
+    app.session.total_cache_miss_tokens = 35;
+    app.session.total_cache_write_tokens = 5;
+    assert_eq!(app.session.displayed_total_tokens(), 120);
+    assert_eq!(app.session.displayed_total_cache_write_tokens(), 5);
+}
+
+#[test]
+fn context_pressure_toast_kind_is_not_inferred_from_display_text() {
+    let mut app = App::new(test_options(false), &Config::default());
+    app.sticky_status = Some(StatusToast::new(
+        "Context high: 90%",
+        StatusToastLevel::Warning,
+        None,
+    ));
+    assert!(!app.dismiss_context_pressure_warning());
+    assert!(app.sticky_status.is_some());
+
+    app.sticky_status = Some(StatusToast::context_pressure(
+        "localized pressure warning",
+        crate::context_budget::PressureLevel::High,
+    ));
+    assert!(app.dismiss_context_pressure_warning());
+    assert!(app.sticky_status.is_none());
+}
+
+#[test]
+fn critical_context_pressure_remains_visible_over_transient_info_toasts() {
+    let mut app = App::new(test_options(false), &Config::default());
+    app.sticky_status = Some(StatusToast::context_pressure(
+        "Context critical: 95%",
+        crate::context_budget::PressureLevel::Critical,
+    ));
+    app.push_status_toast("Saved", StatusToastLevel::Info, None);
+
+    assert_eq!(
+        app.active_status_toast().map(|toast| toast.text),
+        Some("Context critical: 95%".to_string())
+    );
+}
+
+#[test]
 fn cny_display_falls_back_to_usd_for_usd_only_costs() {
     let mut app = App::new(test_options(false), &Config::default());
     app.cost_currency = CostCurrency::Cny;
@@ -2764,13 +2918,28 @@ fn paste_defers_oversized_text_consolidation_until_submit() {
     );
 
     let submitted = app.submit_input().expect("expected submitted input");
+    // The submission is an attachment card, never a bare path: a size
+    // header, the @-mention that attaches the file for the model, and a
+    // bounded preview of the pasted content.
     assert!(
-        submitted.starts_with("@.codewhale/pastes/paste-"),
-        "submitted should be the @mention only, got: {}",
+        submitted.starts_with("[Pasted content attached · "),
+        "submission must open with the attachment header, got: {}",
         &submitted[..submitted.len().min(80)]
     );
-    assert!(submitted.ends_with(".md"), "expected .md extension");
-    let mention = &submitted[1..]; // strip leading '@'
+    assert!(
+        submitted.contains("\n@.codewhale/pastes/paste-"),
+        "the @-mention must survive verbatim for file-mention resolution"
+    );
+    assert!(
+        submitted.contains("--- preview ---\nyyy"),
+        "a bounded preview of the pasted content must be visible"
+    );
+    let mention_line = submitted
+        .lines()
+        .find(|line| line.starts_with("@.codewhale/pastes/"))
+        .expect("mention line");
+    let mention = &mention_line[1..]; // strip leading '@'
+    assert!(mention.ends_with(".md"), "expected .md extension");
     let abs = tmp.path().join(mention);
     assert!(abs.is_file(), "paste file must exist at {abs:?}");
     let written = std::fs::read_to_string(&abs).expect("read");
@@ -2780,6 +2949,42 @@ fn paste_defers_oversized_text_consolidation_until_submit() {
             .iter()
             .any(|toast| toast.text.contains("backed up")),
         "expected backup toast after submit"
+    );
+}
+
+#[test]
+fn oversized_paste_submission_never_renders_as_a_bare_path() {
+    // The reported incident: a large paste became a transcript row that
+    // showed only `@.codewhale/pastes/paste-….md` — a mysterious path where
+    // the user's message should be. The submission must carry a visible
+    // size header and content preview around the mention so the user can
+    // always see what they sent.
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let mut opts = test_options(false);
+    opts.workspace = tmp.path().to_path_buf();
+    let mut app = App::new(opts, &Config::default());
+    let full_content = format!(
+        "IMPORTANT INSTRUCTIONS\n{}",
+        "x".repeat(MAX_SUBMITTED_INPUT_CHARS + 10)
+    );
+
+    app.insert_paste_text(&full_content);
+    let submitted = app.submit_input().expect("expected submitted input");
+
+    assert_ne!(submitted, submitted.lines().nth(1).expect("mention line"));
+    assert!(
+        submitted.contains("IMPORTANT INSTRUCTIONS"),
+        "the preview must surface the pasted content's first line"
+    );
+    assert!(
+        submitted.contains(&format!("· {} chars]", full_content.chars().count())),
+        "the header must state the full pasted size"
+    );
+    // The full oversized content must NOT be inlined — the file is the
+    // single source of truth for the model.
+    assert!(
+        !submitted.contains(&"x".repeat(MAX_SUBMITTED_INPUT_CHARS)),
+        "the inline copy must stay bounded; the @-mention attaches the file"
     );
 }
 
@@ -2857,21 +3062,25 @@ fn submit_input_consolidates_oversized_input_into_paste_file() {
 
     let submitted = app.submit_input().expect("expected submitted input");
 
-    // The submitted text should be the @mention only so the model reads the
-    // full content from the paste file instead of receiving it twice inline
-    // and as a mention (#3263).
+    // The submitted text is an attachment card: size header, the @-mention
+    // that attaches the file for the model, and a bounded preview (#3263
+    // follow-up: never a bare path).
     assert!(
-        submitted.starts_with("@.codewhale/pastes/paste-"),
-        "submitted text should be the @mention, got: {}",
+        submitted.starts_with("[Pasted content attached · "),
+        "submission must open with the attachment header, got: {}",
         &submitted[..submitted.len().min(80)]
     );
+    let mention_line = submitted
+        .lines()
+        .find(|line| line.starts_with("@.codewhale/pastes/paste-"))
+        .expect("mention line");
     assert!(
-        submitted.ends_with(".md"),
-        "expected .md extension, got: {submitted}"
+        mention_line.ends_with(".md"),
+        "expected .md extension, got: {mention_line}"
     );
 
     // The paste file must exist on disk with the full original content.
-    let mention = &submitted[1..]; // strip leading '@'
+    let mention = &mention_line[1..]; // strip leading '@'
     let abs_path = tmp.path().join(mention);
     assert!(abs_path.is_file(), "paste file must exist at {abs_path:?}");
     let written = std::fs::read_to_string(&abs_path).expect("read paste file");

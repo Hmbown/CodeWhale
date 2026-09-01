@@ -84,6 +84,32 @@ pub fn probe_executable_with_flag(spec: &str, version_flag: &str) -> bool {
     matches!(cmd.status(), Ok(status) if status.success())
 }
 
+/// Probe a single executable and capture its version banner in one spawn.
+///
+/// Same contract as [`probe_executable`] (success = exit 0), but returns the
+/// trimmed stdout so callers that want the banner don't need a second process
+/// launch. Returns `None` when the probe fails or stdout is not valid UTF-8.
+pub fn probe_executable_capturing(spec: &str, version_flag: &str) -> Option<String> {
+    let mut parts = spec.split_whitespace();
+    let program = parts.next()?;
+    let mut cmd = Command::new(program);
+    crate::utils::suppress_console_window(&mut cmd);
+    for arg in parts {
+        cmd.arg(arg);
+    }
+    cmd.arg(version_flag);
+    cmd.stderr(std::process::Stdio::null());
+
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 fn executable_path_candidates(program: &str) -> Vec<PathBuf> {
     let program_path = Path::new(program);
     if program_path.components().count() > 1 {
@@ -376,6 +402,41 @@ impl ExternalTool for Git {
         &["git"]
     }
 
+    /// Every `Git` invocation in the product is issued against a repository
+    /// the user also works in by hand. `git status` and `git diff`
+    /// opportunistically refresh the index, and that refresh takes
+    /// `.git/index.lock` — which is why a user's own `git commit` could fail
+    /// with "Unable to create '.../.git/index.lock': File exists" while
+    /// codewhale was merely idling in the same repo (#5617, reported by
+    /// @LmeSzinc).
+    ///
+    /// `GIT_OPTIONAL_LOCKS=0` suppresses only *optional* lock-taking, so
+    /// reads stop touching the index while genuine writes (`add`, `commit`,
+    /// `stash`, `update-ref`) are unaffected — including the snapshot
+    /// side-repo runner, which writes to its own git dir. `git diff --quiet`
+    /// exit-code semantics are preserved, which `snapshot::repo` relies on
+    /// for `/undo` cursoring.
+    ///
+    /// Set here rather than on the `ExternalTool::command` default so it does
+    /// not leak onto `Gh`, `Cargo`, `Node`, `Python`, or `RustC`. Prefer the
+    /// environment variable over the `--no-optional-locks` flag: the flag is
+    /// top-level (it must precede the subcommand, awkward for the several
+    /// call sites that build argument vectors), it would change the
+    /// agent-visible command string rendered by `tools::git::format_command`,
+    /// and an unknown flag hard-fails on old git while an unknown environment
+    /// variable is silently ignored.
+    fn command() -> Option<Command> {
+        let spec = Self::resolve()?;
+        let (program, fixed_args) = split_interpreter_spec(&spec);
+        let mut cmd = Command::new(&program);
+        crate::utils::suppress_console_window(&mut cmd);
+        for arg in &fixed_args {
+            cmd.arg(arg);
+        }
+        cmd.env("GIT_OPTIONAL_LOCKS", "0");
+        Some(cmd)
+    }
+
     fn resolve() -> Option<String> {
         static CACHE: OnceLock<Option<String>> = OnceLock::new();
         CACHE
@@ -428,9 +489,14 @@ impl ExternalTool for RustC {
         static CACHE: OnceLock<Option<String>> = OnceLock::new();
         CACHE
             .get_or_init(|| {
+                // Probe with capture so the `--version` banner observed during
+                // resolution is reused by [`rustc_version_banner`] instead of
+                // paying a second rustc process launch (each launch loads
+                // libLLVM, which dominated diagnostic-command init profiles).
                 for candidate in Self::candidates() {
-                    if probe_executable(candidate) {
+                    if let Some(banner) = probe_executable_capturing(candidate, "--version") {
                         tracing::info!(target: "tool_dependencies", "Resolved rustc binary");
+                        let _ = RUSTC_VERSION_BANNER.set(Some(banner));
                         return Some((*candidate).to_string());
                     }
                 }
@@ -438,6 +504,23 @@ impl ExternalTool for RustC {
             })
             .clone()
     }
+}
+
+/// Captured `--version` banner from the [`RustC`] resolution probe.
+///
+/// `None` until `RustC::resolve()`/`available()`/`command()` first runs, or
+/// when rustc is absent/failing. Reading this after an `available()` check
+/// yields the same string the tool would print, without a second process.
+static RUSTC_VERSION_BANNER: OnceLock<Option<String>> = OnceLock::new();
+
+/// The rustc `--version` banner, if rustc resolved successfully.
+///
+/// Populated as a side effect of resolving [`RustC`]; this reads no fresh
+/// process state. Callers wanting the value should touch `RustC::available()`
+/// first (as the diagnostics path does).
+#[must_use]
+pub fn rustc_version_banner() -> Option<String> {
+    RUSTC_VERSION_BANNER.get().cloned().flatten()
 }
 
 /// Rust build tool — used by the `run_tests` tool.
@@ -751,6 +834,39 @@ mod tests {
     fn git_command_returns_some_when_available() {
         if Git::available() {
             assert!(Git::command().is_some());
+        }
+    }
+
+    /// Every git command we build must be lock-free (#5617). Without this,
+    /// a read-only probe can take `.git/index.lock` in the user's own
+    /// repository and break a `git commit` they run by hand.
+    #[test]
+    fn git_command_never_takes_optional_locks() {
+        if !Git::available() {
+            return;
+        }
+        let cmd = Git::command().expect("git resolves when available");
+        let value = cmd
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("GIT_OPTIONAL_LOCKS"))
+            .and_then(|(_, value)| value)
+            .expect("GIT_OPTIONAL_LOCKS must be set on every git command");
+        assert_eq!(value, std::ffi::OsStr::new("0"));
+    }
+
+    /// The suppression is deliberately scoped to git. Other external tools
+    /// have no index to protect and must not inherit a git-specific variable.
+    #[test]
+    fn optional_lock_suppression_does_not_leak_to_other_tools() {
+        for cmd in [Gh::command(), Cargo::command(), Node::command()]
+            .into_iter()
+            .flatten()
+        {
+            assert!(
+                !cmd.get_envs()
+                    .any(|(key, _)| key == std::ffi::OsStr::new("GIT_OPTIONAL_LOCKS")),
+                "only Git may set GIT_OPTIONAL_LOCKS"
+            );
         }
     }
 

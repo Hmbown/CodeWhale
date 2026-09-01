@@ -27,6 +27,15 @@ use thiserror::Error;
 /// with credentials saved before the CodeWhale rename. macOS users can verify
 /// entries with `security find-generic-password -s deepseek -a <provider>`.
 pub const DEFAULT_SERVICE: &str = "deepseek";
+/// Secret-store slot consumed by Daytona cloud dispatch (`codewhale dispatch`).
+///
+/// Login writes here; dispatch looks this slot up after `DAYTONA_API_KEY` and
+/// `CWC_DAYTONA_TOKEN`. Do not invent a second Daytona credential name.
+pub const DAYTONA_TOKEN_SLOT: &str = "daytona";
+/// First-class Daytona process env that dispatch also accepts.
+pub const DAYTONA_API_KEY_ENV: &str = "DAYTONA_API_KEY";
+/// CWC alias that Daytona dispatch also accepts.
+pub const CWC_DAYTONA_TOKEN_ENV: &str = "CWC_DAYTONA_TOKEN";
 /// Select the secret storage backend. Supported values are `file` (default)
 /// and `system`/`keyring` for the OS credential store.
 pub const SECRET_BACKEND_ENV: &str = "CODEWHALE_SECRET_BACKEND";
@@ -1145,7 +1154,7 @@ impl Secrets {
 /// | `openrouter` | `OPENROUTER_API_KEY` |
 /// | `xiaomi-mimo` / `mimo` | `XIAOMI_MIMO_API_KEY`, `XIAOMI_API_KEY`, `MIMO_API_KEY` |
 /// | `novita` / `novita-ai` | `NOVITA_API_KEY` |
-/// | `nvidia` / `nvidia-nim` / `nim` | `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY`, `DEEPSEEK_API_KEY` |
+/// | `nvidia` / `nvidia-nim` / `nim` | `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY` |
 /// | `fireworks` / `fireworks-ai` | `FIREWORKS_API_KEY` |
 /// | `together` / `togetherai` | `TOGETHER_API_KEY` |
 /// | `deepinfra` | `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN` |
@@ -1178,12 +1187,7 @@ pub fn env_for(name: &str) -> Option<String> {
         "novita" | "novita-ai" | "novita_ai" => &["NOVITA_API_KEY"],
         "together" | "together-ai" | "together_ai" | "togetherai" => &["TOGETHER_API_KEY"],
         "deepinfra" | "deep-infra" | "deep_infra" => &["DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN"],
-        // NVIDIA NIM falls back to `DEEPSEEK_API_KEY` last because the
-        // catalog endpoint accepts the same DeepSeek-issued key when no
-        // dedicated NVIDIA token is set. This mirrors pre-v0.7 behaviour.
-        "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => {
-            &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"]
-        }
+        "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"],
         "fireworks" | "fireworks-ai" => &["FIREWORKS_API_KEY"],
         "siliconflow" | "silicon-flow" | "silicon_flow" | "siliconflow-cn" | "siliconflow_cn"
         | "silicon-flow-cn" | "silicon_flow_cn" | "siliconflow-china" => &["SILICONFLOW_API_KEY"],
@@ -1221,6 +1225,7 @@ pub fn env_for(name: &str) -> Option<String> {
             &["TELECOMJS_API_KEY"]
         }
         "edenai" | "eden-ai" | "eden_ai" => &["EDENAI_API_KEY"],
+        "daytona" => &[DAYTONA_API_KEY_ENV, CWC_DAYTONA_TOKEN_ENV],
         // One Alibaba Cloud Model Studio account authenticates every plan /
         // dialect variant; all four names share one env convention.
         "modelstudio-token-plan"
@@ -1242,6 +1247,31 @@ pub fn env_for(name: &str) -> Option<String> {
             && !value.trim().is_empty()
         {
             return Some(value);
+        }
+    }
+    None
+}
+
+/// Report whether a Daytona token is present without revealing it.
+///
+/// Order matches dispatch: secret-store slot `daytona`, then
+/// [`DAYTONA_API_KEY_ENV`], then [`CWC_DAYTONA_TOKEN_ENV`].
+#[must_use]
+pub fn daytona_credential_source(secrets: &Secrets) -> Option<&'static str> {
+    if secrets
+        .get(DAYTONA_TOKEN_SLOT)
+        .ok()
+        .flatten()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Some("secret-store");
+    }
+    for var in [DAYTONA_API_KEY_ENV, CWC_DAYTONA_TOKEN_ENV] {
+        if std::env::var(var)
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Some("env");
         }
     }
     None
@@ -1300,6 +1330,8 @@ mod tests {
             "EDENAI_API_KEY",
             "MODELSTUDIO_API_KEY",
             "DASHSCOPE_API_KEY",
+            DAYTONA_API_KEY_ENV,
+            CWC_DAYTONA_TOKEN_ENV,
             SECRET_BACKEND_ENV,
             LEGACY_SECRET_BACKEND_ENV,
         ] {
@@ -1769,12 +1801,48 @@ mod tests {
         let _lock = env_lock();
         clear_known_envs();
         // Safety: env mutation guarded by env_lock().
-        unsafe { std::env::set_var("NVIDIA_NIM_API_KEY", "nim-key") };
+        unsafe {
+            std::env::set_var("NVIDIA_API_KEY", "nvidia-key");
+            std::env::set_var("NVIDIA_NIM_API_KEY", "nim-key");
+        }
         let secrets = Secrets::new(Arc::new(InMemoryKeyringStore::new()));
-        assert_eq!(secrets.resolve("nvidia-nim").as_deref(), Some("nim-key"));
-        assert_eq!(secrets.resolve("nvidia").as_deref(), Some("nim-key"));
+        for alias in ["nvidia", "nvidia-nim", "nvidia_nim", "nim"] {
+            assert_eq!(
+                secrets.resolve(alias).as_deref(),
+                Some("nvidia-key"),
+                "NVIDIA_API_KEY should take precedence for {alias}"
+            );
+        }
+
         // Safety: env mutation guarded by env_lock().
-        unsafe { std::env::remove_var("NVIDIA_NIM_API_KEY") };
+        unsafe { std::env::remove_var("NVIDIA_API_KEY") };
+        for alias in ["nvidia", "nvidia-nim", "nvidia_nim", "nim"] {
+            assert_eq!(
+                secrets.resolve(alias).as_deref(),
+                Some("nim-key"),
+                "NVIDIA_NIM_API_KEY should resolve for {alias}"
+            );
+        }
+        clear_known_envs();
+    }
+
+    #[test]
+    fn nvidia_env_aliases_do_not_consume_deepseek_credentials() {
+        let _lock = env_lock();
+        clear_known_envs();
+        // Safety: env mutation guarded by env_lock().
+        unsafe { std::env::set_var("DEEPSEEK_API_KEY", "deepseek-key") };
+        let secrets = Secrets::new(Arc::new(InMemoryKeyringStore::new()));
+
+        for alias in ["nvidia", "nvidia-nim", "nvidia_nim", "nim"] {
+            assert_eq!(
+                secrets.resolve(alias),
+                None,
+                "DeepSeek credentials must stay isolated from {alias}"
+            );
+        }
+        assert_eq!(secrets.resolve("deepseek").as_deref(), Some("deepseek-key"));
+        clear_known_envs();
     }
 
     #[test]
@@ -2375,6 +2443,23 @@ mod tests {
             Err(SecretsError::ReadOnly)
         ));
         assert_eq!(secrets.get("deepseek").unwrap(), None);
+    }
+
+    #[test]
+    fn daytona_slot_resolves_secret_store_then_dispatch_envs() {
+        let _lock = env_lock();
+        clear_known_envs();
+        let secrets = Secrets::new(std::sync::Arc::new(InMemoryKeyringStore::new()));
+        assert_eq!(daytona_credential_source(&secrets), None);
+        assert_eq!(DAYTONA_TOKEN_SLOT, "daytona");
+
+        secrets.set(DAYTONA_TOKEN_SLOT, "dtn_store").unwrap();
+        assert_eq!(daytona_credential_source(&secrets), Some("secret-store"));
+        secrets.delete(DAYTONA_TOKEN_SLOT).unwrap();
+
+        let _key = EnvVarGuard::set(DAYTONA_API_KEY_ENV, "dtn_env");
+        assert_eq!(daytona_credential_source(&secrets), Some("env"));
+        assert_eq!(env_for("daytona").as_deref(), Some("dtn_env"));
     }
 
     #[path = "diagnostic_tests.rs"]

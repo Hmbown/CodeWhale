@@ -140,10 +140,6 @@ pub fn feature_from_key(key: &str) -> Option<Feature> {
         .map(|spec| spec.id)
 }
 
-pub fn feature_spec_by_key(key: &str) -> Option<&'static FeatureSpec> {
-    FEATURES.iter().find(|spec| spec.key == key)
-}
-
 pub fn render_feature_table(features: &Features) -> String {
     let mut output = String::from("feature\tstage\tenabled\n");
     for spec in FEATURES {

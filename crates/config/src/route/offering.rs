@@ -125,6 +125,11 @@ pub(crate) const OPENCODE_ZEN_RESPONSES_MODELS: &[&str] = &[
     "gpt-5",
     "gpt-5-codex",
     "gpt-5-nano",
+    // Muse Spark via OpenCode Zen gateway — Responses-only (reported
+    // 2026-08-29: muse-spark-1.2-contributor-free rejects Chat Completions).
+    "muse-spark-1.2",
+    "muse-spark-1.2-contributor",
+    "muse-spark-1.2-contributor-free",
 ];
 
 pub(crate) const OPENCODE_ZEN_MESSAGES_MODELS: &[&str] = &[
@@ -209,10 +214,9 @@ pub fn bundled_offerings() -> Vec<ProviderModelOffering> {
         parallel_tool_calls: CapabilityState::Supported,
         streaming: CapabilityState::Supported,
         prompt_caching: CapabilityState::Supported,
-        // The endpoint supports native web search, but Codewhale does not yet
-        // replay `web_search_call` items on this stateless route. Keep the
-        // executable capability honest until that loop is implemented.
-        server_side_web_search: CapabilityState::Unknown,
+        // Search execution uses a separate bounded Responses request rather
+        // than replaying `web_search_call` items in the main chat.
+        server_side_web_search: CapabilityState::Supported,
         ..RouteCapabilities::default()
     };
     let documented_limits = RouteLimits {
@@ -311,6 +315,10 @@ pub fn bundled_offerings() -> Vec<ProviderModelOffering> {
             structured_output: CapabilityState::Supported,
             streaming: CapabilityState::Supported,
             image_input,
+            server_side_web_search: super::documented_server_side_web_search(
+                "modelstudio-token-plan",
+                model,
+            ),
             ..RouteCapabilities::default()
         }
     }

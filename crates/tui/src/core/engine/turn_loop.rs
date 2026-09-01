@@ -215,10 +215,11 @@ pub(super) fn requested_sandbox_escalation(
             "danger-full-access",
         ) => crate::sandbox::SandboxPolicy::DangerFullAccess,
         (_, "workspace-write" | "danger-full-access") => {
-            return Err(ToolError::permission_denied(format!(
-                "sandbox escalation to '{requested}' is not strictly wider than this call's current '{}' posture",
-                effective.posture_label()
-            )));
+            return Err(sandbox_escalation_denial(
+                requested,
+                effective,
+                crate::sandbox::process_hardening::no_new_privs_active(),
+            ));
         }
         (_, other) => {
             return Err(ToolError::invalid_input(format!(
@@ -227,6 +228,35 @@ pub(super) fn requested_sandbox_escalation(
         }
     };
     Ok(Some((policy, justification)))
+}
+
+/// Denial for a per-call sandbox escalation that is not strictly wider than
+/// the call's current posture.
+///
+/// When the request aims at `danger-full-access` but the irreversible
+/// no-new-privileges kernel flag was set at startup, even the widest per-call
+/// grant cannot unblock `sudo`/setuid for this process tree — the flag is
+/// process-lifetime and can never be lifted from inside (#5723). Name the two
+/// startup-level paths that actually relax it so the model stops burning
+/// turns on escalation shapes that cannot work.
+pub(super) fn sandbox_escalation_denial(
+    requested: &str,
+    effective: &crate::sandbox::SandboxPolicy,
+    no_new_privs_active: Option<bool>,
+) -> ToolError {
+    let base = format!(
+        "sandbox escalation to '{requested}' is not strictly wider than this call's current '{}' posture",
+        effective.posture_label()
+    );
+    if requested == "danger-full-access" && no_new_privs_active == Some(true) {
+        ToolError::permission_denied(format!(
+            "{base}; sudo/setuid remain blocked by the no-new-privileges kernel flag set at \
+             startup — relaunch with sandbox_mode = \"danger-full-access\" in the config file \
+             or CODEWHALE_NO_NEW_PRIVS=0 to relax it"
+        ))
+    } else {
+        ToolError::permission_denied(base)
+    }
 }
 
 /// Whether a [`Usage`] carries any provider-reported data. The
@@ -307,7 +337,8 @@ pub(super) fn merge_new_runtime_mcp_tools(
     tool_catalog: &mut Vec<Tool>,
     active_tool_names: &mut std::collections::HashSet<String>,
     refreshed: Vec<Tool>,
-) {
+) -> usize {
+    let mut merged = 0;
     for tool in refreshed {
         if !tool_catalog
             .iter()
@@ -315,8 +346,10 @@ pub(super) fn merge_new_runtime_mcp_tools(
         {
             active_tool_names.insert(tool.name.clone());
             tool_catalog.push(tool);
+            merged += 1;
         }
     }
+    merged
 }
 
 impl Engine {
@@ -548,15 +581,48 @@ impl Engine {
         result.map(|_| ())
     }
 
+    async fn request_turn_owned_child_coordination(
+        &mut self,
+        foreground_children: Option<&Arc<ForegroundChildRegistry>>,
+        turn_has_error: bool,
+        guard_already_sent: bool,
+    ) -> Option<usize> {
+        let agent_ids =
+            foreground_children.map_or_else(Vec::new, |registry| registry.active_agent_ids());
+        let running = agent_ids.len();
+        if !should_guard_turn_end_for_owned_children(turn_has_error, running, guard_already_sent) {
+            return None;
+        }
+
+        self.add_session_message(self.runtime_text_message_with_turn_metadata(
+            turn_owned_child_guard_runtime_text(&agent_ids),
+            UserInputProvenance::Runtime,
+        ))
+        .await;
+        let _ = self
+            .tx_event
+            .send(Event::status(format!(
+                "Continuing once — {running} turn-owned sub-agent(s) still running; wait or let them park resumably"
+            )))
+            .await;
+        Some(running)
+    }
+
     pub(super) async fn run_turn(
         &mut self,
         turn: &mut TurnContext,
         tool_policy: ToolSurfacePolicy,
+        foreground_children: Option<Arc<ForegroundChildRegistry>>,
         // Out-of-request facts resolved once for this turn. `None` means the
         // caller captured none, and the projection reports every
         // registry-derived field as unknown rather than guessing.
         inspection_surface: Option<crate::tool_inspection::ToolSurfaceContext>,
     ) -> (TurnOutcomeStatus, Option<String>) {
+        // R1: restart the cumulative per-turn wall-clock budget. This is the
+        // only place it is started, so exactly one turn owns it at a time.
+        self.turn_wall_clock =
+            crate::core::engine::turn_budget::TurnWallClock::start(self.config.turn_wall_clock);
+
         // Only interactive TUI hosts own terminal chrome. Headless exec,
         // app-server, and stream-json stdout must remain byte-clean.
         if self.config.terminal_chrome_enabled {
@@ -573,6 +639,11 @@ impl Engine {
         // Cleared when the loop continues only for optional runtime work
         // (a goal continuation) after the model already delivered an answer.
         let mut step_budget_exhaustion_is_terminal = true;
+        // A1: one soft-landing notice at ~80% of a finite step budget.
+        let mut soft_landing_sent = false;
+        // A2: one final report turn after the budget is exhausted, so a child
+        // that owes work never finishes silently.
+        let mut final_report_sent = false;
         let mut context_recovery_attempts = 0u8;
         let mut tool_policy = tool_policy;
         let mut mode = tool_policy.mode;
@@ -614,6 +685,15 @@ impl Engine {
         // transient; re-request a bounded number of times (the prefix is
         // cached, so each retry is cheap) before surfacing a hard failure.
         let mut reasoning_only_reprompts: u32 = 0;
+        // A normally ending turn gets one explicit chance to join its owned
+        // children. If the model ends again while they are still live, the
+        // outer terminal barrier parks them as resumable Interrupted work.
+        let mut turn_end_child_guard_sent = false;
+        // A settlement prompt appended at the model-step ceiling must reach
+        // the provider, and a wait/tool/completion handoff needs one bounded
+        // follow-up response. Count accepted provider responses, not transport
+        // retries, so this grace cannot become an unbounded model loop.
+        let mut turn_end_child_coordination_responses_remaining = 0u8;
         // Outer stream-retry budget: when the chunked-transfer connection
         // dies mid-stream and either nothing useful was streamed (#103
         // Phase 3), the host slept mid-turn (#2990), or a host hit a
@@ -629,6 +709,22 @@ impl Engine {
                 return (TurnOutcomeStatus::Interrupted, None);
             }
 
+            // R1: the cumulative per-turn wall-clock budget. Checked at the
+            // provider-request boundary so a turn that runs out of time stops
+            // before authorizing another billable request, and every tool
+            // result already produced stays in the transcript. Hitting it is
+            // never a clean success — the turn ends `Failed` with the limit
+            // named, matching how the step ceiling below reports.
+            if self.turn_wall_clock.exhausted() {
+                let error = format!(
+                    "Per-turn wall-clock budget exhausted after {}s (limit: {}s). The turn was stopped before another model request; work already done is in the transcript. Send another message to continue, or raise `[tui].turn_wall_clock_secs`.",
+                    self.turn_wall_clock.spent().as_secs(),
+                    self.turn_wall_clock.budget().as_secs(),
+                );
+                let _ = self.tx_event.send(Event::status(error.clone())).await;
+                return (TurnOutcomeStatus::Failed, Some(error));
+            }
+
             if self.apply_pending_runtime_authority().await {
                 mode = self.current_mode;
                 questions_allowed = crate::core::authority::permission_posture_allows_questions(
@@ -636,11 +732,13 @@ impl Engine {
                 );
             }
 
+            let mut accepted_steer = false;
             while let Ok(steer) = self.rx_steer.try_recv() {
                 let steer = steer.trim().to_string();
                 if steer.is_empty() {
                     continue;
                 }
+                accepted_steer = true;
                 self.session
                     .working_set
                     .observe_user_message(&steer, &self.session.workspace);
@@ -654,6 +752,12 @@ impl Engine {
                     )))
                     .await;
             }
+            if accepted_steer {
+                grant_turn_end_steer_response_allowance(
+                    turn_end_child_guard_sent,
+                    &mut turn_end_child_coordination_responses_remaining,
+                );
+            }
 
             // Child agents can finish while the parent model is still taking
             // tool steps. Surface queued completions before the next provider
@@ -661,6 +765,15 @@ impl Engine {
             // discovering them only when it eventually emits no more tools or
             // the idle handler starts a separate follow-up turn.
             self.drain_subagent_completion_events("queued").await;
+
+            // The settlement grace counts accepted provider responses, not
+            // model steps. Enforce it independently of the ordinary step
+            // ceiling: a model that keeps issuing tools after the targeted
+            // wait/finalization handoff must not turn the one-shot parent
+            // warning into another unbounded work loop.
+            if turn_end_child_guard_sent && turn_end_child_coordination_responses_remaining == 0 {
+                break;
+            }
 
             // The pinned system + tools prefix is frozen for the session:
             // recomposing it here from disk on every tool step is exactly what
@@ -672,19 +785,76 @@ impl Engine {
             // must see mid-turn (LSP diagnostics, steer input, subagent
             // completions) are appended to history above, never spliced into
             // the frozen prefix.
-            if turn.at_max_steps() {
-                // Exhausting the step budget while the model still owes work
-                // is a real failure. Exhausting it after a delivered answer,
-                // on an optional runtime continuation, is a finished turn.
-                if !step_budget_exhaustion_is_terminal {
-                    break;
-                }
-                let error = format!(
-                    "Maximum model steps reached before completion (limit: {})",
-                    self.config.max_steps
+            // A1 soft landing: with a finite step budget, once ~80% of it is
+            // spent tell the model once to stop exploring and write its final
+            // report. Savings proved out by the grok-style parity work (ops
+            // A1): a step-faithful harness ends mid-report far too often.
+            if !soft_landing_sent
+                && self.config.max_steps > 0
+                && turn.steps_used() >= ((self.config.max_steps as f32 * 0.8).floor() as u32).max(1)
+            {
+                soft_landing_sent = true;
+                let notice = format!(
+                    "Step budget soft landing: you have used about {}% of your {} step budget. Stop exploring; write your final, complete report now, in final form, with evidence.",
+                    80, self.config.max_steps,
                 );
-                let _ = self.tx_event.send(Event::status(error.clone())).await;
-                return (TurnOutcomeStatus::Failed, Some(error));
+                self.add_session_message(self.user_text_message_with_turn_metadata(notice))
+                    .await;
+                let _ = self
+                    .tx_event
+                    .send(Event::status(
+                        "Soft landing: wrap up with your final report",
+                    ))
+                    .await;
+            }
+
+            if turn.at_max_steps() && turn_end_child_coordination_responses_remaining == 0 {
+                if self
+                    .request_turn_owned_child_coordination(
+                        foreground_children.as_ref(),
+                        turn_error.is_some(),
+                        turn_end_child_guard_sent,
+                    )
+                    .await
+                    .is_some()
+                {
+                    turn_end_child_guard_sent = true;
+                    turn_end_child_coordination_responses_remaining = 2;
+                    // The model already supplied a final answer before this
+                    // bounded coordination pass. A tool result from the pass
+                    // may therefore close cleanly at the next ceiling check.
+                    step_budget_exhaustion_is_terminal = false;
+                    // A prior continuation/tool result already advanced to
+                    // this provider slot. Fall through and dispatch it without
+                    // incrementing the model-step counter a second time.
+                } else if step_budget_exhaustion_is_terminal && !final_report_sent {
+                    // A2 report-on-exhaustion: the budget died while the model
+                    // still owes work. Never finish silently — grant exactly
+                    // one final provider turn to write a bounded report, then
+                    // let the natural no-tool termination close the turn.
+                    final_report_sent = true;
+                    let notice = format!(
+                        "Your model-step budget was exhausted (limit: {}). You cannot continue working. Write your final report now: what you did, what you proved or found, what remains, and exact evidence. This is your last turn.",
+                        self.config.max_steps,
+                    );
+                    self.add_session_message(self.user_text_message_with_turn_metadata(notice))
+                        .await;
+                    let _ = self
+                        .tx_event
+                        .send(Event::status(
+                            "Model budget exhausted — final report requested",
+                        ))
+                        .await;
+                } else if !step_budget_exhaustion_is_terminal {
+                    break;
+                } else {
+                    let error = format!(
+                        "Maximum model steps reached before completion (limit: {})",
+                        self.config.max_steps
+                    );
+                    let _ = self.tx_event.send(Event::status(error.clone())).await;
+                    return (TurnOutcomeStatus::Failed, Some(error));
+                }
             }
 
             // A tool-producing response can spend the remaining goal budget
@@ -713,7 +883,8 @@ impl Engine {
             // Billing usage accumulates every parent step and child-model
             // call. Only the most recent parent-route request describes the
             // live message list whose pressure we are checking here.
-            let billed_input_tokens = turn.latest_parent_input_tokens.map(u64::from);
+            let billed_input_tokens =
+                turn.billed_input_tokens_for_compaction(self.session.latest_parent_input_tokens);
             let prepared = if crate::compaction::compaction_pressure_reached_with_billed(
                 &self.session.messages,
                 self.session.system_prompt.as_ref(),
@@ -725,13 +896,52 @@ impl Engine {
                 None
             };
 
-            if let Some(prepared) = prepared
-                && crate::compaction::should_compact_with_billed(
+            let compaction_go = match prepared.as_ref() {
+                None => false,
+                Some(prepared) => match crate::compaction::compaction_decision_with_billed(
                     &self.session.messages,
                     self.session.system_prompt.as_ref(),
-                    &prepared,
+                    prepared,
                     billed_input_tokens,
-                )
+                ) {
+                    crate::compaction::CompactionDecision::Compact => true,
+                    crate::compaction::CompactionDecision::NotNeeded => false,
+                    crate::compaction::CompactionDecision::Refused(reason) => {
+                        // A silent refusal looks like broken auto-compaction:
+                        // the meter is full and nothing happens (#5577). Name
+                        // the guard once per turn, in both the transcript
+                        // status line and the trace.
+                        if !turn.compaction_refusal_notified {
+                            turn.compaction_refusal_notified = true;
+                            let message = match reason {
+                                crate::compaction::CompactionRefusal::TooFewMessages { count } => {
+                                    format!(
+                                        "Context pressure is high but auto-compaction held: only {count} messages — nothing meaningful to summarize yet"
+                                    )
+                                }
+                                crate::compaction::CompactionRefusal::RetainedFloor {
+                                    floor,
+                                    threshold,
+                                } => format!(
+                                    "Context pressure is high but auto-compaction held: retained context (~{}K tokens) cannot fall below the {}K trigger — /compact to force a pass, or trim pinned context",
+                                    floor / 1000,
+                                    threshold / 1000
+                                ),
+                            };
+                            tracing::warn!(
+                                target: "compaction",
+                                ?reason,
+                                billed = ?billed_input_tokens,
+                                "auto-compaction refused under pressure"
+                            );
+                            let _ = self.tx_event.send(Event::status(message)).await;
+                        }
+                        false
+                    }
+                },
+            };
+            if let Some(prepared) = prepared
+                && compaction_go
             {
                 let compaction_id = format!("compact_{}", &uuid::Uuid::new_v4().to_string()[..8]);
                 let compaction_cancel = self
@@ -797,7 +1007,9 @@ impl Engine {
                             }
                             let auto_messages_after = result.messages.len();
                             let retries_used = result.retries_used;
+                            let coverage_clause = result.coverage.receipt_clause();
                             self.session.replace_messages(result.messages);
+                            turn.clear_parent_input_tokens();
                             if let Some(pm) = self.session.prefix_stability.as_mut() {
                                 pm.note_history_reset("compaction");
                             }
@@ -807,11 +1019,11 @@ impl Engine {
                             let auto_tokens_after = self.estimated_input_tokens();
                             let status = if retries_used > 0 {
                                 format!(
-                                    "Auto-compaction complete: {auto_messages_before} → {auto_messages_after} messages ({removed} removed, {retries_used} retries), ~{auto_tokens_before} → ~{auto_tokens_after} tokens"
+                                    "Auto-compaction complete: {auto_messages_before} → {auto_messages_after} messages ({removed} removed, {retries_used} retries), ~{auto_tokens_before} → ~{auto_tokens_after} tokens ({coverage_clause})"
                                 )
                             } else {
                                 format!(
-                                    "Auto-compaction complete: {auto_messages_before} → {auto_messages_after} messages ({removed} removed), ~{auto_tokens_before} → ~{auto_tokens_after} tokens"
+                                    "Auto-compaction complete: {auto_messages_before} → {auto_messages_after} messages ({removed} removed), ~{auto_tokens_before} → ~{auto_tokens_after} tokens ({coverage_clause})"
                                 )
                             };
                             self.emit_compaction_completed(
@@ -953,6 +1165,24 @@ impl Engine {
                     crate::prefix_cache::system_prompt_text(self.session.system_prompt.as_ref());
                 let tools_ref: Option<&[crate::models::Tool]> = active_tools.as_deref();
                 let outcome = pm.check(&system_text, tools_ref, declared_change.as_deref());
+                // C5: request N's prefix may only diverge from N-1 across a
+                // DECLARED change. An undeclared drift means the pinned header
+                // moved without stamping a context update — the failure that
+                // silently kills the provider cache while stability claims
+                // still read well. The first check initializes the pin, so it
+                // is exempt.
+                #[cfg(debug_assertions)]
+                if pm.check_count() > 1
+                    && declared_change.is_none()
+                    && let crate::prefix_cache::PrefixCheck::Drift { change }
+                    | crate::prefix_cache::PrefixCheck::Repinned { change, .. } = &outcome
+                {
+                    debug_assert!(
+                        false,
+                        "prefix drift without a declared change (C5): the {} changed but no context update was stamped",
+                        change.label()
+                    );
+                }
                 let pinned_hash = pm
                     .pinned_fingerprint()
                     .map(|fp| fp.combined_sha256.clone())
@@ -1173,7 +1403,9 @@ impl Engine {
                     turn_error = Some(message.clone());
                     let _ = self
                         .tx_event
-                        .send(Event::error(ErrorEnvelope::classify(message, true)))
+                        .send(Event::error(crate::error_taxonomy::envelope_for_llm_error(
+                            e, message,
+                        )))
                         .await;
                     return (TurnOutcomeStatus::Failed, turn_error);
                 }
@@ -1218,6 +1450,7 @@ impl Engine {
             // transport error is still a billed, incomplete response; it must
             // not be discarded and re-issued.
             turn.add_parent_usage(&usage);
+            self.session.latest_parent_input_tokens = turn.latest_parent_input_tokens;
             if usage_reported {
                 let _ = self
                     .tx_event
@@ -1470,6 +1703,10 @@ impl Engine {
                 // state from a previous bad round.
                 stream_retry_budget.reset();
             }
+            if turn_end_child_coordination_responses_remaining > 0 {
+                turn_end_child_coordination_responses_remaining =
+                    turn_end_child_coordination_responses_remaining.saturating_sub(1);
+            }
 
             // Persist only reasoning the provider actually emitted. Some chat
             // wires require a non-empty `reasoning_content` field when an
@@ -1591,8 +1828,15 @@ impl Engine {
             // A truncated response with no tool call cannot continue through
             // tool execution: surface the truncation as a bounded observation
             // and resume the loop so the model can act on it instead of the
-            // turn silently ending on a cut-off answer.
-            if output_limit_truncated.is_some() && tool_uses.is_empty() {
+            // turn silently ending on a cut-off answer. Resume only when the
+            // truncated response actually delivered partial content — a
+            // reasoning-only length stop delivered nothing to continue from,
+            // and re-issuing it would only reproduce the same stop instead of
+            // failing the turn honestly.
+            if output_limit_truncated.is_some()
+                && tool_uses.is_empty()
+                && has_sendable_assistant_content
+            {
                 let reason = output_limit_truncated
                     .take()
                     .expect("output_limit_truncated checked above");
@@ -1620,9 +1864,9 @@ impl Engine {
             // finish the turn. Honest ladder (NOTE-turn-loop-wrongness §3):
             // 1) pending steers → resume, 2) queued subagent completions →
             // resume, 3) REPL fences → run (empty cap may end), 4) goal
-            // continuation if under cap → resume, 5) else end (only then
-            // "background children" status if running>0). No status claims
-            // "ending" before step 5.
+            // continuation if under cap → resume, 5) one settlement prompt
+            // for turn-owned children → resume, 6) else end. No status
+            // claims "ending" before step 6.
             if tool_uses.is_empty() {
                 if !pending_steers.is_empty() {
                     for steer in pending_steers.drain(..) {
@@ -1636,6 +1880,10 @@ impl Engine {
                         .tx_event
                         .send(Event::status("Continuing — queued steer input".to_string()))
                         .await;
+                    grant_turn_end_steer_response_allowance(
+                        turn_end_child_guard_sent,
+                        &mut turn_end_child_coordination_responses_remaining,
+                    );
                     turn.next_step();
                     continue;
                 }
@@ -1650,9 +1898,10 @@ impl Engine {
                 }
 
                 // Sub-agent completion handoff (issue #756). Resuming when
-                // queued completions exist is correct; #3216 says do NOT
-                // barrier on running children. Running children are background
-                // work; results return via sentinel on a later turn.
+                // queued completions exist is correct; #3216 says do not wait
+                // indefinitely for every running child here. Turn-owned work
+                // gets one bounded settlement prompt later in this ladder;
+                // detached work can still report by sentinel on a later turn.
                 let subagent_completions = self.drain_subagent_completion_events("").await;
                 if subagent_completions > 0 {
                     let _ = self
@@ -1896,6 +2145,21 @@ impl Engine {
                             }
                         }
                         self.emit_session_updated().await;
+                        if self
+                            .request_turn_owned_child_coordination(
+                                foreground_children.as_ref(),
+                                turn_error.is_some(),
+                                turn_end_child_guard_sent,
+                            )
+                            .await
+                            .is_some()
+                        {
+                            turn_end_child_guard_sent = true;
+                            turn_end_child_coordination_responses_remaining = 2;
+                            step_budget_exhaustion_is_terminal = false;
+                            turn.next_step();
+                            continue;
+                        }
                         break;
                     }
 
@@ -1904,6 +2168,21 @@ impl Engine {
                         // inside the round loop. End the turn now instead of
                         // letting the outer ladder synthesize another provider
                         // request.
+                        if self
+                            .request_turn_owned_child_coordination(
+                                foreground_children.as_ref(),
+                                turn_error.is_some(),
+                                turn_end_child_guard_sent,
+                            )
+                            .await
+                            .is_some()
+                        {
+                            turn_end_child_guard_sent = true;
+                            turn_end_child_coordination_responses_remaining = 2;
+                            step_budget_exhaustion_is_terminal = false;
+                            turn.next_step();
+                            continue;
+                        }
                         break;
                     }
 
@@ -1920,10 +2199,9 @@ impl Engine {
 
                 // Issue #1727: the turn is now genuinely finishing with no
                 // sendable content. Control only reaches here when there were
-                // no pending steers (`continue`d above), no sub-agent
-                // completions to resume with, and we were not holding for
-                // running children (the `should_hold_turn_for_subagents`
-                // branch above would have awaited / `continue`d / returned).
+                // no pending steers (`continue`d above) and no sub-agent
+                // completions to resume with. The bounded turn-owned-child
+                // settlement guard runs below after other continuation paths.
                 // If the assistant produced ONLY a reasoning block, the prior
                 // code fell straight through to this `break`, emitting nothing
                 // and leaving the UI spinner hung. Surface a status now —
@@ -1956,13 +2234,21 @@ impl Engine {
                     continue;
                 }
 
-                if let Some(continuation) = self
-                    .goal_continuation_message_if_needed(
-                        tool_registry,
-                        &mut goal_continuations_this_turn,
-                        &turn.usage,
-                    )
-                    .await
+                // A goal continuation is optional work on top of a productive
+                // step. A response that produced nothing sendable and ran no
+                // tools is a failed step (incomplete/length-stopped provider
+                // response): continuing would re-issue the exact request that
+                // just failed — for an output-length stop it can only
+                // reproduce — instead of failing the turn honestly.
+                let step_produced_nothing = no_sendable_assistant_content && tool_uses.is_empty();
+                if !step_produced_nothing
+                    && let Some(continuation) = self
+                        .goal_continuation_message_if_needed(
+                            tool_registry,
+                            &mut goal_continuations_this_turn,
+                            &turn.usage,
+                        )
+                        .await
                 {
                     // The model already delivered a complete answer this step;
                     // the continuation is optional runtime work on top of it.
@@ -1980,6 +2266,22 @@ impl Engine {
                             "Continuing — goal still active (pass {goal_continuations_this_turn})"
                         )))
                         .await;
+                    turn.next_step();
+                    continue;
+                }
+
+                if self
+                    .request_turn_owned_child_coordination(
+                        foreground_children.as_ref(),
+                        turn_error.is_some(),
+                        turn_end_child_guard_sent,
+                    )
+                    .await
+                    .is_some()
+                {
+                    turn_end_child_guard_sent = true;
+                    turn_end_child_coordination_responses_remaining = 2;
+                    step_budget_exhaustion_is_terminal = false;
                     turn.next_step();
                     continue;
                 }
@@ -2042,25 +2344,6 @@ impl Engine {
                         .tx_event
                         .send(Event::error(ErrorEnvelope::classify(message, true)))
                         .await;
-                }
-
-                // Honest exit: only now, after every resume check has failed,
-                // may we claim the turn is ending with background children.
-                {
-                    let running = {
-                        let mgr = self.subagent_manager.read().await;
-                        mgr.running_count()
-                    };
-                    if running > 0 {
-                        let _ = self
-                            .tx_event
-                            .send(Event::status(format!(
-                                "Turn ending with {running} sub-agent(s) still running in the background; they'll report when done."
-                            )))
-                            .await;
-                        self.add_session_message(waiting_for_subagents_runtime_message(running))
-                            .await;
-                    }
                 }
 
                 break;
@@ -2153,6 +2436,10 @@ impl Engine {
                     self.add_session_message(self.user_text_message_with_turn_metadata(steer))
                         .await;
                 }
+                grant_turn_end_steer_response_allowance(
+                    turn_end_child_guard_sent,
+                    &mut turn_end_child_coordination_responses_remaining,
+                );
             }
 
             // Surface an output-limit truncation after the tool result so the
@@ -2184,7 +2471,48 @@ impl Engine {
             return (TurnOutcomeStatus::Interrupted, None);
         }
         if let Some(err) = turn_error {
+            let running = foreground_children
+                .as_ref()
+                .map_or(0, |registry| registry.active_count());
+            if running > 0 {
+                let _ = self
+                    .tx_event
+                    .send(Event::status(format!(
+                        "Turn failed with {running} turn-owned sub-agent(s) still running; cancelling them."
+                    )))
+                    .await;
+            }
             return (TurnOutcomeStatus::Failed, Some(err));
+        }
+        let running = foreground_children
+            .as_ref()
+            .map_or(0, |registry| registry.active_count());
+        if running > 0 {
+            let _ = self
+                .tx_event
+                .send(Event::status(format!(
+                    "Turn ending with {running} turn-owned sub-agent(s) still running; parking them as resumable work."
+                )))
+                .await;
+            self.add_session_message(self.runtime_text_message_with_turn_metadata(
+                turn_owned_child_parking_runtime_text(running),
+                UserInputProvenance::Runtime,
+            ))
+            .await;
+        }
+        let detached_running = {
+            let manager = self.subagent_manager.read().await;
+            turn_detached_child_count(manager.running_count_for_session(&self.session.id), running)
+        };
+        if detached_running > 0 {
+            let _ = self
+                .tx_event
+                .send(Event::status(format!(
+                    "Turn ending with {detached_running} detached sub-agent(s) still running in the background; they'll report when done."
+                )))
+                .await;
+            self.add_session_message(waiting_for_subagents_runtime_message(detached_running))
+                .await;
         }
         (TurnOutcomeStatus::Completed, None)
     }
@@ -2781,9 +3109,16 @@ impl Engine {
         super::tool_catalog::remove_evicted_cache_activations(
             tool_catalog,
             active_tool_names,
-            activation.evicted,
+            activation.evicted.iter().cloned(),
         );
-        active_tool_names.extend(activation.admitted);
+        // Admitting or evicting deferred tools changes the request-visible
+        // tool catalog for the rest of this turn. That is a legitimate,
+        // nameable header change — declare it so the prefix pin re-pins under
+        // `change:tool_surface` instead of tripping the C5 drift guard.
+        if !activation.admitted.is_empty() || !activation.evicted.is_empty() {
+            active_tool_names.extend(activation.admitted.iter().cloned());
+            self.session.pending_prefix_change_reason = Some("tool_surface".to_string());
+        }
         PlannedToolCalls {
             plans,
             hook_contexts,
@@ -3227,6 +3562,11 @@ impl Engine {
 
                     if is_tool_search_tool(&tool_name) {
                         let started_at = Instant::now();
+                        // Tool-search activation changes the request-visible
+                        // catalog for the rest of the turn; declare it so the
+                        // next request re-pins under `change:tool_surface`
+                        // instead of tripping the C5 drift guard.
+                        let active_before_search = active_tool_names.clone();
                         let result = super::tool_catalog::execute_tool_search_with_cache(
                             &tool_name,
                             &tool_input,
@@ -3234,6 +3574,10 @@ impl Engine {
                             active_tool_names,
                             &mut self.session.tool_activation_cache,
                         );
+                        if *active_tool_names != active_before_search {
+                            self.session.pending_prefix_change_reason =
+                                Some("tool_surface".to_string());
+                        }
 
                         let _ = self
                             .tx_event
@@ -3582,6 +3926,8 @@ impl Engine {
         active_tool_names: &mut std::collections::HashSet<String>,
         hook_contexts: &std::collections::HashMap<String, String>,
     ) {
+        let active_tool_names_before = active_tool_names.clone();
+        let tool_catalog_len_before = tool_catalog.len();
         // #dogfood 0.8.67: if the model mutates the goal mid-turn via
         // create_goal/update_goal, push the change to the sidebar right after
         // this tool batch instead of waiting for turn end — otherwise the
@@ -3599,19 +3945,21 @@ impl Engine {
             }
             match result {
                 Ok(output) => {
-                    super::tool_catalog::activate_result_dependencies(
-                        tool_catalog,
-                        active_tool_names,
-                        &mut self.session.tool_activation_cache,
-                        &output,
-                    );
-                    if output.success {
-                        super::tool_catalog::touch_cached_tool_after_execution(
+                    let mut tool_surface_changed =
+                        super::tool_catalog::activate_result_dependencies(
                             tool_catalog,
                             active_tool_names,
                             &mut self.session.tool_activation_cache,
-                            &outcome.name,
+                            &output,
                         );
+                    if output.success {
+                        tool_surface_changed |=
+                            super::tool_catalog::touch_cached_tool_after_execution(
+                                tool_catalog,
+                                active_tool_names,
+                                &mut self.session.tool_activation_cache,
+                                &outcome.name,
+                            );
                     }
                     // A runtime MCP connection changes the callable tool
                     // surface. Merge the complete schemas into this turn's
@@ -3629,7 +3977,17 @@ impl Engine {
                         && let Some(pool) = self.mcp_pool.as_ref().cloned()
                     {
                         let refreshed = pool.lock().await.to_api_tools();
-                        merge_new_runtime_mcp_tools(tool_catalog, active_tool_names, refreshed);
+                        tool_surface_changed |=
+                            merge_new_runtime_mcp_tools(tool_catalog, active_tool_names, refreshed)
+                                > 0;
+                    }
+                    // Any of the legitimate mid-turn tool-surface changes above
+                    // re-pin the header under a declared `change:tool_surface`
+                    // reason so the next request's prefix check sees a named
+                    // change instead of drift (C5).
+                    if tool_surface_changed {
+                        self.session.pending_prefix_change_reason =
+                            Some("tool_surface".to_string());
                     }
                     emit_tool_audit(json!({
                         "event": "tool.result",
@@ -3741,6 +4099,14 @@ impl Engine {
         if goal_tool_ran {
             self.emit_goal_updated().await;
         }
+        // Backstop for the per-outcome `tool_surface_changed` declarations
+        // above: any surviving catalog/name-set mutation still re-pins under
+        // `change:tool_surface` instead of tripping the C5 drift guard.
+        if *active_tool_names != active_tool_names_before
+            || tool_catalog.len() != tool_catalog_len_before
+        {
+            self.session.pending_prefix_change_reason = Some("tool_surface".to_string());
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3820,7 +4186,13 @@ impl Engine {
         let mut pending_resume: Option<StreamResume> = None;
         let mut stream_content_bytes: usize = 0;
         let (chunk_timeout_secs, chunk_timeout) = stream_chunk_timeout_budget(&self.config);
-        let max_duration = Duration::from_secs(STREAM_MAX_DURATION_SECS);
+        // R1: the per-step stream caps are resolved from config rather than
+        // read from the module constants, so both are overridable. Both stay
+        // finite: `resolve_stream_*` rejects `0` instead of reading it as
+        // "unlimited".
+        let max_duration = self.config.stream_max_duration;
+        let max_duration_secs = max_duration.as_secs();
+        let max_content_bytes = self.config.stream_max_content_bytes;
 
         // Process stream events
         loop {
@@ -3875,7 +4247,7 @@ impl Engine {
             // Guard: max wall-clock duration
             if stream_start.elapsed() > max_duration {
                 let envelope = StreamError::DurationLimit {
-                    limit_secs: STREAM_MAX_DURATION_SECS,
+                    limit_secs: max_duration_secs,
                 }
                 .into_envelope();
                 crate::logging::warn(&envelope.message);
@@ -3885,9 +4257,9 @@ impl Engine {
             }
 
             // Guard: max accumulated content bytes
-            if stream_content_bytes > STREAM_MAX_CONTENT_BYTES {
+            if stream_content_bytes > max_content_bytes {
                 let envelope = StreamError::Overflow {
-                    limit_bytes: STREAM_MAX_CONTENT_BYTES,
+                    limit_bytes: max_content_bytes,
                 }
                 .into_envelope();
                 crate::logging::warn(&envelope.message);
@@ -3974,7 +4346,11 @@ impl Engine {
                                 stream_error.get_or_insert(retry_msg.clone());
                                 let _ = self
                                     .tx_event
-                                    .send(Event::error(ErrorEnvelope::classify(retry_msg, true)))
+                                    .send(Event::error(
+                                        crate::error_taxonomy::envelope_for_llm_error(
+                                            retry_err, retry_msg,
+                                        ),
+                                    ))
                                     .await;
                                 break;
                             }
@@ -4048,11 +4424,16 @@ impl Engine {
                     let user_message =
                         stream_read_error_user_message(&message, any_content_received);
                     stream_error.get_or_insert(user_message.clone());
-                    let _ = self
-                        .tx_event
-                        .send(Event::error(ErrorEnvelope::classify(user_message, true)))
-                        .await;
-                    if stream_errors >= MAX_STREAM_ERRORS_BEFORE_FAIL {
+                    let envelope = crate::error_taxonomy::envelope_for_llm_error(e, user_message);
+                    // A terminal (non-recoverable) stream failure must stop
+                    // consumption immediately: re-issuing a wrong-model or
+                    // authorization rejection cannot succeed, and continuing
+                    // leaves the door open for stale deltas after the failure
+                    // card. Recoverable classes (rate limit, network) keep
+                    // the bounded retry tail.
+                    let terminal = !envelope.recoverable;
+                    let _ = self.tx_event.send(Event::error(envelope)).await;
+                    if terminal || stream_errors >= MAX_STREAM_ERRORS_BEFORE_FAIL {
                         break;
                     }
                     continue;
@@ -4060,6 +4441,20 @@ impl Engine {
             };
 
             match event {
+                StreamEvent::ToolProjectionWarning {
+                    provider,
+                    omitted_tool_names,
+                    omitted_tool_count,
+                } => {
+                    let _ = self
+                        .tx_event
+                        .send(Event::ToolProjectionWarning {
+                            provider,
+                            omitted_tool_names,
+                            omitted_tool_count,
+                        })
+                        .await;
+                }
                 StreamEvent::MessageStart { message } => {
                     // The chat-completions adapter emits a synthetic
                     // MessageStart with a zeroed usage; only a usage that
@@ -4321,12 +4716,26 @@ impl Engine {
                 }
                 StreamEvent::MessageStop | StreamEvent::Ping => {}
                 StreamEvent::Error { error } => {
-                    // #3014: Anthropic SSE error event. The adapter
-                    // surfaces fatal errors as stream Err items; this
-                    // defensive arm keeps any passed-through error
-                    // visible instead of silently dropped.
-                    crate::logging::warn(format!("Provider stream error event: {error}"));
-                    stream_errors += 1;
+                    // #3014: providers surface mid-stream failures as a
+                    // chunk-level `error` object (chat.rs converts the frame
+                    // to this event and keeps parsing later frames as
+                    // deltas). Historically this arm only warned and kept
+                    // consuming, so every delta after the failure frame —
+                    // including reasoning — still rendered while the real
+                    // error vanished into the retry tail. A mid-stream error
+                    // frame is terminal for this stream: surface it through
+                    // the same typed envelope contract, record it as the
+                    // turn's stream error, and stop consuming. Deltas that
+                    // arrive after the failure frame are never forwarded.
+                    let message = error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("provider stream error");
+                    let envelope = ErrorEnvelope::classify(message.to_string(), true);
+                    crate::logging::warn(format!("Provider stream error event: {message}"));
+                    let _ = self.tx_event.send(Event::error(envelope)).await;
+                    stream_error.get_or_insert(message.to_string());
+                    break;
                 }
             }
         }
@@ -4586,6 +4995,45 @@ fn truncate_runtime_status_field(text: &str, max_chars: usize) -> String {
         out.push_str("...");
     }
     out
+}
+
+fn should_guard_turn_end_for_owned_children(
+    turn_has_error: bool,
+    running_children: usize,
+    guard_already_sent: bool,
+) -> bool {
+    !turn_has_error && running_children > 0 && !guard_already_sent
+}
+
+fn grant_turn_end_steer_response_allowance(guard_sent: bool, remaining: &mut u8) {
+    if guard_sent {
+        // User input is not coordination grace. Preserve the same bounded
+        // response + tool/finalization shape so a steer can call one tool and
+        // still receive an answer without reopening an unbounded loop.
+        *remaining = (*remaining).max(2);
+    }
+}
+
+fn turn_detached_child_count(session_running: usize, turn_owned_running: usize) -> usize {
+    session_running.saturating_sub(turn_owned_running)
+}
+
+fn turn_owned_child_guard_runtime_text(agent_ids: &[String]) -> String {
+    let targeted_waits = agent_ids
+        .iter()
+        .map(|agent_id| format!("agent(action=\"wait\", agent_id=\"{agent_id}\", until=\"all\")"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "<codewhale:runtime_event kind=\"turn_owned_children_active\" visibility=\"internal\">\nThis is an internal runtime event, not user input. {} turn-owned sub-agent(s) are still running. Before ending, wait for these exact owned agents: {targeted_waits}. Do not use an unscoped wait-all call, because deliberately detached work must not hold this turn open. Use detached=true only when starting future work that must outlive its parent turn. If you end again while these children remain active, the runtime will park them as Interrupted work and provide an agent(action=\"start\", resume_from=\"<agent_id>\") recovery path.\n</codewhale:runtime_event>",
+        agent_ids.len()
+    )
+}
+
+fn turn_owned_child_parking_runtime_text(running: usize) -> String {
+    format!(
+        "<codewhale:runtime_event kind=\"turn_owned_children_parking\" visibility=\"internal\">\nThis is an internal runtime event, not user input. The parent ended after one settlement reminder while {running} turn-owned sub-agent(s) remained active. The runtime is parking them as Interrupted with continuable checkpoints instead of discarding their work. Their completion handoffs name the source agent_id to use with agent(action=\"start\", resume_from=\"<agent_id>\").\n</codewhale:runtime_event>"
+    )
 }
 
 #[cfg(test)]
@@ -5258,7 +5706,8 @@ fn stream_event_has_actionable_content(event: &StreamEvent) -> bool {
             Delta::SignatureDelta { signature } => !signature.is_empty(),
             Delta::ReasoningStateDelta { .. } => true,
         },
-        StreamEvent::MessageStart { .. }
+        StreamEvent::ToolProjectionWarning { .. }
+        | StreamEvent::MessageStart { .. }
         | StreamEvent::ContentBlockStop { .. }
         | StreamEvent::MessageDelta { .. }
         | StreamEvent::MessageStop
@@ -5609,6 +6058,45 @@ mod tests {
         assert!(!should_hold_turn_for_subagents(0, 0));
         // Queued completions hold regardless of how many children are running.
         assert!(should_hold_turn_for_subagents(2, 5));
+    }
+
+    #[test]
+    fn turn_owned_children_get_one_settlement_prompt_then_a_resumable_park() {
+        assert!(should_guard_turn_end_for_owned_children(false, 1, false));
+        assert!(!should_guard_turn_end_for_owned_children(false, 1, true));
+        assert!(!should_guard_turn_end_for_owned_children(false, 0, false));
+        assert!(!should_guard_turn_end_for_owned_children(true, 1, false));
+
+        let guard = turn_owned_child_guard_runtime_text(&[
+            "agent_owned_a".to_string(),
+            "agent_owned_b".to_string(),
+        ]);
+        assert!(
+            guard.contains("agent(action=\"wait\", agent_id=\"agent_owned_a\", until=\"all\")")
+        );
+        assert!(
+            guard.contains("agent(action=\"wait\", agent_id=\"agent_owned_b\", until=\"all\")")
+        );
+        assert!(guard.contains("Do not use an unscoped wait-all call"));
+        assert!(guard.contains("detached=true"));
+        assert!(guard.contains("resume_from=\"<agent_id>\""));
+
+        let parking = turn_owned_child_parking_runtime_text(2);
+        assert!(parking.contains("Interrupted"));
+        assert!(parking.contains("continuable checkpoints"));
+        assert!(parking.contains("resume_from=\"<agent_id>\""));
+
+        assert_eq!(turn_detached_child_count(2, 1), 1);
+        assert_eq!(turn_detached_child_count(1, 2), 0);
+
+        for (starting, expected) in [(0, 2), (1, 2), (2, 2), (3, 3)] {
+            let mut remaining = starting;
+            grant_turn_end_steer_response_allowance(true, &mut remaining);
+            assert_eq!(remaining, expected);
+        }
+        let mut no_guard = 0;
+        grant_turn_end_steer_response_allowance(false, &mut no_guard);
+        assert_eq!(no_guard, 0);
     }
 
     #[test]

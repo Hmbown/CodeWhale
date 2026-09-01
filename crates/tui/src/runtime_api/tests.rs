@@ -58,6 +58,11 @@ fn thread_route_credential_error_is_bad_request_not_not_found() {
 
     let missing = map_thread_err(anyhow::anyhow!("thread 'thr_missing' not found"));
     assert_eq!(missing.status, StatusCode::NOT_FOUND);
+
+    let operation_mismatch = map_thread_err(anyhow::anyhow!(
+        "operation_key is already bound to a different turn request"
+    ));
+    assert_eq!(operation_mismatch.status, StatusCode::CONFLICT);
 }
 
 #[test]
@@ -67,6 +72,65 @@ fn web_launcher_failure_is_a_recoverable_manual_bootstrap_warning() {
         .expect("launcher failure should be reported without failing Runtime startup");
     assert!(warning.contains("could not open the default browser"));
     assert!(warning.contains("open the bootstrap URL above manually"));
+}
+
+fn provider_default_model_cases() -> Vec<(&'static str, Config, &'static str)> {
+    let deepseek = Config {
+        provider: Some("deepseek".to_string()),
+        api_key: Some("deepseek-test-key".to_string()),
+        base_url: Some("http://127.0.0.1:1/v1".to_string()),
+        default_text_model: Some("deepseek-v4-flash".to_string()),
+        ..Config::default()
+    };
+
+    let mut zai_providers = crate::config::ProvidersConfig::default();
+    zai_providers.zai.api_key = Some("zai-test-key".to_string());
+    let zai = Config {
+        provider: Some("zai".to_string()),
+        // A saved DeepSeek root default must not leak onto the active Z.ai route.
+        default_text_model: Some(DEFAULT_TEXT_MODEL.to_string()),
+        providers: Some(zai_providers),
+        ..Config::default()
+    };
+
+    let mut custom_providers = crate::config::ProvidersConfig::default();
+    custom_providers.custom.insert(
+        "acme".to_string(),
+        crate::config::ProviderConfig {
+            api_key: Some("acme-test-key".to_string()),
+            base_url: Some("http://127.0.0.1:1/v1".to_string()),
+            model: Some("acme-coder".to_string()),
+            kind: Some("openai-compatible".to_string()),
+            ..crate::config::ProviderConfig::default()
+        },
+    );
+    let custom = Config {
+        provider: Some("acme".to_string()),
+        providers: Some(custom_providers),
+        ..Config::default()
+    };
+
+    vec![
+        ("deepseek", deepseek, "deepseek-v4-flash"),
+        ("zai", zai, crate::config::DEFAULT_ZAI_MODEL),
+        ("custom", custom, "acme-coder"),
+    ]
+}
+
+#[test]
+fn runtime_request_model_uses_the_active_provider_default() {
+    for (label, config, expected) in provider_default_model_cases() {
+        assert_eq!(
+            runtime_request_model(&config, None),
+            expected,
+            "{label} omitted-model resolution"
+        );
+        assert_eq!(
+            runtime_request_model(&config, Some("explicit-model")),
+            "explicit-model",
+            "{label} explicit model"
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -350,6 +414,8 @@ fn messages_from_thread_detail_batches_tool_results() {
         model: DEFAULT_TEXT_MODEL.to_string(),
         model_provider: None,
         model_provider_id: None,
+        reasoning_effort: None,
+        allowed_tools: None,
         workspace: PathBuf::from("."),
         mode: "agent".to_string(),
         permission_posture: Some("ask".to_string()),
@@ -538,6 +604,8 @@ fn legacy_exact_thread_export_normalizes_provider_kind_and_id() {
             // Pre-additive records overloaded this legacy field with the exact id.
             model_provider: Some("lm-studio".to_string()),
             model_provider_id: None,
+            reasoning_effort: None,
+            allowed_tools: None,
             workspace: PathBuf::from("."),
             mode: "agent".to_string(),
             permission_posture: None,
@@ -800,6 +868,7 @@ async fn spawn_test_server_with_root_token_mobile_workspace(
 struct TestServerOverrides {
     sub_agent_manager: Option<SharedSubAgentManager>,
     fleet_codewhale_binary: Option<String>,
+    config: Option<Config>,
     config_path: Option<PathBuf>,
     config_profile: Option<String>,
     web: Option<web::RuntimeWebState>,
@@ -854,7 +923,9 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
     let _ = rustls::crypto::ring::default_provider().install_default();
     fs::create_dir_all(&sessions_dir)?;
     fs::create_dir_all(&workspace)?;
-    let mut config = if let Some(path) = overrides.config_path.clone() {
+    let mut config = if let Some(config) = overrides.config.clone() {
+        config
+    } else if let Some(path) = overrides.config_path.clone() {
         Config::load(Some(path), None)?
     } else {
         Config {
@@ -1269,6 +1340,69 @@ async fn health_and_tasks_endpoints_work() -> Result<()> {
         .await?;
 
     handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn omitted_runtime_models_use_the_active_provider_default() -> Result<()> {
+    for (label, config, expected) in provider_default_model_cases() {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join(label);
+        let sessions_dir = root.join("sessions");
+        let workspace = root.join("workspace");
+        let (hook_tx, mut hook_rx) = mpsc::unbounded_channel();
+        let Some((addr, runtime_threads, handle)) =
+            spawn_test_server_with_root_token_mobile_workspace_and_overrides(
+                root,
+                sessions_dir,
+                None,
+                false,
+                workspace,
+                TestServerOverrides {
+                    config: Some(config),
+                    compat_stream_test_hook: Some(hook_tx),
+                    ..TestServerOverrides::default()
+                },
+            )
+            .await?
+        else {
+            return Ok(());
+        };
+
+        let created: serde_json::Value = crate::tls::reqwest_client()
+            .post(format!("http://{addr}/v1/tasks"))
+            .json(&json!({ "prompt": format!("{label} omitted model") }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        assert_eq!(created["model"], expected, "{label} durable task model");
+
+        let stream_client = crate::tls::reqwest_client();
+        let stream_task = tokio::spawn(async move {
+            stream_client
+                .post(format!("http://{addr}/v1/stream"))
+                .json(&json!({ "prompt": format!("{label} omitted stream model") }))
+                .send()
+                .await
+        });
+        let created = tokio::time::timeout(ci_scaled(Duration::from_secs(2)), hook_rx.recv())
+            .await
+            .with_context(|| format!("{label} compatibility stream did not create its thread"))?
+            .with_context(|| format!("{label} compatibility stream test hook closed"))?;
+        let (thread_id, _resume) = match created {
+            CompatStreamTestPoint::ThreadCreated { thread_id, resume } => (thread_id, resume),
+            CompatStreamTestPoint::SubscribedBeforeReplay { .. }
+            | CompatStreamTestPoint::ReplayLoaded { .. } => {
+                bail!("{label} compatibility stream advanced before thread inspection")
+            }
+        };
+        let thread = runtime_threads.get_thread(&thread_id).await?;
+        assert_eq!(thread.model, expected, "{label} compatibility stream model");
+        stream_task.abort();
+        handle.abort();
+    }
     Ok(())
 }
 
@@ -1811,6 +1945,19 @@ async fn workspace_and_automation_endpoints_work() -> Result<()> {
     Ok(())
 }
 
+fn test_fleet_route_config() -> crate::config::Config {
+    let mut providers = crate::config::ProvidersConfig::default();
+    providers.deepseek.api_key = Some("test-key".to_string());
+    providers.xai.api_key = Some("test-key".to_string());
+    providers.zai.api_key = Some("test-key".to_string());
+    crate::config::Config {
+        provider: Some("deepseek".to_string()),
+        api_key: Some("test-key".to_string()),
+        providers: Some(providers),
+        ..crate::config::Config::default()
+    }
+}
+
 #[tokio::test]
 async fn fleet_status_runtime_api_exposes_state_and_actions() -> Result<()> {
     let root = std::env::temp_dir().join(format!("codewhale-fleet-api-{}", Uuid::new_v4()));
@@ -1819,7 +1966,8 @@ async fn fleet_status_runtime_api_exposes_state_and_actions() -> Result<()> {
     let sub_agent_manager = runtime_api_sub_agent_manager(&workspace, 2);
     let manager = FleetManager::open(&workspace)?
         .with_sub_agent_manager(sub_agent_manager.clone())
-        .with_session_model(DEFAULT_TEXT_MODEL);
+        .with_session_model(DEFAULT_TEXT_MODEL)
+        .with_route_config(test_fleet_route_config());
     let task = codewhale_protocol::fleet::FleetTaskSpec {
         id: "task-a".to_string(),
         name: "Task A".to_string(),
@@ -1855,6 +2003,7 @@ async fn fleet_status_runtime_api_exposes_state_and_actions() -> Result<()> {
             security_policy: None,
             workers: Vec::new(),
             tasks: vec![task],
+            usage_ceiling: None,
         },
         1,
     )?;
@@ -1887,6 +2036,32 @@ async fn fleet_status_runtime_api_exposes_state_and_actions() -> Result<()> {
         .await?;
     assert_eq!(runs["status"]["running"], 1);
     assert_eq!(runs["runs"][0]["id"], report.run_id.0);
+
+    let profiles: serde_json::Value = client
+        .get(format!("http://{addr}/v1/fleet/profiles"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let profile_ids: Vec<&str> = profiles["profiles"]
+        .as_array()
+        .expect("profiles array")
+        .iter()
+        .map(|member| member["id"].as_str().expect("profile id"))
+        .collect();
+    assert!(
+        profile_ids.contains(&"manager"),
+        "built-in roster member 'manager' missing from /v1/fleet/profiles: {profile_ids:?}"
+    );
+    assert!(
+        profiles["profiles"]
+            .as_array()
+            .expect("profiles array")
+            .iter()
+            .all(|member| member["origin"].is_string()),
+        "every profile must carry its roster origin"
+    );
 
     let worker: serde_json::Value = client
         .get(format!("http://{addr}/v1/fleet/workers/{worker_id}"))
@@ -2137,6 +2312,7 @@ async fn agent_runs_runtime_api_exposes_persisted_worker_receipts() -> Result<()
             budget_scope: None,
             note: "not reported".to_string(),
         },
+        usage_source_fingerprints: Default::default(),
         verification: AgentRunVerificationSummary {
             status: "self_report_only".to_string(),
             summary: "no verified receipt attached".to_string(),
@@ -3063,6 +3239,96 @@ async fn thread_endpoints_expose_lifecycle_contract() -> Result<()> {
     );
     assert!(payload.get("seq").and_then(Value::as_u64).is_some());
     assert!(payload["payload"].is_object() || payload["payload"].is_array());
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_endpoint_operation_key_returns_original_and_conflicts_on_mismatch() -> Result<()> {
+    let Some((addr, runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+    let created: serde_json::Value = client
+        .post(format!("http://{addr}/v1/threads"))
+        .json(&json!({}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let thread_id = created["id"].as_str().context("thread id")?.to_string();
+
+    let mut harness = crate::core::engine::mock_engine_handle();
+    runtime_threads
+        .install_test_engine(&thread_id, harness.handle.clone())
+        .await?;
+    let send_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = send_count.clone();
+    let tx_event = harness.tx_event.clone();
+    tokio::spawn(async move {
+        while let Some(op) = harness.rx_op.recv().await {
+            if !matches!(op, Op::SendMessage { .. }) {
+                continue;
+            }
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            sleep(Duration::from_millis(20)).await;
+            let _ = tx_event
+                .send(EngineEvent::TurnComplete {
+                    usage: Usage::default(),
+                    status: TurnOutcomeStatus::Completed,
+                    error: None,
+                    tool_catalog: None,
+                    base_url: None,
+                })
+                .await;
+        }
+    });
+
+    let url = format!("http://{addr}/v1/threads/{thread_id}/turns");
+    let request = json!({
+        "prompt": "one HTTP operation",
+        "operation_key": "cwc-http-operation-1",
+        "reasoning_effort": "high",
+        "allowed_tools": []
+    });
+    let first_response = client.post(&url).json(&request).send().await?;
+    assert_eq!(first_response.status(), StatusCode::CREATED);
+    let first: serde_json::Value = first_response.json().await?;
+    let first_turn_id = first["turn"]["id"].as_str().context("turn id")?;
+    assert!(!serde_json::to_string(&first)?.contains("cwc-http-operation-1"));
+
+    let replay_response = client.post(&url).json(&request).send().await?;
+    assert_eq!(replay_response.status(), StatusCode::CREATED);
+    let replay: serde_json::Value = replay_response.json().await?;
+    assert_eq!(replay["turn"]["id"], first_turn_id);
+
+    let mismatch = client
+        .post(&url)
+        .json(&json!({
+            "prompt": "changed HTTP operation",
+            "operation_key": "cwc-http-operation-1",
+            "reasoning_effort": "high",
+            "allowed_tools": []
+        }))
+        .send()
+        .await?;
+    assert_eq!(mismatch.status(), StatusCode::CONFLICT);
+
+    sleep(Duration::from_millis(40)).await;
+    assert_eq!(
+        send_count.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "exact replay and mismatch must not emit another SendMessage"
+    );
+    assert_eq!(
+        runtime_threads
+            .test_store()
+            .list_turns_for_thread(&thread_id)?
+            .len(),
+        1
+    );
 
     handle.abort();
     Ok(())
@@ -5093,6 +5359,377 @@ async fn usage_endpoint_returns_empty_aggregation_for_fresh_store() -> Result<()
     Ok(())
 }
 
+/// `GET /v1/threads/{id}/usage` reports the thread-scoped token + cost
+/// totals the GUI's session-cost surface consumes. A thread with no turns
+/// yields zeroed totals (both published currencies present in the payload);
+/// a thread that does not exist is a 404, never zeros, so the GUI cannot
+/// mistake a typo'd id for a free conversation.
+#[tokio::test]
+async fn thread_usage_endpoint_scopes_totals_to_one_thread() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let created: serde_json::Value = client
+        .post(format!("http://{addr}/v1/threads"))
+        .json(&json!({}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let id = created["id"].as_str().expect("thread id").to_string();
+
+    let usage: serde_json::Value = client
+        .get(format!("http://{addr}/v1/threads/{id}/usage"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(usage["thread_id"], id);
+    assert_eq!(usage["totals"]["input_tokens"], 0);
+    assert_eq!(usage["totals"]["output_tokens"], 0);
+    assert_eq!(usage["totals"]["cost_usd"], 0.0);
+    assert_eq!(usage["totals"]["cost_cny"], 0.0);
+    assert_eq!(usage["totals"]["turns"], 0);
+    assert_eq!(usage["totals"]["priced_turns"], 0);
+    assert_eq!(usage["totals"]["cny_priced_turns"], 0);
+    assert_eq!(usage["totals"]["cny_unpriced_turns"], 0);
+    assert_eq!(usage["totals"]["cny_unpriced_reasons"], json!([]));
+    assert_eq!(usage["totals"]["cost_complete"], true);
+
+    let missing = client
+        .get(format!("http://{addr}/v1/threads/does-not-exist/usage"))
+        .send()
+        .await?;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    handle.abort();
+    Ok(())
+}
+
+/// `PUT /v1/sessions` persists the thread's audited cost with the same
+/// field semantics the TUI writer uses: parent-turn spend in
+/// `session_cost_*`, routed-child spend in `subagent_cost_*`, so a session
+/// that already carries TUI-written sub-agent spend keeps one display total
+/// instead of counting child spend twice. Coverage rides along (#4318):
+/// `coverage_recorded` is set and the CNY counters describe the provider's
+/// own CNY rows, so a reload reads the totals as known, not legacy-unknown.
+#[tokio::test]
+async fn session_save_merges_thread_cost_split_and_records_coverage() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("deepseek-session-cost-{}", Uuid::new_v4()));
+    let sessions_dir = root.join("sessions");
+    let Some((addr, runtime_threads, handle)) =
+        spawn_test_server_with_root(root.clone(), sessions_dir.clone()).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let created: serde_json::Value = client
+        .post(format!("http://{addr}/v1/threads"))
+        .json(&json!({
+            "model": "deepseek-v4-flash",
+            "workspace": root.join("workspace")
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let thread_id = created["id"]
+        .as_str()
+        .context("missing thread id")?
+        .to_string();
+
+    // Seed one completed turn: a DeepSeek first-party parent call plus a
+    // large routed-child (sub-agent) call, both priced.
+    let store = runtime_threads.test_store();
+    let now = Utc::now();
+    let mut turn = TurnRecord {
+        schema_version: 2,
+        id: "turn_cost_merge".to_string(),
+        thread_id: thread_id.clone(),
+        status: RuntimeTurnStatus::Completed,
+        input_summary: "cost merge".to_string(),
+        created_at: now,
+        started_at: Some(now),
+        ended_at: Some(now),
+        duration_ms: Some(0),
+        usage: Some(Usage {
+            input_tokens: 10_000,
+            output_tokens: 1_000,
+            ..Usage::default()
+        }),
+        permission_posture: None,
+        effective_provider: None,
+        effective_provider_id: None,
+        effective_billing_surface: None,
+        effective_endpoint_fingerprint: None,
+        effective_billing_mode: None,
+        effective_dispatched_at: None,
+        effective_model: None,
+        routed_usage: vec![crate::cost_status::EffectiveRouteUsage {
+            route: crate::cost_status::EffectiveRouteEnvelope {
+                provider: ApiProvider::Deepseek,
+                provider_identity: ApiProvider::Deepseek.as_str().to_string(),
+                model: "deepseek-v4-flash".to_string(),
+                billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
+                endpoint_fingerprint: None,
+                billing_mode: crate::cost_status::RouteBillingMode::Metered,
+                dispatched_at: now,
+            },
+            usage: Usage {
+                input_tokens: 20_000_000,
+                output_tokens: 2_000_000,
+                ..Usage::default()
+            },
+        }],
+        routed_usage_source_ids: Vec::new(),
+        routed_usage_dropped_records: 0,
+        error: None,
+        item_ids: Vec::new(),
+        steer_count: 0,
+        agent_mail_message_id: None,
+    };
+    // Mirror `TurnRecord::persist_effective_route` (private to the runtime
+    // threads module): persist the route envelope onto the turn so the
+    // recorded-time pricer sees a complete dispatch record.
+    turn.effective_provider = Some(ApiProvider::Deepseek.as_str().to_string());
+    turn.effective_provider_id = Some(ApiProvider::Deepseek.as_str().to_string());
+    turn.effective_billing_surface =
+        Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string());
+    turn.effective_endpoint_fingerprint = None;
+    turn.effective_billing_mode = Some(crate::cost_status::RouteBillingMode::Metered);
+    turn.effective_dispatched_at = Some(now);
+    turn.effective_model = Some("deepseek-v4-flash".to_string());
+    store.save_turn(&turn)?;
+    let mut thread = store.load_thread(&thread_id)?;
+    thread.latest_turn_id = Some(turn.id.clone());
+    store.save_thread(&thread)?;
+
+    let endpoint: serde_json::Value = client
+        .get(format!("http://{addr}/v1/threads/{thread_id}/usage"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let combined_usd = endpoint["totals"]["cost_usd"]
+        .as_f64()
+        .context("combined cost_usd")?;
+    assert!(combined_usd > 0.0);
+
+    // Pre-existing session file carrying TUI-written sub-agent spend — the
+    // shape a GUI save of a resumed TUI session merges into.
+    let session_manager = crate::session_manager::SessionManager::new(sessions_dir.clone())?;
+    let mut prior = crate::session_manager::create_saved_session_with_id_and_mode(
+        "sess_cost_merge".to_string(),
+        &[],
+        "deepseek-v4-flash",
+        &root,
+        0,
+        None,
+        None,
+    );
+    prior.metadata.cost.subagent_cost_usd = 0.5;
+    prior.metadata.cost.subagent_cost_cny = 3.0;
+    session_manager.save_session(&prior)?;
+
+    client
+        .put(format!("http://{addr}/v1/sessions"))
+        .json(&json!({
+            "thread_id": thread_id,
+            "session_id": "sess_cost_merge"
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let saved = session_manager.load_session_by_prefix("sess_cost_merge")?;
+    let cost = &saved.metadata.cost;
+    // Parent-turn spend lands in the parent field only, so the display
+    // total keeps exactly one copy of the child spend.
+    assert!(cost.session_cost_usd > 0.0);
+    assert!(cost.session_cost_usd < combined_usd);
+    let child_usd = combined_usd - cost.session_cost_usd;
+    assert!(child_usd > 0.5);
+    assert_eq!(cost.subagent_cost_usd, child_usd);
+    assert_eq!(
+        (cost.session_cost_usd + cost.subagent_cost_usd - combined_usd).abs(),
+        0.0
+    );
+    assert!(cost.subagent_cost_cny > 3.0);
+    assert!(cost.session_cost_cny > 0.0);
+    // Coverage the runtime computed reads back as known, with CNY counted
+    // under the provider's own CNY row.
+    assert!(cost.coverage_recorded);
+    assert!(!cost.coverage_is_legacy_unknown());
+    assert_eq!(cost.priced_turns, 1);
+    assert_eq!(cost.unpriced_turns, 0);
+    assert_eq!(cost.cny_priced_turns, 1);
+    assert_eq!(cost.cny_unpriced_turns, 0);
+    assert!(cost.unpriced_reasons.is_empty());
+    assert!(
+        cost.cny_unpriced_reasons.is_empty(),
+        "DeepSeek first-party parent is CNY-priced; reasons must not invent a gap"
+    );
+
+    // Re-saving is idempotent: max-merge never re-adds the same spend.
+    client
+        .put(format!("http://{addr}/v1/sessions"))
+        .json(&json!({
+            "thread_id": thread_id,
+            "session_id": "sess_cost_merge"
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+    let resaved = session_manager.load_session_by_prefix("sess_cost_merge")?;
+    assert_eq!(
+        resaved.metadata.cost.session_cost_usd,
+        cost.session_cost_usd
+    );
+    assert_eq!(
+        resaved.metadata.cost.subagent_cost_usd,
+        cost.subagent_cost_usd
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+/// USD-unpriced parent + DeepSeek-priced child: coverage reasons persist
+/// with the parent columns (#4318) while routed spend still lands only in
+/// `subagent_cost_*` (no double-count on reload).
+#[tokio::test]
+async fn session_save_persists_parent_cny_unpriced_reasons_without_double_count() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("deepseek-session-cny-{}", Uuid::new_v4()));
+    let sessions_dir = root.join("sessions");
+    let Some((addr, runtime_threads, handle)) =
+        spawn_test_server_with_root(root.clone(), sessions_dir.clone()).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let created: serde_json::Value = client
+        .post(format!("http://{addr}/v1/threads"))
+        .json(&json!({
+            "model": "gpt-5.5",
+            "workspace": root.join("workspace")
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let thread_id = created["id"]
+        .as_str()
+        .context("missing thread id")?
+        .to_string();
+
+    let store = runtime_threads.test_store();
+    let now = Utc::now();
+    let mut turn = TurnRecord {
+        schema_version: 2,
+        id: "turn_cny_reasons".to_string(),
+        thread_id: thread_id.clone(),
+        status: RuntimeTurnStatus::Completed,
+        input_summary: "cny reasons".to_string(),
+        created_at: now,
+        started_at: Some(now),
+        ended_at: Some(now),
+        duration_ms: Some(0),
+        usage: Some(Usage {
+            input_tokens: 10_000,
+            output_tokens: 1_000,
+            ..Usage::default()
+        }),
+        permission_posture: None,
+        effective_provider: None,
+        effective_provider_id: None,
+        effective_billing_surface: None,
+        effective_endpoint_fingerprint: None,
+        effective_billing_mode: None,
+        effective_dispatched_at: None,
+        effective_model: None,
+        routed_usage: vec![crate::cost_status::EffectiveRouteUsage {
+            route: crate::cost_status::EffectiveRouteEnvelope {
+                provider: ApiProvider::Deepseek,
+                provider_identity: ApiProvider::Deepseek.as_str().to_string(),
+                model: "deepseek-v4-flash".to_string(),
+                billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
+                endpoint_fingerprint: None,
+                billing_mode: crate::cost_status::RouteBillingMode::Metered,
+                dispatched_at: now,
+            },
+            usage: Usage {
+                input_tokens: 20_000,
+                output_tokens: 2_000,
+                ..Usage::default()
+            },
+        }],
+        routed_usage_source_ids: Vec::new(),
+        routed_usage_dropped_records: 0,
+        error: None,
+        item_ids: Vec::new(),
+        steer_count: 0,
+        agent_mail_message_id: None,
+    };
+    turn.effective_provider = Some(ApiProvider::Openai.as_str().to_string());
+    turn.effective_provider_id = Some(ApiProvider::Openai.as_str().to_string());
+    turn.effective_billing_surface = Some(crate::pricing::UNCLASSIFIED_BILLING_SURFACE.to_string());
+    turn.effective_endpoint_fingerprint = None;
+    turn.effective_billing_mode = Some(crate::cost_status::RouteBillingMode::Metered);
+    turn.effective_dispatched_at = Some(now);
+    turn.effective_model = Some("gpt-5.5".to_string());
+    store.save_turn(&turn)?;
+    let mut thread = store.load_thread(&thread_id)?;
+    thread.latest_turn_id = Some(turn.id.clone());
+    store.save_thread(&thread)?;
+
+    client
+        .put(format!("http://{addr}/v1/sessions"))
+        .json(&json!({
+            "thread_id": thread_id,
+            "session_id": "sess_cny_reasons"
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let session_manager = crate::session_manager::SessionManager::new(sessions_dir)?;
+    let saved = session_manager.load_session_by_prefix("sess_cny_reasons")?;
+    let cost = &saved.metadata.cost;
+    assert_eq!(
+        cost.session_cost_usd, 0.0,
+        "unpriced parent must not invent USD"
+    );
+    assert!(
+        cost.subagent_cost_usd > 0.0,
+        "routed DeepSeek child is priced"
+    );
+    assert_eq!(
+        cost.priced_turns, 0,
+        "parent coverage columns stay parent-only"
+    );
+    assert_eq!(cost.unpriced_turns, 1);
+    assert_eq!(cost.cny_unpriced_turns, 1);
+    assert!(!cost.unpriced_reasons.is_empty());
+    assert!(
+        !cost.cny_unpriced_reasons.is_empty(),
+        "CNY reasons must persist with the parent coverage counts (#4318)"
+    );
+    assert!(cost.coverage_recorded);
+    assert!(!cost.coverage_is_legacy_unknown());
+
+    handle.abort();
+    Ok(())
+}
+
 #[tokio::test]
 async fn runtime_info_reports_bind_state() -> Result<()> {
     let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
@@ -5131,6 +5768,10 @@ async fn runtime_info_reports_bind_state() -> Result<()> {
     assert!(info["version"].is_string());
     assert_eq!(info["transports"], json!(["http", "sse"]));
     assert_eq!(info["capabilities"]["threads"], true);
+    assert_eq!(
+        info["capabilities"]["turn_operation_idempotency"], true,
+        "clients must have an explicit fail-closed gate before sending operation_key"
+    );
     assert_eq!(info["capabilities"]["account_session"], true);
     assert_eq!(info["capabilities"]["external_tools"], true);
     assert_eq!(info["capabilities"]["worker_runtime"], true);
@@ -5366,7 +6007,7 @@ async fn mobile_page_is_available_only_when_enabled() -> Result<()> {
     let tmp = tempfile::tempdir()?;
     let root = tmp.path().to_path_buf();
     let sessions_dir = root.join("sessions");
-    let Some((addr, _runtime_threads, handle)) = spawn_test_server_with_root_token_and_mobile(
+    let Some((addr, runtime_threads, handle)) = spawn_test_server_with_root_token_and_mobile(
         root.clone(),
         sessions_dir.clone(),
         None,
@@ -5380,6 +6021,8 @@ async fn mobile_page_is_available_only_when_enabled() -> Result<()> {
     let disabled = client.get(format!("http://{addr}/mobile")).send().await?;
     assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
     handle.abort();
+    let _ = handle.await;
+    drop(runtime_threads);
 
     let Some((addr, _runtime_threads, handle)) =
         spawn_test_server_with_root_token_and_mobile(root, sessions_dir, None, true).await?
@@ -6913,6 +7556,148 @@ fn provider_catalog_keeps_official_deepseek_facts_but_not_custom_proxy_claims() 
         codewhale_config::route::CapabilityState::Unknown,
         "same-name custom proxy must not surface first-party vision capability as verified"
     );
+}
+
+#[test]
+fn provider_credential_state_wire_values_are_stable_and_sanitized() {
+    use crate::provider_readiness::CredentialState;
+
+    for (internal, expected) in [
+        (CredentialState::Saved, "configured"),
+        (CredentialState::ImportedToken, "configured"),
+        (CredentialState::MissingLogin, "login_required"),
+        (CredentialState::ExternalConsent, "login_required"),
+        (CredentialState::MissingKey, "missing"),
+        (CredentialState::NoAuth, "no_auth"),
+        (CredentialState::Local, "local"),
+        (CredentialState::Legacy, "legacy"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(ProviderCredentialState::from(internal))
+                .expect("provider credential state should serialize"),
+            expected,
+        );
+    }
+}
+
+#[tokio::test]
+async fn provider_catalog_reports_exact_named_custom_credential_state_without_secrets() -> Result<()>
+{
+    let _env_lock = lock_test_env();
+    let _key_source = EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
+    let _cli_key = EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
+    let root = std::env::temp_dir().join(format!(
+        "codewhale-provider-credential-state-{}",
+        Uuid::new_v4()
+    ));
+    fs::create_dir_all(&root)?;
+
+    let cases = [
+        (
+            "private-gateway",
+            "configured",
+            r#"provider = "private-gateway"
+
+[providers.private-gateway]
+kind = "openai-compatible"
+base_url = "https://secret-route.example.test/tenant/private/v1"
+model = "private-model"
+api_key = "sk-provider-fixture-do-not-leak"
+api_key_env = "CODEWHALE_PROVIDER_FIXTURE_ENV"
+"#,
+        ),
+        (
+            "missing-gateway",
+            "missing",
+            r#"provider = "missing-gateway"
+
+[providers.missing-gateway]
+kind = "openai-compatible"
+base_url = "https://missing-route.example.test/private/v1"
+model = "missing-model"
+"#,
+        ),
+        (
+            "local-runtime",
+            "local",
+            r#"provider = "local-runtime"
+
+[providers.local-runtime]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:18190/private/v1"
+model = "local-model"
+"#,
+        ),
+    ];
+
+    for (route_id, expected_state, config) in cases {
+        let config_file = root.join(format!("{route_id}.toml"));
+        fs::write(&config_file, config)?;
+        let Some((addr, _runtime_threads, handle)) =
+            spawn_test_server_with_config_path(config_file).await?
+        else {
+            return Ok(());
+        };
+        let providers = get_providers(&crate::tls::reqwest_client(), &addr).await;
+        assert_eq!(providers["current"], "custom");
+        let custom = providers["providers"]
+            .as_array()
+            .and_then(|entries| entries.iter().find(|entry| entry["id"] == "custom"))
+            .context("custom provider entry")?;
+        assert_eq!(
+            custom["model_provider_id"], route_id,
+            "credential state must describe the exact active named custom route"
+        );
+        assert_eq!(custom["credentialState"], expected_state);
+
+        let allowed_fields: std::collections::BTreeSet<_> = [
+            "credentialState",
+            "default_model",
+            "display_name",
+            "has_model_catalog",
+            "id",
+            "model_provider_id",
+        ]
+        .into_iter()
+        .collect();
+        for entry in providers["providers"]
+            .as_array()
+            .context("providers array")?
+        {
+            let actual_fields: std::collections::BTreeSet<_> = entry
+                .as_object()
+                .context("provider entry object")?
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(
+                actual_fields, allowed_fields,
+                "provider catalog must remain a non-secret projection"
+            );
+        }
+
+        let serialized = serde_json::to_string(&providers)?;
+        for forbidden in [
+            "sk-provider-fixture-do-not-leak",
+            "CODEWHALE_PROVIDER_FIXTURE_ENV",
+            "secret-route.example.test",
+            "missing-route.example.test",
+            "127.0.0.1:18190",
+            "default_base_url",
+            "env_vars",
+            "api_key",
+            "api_key_env",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "provider catalog leaked forbidden detail: {forbidden}"
+            );
+        }
+
+        handle.abort();
+    }
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -8565,7 +9350,8 @@ async fn fleet_receipt_api_list_and_get_round_trip() -> Result<()> {
         metadata: std::collections::BTreeMap::new(),
     };
     let manager = crate::fleet::manager::FleetManager::open(&workspace)?
-        .with_session_model(crate::config::DEFAULT_TEXT_MODEL);
+        .with_session_model(crate::config::DEFAULT_TEXT_MODEL)
+        .with_route_config(test_fleet_route_config());
     let report = manager.create_run(
         FleetTaskSpecDocument {
             name: Some("receipt-api-smoke".to_string()),
@@ -8573,6 +9359,7 @@ async fn fleet_receipt_api_list_and_get_round_trip() -> Result<()> {
             security_policy: None,
             workers: Vec::new(),
             tasks: vec![task],
+            usage_ceiling: None,
         },
         1,
     )?;

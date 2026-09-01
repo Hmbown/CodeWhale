@@ -22,7 +22,7 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::config::{Config, DEFAULT_TEXT_MODEL};
+use crate::config::Config;
 use crate::runtime_threads::{
     CreateThreadRequest, RuntimeEventRecord, RuntimeThreadManager, RuntimeThreadManagerConfig,
     RuntimeTurnStatus, SharedRuntimeThreadManager, StartTurnRequest,
@@ -566,12 +566,7 @@ impl TaskManagerConfig {
             data_dir: default_tasks_dir(),
             worker_count: worker_count.unwrap_or(DEFAULT_WORKERS),
             default_workspace: workspace,
-            default_model: default_model.unwrap_or_else(|| {
-                config
-                    .default_text_model
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_TEXT_MODEL.to_string())
-            }),
+            default_model: default_model.unwrap_or_else(|| config.default_model()),
             default_mode: "agent".to_string(),
             allow_shell: config.allow_shell(),
             trust_mode: false,
@@ -1090,15 +1085,20 @@ struct QueueFile {
 
 impl TaskManager {
     /// Start the manager with the default DeepSeek executor.
+    ///
+    /// Interactive callers pass the session id so the Runtime store (and its
+    /// exclusive process-owner lock) is per-session rather than per-machine
+    /// (#5630).
     pub async fn start(
         cfg: TaskManagerConfig,
         api_config: Config,
         plugin_registry: Arc<crate::plugins::PluginRegistry>,
+        session_id: &str,
     ) -> Result<SharedTaskManager> {
         let runtime_threads = Arc::new(RuntimeThreadManager::open_with_plugin_registry(
             api_config.clone(),
             cfg.default_workspace.clone(),
-            RuntimeThreadManagerConfig::from_task_data_dir(cfg.data_dir.clone()),
+            RuntimeThreadManagerConfig::for_session(cfg.data_dir.clone(), session_id),
             plugin_registry,
         )?);
         Self::start_with_runtime_manager(cfg, api_config, runtime_threads).await
@@ -2637,6 +2637,55 @@ mod tests {
 
     struct MockExecutor;
 
+    fn provider_default_model_cases() -> Vec<(&'static str, Config, &'static str)> {
+        let deepseek = Config {
+            provider: Some("deepseek".to_string()),
+            default_text_model: Some("deepseek-v4-flash".to_string()),
+            ..Config::default()
+        };
+
+        let zai = Config {
+            provider: Some("zai".to_string()),
+            // Exercise provider-aware rejection of a stale DeepSeek root default.
+            default_text_model: Some(crate::config::DEFAULT_TEXT_MODEL.to_string()),
+            ..Config::default()
+        };
+
+        let mut custom_providers = crate::config::ProvidersConfig::default();
+        custom_providers.custom.insert(
+            "acme".to_string(),
+            crate::config::ProviderConfig {
+                base_url: Some("http://127.0.0.1:1/v1".to_string()),
+                model: Some("acme-coder".to_string()),
+                kind: Some("openai-compatible".to_string()),
+                ..crate::config::ProviderConfig::default()
+            },
+        );
+        let custom = Config {
+            provider: Some("acme".to_string()),
+            providers: Some(custom_providers),
+            ..Config::default()
+        };
+
+        vec![
+            ("deepseek", deepseek, "deepseek-v4-flash"),
+            ("zai", zai, crate::config::DEFAULT_ZAI_MODEL),
+            ("custom", custom, "acme-coder"),
+        ]
+    }
+
+    #[test]
+    fn task_manager_config_uses_the_active_provider_default() {
+        for (label, config, expected) in provider_default_model_cases() {
+            let task_config =
+                TaskManagerConfig::from_runtime(&config, PathBuf::from("."), None, Some(1));
+            assert_eq!(
+                task_config.default_model, expected,
+                "{label} durable task default"
+            );
+        }
+    }
+
     #[async_trait]
     impl TaskExecutor for MockExecutor {
         async fn execute(
@@ -3643,9 +3692,20 @@ mod tests {
             _cancel: CancellationToken,
         ) -> TaskExecutionResult {
             for i in 0..400 {
+                // Mirror the runtime path: each raw event is followed by its
+                // derived message delta. Alternating the two non-urgent stream
+                // kinds prevents timeline coalescing without turning this
+                // storage-bound test into hundreds of synchronous fsyncs.
                 let _ = events
-                    .send(TaskExecutionEvent::Status {
-                        message: format!("tick {i}"),
+                    .send(TaskExecutionEvent::RuntimeEvent {
+                        seq: i,
+                        event: "item.delta".to_string(),
+                        summary: format!("tick {i}"),
+                    })
+                    .await;
+                let _ = events
+                    .send(TaskExecutionEvent::MessageDelta {
+                        content: format!("chunk {i}"),
                     })
                     .await;
             }
@@ -4050,12 +4110,14 @@ mod tests {
     async fn long_stream_timeline_is_bounded() -> Result<()> {
         let root = std::env::temp_dir().join(format!("deepseek-task-test-{}", Uuid::new_v4()));
         let manager =
-            TaskManager::start_with_executor(test_config(root), Arc::new(FloodExecutor)).await?;
+            TaskManager::start_with_executor(test_config(root.clone()), Arc::new(FloodExecutor))
+                .await?;
         let task = manager
             .add_task(NewTaskRequest::from_prompt("flood the timeline"))
             .await?;
         let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         assert_eq!(finished.status, TaskStatus::Completed);
+        assert_eq!(finished.runtime_event_count, 400);
         assert!(
             finished.timeline.len() <= TIMELINE_ENTRY_LIMIT,
             "timeline grew to {}",
@@ -4072,6 +4134,18 @@ mod tests {
                 .iter()
                 .map(|e| e.kind.as_str())
                 .collect::<Vec<_>>()
+        );
+
+        let persisted_path = root.join("tasks").join(format!("{}.json", task.id));
+        let persisted: TaskRecord = serde_json::from_slice(&fs::read(&persisted_path)?)?;
+        assert_eq!(persisted.status, TaskStatus::Completed);
+        assert_eq!(persisted.runtime_event_count, 400);
+        assert!(persisted.timeline.len() <= TIMELINE_ENTRY_LIMIT);
+        assert!(
+            persisted
+                .timeline
+                .iter()
+                .any(|entry| entry.kind == "omitted")
         );
         Ok(())
     }

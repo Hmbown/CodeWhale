@@ -8,8 +8,10 @@ pub mod export;
 pub mod install;
 pub mod manifest;
 pub mod marketplace;
+pub mod matcher;
 pub mod mutation;
 mod path_identity;
+pub mod recommend;
 pub mod registry;
 pub mod runtime;
 pub mod types;
@@ -20,5 +22,25 @@ pub(crate) mod test_fixture;
 mod tests;
 
 pub use context::{HostEnvironment, PluginDiscoveryContext};
+pub use discovery::PluginCatalogStamp;
 pub(crate) use path_identity::metadata_is_link_or_reparse;
 pub use registry::PluginRegistry;
+
+pub const PLUGIN_RELOAD_NUDGE: &str = "Plugins changed on disk. Run /plugin reload to apply.";
+
+/// Returns the reload nudge once per distinct on-disk catalog stamp.
+#[must_use]
+pub fn plugin_reload_nudge(
+    registry: &PluginRegistry,
+    last_nudged: &mut Option<PluginCatalogStamp>,
+) -> Option<&'static str> {
+    if !registry.on_disk_catalog_changed() {
+        return None;
+    }
+    let live = registry.live_catalog_stamp();
+    if last_nudged.as_ref() == Some(&live) {
+        return None;
+    }
+    *last_nudged = Some(live);
+    Some(PLUGIN_RELOAD_NUDGE)
+}

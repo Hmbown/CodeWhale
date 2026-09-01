@@ -5716,3 +5716,67 @@ fn removed_runtime_server_config_can_be_retried_with_same_name() {
     pool.add_runtime_server_config("retryable".to_string(), config)
         .expect("rollback must release the deterministic runtime name");
 }
+
+#[test]
+fn mcp_recovery_kind_names_real_login_and_reload_commands() {
+    assert_eq!(
+        mcp_recovery_kind(false, true, false, None, false),
+        McpRecoveryKind::Enable
+    );
+    assert_eq!(
+        mcp_recovery_kind(true, false, false, None, false),
+        McpRecoveryKind::Connect
+    );
+    assert_eq!(
+        mcp_recovery_kind(true, true, false, Some("connection refused"), false),
+        McpRecoveryKind::Diagnose
+    );
+    assert_eq!(
+        mcp_recovery_kind(true, true, false, Some("connection refused"), true),
+        McpRecoveryKind::Diagnose
+    );
+    assert_eq!(
+        mcp_recovery_kind(true, true, false, Some("401 Unauthorized"), true),
+        McpRecoveryKind::Reauth
+    );
+    assert_eq!(
+        mcp_recovery_kind(true, true, false, None, true),
+        McpRecoveryKind::Reauth
+    );
+    assert_eq!(
+        mcp_recovery_kind(true, true, false, None, false),
+        McpRecoveryKind::Reconnect
+    );
+    assert_eq!(
+        mcp_recovery_kind(true, true, true, None, false),
+        McpRecoveryKind::Diagnose
+    );
+
+    assert_eq!(
+        McpRecoveryKind::Reauth.slash_command("github"),
+        "/mcp login github"
+    );
+    assert_eq!(
+        crate::mcp::mcp_startup_warning("cloudflare-api", McpRecoveryKind::Reauth, true),
+        "The cloudflare-api MCP server requires OAuth reauthentication. Run `/mcp login cloudflare-api`."
+    );
+    assert_eq!(
+        crate::mcp::mcp_startup_warning("cloudflare-api", McpRecoveryKind::Diagnose, true),
+        "MCP startup incomplete (failed: cloudflare-api). Run `/mcp validate`."
+    );
+    assert_eq!(
+        McpRecoveryKind::Connect.slash_command("github"),
+        "/mcp reload"
+    );
+    assert_eq!(
+        McpRecoveryKind::Diagnose.slash_command("github"),
+        "/mcp validate"
+    );
+    assert!(
+        !McpRecoveryKind::Reauth
+            .slash_command("github")
+            .contains("/mcp auth")
+    );
+    assert!(mcp_name_is_command_safe("github"));
+    assert!(!mcp_name_is_command_safe("github mcp"));
+}

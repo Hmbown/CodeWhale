@@ -83,14 +83,14 @@
               pkgs.openssl
               pkgs.python3
               self.formatter.${system}
-            ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+            ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
               pkgs.dbus
             ];
 
             env = {
               # Required by rust-analyzer
               RUST_SRC_PATH = "${pkgs.rustToolchain}/lib/rustlib/src/rust/library";
-            } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+            } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
               LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (
                 with pkgs;
                 [

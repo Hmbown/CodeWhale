@@ -962,9 +962,9 @@ pub enum AppAction {
     OpenExtensions {
         tab: crate::tui::views::extensions::ExtensionsTab,
     },
-    /// Open `/fleet` — the saved named-Fleet list (the primary Fleet surface).
+    /// Open `/pod` — the saved named-Fleet list (the primary Pod surface).
     OpenFleetList,
-    /// Open the `/fleet` roster — the saved-party view of the agent team.
+    /// Open the `/pod` roster — the saved-party view of the agent team.
     OpenFleetRoster,
     /// Open the selected v2 Fleet editor, or legacy profile setup when no
     /// named Fleet is selected.
@@ -1194,6 +1194,10 @@ pub enum McpUiAction {
         scopes: Vec<String>,
     },
     Logout {
+        name: String,
+    },
+    /// Retry one failed/timed-out server through the engine-owned live pool.
+    Retry {
         name: String,
     },
     /// List consent-gated external MCP import candidates with provenance.

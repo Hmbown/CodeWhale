@@ -31,7 +31,10 @@ use super::candidate::{
     LimitField, PricingSku, ReadyRouteCandidate, ResolvedAuthSource, ResolvedEndpoint,
     SourcedLimitOverride, ValidationReport,
 };
-use super::capabilities::RouteCapabilities;
+use super::capabilities::{
+    RouteCapabilities, documented_moonshot_web_search_for_route,
+    documented_zai_web_search_for_route,
+};
 use super::descriptor::ProviderDescriptor;
 use super::errors::RouteError;
 use super::ids::{LogicalModelRef, ModelId, ProviderId, WireModelId};
@@ -243,6 +246,28 @@ impl RouteResolver {
             selected.capabilities = RouteCapabilities::default();
             selected.pricing = PricingSku::UnknownOrStale;
         }
+        if provider_kind == ProviderKind::Zai {
+            let effective_base_url = req
+                .base_url_override
+                .as_deref()
+                .unwrap_or_else(|| descriptor.default_base_url());
+            selected.capabilities.server_side_web_search = documented_zai_web_search_for_route(
+                provider_kind,
+                selected.wire_model_id.as_str(),
+                effective_base_url,
+            );
+        }
+        if provider_kind == ProviderKind::Moonshot {
+            let effective_base_url = req
+                .base_url_override
+                .as_deref()
+                .unwrap_or_else(|| descriptor.default_base_url());
+            selected.capabilities.server_side_web_search = documented_moonshot_web_search_for_route(
+                provider_kind,
+                selected.wire_model_id.as_str(),
+                effective_base_url,
+            );
+        }
 
         let protocol = descriptor
             .protocol_for_endpoint(&selected.endpoint_key)
@@ -406,8 +431,23 @@ impl RouteResolver {
             // Aggregators, local runtimes, and custom OpenAI-compatible
             // endpoints legitimately accept arbitrary / prefixed ids verbatim.
             ProviderClass::Aggregator | ProviderClass::LocalOrCustom => {
-                let _ = provider_kind;
                 if require_catalog_match {
+                    // Opencode Zen serves Muse Spark exclusively over Responses.
+                    // Handle any future muse-spark variant (e.g. -free suffix)
+                    // even when no exact bundled offering exists — fail open to
+                    // responses rather than failing closed to "unproven".
+                    if provider_kind == ProviderKind::OpencodeZen
+                        && raw.to_ascii_lowercase().contains("muse-spark")
+                    {
+                        return Ok(ResolvedOffering {
+                            wire_model_id: WireModelId::from(raw),
+                            canonical_model: None,
+                            endpoint_key: "responses".to_string(),
+                            limits: RouteLimits::default(),
+                            capabilities: RouteCapabilities::default(),
+                            pricing: PricingSku::UnknownOrStale,
+                        });
+                    }
                     return Err(RouteError::UnsupportedModelProtocol {
                         provider: provider_id.clone(),
                         model: raw.to_string(),

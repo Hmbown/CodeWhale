@@ -135,10 +135,10 @@ pub struct FleetExecutorTickReport {
 #[derive(Debug, thiserror::Error)]
 pub enum FleetControlError {
     /// The exact worker exists (or does not) but has no leased task to cancel.
-    #[error("worker {worker_id} has no running fleet task")]
+    #[error("worker {worker_id} has no running Pod task")]
     NoActiveTask { worker_id: String },
     /// No durable run with that exact id in this workspace's ledger.
-    #[error("no fleet run with id {run_id}")]
+    #[error("no Pod run with id {run_id}")]
     UnknownRun { run_id: String },
 }
 
@@ -285,7 +285,8 @@ impl FleetManager {
     /// Effective session roster used everywhere a task references an
     /// `agent_profile` id. A selected v2 Fleet is authoritative; the merged
     /// legacy profile layers remain the fallback only when no Fleet is selected.
-    fn agent_roster(&self) -> crate::fleet::roster::FleetRoster {
+    /// Also exposed over `GET /v1/fleet/profiles` for GUI clients.
+    pub fn agent_roster(&self) -> crate::fleet::roster::FleetRoster {
         crate::fleet::identity::load_effective_roster(&self.fleet_config, &self.workspace, None)
     }
 
@@ -370,7 +371,7 @@ impl FleetManager {
         validate_task_spec_document(&doc)?;
         let roster = self.agent_roster();
         if let Some(error) = roster.load_error() {
-            bail!("cannot create Fleet run: {error}");
+            bail!("cannot create Pod run: {error}");
         }
         worker_runtime::freeze_fleet_task_members(
             &mut doc.tasks,
@@ -417,6 +418,7 @@ impl FleetManager {
             workflow: descriptor.workflow,
             roles: descriptor.roles,
             max_workers: Some(max_workers),
+            usage_ceiling: doc.usage_ceiling.clone(),
             task_specs: doc.tasks.clone(),
             worker_specs: doc.workers.clone(),
             labels: doc.labels,
@@ -472,7 +474,7 @@ impl FleetManager {
             lifecycle,
             FleetRunStatus::Completed | FleetRunStatus::Failed | FleetRunStatus::Cancelled
         ) {
-            bail!("fleet run {} is already terminal ({lifecycle:?})", run_id.0);
+            bail!("Pod run {} is already terminal ({lifecycle:?})", run_id.0);
         }
         if !matches!(lifecycle, FleetRunStatus::Running) {
             self.ledger
@@ -537,7 +539,7 @@ impl FleetManager {
             .runs
             .get(&run_id.0)
             .cloned()
-            .ok_or_else(|| anyhow!("fleet run {} does not exist", run_id.0))?;
+            .ok_or_else(|| anyhow!("Pod run {} does not exist", run_id.0))?;
         let worker_ids = worker_ids_for_run(&run, max_workers);
 
         for task in active_tasks_for_run(&state, run_id) {
@@ -624,7 +626,7 @@ impl FleetManager {
                 &record.spec.worker_id,
                 status,
                 Some(format!(
-                    "Fleet task {} is {}",
+                    "Pod task {} is {}",
                     current.entry.task_id, status_label
                 )),
             );
@@ -686,7 +688,7 @@ impl FleetManager {
             Some(manager) => Some(
                 manager
                     .try_write()
-                    .map_err(|_| anyhow!("Fleet coordination state is busy; retry resume"))?,
+                    .map_err(|_| anyhow!("Pod coordination state is busy; retry resume"))?,
             ),
             None => None,
         };
@@ -725,7 +727,7 @@ impl FleetManager {
         let manager_lock_path = self.manager_lock_path(run_id);
         if let Some(parent) = manager_lock_path.parent() {
             std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating fleet manager lock dir {}", parent.display()))?;
+                .with_context(|| format!("creating Pod manager lock dir {}", parent.display()))?;
         }
         let lock_file = OpenOptions::new()
             .create(true)
@@ -733,9 +735,7 @@ impl FleetManager {
             .read(true)
             .write(true)
             .open(&manager_lock_path)
-            .with_context(|| {
-                format!("opening fleet manager lock {}", manager_lock_path.display())
-            })?;
+            .with_context(|| format!("opening Pod manager lock {}", manager_lock_path.display()))?;
         let mut manager_lock = fd_lock::RwLock::new(lock_file);
         let standby_interval = tick_interval
             .min(Duration::from_millis(100))
@@ -747,7 +747,7 @@ impl FleetManager {
                     if observed_owner {
                         if self.run_has_open_work(run_id)? {
                             bail!(
-                                "fleet manager for run {} exited with open work; wait for stale reconciliation before resuming",
+                                "Pod manager for run {} exited with open work; wait for stale reconciliation before resuming",
                                 run_id.0
                             );
                         }
@@ -770,7 +770,7 @@ impl FleetManager {
                 Err(err) => {
                     return Err(err).with_context(|| {
                         format!(
-                            "locking fleet manager ownership {}",
+                            "locking Pod manager ownership {}",
                             manager_lock_path.display()
                         )
                     });
@@ -791,7 +791,7 @@ impl FleetManager {
                 if executor.worker_ids().is_empty() {
                     return Err(error).with_context(|| {
                         format!(
-                            "scheduling Fleet run {} after draining owned workers",
+                            "scheduling Pod run {} after draining owned workers",
                             run_id.0
                         )
                     });
@@ -799,7 +799,7 @@ impl FleetManager {
                 tracing::warn!(
                     run_id = %run_id.0,
                     error = %error,
-                    "Fleet scheduling paused while already-leased workers continue"
+                    "Pod scheduling paused while already-leased workers continue"
                 );
             }
             // A separate `fleet interrupt` process can make the ledger
@@ -900,6 +900,19 @@ impl FleetManager {
                     executor.forget_worker(&worker_id);
                     continue;
                 };
+                // Per-task wall-clock limit (R5): the process is the
+                // completion authority, so a deadline kills the worker first
+                // and finalizes with an honest Timeout receipt afterwards.
+                if let Some(limit) = task_wall_clock_limit(&task.task_spec)
+                    && let Some(running) = executor.worker_running_for(&worker_id)
+                    && running >= limit
+                {
+                    executor.stop_worker(&worker_id)?;
+                    executor.forget_worker(&worker_id);
+                    self.record_task_timeout(&task, limit)?;
+                    report.terminals += 1;
+                    continue;
+                }
                 if self.record_task_outcome(&task, terminal)? {
                     report.terminals += 1;
                 }
@@ -1023,7 +1036,7 @@ impl FleetManager {
             Some("operator"),
         )?;
         if !cancelled {
-            bail!("worker {worker_id} no longer has that running fleet task");
+            bail!("worker {worker_id} no longer has that running Pod task");
         }
         self.refresh_run_status(&task.entry.run_id)?;
         self.inspect_worker(worker_id)
@@ -1034,12 +1047,12 @@ impl FleetManager {
         let Some(task) = active_task_for_worker(&state, worker_id)
             .or_else(|| latest_task_for_worker(&state, worker_id))
         else {
-            bail!("worker {worker_id} has no fleet task to restart");
+            bail!("worker {worker_id} has no Pod task to restart");
         };
         let run = state
             .runs
             .get(&task.entry.run_id.0)
-            .ok_or_else(|| anyhow!("fleet run {} does not exist", task.entry.run_id.0))?;
+            .ok_or_else(|| anyhow!("Pod run {} does not exist", task.entry.run_id.0))?;
         let max_workers = run
             .max_workers
             .unwrap_or_else(|| run.worker_specs.len().max(1))
@@ -1047,7 +1060,7 @@ impl FleetManager {
         let mut coordination_guard = match &self.sub_agent_manager {
             Some(manager) => {
                 let Ok(guard) = manager.try_write() else {
-                    bail!("Fleet worker {worker_id} coordination state is busy; retry restart");
+                    bail!("Pod worker {worker_id} coordination state is busy; retry restart");
                 };
                 Some(guard)
             }
@@ -1084,9 +1097,7 @@ impl FleetManager {
                         .task_specs
                         .iter()
                         .find(|spec| spec.id == task.entry.task_id)
-                        .ok_or_else(|| {
-                            anyhow!("fleet task {} does not exist", task.entry.task_id)
-                        })?;
+                        .ok_or_else(|| anyhow!("Pod task {} does not exist", task.entry.task_id))?;
                     self.prepare_registered_restart_generation(
                         guard, &state, task, task_spec, worker_id,
                     )?;
@@ -1121,7 +1132,7 @@ impl FleetManager {
         let run = state
             .runs
             .get(&task.entry.run_id.0)
-            .ok_or_else(|| anyhow!("fleet run {} does not exist", task.entry.run_id.0))?;
+            .ok_or_else(|| anyhow!("Pod run {} does not exist", task.entry.run_id.0))?;
         let worker_spec = run
             .worker_specs
             .iter()
@@ -1150,17 +1161,17 @@ impl FleetManager {
         );
         let record = coordination
             .get_worker_record(worker_id)
-            .ok_or_else(|| anyhow!("Fleet worker {worker_id} has no registered launch spec"))?;
+            .ok_or_else(|| anyhow!("Pod worker {worker_id} has no registered launch spec"))?;
         let current_generation = task.entry.attempts.max(1);
         let next_generation = current_generation
             .checked_add(1)
-            .ok_or_else(|| anyhow!("Fleet worker {worker_id} exhausted launch generations"))?;
+            .ok_or_else(|| anyhow!("Pod worker {worker_id} exhausted launch generations"))?;
         let registered_generation = record
             .spec
             .launch_manifest
             .as_ref()
             .map(|manifest| manifest.generation)
-            .ok_or_else(|| anyhow!("Fleet worker {worker_id} has no persisted launch manifest"))?;
+            .ok_or_else(|| anyhow!("Pod worker {worker_id} has no persisted launch manifest"))?;
 
         match registered_generation {
             generation if generation == current_generation => {
@@ -1183,7 +1194,7 @@ impl FleetManager {
             }
             generation => {
                 bail!(
-                    "Fleet worker {worker_id} persisted launch generation {generation} does not match ledger attempt {current_generation} or its prepared retry {next_generation}"
+                    "Pod worker {worker_id} persisted launch generation {generation} does not match ledger attempt {current_generation} or its prepared retry {next_generation}"
                 );
             }
         }
@@ -1228,7 +1239,7 @@ impl FleetManager {
     pub fn stop_run(&self, run_id: &FleetRunId) -> Result<usize> {
         let state = self.ledger.rebuild_state()?;
         if !state.runs.contains_key(&run_id.0) {
-            bail!("fleet run {} does not exist", run_id.0);
+            bail!("Pod run {} does not exist", run_id.0);
         }
         let now = timestamp();
         let mut stopped = 0usize;
@@ -1273,7 +1284,7 @@ impl FleetManager {
             .runs
             .get(&entry.run_id.0)
             .cloned()
-            .ok_or_else(|| anyhow!("fleet run {} does not exist", entry.run_id.0))?;
+            .ok_or_else(|| anyhow!("Pod run {} does not exist", entry.run_id.0))?;
         let worker_spec = run
             .worker_specs
             .iter()
@@ -1318,7 +1329,7 @@ impl FleetManager {
                         run_id = %entry.run_id.0,
                         task_id = %entry.task_id,
                         error = %error,
-                        "Fleet worker coordination is not currently admissible"
+                        "Pod worker coordination is not currently admissible"
                     );
                     return Ok(false);
                 }
@@ -1391,7 +1402,7 @@ impl FleetManager {
             .runs
             .get(&run_id.0)
             .cloned()
-            .ok_or_else(|| anyhow!("fleet run {} does not exist", run_id.0))?;
+            .ok_or_else(|| anyhow!("Pod run {} does not exist", run_id.0))?;
         let roster = self.agent_roster();
         let mut started = 0usize;
         for task in active_tasks_for_run(&state, run_id) {
@@ -1449,7 +1460,7 @@ impl FleetManager {
                         record.spec
                     }
                     Some(None) => {
-                        bail!("Fleet worker {worker_id} has no coordination-registered launch spec")
+                        bail!("Pod worker {worker_id} has no coordination-registered launch spec")
                     }
                     None => expected_launch_spec,
                 };
@@ -1659,7 +1670,7 @@ impl FleetManager {
             FleetWorkerEventPayload::Completed { .. } => FleetTaskLedgerStatus::Completed,
             FleetWorkerEventPayload::Failed { .. } => FleetTaskLedgerStatus::Failed,
             FleetWorkerEventPayload::Cancelled { .. } => FleetTaskLedgerStatus::Cancelled,
-            _ => bail!("fleet executor outcome must contain a terminal worker event"),
+            _ => bail!("Pod executor outcome must contain a terminal worker event"),
         };
         for tail_payload in tail_payloads {
             if is_terminal_payload(&tail_payload) {
@@ -1745,6 +1756,62 @@ impl FleetManager {
                 &timestamp(),
                 payload,
                 final_status,
+                receipt,
+            )?
+            .is_some())
+    }
+
+    /// Mark a leased task timed out after its wall-clock limit (R5). The
+    /// caller stops and forgets the worker before this runs; the ledger's
+    /// implicit rule maps a Timeout receipt onto the Failed terminal status.
+    fn record_task_timeout(
+        &self,
+        task: &FleetExecutorTaskContext,
+        limit: std::time::Duration,
+    ) -> Result<bool> {
+        let state = self.ledger.rebuild_state()?;
+        let key = task_key(&task.entry.run_id.0, &task.entry.task_id);
+        let Some(current) = state.tasks.get(&key) else {
+            return Ok(false);
+        };
+        if current.status != FleetTaskLedgerStatus::Leased
+            || current.leased_to.as_deref() != Some(task.worker_id.as_str())
+            || current.entry.attempts != task.entry.attempts
+        {
+            return Ok(false);
+        }
+        let artifacts = self.task_artifacts_for_receipt(
+            &task.entry.run_id,
+            &task.entry.task_id,
+            &task.worker_id,
+        )?;
+        let receipt = FleetReceipt {
+            run_id: task.entry.run_id.clone(),
+            task_id: task.entry.task_id.clone(),
+            worker_id: task.worker_id.clone(),
+            attempt: Some(task.entry.attempts),
+            terminal_seq: None,
+            completed_at: timestamp(),
+            result: FleetTaskResult::Timeout,
+            failure_kind: None,
+            artifacts,
+            score: None,
+            resolved_route: self.resolve_task_route(&task.task_spec),
+            effective_permissions: self.resolve_task_effective_permissions(task),
+        };
+        let payload = FleetWorkerEventPayload::Cancelled {
+            cancelled_by: Some(format!("driver-timeout-{}-seconds", limit.as_secs())),
+        };
+        Ok(self
+            .ledger
+            .finalize_task_attempt_if_leased(
+                &task.entry.run_id,
+                &task.worker_id,
+                &task.entry.task_id,
+                task.entry.attempts,
+                &timestamp(),
+                payload,
+                Some(FleetTaskLedgerStatus::Failed),
                 receipt,
             )?
             .is_some())
@@ -1899,14 +1966,14 @@ impl FleetManager {
         let abs_path = self.workspace.join(&rel_path);
         if let Some(parent) = abs_path.parent() {
             std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating fleet artifact dir {}", parent.display()))?;
+                .with_context(|| format!("creating Pod artifact dir {}", parent.display()))?;
         }
         let contents = format!(
             "run_id={}\ntask_id={}\ntask_name={}\nworker_id={}\nstatus=started\n",
             run_id.0, task_spec.id, task_spec.name, worker_id
         );
         std::fs::write(&abs_path, contents)
-            .with_context(|| format!("writing fleet worker log {}", abs_path.display()))?;
+            .with_context(|| format!("writing Pod worker log {}", abs_path.display()))?;
         let size_bytes = std::fs::metadata(&abs_path).ok().map(|m| m.len());
         Ok(FleetArtifactRef {
             kind: FleetArtifactKind::Log,
@@ -1951,7 +2018,7 @@ impl FleetManager {
         };
         self.ledger
             .update_run_status(run_id, status, &timestamp())
-            .context("updating fleet run status")
+            .context("updating Pod run status")
     }
 
     fn status_from_state(
@@ -2038,7 +2105,7 @@ fn default_local_worker_with_name(worker_id: &str, index: usize) -> FleetWorkerS
         id: worker_id.to_string(),
         name: format!("Local worker {index}"),
         host: FleetHostSpec::Local,
-        // Legacy ledgers may carry `trust_level`; new Fleet workers leave
+        // Legacy ledgers may carry `trust_level`; new Pod workers leave
         // execution authority entirely to Runtime policy.
         trust_level: None,
         labels: BTreeMap::new(),
@@ -2312,7 +2379,7 @@ fn validate_registered_launch_spec(
 ) -> Result<()> {
     let Some(registered_manifest) = registered.launch_manifest.as_ref() else {
         bail!(
-            "Fleet worker {} has no persisted launch manifest",
+            "Pod worker {} has no persisted launch manifest",
             registered.worker_id
         );
     };
@@ -2320,7 +2387,7 @@ fn validate_registered_launch_spec(
         || !registered_prompt_matches_expected(&registered.objective, &expected.objective)
     {
         bail!(
-            "Fleet worker {} has an inconsistent persisted prompt",
+            "Pod worker {} has an inconsistent persisted prompt",
             registered.worker_id
         );
     }
@@ -2340,7 +2407,7 @@ fn validate_registered_launch_spec(
     }
     if registered_identity != expected_identity {
         bail!(
-            "Fleet worker {} persisted launch spec does not match the exact task lease and attempt",
+            "Pod worker {} persisted launch spec does not match the exact task lease and attempt",
             registered.worker_id
         );
     }
@@ -2384,11 +2451,32 @@ fn validate_task_cwd_for_host(
     .map_err(anyhow::Error::new)?;
     if task_cwd != workspace_root {
         bail!(
-            "SSH Fleet workers do not yet support nested workspace.root values; task cwd '{}' cannot be mapped safely beneath the remote working_directory",
+            "SSH Pod workers do not yet support nested workspace.root values; task cwd '{}' cannot be mapped safely beneath the remote working_directory",
             task_cwd.display()
         );
     }
     Ok(())
+}
+
+/// Effective wall-clock limit for a Fleet task (R5).
+///
+/// `FleetTaskSpec::timeout_seconds` and `FleetTaskBudget::max_seconds` were
+/// both dead config — nothing ever read them. The tighter of the two wins;
+/// zero/None mean unbounded.
+fn task_wall_clock_limit(task_spec: &FleetTaskSpec) -> Option<std::time::Duration> {
+    let mut seconds: Option<u64> = task_spec.timeout_seconds.filter(|s| *s > 0);
+    if let Some(budget_seconds) = task_spec
+        .budget
+        .as_ref()
+        .and_then(|budget| budget.max_seconds)
+        .filter(|s| *s > 0)
+    {
+        seconds = Some(match seconds {
+            Some(current) => current.min(budget_seconds),
+            None => budget_seconds,
+        });
+    }
+    seconds.map(std::time::Duration::from_secs)
 }
 
 fn task_receipt_outcome(
@@ -2458,7 +2546,29 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
 
+    fn test_manager(workspace: impl AsRef<Path>) -> Result<FleetManager> {
+        let mut providers = crate::config::ProvidersConfig::default();
+        providers.deepseek.api_key = Some("test-key".to_string());
+        providers.xai.api_key = Some("test-key".to_string());
+        providers.zai.api_key = Some("test-key".to_string());
+        let route_config = Config {
+            provider: Some("deepseek".to_string()),
+            api_key: Some("test-key".to_string()),
+            providers: Some(providers),
+            ..Config::default()
+        };
+        FleetManager::open(workspace).map(|manager| manager.with_route_config(route_config))
+    }
+
     fn select_test_fleet(workspace: &Path, members: &[(&str, &str)]) {
+        select_test_fleet_with_provider(workspace, members, None);
+    }
+
+    fn select_test_fleet_with_provider(
+        workspace: &Path,
+        members: &[(&str, &str)],
+        provider: Option<&str>,
+    ) {
         use crate::fleet::store::{FleetFile, FleetMember, FleetScope, save_fleet, set_selected};
 
         let mut fleet = FleetFile::new("Manager Test Fleet".to_string(), None).unwrap();
@@ -2468,8 +2578,8 @@ mod tests {
                 id: (*id).to_string(),
                 display_name: None,
                 role: (*role).to_string(),
-                model: None,
-                provider: None,
+                model: provider.map(|_| "private-model".to_string()),
+                provider: provider.map(str::to_string),
                 reasoning: None,
                 instructions: None,
                 requires: Vec::new(),
@@ -2547,7 +2657,7 @@ mod tests {
         std::fs::create_dir(tmp.path().join("nested")).unwrap();
         let coordination =
             crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_sub_agent_manager(coordination.clone());
         let mut nested = task("nested");
@@ -2592,6 +2702,7 @@ mod tests {
                     security_policy: None,
                     workers: vec![worker],
                     tasks: vec![nested],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -2617,7 +2728,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let coordination =
             crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_sub_agent_manager(coordination.clone());
         let mut spec = task("read-only");
@@ -2641,6 +2752,7 @@ mod tests {
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![spec],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -2660,7 +2772,7 @@ mod tests {
     #[test]
     fn invalid_worker_identity_is_rejected_before_run_journal_creation() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let error = manager
             .create_run(
                 FleetTaskSpecDocument {
@@ -2669,6 +2781,7 @@ mod tests {
                     security_policy: None,
                     workers: vec![resume_worker_spec("worker\r\nforged")],
                     tasks: vec![task("task-a")],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -2685,11 +2798,77 @@ mod tests {
     }
 
     #[test]
+    fn configless_manager_rejects_ambiguous_route_before_run_journal_creation() {
+        let tmp = TempDir::new().unwrap();
+        select_test_fleet(tmp.path(), &[("reviewer", "reviewer")]);
+        let manager = FleetManager::open(tmp.path()).expect("config-less manager");
+
+        let error = manager
+            .create_queued_run(
+                FleetTaskSpecDocument {
+                    name: Some("ambiguous route".to_string()),
+                    labels: BTreeMap::new(),
+                    security_policy: None,
+                    workers: Vec::new(),
+                    tasks: vec![task("task-a")],
+                    usage_ceiling: None,
+                },
+                1,
+            )
+            .expect_err("Fleet creation must not invent a default provider");
+        let message = error.to_string();
+        assert!(message.contains("no provider authority"), "{message}");
+        assert!(
+            message.contains("attach the resolved route config"),
+            "{message}"
+        );
+
+        let state = manager.rebuild_state().unwrap();
+        assert!(state.runs.is_empty());
+        assert!(state.tasks.is_empty());
+    }
+
+    #[test]
+    fn configless_manager_rejects_custom_provider_before_run_journal_creation() {
+        let tmp = TempDir::new().unwrap();
+        select_test_fleet_with_provider(
+            tmp.path(),
+            &[("private-reviewer", "reviewer")],
+            Some("private-gateway"),
+        );
+        let manager = FleetManager::open(tmp.path()).expect("config-less manager");
+
+        let error = manager
+            .create_queued_run(
+                FleetTaskSpecDocument {
+                    name: Some("unresolved custom route".to_string()),
+                    labels: BTreeMap::new(),
+                    security_policy: None,
+                    workers: Vec::new(),
+                    tasks: vec![task("task-a")],
+                    usage_ceiling: None,
+                },
+                1,
+            )
+            .expect_err("custom provider without live config must fail before journaling");
+        let message = error.to_string();
+        assert!(message.contains("provider=`private-gateway`"), "{message}");
+        assert!(
+            message.contains("attach the live route config"),
+            "{message}"
+        );
+
+        let state = manager.rebuild_state().unwrap();
+        assert!(state.runs.is_empty());
+        assert!(state.tasks.is_empty());
+    }
+
+    #[test]
     fn queued_creation_waits_for_explicit_idempotent_start() {
         let tmp = TempDir::new().unwrap();
         let coordination =
             crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_sub_agent_manager(coordination.clone());
         let report = manager
@@ -2700,6 +2879,7 @@ mod tests {
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![task("task-a")],
+                    usage_ceiling: None,
                 },
                 1,
                 ManagedFleetRunDescriptor {
@@ -2777,7 +2957,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let coordination =
             crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_sub_agent_manager(coordination.clone());
         let prepared = manager
@@ -2788,6 +2968,7 @@ mod tests {
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![task("task-a")],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -2812,7 +2993,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let coordination =
             crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_sub_agent_manager(coordination);
         let write_task = |id: &str| {
@@ -2842,6 +3023,7 @@ mod tests {
                         security_policy: None,
                         workers: Vec::new(),
                         tasks: vec![write_task(task_id)],
+                        usage_ceiling: None,
                     },
                     1,
                 )
@@ -2871,7 +3053,7 @@ mod tests {
             .try_read()
             .unwrap()
             .coordination_registration_snapshot();
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_sub_agent_manager(coordination.clone());
         let mut spec = task("task-a");
@@ -2893,6 +3075,7 @@ mod tests {
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![spec],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -2991,12 +3174,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
 
         // No session: legacy auto sentinel.
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         assert_eq!(manager.run_model(), "auto");
         assert_eq!(manager.session_model(), None);
 
         // The session route becomes the run model — the operator's model.
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_session_model("deepseek-v4-pro");
         assert_eq!(manager.run_model(), "deepseek-v4-pro");
@@ -3004,9 +3187,7 @@ mod tests {
 
         // "auto" and empty/whitespace inputs keep the resolver default.
         for noop in ["auto", "AUTO", "", "   "] {
-            let manager = FleetManager::open(tmp.path())
-                .unwrap()
-                .with_session_model(noop);
+            let manager = test_manager(tmp.path()).unwrap().with_session_model(noop);
             assert_eq!(manager.run_model(), "auto");
             assert_eq!(manager.session_model(), None);
         }
@@ -3073,6 +3254,43 @@ mod tests {
 
     const RESUME_T0: &str = "2026-06-13T01:00:00Z";
 
+    #[test]
+    fn task_wall_clock_limit_prefers_the_tighter_configured_limit() {
+        let mut spec = task("timeout-task");
+        spec.timeout_seconds = Some(120);
+        spec.budget = Some(FleetTaskBudget {
+            max_tokens: None,
+            max_steps: None,
+            max_tool_calls: None,
+            max_seconds: Some(60),
+        });
+        assert_eq!(
+            task_wall_clock_limit(&spec),
+            Some(std::time::Duration::from_secs(60)),
+            "the tightest limit must win"
+        );
+
+        spec.timeout_seconds = Some(30);
+        assert_eq!(
+            task_wall_clock_limit(&spec),
+            Some(std::time::Duration::from_secs(30)),
+        );
+    }
+
+    #[test]
+    fn task_wall_clock_limit_is_unbounded_when_not_configured() {
+        assert_eq!(task_wall_clock_limit(&task("no-limit")), None);
+        let mut spec = task("zero-limits");
+        spec.timeout_seconds = Some(0);
+        spec.budget = Some(FleetTaskBudget {
+            max_tokens: None,
+            max_steps: None,
+            max_tool_calls: None,
+            max_seconds: Some(0),
+        });
+        assert_eq!(task_wall_clock_limit(&spec), None);
+    }
+
     fn role_task_with_retry(id: &str, role: &str, max_attempts: u32) -> FleetTaskSpec {
         let mut spec = task(id);
         spec.worker = Some(FleetTaskWorkerProfile {
@@ -3134,6 +3352,7 @@ mod tests {
                 workflow: None,
                 roles: Vec::new(),
                 max_workers: Some(workers.len().max(1)),
+                usage_ceiling: None,
                 task_specs: tasks.to_vec(),
                 worker_specs: workers.to_vec(),
                 labels: BTreeMap::new(),
@@ -3224,7 +3443,7 @@ mod tests {
         );
 
         // Restart: a fresh manager over the same workspace resumes from ledger.
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_stale_after(Duration::from_secs(5));
         let outcome = manager.resume_run_at(&run_id, resume_now(30)).unwrap();
@@ -3285,7 +3504,7 @@ mod tests {
             RESUME_T0,
         );
 
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_stale_after(Duration::from_secs(5));
         let outcome = manager.resume_run_at(&run_id, resume_now(30)).unwrap();
@@ -3338,7 +3557,7 @@ mod tests {
             RESUME_T0,
         );
 
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_stale_after(Duration::from_secs(5));
         let first = manager.resume_run_at(&run_id, resume_now(30)).unwrap();
@@ -3379,7 +3598,7 @@ mod tests {
             &stale_ts,
         );
 
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_stale_after(Duration::from_secs(5));
         let outcome = manager.resume_run(&run_id).unwrap();
@@ -3391,7 +3610,7 @@ mod tests {
     #[test]
     fn fleet_manager_creates_run_and_starts_workers_up_to_cap() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let path = task_spec_file(&tmp, vec![task("task-a"), task("task-b"), task("task-c")]);
 
         let report = manager.create_run_from_task_spec_path(&path, 2).unwrap();
@@ -3410,7 +3629,7 @@ mod tests {
     fn fleet_manager_rejects_unknown_agent_profile_before_run_creation() {
         let tmp = TempDir::new().unwrap();
         select_test_fleet(tmp.path(), &[("reviewer", "reviewer")]);
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let mut task = task("task-a");
         task.worker = Some(FleetTaskWorkerProfile {
             role: None,
@@ -3428,6 +3647,7 @@ mod tests {
             security_policy: None,
             workers: Vec::new(),
             tasks: vec![task],
+            usage_ceiling: None,
         };
 
         let err = manager
@@ -3444,7 +3664,7 @@ mod tests {
     #[test]
     fn fleet_manager_inspect_exposes_heartbeat_artifacts_and_errors() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let path = task_spec_file(&tmp, vec![task("task-a")]);
         let report = manager.create_run_from_task_spec_path(&path, 1).unwrap();
         let worker_id = &report.worker_ids[0];
@@ -3471,7 +3691,7 @@ mod tests {
         for alias in ["oracle", "advisor"] {
             let tmp = TempDir::new().unwrap();
             select_test_fleet(tmp.path(), &[(alias, alias)]);
-            let manager = FleetManager::open(tmp.path()).unwrap();
+            let manager = test_manager(tmp.path()).unwrap();
             let path = task_spec_file(&tmp, vec![role_task_with_retry("advice", alias, 1)]);
             let report = manager.create_run_from_task_spec_path(&path, 1).unwrap();
 
@@ -3507,8 +3727,8 @@ mod tests {
             return;
         }
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
-        let controller = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
+        let controller = test_manager(tmp.path()).unwrap();
         let path = task_spec_file(&tmp, vec![task("task-a"), task("task-b")]);
         let pid_path = tmp.path().join("live-worker.pid");
         let first_worker_marker = tmp.path().join("first-worker-started");
@@ -3601,8 +3821,8 @@ sleep 30
             return;
         }
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
-        let controller = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
+        let controller = test_manager(tmp.path()).unwrap();
         let path = task_spec_file(&tmp, vec![task("task-a")]);
         let first_worker_marker = tmp.path().join("first-attempt-started");
         let stopped_marker = tmp.path().join("first-attempt-stopped");
@@ -3685,7 +3905,7 @@ while :; do sleep 1; done
     #[test]
     fn fleet_manager_restart_and_stop_all_are_ledgered() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let path = task_spec_file(&tmp, vec![task("task-a"), task("task-b")]);
         let report = manager.create_run_from_task_spec_path(&path, 1).unwrap();
         let worker_id = &report.worker_ids[0];
@@ -3712,7 +3932,7 @@ while :; do sleep 1; done
         let tmp = TempDir::new().unwrap();
         let coordination =
             crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_sub_agent_manager(coordination.clone());
         let path = task_spec_file(&tmp, vec![task("task-a")]);
@@ -3780,7 +4000,7 @@ exit 0
         let tmp = TempDir::new().unwrap();
         let coordination =
             crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_sub_agent_manager(coordination.clone());
         let path = task_spec_file(&tmp, vec![task("task-a")]);
@@ -3821,7 +4041,7 @@ exit 0
 
         let reloaded_coordination =
             crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
-        let reloaded = FleetManager::open(tmp.path())
+        let reloaded = test_manager(tmp.path())
             .unwrap()
             .with_sub_agent_manager(reloaded_coordination.clone());
         reloaded
@@ -3855,7 +4075,7 @@ exit 0
         let tmp = TempDir::new().unwrap();
         let coordination =
             crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_sub_agent_manager(coordination.clone());
         let path = task_spec_file(&tmp, vec![task("task-a")]);
@@ -3879,7 +4099,7 @@ exit 0
 
         let reloaded_coordination =
             crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
-        let reloaded = FleetManager::open(tmp.path())
+        let reloaded = test_manager(tmp.path())
             .unwrap()
             .with_sub_agent_manager(reloaded_coordination);
         let error = reloaded
@@ -3906,7 +4126,7 @@ exit 0
         let tmp = TempDir::new().unwrap();
         let coordination =
             crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_stale_after(Duration::from_secs(5))
             .with_sub_agent_manager(coordination.clone());
@@ -3931,7 +4151,7 @@ exit 0
 
         let reloaded_coordination =
             crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
-        let reloaded = FleetManager::open(tmp.path())
+        let reloaded = test_manager(tmp.path())
             .unwrap()
             .with_stale_after(Duration::from_secs(5))
             .with_sub_agent_manager(reloaded_coordination.clone());
@@ -3974,8 +4194,8 @@ exit 0
     #[test]
     fn concurrent_manager_loops_launch_each_attempt_once() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
-        let standby = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
+        let standby = test_manager(tmp.path()).unwrap();
         let path = task_spec_file(&tmp, vec![task("task-a")]);
         let starts = tmp.path().join("worker-starts");
         let fake = fake_codewhale(
@@ -4036,7 +4256,7 @@ exit 0
     #[test]
     fn fleet_manager_can_record_completed_local_smoke_tasks() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let path = task_spec_file(&tmp, vec![task("task-a"), task("task-b"), task("task-c")]);
         let fake = fake_codewhale(
             &tmp,
@@ -4061,7 +4281,7 @@ exit 0
     #[test]
     fn fleet_task_spec_sample_launches_independent_worker_tasks() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let path = task_spec_file(
             &tmp,
             vec![
@@ -4099,7 +4319,7 @@ exit 0
     #[test]
     fn fleet_task_spec_local_scorer_records_receipt_artifact() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let mut completed = task("task-a");
         completed.scorer = Some(FleetScorerSpec::ExitCode);
         let path = task_spec_file(&tmp, vec![completed]);
@@ -4138,7 +4358,7 @@ exit 0
     #[test]
     fn fleet_task_spec_unscored_zero_exit_records_partial_receipt() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let path = task_spec_file(&tmp, vec![task("task-a")]);
         let fake = fake_codewhale(
             &tmp,
@@ -4183,7 +4403,7 @@ exit 0
     #[test]
     fn fleet_task_spec_unscored_worker_error_records_failed_receipt() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let path = task_spec_file(&tmp, vec![task("task-a")]);
         let fake = fake_codewhale(
             &tmp,
@@ -4210,7 +4430,7 @@ exit 7
     #[test]
     fn fleet_task_spec_status_distinguishes_failure_sources() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let mut task_failed = task("a-task-failure");
         task_failed.scorer = Some(FleetScorerSpec::ExitCode);
         task_failed.instructions = "task-failure".to_string();
@@ -4257,6 +4477,7 @@ esac
                 default_local_worker("local-verifier"),
             ],
             tasks: vec![task_failed, transport, verifier_failed],
+            usage_ceiling: None,
         };
 
         let report = manager.create_run(doc, 3).unwrap();
@@ -4291,7 +4512,7 @@ esac
             }),
             ..Default::default()
         };
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_session_model("manager-model-y")
             .with_route_config(manager_config);
@@ -4310,6 +4531,7 @@ printf '%s\n' '{"type":"done"}'
                     security_policy: None,
                     workers: vec![],
                     tasks: vec![task("route-drift")],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -4353,7 +4575,7 @@ printf '%s\n' '{"type":"done"}'
     fn headless_terminal_with_invalid_route_metadata_does_not_fall_back_to_manager_config() {
         let tmp = TempDir::new().unwrap();
         select_test_fleet(tmp.path(), &[("reviewer", "reviewer")]);
-        let manager = FleetManager::open(tmp.path())
+        let manager = test_manager(tmp.path())
             .unwrap()
             .with_session_model("manager-model-y")
             .with_route_config(Config {
@@ -4388,6 +4610,7 @@ printf '%s\n' '{"type":"done"}'
                     security_policy: None,
                     workers: vec![],
                     tasks: vec![task("invalid-route")],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -4408,7 +4631,7 @@ printf '%s\n' '{"type":"done"}'
     #[test]
     fn fleet_smoke_runs_three_roles_ten_tasks_with_receipts_and_failure() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let fake = fake_codewhale(
             &tmp,
             r#"#!/bin/sh
@@ -4514,6 +4737,7 @@ esac
                     security_policy: None,
                     workers: vec![],
                     tasks,
+                    usage_ceiling: None,
                 },
                 3,
             )
@@ -4724,7 +4948,7 @@ esac
     #[test]
     fn fleet_status_counts_restarted_and_escalated_events() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let path = task_spec_file(&tmp, vec![task("task-a")]);
         let report = manager.create_run_from_task_spec_path(&path, 1).unwrap();
         let worker_id = &report.worker_ids[0];
@@ -4755,7 +4979,7 @@ esac
     #[test]
     fn fleet_status_inspect_exposes_task_context_host_and_alert() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let mut contextual = task("task-a");
         contextual.objective = Some("Review the release ledger".to_string());
         contextual.worker = Some(FleetTaskWorkerProfile {
@@ -4900,7 +5124,7 @@ esac
             },
         ];
 
-        let manager = FleetManager::open(&workspace).unwrap();
+        let manager = test_manager(&workspace).unwrap();
         let report = manager
             .create_run(
                 FleetTaskSpecDocument {
@@ -4909,6 +5133,7 @@ esac
                     security_policy: None,
                     workers: vec![],
                     tasks,
+                    usage_ceiling: None,
                 },
                 2,
             )
@@ -4926,7 +5151,7 @@ esac
     #[test]
     fn fleet_security_policy_is_rejected_for_new_runs() {
         let tmp = TempDir::new().unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         // Rewrite the spec file with a security_policy block.
         let doc = serde_json::json!({
             "name": "secure smoke",
@@ -4970,7 +5195,7 @@ esac
             "schema = \"fleet\"\nschema_revision = 2\nname = \"Broken\"\n[[members]]\nid = \"scout\"\nprovider = \"deepseek\"\n",
         )
         .unwrap();
-        let manager = FleetManager::open(tmp.path()).unwrap();
+        let manager = test_manager(tmp.path()).unwrap();
         let error = manager
             .create_queued_run(
                 FleetTaskSpecDocument {
@@ -4979,6 +5204,7 @@ esac
                     security_policy: None,
                     workers: Vec::new(),
                     tasks: vec![task("task-a")],
+                    usage_ceiling: None,
                 },
                 1,
             )
@@ -4987,7 +5213,7 @@ esac
         assert!(
             error
                 .to_string()
-                .contains("Selected folder Fleet `Broken` is invalid or unreadable"),
+                .contains("Selected folder Pod `Broken` is invalid or unreadable"),
             "{error:#}"
         );
         assert!(manager.rebuild_state().unwrap().runs.is_empty());

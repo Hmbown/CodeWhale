@@ -628,6 +628,53 @@ pub enum RequestPayloadMode {
 /// in the API payload (after normalization / provider-specific mapping).
 #[must_use]
 pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> ProviderCapability {
+    provider_capability_with_wire(provider, resolved_model, None)
+}
+
+/// Wire-aware variant of [`provider_capability`] that respects
+/// `wire = "responses" | "anthropic" | "chat"` for `Custom` providers.
+///
+/// Built-ins keep their fixed policy; `Custom` defaults to `Chat` when `wire`
+/// is absent so existing configs stay compatible. Mirrors
+/// `crates/tui/src/client.rs::provider_wire_format_for_config` and the
+/// `Custom` comment in `crates/config/src/provider.rs`.
+#[must_use]
+pub fn provider_capability_with_wire(
+    provider: ApiProvider,
+    resolved_model: &str,
+    wire: Option<&str>,
+) -> ProviderCapability {
+    // Custom wire overrides must be checked before the generic fallback so
+    // `[providers.<name>] wire = "responses"` / `"anthropic"` is honored.
+    if provider == ApiProvider::Custom {
+        if wire_config_prefers_anthropic(wire) {
+            return ProviderCapability {
+                provider,
+                resolved_model: resolved_model.to_string(),
+                context_window: crate::models::context_window_for_model(resolved_model)
+                    .unwrap_or(crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS),
+                max_output: crate::models::max_output_tokens_for_model(resolved_model),
+                thinking_supported: crate::models::model_supports_reasoning(resolved_model),
+                cache_telemetry_supported: false,
+                request_payload_mode: RequestPayloadMode::AnthropicMessages,
+                alias_deprecation: None,
+            };
+        }
+        if wire_config_prefers_responses(wire) {
+            return ProviderCapability {
+                provider,
+                resolved_model: resolved_model.to_string(),
+                context_window: crate::models::context_window_for_model(resolved_model)
+                    .unwrap_or(crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS),
+                max_output: crate::models::max_output_tokens_for_model(resolved_model),
+                thinking_supported: crate::models::model_supports_reasoning(resolved_model),
+                cache_telemetry_supported: false,
+                request_payload_mode: RequestPayloadMode::Responses,
+                alias_deprecation: None,
+            };
+        }
+    }
+
     if matches!(
         provider,
         ApiProvider::Anthropic | ApiProvider::MinimaxAnthropic | ApiProvider::Openmodel
@@ -1022,6 +1069,11 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
         OPENROUTER_GLM_5_2_MODEL | "glm-5.2" | "glm-5-2" | "zai-glm-5.2" | "zai-glm-5-2" => {
             Some(OPENROUTER_GLM_5_2_MODEL)
         }
+        OPENROUTER_GLM_5_3_FLASH_MODEL
+        | "glm-5.3-flash"
+        | "glm-5-3-flash"
+        | "zai-glm-5.3-flash"
+        | "zai-glm-5-3-flash" => Some(OPENROUTER_GLM_5_3_FLASH_MODEL),
         OPENROUTER_GLM_5_3_MODEL | "glm-5.3" | "glm-5-3" | "zai-glm-5.3" | "zai-glm-5-3" => {
             Some(OPENROUTER_GLM_5_3_MODEL)
         }
@@ -1083,9 +1135,16 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
         OPENROUTER_QWEN_3_7_MAX_MODEL | "qwen3.7-max" | "qwen-3.7-max" => {
             Some(OPENROUTER_QWEN_3_7_MAX_MODEL)
         }
-        OPENROUTER_TENCENT_HY3_PREVIEW_MODEL | "hy3-preview" | "tencent-hy3-preview" => {
-            Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL)
+        OPENROUTER_QWEN_3_8_FLASH_MODEL | "qwen3.8-flash" | "qwen-3.8-flash" => {
+            Some(OPENROUTER_QWEN_3_8_FLASH_MODEL)
         }
+        OPENROUTER_TENCENT_HY3_PREVIEW_MODEL
+        | "hy3-preview"
+        | "tencent-hy3-preview"
+        | "hy3"
+        | "hunyuan"
+        | "tencent-hunyuan"
+        | "hunyuan-hy3" => Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL),
         OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL
         | "mimo-v2.5-pro"
         | "mimo-v2-5-pro"
@@ -1197,6 +1256,9 @@ fn canonical_zai_model_id(model: &str) -> Option<&'static str> {
         // `DEFAULT_ZAI_MODEL`: moving the default (now GLM-5.3) must not
         // silently re-point an explicit GLM-5.2 request.
         "glm-5.2" | "glm-5-2" | "zai-glm-5.2" | "zai-glm-5-2" => Some(ZAI_GLM_5_2_MODEL),
+        "glm-5.3-flash" | "glm-5-3-flash" | "zai-glm-5.3-flash" | "zai-glm-5-3-flash" => {
+            Some(ZAI_GLM_5_3_FLASH_MODEL)
+        }
         "glm-5.3" | "glm-5-3" | "zai-glm-5.3" | "zai-glm-5-3" => Some(ZAI_GLM_5_3_MODEL),
         "glm-5-turbo" | "glm-5turbo" | "zai-glm-5-turbo" => Some(ZAI_GLM_5_TURBO_MODEL),
         _ => None,
@@ -1506,13 +1568,15 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Vllm => vec![DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
         ApiProvider::Volcengine => vec![DEFAULT_VOLCENGINE_MODEL, DEFAULT_VOLCENGINE_FLASH_MODEL],
         ApiProvider::Ollama | ApiProvider::OllamaCloud => Vec::new(),
-        ApiProvider::Openai | ApiProvider::Atlascloud => OFFICIAL_DEEPSEEK_MODELS.to_vec(),
+        ApiProvider::Openai => OFFICIAL_OPENAI_MODELS.to_vec(),
+        ApiProvider::Atlascloud => vec![DEFAULT_ATLASCLOUD_MODEL],
         ApiProvider::Together => vec![DEFAULT_TOGETHER_MODEL, DEFAULT_TOGETHER_FLASH_MODEL],
         ApiProvider::Qianfan => vec![DEFAULT_QIANFAN_MODEL],
         ApiProvider::OpenaiCodex => vec![DEFAULT_OPENAI_CODEX_MODEL],
         ApiProvider::Openmodel => vec![DEFAULT_OPENMODEL_MODEL],
         ApiProvider::Zai => vec![
             DEFAULT_ZAI_MODEL,
+            ZAI_GLM_5_3_FLASH_MODEL,
             ZAI_GLM_5_2_MODEL,
             ZAI_GLM_5_1_MODEL,
             ZAI_GLM_5_TURBO_MODEL,
@@ -1680,6 +1744,24 @@ pub struct TuiConfig {
     /// Per-SSE-chunk idle timeout in seconds. Defaults to 900 seconds when
     /// omitted. `0` maps to the default; values clamp to `1..=3600`.
     pub stream_chunk_timeout_secs: Option<u64>,
+    /// R1: ceiling on model steps in a single turn. Omitted or `0` resolve
+    /// to the finite default (200); explicit values clamp to
+    /// `1..=100_000`. There is deliberately no "unlimited" value — `0` is
+    /// an invalid setting, not a sentinel that disables the cap.
+    pub max_model_steps: Option<u32>,
+    /// R1: cumulative wall-clock budget for a single turn, in seconds.
+    /// Omitted or `0` resolve to the finite default (3600); explicit values
+    /// clamp to `30..=86_400`. Time blocked on a human approval decision is
+    /// excluded from the measurement.
+    pub turn_wall_clock_secs: Option<u64>,
+    /// R1: per-step cap on accumulated streamed content, in megabytes.
+    /// Omitted or `0` resolve to the default (10 MB); explicit values clamp
+    /// to `64 KiB..=512 MiB`.
+    pub stream_max_content_mb: Option<u64>,
+    /// R1: per-step cap on a single stream's wall-clock duration, in
+    /// seconds. Omitted or `0` resolve to the default (1800); explicit
+    /// values clamp to `10..=86_400`.
+    pub stream_max_duration_secs: Option<u64>,
     /// Ordered list of footer items the user wants visible. `None` (the field
     /// missing from `config.toml`) means "use the built-in default order"; an
     /// empty `Some(vec![])` means "show nothing in the footer".
@@ -1714,15 +1796,20 @@ pub struct TuiConfig {
     /// (e.g. for a terminal that misrenders the sequence). OSC 8 escapes are
     /// emitted out-of-band, so buffer-column corruption is not a concern.
     pub osc8_links: Option<bool>,
-    /// High-level notification trigger condition. When set, overrides the
-    /// `[notifications].threshold_secs` gate from the lower-level
-    /// `[notifications]` block:
+    /// High-level notification trigger condition. When set, controls whether
+    /// operator notifications may interrupt the current terminal and, for
+    /// `Always`, overrides the `[notifications].threshold_secs` gate from the
+    /// lower-level `[notifications]` block:
     ///
-    /// - `Always` — fire a turn-completion notification on every successful
-    ///   turn regardless of duration. The configured `[notifications].method`
-    ///   and `include_summary` flag are still respected.
-    /// - `Never` — suppress all turn-completion notifications.
-    /// - Unset (default) — fall back to the `[notifications]` defaults.
+    /// - `Always` — allow configured operator notifications even while the
+    ///   terminal is focused. Successful turn completion also ignores the
+    ///   duration threshold. Method, category, and quiet gates still apply.
+    /// - `Unfocused` — notify only after the terminal has remained unfocused
+    ///   for the built-in attention grace period. The normal duration
+    ///   threshold still applies.
+    /// - `Never` — suppress all operator notifications.
+    /// - Unset (default) — behave like `Unfocused` and fall back to the
+    ///   `[notifications]` duration threshold.
     pub notification_condition: Option<NotificationCondition>,
     /// When `true`, plain Up/Down on an empty composer scroll the
     /// transcript instead of recalling input history. Useful for
@@ -1737,9 +1824,12 @@ pub struct TuiConfig {
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationCondition {
-    /// Notify on every successful turn (no duration threshold).
+    /// Allow configured operator notifications in the foreground; completed
+    /// turns have no duration threshold.
     Always,
-    /// Suppress notifications entirely.
+    /// Notify only while the terminal is genuinely in the background.
+    Unfocused,
+    /// Suppress all operator notifications.
     Never,
 }
 
@@ -1804,9 +1894,9 @@ fn default_threshold_secs() -> u64 {
 #[serde(rename_all = "kebab-case")]
 pub enum CompletionSound {
     /// No sound on turn completion.
-    Off,
-    /// System notification beep (default). On Windows uses `MessageBeep`.
     #[default]
+    Off,
+    /// System notification beep. On Windows uses `MessageBeep`.
     Beep,
     /// Terminal BEL character (`\x07`).
     Bell,
@@ -1884,13 +1974,15 @@ impl SubagentCompletionNotification {
     }
 }
 
-/// Desktop-notification configuration (OSC 9 / BEL on turn completion).
+/// Operator notification configuration (native and terminal transports).
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct NotificationsConfig {
-    /// Delivery method: `auto` | `osc9` | `bel` | `off`. Default: `auto`.
+    /// Delivery method: `auto` | `osc9` | `kitty` | `ghostty` | `bel` |
+    /// `off`. Default: `auto`.
     /// `auto` resolves to OSC 9 for iTerm.app / Ghostty / WezTerm / Cmux
-    /// (detected via `$TERM_PROGRAM` then `$LC_TERMINAL`); otherwise it
-    /// falls back to BEL. On Windows the BEL path is routed through
+    /// (detected via `$TERM_PROGRAM` then `$LC_TERMINAL`) and the native macOS
+    /// transport where appropriate; unknown terminals fail closed to `off`.
+    /// Audible BEL is explicit only. On Windows explicit BEL is routed through
     /// `MessageBeep(MB_OK)`.
     /// Use `method = "osc9"` explicitly when your terminal is OSC-9 capable
     /// but sets neither env var (e.g. Cmux without `LC_TERMINAL`).
@@ -1911,8 +2003,9 @@ pub struct NotificationsConfig {
     #[serde(default)]
     pub subagent_completion: SubagentCompletionNotification,
 
-    /// Completion sound: `"off"` | `"beep"` | `"bell"` | `"file"`. Default: `"beep"`.
-    /// Plays a sound when every turn finishes (alongside the ✅ marker).
+    /// Completion sound: `"off"` | `"beep"` | `"bell"` | `"file"`. Default: `"off"`.
+    /// This is opt-in and follows the same foreground/quiet attention policy
+    /// as desktop notifications.
     #[serde(default)]
     pub completion_sound: CompletionSound,
 
@@ -1927,9 +2020,8 @@ pub struct NotificationsConfig {
 
     /// Quiet mode: suppress every desktop notification (all categories, all
     /// delivery methods) and the paired `[notifications.event_sound]` cues,
-    /// without editing `method` or the per-category switches under
-    /// `[notifications.events]`. The turn-completion chime
-    /// (`completion_sound`) is governed separately. Default: `false`.
+    /// without editing `method`, `completion_sound`, or the per-category
+    /// switches under `[notifications.events]`. Default: `false`.
     #[serde(default)]
     pub quiet: bool,
 
@@ -2848,6 +2940,22 @@ pub struct Config {
     /// selection.
     #[serde(skip)]
     pub(crate) migrated_legacy_ollama_cloud_route: bool,
+    /// Runtime-only isolation boundary for account-owned managed Chat.
+    ///
+    /// This is never user-configurable or serialized. The Runtime Chat relay
+    /// sets it on its private config clone so the Engine suppresses all host
+    /// workspace metadata and constructs no model-visible MCP, sub-agent, or
+    /// native tool surface for those turns.
+    #[serde(skip)]
+    pub(crate) runtime_chat_isolated: bool,
+    /// Runtime-only marker for an independent RuntimeThreadManager store.
+    ///
+    /// Those threads are not projected into the interactive TUI's attached
+    /// CWC run, so their provider requests do not participate in that run's
+    /// exclusive Chat ownership gate. RuntimeThreadManager sets this marker on
+    /// its private config clone; it is never user-configurable or serialized.
+    #[serde(skip)]
+    pub(crate) runtime_thread_inference_unrelated: bool,
     /// Native tool catalog controls. This table controls built-in
     /// tool loading policy.
     #[serde(default)]
@@ -2934,6 +3042,29 @@ pub struct Config {
     /// provides fresh device nodes, so most users never need this.
     #[serde(default, alias = "bwrapDevRoots")]
     pub bwrap_dev_roots: Vec<std::path::PathBuf>,
+    /// Opt-in sandbox read deny-list (S1, #5568). Listed subpaths are
+    /// unreadable inside sandboxed shell commands even though the sandbox
+    /// otherwise grants full-disk read: Seatbelt appends last-match-wins
+    /// deny rules; bubblewrap masks each existing path with an empty tmpfs
+    /// (directories) or a /dev/null bind (files). A leading `~` expands to
+    /// the user's home. Empty (the default) preserves current behavior.
+    /// Example: `sandbox_denied_read_paths = ["~/.ssh", "~/.aws"]`.
+    #[serde(default, alias = "sandboxDeniedReadPaths")]
+    pub sandbox_denied_read_paths: Vec<std::path::PathBuf>,
+    /// Apply the built-in credential-store read deny-list (S1). Defaults to
+    /// `true`: `~/.ssh`, cloud credential dirs, keychains, browser profiles,
+    /// `.env` files, and Codewhale's own secret stores are unreadable by the
+    /// file-reading tools and by sandboxed shell commands. Set to `false` to
+    /// restore the pre-S1 full-disk-read behavior. See
+    /// `sandbox::read_guard` for the exact list and its honest limits — it is
+    /// defense-in-depth, not a security boundary.
+    #[serde(default, alias = "sandboxReadDenylistDefaults")]
+    pub sandbox_read_denylist_defaults: Option<bool>,
+    /// Subtract paths from the *built-in* deny-list defaults when a project
+    /// genuinely needs one of them. Has no effect on
+    /// `sandbox_denied_read_paths`: an explicit deny always wins.
+    #[serde(default, alias = "sandboxReadDenylistExempt")]
+    pub sandbox_read_denylist_exempt: Vec<std::path::PathBuf>,
     #[serde(alias = "managedConfigPath")]
     pub managed_config_path: Option<String>,
     #[serde(alias = "requirementsPath")]
@@ -2960,6 +3091,12 @@ pub struct Config {
     /// Lifecycle hooks configuration
     #[serde(default)]
     pub hooks: Option<HooksConfig>,
+
+    /// Lifecycle event outbox (`[lifecycle_outbox]`). Opt-in: an unset or
+    /// empty `path` disables the feature and leaves behavior unchanged.
+    /// Fires for interactive TUI sessions and headless `codewhale exec` runs.
+    #[serde(default)]
+    pub lifecycle_outbox: Option<codewhale_config::LifecycleOutboxToml>,
 
     /// Provider-specific credentials and defaults shared with the `codewhale` facade.
     #[serde(default)]
@@ -4059,6 +4196,29 @@ pub(crate) fn approval_policy_baseline_from_permission_posture(
 // === Config Loading ===
 
 impl Config {
+    /// The read deny-list in force for this config (S1).
+    ///
+    /// Unions the built-in credential-store defaults (unless
+    /// `sandbox_read_denylist_defaults = false`) with
+    /// `sandbox_denied_read_paths`, minus `sandbox_read_denylist_exempt`.
+    /// Feeds both the in-process file-reading tools and the OS sandbox
+    /// wrappers, so a shell `cat` and a `read_file` call refuse the same paths.
+    #[must_use]
+    pub fn read_denylist(&self) -> crate::sandbox::read_guard::ReadDenylist {
+        crate::sandbox::read_guard::ReadDenylist::build(
+            self.sandbox_read_denylist_defaults.unwrap_or(true),
+            &self.sandbox_denied_read_paths,
+            &self.sandbox_read_denylist_exempt,
+        )
+    }
+
+    /// Every path the OS sandbox wrappers should deny reads under — the
+    /// deny-list's subtree rules, home-expanded and normalized.
+    #[must_use]
+    pub fn effective_sandbox_denied_read_paths(&self) -> Vec<std::path::PathBuf> {
+        self.read_denylist().subtree_paths()
+    }
+
     #[must_use]
     pub fn stop_words(&self) -> Vec<String> {
         self.stop_words.clone().unwrap_or_else(default_stop_words)
@@ -5353,6 +5513,20 @@ impl Config {
             || (identity_is_literal_custom(identity) && self.uses_legacy_literal_custom_route())
     }
 
+    /// Trimmed, non-empty `wire` dialect preference for `provider`'s config
+    /// table (`[providers.<name>] wire = "responses" | "anthropic" | "chat"`).
+    ///
+    /// Single source for the client wire resolver and the capability reporter
+    /// so the two cannot drift. `None` means "no preference" — the provider's
+    /// static policy applies.
+    pub(crate) fn provider_wire_dialect(&self, provider: ApiProvider) -> Option<&str> {
+        self.provider_config_for(provider)?
+            .wire
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
     pub(crate) fn provider_config_for(&self, provider: ApiProvider) -> Option<&ProviderConfig> {
         let providers = self.providers.as_ref()?;
         // The custom provider's config lives in the flatten map, keyed by the
@@ -6450,13 +6624,13 @@ impl Config {
         // named/custom-table routes so a stale root key is not sent elsewhere.
         //
         // However, when the CLI dispatcher forwards an explicit `--api-key`
-        // through `DEEPSEEK_API_KEY` with the dispatcher source marker, that
+        // through the provider-neutral CLI bridge with its source marker, that
         // intentional override must win over the saved root key. This is
         // essential for DeepSeek-compatible subscription endpoints where the
         // user runs something like:
         //   codewhale --provider deepseek --api-key ark-... --base-url ... --model auto
         if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
-            && std::env::var("DEEPSEEK_API_KEY_SOURCE").as_deref() == Ok("cli")
+            && cli_api_key_source().as_deref() == Some("cli")
             && let Some(env_key) = explicit_cli_key
                 .as_ref()
                 .cloned()
@@ -7297,6 +7471,65 @@ impl Config {
             return DEFAULT_STREAM_CHUNK_TIMEOUT_SECS;
         }
         raw.clamp(MIN_STREAM_CHUNK_TIMEOUT_SECS, MAX_STREAM_CHUNK_TIMEOUT_SECS)
+    }
+
+    /// R1: resolved ceiling on model steps in a single turn.
+    ///
+    /// Reads `[tui].max_model_steps`, falling back to the
+    /// `CODEWHALE_MAX_MODEL_STEPS` env var, then to the finite default.
+    /// `0` — from either source — is treated as an invalid value and
+    /// resolves to the default; it never means "unlimited".
+    #[must_use]
+    pub fn max_model_steps(&self) -> u32 {
+        let raw = self
+            .tui
+            .as_ref()
+            .and_then(|cfg| cfg.max_model_steps)
+            .or_else(|| {
+                std::env::var(MAX_MODEL_STEPS_ENV)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u32>().ok())
+            });
+        crate::core::engine::turn_budget::resolve_max_model_steps(raw)
+    }
+
+    /// R1: resolved cumulative per-turn wall-clock budget.
+    ///
+    /// Reads `[tui].turn_wall_clock_secs`, falling back to the
+    /// `CODEWHALE_TURN_WALL_CLOCK_SECS` env var, then to the finite
+    /// default. `0` resolves to the default; it never means "unlimited".
+    #[must_use]
+    pub fn turn_wall_clock(&self) -> std::time::Duration {
+        let raw = self
+            .tui
+            .as_ref()
+            .and_then(|cfg| cfg.turn_wall_clock_secs)
+            .or_else(|| {
+                std::env::var(TURN_WALL_CLOCK_ENV)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+            });
+        crate::core::engine::turn_budget::resolve_turn_wall_clock(raw)
+    }
+
+    /// R1: resolved per-step cap on accumulated streamed content, in bytes.
+    #[must_use]
+    pub fn stream_max_content_bytes(&self) -> usize {
+        crate::core::engine::turn_budget::resolve_stream_max_content_bytes(
+            self.tui.as_ref().and_then(|cfg| cfg.stream_max_content_mb),
+        )
+    }
+
+    /// R1: resolved per-step cap on a single stream's wall-clock duration.
+    #[must_use]
+    pub fn stream_max_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(
+            crate::core::engine::turn_budget::resolve_stream_max_duration_secs(
+                self.tui
+                    .as_ref()
+                    .and_then(|cfg| cfg.stream_max_duration_secs),
+            ),
+        )
     }
 
     /// Raw sub-agent model override map. Values are validated at spawn time
@@ -9325,6 +9558,24 @@ fn wire_config_prefers_anthropic(wire: Option<&str>) -> bool {
     )
 }
 
+fn wire_config_prefers_responses(wire: Option<&str>) -> bool {
+    let Some(raw) = wire.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let normalized = raw.to_ascii_lowercase().replace(['_', ' '], "-");
+    matches!(
+        normalized.as_str(),
+        "responses"
+            | "responses-api"
+            | "openai-responses"
+            | "openai-responses-api"
+            | "response"
+            | "response-api"
+            | "openai-responses-compat"
+            | "responses-compat"
+    )
+}
+
 fn modelstudio_mode_is_coding_plan(provider: ApiProvider, mode: Option<&str>) -> bool {
     if matches!(
         provider,
@@ -9520,12 +9771,24 @@ pub(crate) fn is_exact_xai_grok_4_6_route(
         && model.trim().eq_ignore_ascii_case(XAI_GROK_4_6_MODEL)
 }
 
-/// Whether a route is exactly the Kimi Code K3 membership-plan route.
-///
-/// Keep the bare `k3` identifier route-owned. In particular, do not infer a
-/// Kimi Code plan entitlement for direct Moonshot `kimi-k3`, generic `k3`, or
-/// `kimi-for-coding` routes.
+/// Whether a route uses either official Kimi Code K3 membership model.
 pub(crate) fn is_exact_kimi_code_k3_route(
+    provider: ApiProvider,
+    base_url: &str,
+    model: &str,
+) -> bool {
+    provider == ApiProvider::Moonshot
+        && moonshot_base_url_is_exact_kimi_code(base_url)
+        && [KIMI_CODE_K3_MODEL, KIMI_CODE_K3_256K_MODEL]
+            .iter()
+            .any(|id| model.trim().eq_ignore_ascii_case(id))
+}
+
+/// Whether a route uses plan-tier-dependent bare `k3`.
+///
+/// Keep entitlement handling separate from `k3-256k`, whose window is fixed.
+#[must_use]
+pub(crate) fn is_exact_kimi_code_bare_k3_route(
     provider: ApiProvider,
     base_url: &str,
     model: &str,
@@ -9549,10 +9812,10 @@ pub(crate) fn is_exact_zai_chat_route(provider: ApiProvider, base_url: &str) -> 
 /// reasoning effort (`reasoning_effort: high | max`) rather than only the
 /// generic thinking toggle.
 ///
-/// GLM-5.2 is the verified member. GLM-5.3 inherits it because its catalog row
-/// inherits GLM-5.2's `reasoning_options` wholesale — see the
-/// `INHERITED FROM glm-5.2` marker in `config/models.rs`. If Z.ai publishes
-/// different reasoning controls for 5.3, this predicate is where they split.
+/// GLM-5.2 is the verified member. GLM-5.3 and GLM-5.3-Flash inherit it
+/// because their catalog rows inherit GLM-5.2's `reasoning_options`
+/// wholesale. If Z.ai publishes different reasoning controls, this
+/// predicate is where they split.
 #[must_use]
 pub(crate) fn is_exact_zai_tiered_effort_route(
     provider: ApiProvider,
@@ -9561,7 +9824,8 @@ pub(crate) fn is_exact_zai_tiered_effort_route(
 ) -> bool {
     is_exact_zai_chat_route(provider, base_url)
         && (model.trim().eq_ignore_ascii_case(ZAI_GLM_5_2_MODEL)
-            || model.trim().eq_ignore_ascii_case(ZAI_GLM_5_3_MODEL))
+            || model.trim().eq_ignore_ascii_case(ZAI_GLM_5_3_MODEL)
+            || model.trim().eq_ignore_ascii_case(ZAI_GLM_5_3_FLASH_MODEL))
 }
 
 /// Whether a route is exactly first-party Z.ai GLM-5-Turbo.
@@ -9576,8 +9840,8 @@ pub(crate) fn is_exact_zai_glm_5_turbo_route(
 }
 
 /// Whether a route is an exact first-party Z.ai model with a verified
-/// reasoning control. GLM-5.2 and GLM-5.3 have tiered effort; GLM-5.1 and
-/// GLM-5-Turbo only expose the generic thinking toggle.
+/// reasoning control. GLM-5.2, GLM-5.3, and GLM-5.3-Flash have tiered
+/// effort; GLM-5.1 and GLM-5-Turbo only expose the generic thinking toggle.
 #[must_use]
 pub(crate) fn is_exact_known_zai_reasoning_route(
     provider: ApiProvider,
@@ -9657,8 +9921,9 @@ pub(crate) fn minimax_m3_route_uses_max_completion_tokens(
 /// model picker labels them as plan routes. Those sites previously kept
 /// independent literal lists and had already drifted (`kimi-for-coding` was
 /// missing from the picker label), so the roster lives here and nowhere else.
-pub(crate) const KIMI_CODE_MEMBERSHIP_MODELS: [&str; 3] = [
+pub(crate) const KIMI_CODE_MEMBERSHIP_MODELS: [&str; 4] = [
     KIMI_CODE_K3_MODEL,
+    KIMI_CODE_K3_256K_MODEL,
     DEFAULT_KIMI_CODE_MODEL,
     KIMI_CODE_HIGHSPEED_MODEL,
 ];
@@ -9716,7 +9981,7 @@ pub(crate) fn validate_kimi_code_api_model_id(
         for direct_id in MOONSHOT_DIRECT_PLATFORM_MODELS {
             if model.eq_ignore_ascii_case(direct_id) {
                 return Err(format!(
-                    "Kimi Code membership route (api.kimi.com/coding/v1) does not accept model = \"{model}\": it is a direct Moonshot platform id. Use a Kimi Code membership model (\"k3\", \"kimi-for-coding\", or \"kimi-for-coding-highspeed\") for this base_url. Direct Moonshot pay-as-you-go uses base_url = \"https://api.moonshot.ai/v1\" with model = \"{direct_id}\"."
+                    "Kimi Code membership route (api.kimi.com/coding/v1) does not accept model = \"{model}\": it is a direct Moonshot platform id. Use a Kimi Code membership model (\"k3\", \"k3-256k\", \"kimi-for-coding\", or \"kimi-for-coding-highspeed\") for this base_url. Direct Moonshot pay-as-you-go uses base_url = \"https://api.moonshot.ai/v1\" with model = \"{direct_id}\"."
                 ));
             }
         }
@@ -9744,6 +10009,7 @@ mod kimi_code_pairing_tests {
     fn membership_roster_passes_on_kimi_code_endpoint() {
         for model in [
             KIMI_CODE_K3_MODEL,
+            KIMI_CODE_K3_256K_MODEL,
             DEFAULT_KIMI_CODE_MODEL,
             KIMI_CODE_HIGHSPEED_MODEL,
         ] {
@@ -9781,6 +10047,7 @@ mod kimi_code_pairing_tests {
     fn membership_ids_fail_on_direct_moonshot_endpoint() {
         for model in [
             KIMI_CODE_K3_MODEL,
+            KIMI_CODE_K3_256K_MODEL,
             DEFAULT_KIMI_CODE_MODEL,
             KIMI_CODE_HIGHSPEED_MODEL,
         ] {
@@ -9800,6 +10067,7 @@ mod kimi_code_pairing_tests {
         // Canonical pairs pass on both endpoints.
         for (base_url, model) in [
             (DEFAULT_KIMI_CODE_BASE_URL, KIMI_CODE_K3_MODEL),
+            (DEFAULT_KIMI_CODE_BASE_URL, KIMI_CODE_K3_256K_MODEL),
             (DEFAULT_KIMI_CODE_BASE_URL, DEFAULT_KIMI_CODE_MODEL),
             (DEFAULT_KIMI_CODE_BASE_URL, KIMI_CODE_HIGHSPEED_MODEL),
             (DEFAULT_MOONSHOT_BASE_URL, MOONSHOT_KIMI_K3_MODEL),
@@ -9832,6 +10100,7 @@ mod kimi_code_pairing_tests {
         // included: only the two canonical endpoints enforce pairings.
         for model in [
             KIMI_CODE_K3_MODEL,
+            KIMI_CODE_K3_256K_MODEL,
             DEFAULT_KIMI_CODE_MODEL,
             KIMI_CODE_HIGHSPEED_MODEL,
             MOONSHOT_KIMI_K3_MODEL,
@@ -9851,8 +10120,11 @@ mod kimi_code_pairing_tests {
 
 /// Short route label for header/diagnostics without credentials (#4687).
 pub(crate) fn moonshot_k3_route_display_name(base_url: &str, model: &str) -> Option<&'static str> {
-    if is_exact_kimi_code_k3_route(ApiProvider::Moonshot, base_url, model) {
+    if is_exact_kimi_code_bare_k3_route(ApiProvider::Moonshot, base_url, model) {
         return Some("Kimi Code membership / k3");
+    }
+    if is_exact_kimi_code_k3_route(ApiProvider::Moonshot, base_url, model) {
+        return Some("Kimi Code membership / k3-256k");
     }
     if is_exact_direct_moonshot_k3_route(ApiProvider::Moonshot, base_url, model) {
         return Some("Moonshot direct / kimi-k3");
@@ -10114,6 +10386,19 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         } else {
             override_cfg.bwrap_dev_roots
         },
+        sandbox_denied_read_paths: if override_cfg.sandbox_denied_read_paths.is_empty() {
+            base.sandbox_denied_read_paths
+        } else {
+            override_cfg.sandbox_denied_read_paths
+        },
+        sandbox_read_denylist_defaults: override_cfg
+            .sandbox_read_denylist_defaults
+            .or(base.sandbox_read_denylist_defaults),
+        sandbox_read_denylist_exempt: if override_cfg.sandbox_read_denylist_exempt.is_empty() {
+            base.sandbox_read_denylist_exempt
+        } else {
+            override_cfg.sandbox_read_denylist_exempt
+        },
         managed_config_path: override_cfg
             .managed_config_path
             .or(base.managed_config_path),
@@ -10124,6 +10409,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         tui: override_cfg.tui.or(base.tui),
         transcript: override_cfg.transcript.or(base.transcript),
         hooks: override_cfg.hooks.or(base.hooks),
+        lifecycle_outbox: override_cfg.lifecycle_outbox.or(base.lifecycle_outbox),
         providers: merge_providers(base.providers, override_cfg.providers),
         features: merge_features(base.features, override_cfg.features),
         notifications: override_cfg.notifications.or(base.notifications),
@@ -10186,6 +10472,9 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
                 recorded => recorded,
             }
         },
+        runtime_chat_isolated: override_cfg.runtime_chat_isolated || base.runtime_chat_isolated,
+        runtime_thread_inference_unrelated: override_cfg.runtime_thread_inference_unrelated
+            || base.runtime_thread_inference_unrelated,
         mini_window: override_cfg.mini_window.or(base.mini_window),
         title: override_cfg.title.or(base.title),
     }
@@ -10979,13 +11268,20 @@ pub fn active_provider_has_config_api_key(config: &Config) -> bool {
     if provider == ApiProvider::OpenaiCodex && !custom_endpoint {
         // The persistent Codex login is the OAuth credential file, analogous to
         // a stored config key. Token env overrides are scored separately by
-        // active_provider_has_env_api_key.
-        let path = crate::oauth::auth_file_path();
+        // active_provider_has_env_api_key. #5772: a consent record alone is not
+        // a credential — the exact consented path (never an ambient candidate)
+        // is read through the secure adapter and must still hold a live token.
+        let Some(consent) = config
+            .provider_config_for(provider)
+            .and_then(|entry| entry.external_credentials.as_ref())
+        else {
+            return false;
+        };
         return config
             .external_credential_read_grant(
                 provider,
                 codewhale_config::ExternalCredentialSource::CodexCli,
-                &path,
+                &consent.path,
             )
             .is_ok_and(|grant| crate::oauth::stored_credentials_present(&grant));
     }
@@ -11585,9 +11881,58 @@ pub(crate) fn save_provider_context_window_for_identity(
     Ok(config_path)
 }
 
+/// Grant-time validation (#5772): read the exact file the user just confirmed,
+/// through the same secure adapter the request path uses, and require it to
+/// hold a usable credential.
+///
+/// This runs *after* the confirmation disclosure and *before* any consent
+/// record is written, which is the whole ordering the consent model depends
+/// on. Persisting first would leave a record claiming a credential exists for
+/// a file that is missing, malformed, or expired — and every status surface
+/// downstream would then have to trust it. Nothing here refreshes, rewrites,
+/// or makes a network request, and no credential value escapes this function.
+fn validate_external_credential_before_consent(
+    consent_provider: codewhale_config::ProviderKind,
+    source: codewhale_config::ExternalCredentialSource,
+    path: &Path,
+) -> Result<()> {
+    let grant = codewhale_config::ExternalCredentialConsentToml::read_only(
+        consent_provider,
+        source,
+        path.to_path_buf(),
+    )
+    .read_grant(consent_provider, source, path)?;
+    match source {
+        codewhale_config::ExternalCredentialSource::CodexCli => {
+            crate::oauth::get_credentials(&grant).map(|_| ())
+        }
+        codewhale_config::ExternalCredentialSource::GrokCli => {
+            crate::xai_oauth::validate_external_credentials(&grant)
+        }
+        codewhale_config::ExternalCredentialSource::DshCli => {
+            crate::dsh_credentials::deepseek_api_key_from_grant(&grant)?
+                .map(|_| ())
+                .context("the DeepSeek Harness credentials file holds no DEEPSEEK_API_KEY")
+        }
+        codewhale_config::ExternalCredentialSource::AgyCli => {
+            crate::agy_credentials::antigravity_oauth_token_from_grant(&grant)?
+                .map(|_| ())
+                .context("the Antigravity credential store holds no OAuth token")
+        }
+        codewhale_config::ExternalCredentialSource::KimiCodeCli => anyhow::bail!(
+            "Kimi CLI credentials are never imported; configure a Kimi API key instead"
+        ),
+    }
+}
+
 /// Persist an explicitly confirmed read-only external credential grant and
 /// update the live mirror only after the comment-preserving disk mutation
-/// succeeds. This function never inspects the external path.
+/// succeeds.
+///
+/// Order is load-bearing (#5772): the caller has already shown the
+/// confirmation disclosure, this function then reads and validates the exact
+/// consented file, and only a usable credential is allowed to produce a
+/// persisted consent record.
 pub(crate) fn persist_external_credential_consent_for_at(
     config_path: Option<&Path>,
     live_config: &mut Config,
@@ -11618,6 +11963,14 @@ pub(crate) fn persist_external_credential_consent_for_at(
     let path = codewhale_config::resolve_external_credential_path(path)?;
     let path_value = path.to_str().context(
         "external credential path cannot be persisted losslessly because it is not valid UTF-8",
+    )?;
+    validate_external_credential_before_consent(consent_provider, source, &path).with_context(
+        || {
+            format!(
+                "no usable {} credential was found, so read-only consent was not saved",
+                source.owner_label()
+            )
+        },
     )?;
     let config_path = match config_path {
         Some(path) => path.to_path_buf(),
@@ -11950,13 +12303,21 @@ pub(crate) fn explicit_launch_provider_override() -> Option<String> {
 }
 
 pub(crate) fn explicit_cli_api_key_override() -> Option<String> {
-    (std::env::var("DEEPSEEK_API_KEY_SOURCE").as_deref() == Ok("cli"))
+    (cli_api_key_source().as_deref() == Some("cli"))
         .then(|| {
-            std::env::var("CODEWHALE_CLI_API_KEY")
+            std::env::var(codewhale_config::CLI_API_KEY_ENV)
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
         .flatten()
+}
+
+pub(crate) fn cli_api_key_source() -> Option<String> {
+    codewhale_env_var(
+        codewhale_config::CLI_API_KEY_SOURCE_ENV,
+        codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV,
+    )
+    .ok()
 }
 
 fn missing_provider_api_key_message(provider: ApiProvider) -> Result<String> {

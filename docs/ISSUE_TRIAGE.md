@@ -65,7 +65,7 @@ Before relying on automation, perform one manual pass:
   current-version reproduction details.
 - Close obvious GUI, VS Code, and web UI duplicates with links to canonical
   desktop/runtime issues.
-- Close old brand-discussion issues as superseded when the CodeWhale rebrand
+- Close old brand-discussion issues as superseded when the Codewhale rebrand
   and README/history work already covers them.
 - Protect intentional v0.9.0 roadmap shards with `keep-open` or close them as
   superseded by a canonical epic.

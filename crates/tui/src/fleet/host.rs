@@ -181,6 +181,8 @@ struct LocalWorkerProcess {
     child: Child,
     #[cfg(unix)]
     session_id: libc::pid_t,
+    #[cfg(unix)]
+    parent_death_writer: Option<std::io::PipeWriter>,
     #[cfg(windows)]
     windows_job: FleetWindowsJob,
     host_kind: FleetHostKind,
@@ -223,9 +225,24 @@ impl LocalProcessFleetHostAdapter {
             .map_err(|err| FleetHostError::retryable(format!("cloning worker log: {err}")))?;
 
         let mut command = Command::new(&request.command.program);
+        // Parent-death watch (R7): the worker's stdin is the read end of a pipe
+        // whose write end lives only in this adapter process. If the manager
+        // dies (crash, kill, power loss), the kernel closes the write end, the
+        // worker sees stdin EOF, and `--parent-death-watch` shuts the worker
+        // tree down instead of letting it spend forever. Windows workers are
+        // contained in a Job Object that the OS terminates on parent death.
+        #[cfg(unix)]
+        let (parent_death_writer, stdin) = {
+            let (reader, writer) = std::io::pipe().map_err(|err| {
+                FleetHostError::retryable(format!("creating parent-death pipe: {err}"))
+            })?;
+            (Some(writer), std::process::Stdio::from(reader))
+        };
+        #[cfg(not(unix))]
+        let stdin = Stdio::null();
         command
             .args(&request.command.args)
-            .stdin(Stdio::null())
+            .stdin(stdin)
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(stderr))
             .env_clear()
@@ -273,8 +290,12 @@ impl LocalProcessFleetHostAdapter {
             LocalWorkerProcess {
                 request,
                 child,
+                // SAFETY: `setsid` is async-signal-safe and the closure does not
+                // touch allocator or parent-held state between fork and exec.
                 #[cfg(unix)]
                 session_id: pid as libc::pid_t,
+                #[cfg(unix)]
+                parent_death_writer,
                 #[cfg(windows)]
                 windows_job,
                 host_kind,
@@ -501,15 +522,13 @@ impl SshFleetHostConfig {
             codewhale_binary,
         } = spec
         else {
-            return Err(FleetHostError::configuration(
-                "expected SSH fleet host spec",
-            ));
+            return Err(FleetHostError::configuration("expected SSH Pod host spec"));
         };
         let working_directory = working_directory.clone().ok_or_else(|| {
-            FleetHostError::configuration("SSH fleet host spec requires working_directory")
+            FleetHostError::configuration("SSH Pod host spec requires working_directory")
         })?;
         let codewhale_binary = codewhale_binary.clone().ok_or_else(|| {
-            FleetHostError::configuration("SSH fleet host spec requires codewhale_binary")
+            FleetHostError::configuration("SSH Pod host spec requires codewhale_binary")
         })?;
         let mut config = Self::new(host.clone(), working_directory);
         config.port = *port;
@@ -526,17 +545,17 @@ impl SshFleetHostConfig {
     fn validate(&self) -> FleetHostResult<()> {
         if self.host.trim().is_empty() {
             return Err(FleetHostError::configuration(
-                "SSH fleet host requires an explicit host",
+                "SSH Pod host requires an explicit host",
             ));
         }
         if self.codewhale_binary.trim().is_empty() {
             return Err(FleetHostError::configuration(
-                "SSH fleet host requires an explicit codewhale binary path",
+                "SSH Pod host requires an explicit codewhale binary path",
             ));
         }
         if self.working_directory.as_os_str().is_empty() {
             return Err(FleetHostError::configuration(
-                "SSH fleet host requires an explicit working directory",
+                "SSH Pod host requires an explicit working directory",
             ));
         }
         validate_env_allowlist(&self.env_allowlist)
@@ -905,7 +924,7 @@ fn shutdown_unix_worker_session(
             return Ok(());
         }
         return Err(FleetHostError::retryable(format!(
-            "Fleet session {} still has a live tracked leader after SIGKILL and process-table inspection is unavailable{}",
+            "Pod session {} still has a live tracked leader after SIGKILL and process-table inspection is unavailable{}",
             process.session_id,
             if signal_errors.is_empty() {
                 String::new()
@@ -917,7 +936,7 @@ fn shutdown_unix_worker_session(
 
     let alive = unix_session_members(process.session_id, Some(known_leader))?;
     Err(FleetHostError::retryable(format!(
-        "Fleet session {} still has live processes after SIGKILL: {alive:?}{}",
+        "Pod session {} still has live processes after SIGKILL: {alive:?}{}",
         process.session_id,
         if signal_errors.is_empty() {
             String::new()
@@ -937,7 +956,7 @@ fn wait_for_unix_session_exit(
     loop {
         if process.last_exit.is_none() {
             process.last_exit = process.child.try_wait().map_err(|err| {
-                FleetHostError::retryable(format!("checking Fleet dispatcher exit: {err}"))
+                FleetHostError::retryable(format!("checking Pod dispatcher exit: {err}"))
             })?;
         }
         if process.last_exit.is_some() {
@@ -1064,10 +1083,10 @@ fn unix_process_ids_uncached() -> FleetHostResult<Vec<libc::pid_t>> {
     let entries = std::fs::read_dir("/proc").map_err(|err| {
         if is_permission_denied(&err) {
             FleetHostError::retryable(format!(
-                "listing Fleet session through /proc: process-table inspection unavailable: {err}"
+                "listing Pod session through /proc: process-table inspection unavailable: {err}"
             ))
         } else {
-            FleetHostError::retryable(format!("listing Fleet session through /proc: {err}"))
+            FleetHostError::retryable(format!("listing Pod session through /proc: {err}"))
         }
     })?;
     Ok(entries
@@ -1082,7 +1101,7 @@ fn unix_process_ids() -> FleetHostResult<Vec<libc::pid_t>> {
         && !*available
     {
         return Err(FleetHostError::retryable(
-            "listing Fleet session with ps: process-table inspection unavailable",
+            "listing Pod session with ps: process-table inspection unavailable",
         ));
     }
     match unix_process_ids_uncached() {
@@ -1107,10 +1126,10 @@ fn unix_process_ids_uncached() -> FleetHostResult<Vec<libc::pid_t>> {
         .map_err(|err| {
             if is_permission_denied(&err) {
                 FleetHostError::retryable(format!(
-                    "listing Fleet session with ps: process-table inspection unavailable: {err}"
+                    "listing Pod session with ps: process-table inspection unavailable: {err}"
                 ))
             } else {
-                FleetHostError::retryable(format!("listing Fleet session with ps: {err}"))
+                FleetHostError::retryable(format!("listing Pod session with ps: {err}"))
             }
         })?;
     if !output.status.success() {
@@ -1121,11 +1140,11 @@ fn unix_process_ids_uncached() -> FleetHostResult<Vec<libc::pid_t>> {
                 && stderr.to_ascii_lowercase().contains("not permitted");
         if denied {
             return Err(FleetHostError::retryable(format!(
-                "listing Fleet session with ps: process-table inspection unavailable: {stderr}"
+                "listing Pod session with ps: process-table inspection unavailable: {stderr}"
             )));
         }
         return Err(FleetHostError::retryable(format!(
-            "listing Fleet session with ps exited {:?}",
+            "listing Pod session with ps exited {:?}",
             output.status.code()
         )));
     }
@@ -1145,7 +1164,7 @@ fn signal_unix_session(
     let own_session = unsafe { libc::getsid(0) };
     if session_id <= 0 || session_id == own_session {
         return Err(FleetHostError::terminal(format!(
-            "refusing to signal unsafe Fleet session {session_id}"
+            "refusing to signal unsafe Pod session {session_id}"
         )));
     }
 
@@ -1325,7 +1344,7 @@ fn validate_env_allowlist(allowlist: &BTreeSet<String>) -> FleetHostResult<()> {
     for key in allowlist {
         if !is_safe_env_key(key) {
             return Err(FleetHostError::configuration(format!(
-                "fleet host env allowlist key {key} looks secret-bearing; pass secrets through config providers, not worker argv/env"
+                "Pod host env allowlist key {key} looks secret-bearing; pass secrets through config providers, not worker argv/env"
             )));
         }
     }

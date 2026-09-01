@@ -9,7 +9,7 @@ import type { ChromeDict } from "../types";
  * आपकी मशीन पर।
  *
  * मोड और अनुमति-मुद्रा (posture) literal रहते हैं (Plan / Work / Operate,
- * Ask / Auto-Review / Full Access); `Runtime`, `Fleet`, `TUI` उत्पाद-नाम
+ * Ask / Auto-Review / Full Access); `Runtime`, `Pod`, `TUI` उत्पाद-नाम
  * हैं और ऐसे ही रहते हैं।
  *
  * सेकेंडरी नेविगेशन लेबल हिन्दी मुख्य लेबल के साथ छोटा अंग्रेज़ी साथी
@@ -85,6 +85,9 @@ export const chrome: ChromeDict = {
   footerIssues: "Issues",
   footerContribute: "योगदान दें",
   footerLicense: "MIT लाइसेंस",
+  footerPricing: "मूल्य",
+  footerTerms: "सेवा की शर्तें",
+  footerPrivacy: "गोपनीयता",
   footerCanonicalSource: "कैननिकल सोर्स: ",
   footerReleases: " · रिलीज़: ",
   footerReleasesLink: "GitHub रिलीज़",

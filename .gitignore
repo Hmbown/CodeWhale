@@ -1,5 +1,12 @@
 # Build artifacts
 /target
+/target-*
+.entire/
+.cursor/
+.plans/
+.codewhale-worktrees/
+docs/superpowers/
+codewhale-inference/
 /extensions/vscode/out/
 *.pdb
 *.exe
@@ -53,6 +60,7 @@ docs/*.pdf
 *.cmd
 !scripts/**
 !.github/scripts/**
+!.buildkite/**
 !web/public/install.sh
 !packaging/winget/**
 test.txt

@@ -1,4 +1,5 @@
 # Hooks
+> 阅读简体中文版：[zh_hans/HOOKS.md](zh_hans/HOOKS.md)
 
 Hooks run a shell command when the Codewhale **TUI** reaches a lifecycle
 point. They are plain processes: they receive context through environment
@@ -166,7 +167,7 @@ configured instead (the backend owns its base environment, and your
 | `{ type = "all", conditions = [...] }` | every nested condition | every event |
 | `{ type = "any", conditions = [...] }` | at least one nested condition | every event |
 
-Two rules keep conditions from lying:
+Three rules keep conditions from lying:
 
 - **`exit_code` needs a real exit code.** It matches only when the event
   actually observed a process exit code — `tool_call_after`, or `on_error` for
@@ -405,8 +406,8 @@ aborted".
 Codewhale's ambient environment. Its environment is built as:
 
 1. a sanitized fixed allowlist of parent variables — `PATH`, `HOME`, `USER`,
-   `LANG` and the other `LC_*`/locale entries, `TERM`, `SHELL`, `TMPDIR`, the
-   Windows system and MSVC toolchain entries — and nothing else. Variables
+   `LANG` and the other `LC_*`/locale entries, `TERM`, `SHELL`, `TMPDIR`,
+   proxy variables, color/terminal entries such as `NO_COLOR`, `CARGO_HOME`/`RUSTUP_HOME`/`RUSTUP_TOOLCHAIN`, the Windows system and MSVC toolchain entries, and other platform keys (the full list lives in `crates/tui/src/child_env.rs`) — and nothing else. Variables
    outside that allowlist, including anything that looks like a secret, are
    dropped;
 2. then the `KEY=VALUE` pairs your `shell_env` hooks produced, applied on top.

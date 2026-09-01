@@ -28,6 +28,41 @@ notes, and relevant issue/PR comments.
 ## Contributors by time
 
 <details open>
+<summary><strong>v0.9.12 — native search, live token truth, and runtime surfaces</strong></summary>
+
+**Merged or adapted contributions**
+
+- **[hexin / h3c-hexin](https://github.com/h3c-hexin)** — provider-native web
+  search across four routes: the DeepSeek adapter (#5683), Z.AI and BigModel
+  (#5685), and Xiaomi MiMo (#5687), each fail-closed for undocumented models,
+  plus the constraint enforcement that runs before any fallback (#5682); also
+  authoritative edit-last-turn boundaries (#5621), Kimi Code k3-256k support
+  (#5622), post-compaction input-token reporting (#5623), and preserving the
+  scheduled model selection in automations (#5650)
+- **[Isabel Wu / wuisabel-gif](https://github.com/wuisabel-gif)** — live
+  session token totals (#5624), persisted context-pressure warnings (#5629),
+  discoverable Fleet roster editing (#5604), the capability-gated cursor
+  accent (#5599), and `/copy` for the latest completed response (#5692)
+- **[Paulo Aboim Pinto / aboimpinto](https://github.com/aboimpinto)** —
+  preserved Windows verbatim-path operands through POSIX word splitting
+  (#5610) and moved the plugins group onto the command shapes (#5657)
+- **[Alex Musichen / musichen](https://github.com/musichen)** — fixed the
+  configured-view DeepSeek model picker so it shows a stable DeepSeek heading
+  and keeps every official catalog model for the active provider visible
+  (#5689)
+- **[gaord](https://github.com/gaord)** — added the `GET /v1/fleet/profiles`
+  runtime API endpoint, reusing the FleetManager validation path (#5688)
+- **[Sh1Zuku / SparkofSpike](https://github.com/SparkofSpike)** — corrected
+  English documentation inaccuracies and contributed the first zh_hans
+  translations for the Tier-2 docs (#5613)
+- **[M-Maciej](https://github.com/M-Maciej)** — goal continuation cadence fix
+  (#5591)
+- **[Serephus / serephus](https://github.com/serephus)** — nixpkgs update
+  (#5669)
+
+</details>
+
+<details>
 <summary><strong>v0.9.11 — portable command surfaces and turn-loop structure</strong></summary>
 
 **Merged or adapted contributions**
@@ -533,7 +568,7 @@ release evidence. The reports and pull requests below materially shaped it.
   matches on UTF-8 character boundaries; preserve inline skill task text in
   PR #4372 (#4088, #4045, #3915)
 - **[gaord](https://github.com/gaord)** — add the community-maintained
-  CodeWhale for VS Code GUI frontend to the English and Chinese READMEs (#4035)
+  Codewhale for VS Code GUI frontend to the English and Chinese READMEs (#4035)
 - **[Darrell Thomas](https://github.com/DarrellThomas)** — remove the unused
   whale route taxonomy module and its dead tests (#4041)
 - **[Taixin Guo](https://github.com/taixinguo)** — CJK fuzzy-edit panic report
@@ -561,7 +596,7 @@ in several community provider and bridge contributions with release credit.
   ask-rules` view for resolved ask-rule paths, status, and configured
   tool/command/path rules (#3569, merged)
 - **[noaft](https://github.com/noaft)** — `/links` provider docs fallback
-  update, including the current CodeWhale docs URL and a Baidu Qianfan docs
+  update, including the current Codewhale docs URL and a Baidu Qianfan docs
   link (#3621, harvested)
 - **[noaft](https://github.com/noaft)** — OpenModel provider support across
   config, CLI, TUI provider picker, docs, and registry checks (#3585,
@@ -623,7 +658,7 @@ proxying, and DeepSeek thinking tool calls — alongside community contributions
 
 The v0.8.62 release retuned provider/model routing (GLM-5.2 as the default direct
 Z.AI model, `type: "explore"` sub-agents defaulting to the cheaper same-family
-sibling), added TOML comment preservation and the CodeWhale-only skill discovery
+sibling), added TOML comment preservation and the Codewhale-only skill discovery
 gate, and shipped the static Linux x64 musl binary — alongside a broad community
 closeout and a retroactive credit reconciliation pass.
 
@@ -636,7 +671,7 @@ closeout and a retroactive credit reconciliation pass.
 - **[LeoLin990405](https://github.com/LeoLin990405)** — Poppler `pdftotext -v`
   detection (#1667), session persistence before stall/cancel recovery (#2739),
   and debounced thinking-stream re-renders (#1620)
-- **[nightt5879](https://github.com/nightt5879)** — CodeWhale-only skill discovery
+- **[nightt5879](https://github.com/nightt5879)** — Codewhale-only skill discovery
   gate (`[skills].scan_codewhale_only`) ignoring cross-tool directories (#3296) and
   app-server no-auth loopback docs
 - **[reidliu41](https://github.com/reidliu41)** — slash commands exposed as hotbar
@@ -701,7 +736,7 @@ patches, and TUI fixes landed alongside first-time and returning contributor wor
 <summary><strong>Forward track — recent v0.9 work (newest)</strong></summary>
 
 
-- **[xyuai](https://github.com/xyuai)** — canonical CodeWhale settings path,
+- **[xyuai](https://github.com/xyuai)** — canonical Codewhale settings path,
   provider persistence, provider picker, logout-scope, and MiMo auth cleanup
   work (#2730, #2714, #2715, #2717, #2718)
 - **[shenjackyuanjie](https://github.com/shenjackyuanjie)** — HarmonyOS /
@@ -818,7 +853,7 @@ patches, and TUI fixes landed alongside first-time and returning contributor wor
 - **[mdrkrg](https://github.com/mdrkrg)** — first-run onboarding crash fix when the API key is missing (#1598)
 - **[Aitensa](https://github.com/Aitensa)** — CJK wrapping propagation for diff and pager output (#1622)
 - **[qiyan233](https://github.com/qiyan233)** — legacy DeepSeek CN provider alias compatibility (#1645)
-- **[zlh124](https://github.com/zlh124)** — WSL2/headless startup report, clipboard-init fix, CodeWhale tab-title polish, localized context-menu labels, and approval-dialog fixes (#1772, #1773, #2319, #2320, #2325)
+- **[zlh124](https://github.com/zlh124)** — WSL2/headless startup report, clipboard-init fix, Codewhale tab-title polish, localized context-menu labels, and approval-dialog fixes (#1772, #1773, #2319, #2320, #2325)
 - **[aboimpinto](https://github.com/aboimpinto)** — Windows alt-screen
   logging, Home/End composer, runtime log follow-ups, sidebar command polish,
   and pausable command lifecycle work (#1774, #1776, #1748, #1749, #1782,
@@ -835,7 +870,7 @@ patches, and TUI fixes landed alongside first-time and returning contributor wor
 - **[mrluanma](https://github.com/mrluanma)** — Metaso search provider (#2059)
 - **[Lellansin](https://github.com/Lellansin)** — skip config merge at home dir (#2055)
 - **[zhuangbiaowei](https://github.com/zhuangbiaowei)** — update release channels and legacy MCP SSE fixes (#2145, #2301)
-- **[cy2311](https://github.com/cy2311)** — Windows `.bat` launcher for CodeWhale (#1861)
+- **[cy2311](https://github.com/cy2311)** — Windows `.bat` launcher for Codewhale (#1861)
 - **[LING71671](https://github.com/LING71671)** — effective cost currency context, custom provider docs, and core tool taxonomy prompt block (#1902, #2287, #2292)
 - **[dzyuan](https://github.com/dzyuan)** — Volcengine provider support with DeepSeek V4 Pro/Flash models (#1993)
 - **[mvanhorn](https://github.com/mvanhorn)** — live request-shape test factories and global `~/.agents/AGENTS.md` fallback (#2107, #2236)

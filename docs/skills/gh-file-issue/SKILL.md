@@ -1,11 +1,11 @@
 ---
 name: gh-file-issue
-description: "Use when filing a new CodeWhale GitHub issue: turn a bug or idea into a well-formed, actionable issue with repro, acceptance criteria, labels, and milestone."
+description: "Use when filing a new Codewhale GitHub issue: turn a bug or idea into a well-formed, actionable issue with repro, acceptance criteria, labels, and milestone."
 ---
 
 # gh-file-issue
 
-File ONE high-quality, actionable issue for CodeWhale. An issue is maintainer
+File ONE high-quality, actionable issue for Codewhale. An issue is maintainer
 evidence, not a sticky note: it must name a real gap, show falsifiable proof,
 and tell the next agent exactly when it is done. Vague issues become queue
 noise; concrete ones become fixes with credit.
@@ -13,7 +13,7 @@ noise; concrete ones become fixes with credit.
 ## When to use
 
 - You hit a bug, regression, or rough edge while building, reviewing, or
-  running CodeWhale and want it tracked instead of lost.
+  running Codewhale and want it tracked instead of lost.
 - You have a feature or product-surface idea worth a milestone slot.
 - A community report, comment, or PR surfaced a gap that deserves its own
   trackable issue (link, do not duplicate).

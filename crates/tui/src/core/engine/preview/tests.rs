@@ -333,6 +333,214 @@ fn turn_metadata_uses_planned_cross_route_limits_not_installed_limits() {
     assert!(!metadata.contains("4096 tokens"), "{metadata}");
 }
 
+/// #perf-r5: the pressure-line helper must estimate the history IN PLACE and
+/// add the composer text arithmetically. Guards two things at once:
+///
+/// 1. Equivalence — the arithmetic form must equal the naive
+///    "clone + push + estimate" reference for non-trivial inputs (Unicode
+///    multi-byte content included, since Text blocks count *chars* for the
+///    conservative estimator but the delta path counts... the same rule as
+///    `estimate_tokens_for_message`: bytes/4).
+/// 2. The contract that empty/no-op composer text costs nothing extra.
+#[test]
+fn context_pressure_delta_matches_clone_and_push_reference() {
+    let config = deepseek_config();
+    let (mut engine, _handle, _tmp) = preview_engine(&config);
+    engine.api_provider = ApiProvider::Deepseek;
+    let installed_limits = codewhale_config::route::RouteLimits {
+        context_tokens: Some(64_000),
+        input_tokens: None,
+        output_tokens: Some(512),
+    };
+    engine.active_route_limits = Some(installed_limits);
+    // Multi-byte content on purpose: chars().count() != len() here, so an
+    // arity mistake between the byte rule (estimator) would surface.
+    engine.session.messages.push(Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: "héllo wörld — ünïcode ✓ ".repeat(500),
+            cache_control: None,
+        }],
+    });
+    engine.session.messages.push(Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::Thinking {
+            thinking: "step".repeat(100),
+            signature: None,
+            state: None,
+        }],
+    });
+    // Replayed-reasoning case (#perf-r5 fresh-eyes fix): an assistant message
+    // carrying BOTH thinking and a tool call keeps its reasoning content in
+    // every subsequent request — the estimator counts those bytes, and this
+    // was the exact arm the delta helper originally missed. Both parity
+    // variants of the thinking byte-count are exercised below.
+    engine.session.messages.push(Message {
+        role: Role::Assistant,
+        content: vec![
+            ContentBlock::Thinking {
+                thinking: "replayed".repeat(300), // 8 bytes per unit -> even count
+                signature: None,
+                state: None,
+            },
+            ContentBlock::ToolUse {
+                id: "call_1".to_string(),
+                name: "bash".to_string(),
+                input: json!({"command": "echo hello"}),
+                caller: None,
+                thought_signature: None,
+            },
+        ],
+    });
+    engine.session.messages.push(Message {
+        role: Role::Assistant,
+        content: vec![
+            ContentBlock::Thinking {
+                thinking: "odd replay".to_string(), // 11 bytes / 4 = 2 (even)... use odd total
+                signature: None,
+                state: None,
+            },
+            ContentBlock::ToolUse {
+                id: "call_2".to_string(),
+                name: "read".to_string(),
+                input: json!({"path": "x"}), // 13-byte JSON -> 3
+                caller: None,
+                thought_signature: None,
+            },
+        ],
+    });
+    let _prompt_context = NextTurnPromptContext::for_planned_turn(
+        ApiProvider::Deepseek,
+        "deepseek-v4-flash".to_string(),
+        Some(installed_limits),
+        AppMode::Agent,
+        None,
+        GoalStatus::Active,
+        None,
+        false,
+        None,
+    );
+    let _ = &_prompt_context;
+
+    // Naive reference implementation: clone the transcript, push a
+    // hypothetical user message, run the full conservative estimator.
+    let reference = |engine: &Engine, text: &str| -> usize {
+        let mut messages: Vec<Message> =
+            crate::prompt_zones::AppendLog::clone(&engine.session.messages).into();
+        if !text.trim().is_empty() {
+            messages.push(Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: text.to_string(),
+                    cache_control: None,
+                }],
+            });
+        }
+        crate::compaction::estimate_input_tokens_conservative(&messages, None)
+    };
+
+    for text in [
+        "",
+        "   ",
+        "short",
+        "a much longer composer draft with punctuation…",
+    ] {
+        let via_pressure_line_input = engine.active_input_tokens_with_current_text(text, None);
+        assert_eq!(
+            via_pressure_line_input,
+            reference(&engine, text),
+            "delta arithmetic diverged from clone+push+estimate for {text:?}"
+        );
+    }
+}
+
+/// #perf-r5 guard: billed input above the threshold must report pressure with
+/// a provably-empty history — proving the short-circuit answers from billing
+/// alone without consulting message contents.
+#[test]
+fn billed_pressure_above_threshold_answers_from_billing_alone() {
+    let config = CompactionConfig {
+        enabled: true,
+        token_threshold: 1_000,
+        ..Default::default()
+    };
+    let pressure = crate::compaction::compaction_pressure_reached_with_billed(
+        &[], // empty history: only billing can prove pressure
+        None,
+        &config,
+        Some(2_000),
+    );
+    assert!(pressure, "billed 2000 >= threshold 1000 must be pressure");
+}
+
+/// #perf-r5 guard: under-threshold billing keeps the old max() semantics —
+/// an estimate above the trigger still fires even when billing is quiet.
+#[test]
+fn billed_below_threshold_still_fires_on_estimate() {
+    let config = CompactionConfig {
+        enabled: true,
+        token_threshold: 100,
+        ..Default::default()
+    };
+    let big = Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(4 * 200),
+            cache_control: None,
+        }],
+    };
+    let pressure = crate::compaction::compaction_pressure_reached_with_billed(
+        std::slice::from_ref(&big),
+        None,
+        &config,
+        Some(10), // below threshold; must not short-circuit to false either
+    );
+    assert!(pressure, "estimate 200 (+1.0 framing) >= 100 must fire");
+}
+
+/// #perf-r5 guard: a direct `session.messages` overwrite (the SyncSession
+/// restore path) must advance `messages_revision` so the token-estimate
+/// cache invalidates instead of serving the pre-sync value.
+#[test]
+fn sync_restore_bumps_messages_revision_for_estimate_cache() {
+    use crate::core::engine::token_estimate_cache::TokenEstimateCache;
+
+    let config = deepseek_config();
+    let (mut engine, _handle, _tmp) = preview_engine(&config);
+    engine.session.add_message(Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: "before restore".to_string(),
+            cache_control: None,
+        }],
+    });
+    let revision_before = engine.session.messages_revision;
+    let mut cache = TokenEstimateCache::new();
+    let stale = cache.lookup_or_compute(
+        revision_before,
+        engine.session.system_prompt.as_ref(),
+        &engine.session.messages,
+    );
+
+    // Simulate the restore's direct field assignment.
+    engine.session.messages = Vec::new().into();
+    engine.session.bump_messages_revision();
+
+    assert_ne!(
+        engine.session.messages_revision, revision_before,
+        "restore must bump the revision the estimate cache keys on"
+    );
+    let fresh = cache.lookup_or_compute(
+        engine.session.messages_revision,
+        engine.session.system_prompt.as_ref(),
+        &engine.session.messages,
+    );
+    assert_ne!(
+        fresh, stale,
+        "cache must recompute after a restore-driven revision bump"
+    );
+}
+
 #[tokio::test]
 async fn compaction_preview_uses_the_planned_routes_system_prompt() {
     let config = deepseek_config();

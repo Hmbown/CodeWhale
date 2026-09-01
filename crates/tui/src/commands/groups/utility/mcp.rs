@@ -17,7 +17,7 @@ const CONTAINER_USE_SOURCE: &str = "https://github.com/dagger/container-use";
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "mcp",
     aliases: &[],
-    usage: "/mcp [init|import|import approve <name>|import decline <name>|recommendations|add recommended <id>|add stdio <name> <command> [args...]|add http <name> <url>|enable <name>|disable <name>|remove <name>|doctor|validate|restart|reload]",
+    usage: "/mcp [init|import|import approve <name>|import decline <name>|recommendations|add recommended <id>|add stdio <name> <command> [args...]|add http <name> <url>|enable <name>|disable <name>|remove <name>|retry <name>|doctor|validate|restart|reload]",
     description_key: "cmd_mcp_description",
 };
 
@@ -81,6 +81,10 @@ fn mcp(presentation: &mut dyn CommandPresentationContext, args: Option<&str>) ->
             Ok(name) => CommandResult::action(AppAction::Mcp(McpUiAction::Logout { name })),
             Err(msg) => CommandResult::error(msg),
         },
+        "retry" => match parse_name(parts.next(), "Usage: /mcp retry <name>") {
+            Ok(name) => CommandResult::action(AppAction::Mcp(McpUiAction::Retry { name })),
+            Err(msg) => CommandResult::error(msg),
+        },
         "import" | "marketplace" | "sources" => {
             let sub = parts.next().unwrap_or("").to_ascii_lowercase();
             match sub.as_str() {
@@ -117,7 +121,7 @@ fn mcp(presentation: &mut dyn CommandPresentationContext, args: Option<&str>) ->
             CommandResult::action(AppAction::Mcp(McpUiAction::Reload))
         }
         _ => CommandResult::error(
-            "Usage: /mcp [init|import|recommendations|add recommended <id>|add stdio <name> <command> [args...]|add http <name> <url>|enable <name>|disable <name>|remove <name>|login <name>|logout <name>|doctor|validate|restart|reload]",
+            "Usage: /mcp [init|import|recommendations|add recommended <id>|add stdio <name> <command> [args...]|add http <name> <url>|enable <name>|disable <name>|remove <name>|login <name>|logout <name>|retry <name>|doctor|validate|restart|reload]",
         ),
     }
 }
@@ -560,6 +564,12 @@ mod tests {
             Some(AppAction::Mcp(McpUiAction::Login { name, scopes }))
                 if name == "remote"
                     && scopes == vec!["tools/read".to_string(), "tools/write".to_string()]
+        ));
+
+        let retry = mcp(&mut FakePresentation, Some("retry remote"));
+        assert!(matches!(
+            retry.action,
+            Some(AppAction::Mcp(McpUiAction::Retry { name })) if name == "remote"
         ));
     }
 

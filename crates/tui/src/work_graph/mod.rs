@@ -13,11 +13,9 @@
 //! and liveness truth stays with the owning subsystems — the graph records
 //! observations, it never invents them.
 //!
-//! This slice is the core only: model, changes, pure reducer, validation.
 //! Session persistence, legacy import, UI projections, and liveness adapters
-//! land in later slices; nothing in the app or engine calls this yet.
-// Staged cutover: later slices wire persistence, UI, and liveness; until
-// then the public surface (including re-exports) has no external callers.
+//! are wired: `session_manager` stores a snapshot, `tools/shell` and
+//! `tools/tasks` observe operations, and the engine records owner liveness.
 #![allow(dead_code)]
 #![allow(unused_imports)]
 

@@ -845,7 +845,7 @@ fn subagent_output_handle(row: &SidebarAgentRow) -> Option<String> {
 
 /// Build the Agents panel lines together with a parallel per-line
 /// click-action vector (#3028). Agent label rows open the current-session
-/// Fleet worker view (`/fleet workers`, formerly spelled `/fleet status`
+/// Fleet worker view (`/pod workers`, formerly spelled `/fleet status`
 /// before that name moved to the durable ledger in #4022); header, role-mix,
 /// detail, and RLM lines are not clickable.
 fn subagent_panel_rows(
@@ -1136,7 +1136,7 @@ pub(crate) fn context_panel_lines(app: &App, content_width: usize) -> Vec<Line<'
     // ── Token usage ──────────────────────────────────────────────
     // Context % is disclosed in the header; the sidebar keeps the raw token
     // counts for at-a-glance reference without duplicating the bar.
-    let total_tokens = app.session.total_conversation_tokens;
+    let total_tokens = app.session.displayed_total_conversation_tokens();
     let window = crate::route_budget::route_context_window_tokens(
         app.api_provider,
         app.effective_model_for_budget(),

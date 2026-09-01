@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Workrooms are CodeWhale's chat-native abstraction for durable, addressable
+Workrooms are Codewhale's chat-native abstraction for durable, addressable
 threads of agent work. They sit between the Runtime API's transient thread
 model and the user-facing surfaces (TUI, mobile, chat bridges).
 
@@ -60,7 +60,7 @@ rendering, and model-visible link resolution are planned follow-ups.
 
 ## State store
 
-Persisted workroom state should live alongside existing CodeWhale state:
+Persisted workroom state should live alongside existing Codewhale state:
 
 ```
 ~/.codewhale/

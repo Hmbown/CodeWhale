@@ -1,4 +1,4 @@
-# CodeWhale Release Runbook
+# Codewhale Release Runbook
 
 This runbook is the source of truth for shipping Rust crates, GitHub release assets,
 and the `codewhale` npm wrapper.
@@ -322,6 +322,27 @@ release is missing a required binary, archive, installer, or manifest; either
 manifest omits a required row; or the assets predate the matching release
 workflow run. If the command fails, rerun or repair `release.yml`; do not
 publish Cargo or npm against stale assets.
+
+## AUR / Omarchy Package
+
+`codewhale-bin` is a downstream package of the same Linux release, not a new
+Codewhale semantic version. After the public asset gate above passes, render
+its AUR metadata from the verified release directory:
+
+```bash
+./packaging/aur/render.sh /path/to/release-assets /tmp/codewhale-bin
+```
+
+The renderer reads the workspace version and extracts the x64/arm64 archive
+hashes only after both release checksum manifests agree with the actual files.
+It emits no `SKIP` checksums or source-controlled per-release values. Follow
+[`packaging/aur/README.md`](../packaging/aur/README.md) for the clean Arch build,
+`.SRCINFO` comparison, and package-content checks.
+
+The GitHub release workflows only verify that the AUR metadata can be rendered
+from their candidate assets. They do not publish to AUR. AUR publication is a
+separate, explicitly authorized maintainer action after the matching tag and
+assets are public.
 
 ## npm Wrapper Release
 

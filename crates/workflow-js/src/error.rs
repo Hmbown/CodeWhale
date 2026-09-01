@@ -51,3 +51,79 @@ pub enum DriverError {
     #[error("driver unavailable: {0}")]
     Unavailable(String),
 }
+
+/// Why a `task()` call failed, as a stable machine kind (R9).
+///
+/// The host assigns the kind at the point the failure actually happens and
+/// ships it on the task envelope as `error_kind`; the JS prelude copies it
+/// onto the thrown `Error` as `.kind`, and `parallel()` / `pipeline()`
+/// classify slots from that field alone.
+///
+/// This exists because the classification used to be a substring match on the
+/// operator-facing message. A child whose own reply text contained the words
+/// "budget exhausted" — or a script that threw `new Error("run cancelled")` —
+/// could forge a fatal classification and abort a healthy run, and a genuine
+/// subagent failure was indistinguishable from a plain script throw. The kind
+/// is now data, not prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskErrorKind {
+    /// The call never became a child: malformed options, an invalid
+    /// `responseSchema`, the workflow lifetime cap, or a driver admission
+    /// refusal. Nothing ran, so nothing was spent.
+    Admission,
+    /// The run's shared token pool is exhausted — either the pre-spawn gate
+    /// or a child that reported [`crate::TaskCompletion::BudgetExhausted`].
+    Budget,
+    /// The run or the child was cancelled. Always fatal to the fan-out:
+    /// cancellation is the run's own deadline, never a per-slot outcome.
+    Cancelled,
+    /// The child ran and failed (error result, timeout, tool refusal, ...).
+    Agent,
+    /// The reply did not satisfy `responseSchema` and no bounded repair
+    /// remained.
+    Schema,
+    /// The driver seam broke: unavailable, or the completion channel dropped
+    /// before a terminal outcome arrived.
+    Driver,
+}
+
+impl TaskErrorKind {
+    /// The wire spelling carried on the envelope and on JS `Error.kind`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Admission => "admission",
+            Self::Budget => "budget",
+            Self::Cancelled => "cancelled",
+            Self::Agent => "agent",
+            Self::Schema => "schema",
+            Self::Driver => "driver",
+        }
+    }
+}
+
+/// One `task()` failure: the operator-facing message plus its typed kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskError {
+    pub(crate) kind: TaskErrorKind,
+    pub(crate) message: String,
+}
+
+impl TaskError {
+    pub(crate) fn new(kind: TaskErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<&DriverError> for TaskErrorKind {
+    fn from(err: &DriverError) -> Self {
+        match err {
+            // A refused spawn never produced a child; it is admission, not a
+            // failure of work that ran.
+            DriverError::Rejected(_) => Self::Admission,
+            DriverError::Unavailable(_) => Self::Driver,
+        }
+    }
+}

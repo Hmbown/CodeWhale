@@ -1,6 +1,6 @@
 use super::activity_detail::*;
 use super::compaction_flow::{
-    maybe_warn_context_pressure, should_auto_compact_before_send,
+    apply_compaction_started, maybe_warn_context_pressure, should_auto_compact_before_send,
     should_auto_compact_before_send_with_config,
 };
 use super::observer_hooks::{
@@ -179,10 +179,10 @@ fn frame_cursor_is_hidden_during_diff_then_positioned_before_reveal() {
 
 #[test]
 fn composer_rows_stay_pinned_across_turn_state_transitions() {
-    // The two bands bracketing the composer are reserved in every frame:
-    // activity above, identity below. Sending a prompt must not relocate
-    // the route identity, displace the composer, or duplicate the route
-    // into the activity row.
+    // The Tideline shell: a one-row topbar, the stage, and one merged
+    // footer row (slots 6+8 collapsed, spec §3). Sending a prompt must not
+    // displace the composer, relocate the route into the footer, or drop
+    // the phase verb from the footer's left half.
     fn frame_app() -> App {
         let mut app = crate::test_support::test_app_with_options(crate::tui::app::TuiOptions {
             model: "deepseek-v4-flash".to_string(),
@@ -217,27 +217,27 @@ fn composer_rows_stay_pinned_across_turn_state_transitions() {
             .last_composer_area
             .expect("idle frame records the composer area");
 
-        // The identity row is the screen's bottom row and owns the route.
-        // Its route prefix (everything through the model name) is the part
-        // that must never move; right-aligned key hints may differ by phase.
+        // The topbar is the screen's first row and now owns the route; the
+        // merged footer is the bottom row and carries the phase verb plus
+        // cost, never the route.
         let (_, model) = idle.effective_route_identity_display();
-        let route_prefix = |row: &str| -> String {
-            let end = row
-                .find(model.as_str())
-                .map(|start| start + model.len())
-                .unwrap_or(0);
-            row[..end].to_string()
-        };
-        let identity_row = idle_rows.last().expect("identity row");
-        let identity_route = route_prefix(identity_row);
+        let topbar_row = idle_rows.first().expect("topbar row");
         assert!(
-            !identity_route.is_empty(),
-            "{width}x{height} idle identity row lost the route {model:?}: {identity_row:?}"
+            topbar_row.contains(model.as_str()),
+            "{width}x{height} topbar lost the route {model:?}: {topbar_row:?}"
+        );
+        assert!(
+            topbar_row.contains("CODEWHALE"),
+            "{width}x{height} topbar lost the brand: {topbar_row:?}"
+        );
+        let footer_row = idle_rows.last().expect("merged footer row");
+        assert!(
+            !footer_row.contains(model.as_str()),
+            "{width}x{height} footer duplicated the route: {footer_row:?}"
         );
 
-        // A live turn: the composer keeps its exact rows, the identity row
-        // keeps the route, and the activity row above the composer carries
-        // the phase verb without duplicating the route.
+        // A live turn: the composer keeps its exact rows, the topbar keeps
+        // the route, and the merged footer carries the phase verb.
         let mut working = frame_app();
         working.is_loading = true;
         working.turn_started_at = Some(std::time::Instant::now());
@@ -247,20 +247,21 @@ fn composer_rows_stay_pinned_across_turn_state_transitions() {
             Some(composer),
             "{width}x{height}: sending a prompt displaced the composer"
         );
-        let working_identity = working_rows.last().expect("identity row");
-        assert_eq!(
-            route_prefix(working_identity),
-            identity_route,
-            "{width}x{height}: sending a prompt rewrote the identity row"
-        );
-        let activity_row = &working_rows[usize::from(composer.y.saturating_sub(1))];
         assert!(
-            !activity_row.contains(model.as_str()),
-            "{width}x{height} activity row duplicated the route: {activity_row:?}"
+            working_rows
+                .first()
+                .expect("topbar row")
+                .contains(model.as_str()),
+            "{width}x{height}: sending a prompt dropped the route from the topbar"
+        );
+        let working_footer = working_rows.last().expect("merged footer row");
+        assert!(
+            !working_footer.contains(model.as_str()),
+            "{width}x{height} working footer duplicated the route: {working_footer:?}"
         );
         assert!(
-            !activity_row.contains("DeepSeek"),
-            "{width}x{height} activity row duplicated the provider: {activity_row:?}"
+            !working_footer.contains("DeepSeek"),
+            "{width}x{height} working footer duplicated the provider: {working_footer:?}"
         );
 
         // A settled turn keeps the same geometry.
@@ -272,10 +273,19 @@ fn composer_rows_stay_pinned_across_turn_state_transitions() {
             Some(composer),
             "{width}x{height}: completion displaced the composer"
         );
-        assert_eq!(
-            route_prefix(done_rows.last().expect("identity row")),
-            identity_route,
-            "{width}x{height}: completion rewrote the identity row"
+        assert!(
+            done_rows
+                .first()
+                .expect("topbar row")
+                .contains(model.as_str()),
+            "{width}x{height}: completion dropped the route from the topbar"
+        );
+        assert!(
+            !done_rows
+                .last()
+                .expect("merged footer row")
+                .contains(model.as_str()),
+            "{width}x{height}: completion leaked the route into the footer"
         );
     }
 }
@@ -286,6 +296,7 @@ fn cjk_composer_cursor_and_mouse_geometry_agree_in_compact_and_wide_frames() {
         let mut app = create_test_app();
         app.onboarding = OnboardingState::None;
         app.launch.visible = false;
+        app.composer_border = true;
         app.input = "ab中文".to_string();
         app.cursor_position = app.input.chars().count();
         let config = Config::default();
@@ -307,6 +318,17 @@ fn cjk_composer_cursor_and_mouse_geometry_agree_in_compact_and_wide_frames() {
             .last_composer_content
             .expect("render records composer content geometry");
         let text_area = crate::tui::widgets::composer_content_geometry(inner, false).text_area;
+        let composer = app
+            .viewport
+            .last_composer_area
+            .expect("render records composer area");
+        let submit = crate::tui::widgets::active_composer_submit_rect(&app, composer)
+            .expect("enclosed composer exposes submit geometry");
+        assert_eq!(
+            text_area.right(),
+            submit.x.saturating_sub(1),
+            "{width}x{height}: frame must retain one blank cell before submit"
+        );
         assert_eq!(
             first_cursor.0,
             text_area.x + 6,
@@ -316,6 +338,12 @@ fn cjk_composer_cursor_and_mouse_geometry_agree_in_compact_and_wide_frames() {
             first_cursor.1 >= text_area.y
                 && first_cursor.1 < text_area.y.saturating_add(text_area.height),
             "{width}x{height}: cursor must remain inside composer content: {first_cursor:?}"
+        );
+        assert!(
+            first_cursor.0 < submit.x
+                || first_cursor.0 >= submit.right()
+                || first_cursor.1 != submit.y,
+            "{width}x{height}: cursor must stay outside submit: {first_cursor:?} vs {submit:?}"
         );
 
         frame::finish_frame_cursor(&mut terminal, Some(first_cursor)).unwrap();
@@ -402,6 +430,64 @@ async fn connected_web_mirror_never_refuses_local_composer_input() {
     assert!(
         app.is_loading,
         "the local prompt must have started a turn despite the connected mirror"
+    );
+}
+
+#[tokio::test]
+async fn runtime_chat_queues_local_composer_input_without_starting_a_second_turn() {
+    let mut app = create_test_app();
+    app.remote_control.block_runtime_chat_dispatch_for_tests();
+    let config = Config::default();
+    let mut mock = mock_engine_handle();
+
+    crate::tui::ui::dispatch::dispatch_composer_message(
+        &mut app,
+        &config,
+        &mock.handle,
+        crate::tui::app::QueuedMessage::new("local prompt during Runtime Chat".to_string(), None),
+        crate::tui::ui::DispatchRecovery::Immediate,
+        crate::tui::app::ComposerSubmitAction::Submit(
+            crate::tui::app::SubmitDisposition::Immediate,
+        ),
+    )
+    .await
+    .expect("Runtime Chat dispatch gate");
+
+    assert_eq!(app.queued_message_count(), 1);
+    assert!(!app.is_loading, "the interactive engine must remain idle");
+    assert!(
+        mock.rx_op.try_recv().is_err(),
+        "the interactive engine must not receive a second provider turn"
+    );
+    assert!(app.status_message.is_none());
+    let toast = app.status_toasts.back().expect("Runtime Chat queue toast");
+    assert_eq!(toast.level, StatusToastLevel::Info);
+    assert!(toast.text.contains("Runtime Chat"));
+    assert_eq!(toast.ttl_ms, Some(4_000));
+}
+
+#[tokio::test]
+async fn stale_remote_control_turn_never_cancels_the_current_engine_turn() {
+    let mut app = create_test_app();
+    app.remote_control
+        .force_mirror_connected_for_tests("run_fixture", "turn_current");
+    app.remote_control
+        .queue_remote_event_for_tests(crate::remote_control::RemoteEvent::Command {
+            run_id: "run_fixture".to_string(),
+            seq: 1,
+            command: crate::remote_control::RemoteCommand::Control {
+                action: crate::remote_control::RemoteControlRequest::Interrupt,
+                turn_id: Some("turn_stale".to_string()),
+                runtime_chat: None,
+            },
+        });
+    let mock = mock_engine_handle();
+    drain_remote_control_events(&mut app, &Config::default(), &mock.handle)
+        .await
+        .unwrap();
+    assert!(
+        !mock.cancel_token.is_cancelled(),
+        "a delayed command for an older turn must not cancel the current provider lifecycle"
     );
 }
 
@@ -519,6 +605,19 @@ fn settings_toggle_opens_and_closes_without_stacking_duplicates() {
     toggle_settings_view(&mut app);
     assert_eq!(app.view_stack.top_kind(), Some(ModalKind::Config));
     toggle_settings_view(&mut app);
+    assert!(app.view_stack.is_empty());
+}
+
+#[test]
+fn launch_help_uses_the_same_toggle_and_shortcut_ordering_as_the_live_shell() {
+    let _lock = crate::test_support::lock_test_env();
+    let mut app = create_test_app();
+    app.launch.visible = true;
+
+    toggle_help_view(&mut app);
+    assert_eq!(app.view_stack.top_kind(), Some(ModalKind::Help));
+
+    toggle_help_view(&mut app);
     assert!(app.view_stack.is_empty());
 }
 
@@ -999,9 +1098,12 @@ fn canonical_completion_refreshes_workspace_only_for_semantic_mutations() {
 
 #[test]
 fn underwater_motion_ticks_only_for_visible_unobscured_owners() {
-    assert!(!underwater_motion_surface_visible(None, true, true, false));
+    assert!(!underwater_motion_surface_visible(
+        None, true, true, true, false
+    ));
     assert!(!underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 0, 24)),
+        true,
         true,
         true,
         false,
@@ -1009,29 +1111,41 @@ fn underwater_motion_ticks_only_for_visible_unobscured_owners() {
     assert!(underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 40, 12)),
         true,
+        true,
         false,
         false,
     ));
     assert!(underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 60, 16)),
+        true,
         false,
         true,
         false,
     ));
     assert!(underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 60, 16)),
+        true,
         false,
         false,
         false,
     ));
     assert!(underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 80, 24)),
+        true,
         false,
         false,
         false,
     ));
     assert!(!underwater_motion_surface_visible(
         Some(Rect::new(0, 0, 100, 32)),
+        false,
+        false,
+        true,
+        false,
+    ));
+    assert!(!underwater_motion_surface_visible(
+        Some(Rect::new(0, 0, 100, 32)),
+        true,
         true,
         true,
         true,
@@ -1278,7 +1392,7 @@ fn coordination_handover_within_this_process_does_not_toast() {
     assert!(
         toast
             .text
-            .starts_with("Another CodeWhale session in this workspace"),
+            .starts_with("Another Codewhale session in this workspace"),
         "the toast must lead with the fact that explains the state: {}",
         toast.text
     );
@@ -1646,7 +1760,10 @@ fn resume_hint_omits_missing_session_id() {
 fn plain_mcp_show_refreshes_discovery_counts() {
     use crate::tui::app::McpUiAction;
 
-    assert!(mcp_ui_action_refreshes_discovery(&McpUiAction::Show));
+    assert!(
+        !mcp_ui_action_refreshes_discovery(&McpUiAction::Show),
+        "plain /mcp snapshots the engine-owned live pool, not a UI discovery pool"
+    );
     assert!(mcp_ui_action_refreshes_discovery(&McpUiAction::Validate));
     assert!(
         !mcp_ui_action_refreshes_discovery(&McpUiAction::Reload),
@@ -1707,7 +1824,12 @@ async fn mcp_enable_persists_and_applies_the_live_tool_pool_in_one_action() {
             Op::ReloadMcp { config_path, tx } => {
                 assert_eq!(config_path, path);
                 let sender = tx.lock().unwrap().take().expect("reload reply sender");
-                sender.send(Ok(response_snapshot)).expect("reload reply");
+                sender
+                    .send(Ok(crate::core::ops::McpManagerUpdate {
+                        snapshot: response_snapshot,
+                        generation: 7,
+                    }))
+                    .expect("reload reply");
             }
             other => panic!("unexpected op: {other:?}"),
         }
@@ -1733,6 +1855,8 @@ async fn mcp_enable_persists_and_applies_the_live_tool_pool_in_one_action() {
     );
     assert!(!app.mcp_reload_required);
     assert_eq!(app.mcp_snapshot.as_ref(), Some(&snapshot));
+    assert_eq!(app.mcp_snapshot_generation, 7);
+    assert!(app.mcp_snapshot_generation_invalidated);
     assert!(app.history.iter().any(|cell| matches!(
         cell,
         HistoryCell::System { content }
@@ -2597,6 +2721,9 @@ fn loading_mouse_filter_keeps_hover_and_active_drags() {
     assert!(!should_drop_loading_mouse_motion(&app, drag));
 
     app.viewport.transcript_scrollbar_dragging = false;
+    app.work_surface = crate::tui::work_surface::WorkSurfaceState::with_placement(
+        crate::tui::work_surface::WorkSurfacePlacement::Top,
+    );
     app.work_surface.last_area = Some(Rect::new(0, 0, 80, 3));
     let started = crate::tui::work_surface::handle_mouse(
         &mut app,
@@ -3370,6 +3497,9 @@ fn composer_mouse_first_visible_character_maps_to_zero_after_prompt_gutter() {
         "the first rendered character must not inherit the prompt's two-column inset"
     );
 
+    // Exercise a second independent caret mapping, not the intentional
+    // adjacent-click word-selection gesture.
+    app.viewport.composer_click_trace = None;
     assert!(handle_composer_mouse(
         &mut app,
         MouseEvent {
@@ -3513,6 +3643,41 @@ fn create_test_app() -> App {
         skip_onboarding: false,
         ..crate::test_support::test_tui_options(PathBuf::from("."))
     })
+}
+
+#[test]
+fn runtime_chat_short_circuits_inline_voice_and_cache_actions_before_ui_mutation() {
+    let mut app = create_test_app();
+    app.remote_control.block_runtime_chat_dispatch_for_tests();
+    app.voice_enabled = true;
+    let history_len = app.history.len();
+
+    let voice = crate::commands::CommandResult::with_message_and_action(
+        "optimistic voice message",
+        AppAction::VoiceCapture,
+    );
+    assert!(super::apply::reject_inline_inference_while_runtime_chat_owns_run(&mut app, &voice,));
+    assert!(!app.voice_enabled, "blocked /voice must restore its toggle");
+    assert_eq!(
+        app.history.len(),
+        history_len,
+        "the optimistic command message must not be appended"
+    );
+    assert!(app.status_message.is_none());
+    let toast = app.status_toasts.back().expect("blocked action toast");
+    assert_eq!(toast.level, crate::tui::app::StatusToastLevel::Info);
+    assert!(toast.text.contains("Codewhale Runtime"));
+    assert_eq!(toast.ttl_ms, Some(6_000));
+
+    let cache = crate::commands::CommandResult::with_message_and_action(
+        "optimistic cache message",
+        AppAction::CacheWarmup,
+    );
+    assert!(super::apply::reject_inline_inference_while_runtime_chat_owns_run(&mut app, &cache,));
+    assert_eq!(app.history.len(), history_len);
+
+    let mut idle = create_test_app();
+    assert!(!super::apply::reject_inline_inference_while_runtime_chat_owns_run(&mut idle, &cache,));
 }
 
 #[derive(Clone, Default)]
@@ -3988,8 +4153,67 @@ fn wide_underwater_shell_aligns_transcript_and_composer_on_the_shared_canvas() {
 }
 
 #[test]
+fn failed_mcp_is_a_footer_chip_not_multiline_chat_boot_output() {
+    fn app() -> App {
+        let mut app = create_test_app();
+        app.onboarding_workspace_trust_gate = false;
+        app.onboarding = OnboardingState::None;
+        app.launch.visible = false;
+        app
+    }
+
+    let mut baseline = app();
+    let _ = render_underwater_test_app(&mut baseline, 100, 30);
+    let baseline_composer = baseline
+        .viewport
+        .last_composer_area
+        .expect("baseline composer area");
+
+    let mut failed = app();
+    failed.mcp_snapshot = Some(crate::mcp::McpManagerSnapshot {
+        config_path: PathBuf::from("mcp.json"),
+        config_exists: true,
+        reload_required: false,
+        servers: vec![crate::mcp::McpServerSnapshot {
+            name: "alpha".to_string(),
+            enabled: true,
+            required: false,
+            transport: "stdio".to_string(),
+            command_or_url: "alpha-mcp".to_string(),
+            connect_timeout: 5,
+            execute_timeout: 5,
+            read_timeout: 5,
+            connected: false,
+            error: Some("protocol negotiation timed out".to_string()),
+            capability_metadata: crate::mcp::McpServerCapabilityMetadata::NotObserved,
+            tools: Vec::new(),
+            resources: Vec::new(),
+            prompts: Vec::new(),
+        }],
+    });
+    let rendered = render_underwater_test_app(&mut failed, 100, 30);
+
+    assert_eq!(
+        failed
+            .viewport
+            .last_composer_area
+            .expect("failed-MCP composer area"),
+        baseline_composer,
+        "MCP diagnostics must not reserve chat/composer rows"
+    );
+    assert!(
+        rendered.contains("MCP · 0 connected · 1 failed"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("alpha · failed"), "{rendered}");
+    assert!(!rendered.contains("/mcp retry alpha"), "{rendered}");
+}
+
+#[test]
 fn wide_underwater_canvas_carries_the_ocean_to_both_terminal_edges() {
     let mut app = create_test_app();
+    app.ui_theme = crate::palette::UI_THEME;
+    app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
     app.onboarding_workspace_trust_gate = false;
     app.onboarding = OnboardingState::None;
     let surface_bg = app.ui_theme.surface_bg;
@@ -4003,7 +4227,7 @@ fn wide_underwater_canvas_carries_the_ocean_to_both_terminal_edges() {
     let buffer = terminal.backend().buffer();
 
     // Full-width shell (#5322): both terminal edges stay in the water column.
-    // Ombre may tint left and right differently; what must not happen is a flat
+    // Deepsea may tint left and right differently; what must not happen is a flat
     // surface-bg dead margin on either side.
     let mut left_ocean = false;
     let mut right_ocean = false;
@@ -4435,6 +4659,46 @@ fn active_raw_paste_keeps_space_as_payload_over_reasoning_action() {
 }
 
 #[test]
+fn typed_command_burst_keeps_r_and_y_out_of_transcript_actions() {
+    let mut app = create_test_app();
+    app.use_paste_burst_detection = true;
+    app.bracketed_paste_seen = false;
+    app.history = vec![HistoryCell::Assistant {
+        content: "previous command output".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+    let _ = render_underwater_test_app(&mut app, 60, 16);
+    select_original_cell(&mut app, 0);
+    assert!(
+        app.viewport.transcript_selection.is_active(),
+        "precondition: a standing transcript selection must arm block actions"
+    );
+
+    let now = Instant::now();
+    let command = "/plugin trust demo";
+    for (offset, ch) in command.chars().enumerate() {
+        let at = now + Duration::from_millis(offset as u64);
+        let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
+        let _ = flush_paste_burst_before_composer(&mut app, at);
+        assert!(
+            handle_plain_key_before_composer(&mut app, &key, at),
+            "paste-burst input should retain {ch:?}"
+        );
+    }
+    assert!(flush_paste_burst_before_composer(
+        &mut app,
+        now + Duration::from_millis(500),
+    ));
+
+    assert_eq!(app.input, command);
+    assert!(
+        app.view_stack.is_empty(),
+        "typed command must not open a pager"
+    );
+}
+
+#[test]
 fn active_streaming_reasoning_keeps_its_visible_owner_across_a_delta() {
     let mut app = create_test_app();
     app.push_history_cell(running_exec_cell());
@@ -4843,8 +5107,8 @@ async fn session_denied_cache_auto_deny_explains_the_cached_rejection() {
     assert_eq!(toast.level, StatusToastLevel::Warning);
     assert_eq!(toast.ttl_ms, Some(12_000));
     assert!(toast.text.contains("matching request was denied earlier"));
-    assert!(toast.text.contains("during this CodeWhale run"));
-    assert!(toast.text.contains("Restart CodeWhale"));
+    assert!(toast.text.contains("during this Codewhale run"));
+    assert!(toast.text.contains("Restart Codewhale"));
     assert!(toast.text.contains("exec_shell"));
     let history_notice = app
         .history
@@ -4870,7 +5134,7 @@ async fn session_denied_cache_auto_deny_explains_the_cached_rejection() {
     let rendered = render_underwater_test_app(&mut app, 40, 12);
     assert!(rendered.contains("Auto-denied"), "{rendered:?}");
     assert!(
-        rendered.contains("Restart") && rendered.contains("CodeWhale"),
+        rendered.contains("Restart") && rendered.contains("Codewhale"),
         "{rendered:?}"
     );
 }
@@ -5097,7 +5361,7 @@ async fn session_denied_cache_notice_renders_host_scope_in_zh_hans() {
             _ => None,
         })
         .expect("localized persistent auto-deny explanation");
-    assert!(notice.contains("本次 CodeWhale 运行期间"));
+    assert!(notice.contains("本次 Codewhale 运行期间"));
     assert!(notice.contains("匹配请求"));
     assert!(!notice.contains("example.com"));
 
@@ -5109,7 +5373,7 @@ async fn session_denied_cache_notice_renders_host_scope_in_zh_hans() {
     assert!(rendered_compact.contains("已自动拒绝"), "{rendered:?}");
     assert!(rendered_compact.contains("匹配请求"), "{rendered:?}");
     assert!(
-        rendered_compact.contains("重启") && rendered_compact.contains("CodeWhale"),
+        rendered_compact.contains("重启") && rendered_compact.contains("Codewhale"),
         "{rendered:?}"
     );
 }
@@ -5121,8 +5385,8 @@ fn session_denied_notice_explains_cached_decision_and_recovery() {
 
     assert!(notice.contains("exec_shell"));
     assert!(notice.contains("matching request was denied earlier"));
-    assert!(notice.contains("during this CodeWhale run"));
-    assert!(notice.contains("Restart CodeWhale"));
+    assert!(notice.contains("during this Codewhale run"));
+    assert!(notice.contains("Restart Codewhale"));
 }
 
 #[tokio::test]
@@ -5135,7 +5399,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
     let mut app = create_test_app();
     app.onboarding = OnboardingState::None;
     app.launch.visible = false;
-    app.ocean_treatment = OceanTreatment::Ombre;
+    app.ocean_treatment = OceanTreatment::Deepsea;
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
 
@@ -5191,7 +5455,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
                 cell,
                 HistoryCell::System { content }
                     if content.contains("Auto-denied exec_shell")
-                        && content.contains("Restart CodeWhale")
+                        && content.contains("Restart Codewhale")
             )
         })
         .expect("cached denial must leave a durable recovery receipt");
@@ -5228,7 +5492,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
         "cached-decision explanation disappeared after completion:\n{rendered}"
     );
     assert!(
-        rendered.contains("Restart CodeWhale"),
+        rendered.contains("Restart Codewhale"),
         "cached-denial recovery path disappeared after completion:\n{rendered}"
     );
     assert_eq!(
@@ -5239,14 +5503,20 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
 }
 
 #[test]
-fn session_approved_cache_keeps_tool_name_session_grants() {
+fn session_approved_cache_does_not_promote_tool_name_grants_to_whole_tool() {
     let mut app = create_test_app();
     app.approval_session_approved
         .insert("edit_file".to_string());
 
     assert!(
+        !is_session_approved_for_tool(&app, "edit_file", "file:edit_file:fresh"),
+        "a bare tool-name grant must not cover future calls of the same tool (ops R2)"
+    );
+    app.approval_session_approved
+        .insert("file:edit_file:fresh".to_string());
+    assert!(
         is_session_approved_for_tool(&app, "edit_file", "file:edit_file:fresh"),
-        "approve-for-session should still cover future calls of the same tool"
+        "a grouping-key grant still covers its command family"
     );
 }
 
@@ -6299,7 +6569,9 @@ fn apply_loaded_session_resets_unpersisted_telemetry() {
     app.session.subagent_cost_cny = 5.48;
     app.session
         .subagent_usage_sources
-        .insert(("agent-test".to_string(), "response-test".to_string()));
+        .insert(crate::cost_status::usage_source_fingerprint(
+            "response-test",
+        ));
     app.session.displayed_cost_high_water = 2.0;
     app.session.displayed_cost_high_water_cny = 14.61;
     app.session.last_prompt_tokens = Some(120);
@@ -6364,6 +6636,7 @@ fn apply_loaded_session_resets_unpersisted_telemetry() {
 /// to recognize that shape rather than trust it (#4318).
 #[test]
 fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
+    let _cost_scope = crate::cost_status::test_scope();
     let mut app = create_test_app();
     // Live state from the session being replaced.
     app.session.cost_priced_turns = 9;
@@ -6384,6 +6657,7 @@ fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
     let mut session = saved_session_with_messages(vec![text_message("assistant", "ready")]);
     session.metadata.cost = crate::session_manager::SessionCostSnapshot {
         session_cost_usd: 2.5,
+        subagent_cost_usd: 1.25,
         priced_turns: 2,
         unpriced_turns: 1,
         cny_priced_turns: 0,
@@ -6394,6 +6668,10 @@ fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
         pricing_provenances: ["models_dev_bundled".to_string()].into(),
         route_receipts: ["provider=deepseek identity=deepseek model=deepseek-v4-flash".to_string()]
             .into(),
+        usage_source_fingerprints: [crate::cost_status::usage_source_fingerprint(
+            "subagent:agent-reload:step:1:response:late",
+        )]
+        .into(),
         coverage_recorded: true,
         ..crate::session_manager::SessionCostSnapshot::default()
     };
@@ -6401,6 +6679,7 @@ fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
     apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
 
     assert_eq!(app.session.cost_priced_turns, 2);
+    assert_eq!(app.session.subagent_cost, 1.25);
     assert_eq!(app.session.cost_unpriced_turns, 1);
     assert_eq!(app.session.cost_cny_priced_turns, 0);
     assert_eq!(app.session.cost_cny_unpriced_turns, 3);
@@ -6411,6 +6690,47 @@ fn apply_loaded_session_replaces_cost_coverage_with_the_loaded_total() {
     assert_eq!(
         app.session.cost_unpriced_classes,
         ["cache_write".to_string()].into()
+    );
+    assert_eq!(
+        app.session.subagent_usage_sources,
+        session
+            .metadata
+            .cost
+            .usage_source_fingerprints
+            .iter()
+            .cloned()
+            .collect()
+    );
+    assert!(crate::cost_status::usage_source_seen(
+        "subagent:agent-reload:step:1:response:late"
+    ));
+    let replay_owner = "interactive:reloaded-session:turn-replay";
+    crate::cost_status::register_interactive_runtime_usage_sink(
+        replay_owner,
+        crate::cost_status::scope_token(),
+    );
+    crate::cost_status::report_effective_route_for_runtime(
+        crate::cost_status::scope_token(),
+        Some(replay_owner),
+        "subagent:agent-reload:step:1:response:late",
+        &crate::cost_status::EffectiveRouteEnvelope::capture(
+            None,
+            ApiProvider::Anthropic,
+            "anthropic-direct",
+            "claude-sonnet-4-5",
+            Some(ApiProvider::Anthropic.default_base_url()),
+            chrono::Utc::now(),
+        ),
+        &Usage {
+            input_tokens: 200,
+            output_tokens: 20,
+            ..Usage::default()
+        },
+    );
+    crate::cost_status::finish_runtime_usage_owner(replay_owner);
+    assert!(
+        crate::cost_status::drain().is_empty(),
+        "a re-delivered provider response must remain deduped after reload"
     );
     assert_eq!(app.session.cost_route_receipts.len(), 1);
     assert!(
@@ -6969,6 +7289,10 @@ fn terminal_probe_timeout_uses_tui_config_and_clamps() {
             mouse_capture: None,
             terminal_probe_timeout_ms: Some(750),
             stream_chunk_timeout_secs: None,
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             status_items: None,
             header_items: None,
             osc8_links: None,
@@ -7629,50 +7953,72 @@ async fn xai_api_key_confirmation_saves_only_the_selected_xai_slot() {
 /// #5195: the save confirmation must name where the key actually landed —
 /// the durable secret store, not the config path — and the scope it is
 /// visible from (user-global credential, available in all folders).
-#[tokio::test]
-async fn setup_confirm_toast_names_secret_store_and_global_scope() {
-    // ConfigPathEnvGuard holds the shared env lock for the whole test, so the
-    // home/backend overrides must be set after it (and never take the lock
-    // again — it is not reentrant).
-    let _config = ConfigPathEnvGuard::new();
-    let home = TempDir::new().expect("isolated toast home");
-    let _home = crate::test_support::EnvVarGuard::set(
-        "CODEWHALE_HOME",
-        home.path().to_string_lossy().as_ref(),
-    );
-    let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
-    let mut app = create_test_app();
-    let mut engine = mock_engine_handle();
-    let mut config = Config::default();
-    let identity = picker_provider_identity(&config, ApiProvider::Openrouter, None)
-        .expect("OpenRouter identity");
+/// #5585: this test drives the full guided-setup save path (provider
+/// identity minting, key persistence, model/base-url pinning, and the
+/// settings/TOML round-trips they trigger). Those serde round-trips are deep
+/// enough that the default 2 MiB libtest thread stack overflows; the product
+/// paths run on the 8 MiB main thread or the sheltered 16 MiB parse threads
+/// (see `parse_config_file_str` in `config.rs` and `parse_config_toml_str`
+/// in `codewhale-config`), so this test runs its runtime on an equivalently
+/// sized stack instead of crashing.
+#[test]
+fn setup_confirm_toast_names_secret_store_and_global_scope() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime")
+                .block_on(async {
+                    // ConfigPathEnvGuard holds the shared env lock for the whole test, so the
+                    // home/backend overrides must be set after it (and never take the lock
+                    // again — it is not reentrant).
+                    let _config = ConfigPathEnvGuard::new();
+                    let home = TempDir::new().expect("isolated toast home");
+                    let _home = crate::test_support::EnvVarGuard::set(
+                        "CODEWHALE_HOME",
+                        home.path().to_string_lossy().as_ref(),
+                    );
+                    let _backend =
+                        crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+                    let mut app = create_test_app();
+                    let mut engine = mock_engine_handle();
+                    let mut config = Config::default();
+                    let identity = picker_provider_identity(&config, ApiProvider::Openrouter, None)
+                        .expect("OpenRouter identity");
 
-    let switched = apply_provider_picker_setup_confirmed(
-        &mut app,
-        &mut engine.handle,
-        &mut config,
-        identity,
-        "toast-destination-key".to_string(),
-        "deepseek/deepseek-v4-pro".to_string(),
-        None,
-        None,
-    )
-    .await;
+                    let switched = apply_provider_picker_setup_confirmed(
+                        &mut app,
+                        &mut engine.handle,
+                        &mut config,
+                        identity,
+                        "toast-destination-key".to_string(),
+                        "deepseek/deepseek-v4-pro".to_string(),
+                        None,
+                        None,
+                    )
+                    .await;
 
-    assert!(switched, "setup confirm failed: {:?}", app.status_message);
-    let toast = app.status_message.as_deref().expect("save toast");
-    assert!(
-        toast.contains("secret store"),
-        "toast must name the secret store, got: {toast}"
-    );
-    assert!(
-        toast.contains("available in all folders"),
-        "toast must state the user-global scope, got: {toast}"
-    );
-    assert!(
-        !toast.contains("toast-destination-key"),
-        "toast must never include the key, got: {toast}"
-    );
+                    assert!(switched, "setup confirm failed: {:?}", app.status_message);
+                    let toast = app.status_message.as_deref().expect("save toast");
+                    assert!(
+                        toast.contains("secret store"),
+                        "toast must name the secret store, got: {toast}"
+                    );
+                    assert!(
+                        toast.contains("available in all folders"),
+                        "toast must state the user-global scope, got: {toast}"
+                    );
+                    assert!(
+                        !toast.contains("toast-destination-key"),
+                        "toast must never include the key, got: {toast}"
+                    );
+                })
+        })
+        .expect("spawn test thread")
+        .join()
+        .expect("test thread panicked");
 }
 
 #[tokio::test]
@@ -8240,7 +8586,11 @@ async fn auto_dispatch_keeps_last_and_pending_receipts_aligned() {
         app.pending_turn_route
             .as_ref()
             .map(|(provider, model, auto)| (*provider, model.as_str(), *auto)),
-        Some((ApiProvider::Zai, crate::config::ZAI_GLM_5_TURBO_MODEL, true))
+        Some((
+            ApiProvider::Zai,
+            crate::config::ZAI_GLM_5_3_FLASH_MODEL,
+            true,
+        ))
     );
     assert_eq!(
         app.last_auto_route_receipt, app.pending_auto_route_receipt,
@@ -8254,13 +8604,10 @@ async fn auto_dispatch_keeps_last_and_pending_receipts_aligned() {
     );
     assert_eq!(
         app.last_effective_reasoning_effort,
-        Some(EffectiveReasoningEffort::ThinkingEnabledGranularityUnavailable),
+        Some(EffectiveReasoningEffort::Tier(ReasoningEffort::High)),
         "the post-turn receipt must retain exact route capability constraints"
     );
-    assert_eq!(
-        app.reasoning_effort_display_label(),
-        "low→thinking enabled; granularity unavailable"
-    );
+    assert_eq!(app.reasoning_effort_display_label(), "low→high");
 }
 
 #[tokio::test]
@@ -8528,8 +8875,17 @@ async fn remote_preflight_failure_releases_the_account_owned_run() {
     let mut app = create_test_app();
     app.set_provider_identity(ApiProvider::Custom, "lm-studio");
     app.set_model_selection("local-model".to_string());
+    let journal_root = tempfile::tempdir().expect("remote dispatch journal root");
     app.remote_control
-        .activate_prompt("run_remote_fixture", "turn_remote_fixture");
+        .prepare_remote_control_session_journal(
+            journal_root.path(),
+            "target_remote_fixture",
+            "session_remote_fixture",
+        )
+        .expect("durable remote dispatch journal");
+    app.remote_control
+        .activate_prompt("run_remote_fixture", "turn_remote_fixture")
+        .unwrap();
     let (_engine, handle) = crate::core::engine::Engine::new(EngineConfig::default(), &config);
 
     dispatch_user_message(
@@ -9023,6 +9379,9 @@ fn deferred_manual_compaction_is_superseded_by_a_live_pass() {
         "compact-x",
         true,
         "Auto-compaction complete".to_string(),
+        None,
+        None,
+        None,
     );
     assert!(app.deferred_manual_compaction.is_none());
     assert!(!app.manual_compaction_queued);
@@ -9066,6 +9425,9 @@ fn compaction_lifecycle_keeps_truthful_auto_label_until_matching_completion() {
         "compact-stale",
         true,
         "stale completion".to_string(),
+        None,
+        None,
+        None,
     );
     assert!(app.is_compacting, "stale id must not clear newer activity");
     assert_eq!(
@@ -9078,6 +9440,9 @@ fn compaction_lifecycle_keeps_truthful_auto_label_until_matching_completion() {
         "compact-new",
         true,
         "Auto-compaction complete: 126 → 12 messages".to_string(),
+        None,
+        None,
+        None,
     );
     assert!(!app.is_compacting);
     assert!(app.active_compaction.is_none());
@@ -9400,7 +9765,7 @@ async fn denied_steer_restores_queued_draft_and_keeps_active_turn() {
     assert_eq!(app.queued_draft, Some(message));
     assert_eq!(app.queued_message_count(), 0);
     assert!(app.status_toasts.back().is_some_and(|toast| {
-        toast.level == StatusToastLevel::Warning && toast.text.contains("blocked the steer")
+        toast.level == StatusToastLevel::Warning && toast.text.contains("blocked the follow-up")
     }));
 }
 
@@ -12334,6 +12699,12 @@ fn update_notice_names_the_command_for_the_actual_install_method() {
             .contains("brew upgrade codewhale"),
         "toast names the Homebrew command"
     );
+    assert!(
+        notice
+            .toast_line(codewhale_release::InstallMethod::Omarchy)
+            .contains("omarchy update"),
+        "toast names the Omarchy update command"
+    );
 
     // A plain release binary keeps the self-updater.
     assert!(
@@ -12632,10 +13003,104 @@ fn context_pressure_warning_reflects_auto_compact_threshold_state() {
 
     maybe_warn_context_pressure(&mut app);
 
-    let status = app.status_message.expect("context warning");
+    let status = app.status_message.as_deref().expect("context warning");
     assert!(
         status.contains("Auto-compaction will run before the next send."),
         "unexpected status: {status}"
+    );
+    assert!(
+        app.sticky_status
+            .as_ref()
+            .is_some_and(|toast| toast.text == status),
+        "context pressure must remain visible in sticky status: {status}"
+    );
+}
+
+#[test]
+fn context_pressure_warning_survives_later_status_and_can_be_dismissed() {
+    let mut app = create_test_app();
+    app.api_messages = vec![Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: "context ".repeat(240_000),
+            cache_control: None,
+        }],
+    }];
+    app.auto_compact = true;
+    app.auto_compact_threshold_percent = 100.0;
+    let (used, _, _) = context_usage_snapshot(&app).expect("context snapshot");
+    app.compact_threshold = usize::try_from(used).expect("non-negative context estimate");
+    maybe_warn_context_pressure(&mut app);
+    let warning = app
+        .sticky_status
+        .as_ref()
+        .expect("sticky context warning")
+        .text
+        .clone();
+
+    app.status_message = Some("A later transcript status".to_string());
+    let visible = app
+        .active_status_toast()
+        .expect("a later transient status is visible");
+    assert_eq!(visible.text, "A later transcript status");
+    assert_eq!(
+        app.sticky_status.as_ref().map(|toast| toast.text.as_str()),
+        Some(warning.as_str()),
+        "the persistent pressure warning remains behind the transient status"
+    );
+    assert!(app.dismiss_context_pressure_warning());
+    assert!(app.sticky_status.is_none());
+    app.status_message = None;
+    maybe_warn_context_pressure(&mut app);
+    assert!(
+        app.sticky_status.is_none(),
+        "explicit dismissal must not re-arm on the next pressure check"
+    );
+}
+
+#[test]
+fn context_pressure_warning_clears_when_compaction_starts() {
+    let mut app = create_test_app();
+    app.api_messages = vec![Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: "context ".repeat(240_000),
+            cache_control: None,
+        }],
+    }];
+    app.auto_compact = true;
+    app.auto_compact_threshold_percent = 100.0;
+    let (used, _, _) = context_usage_snapshot(&app).expect("context snapshot");
+    app.compact_threshold = usize::try_from(used).expect("non-negative context estimate");
+    maybe_warn_context_pressure(&mut app);
+    assert!(
+        app.sticky_status
+            .as_ref()
+            .is_some_and(|toast| toast.text.starts_with("Context "))
+    );
+
+    apply_compaction_started(&mut app, "compaction-1".to_string(), false);
+    assert!(
+        app.sticky_status.is_none(),
+        "pressure warning should be cleared"
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|text| text.to_ascii_lowercase().contains("compacting")),
+        "compaction status should replace the pressure warning"
+    );
+}
+
+#[test]
+fn context_pressure_warning_stays_absent_below_threshold() {
+    let mut app = create_test_app();
+    maybe_warn_context_pressure(&mut app);
+
+    assert!(app.sticky_status.is_none());
+    assert!(
+        app.status_message.is_none(),
+        "low-pressure sessions should not create warning chrome"
     );
 }
 
@@ -14222,7 +14687,7 @@ async fn steer_failure_queues_message_and_surfaces_toast() {
     assert_eq!(app.queued_message_count(), 1);
     let toast = app.status_toasts.back().expect("steer failure toast");
     assert_eq!(toast.level, StatusToastLevel::Warning);
-    assert!(toast.text.contains("Steer failed"));
+    assert!(toast.text.contains("Could not send into this turn"));
 }
 
 #[tokio::test]
@@ -14247,7 +14712,7 @@ async fn streaming_enter_queue_pushes_visible_toast() {
     assert_eq!(app.queued_message_count(), 1);
     let toast = app.status_toasts.back().expect("queue toast");
     assert_eq!(toast.level, StatusToastLevel::Info);
-    assert!(toast.text.contains("Queued follow-up"));
+    assert!(toast.text.contains("Queued. Sends after this turn."));
 }
 
 #[test]
@@ -14346,13 +14811,10 @@ async fn operate_streaming_enter_queues_another_parallel_task() {
     .expect("Operate streaming submit queues another task");
 
     assert_eq!(app.queued_message_count(), 1);
-    assert!(app.status_message.as_deref().is_some_and(
-        |status| status.contains("queued task(s)") && status.contains("workers continue")
-    ));
     let toast = app.status_toasts.back().expect("Operate queue toast");
     assert_eq!(toast.level, StatusToastLevel::Info);
-    assert!(toast.text.contains("Queued task"));
-    assert!(toast.text.contains("dispatches next"));
+    assert_eq!(toast.text, "Queued. Sends after this turn.");
+    assert_eq!(app.status_message.as_deref(), Some(toast.text.as_str()));
 }
 
 #[tokio::test]
@@ -21252,7 +21714,8 @@ fn notification_settings_tui_always_keeps_configured_method_no_threshold() {
     };
 
     let (method, threshold, include_summary) =
-        crate::tui::notifications::settings(&config).expect("notification should be enabled");
+        crate::tui::notifications::settings_projection(&config)
+            .expect("notification should be enabled");
     assert_eq!(method, crate::tui::notifications::Method::Bel);
     assert_eq!(threshold, Duration::ZERO);
     assert!(include_summary);
@@ -21268,7 +21731,7 @@ fn notification_settings_tui_never_disables_notifications() {
         ..Config::default()
     };
 
-    assert!(crate::tui::notifications::settings(&config).is_none());
+    assert!(crate::tui::notifications::settings_projection(&config).is_none());
 }
 
 #[test]
@@ -21289,7 +21752,8 @@ fn notification_settings_no_tui_override_uses_notifications_block() {
     };
 
     let (method, threshold, include_summary) =
-        crate::tui::notifications::settings(&config).expect("notification should be enabled");
+        crate::tui::notifications::settings_projection(&config)
+            .expect("notification should be enabled");
     assert_eq!(method, crate::tui::notifications::Method::Osc9);
     assert_eq!(threshold, Duration::from_secs(45));
     assert!(!include_summary);
@@ -22650,6 +23114,7 @@ mod work_surface {
 
     fn idle_rail_app(panel: RailPanel) -> App {
         let mut app = create_test_app();
+        app.ui_locale = crate::localization::Locale::En;
         // Pin the chrome the budget charges for: `App::new` reads the developer's
         // real settings.toml, and a host with `composer_border = false` would
         // shift every threshold below by a row.
@@ -22718,9 +23183,16 @@ mod work_surface {
         app
     }
 
-    /// The whale's belly: a run of upper-block glyphs no other chrome draws.
-    fn has_idle_whale(rendered: &str) -> bool {
-        rendered.contains("▀▀▀▀▀▀▀▀")
+    /// Whether the ambient ocean actually got its floor this frame, measured
+    /// from the empty state's transcript area. The hand-drawn idle whale that
+    /// used to be the on-screen evidence here was deleted per the 2026-08-29
+    /// founder directive; the whale drew exactly when this predicate held, so
+    /// `empty_state_mark_visible` over the recorded transcript area is the
+    /// same visibility, asserted without the deleted art.
+    fn idle_ocean_visible(app: &App) -> bool {
+        app.viewport
+            .last_transcript_area
+            .is_some_and(crate::tui::underwater::empty_state_mark_visible)
     }
 
     /// The strip height for this frame, measured the way the shell measures it:
@@ -22753,7 +23225,7 @@ mod work_surface {
     }
 
     #[test]
-    fn rail_strip_yields_its_rows_so_the_idle_whale_survives_at_24_rows() {
+    fn rail_strip_yields_its_rows_so_the_idle_ocean_survives_at_24_rows() {
         let panel = RailPanel::Agents;
         let natural = natural_strip_rows(panel);
         assert!(
@@ -22765,7 +23237,7 @@ mod work_surface {
         // Below the threshold the rail hands rows back to the water: it renders
         // shorter than it wants, or not at all, and the ocean keeps its floor.
         // 24 rows is the release-evidence size the rail regression took the
-        // whale away from.
+        // ambient ocean away from.
         for rows in [22_u16, 23, 24, 25] {
             let mut app = busy_rail_app(panel);
             let budget = rail_row_budget(&app, 80, rows, true);
@@ -22790,16 +23262,17 @@ mod work_surface {
             );
             let rendered = render_underwater_test_app(&mut app, 80, rows);
             assert!(
-                has_idle_whale(&rendered),
-                "the idle whale must survive at 80x{rows}: decorative water \
-                 outranks a panel nobody is watching\n{rendered}"
+                idle_ocean_visible(&app),
+                "the ambient ocean floor must survive at 80x{rows}: decorative \
+                 water outranks a panel nobody is watching\n{rendered}"
             );
         }
 
         // At and above the threshold the rows are genuinely spare, so the rail
         // takes its full auto-fit height over an intact 16-row ocean. The
-        // two standing bands bracketing the composer cost one more row than
-        // the single legacy strip did, so the threshold sits one row higher.
+        // Tideline shell charges one row less than the classic shell did
+        // (one-row topbar, merged footer instead of two standing bands), so
+        // the threshold sits one row lower again.
         for rows in [29_u16, 30, 32] {
             let mut app = busy_rail_app(panel);
             let strip = strip_height(&mut app, 80, rows);
@@ -22810,8 +23283,8 @@ mod work_surface {
             );
             let rendered = render_underwater_test_app(&mut app, 80, rows);
             assert!(
-                has_idle_whale(&rendered),
-                "the idle whale must still be earned at 80x{rows}\n{rendered}"
+                idle_ocean_visible(&app),
+                "the ambient ocean floor must still be earned at 80x{rows}\n{rendered}"
             );
             assert!(
                 rendered.contains(AGENT_MARK),
@@ -22820,18 +23293,32 @@ mod work_surface {
             );
         }
 
-        // 21 rows cannot seat the ocean at any strip height. That is pre-rail
+        // 21 rows now seats the ocean floor exactly — the merged footer
+        // returned the activity band's row to the stage (topbar 1 + footer 1
+        // + composer floor 3 + the 16-row ambient floor = 21). 20 rows
+        // cannot seat the ocean at any strip height. That is pre-rail
         // behavior and the yield rule must not pretend otherwise.
         let mut app = busy_rail_app(panel);
         assert_eq!(
             strip_height(&mut app, 80, 21),
             0,
-            "80x21 has no spare rows for a strip at all"
+            "80x21 seats the ocean floor but has no spare rows for a strip"
         );
         let rendered = render_underwater_test_app(&mut app, 80, 21);
         assert!(
-            !has_idle_whale(&rendered),
-            "80x21 has no room for the ocean even with no strip at all\n{rendered}"
+            idle_ocean_visible(&app),
+            "80x21 is exactly the ocean floor under the Tideline shell:\n{rendered}"
+        );
+        let mut app = busy_rail_app(panel);
+        assert_eq!(
+            strip_height(&mut app, 80, 20),
+            0,
+            "80x20 has no spare rows for a strip at all"
+        );
+        let rendered = render_underwater_test_app(&mut app, 80, 20);
+        assert!(
+            !idle_ocean_visible(&app),
+            "80x20 has no room for the ocean even with no strip at all\n{rendered}"
         );
     }
 
@@ -22856,11 +23343,13 @@ mod work_surface {
 
         for rows in 18_u16..=40 {
             let mut with_rail = busy_rail_app(RailPanel::Agents);
-            let with = has_idle_whale(&render_underwater_test_app(&mut with_rail, 80, rows));
+            let _ = render_underwater_test_app(&mut with_rail, 80, rows);
+            let with = idle_ocean_visible(&with_rail);
 
             let mut without_rail = busy_rail_app(RailPanel::Agents);
             without_rail.work_surface.placement = WorkSurfacePlacement::Off;
-            let without = has_idle_whale(&render_underwater_test_app(&mut without_rail, 80, rows));
+            let _ = render_underwater_test_app(&mut without_rail, 80, rows);
+            let without = idle_ocean_visible(&without_rail);
 
             assert_eq!(
                 with, without,
@@ -22872,7 +23361,7 @@ mod work_surface {
     }
 
     #[test]
-    fn rail_strip_and_idle_whale_never_thrash_across_a_resize() {
+    fn rail_strip_and_idle_ocean_never_thrash_across_a_resize() {
         // A threshold that is not monotonic in terminal height reads as flicker:
         // drag a terminal edge and the strip blinks in and out. Growing the
         // terminal may only ever *add* chrome, never take it away, and the same
@@ -22916,25 +23405,28 @@ mod work_surface {
             }
         }
 
-        // The whale is monotone too: once the ocean is earned, growing the
-        // terminal never takes it back.
-        let mut seen_whale = false;
+        // The ocean floor is monotone too: once the ocean is earned, growing
+        // the terminal never takes it back.
+        let mut seen_ocean = false;
         for rows in 16_u16..=34 {
             let mut app = busy_rail_app(RailPanel::Agents);
             let rendered = render_underwater_test_app(&mut app, 80, rows);
-            let whale = has_idle_whale(&rendered);
+            let ocean = idle_ocean_visible(&app);
             assert!(
-                whale || !seen_whale,
-                "the idle whale disappeared again at 80x{rows} after being earned at a \
+                ocean || !seen_ocean,
+                "the ambient ocean floor disappeared again at 80x{rows} after being earned at a \
                  smaller size\n{rendered}"
             );
-            seen_whale |= whale;
+            seen_ocean |= ocean;
         }
-        assert!(seen_whale, "the sweep never rendered an idle whale at all");
+        assert!(
+            seen_ocean,
+            "the sweep never earned the ambient ocean at all"
+        );
     }
 
     #[test]
-    fn rail_strip_and_whale_swap_at_the_ambient_width() {
+    fn rail_strip_and_ocean_swap_at_the_ambient_width() {
         // The width gate is a real trade and this test exists so it stays a
         // decision rather than drifting into an accident.
         //
@@ -22966,7 +23458,7 @@ mod work_surface {
         let mut app = busy_rail_app(panel);
         let rendered = render_underwater_test_app(&mut app, width_floor, rows);
         assert!(
-            has_idle_whale(&rendered),
+            idle_ocean_visible(&app),
             "yielding the strip at {width_floor}x{rows} must actually buy the ocean\n{rendered}"
         );
     }
@@ -23086,8 +23578,8 @@ mod work_surface {
         );
         let rendered = render_underwater_test_app(&mut app, 80, 24);
         assert!(
-            has_idle_whale(&rendered),
-            "a yielded strip must leave the whale intact at 80x24\n{rendered}"
+            idle_ocean_visible(&app),
+            "a yielded strip must leave the ambient ocean intact at 80x24\n{rendered}"
         );
         assert!(app.work_surface.last_area.is_none());
         assert!(!app.work_surface.focused);
@@ -23115,9 +23607,18 @@ mod work_surface {
         let short = strip_height(&mut app, 80, 22);
         assert_eq!(short, 0, "80x22 has no spare rows for a strip");
         let rendered = render_underwater_test_app(&mut app, 80, 22);
+        // Probe the strip's own rows — directly under the one-row topbar —
+        // not the whole frame: the background-work chip (slot 4) is a
+        // different surface and may legitimately spend its spare row on the
+        // same agent's name now that the merged footer freed one.
+        let strip_slot_row = rendered
+            .lines()
+            .nth(1)
+            .expect("a body row under the topbar");
         assert!(
-            !rendered.contains(AGENT_MARK),
-            "strip_height says 0 rows at 80x22, but the panel painted anyway\n{rendered}"
+            !strip_slot_row.contains(AGENT_MARK),
+            "strip_height says {short} rows at 80x22, but the panel painted \
+             anyway: {strip_slot_row:?}"
         );
     }
 
@@ -23511,4 +24012,129 @@ fn focused_agent_transcript_receives_wheel_scroll_through_the_frame() {
         app.viewport.transcript_scroll.is_at_tail(),
         "the invisible main transcript must not consume the focused pane's scroll"
     );
+}
+
+#[test]
+fn fresh_launch_engine_adopts_the_app_session_id() {
+    // Regression for phantom duplicate sessions: a fresh interactive launch
+    // claimed session id A in the App (Runtime store lock, turn-start crash
+    // checkpoint) while the engine minted its own id B. The first
+    // `SessionUpdated` re-keyed the App to B, the completion commit cleared
+    // only `checkpoints/<B>.json`, and `--continue` later "recovered" the
+    // orphaned `checkpoints/<A>.json` (one user message, no reply) instead of
+    // the real session. The engine must adopt the App's id at spawn.
+    let mut app = create_test_app();
+    app.current_session_id = None;
+    let config = Config::default();
+
+    let session_id = super::event_loop::ensure_runtime_session_id(&mut app);
+    assert_eq!(app.current_session_id.as_deref(), Some(session_id.as_str()));
+    assert!(
+        uuid::Uuid::parse_str(&session_id).is_ok(),
+        "fresh launch claims a uuid, got {session_id:?}"
+    );
+
+    let engine_config = build_engine_config(&app, &config);
+    assert_eq!(
+        engine_config.session_id.as_deref(),
+        Some(session_id.as_str()),
+        "the engine config must carry the App session id"
+    );
+    let (engine, _handle) = crate::core::engine::Engine::new(engine_config, &config);
+    assert_eq!(
+        engine.session_id(),
+        session_id,
+        "the engine must run the conversation the App persists"
+    );
+}
+
+#[test]
+fn fresh_session_turn_lifecycle_leaves_no_orphan_checkpoint() {
+    // Store-level regression for the phantom duplicate sessions: walk the
+    // persistence lifecycle of one fresh interactive turn against an
+    // isolated session store and require that the turn-start checkpoint and
+    // the completion commit are keyed by the same id. Before the fix the
+    // engine minted its own id, `SessionUpdated` re-keyed the App to it, and
+    // `checkpoints/<app id>.json` survived every completed turn; `--continue`
+    // then "recovered" that one-message orphan as a duplicate session.
+    //
+    // `build_session_snapshot` calls `set_live_session`, which writes the
+    // process-global LIVE_SESSIONS registry. Without this lock the test races
+    // the other live-session tests under the default multi-thread runner.
+    let _lock = crate::test_support::lock_test_env();
+    let mut app = create_test_app();
+    app.current_session_id = None;
+    app.current_session_metadata = None;
+    let config = Config::default();
+    let store = TempDir::new().expect("sessions tempdir");
+    let manager = crate::session_manager::SessionManager::new(store.path().join("sessions"))
+        .expect("manager");
+
+    // Fresh launch (event_loop::run_tui): the App claims the id, the engine
+    // adopts it.
+    let app_session_id = super::event_loop::ensure_runtime_session_id(&mut app);
+    let (engine, _handle) =
+        crate::core::engine::Engine::new(build_engine_config(&app, &config), &config);
+
+    // Turn start (dispatch.rs): crash checkpoint under the App id.
+    app.api_messages.push(crate::models::Message {
+        role: Role::User,
+        content: vec![crate::models::ContentBlock::Text {
+            text: "please answer".to_string(),
+            cache_control: None,
+        }],
+    });
+    let checkpoint = build_session_snapshot(&mut app, &manager).expect("turn-start snapshot");
+    assert_eq!(checkpoint.metadata.id, app_session_id);
+    manager
+        .save_checkpoint(&checkpoint)
+        .expect("save turn-start checkpoint");
+
+    // The engine reports its conversation id (`SessionUpdated` handler).
+    app.current_session_id = Some(engine.session_id().to_string());
+
+    // Turn completion (`PersistRequest::CompletedCommit`): save the session,
+    // then clear the checkpoint of the id the snapshot carries.
+    app.api_messages.push(crate::models::Message {
+        role: Role::Assistant,
+        content: vec![crate::models::ContentBlock::Text {
+            text: "answer".to_string(),
+            cache_control: None,
+        }],
+    });
+    let completed = build_session_snapshot(&mut app, &manager).expect("completed snapshot");
+    manager.save_session(&completed).expect("save session");
+    manager
+        .clear_session_checkpoint(&completed.metadata.id)
+        .expect("clear checkpoint");
+
+    assert_eq!(
+        completed.metadata.id, app_session_id,
+        "the completed turn must commit under the id the checkpoint was written with"
+    );
+    let orphans = manager.list_checkpoints().expect("list checkpoints");
+    assert!(
+        orphans.is_empty(),
+        "a completed turn must leave no checkpoint behind, found {:?}",
+        orphans.iter().map(|c| c.path.clone()).collect::<Vec<_>>()
+    );
+    let sessions = manager.list_sessions().expect("list sessions");
+    assert_eq!(sessions.len(), 1, "exactly one session file: {sessions:?}");
+    assert_eq!(sessions[0].id, app_session_id);
+    assert_eq!(sessions[0].message_count, 2);
+    crate::session_manager::set_live_session(None);
+}
+
+#[test]
+fn resumed_launch_keeps_the_loaded_session_id_for_the_engine() {
+    let mut app = create_test_app();
+    app.current_session_id = Some("800596e6-56fd-477c-9a0f-13ada7846194".to_string());
+    let config = Config::default();
+
+    let session_id = super::event_loop::ensure_runtime_session_id(&mut app);
+    assert_eq!(session_id, "800596e6-56fd-477c-9a0f-13ada7846194");
+
+    let (engine, _handle) =
+        crate::core::engine::Engine::new(build_engine_config(&app, &config), &config);
+    assert_eq!(engine.session_id(), "800596e6-56fd-477c-9a0f-13ada7846194");
 }

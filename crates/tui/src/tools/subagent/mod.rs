@@ -388,7 +388,7 @@ const VALID_SUBAGENT_TYPES: &str = "worker, scout, planner, reviewer, builder, v
 /// resolves to a canonical role (avoids the dual-validation rejection in #2649).
 const VALID_ROLE_ALIASES: &str = "default; worker; scout; planner; reviewer; builder; verifier; consultant; custom \
      (legacy aliases remain accepted)";
-/// Canonical model-facing Fleet role values, in schema order. This is the
+/// Canonical model-facing Pod role values, in schema order. This is the
 /// closed `enum` advertised on the Agent tool's `type` property. Legacy
 /// aliases are accepted only at replay/deserialization boundaries
 /// ([`migrate_legacy_role_token`]) and are never advertised to models.
@@ -402,7 +402,7 @@ const FLEET_ROLE_SCHEMA_VALUES: [&str; 8] = [
     "consultant",
     "custom",
 ];
-const SUBAGENT_TYPE_DESCRIPTION: &str = "Fleet role for this delegated worker. worker: full tool access for multi-step tasks. scout: fast read-only exploration. planner: grounded strategy with read-only probes. reviewer: reads and grades code. builder: lands focused code changes. verifier: runs tests/validation gates and reports evidence. consultant: read-only high-reasoning counsel for judgement calls and design critique. custom: the tools listed in allowed_tools on the parent's posture.";
+const SUBAGENT_TYPE_DESCRIPTION: &str = "Pod role for this delegated worker. worker: full tool access for multi-step tasks. scout: fast read-only exploration. planner: grounded strategy with read-only probes. reviewer: reads and grades code. builder: lands focused code changes. verifier: runs tests/validation gates and reports evidence. consultant: read-only high-reasoning counsel for judgement calls and design critique. custom: the tools listed in allowed_tools on the parent's posture.";
 
 // === Types ===
 
@@ -420,10 +420,10 @@ impl SubAgentAssignment {
     }
 }
 
-/// Canonical Fleet role for a delegated worker, with specialized behavior
+/// Canonical Pod role for a delegated worker, with specialized behavior
 /// and tool access per role.
 ///
-/// **Public vocabulary is Fleet roles** (`worker`, `scout`, `planner`,
+/// **Public vocabulary is Pod roles** (`worker`, `scout`, `planner`,
 /// `reviewer`, `builder`, `verifier`, `custom`) and the variants match that
 /// vocabulary one-to-one. Serialization, prompts, receipts, and UI always
 /// use [`Self::as_str`]. Legacy wire spellings (`general`, `explore`,
@@ -433,7 +433,7 @@ impl SubAgentAssignment {
 /// This is the closed runtime role set. It is distinct from
 /// `codewhale_config::FleetRole`, which is the open config-side role
 /// *declaration* (free-form name plus instruction overlay) carried by a
-/// Fleet profile.
+/// Pod profile. The `FleetRole` type name remains a compatibility identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum FleetRole {
     /// General-purpose worker - full tool access for multi-step tasks.
@@ -512,14 +512,14 @@ pub fn migrate_legacy_role_token(token: &str) -> Option<&'static str> {
 }
 
 impl FleetRole {
-    /// Parse a Fleet role from user input or a serialized boundary.
+    /// Parse a Pod role from user input or a serialized boundary.
     ///
-    /// Accepts Fleet role names and, at this parse boundary only, legacy
+    /// Accepts Pod role names and, at this parse boundary only, legacy
     /// aliases (`explore` → scout, `plan` → planner, …).
     #[must_use]
     pub fn from_str(s: &str) -> Option<Self> {
         let normalized = s.trim().to_ascii_lowercase();
-        // Boundary migration first, then canonical Fleet names.
+        // Boundary migration first, then canonical Pod names.
         let token = migrate_legacy_role_token(&normalized).unwrap_or(normalized.as_str());
         match token {
             "worker" => Some(Self::Worker),
@@ -534,7 +534,7 @@ impl FleetRole {
         }
     }
 
-    /// Canonical Fleet role label for runtime, schemas, prompts, receipts, UI.
+    /// Canonical Pod role label for runtime, schemas, prompts, receipts, UI.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -566,7 +566,7 @@ impl FleetRole {
         }
     }
 
-    /// Get the system prompt for this Fleet role.
+    /// Get the system prompt for this Pod role.
     #[must_use]
     pub fn system_prompt(&self) -> String {
         let role_intro = match self {
@@ -939,6 +939,11 @@ pub struct AgentWorkerRecord {
     pub artifacts: Vec<AgentRunArtifactRef>,
     #[serde(default = "default_agent_run_usage")]
     pub usage: AgentRunUsage,
+    /// Redacted provider-response identities already folded into `usage`.
+    /// Persisting the same fingerprint as the session cost snapshot makes a
+    /// retried delivery idempotent in both projections after reload.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub usage_source_fingerprints: BTreeSet<String>,
     #[serde(default = "default_agent_run_verification")]
     pub verification: AgentRunVerificationSummary,
     #[serde(default = "default_agent_run_recommended_action")]
@@ -993,6 +998,7 @@ impl AgentWorkerRecord {
             takeover,
             artifacts,
             usage: default_agent_run_usage(),
+            usage_source_fingerprints: BTreeSet::new(),
             verification: default_agent_run_verification(),
             recommended_action,
             status: AgentWorkerStatus::Starting,
@@ -1080,6 +1086,42 @@ fn priced_usd_microusd(audit: &crate::pricing::TurnCostAudit) -> Option<u64> {
     Some(microusd.round() as u64)
 }
 
+/// Publish one child provider response into every projection that owns it.
+/// The stable source id is the shared exactly-once key: runtime/session cost
+/// and the durable worker record hash it with the same canonical function.
+async fn record_provider_response_usage(
+    runtime: &SubAgentRuntime,
+    agent_id: &str,
+    source_id: &str,
+    route: crate::cost_status::EffectiveRouteEnvelope,
+    usage: &Usage,
+) {
+    let priced_cost_microusd = priced_usd_microusd(&route.audit(usage));
+    if let Some(lease) = runtime.runtime_usage_lease.as_ref() {
+        crate::cost_status::report_effective_route_for_runtime(
+            crate::cost_status::scope_token(),
+            Some(lease.owner()),
+            source_id,
+            &route,
+            usage,
+        );
+    }
+    if let Some(mailbox) = runtime.mailbox.as_ref() {
+        let _ = mailbox.send(MailboxMessage::token_usage(
+            agent_id,
+            source_id,
+            route,
+            usage.clone(),
+        ));
+    }
+    runtime.manager.write().await.record_worker_usage(
+        agent_id,
+        source_id,
+        usage,
+        priced_cost_microusd,
+    );
+}
+
 fn refresh_usage_note(usage: &mut AgentRunUsage) {
     let worker_total = usage.total_tokens.unwrap_or(0);
     if let Some(limit) = usage.token_budget {
@@ -1152,6 +1194,9 @@ fn claimed_diff_taint(
         .arg("-C")
         .arg(workspace)
         .args(["status", "--porcelain"])
+        // Read-only probe: never take the index lock in the user's repo
+        // (#5617).
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .ok()?;
     if !status_output.status.success() {
@@ -1852,8 +1897,8 @@ struct SpawnRequest {
     /// workspace, and reachable by the spawning agent.
     resume_from: Option<String>,
     /// Detached children deliberately outlive the active parent turn. The
-    /// default is foreground ownership: a turn-end cancellation stops and
-    /// joins its direct children before the turn becomes terminal.
+    /// default is foreground ownership: normal turn end parks and joins the
+    /// child's entire non-detached subtree before the turn becomes terminal.
     detached: bool,
 }
 
@@ -2223,16 +2268,30 @@ pub(crate) struct ForegroundChildRegistry {
     settled: tokio::sync::watch::Sender<()>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ForegroundSettlement {
+    Cancel,
+    Park,
+}
+
+#[derive(Debug)]
+struct ForegroundChildEntry {
+    agent_id: String,
+    token: CancellationToken,
+    parking_requested: Arc<std::sync::atomic::AtomicBool>,
+}
+
 #[derive(Debug, Default)]
 struct ForegroundChildState {
-    cancelled: bool,
+    settlement: Option<ForegroundSettlement>,
     next_id: u64,
-    tokens: HashMap<u64, CancellationToken>,
+    children: HashMap<u64, ForegroundChildEntry>,
 }
 
 pub(crate) struct ForegroundChildRegistration {
     registry: std::sync::Weak<ForegroundChildRegistry>,
     id: u64,
+    parking_requested: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ForegroundChildRegistry {
@@ -2247,22 +2306,57 @@ impl ForegroundChildRegistry {
 
     pub(crate) fn register(
         self: &Arc<Self>,
+        agent_id: impl Into<String>,
         token: CancellationToken,
-    ) -> ForegroundChildRegistration {
+    ) -> Result<ForegroundChildRegistration, ForegroundSettlement> {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(settlement) = state.settlement {
+            token.cancel();
+            return Err(settlement);
+        }
         let id = state.next_id;
         state.next_id = state.next_id.saturating_add(1);
-        if state.cancelled {
-            token.cancel();
-        }
-        state.tokens.insert(id, token);
-        ForegroundChildRegistration {
+        let parking_requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        state.children.insert(
+            id,
+            ForegroundChildEntry {
+                agent_id: agent_id.into(),
+                token,
+                parking_requested: Arc::clone(&parking_requested),
+            },
+        );
+        Ok(ForegroundChildRegistration {
             registry: Arc::downgrade(self),
             id,
-        }
+            parking_requested,
+        })
+    }
+
+    #[must_use]
+    pub(crate) fn active_count(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .children
+            .len()
+    }
+
+    #[must_use]
+    pub(crate) fn active_agent_ids(&self) -> Vec<String> {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut agent_ids = state
+            .children
+            .values()
+            .map(|entry| entry.agent_id.clone())
+            .collect::<Vec<_>>();
+        agent_ids.sort();
+        agent_ids
     }
 
     fn release(&self, id: u64) {
@@ -2270,28 +2364,51 @@ impl ForegroundChildRegistry {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.tokens.remove(&id).is_some() {
+        if state.children.remove(&id).is_some() {
             self.settled.send_replace(());
         }
     }
 
-    /// Cancel every currently-owned direct child and wait until each task has
+    /// Cancel every currently-owned child and wait until each task has
     /// released its registration. Multiple terminal paths share this barrier:
     /// only the first call issues cancellation, while all callers await the
     /// same settled set. A child registered after cancellation observes the
     /// latched state and is cancelled before it can reach a provider request.
     pub(crate) async fn cancel_and_wait(&self) {
+        self.settle_and_wait(ForegroundSettlement::Cancel).await;
+    }
+
+    /// Park turn-owned children as resumable before cancelling their live
+    /// tasks. The flag is stored before token cancellation, so every child
+    /// projects the race as Interrupted with a checkpoint rather than a
+    /// terminal Cancelled receipt.
+    pub(crate) async fn park_and_wait(&self) {
+        self.settle_and_wait(ForegroundSettlement::Park).await;
+    }
+
+    async fn settle_and_wait(&self, requested: ForegroundSettlement) {
+        use std::sync::atomic::Ordering;
+
         let mut settled = self.settled.subscribe();
         let tokens = {
             let mut state = self
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if state.cancelled {
+            if state.settlement.is_some() {
                 Vec::new()
             } else {
-                state.cancelled = true;
-                state.tokens.values().cloned().collect::<Vec<_>>()
+                state.settlement = Some(requested);
+                state
+                    .children
+                    .values()
+                    .map(|entry| {
+                        if requested == ForegroundSettlement::Park {
+                            entry.parking_requested.store(true, Ordering::Release);
+                        }
+                        entry.token.clone()
+                    })
+                    .collect::<Vec<_>>()
             }
         };
         for token in tokens {
@@ -2304,7 +2421,7 @@ impl ForegroundChildRegistry {
                     .state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                state.tokens.is_empty()
+                state.children.is_empty()
             };
             if is_settled {
                 return;
@@ -2313,6 +2430,12 @@ impl ForegroundChildRegistry {
             // plain notification created but not yet polled by this task.
             let _ = settled.changed().await;
         }
+    }
+}
+
+impl ForegroundChildRegistration {
+    pub(crate) fn parking_signal(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        Arc::clone(&self.parking_requested)
     }
 }
 
@@ -2393,9 +2516,9 @@ pub struct SubAgentRuntime {
     /// a child token from the parent; explicitly detached model-visible
     /// `agent` starts use `background_runtime()` to replace it.
     pub cancel_token: CancellationToken,
-    /// Turn-scoped ownership barrier for direct foreground children. Nested
-    /// children inherit the Arc but do not register: their direct parent owns
-    /// their lifecycle. Explicitly detached runtimes clear it.
+    /// Turn-scoped ownership barrier for the complete foreground subtree.
+    /// Every non-detached descendant registers with the same root barrier;
+    /// explicitly detached runtimes clear it for their whole subtree.
     foreground_children: Option<Arc<ForegroundChildRegistry>>,
     /// Structured progress / lifecycle stream. Cloned across children so the
     /// whole spawn tree publishes into one ordered, fan-out-able mailbox.
@@ -2654,12 +2777,14 @@ impl SubAgentRuntime {
     #[must_use]
     #[allow(dead_code)] // wired by #128 alongside `with_mailbox`.
     pub fn with_cancel_token(mut self, token: CancellationToken) -> Self {
+        self.context.cancel_token = Some(token.clone());
         self.cancel_token = token;
         self
     }
 
-    /// Attach the turn-owned direct-child registry. Engine-only wiring keeps
-    /// the ownership boundary out of Fleet scheduling and persisted records.
+    /// Attach the turn-owned foreground-subtree registry. Engine-only wiring
+    /// keeps the ownership boundary out of Fleet scheduling and persisted
+    /// records.
     #[must_use]
     pub(crate) fn with_foreground_children(
         mut self,
@@ -2780,11 +2905,24 @@ impl SubAgentRuntime {
         runtime
     }
 
-    fn foreground_child_registration(&self) -> Option<ForegroundChildRegistration> {
-        (self.spawn_depth == 1)
-            .then_some(())
-            .and(self.foreground_children.as_ref())
-            .map(|registry| registry.register(self.cancel_token.clone()))
+    fn foreground_child_registration(
+        &self,
+        agent_id: &str,
+    ) -> Result<Option<ForegroundChildRegistration>> {
+        if self.spawn_depth == 0 {
+            return Ok(None);
+        }
+        let Some(registry) = self.foreground_children.as_ref() else {
+            return Ok(None);
+        };
+        registry
+            .register(agent_id, self.cancel_token.clone())
+            .map(Some)
+            .map_err(|settlement| {
+                anyhow!(
+                    "parent turn is already settling foreground work as {settlement:?}; refusing to launch child {agent_id} after the ownership barrier closed"
+                )
+            })
     }
 
     /// Build a child runtime cloning this one, incrementing `spawn_depth`,
@@ -2799,6 +2937,8 @@ impl SubAgentRuntime {
     pub fn child_runtime(&self) -> Self {
         let mut child_context = self.context.clone();
         child_context.auto_approve = self.context.auto_approve;
+        let cancel_token = self.cancel_token.child_token();
+        child_context.cancel_token = Some(cancel_token.clone());
         Self {
             client: self.client.clone(),
             api_config: self.api_config.clone(),
@@ -2823,7 +2963,7 @@ impl SubAgentRuntime {
             spawn_depth: self.spawn_depth + 1,
             parent_agent_id: self.parent_agent_id.clone(),
             max_spawn_depth: self.max_spawn_depth,
-            cancel_token: self.cancel_token.child_token(),
+            cancel_token,
             foreground_children: self.foreground_children.clone(),
             mailbox: self.mailbox.clone(),
             runtime_usage_lease: self.runtime_usage_lease.clone(),
@@ -3967,6 +4107,26 @@ impl SubAgentManager {
             })
     }
 
+    /// Release write claims whose owner is no longer a live claimant.
+    ///
+    /// The operator-of-record path for #5562: `coordinate inspect` shows the
+    /// standing claims, and `coordinate release` clears the stale ones after
+    /// the manager agrees no live claimant is being touched. An optional owner
+    /// restricts the sweep to one agent; live claims are never removed.
+    pub(crate) fn release_stale_write_claims(
+        &mut self,
+        owner: Option<String>,
+    ) -> Result<Vec<String>, String> {
+        self.ensure_coordination_process_lock()?;
+        let active = self.active_coordination_owners();
+        let released = self
+            .coordination
+            .release_stale_claims(owner.as_deref(), |candidate| active.contains(candidate))?;
+        self.persist_state_synchronously()
+            .map_err(|error| error.to_string())?;
+        Ok(released)
+    }
+
     fn validate_write_scope(&self, owner: &str, paths: &[String]) -> Result<(), String> {
         let Some(claim) = self
             .coordination
@@ -4000,13 +4160,9 @@ impl SubAgentManager {
             .find(|record| record.claim.owner == owner && !record.isolated_worktree)
     }
 
-    /// Is another *live* child writing in the shared checkout?
-    ///
-    /// This is the question the unbounded-write gate actually needs. A claim
-    /// bounds a child so concurrent children cannot overwrite each other's
-    /// files; with no second writer in the shared tree there is nothing to
-    /// collide with, and a shell redirect is no more dangerous than the `File`
-    /// write the same child is already allowed to perform.
+    /// The live peers whose shared-checkout write claims gate `owner` — the
+    /// names the contention refusal must surface so a refused child knows
+    /// what it is waiting on and what to cancel or release.
     ///
     /// Liveness is the load-bearing part. Claims outlive the agents that
     /// registered them, so a workspace accumulates one per builder that ever
@@ -4015,21 +4171,22 @@ impl SubAgentManager {
     /// since finished, and the contention only ever grew. A terminal owner
     /// cannot write anything, so its claim cannot contend.
     ///
+    /// The same single predicate as claim admission (#5562): an agent restored
+    /// `Running` from a prior session (crash leftover) and an owner whose agent
+    /// record is not loaded are both non-live — the per-workspace coordination
+    /// process lock means no other process is writing concurrently, so there is
+    /// no live peer to fail closed against.
+    ///
     /// Worktree-isolated peers are excluded too: they write into their own
     /// checkout and can never contend for these paths.
-    fn has_peer_shared_write_claim(&self, owner: &str) -> bool {
+    fn live_peer_shared_write_claim_owners(&self, owner: &str) -> Vec<String> {
         self.coordination
             .write_claims
             .iter()
             .filter(|record| record.claim.owner != owner && !record.isolated_worktree)
-            .any(|record| {
-                // Unknown owners stay contended: a claim whose agent is not in
-                // this map may predate the current session, and failing closed
-                // is the safe direction for a write gate.
-                self.agents
-                    .get(&record.claim.owner)
-                    .is_none_or(|agent| matches!(agent.status, SubAgentStatus::Running))
-            })
+            .filter(|record| self.is_live_coordination_owner(&record.claim.owner))
+            .map(|record| record.claim.owner.clone())
+            .collect()
     }
 
     /// Classify an agent by its `session_boot_id`: `true` when the
@@ -4561,7 +4718,7 @@ impl SubAgentManager {
             target: "subagent",
             finalized,
             released,
-            "finalized sub-agent fleet on session close"
+            "finalized sub-agent pod on session close"
         );
         finalized
     }
@@ -4732,7 +4889,7 @@ impl SubAgentManager {
             self.worker_records = previous_worker_records;
             self.coordination = previous_coordination;
             return Err(format!(
-                "failed to persist Fleet coordination launch record: {error}"
+                "failed to persist Pod coordination launch record: {error}"
             ));
         }
         Ok(())
@@ -4752,36 +4909,51 @@ impl SubAgentManager {
         self.worker_records = snapshot.worker_records;
         self.coordination = snapshot.coordination;
         self.persist_state_synchronously()
-            .map_err(|error| format!("failed to persist Fleet coordination rollback: {error}"))
+            .map_err(|error| format!("failed to persist Pod coordination rollback: {error}"))
     }
 
+    /// The single definition of a live coordination claimant.
+    ///
+    /// One predicate, evaluated per owner id by every caller: claim admission
+    /// (`active_coordination_owners` delegates below), the shared-checkout peer
+    /// gate (`live_peer_shared_write_claim_owners`), and stale-claim release.
+    /// The admission and gate sides used to disagree, which let a claim from a
+    /// crashed prior session (an agent record restored as `Running` with a
+    /// different boot id, or an owner whose record was never loaded at all)
+    /// keep looking like a live writer forever — every later builder/worker
+    /// was then denied all command execution (issue #5562: "stale write-claims
+    /// persist forever and cascade-lock other agents"). A claim cannot contend
+    /// for an owner that cannot write.
+    fn is_live_coordination_owner(&self, id: &str) -> bool {
+        self.agents.get(id).is_some_and(|agent| {
+            agent.status == SubAgentStatus::Running && !self.is_from_prior_session(agent)
+        }) || self.worker_records.get(id).is_some_and(|record| {
+            !record.status.is_terminal()
+                // A headless worker (no paired agent entry) that reaches
+                // WaitingForUser can never be answered: no user path will
+                // resume or finalize it, so counting it live leaks its claim
+                // as a permanent gate on every later writer. A *paired*
+                // waiting child keeps its claim — the user can still answer
+                // and the child will write again.
+                && !(record.status == AgentWorkerStatus::WaitingForUser
+                    && !self.agents.contains_key(id))
+                && !self
+                    .agents
+                    .get(id)
+                    .is_some_and(|agent| self.is_from_prior_session(agent))
+        })
+    }
+
+    // Worker records carry no boot id of their own, so the per-id predicate
+    // consults the paired agent when one exists; delegating keeps admission,
+    // the peer gate, and stale-claim release on one liveness definition.
     fn active_coordination_owners(&self) -> std::collections::HashSet<String> {
-        let mut owners = std::collections::HashSet::new();
-        for (id, agent) in &self.agents {
-            // A prior-session agent (mismatched/empty boot id) is not a live
-            // claimant even if its restored status still reads Running.
-            if agent.status == SubAgentStatus::Running && !self.is_from_prior_session(agent) {
-                owners.insert(id.clone());
-            }
-        }
-        for (id, record) in &self.worker_records {
-            if record.status.is_terminal() {
-                continue;
-            }
-            // Worker records don't carry their own boot id, so consult the
-            // paired agent when one exists. A headless worker (no agent
-            // entry) is a live current-session owner by virtue of its
-            // non-terminal record; a paired agent from a prior session means
-            // the worker is an orphan that must never gate a new writer.
-            let prior_session = self
-                .agents
-                .get(id)
-                .is_some_and(|agent| self.is_from_prior_session(agent));
-            if !prior_session {
-                owners.insert(id.clone());
-            }
-        }
-        owners
+        self.agents
+            .keys()
+            .chain(self.worker_records.keys())
+            .filter(|id| self.is_live_coordination_owner(id))
+            .cloned()
+            .collect()
     }
 
     fn namespace_write_claim(
@@ -4887,7 +5059,7 @@ impl SubAgentManager {
         let record = self
             .worker_records
             .get_mut(&worker_id)
-            .ok_or_else(|| format!("Fleet worker {worker_id} has no registered launch spec"))?;
+            .ok_or_else(|| format!("Pod worker {worker_id} has no registered launch spec"))?;
         record.spec = spec;
         self.persist_state_synchronously()
             .map_err(|error| format!("failed to persist test worker spec: {error}"))
@@ -4908,23 +5080,21 @@ impl SubAgentManager {
             .worker_records
             .get(&worker_id)
             .cloned()
-            .ok_or_else(|| format!("Fleet worker {worker_id} has no registered launch spec"))?;
+            .ok_or_else(|| format!("Pod worker {worker_id} has no registered launch spec"))?;
         let old_generation = previous
             .spec
             .launch_manifest
             .as_ref()
             .map(|manifest| manifest.generation)
-            .ok_or_else(|| format!("Fleet worker {worker_id} has no persisted launch manifest"))?;
+            .ok_or_else(|| format!("Pod worker {worker_id} has no persisted launch manifest"))?;
         let new_generation = spec
             .launch_manifest
             .as_ref()
             .map(|manifest| manifest.generation)
-            .ok_or_else(|| {
-                format!("Fleet worker {worker_id} replacement has no launch manifest")
-            })?;
+            .ok_or_else(|| format!("Pod worker {worker_id} replacement has no launch manifest"))?;
         if new_generation != old_generation.saturating_add(1) {
             return Err(format!(
-                "Fleet worker {worker_id} restart generation must advance from {old_generation} to {}",
+                "Pod worker {worker_id} restart generation must advance from {old_generation} to {}",
                 old_generation.saturating_add(1)
             ));
         }
@@ -4936,7 +5106,7 @@ impl SubAgentManager {
             .generation = new_generation;
         if expected != spec {
             return Err(format!(
-                "Fleet worker {worker_id} restart may change only its launch generation"
+                "Pod worker {worker_id} restart may change only its launch generation"
             ));
         }
 
@@ -4949,7 +5119,7 @@ impl SubAgentManager {
         if let Err(error) = self.persist_state_synchronously() {
             self.worker_records.insert(worker_id, previous);
             return Err(format!(
-                "failed to persist Fleet restart launch generation: {error}"
+                "failed to persist Pod restart launch generation: {error}"
             ));
         }
         Ok(())
@@ -5111,6 +5281,7 @@ impl SubAgentManager {
     fn record_worker_usage(
         &mut self,
         worker_id: &str,
+        source_id: &str,
         usage: &Usage,
         priced_cost_microusd: Option<u64>,
     ) {
@@ -5119,6 +5290,10 @@ impl SubAgentManager {
         let Some(record) = self.worker_records.get_mut(worker_id) else {
             return;
         };
+        let source_fingerprint = crate::cost_status::usage_source_fingerprint(source_id);
+        if !record.usage_source_fingerprints.insert(source_fingerprint) {
+            return;
+        }
         record.updated_at_ms = now_ms;
         record.usage.input_tokens = Some(
             record
@@ -6263,6 +6438,11 @@ impl SubAgentManager {
         }
         let effective_model = runtime.model.clone();
         let agent_id = format!("agent_{}", &Uuid::new_v4().to_string()[..8]);
+        // Admission into the turn-owned barrier happens before worker records,
+        // mailbox events, or task scheduling. Once turn settlement closes the
+        // registry, a racing descendant is refused rather than escaping the
+        // one-shot join and publishing after TurnComplete.
+        let foreground_child_registration = runtime.foreground_child_registration(&agent_id)?;
         let budget_scope = self.resolve_spawn_budget_scope(
             &agent_id,
             runtime.parent_agent_id.as_deref(),
@@ -6300,11 +6480,14 @@ impl SubAgentManager {
             .map(str::trim)
             .filter(|name| !name.is_empty())
         {
-            if let Some(existing) = self
-                .agents
-                .values()
-                .find(|existing| existing.session_name == name)
-            {
+            // Names are scoped to the live session: a completed worker
+            // hydrated from a previous session's ledger is invisible to
+            // `status`/`peek`/`followup`, so it must not reserve the name
+            // either (cloud-agent e2e, 2026-08-30: a fresh `exec` in the same
+            // workspace could not spawn `worker-a` again).
+            if let Some(existing) = self.agents.values().find(|existing| {
+                existing.session_name == name && !self.is_from_prior_session(existing)
+            }) {
                 // #3020: Include elapsed time so the parent can distinguish a
                 // live worker from a stale/failed earlier spawn (#2656).
                 let elapsed = existing.started_at.elapsed();
@@ -6560,7 +6743,6 @@ impl SubAgentManager {
         }
 
         let launch_gate = (runtime.spawn_depth == 1).then(|| self.launch_gate.clone());
-        let foreground_child_registration = runtime.foreground_child_registration();
         let task = SubAgentTask {
             manager_handle,
             runtime,
@@ -8212,10 +8394,10 @@ impl ToolSpec for AgentTool {
         concat!(
             "Start with action=start and prompt; returns a turn-owned agent_id immediately. Read-only roles need no extra fields. Set detached=true only for work that must remain independently observable after the turn. ",
             "Use multiple starts for independent parallel tasks. ",
-            "type selects the Fleet role: worker (full tool access), scout (fast read-only exploration), planner (grounded strategy, read-only probes), reviewer (reads and grades code), builder (lands focused code changes), verifier (runs tests and reports evidence), consultant (read-only design counsel), or custom (allowed_tools on the parent's posture). ",
-            "profile runs the child as a named Fleet profile (roster member) — its role posture, model route, and thinking tier — so pass a profile only when the task needs that member. Without a profile the child inherits the parent's model; per-call model or thinking overrides are not part of this surface. ",
-            "Use action=roster to inspect the current selected Fleet's member ids, names, roles, and exact provider/model routes before choosing a profile. ",
-            "Child run budgets (model turns, wall time) come from Fleet role defaults and operator [subagents] config, not per-call fields. ",
+            "type selects the Pod role: worker (full tool access), scout (fast read-only exploration), planner (grounded strategy, read-only probes), reviewer (reads and grades code), builder (lands focused code changes), verifier (runs tests and reports evidence), consultant (read-only design counsel), or custom (allowed_tools on the parent's posture). ",
+            "profile runs the child as a named Pod profile (roster member) — its role posture, model route, and thinking tier — so pass a profile only when the task needs that member. Without a profile the child inherits the parent's model; per-call model or thinking overrides are not part of this surface. ",
+            "Use action=roster to inspect the current selected Pod's member ids, names, roles, and exact provider/model routes before choosing a profile. ",
+            "Child run budgets (model turns, wall time) come from Pod role defaults and operator [subagents] config, not per-call fields. ",
             "worktree=true gives the child an isolated git worktree — use it whenever parallel writers must not collide with the parent checkout. ",
             "A write-capable child defaults write scope to the parent workspace; narrow it with write_roots (repo-relative directory trees) so parallel children claim disjoint scope. ",
             "Prefer type=builder for write work and type=verifier (or the Run tool with action=\"verifiers\") after writes settle — dispatch is not completion. ",
@@ -8253,7 +8435,7 @@ impl ToolSpec for AgentTool {
                 "action": {
                     "type": "string",
                     "enum": ["start", "roster", "status", "peek", "message", "followup", "interrupt", "wait", "claim", "cancel"],
-                    "description": "start launches a turn-owned worker and returns immediately. roster lists the current Fleet members and exact routes. status/peek inspect running or retained workers. message queues a note without waking a running child. followup delivers queued notes and wakes a running child for its next user-provenance model turn. interrupt stops the current turn while preserving the child checkpoint. wait only observes; see until. claim widens your own enforced write scope (see write_roots). cancel permanently cancels a running child."
+                    "description": "start launches a turn-owned worker and returns immediately. roster lists the current Pod members and exact routes. status/peek inspect running or retained workers. message queues a note without waking a running child. followup delivers queued notes and wakes a running child for its next user-provenance model turn. interrupt stops the current turn while preserving the child checkpoint. wait only observes; see until. claim widens your own enforced write scope (see write_roots). cancel permanently cancels a running child."
                 },
                 "until": {
                     "type": "string",
@@ -8278,7 +8460,7 @@ impl ToolSpec for AgentTool {
                 },
                 "detached": {
                     "type": "boolean",
-                    "description": "False (default): the active turn owns this direct child and cancels it before ending. true: explicitly detached work remains running and inspectable after the parent turn ends; cancel it with agent(action=cancel)."
+                    "description": "False (default): the turn owns this child's non-detached subtree; the parent gets one chance to join before resumable parking. true: detached work outlives the turn; inspect or cancel it with agent(action=cancel)."
                 },
                 "type": {
                     "type": "string",
@@ -8287,7 +8469,7 @@ impl ToolSpec for AgentTool {
                 },
                 "profile": {
                     "type": "string",
-                    "description": "Optional Fleet member selector. Use an exact member id, unique display name or role, exact pinned model id, offline model name, or route:provider/model; action=roster lists the current choices. Ambiguous labels are refused and require member:<id>. The resolved member supplies role posture, exact model route, thinking tier, instruction overlay, and delegation bounds. Named profiles bind 1:1 to their configured route; there is no per-call model override on this surface."
+                    "description": "Optional Pod member selector. Use an exact member id, unique display name or role, exact pinned model id, offline model name, or route:provider/model; action=roster lists the current choices. Ambiguous labels are refused and require member:<id>. The resolved member supplies role posture, exact model route, thinking tier, instruction overlay, and delegation bounds. Named profiles bind 1:1 to their configured route; there is no per-call model override on this surface."
                 },
                 "worktree": {
                     "type": "boolean",
@@ -8454,7 +8636,7 @@ impl ToolSpec for AgentTool {
                     "total_count": total_count,
                     "truncated": members.len() < total_count,
                     "members": members,
-                    "selector_help": "Use member:<id> for an exact choice. Unique role:<role>, model:<id>, model name, and route:<provider>/<model> selectors are also accepted; ambiguity is refused. If truncated=true, use a known exact member id or inspect /fleet.",
+                    "selector_help": "Use member:<id> for an exact choice. Unique role:<role>, model:<id>, model name, and route:<provider>/<model> selectors are also accepted; ambiguity is refused. If truncated=true, use a known exact member id or inspect /pod.",
                 });
                 let mut result = ToolResult::json(&payload)
                     .map_err(|error| ToolError::execution_failed(error.to_string()))?;
@@ -9057,7 +9239,7 @@ fn child_provider_binding(
                     .scoped_config_for_provider_id(&pinned_id)
                     .map_err(|err| {
                         ToolError::execution_failed(format!(
-                            "fleet profile pins provider '{}' but its client could not be built \
+                            "Pod profile pins provider '{}' but its client could not be built \
                          ({err}). Configure that provider's credentials/base URL, or drop the \
                          provider pin to inherit the session provider '{}'.",
                             pinned_id,
@@ -9066,7 +9248,7 @@ fn child_provider_binding(
                     })?;
             let client = DeepSeekClient::new(&scoped_config).map_err(|err| {
                 ToolError::execution_failed(format!(
-                    "fleet profile pins provider '{}' but its client could not be built \
+                    "Pod profile pins provider '{}' but its client could not be built \
                      ({err}). Configure that provider's credentials/base URL, or drop the \
                      provider pin to inherit the session provider '{}'.",
                     pinned_id,
@@ -9138,7 +9320,7 @@ fn enforce_fleet_member_route_requirements(
     )
     .map_err(|error| {
         ToolError::execution_failed(format!(
-            "Fleet member '{member_id}' requirements could not be checked against its exact child route: {}",
+            "Pod member '{member_id}' requirements could not be checked against its exact child route: {}",
             crate::safe_label::safe_error_text(&error.to_string())
         ))
     })?;
@@ -9160,14 +9342,14 @@ fn enforce_fleet_member_route_requirements(
                         codewhale_config::route::CapabilityState::Supported => unreachable!(),
                     };
                     return Err(ToolError::execution_failed(format!(
-                        "Fleet member '{member_id}' requires vision, but exact route {provider_id}/{model_id} has image_input={state}. Codewhale will not reroute a capability-bound member; pin an exact route with verified image_input support."
+                        "Pod member '{member_id}' requires vision, but exact route {provider_id}/{model_id} has image_input={state}. Codewhale will not reroute a capability-bound member; pin an exact route with verified image_input support."
                     )));
                 }
             }
             None => {
                 let requirement = crate::fleet::identity::bounded_identity_field(requirement);
                 return Err(ToolError::execution_failed(format!(
-                    "Fleet member '{member_id}' has unknown capability requirement '{}'; valid values: {}",
+                    "Pod member '{member_id}' has unknown capability requirement '{}'; valid values: {}",
                     requirement,
                     crate::fleet::store::MemberCapability::VOCABULARY.join(", ")
                 )));
@@ -9249,7 +9431,7 @@ async fn spawn_subagent_from_input(
         .rebound_for_model_protocol(child_runtime.api_config.as_deref(), &effective_model)
         .map_err(|err| {
             ToolError::execution_failed(format!(
-                "fleet dispatch could not bind the wire protocol for model {effective_model:?}: {err:#}"
+                "Pod dispatch could not bind the wire protocol for model {effective_model:?}: {err:#}"
             ))
         })?
     {
@@ -9771,7 +9953,7 @@ fn verify_fleet_authority_input(expected: &str, input: &Value) -> Result<()> {
         .collect();
     if !expected.starts_with("v1;") || fields.len() < 8 {
         return Err(anyhow!(
-            "fleet authority fingerprint `{expected}` is not a form this build understands; \
+            "Pod authority fingerprint `{expected}` is not a form this build understands; \
              refusing the spawn rather than launching an unverified child"
         ));
     }
@@ -9817,8 +9999,8 @@ fn verify_fleet_authority_input(expected: &str, input: &Value) -> Result<()> {
         let expected_value = fields.get(key).copied().unwrap_or_default();
         if expected_value != actual {
             return Err(anyhow!(
-                "fleet authority mismatch at the spawn boundary: the receipt names {key}=`{expected_value}` \
-                 but the child would be constructed with `{actual}`. Refusing the spawn — a Fleet \
+                "Pod authority mismatch at the spawn boundary: the receipt names {key}=`{expected_value}` \
+                 but the child would be constructed with `{actual}`. Refusing the spawn — a Pod \
                  ceiling that does not reach the runtime is not a ceiling."
             ));
         }
@@ -10065,13 +10247,67 @@ struct SubAgentTask {
     /// holds it until completion, so a fanout burst beyond the limit queues
     /// with a visible reason instead of executing all at once.
     launch_gate: Option<Arc<Semaphore>>,
-    /// Releases the parent turn's cancellation-and-join barrier after this
-    /// direct foreground child has completed its terminal fan-in.
+    /// Releases the parent turn's settlement barrier after this turn-owned
+    /// child or descendant has completed its terminal fan-in.
     _foreground_child_registration: Option<ForegroundChildRegistration>,
 }
 
-#[allow(clippy::too_many_lines)]
+/// Spawn the child task body under a panic guard.
+///
+/// Children run under `spawn_supervised`, which catch_unwinds a panic so the
+/// parent process survives — and that used to be where the story ended: the
+/// terminal commit at the end of `run_subagent_task_inner` never ran, so the
+/// panicked child stayed `Running` and its write claim kept gating live peers
+/// until heartbeat auto-cancel (indefinitely, while a lingering shell kept
+/// the heartbeat fresh). The guard catches the panic first, commits a crash
+/// terminal result through the same `finish_terminal_result` arbitration every
+/// other terminal path uses, then resumes unwinding so the supervisor still
+/// logs the panic and writes its crash dump.
 async fn run_subagent_task(task: SubAgentTask) {
+    let agent_id = task.agent_id.clone();
+    let manager_handle = task.manager_handle.clone();
+    supervise_subagent_task_body(manager_handle, agent_id, run_subagent_task_inner(task)).await;
+}
+
+async fn supervise_subagent_task_body(
+    manager_handle: SharedSubAgentManager,
+    agent_id: String,
+    body: impl std::future::Future<Output = ()> + Send,
+) {
+    use futures_util::FutureExt;
+    let panicked = std::panic::AssertUnwindSafe(body).catch_unwind().await;
+    let Err(panic) = panicked else {
+        return;
+    };
+    let message = crate::utils::panic_message(&*panic);
+    {
+        let mut manager = manager_handle.write().await;
+        match manager.get_result(&agent_id) {
+            Ok(mut result) => {
+                result.status =
+                    SubAgentStatus::Failed(format!("sub-agent task panicked: {message}"));
+                result.result = None;
+                result.needs_input = None;
+                // Arbitrated exactly like the natural terminal commit: when a
+                // cancel or another terminal outcome already won, this is a
+                // no-op rather than a second result.
+                manager.finish_terminal_result(&agent_id, result, false, true);
+            }
+            Err(err) => {
+                tracing::error!(
+                    target: "subagent",
+                    agent_id = %agent_id,
+                    ?err,
+                    "panicked task no longer has a manager record"
+                );
+            }
+        }
+    }
+    std::panic::resume_unwind(panic);
+}
+
+#[allow(clippy::too_many_lines)]
+async fn run_subagent_task_inner(task: SubAgentTask) {
     // `spawn_background_with_assignment_options` installs this before the task
     // is scheduled. Keep this fallback for internal/test task launchers so a
     // manually-created worker still owns the same terminal fan-in contract.
@@ -10096,7 +10332,7 @@ async fn run_subagent_task(task: SubAgentTask) {
     // for the lifetime of the task. The permit wait shares the authored child
     // deadline with model/tool work, so saturation cannot extend the whole
     // child beyond its wall-time budget. Cancellation while queued is handled
-    // by `run_subagent`'s own first-step cancel check.
+    // by `run_subagent` before it emits Started/Starting.
     let mut _launch_permit = None;
     let mut launch_wait_timed_out = false;
     if let Some(gate) = task.launch_gate.as_ref() {
@@ -10122,6 +10358,10 @@ async fn run_subagent_task(task: SubAgentTask) {
         }
     }
 
+    let turn_end_parking = task
+        ._foreground_child_registration
+        .as_ref()
+        .map(ForegroundChildRegistration::parking_signal);
     let result = if launch_wait_timed_out {
         Err(anyhow!(child_wall_time_exhausted_reason(task.wall_time)))
     } else {
@@ -10138,6 +10378,7 @@ async fn run_subagent_task(task: SubAgentTask) {
                 task.started_at,
                 task.max_steps,
                 task.token_budget,
+                turn_end_parking,
                 task.input_rx,
             ),
         )
@@ -10209,12 +10450,6 @@ async fn acquire_queued_launch_permit(
     tokio::select! {
         biased;
         () = task.runtime.cancel_token.cancelled() => {
-            record_agent_progress(
-                &task.runtime,
-                &task.agent_id,
-                AgentProgressEventMeta::new(AgentWorkerStatus::Cancelled),
-                "cancelled while queued for a sub-agent launch slot".to_string(),
-            );
             None
         }
         permit = Arc::clone(&gate).acquire_owned() => {
@@ -11101,6 +11336,154 @@ then re-plan dependent work before claiming completion.\n",
     }
 }
 
+fn subagent_cancellation_projection(
+    agent_id: &str,
+    messages: &[Message],
+    steps: u32,
+    latest_checkpoint: Option<&SubAgentCheckpoint>,
+    turn_end_parking: Option<&Arc<std::sync::atomic::AtomicBool>>,
+) -> (
+    SubAgentStatus,
+    Option<String>,
+    Option<SubAgentCheckpoint>,
+    Option<SubAgentNeedsInput>,
+    AgentWorkerStatus,
+    &'static str,
+) {
+    let parking_requested =
+        turn_end_parking.is_some_and(|signal| signal.load(std::sync::atomic::Ordering::Acquire));
+    if parking_requested {
+        let reason = format!(
+            "Parent turn ended before this turn-owned child settled. Work was parked instead of discarded; resume with agent(action=\"start\", prompt=\"Continue the parked assignment.\", resume_from=\"{agent_id}\")."
+        );
+        let checkpoint = build_subagent_checkpoint(agent_id, &reason, messages, steps, true);
+        let needs_input = SubAgentNeedsInput {
+            question: format!(
+                "Resume this parked child with agent(action=\"start\", prompt=\"Continue the parked assignment.\", resume_from=\"{agent_id}\")."
+            ),
+        };
+        return (
+            SubAgentStatus::Interrupted(reason.clone()),
+            Some(reason),
+            Some(checkpoint),
+            Some(needs_input),
+            AgentWorkerStatus::Interrupted,
+            "parked at parent turn end",
+        );
+    }
+
+    (
+        SubAgentStatus::Cancelled,
+        None,
+        latest_checkpoint.cloned(),
+        None,
+        AgentWorkerStatus::Cancelled,
+        "cancelled",
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubAgentLoopBoundary {
+    Continue,
+    Cancellation,
+    StepLimit,
+}
+
+fn subagent_loop_boundary(
+    max_steps: u32,
+    steps: u32,
+    cancellation_requested: bool,
+) -> SubAgentLoopBoundary {
+    if cancellation_requested {
+        SubAgentLoopBoundary::Cancellation
+    } else if max_steps > 0 && steps >= max_steps {
+        SubAgentLoopBoundary::StepLimit
+    } else {
+        SubAgentLoopBoundary::Continue
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cancelled_subagent_result(
+    runtime: &SubAgentRuntime,
+    agent_id: &str,
+    agent_type: &FleetRole,
+    assignment: &SubAgentAssignment,
+    messages: &[Message],
+    steps: u32,
+    max_steps: u32,
+    latest_checkpoint: Option<&SubAgentCheckpoint>,
+    turn_end_parking: Option<&Arc<std::sync::atomic::AtomicBool>>,
+    transcript_artifact: &mut Option<SubAgentTranscriptArtifactWriter>,
+    started_at: Instant,
+    fork_context_enabled: bool,
+    progress_suffix: &str,
+) -> SubAgentResult {
+    let (status, result, checkpoint, needs_input, worker_status, progress) =
+        subagent_cancellation_projection(
+            agent_id,
+            messages,
+            steps,
+            latest_checkpoint,
+            turn_end_parking,
+        );
+    record_agent_progress(
+        runtime,
+        agent_id,
+        AgentProgressEventMeta::new(worker_status).with_step(steps),
+        format!(
+            "{}: {progress}{progress_suffix}",
+            format_step_counter(steps, max_steps)
+        ),
+    );
+    let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+    insert_subagent_full_transcript_handle(
+        runtime,
+        agent_id,
+        agent_type,
+        assignment,
+        &status,
+        result.as_ref(),
+        checkpoint.as_ref(),
+        transcript_artifact.as_mut(),
+        messages,
+        steps,
+        duration_ms,
+        fork_context_enabled,
+    )
+    .await;
+    SubAgentResult {
+        name: agent_id.to_string(),
+        agent_id: agent_id.to_string(),
+        context_mode: if fork_context_enabled {
+            "forked"
+        } else {
+            "fresh"
+        }
+        .to_string(),
+        fork_context: fork_context_enabled,
+        workspace: Some(runtime.context.workspace.clone()),
+        git_branch: current_git_branch(&runtime.context.workspace),
+        agent_type: agent_type.clone(),
+        assignment: assignment.clone(),
+        model: runtime.model.clone(),
+        nickname: None,
+        status,
+        worker_status: None,
+        runtime_permissions: None,
+        parent_run_id: runtime.parent_agent_id.clone(),
+        spawn_depth: runtime.spawn_depth,
+        child_route: None,
+        result,
+        steps_taken: steps,
+        checkpoint,
+        needs_input,
+        duration_ms,
+        started_at: Some(started_at),
+        from_prior_session: false,
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn run_subagent(
     runtime: &SubAgentRuntime,
@@ -11113,6 +11496,7 @@ async fn run_subagent(
     started_at: Instant,
     max_steps: u32,
     token_budget: Option<u64>,
+    turn_end_parking: Option<Arc<std::sync::atomic::AtomicBool>>,
     mut input_rx: mpsc::UnboundedReceiver<SubAgentInput>,
 ) -> Result<SubAgentResult> {
     let system_prompt =
@@ -11208,6 +11592,40 @@ async fn run_subagent(
     }
     let tool_catalog = tool_registry.deferred_catalog_for_model(&agent_type);
     let mut tool_surface = SubAgentToolSurface::new(tool_catalog, &[]);
+    let mut steps = 0;
+    let mut final_result: Option<String> = None;
+    let mut pending_inputs: VecDeque<SubAgentInput> = VecDeque::new();
+    let mut latest_checkpoint: Option<SubAgentCheckpoint> = None;
+    let mut tokens_used: u64 = 0;
+    let mut terminal_failure_reason: Option<String> = None;
+    // Distinguish a real "the model chose to stop" exit from an explicitly
+    // configured step-cap exit. The normal loop is unbounded (max_steps == 0).
+    let mut stopped_naturally = false;
+
+    // A queued child can be parked before it ever acquires a launch permit.
+    // Project that terminal state before emitting Started/Starting so the
+    // lifecycle never claims that work began after its parent already ended.
+    if subagent_loop_boundary(max_steps, steps, runtime.cancel_token.is_cancelled())
+        == SubAgentLoopBoundary::Cancellation
+    {
+        return Ok(cancelled_subagent_result(
+            runtime,
+            &agent_id,
+            &agent_type,
+            &assignment,
+            &messages,
+            steps,
+            max_steps,
+            latest_checkpoint.as_ref(),
+            turn_end_parking.as_ref(),
+            &mut transcript_artifact,
+            started_at,
+            fork_context_enabled,
+            " before start",
+        )
+        .await);
+    }
+
     if let Some(mb) = runtime.mailbox.as_ref() {
         let _ = mb.send(MailboxMessage::started(&agent_id, agent_type.clone()));
     }
@@ -11218,15 +11636,6 @@ async fn run_subagent(
         format!("started ({})", agent_type.as_str()),
     );
 
-    let mut steps = 0;
-    let mut final_result: Option<String> = None;
-    let mut pending_inputs: VecDeque<SubAgentInput> = VecDeque::new();
-    let mut latest_checkpoint: Option<SubAgentCheckpoint> = None;
-    let mut tokens_used: u64 = 0;
-    let mut terminal_failure_reason: Option<String> = None;
-    // Distinguish a real "the model chose to stop" exit from an explicitly
-    // configured step-cap exit. The normal loop is unbounded (max_steps == 0).
-    let mut stopped_naturally = false;
     // A worker is inspectable as soon as it is launched, not only after its
     // first model round trip. This gives Open a real conversation destination
     // while the worker is waiting on the provider.
@@ -11246,66 +11655,30 @@ async fn run_subagent(
     .await;
 
     loop {
-        if max_steps > 0 && steps >= max_steps {
-            break;
-        }
-        // Cooperative cancellation: bail if this session's token was cancelled
-        // while we were between steps. Top-level model-visible sub-agents use
-        // a detached token so parent turn cancellation does not stop them.
-        if runtime.cancel_token.is_cancelled() {
-            record_agent_progress(
-                runtime,
-                &agent_id,
-                AgentProgressEventMeta::new(AgentWorkerStatus::Cancelled).with_step(steps),
-                format!("{}: cancelled", format_step_counter(steps, max_steps)),
-            );
-            let status = SubAgentStatus::Cancelled;
-            let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-            insert_subagent_full_transcript_handle(
-                runtime,
-                &agent_id,
-                &agent_type,
-                &assignment,
-                &status,
-                None,
-                latest_checkpoint.as_ref(),
-                transcript_artifact.as_mut(),
-                &messages,
-                steps,
-                duration_ms,
-                fork_context_enabled,
-            )
-            .await;
-            return Ok(SubAgentResult {
-                name: agent_id.clone(),
-                agent_id: agent_id.clone(),
-                context_mode: if fork_context_enabled {
-                    "forked"
-                } else {
-                    "fresh"
-                }
-                .to_string(),
-                fork_context: fork_context_enabled,
-                workspace: Some(runtime.context.workspace.clone()),
-                git_branch: current_git_branch(&runtime.context.workspace),
-                agent_type: agent_type.clone(),
-                assignment: assignment.clone(),
-                model: runtime.model.clone(),
-                nickname: None,
-                status,
-                worker_status: None,
-                runtime_permissions: None,
-                parent_run_id: runtime.parent_agent_id.clone(),
-                spawn_depth: runtime.spawn_depth,
-                child_route: None,
-                result: None,
-                steps_taken: steps,
-                checkpoint: latest_checkpoint.clone(),
-                needs_input: None,
-                duration_ms,
-                started_at: Some(started_at),
-                from_prior_session: false,
-            });
+        match subagent_loop_boundary(max_steps, steps, runtime.cancel_token.is_cancelled()) {
+            // Cancellation must win even after the final allowed tool step.
+            // Otherwise a turn-end park at that seam is mislabeled as step
+            // exhaustion and its continuable checkpoint becomes terminal.
+            SubAgentLoopBoundary::Cancellation => {
+                return Ok(cancelled_subagent_result(
+                    runtime,
+                    &agent_id,
+                    &agent_type,
+                    &assignment,
+                    &messages,
+                    steps,
+                    max_steps,
+                    latest_checkpoint.as_ref(),
+                    turn_end_parking.as_ref(),
+                    &mut transcript_artifact,
+                    started_at,
+                    fork_context_enabled,
+                    "",
+                )
+                .await);
+            }
+            SubAgentLoopBoundary::StepLimit => break,
+            SubAgentLoopBoundary::Continue => {}
         }
 
         steps = steps.saturating_add(1);
@@ -11429,54 +11802,22 @@ async fn run_subagent(
         let (response, usage_route) = tokio::select! {
             biased;
             () = runtime.cancel_token.cancelled() => {
-                record_agent_progress(
-                    runtime,
-                    &agent_id,
-                    AgentProgressEventMeta::new(AgentWorkerStatus::Cancelled).with_step(steps),
-                    format!("{}: cancelled mid-request", format_step_counter(steps, max_steps)),
-                );
-                let status = SubAgentStatus::Cancelled;
-                let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-                insert_subagent_full_transcript_handle(
+                return Ok(cancelled_subagent_result(
                     runtime,
                     &agent_id,
                     &agent_type,
                     &assignment,
-                    &status,
-                    None,
-                    latest_checkpoint.as_ref(),
-                    transcript_artifact.as_mut(),
                     &messages,
                     steps,
-                    duration_ms,
+                    max_steps,
+                    latest_checkpoint.as_ref(),
+                    turn_end_parking.as_ref(),
+                    &mut transcript_artifact,
+                    started_at,
                     fork_context_enabled,
+                    " mid-request",
                 )
-                .await;
-                return Ok(SubAgentResult {
-                    name: agent_id.clone(),
-                    agent_id: agent_id.clone(),
-                    context_mode: if fork_context_enabled { "forked" } else { "fresh" }.to_string(),
-                    fork_context: fork_context_enabled,
-                    workspace: Some(runtime.context.workspace.clone()),
-                    git_branch: current_git_branch(&runtime.context.workspace),
-                    agent_type: agent_type.clone(),
-                    assignment: assignment.clone(),
-                    model: runtime.model.clone(),
-                    nickname: None,
-                    status,
-                    worker_status: None,
-                    runtime_permissions: None,
-                    parent_run_id: runtime.parent_agent_id.clone(),
-                    spawn_depth: runtime.spawn_depth,
-                    child_route: None,
-                    result: None,
-                    steps_taken: steps,
-                    checkpoint: latest_checkpoint.clone(),
-                    needs_input: None,
-                    duration_ms,
-                    started_at: Some(started_at),
-                    from_prior_session: false,
-                });
+                .await);
             }
             api = request_subagent_model_response_with_retries(
                 runtime,
@@ -11607,41 +11948,18 @@ async fn run_subagent(
         // Runtime-owned children persist directly before best-effort UI
         // delivery. The owner lease outlives the parent mailbox when a top-
         // level child remains active after the parent turn terminates.
-        let priced_cost_microusd = priced_usd_microusd(&usage_route.audit(&response.usage));
-        if let Some(lease) = runtime.runtime_usage_lease.as_ref() {
-            crate::cost_status::report_effective_route_for_runtime(
-                crate::cost_status::scope_token(),
-                Some(lease.owner()),
-                &usage_source_id,
-                &usage_route,
-                &response.usage,
-            );
-        }
-        // Interactive turns have no runtime owner; their mailbox is the sole
-        // delivery path into the TUI cost projection.
-        if let Some(mb) = runtime.mailbox.as_ref() {
-            // The child's own route billing travels on `usage_route`: the
-            // client this worker actually ran on froze its provider,
-            // identity, endpoint fingerprint, billing surface and billing
-            // mode at construction (`DeepSeekClient::from_parts`), so the
-            // envelope *is* the child's dispatch receipt. It is deliberately
-            // NOT a later ambient `Config` re-read — provider endpoint
-            // variables (`MOONSHOT_BASE_URL`, `KIMI_BASE_URL`, …) are merged
-            // into the *active* provider's table only, so a cross-provider
-            // child's config entry does not describe the endpoint it
-            // dispatched to. An endpoint/credential that names no known
-            // product froze as Unknown and stays Unknown here.
-            let _ = mb.send(MailboxMessage::token_usage(
-                &agent_id,
-                &usage_source_id,
-                usage_route,
-                response.usage.clone(),
-            ));
-        }
-        {
-            let mut manager = runtime.manager.write().await;
-            manager.record_worker_usage(&agent_id, &response.usage, priced_cost_microusd);
-        }
+        // The child's own route billing travels on `usage_route`: the client
+        // that actually ran froze its provider, identity, endpoint fingerprint,
+        // billing surface and billing mode at construction. It is deliberately
+        // not re-derived from ambient parent config at completion time.
+        record_provider_response_usage(
+            runtime,
+            &agent_id,
+            &usage_source_id,
+            usage_route,
+            &response.usage,
+        )
+        .await;
 
         // Per-worker token-budget enforcement (#3321): stop a single runaway
         // worker once its accumulated model tokens exceed its own cap. This
@@ -12307,7 +12625,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         && type_kind != role_kind
     {
         return Err(ToolError::invalid_input(
-            "Fleet role conflicts with the explicit legacy agent type".to_string(),
+            "Pod role conflicts with the explicit legacy agent type".to_string(),
         ));
     }
 
@@ -12902,8 +13220,8 @@ fn apply_spawn_profile(
             String::new()
         };
         return Err(ToolError::invalid_input(format!(
-            "Unknown fleet role/profile '{profile_id}'. Available fleet roster members: {available}. \
-             Type aliases: {VALID_ROLE_ALIASES}. See /fleet.{truncation}"
+            "Unknown Pod role/profile '{profile_id}'. Available Pod members: {available}. \
+             Type aliases: {VALID_ROLE_ALIASES}. See /pod.{truncation}"
         )));
     };
     if let Some(authority) = member.plugin_authority.as_ref()
@@ -12957,7 +13275,7 @@ fn apply_spawn_profile(
                     request.model = None;
                 } else {
                     return Err(ToolError::invalid_input(format!(
-                        "fleet profile '{}' pins model '{}', but the caller requested '{}'. \
+                        "Pod profile '{}' pins model '{}', but the caller requested '{}'. \
                          Named agents use exactly their configured model, route, and posture. \
                          Remove 'model' to use the profile pin, or dispatch without a profile \
                          (type: 'worker'/'general'/'planner'/'custom') to use 'model'.",
@@ -12966,8 +13284,8 @@ fn apply_spawn_profile(
                 }
             } else {
                 return Err(ToolError::invalid_input(format!(
-                    "fleet profile '{}' binds a pre-configured route; 'model' may not be set for \
-                     named fleet roles. Named agents use exactly their configured model, route, and \
+                    "Pod profile '{}' binds a pre-configured route; 'model' may not be set for \
+                     named Pod roles. Named agents use exactly their configured model, route, and \
                      posture — the dispatching model cannot override them. Remove 'model', or dispatch \
                      with type: 'worker'/'general'/'planner'/'custom' (the postures with model options).",
                     member.id
@@ -12976,8 +13294,8 @@ fn apply_spawn_profile(
         }
         if request.model_strength_explicit {
             return Err(ToolError::invalid_input(format!(
-                "fleet profile '{}' binds a pre-configured route; 'model_strength' may not be \
-                 set for named fleet roles. Named agents use exactly their configured model, \
+                "Pod profile '{}' binds a pre-configured route; 'model_strength' may not be \
+                 set for named Pod roles. Named agents use exactly their configured model, \
                  route, and posture — the dispatching model cannot override them. Remove \
                  'model_strength', or dispatch with type: 'worker'/'general'/'planner'/'custom' \
                  (the postures with model options).",
@@ -13011,7 +13329,7 @@ fn apply_spawn_profile(
         if !effort.eq_ignore_ascii_case("inherit") {
             request.thinking = SubAgentThinking::parse(&effort).map_err(|_| {
                 ToolError::invalid_input(format!(
-                    "fleet profile '{}' has invalid reasoning_effort '{effort}'; expected \
+                    "Pod profile '{}' has invalid reasoning_effort '{effort}'; expected \
                      inherit, auto, off, low, medium, high, or max",
                     member.id
                 ))
@@ -13037,7 +13355,7 @@ fn spawn_profile_prompt_overlay(member: &crate::fleet::profile::AgentProfile) ->
         return None;
     }
     let mut overlay = String::new();
-    overlay.push_str("\n\nFleet profile: ");
+    overlay.push_str("\n\nPod profile: ");
     overlay.push_str(&member.id);
     if let Some(display_name) = member.display_name.as_deref() {
         overlay.push_str(" (");
@@ -14125,6 +14443,14 @@ impl SubAgentToolRegistry {
     /// arbitrary shell needs the parent auto-approved. `None` when the call
     /// clears the role-based delegation rules on its own.
     fn delegation_refusal(&self, name: &str, input: &Value) -> Option<String> {
+        // #5595/#5438: session approval is transport, not a second shell
+        // classifier. Scout/Reviewer/Planner calls already proven by the exact
+        // predicate used at posture, envelope, and execute boundaries are
+        // delegated reads even though lowercase `bash` deliberately keeps the
+        // stricter parent-parallel classifier as its generic approval baseline.
+        if self.bounded_readonly_bash_evidence(name, input) {
+            return None;
+        }
         let spec = self.registry.get(name)?;
         match spec.approval_requirement_for(input) {
             ApprovalRequirement::Auto => None,
@@ -14982,7 +15308,7 @@ impl SubAgentToolRegistry {
             && !self.agent_action_permitted("claim")
         {
             return Err(anyhow!(
-                "agent action=claim widens an enforced write scope, and the Fleet role `{role}` has no write authority to widen. Use a `builder` or `worker` role.",
+                "agent action=claim widens an enforced write scope, and the Pod role `{role}` has no write authority to widen. Use a `builder` or `worker` role.",
                 role = self.agent_type.as_str()
             ));
         }
@@ -15006,8 +15332,14 @@ impl SubAgentToolRegistry {
         // the parent session is auto-approved. This closes the auto-approve
         // bypass where a read-only child could quietly write or shell out.
         if !self.posture_permits_tool(name, Some(&input)) {
+            if self.allows_bounded_readonly_bash(name) {
+                return Err(anyhow!(
+                    "[shell.readonly.command] Tool {name} input did not match the bounded read-only shell grammar for Pod role `{role}`. Use read-only inspection commands, or a `builder`/`worker` role for mutation or arbitrary execution.",
+                    role = self.agent_type.as_str()
+                ));
+            }
             return Err(anyhow!(
-                "Tool {name} is not permitted for the read-only Fleet role `{role}`. Use a `builder` or `worker` role (or `custom` with an explicit allowed_tools list) to mutate the workspace or run shell commands.",
+                "[role.posture.denied] Tool {name} is not permitted for the read-only Pod role `{role}`. Use a `builder` or `worker` role (or `custom` with an explicit allowed_tools list) to mutate the workspace or run shell commands.",
                 role = self.agent_type.as_str()
             ));
         }
@@ -15070,6 +15402,10 @@ impl SubAgentToolRegistry {
                 .map_err(anyhow::Error::msg)?;
         } else if self.enforce_write_claim
             && !is_internal_coordination_state_tool(name)
+            // A shell run the read-only classifier proves mutation-free cannot
+            // collide with the peer's writes no matter how contended the
+            // checkout is, so the gate below does not apply to it.
+            && !proven_readonly_shell_run(name, &input)
             && (is_unbounded_shell_run(name, &input)
                 || self.registry.get(name).is_some_and(|spec| {
                     let canonical = canonical_action_alias(name, &input);
@@ -15098,12 +15434,15 @@ impl SubAgentToolRegistry {
             // no safety while making a builder unable to run ordinary shell
             // work in the workspace the operator actually watches — worktree
             // isolation "fixes" that by writing somewhere they never see.
-            if manager.shared_write_claim(&self.owner_agent_id).is_some()
-                && manager.has_peer_shared_write_claim(&self.owner_agent_id)
-            {
-                return Err(anyhow!(
-                    "Tool {name} cannot prove a bounded file target, and another child is writing in this shared checkout. Use scope-aware file tools, or launch the children with worktree isolation."
-                ));
+            if manager.shared_write_claim(&self.owner_agent_id).is_some() {
+                let blocking_peers =
+                    manager.live_peer_shared_write_claim_owners(&self.owner_agent_id);
+                if !blocking_peers.is_empty() {
+                    return Err(anyhow!(
+                        "Tool {name} cannot prove a bounded file target, and another child is writing in this shared checkout (blocking peers: {}). Wait for the peer to finish, ask the parent to cancel it, run agents/coordinate action=release to clear a stale claim, or relaunch the children with worktree isolation.",
+                        blocking_peers.join(", ")
+                    ));
+                }
             }
         }
         let context = self
@@ -15175,6 +15514,20 @@ impl SubAgentToolRegistry {
 
 fn is_unbounded_shell_run(name: &str, input: &Value) -> bool {
     canonical_action_alias(name, input) == "exec_shell"
+}
+
+/// Whether this exact call is a shell run the agent read-only classifier
+/// proves mutation-free — the contention gate's carve-out.
+///
+/// This shares its classifier with `bounded_readonly_bash_evidence` but not
+/// its role restriction, deliberately: the envelope helper's carve-out
+/// *grants* shell to inspection roles that otherwise lack it, so it is scoped
+/// to them; the contention gate grants nothing — shell authority, posture, and
+/// the envelope have already settled by the time it runs — and asks only
+/// whether this call can collide with a live peer's writes. A proven
+/// read-only `ls` cannot, whichever role runs it.
+fn proven_readonly_shell_run(name: &str, input: &Value) -> bool {
+    is_unbounded_shell_run(name, input) && crate::tools::shell::agent_readonly_bash_input(input)
 }
 
 /// Parameter names whose *value* is a location to reach, rather than content.
@@ -15670,7 +16023,7 @@ fn subagent_status_name(status: &SubAgentStatus) -> &'static str {
 use crate::prompts::text::SUBAGENT_OUTPUT_FORMAT;
 
 const GENERAL_AGENT_INTRO: &str = concat!(
-    "You are a trusted Fleet worker. Your job is to complete the one task you were given, end-to-end, and report back concisely.\n",
+    "You are a trusted Pod worker. Your job is to complete the one task you were given, end-to-end, and report back concisely.\n",
     "Stay inside the assigned scope; put adjacent work under RISKS/BLOCKERS.\n",
     "For genuinely multi-step work, track progress with `todo_write`; skip it for short, focused tasks.\n",
     "**Stop quickly on failure**: if the same tool call fails 2 times in a row, stop retrying and return what you have so far with a one-line note explaining what's missing. Do not loop on impossible queries (e.g. external API unreachable, rate-limited, or returning empty).\n",
@@ -15678,7 +16031,7 @@ const GENERAL_AGENT_INTRO: &str = concat!(
 );
 
 const EXPLORE_AGENT_INTRO: &str = concat!(
-    "You are a trusted Fleet scout (role: `scout`). Your job is to map the relevant code quickly and stay strictly read-only.\n",
+    "You are a trusted Pod scout (role: `scout`). Your job is to map the relevant code quickly and stay strictly read-only.\n",
     "Default to `EFFORT: quick`: aim for about 3-5 tool calls unless the brief explicitly asks for more.\n",
     "Orient first: confirm the workspace/project root, read relevant AGENTS.md/README guidance when the tree is unfamiliar, then search only the likely scope.\n",
     "Use `read` for bounded file reads and `bash` only for the allowed read-only inspection subset: navigation/rg, safe Git reads (for example `git log -n 5`), and read-only GitHub views such as `gh issue view`. Builds, tests, writes, and shell control actions are unavailable.\n",
@@ -15689,7 +16042,7 @@ const EXPLORE_AGENT_INTRO: &str = concat!(
 );
 
 const PLAN_AGENT_INTRO: &str = concat!(
-    "You are a trusted Fleet planner (role: `planner`). Your job is to produce a grounded, prioritized plan, not patches.\n",
+    "You are a trusted Pod planner (role: `planner`). Your job is to produce a grounded, prioritized plan, not patches.\n",
     "Read enough code to avoid guessing; each step names its artifact and verification.\n",
     "Use `read` for bounded file reads and `bash` only for the allowed read-only inspection subset: navigation/rg, safe Git reads (for example `git log -n 5`), and read-only GitHub views such as `gh issue view`. Builds, tests, writes, and shell control actions are unavailable.\n",
     "Use todo_write for concrete To-do progress; explain key trade-offs in the plan you return.\n",
@@ -15697,7 +16050,7 @@ const PLAN_AGENT_INTRO: &str = concat!(
 );
 
 const REVIEW_AGENT_INTRO: &str = concat!(
-    "You are an adversarial Fleet reviewer (role: `reviewer`). Assume the change is broken until the evidence proves otherwise: actively try to refute the claims made about it, and stay strictly read-only.\n",
+    "You are an adversarial Pod reviewer (role: `reviewer`). Assume the change is broken until the evidence proves otherwise: actively try to refute the claims made about it, and stay strictly read-only.\n",
     "Read the diff/files, grep sibling patterns/tests, hunt regressions, missing tests, unhandled edge cases, and quiet behavior changes, then order EVIDENCE by severity.\n",
     "Use `read` for bounded file reads and `bash` only for the allowed read-only navigation/rg, safe Git, and read-only GitHub evidence subset; builds, tests, writes, and shell control actions are unavailable.\n",
     "Use your private `todo_write` list as editable working notes when useful; it is agent-owned state, not permission to write project files. Those tool calls remain in the complete transcript artifact returned to the parent.\n",
@@ -15708,12 +16061,12 @@ const REVIEW_AGENT_INTRO: &str = concat!(
 );
 
 const CUSTOM_AGENT_INTRO: &str = concat!(
-    "You are a trusted custom Fleet worker (role: `custom`) with a narrowed tool registry. Your job is to stay tightly scoped to the assigned objective.\n",
+    "You are a trusted custom Pod worker (role: `custom`) with a narrowed tool registry. Your job is to stay tightly scoped to the assigned objective.\n",
     "Use only tools available at runtime; put missing capabilities under BLOCKERS and stop.\n\n"
 );
 
 const IMPLEMENTER_AGENT_INTRO: &str = concat!(
-    "You are a trusted Fleet builder (role: `builder`). Your job is to land the assigned change with minimal surrounding edits.\n",
+    "You are a trusted Pod builder (role: `builder`). Your job is to land the assigned change with minimal surrounding edits.\n",
     "Use `edit` for precise unique replacements, `write` for whole-file changes, and discover `apply_patch` for unified multi-file patches when needed.\n",
     "Run relevant verification after edit batches; write needed tests with the implementation.\n",
     "You are not limited to a scout-style 3-5 tool-call cap. Checkpoint before expanding scope or after repeated failures, then continue only inside the assigned brief.\n",
@@ -15736,7 +16089,7 @@ const WRITE_CHILD_VERIFY_CONTRACT: &str = concat!(
 );
 
 const CONSULTANT_AGENT_INTRO: &str = concat!(
-    "You are a trusted Fleet consultant (role: `consultant`). You are asked for judgement, not for labour.\n",
+    "You are a trusted Pod consultant (role: `consultant`). You are asked for judgement, not for labour.\n",
     "You are read-only and have no shell. Read the workspace and the public web to ground your advice, then give counsel.\n",
     "Lead with your actual recommendation, not a survey of options. If you would do something different from what was proposed, say so first and say why.\n",
     "Name what the asker appears not to have considered: the failure mode, the constraint, the cheaper alternative, the reason this is harder than it looks.\n",
@@ -15746,7 +16099,7 @@ const CONSULTANT_AGENT_INTRO: &str = concat!(
 );
 
 const VERIFIER_AGENT_INTRO: &str = concat!(
-    "You are a trusted Fleet verifier (role: `verifier`). Your job is to run the requested gates and report results, and stay read-only.\n",
+    "You are a trusted Pod verifier (role: `verifier`). Your job is to run the requested gates with your bounded validation tools — the allowed test/check selections — and report results. You never write: patching the workspace is denied. Unbounded shell forms are refused; use the verification surface.\n",
     "Report PASS/FAIL/FLAKY at the top of SUMMARY with exact command evidence.\n",
     "Capture failing assertion and file:line; put obvious fixes under RISKS.\n",
     "You may use more tool calls than quick exploration, but stop after decisive pass/fail evidence.\n",

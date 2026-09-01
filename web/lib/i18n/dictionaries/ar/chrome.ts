@@ -7,7 +7,7 @@ import type { ChromeDict } from "../types";
  * لا تموضع «local-first» المتقاعد.
  *
  * أسماء الأوامر والمنتجات تبقى كما هي: Codewhale و GitHub و Issues
- * و `Runtime` و `Fleet` و TUI. الأسهم تشير إلى الأمام في سياق RTL (←).
+ * و `Runtime` و `Pod` و TUI. الأسهم تشير إلى الأمام في سياق RTL (←).
  *
  * التسميات الثانوية للتنقل تقارن التسمية العربية بنظيرة إنجليزية
  * قصيرة — ثنائية الهان هي أداة تحريرية خاصة بالنسخة الإنجليزية.
@@ -82,6 +82,9 @@ export const chrome: ChromeDict = {
   footerIssues: "Issues",
   footerContribute: "المساهمة",
   footerLicense: "رخصة MIT",
+  footerPricing: "الأسعار",
+  footerTerms: "شروط الخدمة",
+  footerPrivacy: "الخصوصية",
   footerCanonicalSource: "المصدر القانوني: ",
   footerReleases: " · الإصدارات: ",
   footerReleasesLink: "إصدارات GitHub",

@@ -53,7 +53,7 @@ pub(super) fn format_shell_job_list(jobs: &[ShellJobSnapshot]) -> String {
         }
     }
     lines.push(
-        "Controls: /jobs show <id>, /jobs poll <id>, /jobs wait <id>, /jobs stdin <id> <input>, /jobs cancel <id>, /jobs cancel-all."
+        "Controls: /jobs show <id>, /jobs poll <id>, /jobs wait <id>, /jobs stdin <id> <input>, /jobs cancel <id|all>."
             .to_string(),
     );
     lines.join("\n")
@@ -177,6 +177,8 @@ mod tests {
         assert!(formatted.contains("shell_dead"));
         assert!(formatted.contains("stale"));
         assert!(formatted.contains("/jobs poll <id>"));
+        assert!(formatted.contains("/jobs cancel <id|all>"));
+        assert!(!formatted.contains("cancel-all"));
         assert!(formatted.contains("task=task_1"));
     }
 }

@@ -17,6 +17,7 @@ import { contentLocalesForPath } from "./i18n/content-locales";
 import { getChrome, getHome } from "./i18n/dictionaries";
 import {
   currentNavHref,
+  footerLegalLinks,
   footerProductLinks,
   footerProjectLinks,
   navLinks as buildNavLinks,
@@ -88,7 +89,13 @@ describe("sitemap and hreflang preservation", () => {
   });
 
   it("keeps sitemap and hreflang output aligned with real translation coverage", () => {
-    expect(sitemapEntries).toHaveLength(78);
+    expect(sitemapEntries).toHaveLength(88);
+    for (const path of ["/pricing", "/signin", "/signup", "/legal/terms", "/legal/privacy"]) {
+      expect(
+        sitemapEntries.some((entry) => entry.url === `${SITE_URL}/en${path}`),
+        path,
+      ).toBe(true);
+    }
     for (const [path, expectedLocales] of [
       ["/", locales],
       ["/docs/guide", contentLocalesForPath("/docs/guide")],
@@ -112,6 +119,23 @@ describe("sitemap and hreflang preservation", () => {
       expect(page, route).toContain('import { buildPageMetadata } from "@/lib/page-meta"');
       expect(page, route).toContain(`path: "/docs/${route}"`);
     }
+  });
+
+  it("indexes public sign-in and create-account routes", () => {
+    for (const path of ["/signin", "/signup"]) {
+      expect(
+        sitemapEntries.some((entry) => entry.url === `${SITE_URL}/en${path}`),
+        path,
+      ).toBe(true);
+      expect(existsSync(new URL(`app/[locale]${path}/page.tsx`, webRoot)), path).toBe(true);
+    }
+    const entry = webText("components/public-account-entry.tsx");
+    expect(entry).toContain("CANONICAL_MARK_SRC");
+    expect(entry).toContain("Install locally");
+    expect(webText("app/[locale]/signin/page.tsx")).toContain('kind="sign-in"');
+    expect(webText("app/[locale]/signup/page.tsx")).toContain('kind="sign-up"');
+    expect(nav).toContain("APP_LOGIN_URL");
+    expect(nav).toContain("APP_SIGNUP_URL");
   });
 });
 
@@ -199,6 +223,19 @@ describe("navigation parity and accessibility", () => {
         `/${locale}/contribute`,
         "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE",
       ]);
+      const legal = footerLegalLinks(locale, getChrome(locale));
+      expect(legal.map((l) => l.href), `${locale} footer legal`).toEqual([
+        `/${locale}/pricing`,
+        `/${locale}/legal/terms`,
+        `/${locale}/legal/privacy`,
+      ]);
+      // Labels come from the dictionary, not hardcoded English, so every
+      // routed locale renders the footer legal links in its own language.
+      expect(legal.map((l) => l.label), `${locale} footer legal labels`).toEqual([
+        getChrome(locale).footerPricing,
+        getChrome(locale).footerTerms,
+        getChrome(locale).footerPrivacy,
+      ]);
     }
   });
 
@@ -281,8 +318,15 @@ describe("navigation parity and accessibility", () => {
       label: "MIT license",
       href: "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE",
     });
+    // zh gets the footer legal labels from its dictionary, not English.
+    expect(footerLegalLinks("zh", getChrome("zh")).map((l) => l.label)).toEqual([
+      "价格",
+      "服务条款",
+      "隐私政策",
+    ]);
     expect(footer).toContain("footerProductLinks(locale, chrome)");
     expect(footer).toContain("footerProjectLinks(locale, chrome)");
+    expect(footer).toContain("footerLegalLinks(locale, chrome)");
   });
 });
 

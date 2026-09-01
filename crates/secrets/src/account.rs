@@ -274,15 +274,12 @@ impl AccountSessionStore {
 
 /// Select the approved account-session backend shared by CLI, TUI, and Runtime.
 ///
-/// The native credential manager is preferred; when it is unavailable the
-/// private `0600` Codewhale secrets file is used automatically, so headless
-/// hosts can sign in without any opt-in.
+/// Account sessions live in the private `0600` Codewhale secrets file. The OS
+/// keyring is not used: on macOS every unsigned or rebuilt `codewhale` binary
+/// is a new Keychain ACL principal, so reading `codewhale-cloud-auth-v1-*`
+/// under the legacy `deepseek` service pops a password dialog on every start.
 pub fn secure_account_session_secrets() -> Result<Secrets, AccountSessionError> {
-    // Codex-style storage contract: prefer the OS credential manager, fall
-    // back to the private 0600 file store when it is unavailable. Account
-    // sign-in must not hard-require a platform keyring (headless Linux, SSH,
-    // containers); the file store enforces owner-only permissions itself.
-    Ok(Secrets::system_keyring())
+    Ok(Secrets::file_backed())
 }
 
 /// Normalize an optional CLI/TUI profile to the durable account slot label.
@@ -418,33 +415,27 @@ mod tests {
 
     use crate::InMemoryKeyringStore;
 
-    /// Codex-style storage contract: with no OS keyring available and no
-    /// opt-in env var, session secrets must still resolve (to the private
-    /// 0600 file store) instead of failing closed.
+    /// Account sessions must never touch the OS keyring. Unsigned rebuilds
+    /// on macOS otherwise prompt on every `codewhale web` / TUI start.
     #[test]
-    fn session_secrets_fall_back_to_file_store_without_opt_in() {
+    fn session_secrets_use_the_file_store_not_keychain() {
         let _lock = crate::tests::env_lock();
-        // SAFETY (test): single-threaded via env_lock; restoring not needed —
-        // temp CODEWHALE_HOME is discarded with the process-scoped test env.
-        let prev_home = std::env::var("CODEWHALE_HOME").ok();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let home = dir.path().join("codewhale-home");
         std::fs::create_dir_all(&home).expect("home");
-        // SAFETY (test): see above.
         unsafe { std::env::set_var("CODEWHALE_HOME", &home) };
         unsafe { std::env::remove_var("CODEWHALE_CLOUD_ALLOW_FILE_SESSION_STORE") };
-        let _prev_home = prev_home;
-        // The contract under test: resolution succeeds with NO opt-in env var.
-        // Which backend wins is platform-dependent (keyring when present,
-        // private 0600 file otherwise); assert the store is usable either way.
+        unsafe { std::env::remove_var("CODEWHALE_SECRET_BACKEND") };
+        unsafe { std::env::remove_var("DEEPSEEK_SECRET_BACKEND") };
         let secrets =
             secure_account_session_secrets().expect("session secrets must resolve without opt-in");
         let name = secrets.backend_name();
-        assert!(!name.is_empty(), "backend must report a name");
         assert!(
-            name.to_lowercase().contains("file") || name.to_lowercase().contains("keyring"),
-            "unexpected backend: {name}"
+            name.to_lowercase().contains("file"),
+            "account sessions must not use Keychain: {name}"
         );
+        assert!(!name.to_lowercase().contains("keychain"));
+        assert!(!name.to_lowercase().contains("keyring"));
     }
 
     fn auth(

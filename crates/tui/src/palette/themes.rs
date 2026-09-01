@@ -136,7 +136,8 @@ pub const UI_THEME: UiTheme = UiTheme {
         WHALE_WORKING_GREEN_RGB.2,
     ),
     tool_failed: WHALE_ERROR,
-};
+}
+.with_terminal_native_shell();
 
 pub const LIGHT_UI_THEME: UiTheme = UiTheme {
     name: "whale-light",
@@ -182,7 +183,8 @@ pub const LIGHT_UI_THEME: UiTheme = UiTheme {
     tool_running: LIGHT_LIVE,
     tool_success: LIGHT_SUCCESS_FG,
     tool_failed: LIGHT_DANGER,
-};
+}
+.with_terminal_native_shell();
 
 pub const SOLARIZED_LIGHT_UI_THEME: UiTheme = UiTheme {
     name: "solarized-light",
@@ -878,6 +880,21 @@ pub const SELECTABLE_THEMES: &[ThemeId] = &[
 ];
 
 impl UiTheme {
+    /// Let the terminal own the ordinary shell while retaining explicit
+    /// semantic surfaces (selection, elevation, errors, diffs, and status).
+    ///
+    /// Deepsea paints these reset cells later through the shared ocean
+    /// column; Flat leaves them untouched so the host terminal shows through.
+    #[must_use]
+    pub const fn with_terminal_native_shell(mut self) -> Self {
+        self.surface_bg = Color::Reset;
+        self.panel_bg = Color::Reset;
+        self.composer_bg = Color::Reset;
+        self.header_bg = Color::Reset;
+        self.footer_bg = Color::Reset;
+        self
+    }
+
     #[must_use]
     pub fn for_mode(mode: PaletteMode) -> Self {
         match mode {

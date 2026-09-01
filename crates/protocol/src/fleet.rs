@@ -64,6 +64,12 @@ pub struct FleetRun {
     /// worker roster when resuming those runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_workers: Option<usize>,
+    /// Optional run-wide usage ceiling (R6, #5567). When the accumulated
+    /// worker usage crosses it, the ledger refuses new task admissions,
+    /// pauses the run, and records exactly one budget alert. Absent on older
+    /// ledgers and by default: unbounded, today's behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_ceiling: Option<FleetUsageCeiling>,
     #[serde(default)]
     pub task_specs: Vec<FleetTaskSpec>,
     #[serde(default)]
@@ -789,6 +795,13 @@ pub enum FleetWorkerEventPayload {
         #[serde(skip_serializing_if = "Option::is_none")]
         memory_mb: Option<u64>,
     },
+    /// Provider-reported usage receipt for one model call inside this
+    /// worker (R6, #5567). Feeds the run-level accumulator that enforces
+    /// [`FleetUsageCeiling`].
+    UsageReport {
+        input_tokens: u64,
+        output_tokens: u64,
+    },
     Artifact(FleetArtifactRef),
     Completed {
         #[serde(default)]
@@ -823,6 +836,17 @@ pub enum FleetWorkerEventPayload {
         #[serde(skip_serializing_if = "Option::is_none")]
         alert_id: Option<String>,
     },
+}
+
+/// Run-wide usage ceiling (R6, #5567). Token-denominated: workers report
+/// provider token counts; a cost-denominated ceiling needs priced receipts
+/// in the worker stream and is deliberately not declared until it can be
+/// enforced.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FleetUsageCeiling {
+    /// Maximum input+output tokens accumulated across every worker model
+    /// call in the run.
+    pub max_total_tokens: u64,
 }
 
 /// Retry policy for a task or worker.
@@ -1199,6 +1223,7 @@ mod tests {
             created_at: "2026-06-12T17:00:00Z".to_string(),
             updated_at: None,
             completed_at: None,
+            usage_ceiling: None,
         };
         let json = serde_json::to_string(&run).unwrap();
         let back: FleetRun = serde_json::from_str(&json).unwrap();

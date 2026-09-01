@@ -417,7 +417,7 @@ pub(crate) fn activate_result_dependencies(
     active: &mut HashSet<String>,
     cache: &mut ToolActivationCache,
     result: &ToolResult,
-) {
+) -> bool {
     let needs_retrieval = result
         .metadata
         .as_ref()
@@ -425,11 +425,12 @@ pub(crate) fn activate_result_dependencies(
         .and_then(Value::as_bool)
         == Some(true);
     if !needs_retrieval {
-        return;
+        return false;
     }
     let delta = cache.activate(catalog, &[TOOL_RESULT_RETRIEVAL_NAME.to_string()]);
-    remove_evicted_cache_activations(catalog, active, delta.evicted);
-    active.extend(delta.admitted);
+    remove_evicted_cache_activations(catalog, active, delta.evicted.iter().cloned());
+    active.extend(delta.admitted.iter().cloned());
+    !delta.admitted.is_empty() || !delta.evicted.is_empty()
 }
 
 fn active_tool_list_from_catalog(catalog: &[Tool], active: &HashSet<String>) -> Vec<Tool> {

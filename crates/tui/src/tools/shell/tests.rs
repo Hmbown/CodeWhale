@@ -951,6 +951,32 @@ fn readonly_operands_are_workspace_bounded_and_symlink_aware() {
 
     enforce_readonly_workspace_operands("cat inside.txt", workspace.path(), workspace.path())
         .expect("in-workspace operand");
+    let inside_absolute = workspace
+        .path()
+        .join("inside.txt")
+        .canonicalize()
+        .expect("canonical inside file");
+    enforce_readonly_workspace_operands(
+        &format!("cat {}", inside_absolute.display()),
+        workspace.path(),
+        workspace.path(),
+    )
+    .expect("absolute in-workspace operand");
+
+    let outside_absolute = outside
+        .path()
+        .join("secret.txt")
+        .canonicalize()
+        .expect("canonical outside file");
+    let error = enforce_readonly_workspace_operands(
+        &format!("cat {}", outside_absolute.display()),
+        workspace.path(),
+        workspace.path(),
+    )
+    .expect_err("absolute outside operand must fail")
+    .to_string();
+    assert!(error.contains("operand.outside_workspace"), "{error}");
+
     for command in [
         "cat ../secret.txt",
         "cat ~/.ssh/id_rsa",
@@ -992,6 +1018,48 @@ fn readonly_operands_are_workspace_bounded_and_symlink_aware() {
         enforce_readonly_workspace_operands("cat secret-link", workspace.path(), &subdir)
             .expect_err("operands must resolve relative to the effective cwd");
     }
+}
+
+#[test]
+fn windows_verbatim_and_drive_operands_survive_posix_split() {
+    // `shell_words` splits with POSIX backslash-escaping, which silently eats
+    // the separators of Windows absolute paths (`C:\Users\...` becomes
+    // `C:Users...`) and mangles the `\\?\` verbatim prefix before operand
+    // classification can see it. The protection doubles those backslashes so
+    // the splitter round-trips the real path (the `\\?\` cases that the
+    // verbatim strip alone could never reach).
+    for (raw, expected) in [
+        (r"\\?\C:\Users\foo\inside.txt", r"C:\Users\foo\inside.txt"),
+        (r"C:\Users\foo\inside.txt", r"C:\Users\foo\inside.txt"),
+        (r"\\server\share\secret", r"\\server\share\secret"),
+        (r"\\.\device\path", r"\\.\device\path"),
+    ] {
+        let protected = normalize_windows_command_paths(&format!("cat {raw}"));
+        let argv = shell_words::split(&protected).expect("split must succeed");
+        assert_eq!(
+            argv,
+            vec!["cat".to_string(), expected.to_string()],
+            "{raw} must survive the POSIX split"
+        );
+    }
+}
+
+#[test]
+fn windows_path_protection_leaves_other_words_untouched() {
+    // POSIX escapes, drive-relative spellings, and plain relative operands
+    // are not Windows absolute paths and must round-trip unchanged.
+    assert_eq!(
+        normalize_windows_command_paths("echo a\\ b && cat inside.txt"),
+        "echo a\\ b && cat inside.txt"
+    );
+    assert_eq!(
+        normalize_windows_command_paths("cat C:secret"),
+        "cat C:secret"
+    );
+    assert_eq!(
+        normalize_windows_command_paths("cat inside.txt"),
+        "cat inside.txt"
+    );
 }
 
 #[test]
@@ -1329,6 +1397,144 @@ async fn exec_shell_wait_without_wait_arg_returns_running_at_timeout() {
         .execute(json!({"action": "cancel", "task_id": task_id}), &ctx)
         .await
         .expect("cancel background");
+}
+
+#[tokio::test]
+async fn exec_shell_wait_many_until_any_returns_when_the_first_task_settles() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let short = BashTool::new("Bash")
+        .execute(
+            json!({"command": sleep_command(1), "background": true}),
+            &ctx,
+        )
+        .await
+        .expect("start short");
+    let long = BashTool::new("Bash")
+        .execute(
+            json!({"command": sleep_command(30), "background": true}),
+            &ctx,
+        )
+        .await
+        .expect("start long");
+    let short_id = short
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("task_id"))
+        .and_then(Value::as_str)
+        .expect("short id")
+        .to_string();
+    let long_id = long
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("task_id"))
+        .and_then(Value::as_str)
+        .expect("long id")
+        .to_string();
+
+    let started = Instant::now();
+    let result = BashTool::new("Bash")
+        .execute(
+            json!({
+                "action": "wait",
+                "task_ids": [short_id, long_id],
+                "until": "any",
+                "timeout_ms": 8_000
+            }),
+            &ctx,
+        )
+        .await
+        .expect("multi wait");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "until=any must not wait for the long task"
+    );
+    let statuses = result
+        .metadata
+        .as_ref()
+        .expect("metadata")
+        .get("statuses")
+        .expect("statuses");
+    assert_eq!(statuses[short_id.as_str()], "Completed");
+    assert_eq!(statuses[long_id.as_str()], "Running");
+    assert_eq!(
+        result.metadata.as_ref().and_then(|m| m.get("until")),
+        Some(&json!("any"))
+    );
+    assert_eq!(
+        result.metadata.as_ref().and_then(|m| m.get("timed_out")),
+        Some(&json!(false))
+    );
+}
+
+#[tokio::test]
+async fn exec_shell_wait_many_all_reports_timeout_and_still_running() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let first = BashTool::new("Bash")
+        .execute(
+            json!({"command": sleep_command(30), "background": true}),
+            &ctx,
+        )
+        .await
+        .expect("start first");
+    let second = BashTool::new("Bash")
+        .execute(
+            json!({"command": sleep_command(30), "background": true}),
+            &ctx,
+        )
+        .await
+        .expect("start second");
+    let first_id = first
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("task_id"))
+        .and_then(Value::as_str)
+        .expect("first id")
+        .to_string();
+    let second_id = second
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("task_id"))
+        .and_then(Value::as_str)
+        .expect("second id")
+        .to_string();
+
+    let result = BashTool::new("Bash")
+        .execute(
+            json!({ "action": "wait", "task_ids": [first_id, second_id], "timeout_ms": 1_500 }),
+            &ctx,
+        )
+        .await
+        .expect("multi wait times out");
+    assert_eq!(
+        result.metadata.as_ref().and_then(|m| m.get("timed_out")),
+        Some(&json!(true))
+    );
+    assert!(result.content.contains("still running"));
+    let statuses = result
+        .metadata
+        .as_ref()
+        .expect("metadata")
+        .get("statuses")
+        .expect("statuses");
+    assert_eq!(statuses[first_id.as_str()], "Running");
+    assert_eq!(statuses[second_id.as_str()], "Running");
+}
+
+#[tokio::test]
+async fn exec_shell_wait_many_rejects_an_unknown_task_id() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let err = BashTool::new("Bash")
+        .execute(
+            json!({ "action": "wait", "task_ids": ["nope-1", "nope-2"], "wait": false }),
+            &ctx,
+        )
+        .await
+        .expect_err("unknown ids must fail the same way as the single-task path");
+    assert!(err.to_string().contains("nope-1"), "{err}");
 }
 
 #[tokio::test]

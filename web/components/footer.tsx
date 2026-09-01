@@ -2,6 +2,7 @@ import Link from "next/link";
 import { GITEE_ENABLED, type Locale } from "@/lib/i18n/config";
 import { getChrome } from "@/lib/i18n/dictionaries";
 import {
+  footerLegalLinks,
   footerProductLinks,
   footerProjectLinks,
   REPO_RELEASES_URL,
@@ -20,6 +21,7 @@ export function Footer({ locale = "en" }: { locale?: Locale }) {
   const homeHref = `/${locale}`;
   const product = footerProductLinks(locale, chrome);
   const project = footerProjectLinks(locale, chrome);
+  const legal = footerLegalLinks(locale, chrome);
 
   return (
     <footer className="site-footer">
@@ -52,6 +54,7 @@ export function Footer({ locale = "en" }: { locale?: Locale }) {
           <a href={REPO_RELEASES_URL}>{chrome.footerReleasesLink}</a>
         </p>
         <div>
+          {legal.map((item) => <Link key={item.href} href={item.href}>{item.label}</Link>)}
           {GITEE_ENABLED && <a href="https://gitee.com/Hmbown/CodeWhale">Gitee</a>}
           <a href="https://cnb.cool/codewhale.net/codewhale">CNB</a>
           <a href="https://npmmirror.com/package/codewhale">npmmirror</a>

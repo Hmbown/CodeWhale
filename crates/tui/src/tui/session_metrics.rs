@@ -174,14 +174,6 @@ pub struct MetricCell {
     /// `label` first (`4 turns`) or value first (`LLM 11m46s`).
     pub value_first: bool,
 }
-
-impl MetricCell {
-    fn width(&self) -> usize {
-        use unicode_width::UnicodeWidthStr;
-        self.label.width() + 1 + self.value.width()
-    }
-}
-
 /// Group priority, highest kept first. When the row is too narrow, groups
 /// are dropped from the end of this list; inside a group the second cell
 /// (steps, tools, tok/s) is dropped before the group itself.
@@ -193,14 +185,6 @@ pub enum MetricGroup {
     Turns,
     Latency,
 }
-
-const GROUP_PRIORITY: [MetricGroup; 5] = [
-    MetricGroup::Input,
-    MetricGroup::Cache,
-    MetricGroup::Llm,
-    MetricGroup::Turns,
-    MetricGroup::Latency,
-];
 
 /// The DSH-style layout order, left to right.
 const GROUP_ORDER: [MetricGroup; 5] = [
@@ -300,46 +284,68 @@ pub fn format_rate(rate: f64) -> String {
 /// A cell whose evidence has not arrived is omitted — never a placeholder:
 /// `TTFT avg` / `tok/s` appear only once a model call reported them, `Cache
 /// hit` only when a provider reported cache classes, `Input` only after the
-/// first usage receipt. Turn, step, and time cells are always present once
-/// the session has started (zero is a real count).
+/// first usage receipt. Turn cells are present once the session has started
+/// (zero turns is a real count). Step cells wait for the first completed
+/// model or tool call so `0 steps` cannot look like a stalled scoreboard.
 #[must_use]
 pub fn build_groups(snapshot: MetricsSnapshot, locale: Locale) -> Vec<MetricGroupCells> {
     let label = |id: MessageId| tr(locale, id).into_owned();
     let mut groups = Vec::new();
     for group in GROUP_ORDER {
         let cells = match group {
-            MetricGroup::Turns => vec![
-                MetricCell {
-                    label: label(if snapshot.turns == 1 {
-                        MessageId::SessionMetricsTurn
-                    } else {
-                        MessageId::SessionMetricsTurns
-                    }),
-                    value: snapshot.turns.to_string(),
-                    value_first: true,
-                },
-                MetricCell {
-                    label: label(if snapshot.steps == 1 {
-                        MessageId::SessionMetricsStep
-                    } else {
-                        MessageId::SessionMetricsSteps
-                    }),
-                    value: snapshot.steps.to_string(),
-                    value_first: true,
-                },
-            ],
-            MetricGroup::Llm => vec![
-                MetricCell {
-                    label: label(MessageId::SessionMetricsLlm),
-                    value: format_duration(snapshot.llm_time),
-                    value_first: false,
-                },
-                MetricCell {
-                    label: label(MessageId::SessionMetricsTools),
-                    value: format_duration(snapshot.tool_time),
-                    value_first: false,
-                },
-            ],
+            MetricGroup::Turns => {
+                if snapshot.turns == 0 && snapshot.steps == 0 {
+                    continue;
+                }
+                let mut cells = Vec::new();
+                if snapshot.turns > 0 {
+                    cells.push(MetricCell {
+                        label: label(if snapshot.turns == 1 {
+                            MessageId::SessionMetricsTurn
+                        } else {
+                            MessageId::SessionMetricsTurns
+                        }),
+                        value: snapshot.turns.to_string(),
+                        value_first: true,
+                    });
+                }
+                if snapshot.steps > 0 {
+                    cells.push(MetricCell {
+                        label: label(if snapshot.steps == 1 {
+                            MessageId::SessionMetricsStep
+                        } else {
+                            MessageId::SessionMetricsSteps
+                        }),
+                        value: snapshot.steps.to_string(),
+                        value_first: true,
+                    });
+                }
+                if cells.is_empty() {
+                    continue;
+                }
+                cells
+            }
+            MetricGroup::Llm => {
+                let mut cells = Vec::new();
+                if !snapshot.llm_time.is_zero() {
+                    cells.push(MetricCell {
+                        label: label(MessageId::SessionMetricsLlm),
+                        value: format_duration(snapshot.llm_time),
+                        value_first: false,
+                    });
+                }
+                if !snapshot.tool_time.is_zero() {
+                    cells.push(MetricCell {
+                        label: label(MessageId::SessionMetricsTools),
+                        value: format_duration(snapshot.tool_time),
+                        value_first: false,
+                    });
+                }
+                if cells.is_empty() {
+                    continue;
+                }
+                cells
+            }
             MetricGroup::Latency => {
                 let mut cells = Vec::new();
                 if let Some(ttft) = snapshot.ttft_avg {
@@ -422,77 +428,13 @@ impl RenderedStrip {
         }
         out
     }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn width(&self) -> usize {
-        use unicode_width::UnicodeWidthStr;
-        self.text().width()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.groups.is_empty()
-    }
-}
-
-fn strip_width(groups: &[MetricGroupCells], separators: Separators) -> usize {
-    use unicode_width::UnicodeWidthStr;
-    let mut width = 0;
-    for (index, group) in groups.iter().enumerate() {
-        if index > 0 {
-            width += separators.group.width();
-        }
-        for (cell_index, cell) in group.cells.iter().enumerate() {
-            if cell_index > 0 {
-                width += separators.cell.width();
-            }
-            width += cell.width();
-        }
-    }
-    width
-}
-
-/// Fit the strip into `budget` columns by shedding the lowest-priority
-/// evidence first: second cells (steps, tools, tok/s) go before whole
-/// groups, and groups go from latency → turns → LLM time → cache → input.
-/// Returns an empty strip when even the input count does not fit.
-#[must_use]
-pub fn fit_to_width(
-    mut groups: Vec<MetricGroupCells>,
-    budget: usize,
-    separators: Separators,
-) -> RenderedStrip {
-    // Pass one: shed second cells (steps, tools, tok/s) from the lowest
-    // priority group upward, so every group keeps its headline fact.
-    for group in GROUP_PRIORITY.iter().rev() {
-        if strip_width(&groups, separators) <= budget {
-            break;
-        }
-        if let Some(position) = groups.iter().position(|g| g.group == *group) {
-            groups[position].cells.truncate(1);
-        }
-    }
-    // Pass two: drop whole groups from the lowest priority upward.
-    for group in GROUP_PRIORITY.iter().rev() {
-        if strip_width(&groups, separators) <= budget {
-            break;
-        }
-        if let Some(position) = groups.iter().position(|g| g.group == *group) {
-            groups.remove(position);
-        }
-    }
-    if strip_width(&groups, separators) > budget {
-        groups.clear();
-    }
-    RenderedStrip { groups, separators }
 }
 
 /// Snapshot the live app state into the strip's inputs.
 #[must_use]
 pub fn snapshot_from_app(app: &crate::tui::app::App) -> MetricsSnapshot {
-    let hit = u64::from(app.session.total_cache_hit_tokens);
-    let miss = u64::from(app.session.total_cache_miss_tokens);
+    let hit = u64::from(app.session.displayed_total_cache_hit_tokens());
+    let miss = u64::from(app.session.displayed_total_cache_miss_tokens());
     let cache_hit_percent = (hit + miss > 0).then(|| {
         // Widen before adding so saturated counters never exceed 100%.
         u8::try_from((hit * 100 + (hit + miss) / 2) / (hit + miss)).unwrap_or(100)
@@ -505,46 +447,8 @@ pub fn snapshot_from_app(app: &crate::tui::app::App) -> MetricsSnapshot {
         ttft_avg: app.session_metrics.ttft_average(),
         tokens_per_second: app.session_metrics.tokens_per_second(),
         cache_hit_percent,
-        input_tokens: u64::from(app.session.total_input_tokens),
+        input_tokens: u64::from(app.session.displayed_total_input_tokens()),
     }
-}
-
-/// Paint a fitted strip as styled spans: labels and separators quiet,
-/// values readable.
-#[must_use]
-pub fn spans(
-    strip: &RenderedStrip,
-    theme: &crate::palette::UiTheme,
-) -> Vec<ratatui::text::Span<'static>> {
-    use crate::palette::ChromeInk;
-    use ratatui::style::Style;
-    use ratatui::text::Span;
-    // Footer-rail ink is status-bar ink: the whole strip is passive Metadata,
-    // separated only by weight. `docs/design/STATUS_BAR_COLOR_GRAMMAR.md`.
-    let dim = Style::default().fg(ChromeInk::MetadataDim.color(theme));
-    let label = Style::default().fg(ChromeInk::Metadata.color(theme));
-    let value = Style::default().fg(ChromeInk::MetadataValue.color(theme));
-    let mut out = Vec::new();
-    for (index, group) in strip.groups.iter().enumerate() {
-        if index > 0 {
-            out.push(Span::styled(strip.separators.group, dim));
-        }
-        for (cell_index, cell) in group.cells.iter().enumerate() {
-            if cell_index > 0 {
-                out.push(Span::styled(strip.separators.cell, dim));
-            }
-            if cell.value_first {
-                out.push(Span::styled(cell.value.clone(), value));
-                out.push(Span::raw(" "));
-                out.push(Span::styled(cell.label.clone(), label));
-            } else {
-                out.push(Span::styled(cell.label.clone(), label));
-                out.push(Span::raw(" "));
-                out.push(Span::styled(cell.value.clone(), value));
-            }
-        }
-    }
-    out
 }
 
 /// The complete, untrimmed strip text — what `/status` prints.
@@ -609,30 +513,9 @@ mod tests {
     }
 
     #[test]
-    fn painted_metrics_use_metadata_inks_for_every_weight() {
-        let strip = fit_to_width(build_groups(sample(), Locale::En), 200, Separators::UNICODE);
-        let spans = spans(&strip, &crate::palette::UI_THEME);
-        let styled = |text: &str| {
-            spans
-                .iter()
-                .find(|span| span.content.as_ref() == text)
-                .unwrap_or_else(|| panic!("missing metrics span {text:?}"))
-                .style
-                .fg
-        };
-
-        assert_eq!(
-            styled("4"),
-            Some(crate::palette::ChromeInk::MetadataValue.color(&crate::palette::UI_THEME))
-        );
-        assert_eq!(
-            styled("turns"),
-            Some(crate::palette::ChromeInk::Metadata.color(&crate::palette::UI_THEME))
-        );
-        assert_eq!(
-            styled(" │ "),
-            Some(crate::palette::ChromeInk::MetadataDim.color(&crate::palette::UI_THEME))
-        );
+    fn idle_snapshot_paints_nothing() {
+        let text = full_text(MetricsSnapshot::default(), Locale::En, false);
+        assert_eq!(text, "");
     }
 
     #[test]
@@ -664,37 +547,7 @@ mod tests {
             ..MetricsSnapshot::default()
         };
         let text = full_text(snapshot, Locale::En, false);
-        assert!(text.starts_with("1 turn · 1 step │"), "{text}");
-    }
-
-    #[test]
-    fn narrow_budgets_drop_the_least_useful_evidence_first() {
-        let groups = build_groups(sample(), Locale::En);
-        let full = fit_to_width(groups.clone(), 200, Separators::UNICODE);
-        assert_eq!(full.groups.len(), 5);
-
-        // Just short of the full width: the latency group loses tok/s first.
-        let width = full.width();
-        let trimmed = fit_to_width(groups.clone(), width - 1, Separators::UNICODE);
-        assert_eq!(
-            trimmed.text(),
-            "4 turns · 108 steps │ LLM 11m46s · Tool call 1m52s │ TTFT avg 1.5s │ Cache hit 99% │ Input 9.3M"
-        );
-
-        // Normal terminals keep turns, LLM time, cache, and input.
-        let normal = fit_to_width(groups.clone(), 60, Separators::UNICODE);
-        assert_eq!(
-            normal.text(),
-            "4 turns │ LLM 11m46s │ Cache hit 99% │ Input 9.3M"
-        );
-
-        // Compact keeps the highest-value facts only.
-        let compact = fit_to_width(groups.clone(), 28, Separators::UNICODE);
-        assert_eq!(compact.text(), "Cache hit 99% │ Input 9.3M");
-
-        // Below the input cell nothing is painted rather than a truncated lie.
-        let none = fit_to_width(groups, 5, Separators::UNICODE);
-        assert!(none.is_empty());
+        assert_eq!(text, "1 turn · 1 step", "{text}");
     }
 
     #[test]

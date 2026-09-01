@@ -53,6 +53,8 @@ pub enum PricingProvenance {
     UserOverride,
     /// No sourced price.
     Unknown,
+    /// From the Codewhale-owned signed/bundled catalog.
+    CodewhaleCatalog,
 }
 
 impl PricingProvenance {
@@ -65,6 +67,7 @@ impl PricingProvenance {
             Self::ProviderDocs => "provider_docs",
             Self::UserOverride => "user_override",
             Self::Unknown => "unknown",
+            Self::CodewhaleCatalog => "codewhale_catalog",
         }
     }
 
@@ -79,7 +82,10 @@ impl PricingProvenance {
     pub fn is_authoritative_without_freshness_check(&self) -> bool {
         matches!(
             self,
-            Self::ModelsDevBundled | Self::ProviderDocs | Self::UserOverride
+            Self::ModelsDevBundled
+                | Self::ProviderDocs
+                | Self::UserOverride
+                | Self::CodewhaleCatalog
         )
     }
 }
@@ -498,16 +504,28 @@ pub fn catalog_cost_is_valid(cost: &ModelsDevCost) -> bool {
 
 fn provenance_from_source(source: &CatalogSource) -> PricingProvenance {
     match source {
-        CatalogSource::Bundled => PricingProvenance::ModelsDevBundled,
+        CatalogSource::Bundled | CatalogSource::ModelsDevLive { .. } => {
+            PricingProvenance::ModelsDevBundled
+        }
         CatalogSource::Live { .. } => PricingProvenance::ProviderLive,
-        CatalogSource::UserOverride => PricingProvenance::UserOverride,
+        CatalogSource::ConfigOverride | CatalogSource::UserOverride => {
+            PricingProvenance::UserOverride
+        }
+        CatalogSource::CodewhaleBundled { .. } | CatalogSource::CodewhaleLive { .. } => {
+            PricingProvenance::CodewhaleCatalog
+        }
     }
 }
 
 fn effective_at_from_source(source: &CatalogSource) -> Option<u64> {
     match source {
-        CatalogSource::Live { fetched_at, .. } => Some(*fetched_at),
-        CatalogSource::Bundled | CatalogSource::UserOverride => None,
+        CatalogSource::Live { fetched_at, .. }
+        | CatalogSource::ModelsDevLive { fetched_at }
+        | CatalogSource::CodewhaleLive { fetched_at, .. } => Some(*fetched_at),
+        CatalogSource::Bundled
+        | CatalogSource::ConfigOverride
+        | CatalogSource::UserOverride
+        | CatalogSource::CodewhaleBundled { .. } => None,
     }
 }
 
@@ -517,7 +535,12 @@ fn endpoint_fingerprint_from_source(source: &CatalogSource) -> Option<String> {
             base_url_fingerprint,
             ..
         } => Some(base_url_fingerprint.clone()),
-        CatalogSource::Bundled | CatalogSource::UserOverride => None,
+        CatalogSource::Bundled
+        | CatalogSource::ModelsDevLive { .. }
+        | CatalogSource::ConfigOverride
+        | CatalogSource::UserOverride
+        | CatalogSource::CodewhaleBundled { .. }
+        | CatalogSource::CodewhaleLive { .. } => None,
     }
 }
 

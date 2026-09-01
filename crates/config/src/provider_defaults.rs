@@ -9,7 +9,10 @@ pub(crate) const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-pro";
 pub(crate) const DEFAULT_DEEPSEEK_ANTHROPIC_MODEL: &str = DEFAULT_DEEPSEEK_MODEL;
 pub(crate) const DEFAULT_NVIDIA_NIM_MODEL: &str = "deepseek-ai/deepseek-v4-pro";
 pub(crate) const DEFAULT_NVIDIA_NIM_FLASH_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
-pub(crate) const DEFAULT_OPENAI_MODEL: &str = "deepseek-v4-pro";
+// A DeepSeek id here guaranteed a 404 against the default OpenAI endpoint:
+// unlike the hosted-aggregator rows below, api.openai.com serves no DeepSeek
+// models. Default to OpenAI's own flagship instead (#5588).
+pub(crate) const DEFAULT_OPENAI_MODEL: &str = "gpt-5.6";
 pub(crate) const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/beta";
 pub(crate) const DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL: &str = "https://api.deepseek.com/anthropic";
 pub(crate) const DEFAULT_NVIDIA_NIM_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
@@ -46,6 +49,10 @@ pub(crate) const OPENROUTER_GLM_5_2_MODEL: &str = "z-ai/glm-5.2";
 // resolves to OpenRouter rather than another vendor. See
 // models_dev.bundled.json `_meta.pending_release_metadata`.
 pub(crate) const OPENROUTER_GLM_5_3_MODEL: &str = "z-ai/glm-5.3";
+// GLM-5.3-Flash (2026-08-26): first natively multimodal GLM-5, 1M context,
+// published USD list $0.15/$0.50 (50% promo until 2026-09-09 UTC+8 is not
+// the durable row). OpenRouter mirror is z-ai/glm-5.3-flash.
+pub(crate) const OPENROUTER_GLM_5_3_FLASH_MODEL: &str = "z-ai/glm-5.3-flash";
 pub(crate) const OPENROUTER_KIMI_K2_7_CODE_MODEL: &str = "moonshotai/kimi-k2.7-code";
 pub(crate) const OPENROUTER_KIMI_K2_6_MODEL: &str = "moonshotai/kimi-k2.6";
 pub(crate) const OPENROUTER_MINIMAX_M3_MODEL: &str = "minimax/minimax-m3";
@@ -59,6 +66,7 @@ pub(crate) const OPENROUTER_QWEN_3_6_27B_MODEL: &str = "qwen/qwen3.6-27b";
 pub(crate) const OPENROUTER_QWEN_3_6_PLUS_MODEL: &str = "qwen/qwen3.6-plus";
 pub(crate) const OPENROUTER_QWEN_3_7_PLUS_MODEL: &str = "qwen/qwen3.7-plus";
 pub(crate) const OPENROUTER_QWEN_3_7_MAX_MODEL: &str = "qwen/qwen3.7-max";
+pub(crate) const OPENROUTER_QWEN_3_8_FLASH_MODEL: &str = "qwen/qwen3.8-flash";
 pub(crate) const OPENROUTER_TENCENT_HY3_PREVIEW_MODEL: &str = "tencent/hy3-preview";
 pub(crate) const OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL: &str = "xiaomi/mimo-v2.5-pro";
 pub(crate) const OPENROUTER_XIAOMI_MIMO_V2_5_MODEL: &str = "xiaomi/mimo-v2.5";
@@ -81,6 +89,7 @@ pub(crate) const ARCEE_TRINITY_MINI_MODEL: &str = "trinity-mini";
 pub(crate) const DEFAULT_MOONSHOT_MODEL: &str = "kimi-k2.7-code";
 pub(crate) const MOONSHOT_KIMI_K2_6_MODEL: &str = "kimi-k2.6";
 pub(crate) const DEFAULT_MOONSHOT_BASE_URL: &str = "https://api.moonshot.ai/v1";
+pub(crate) const MOONSHOT_CN_BASE_URL: &str = "https://api.moonshot.cn/v1";
 pub(crate) const DEFAULT_KIMI_CODE_MODEL: &str = "kimi-for-coding";
 pub(crate) const DEFAULT_KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 pub(crate) const DEFAULT_SGLANG_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
@@ -124,6 +133,7 @@ pub(crate) const DEFAULT_OLLAMA_CLOUD_BASE_URL: &str = "https://ollama.com/v1";
 // own id: only the default moved.
 pub(crate) const DEFAULT_ZAI_MODEL: &str = ZAI_GLM_5_3_MODEL;
 pub(crate) const ZAI_GLM_5_3_MODEL: &str = "GLM-5.3";
+pub(crate) const ZAI_GLM_5_3_FLASH_MODEL: &str = "GLM-5.3-Flash";
 pub(crate) const ZAI_GLM_5_2_MODEL: &str = "GLM-5.2";
 pub(crate) const ZAI_GLM_5_1_MODEL: &str = "GLM-5.1";
 pub(crate) const ZAI_GLM_5_TURBO_MODEL: &str = "GLM-5-Turbo";

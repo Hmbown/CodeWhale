@@ -353,12 +353,20 @@ fn resolver_routes_only_official_deepseek_flash_over_responses() {
         .expect("official Flash route resolves");
     assert_eq!(flash.protocol(), RequestProtocol::Responses);
     assert_eq!(flash.endpoint().endpoint_key, "responses");
+    assert_eq!(
+        flash.capabilities().server_side_web_search,
+        CapabilityState::Supported
+    );
 
     let pro = resolver
         .resolve(&req(Some(ProviderKind::Deepseek), Some("deepseek-v4-pro")))
         .expect("official Pro route resolves");
     assert_eq!(pro.protocol(), RequestProtocol::ChatCompletions);
     assert_eq!(pro.endpoint().endpoint_key, "chat");
+    assert_eq!(
+        pro.capabilities().server_side_web_search,
+        CapabilityState::Supported
+    );
 
     let future = resolver
         .resolve(&req(
@@ -389,6 +397,10 @@ fn resolver_routes_only_official_deepseek_flash_over_responses() {
         .expect("custom compatible Flash route remains pass-through");
     assert_eq!(custom.protocol(), RequestProtocol::ChatCompletions);
     assert_eq!(custom.endpoint().endpoint_key, "chat");
+    assert_eq!(
+        custom.capabilities().server_side_web_search,
+        CapabilityState::Unknown
+    );
 }
 
 #[test]
@@ -1358,7 +1370,7 @@ fn resolver_carries_exact_offering_capabilities_without_protocol_inference() {
     assert_eq!(capabilities.streaming, CapabilityState::Unknown);
     assert_eq!(
         capabilities.server_side_web_search,
-        CapabilityState::Unknown
+        CapabilityState::Supported
     );
 }
 
@@ -1419,6 +1431,194 @@ fn provider_native_web_search_requires_exact_direct_endpoint_offering() {
         custom_endpoint.capabilities().server_side_web_search,
         CapabilityState::Unknown
     );
+}
+
+#[test]
+fn mimo_native_search_is_exact_to_documented_chat_models() {
+    use crate::route::CapabilityState;
+
+    let resolver = RouteResolver::new();
+    for model in ["mimo-v2.5-pro", "mimo-v2.5"] {
+        let direct = resolver
+            .resolve(&req(Some(ProviderKind::XiaomiMimo), Some(model)))
+            .expect("official MiMo chat route resolves");
+        assert_eq!(
+            direct.capabilities().server_side_web_search,
+            CapabilityState::Supported
+        );
+    }
+
+    let neighboring = resolver
+        .resolve(&req(
+            Some(ProviderKind::XiaomiMimo),
+            Some("mimo-v2.5-pro-ultraspeed"),
+        ))
+        .expect("neighboring MiMo model resolves");
+    assert_eq!(
+        neighboring.capabilities().server_side_web_search,
+        CapabilityState::Unknown
+    );
+
+    let custom = resolver
+        .resolve(&RouteRequest {
+            explicit_provider: Some(ProviderKind::XiaomiMimo),
+            model_selector: Some(LogicalModelRef::from("mimo-v2.5-pro")),
+            saved_provider_model: None,
+            base_url_override: Some("https://compatible.example.test/v1".to_string()),
+            limit_overrides: Vec::new(),
+        })
+        .expect("custom MiMo-compatible route resolves");
+    assert_eq!(
+        custom.capabilities().server_side_web_search,
+        CapabilityState::Unknown
+    );
+}
+
+#[test]
+fn zai_native_search_requires_exact_general_api_product() {
+    use crate::route::CapabilityState;
+
+    let resolver = RouteResolver::new();
+    for base_url in [
+        "https://api.z.ai/api/paas/v4",
+        "https://open.bigmodel.cn/api/paas/v4",
+    ] {
+        let direct = resolver
+            .resolve(&RouteRequest {
+                explicit_provider: Some(ProviderKind::Zai),
+                model_selector: Some(LogicalModelRef::from("GLM-5.3")),
+                saved_provider_model: None,
+                base_url_override: Some(base_url.to_string()),
+                limit_overrides: Vec::new(),
+            })
+            .expect("general API route resolves");
+        assert_eq!(
+            direct.capabilities().server_side_web_search,
+            CapabilityState::Supported,
+            "{base_url} should expose structured web search"
+        );
+    }
+
+    for base_url in [
+        "https://api.z.ai/api/coding/paas/v4",
+        "https://open.bigmodel.cn/api/paas/v4/preview",
+        "https://compatible.example.test/v1",
+    ] {
+        let adjacent = resolver
+            .resolve(&RouteRequest {
+                explicit_provider: Some(ProviderKind::Zai),
+                model_selector: Some(LogicalModelRef::from("GLM-5.3")),
+                saved_provider_model: None,
+                base_url_override: Some(base_url.to_string()),
+                limit_overrides: Vec::new(),
+            })
+            .expect("adjacent route resolves");
+        assert_eq!(
+            adjacent.capabilities().server_side_web_search,
+            CapabilityState::Unknown,
+            "{base_url} must remain fail-closed"
+        );
+    }
+}
+
+#[test]
+fn qwen_native_search_is_exact_to_token_plan_responses_routes() {
+    use crate::route::CapabilityState;
+
+    let resolver = RouteResolver::new();
+    let direct = resolver
+        .resolve(&req(
+            Some(ProviderKind::ModelstudioTokenPlan),
+            Some("qwen3.8-max"),
+        ))
+        .expect("Token Plan Qwen route resolves");
+    assert_eq!(
+        direct.capabilities().server_side_web_search,
+        CapabilityState::Supported
+    );
+
+    let preview = resolver
+        .resolve(&req(
+            Some(ProviderKind::ModelstudioTokenPlan),
+            Some("qwen3.8-max-preview"),
+        ))
+        .expect("neighboring preview route resolves");
+    assert_eq!(
+        preview.capabilities().server_side_web_search,
+        CapabilityState::Unknown
+    );
+
+    for base_url in [
+        "https://coding-intl.dashscope.aliyuncs.com/v1",
+        "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
+        "https://compatible.example.test/v1",
+    ] {
+        let alternate = resolver
+            .resolve(&RouteRequest {
+                explicit_provider: Some(ProviderKind::ModelstudioTokenPlan),
+                model_selector: Some(LogicalModelRef::from("qwen3.8-max")),
+                saved_provider_model: None,
+                base_url_override: Some(base_url.to_string()),
+                limit_overrides: Vec::new(),
+            })
+            .expect("alternate product route resolves");
+        assert_eq!(
+            alternate.capabilities().server_side_web_search,
+            CapabilityState::Unknown,
+            "{base_url} must not inherit Token Plan Responses search"
+        );
+    }
+}
+
+#[test]
+fn moonshot_native_search_requires_exact_product_model_pair() {
+    use crate::route::CapabilityState;
+
+    let resolver = RouteResolver::new();
+    for (model, base_url) in [
+        ("kimi-k3", "https://api.moonshot.ai/v1"),
+        ("kimi-k3", "https://api.moonshot.cn/v1"),
+        ("kimi-k2.6", "https://api.moonshot.ai/v1"),
+        ("k3", "https://api.kimi.com/coding/v1"),
+        ("kimi-for-coding", "https://api.kimi.com/coding/v1"),
+    ] {
+        let direct = resolver
+            .resolve(&RouteRequest {
+                explicit_provider: Some(ProviderKind::Moonshot),
+                model_selector: Some(LogicalModelRef::from(model)),
+                saved_provider_model: None,
+                base_url_override: Some(base_url.to_string()),
+                limit_overrides: Vec::new(),
+            })
+            .expect("documented Moonshot/Kimi route resolves");
+        assert_eq!(
+            direct.capabilities().server_side_web_search,
+            CapabilityState::Supported,
+            "{base_url}/{model} should expose native search"
+        );
+    }
+
+    for (model, base_url) in [
+        ("kimi-k3", "https://api.kimi.com/coding/v2"),
+        ("kimi-k2.6", "https://api.kimi.com/coding/v1/preview"),
+        ("k3", "https://api.moonshot.ai/v1"),
+        ("kimi-k2.7-code", "https://api.moonshot.ai/v1"),
+    ] {
+        let adjacent = resolver
+            .resolve(&RouteRequest {
+                explicit_provider: Some(ProviderKind::Moonshot),
+                model_selector: Some(LogicalModelRef::from(model)),
+                saved_provider_model: None,
+                base_url_override: Some(base_url.to_string()),
+                limit_overrides: Vec::new(),
+            })
+            .expect("adjacent Moonshot/Kimi route resolves");
+        assert_eq!(
+            adjacent.capabilities().server_side_web_search,
+            CapabilityState::Unknown,
+            "{base_url}/{model} must remain fail-closed"
+        );
+    }
 }
 
 #[test]

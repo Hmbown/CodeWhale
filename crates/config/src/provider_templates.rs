@@ -6,7 +6,12 @@
 //! - first-class gateways users still treat as "paste a Base URL"
 //!   (OpenCode Zen / Go), and
 //! - named OpenAI-compatible custom routes that are not `ProviderKind`
-//!   variants (SenseNova).
+//!   variants (SenseNova, Baseten, Groq, Cerebras, Command Code). Hosted
+//!   Chat Completions backends are descriptor rows — not new enum variants
+//!   and not compiled model rosters. Live `GET /v1/models` and the
+//!   Codewhale catalog are the offering list. Distinct *wires*
+//!   (Anthropic Messages, Codex Responses, Google thought signatures) stay
+//!   on `ProviderKind`.
 //!
 //! Values here are limited to hosts, models, and env names already
 //! documented in this repository. Agnes is catalogued as unpublished so
@@ -25,11 +30,29 @@ pub const SENSENOVA_TEMPLATE_ID: &str = "sensenova";
 pub const SENSENOVA_BASE_URL: &str = "https://token.sensenova.cn/v1";
 pub const SENSENOVA_DEFAULT_MODEL: &str = "deepseek-v4-flash";
 pub const SENSENOVA_API_KEY_ENV: &str = "SENSENOVA_API_KEY";
-pub const SENSENOVA_MODELS: &[&str] = &[SENSENOVA_DEFAULT_MODEL];
 
 /// Agnes is requested by #5350 but has no published OpenAI-compatible
 /// host in this repository.
 pub const AGNES_TEMPLATE_ID: &str = "agnes";
+
+/// Baseten Model APIs — OpenAI Chat Completions, discovered at `/v1/models`.
+pub const BASETEN_TEMPLATE_ID: &str = "baseten";
+pub const BASETEN_BASE_URL: &str = "https://inference.baseten.co/v1";
+pub const BASETEN_DEFAULT_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
+pub const BASETEN_API_KEY_ENV: &str = "BASETEN_API_KEY";
+
+/// Groq — OpenAI Chat Completions hosted inference.
+pub const GROQ_TEMPLATE_ID: &str = "groq";
+pub const GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
+pub const GROQ_DEFAULT_MODEL: &str = "llama-3.3-70b-versatile";
+pub const GROQ_API_KEY_ENV: &str = "GROQ_API_KEY";
+
+/// Cerebras — OpenAI Chat Completions hosted inference.
+pub const CEREBRAS_TEMPLATE_ID: &str = "cerebras";
+pub const CEREBRAS_BASE_URL: &str = "https://api.cerebras.ai/v1";
+pub const CEREBRAS_DEFAULT_MODEL: &str = "llama-3.3-70b";
+pub const CEREBRAS_API_KEY_ENV: &str = "CEREBRAS_API_KEY";
+pub const COMMAND_CODE_TEMPLATE_ID: &str = "command-code";
 
 /// How a beginner template is applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,7 +78,6 @@ pub struct ProviderSetupTemplate {
     pub apply: ProviderSetupApply,
     base_url: Option<&'static str>,
     default_model: Option<&'static str>,
-    models: &'static [&'static str],
     api_key_env: Option<&'static str>,
     docs_url: Option<&'static str>,
     credential_url: Option<&'static str>,
@@ -85,9 +107,8 @@ impl ProviderSetupTemplate {
         }
     }
 
-    /// Models shown in setup / `/model` when the live catalog is empty or
-    /// Models.dev refresh failed. First-class Zen/Go use the curated
-    /// roster already owned by the route catalog.
+    /// Bootstrap model ids when the live catalog has not yet answered.
+    /// Compatible hosts expose only the descriptor default — never a compiled roster.
     #[must_use]
     pub fn picker_models(self) -> Vec<&'static str> {
         match self.apply {
@@ -97,11 +118,10 @@ impl ProviderSetupTemplate {
             ProviderSetupApply::FirstClass(ProviderKind::OpencodeGo) => {
                 OPENCODE_GO_CHAT_MODELS.to_vec()
             }
-            ProviderSetupApply::FirstClass(_) => self
+            ProviderSetupApply::FirstClass(_) | ProviderSetupApply::Compatible => self
                 .default_model()
                 .map(|model| vec![model])
                 .unwrap_or_default(),
-            ProviderSetupApply::Compatible => self.models.to_vec(),
             ProviderSetupApply::Unpublished => Vec::new(),
         }
     }
@@ -193,7 +213,6 @@ const TEMPLATES: &[ProviderSetupTemplate] = &[
         apply: ProviderSetupApply::FirstClass(ProviderKind::OpencodeZen),
         base_url: None,
         default_model: None,
-        models: &[],
         api_key_env: None,
         docs_url: None,
         credential_url: None,
@@ -205,7 +224,6 @@ const TEMPLATES: &[ProviderSetupTemplate] = &[
         apply: ProviderSetupApply::FirstClass(ProviderKind::OpencodeGo),
         base_url: None,
         default_model: None,
-        models: &[],
         api_key_env: None,
         docs_url: None,
         credential_url: None,
@@ -217,11 +235,54 @@ const TEMPLATES: &[ProviderSetupTemplate] = &[
         apply: ProviderSetupApply::Compatible,
         base_url: Some(SENSENOVA_BASE_URL),
         default_model: Some(SENSENOVA_DEFAULT_MODEL),
-        models: SENSENOVA_MODELS,
         api_key_env: Some(SENSENOVA_API_KEY_ENV),
         docs_url: None,
         credential_url: None,
         guidance: "OpenAI-compatible SenseTime SenseNova host. Store an env var name, not a raw key.",
+    },
+    ProviderSetupTemplate {
+        id: BASETEN_TEMPLATE_ID,
+        display_name: "Baseten",
+        apply: ProviderSetupApply::Compatible,
+        base_url: Some(BASETEN_BASE_URL),
+        default_model: Some(BASETEN_DEFAULT_MODEL),
+        api_key_env: Some(BASETEN_API_KEY_ENV),
+        docs_url: Some("https://docs.baseten.co/inference/model-apis/overview"),
+        credential_url: Some("https://app.baseten.co/settings/api_keys"),
+        guidance: "Baseten Model APIs. OpenAI Chat Completions at inference.baseten.co. Store BASETEN_API_KEY, not a raw key.",
+    },
+    ProviderSetupTemplate {
+        id: GROQ_TEMPLATE_ID,
+        display_name: "Groq",
+        apply: ProviderSetupApply::Compatible,
+        base_url: Some(GROQ_BASE_URL),
+        default_model: Some(GROQ_DEFAULT_MODEL),
+        api_key_env: Some(GROQ_API_KEY_ENV),
+        docs_url: Some("https://console.groq.com/docs/quickstart"),
+        credential_url: Some("https://console.groq.com/keys"),
+        guidance: "Groq hosted inference. OpenAI Chat Completions. Store GROQ_API_KEY, not a raw key.",
+    },
+    ProviderSetupTemplate {
+        id: CEREBRAS_TEMPLATE_ID,
+        display_name: "Cerebras",
+        apply: ProviderSetupApply::Compatible,
+        base_url: Some(CEREBRAS_BASE_URL),
+        default_model: Some(CEREBRAS_DEFAULT_MODEL),
+        api_key_env: Some(CEREBRAS_API_KEY_ENV),
+        docs_url: Some("https://inference-docs.cerebras.ai/quickstart"),
+        credential_url: Some("https://cloud.cerebras.ai"),
+        guidance: "Cerebras hosted inference. OpenAI Chat Completions. Store CEREBRAS_API_KEY, not a raw key.",
+    },
+    ProviderSetupTemplate {
+        id: COMMAND_CODE_TEMPLATE_ID,
+        display_name: "Command Code",
+        apply: ProviderSetupApply::Compatible,
+        base_url: Some("https://api.commandcode.ai/provider/v1"),
+        default_model: Some("deepseek/deepseek-v4-flash"),
+        api_key_env: Some("COMMAND_CODE_API_KEY"),
+        docs_url: Some("https://commandcode.ai/docs/provider"),
+        credential_url: Some("https://commandcode.ai/provider"),
+        guidance: "Published Provider API. Live GET /v1/models is the roster. Do not import the Command Code CLI login. Store COMMAND_CODE_API_KEY, not a raw key.",
     },
     ProviderSetupTemplate {
         id: AGNES_TEMPLATE_ID,
@@ -229,7 +290,6 @@ const TEMPLATES: &[ProviderSetupTemplate] = &[
         apply: ProviderSetupApply::Unpublished,
         base_url: None,
         default_model: None,
-        models: &[],
         api_key_env: None,
         docs_url: None,
         credential_url: None,
@@ -266,6 +326,8 @@ pub fn provider_setup_template(id: &str) -> Option<&'static ProviderSetupTemplat
                 "sense-nova" | "meituan-sensenova" | "meituan-sensenova-cn" => {
                     template.id == SENSENOVA_TEMPLATE_ID
                 }
+                "base-ten" | "base_ten" => template.id == BASETEN_TEMPLATE_ID,
+                "commandcode" | "cmd-code" => template.id == COMMAND_CODE_TEMPLATE_ID,
                 _ => false,
             })
         })
@@ -366,7 +428,7 @@ mod tests {
         assert_eq!(sense.base_url(), Some(SENSENOVA_BASE_URL));
         assert_eq!(sense.default_model(), Some(SENSENOVA_DEFAULT_MODEL));
         assert_eq!(sense.api_key_env(), Some(SENSENOVA_API_KEY_ENV));
-        assert_eq!(sense.picker_models(), SENSENOVA_MODELS);
+        assert_eq!(sense.picker_models(), vec![SENSENOVA_DEFAULT_MODEL]);
         assert!(sense.docs_url().is_none());
         assert!(sense.credential_url().is_none());
     }
@@ -387,7 +449,7 @@ mod tests {
     fn settings_value_names_fillable_then_unpublished() {
         assert_eq!(
             ProviderSetupTemplate::settings_value(),
-            "opencode-zen, opencode-go, sensenova; agnes unpublished"
+            "opencode-zen, opencode-go, sensenova, baseten, groq, cerebras, command-code; agnes unpublished"
         );
     }
 
@@ -401,5 +463,46 @@ mod tests {
             provider_setup_template("OPENCODE_ZEN").map(|template| template.id),
             Some("opencode-zen")
         );
+    }
+
+    #[test]
+    fn hosted_openai_compat_hosts_are_templates_not_enum_variants() {
+        for (alias, id, url, env) in [
+            (
+                "baseten",
+                BASETEN_TEMPLATE_ID,
+                BASETEN_BASE_URL,
+                BASETEN_API_KEY_ENV,
+            ),
+            (
+                "base-ten",
+                BASETEN_TEMPLATE_ID,
+                BASETEN_BASE_URL,
+                BASETEN_API_KEY_ENV,
+            ),
+            ("groq", GROQ_TEMPLATE_ID, GROQ_BASE_URL, GROQ_API_KEY_ENV),
+            (
+                "cerebras",
+                CEREBRAS_TEMPLATE_ID,
+                CEREBRAS_BASE_URL,
+                CEREBRAS_API_KEY_ENV,
+            ),
+            (
+                "command-code",
+                COMMAND_CODE_TEMPLATE_ID,
+                "https://api.commandcode.ai/provider/v1",
+                "COMMAND_CODE_API_KEY",
+            ),
+        ] {
+            let template = provider_setup_template(alias).unwrap_or_else(|| panic!("{alias}"));
+            assert_eq!(template.id, id);
+            assert!(template.is_compatible(), "{alias}");
+            assert_eq!(template.base_url(), Some(url));
+            assert_eq!(template.api_key_env(), Some(env));
+            assert!(
+                ProviderKind::parse(id).is_none(),
+                "{id} must not be a ProviderKind"
+            );
+        }
     }
 }

@@ -9,7 +9,7 @@ use crate::client::DeepSeekClient;
 use crate::codex_model_cache::{CodexModelCacheFreshness, model_roster};
 use crate::config::{
     ApiProvider, Config, DEFAULT_NVIDIA_NIM_BASE_URL, KIMI_CODE_K3_CONTEXT_WINDOW_TOKENS,
-    ProviderIdentity, is_exact_direct_moonshot_k3_route, is_exact_kimi_code_k3_route,
+    ProviderIdentity, is_exact_direct_moonshot_k3_route, is_exact_kimi_code_bare_k3_route,
     validate_kimi_code_api_model_id,
 };
 use crate::models::DIRECT_KIMI_K3_MAX_OUTPUT_TOKENS;
@@ -331,7 +331,7 @@ fn classify_provider_route_preflight_next_step(identity_key: &str, reason: &str)
     }
     if lower.contains("fleet") || lower.contains("profile") || lower.contains("partial route") {
         return Some(
-            "Review Fleet profile provider/model overrides; keep route fields atomic (#5042)."
+            "Review Pod profile provider/model overrides; keep route fields atomic (#5042)."
                 .to_string(),
         );
     }
@@ -554,7 +554,7 @@ fn plan_limit_overrides(
         };
     }
 
-    let is_exact_kimi_code_k3 = is_exact_kimi_code_k3_route(
+    let is_exact_kimi_code_k3 = is_exact_kimi_code_bare_k3_route(
         provider,
         &resolved.endpoint().base_url,
         resolved.wire_model_id().as_str(),
@@ -1255,7 +1255,7 @@ mod tests {
             crate::config::KIMI_CODE_K3_MODEL,
             "the 1M entitlement changes limits, never the provider wire id"
         );
-        assert!(crate::config::is_exact_kimi_code_k3_route(
+        assert!(crate::config::is_exact_kimi_code_bare_k3_route(
             ApiProvider::Moonshot,
             &candidate.endpoint().base_url,
             candidate.wire_model_id().as_str(),

@@ -9,6 +9,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  - package-ecosystem: nix
+    directory: /
+    schedule:
+      interval: monthly
   - package-ecosystem: npm
     directory: /web
     schedule:

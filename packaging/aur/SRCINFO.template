@@ -1,0 +1,30 @@
+pkgbase = codewhale-bin
+	pkgdesc = Provider-neutral coding agent for the terminal (prebuilt binary)
+	pkgver = @PKGVER@
+	pkgrel = @PKGREL@
+	url = https://codewhale.net
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	depends = glibc
+	depends = gcc-libs
+	depends = dbus
+	provides = codewhale=@PKGVER@
+	provides = codewhale-tui
+	provides = deepseek
+	provides = deepseek-tui
+	conflicts = codewhale
+	conflicts = codewhale-tui
+	conflicts = deepseek
+	conflicts = deepseek-tui
+	conflicts = deepseek-tui-bin
+	replaces = deepseek-tui-bin
+	options = !strip
+	source = LICENSE-@PKGVER@::https://raw.githubusercontent.com/Hmbown/CodeWhale/v@PKGVER@/LICENSE
+	sha256sums = @LICENSE_SHA256@
+	source_x86_64 = codewhale-bin-@PKGVER@-x86_64.tar.gz::https://github.com/Hmbown/CodeWhale/releases/download/v@PKGVER@/codewhale-linux-x64.tar.gz
+	sha256sums_x86_64 = @X86_64_SHA256@
+	source_aarch64 = codewhale-bin-@PKGVER@-aarch64.tar.gz::https://github.com/Hmbown/CodeWhale/releases/download/v@PKGVER@/codewhale-linux-arm64.tar.gz
+	sha256sums_aarch64 = @AARCH64_SHA256@
+
+pkgname = codewhale-bin

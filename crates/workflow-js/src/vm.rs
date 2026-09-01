@@ -25,8 +25,11 @@ use serde::Deserialize;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot, watch};
 
 use crate::driver::{ProgressEvent, TaskCompletion, TaskRequest, WorkflowDriver};
-use crate::error::WorkflowJsError;
-use crate::schema::{compile_schema, decode_reply};
+use crate::error::{TaskError, TaskErrorKind, WorkflowJsError};
+use crate::schema::{
+    ReplyDecodeError, SCHEMA_REPAIR_MAX_ATTEMPTS, carried_raw, compile_schema, decode_reply,
+    repair_prompt,
+};
 use crate::{PARALLEL_MAX_ITEMS, WORKFLOW_LIFETIME_CAP, normalize_profile};
 
 const DEFAULT_VM_MEMORY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
@@ -563,6 +566,42 @@ fn install_host(
         )
         .map_err(init_err)?;
 
+    // Structured twin of the prelude's "every slot failed" breadcrumb (R9):
+    // a dead fan-out of script-thrown thunks leaves no task record behind,
+    // so the host needs a typed event — not a log line — to keep the run's
+    // terminal status honest.
+    let fanout_driver = driver.clone();
+    globals
+        .set(
+            "__workflow_every_slot_failed",
+            Func::from(move |construct: String, failed: u32, total: u32| {
+                fanout_driver.progress(ProgressEvent::FanoutAllSlotsFailed {
+                    construct,
+                    failed,
+                    total,
+                });
+            }),
+        )
+        .map_err(init_err)?;
+
+    // Structured twin of the per-slot "dropped a failed slot as null"
+    // breadcrumb (R9): a PARTIALLY failed fan-out still resolves and leaves
+    // no task record for the dropped slot, so without this event the ledger
+    // cannot see the loss and records a clean Completed.
+    let fanout_driver = driver.clone();
+    globals
+        .set(
+            "__workflow_slot_dropped",
+            Func::from(move |construct: String, kind: String, slot: u32| {
+                fanout_driver.progress(ProgressEvent::FanoutSlotDropped {
+                    construct,
+                    kind,
+                    slot,
+                });
+            }),
+        )
+        .map_err(init_err)?;
+
     let phase_driver = driver.clone();
     globals
         .set(
@@ -616,8 +655,10 @@ fn init_err(err: rquickjs::Error) -> WorkflowJsError {
 }
 
 /// The `task()` host call. Everything that can go wrong is reported through
-/// the JSON envelope (`{"error": ...}`) so the prelude re-throws it as a real
-/// JS `Error` with a script-side stack.
+/// the JSON envelope (`{"error": ..., "error_kind": ...}`) so the prelude
+/// re-throws it as a real JS `Error` with a script-side stack and a typed
+/// [`TaskErrorKind`] on `.kind` (R9). The kind is assigned here, where the
+/// failure actually happened — never re-derived from the message text.
 async fn task_host(
     opts_json: String,
     driver: Arc<dyn WorkflowDriver>,
@@ -627,7 +668,9 @@ async fn task_host(
     let outcome = task_host_inner(opts_json, driver, cancel, spawned).await;
     let envelope = match outcome {
         Ok(value) => serde_json::json!({ "value": value }),
-        Err(message) => serde_json::json!({ "error": message }),
+        Err(TaskError { kind, message }) => {
+            serde_json::json!({ "error": message, "error_kind": kind.as_str() })
+        }
     };
     envelope.to_string()
 }
@@ -661,14 +704,83 @@ fn reject_task(driver: &Arc<dyn WorkflowDriver>, opts_json: &str, message: Strin
     message
 }
 
+/// Emit the terminal schema-failure receipt for a `task()` whose reply failed
+/// `responseSchema` with no repair left to try, and hand the message back for
+/// the JS throw. `note` (when present) names why a repair was skipped, so the
+/// operator can tell "repair refused to run" from "repair also failed".
+fn fail_schema(
+    driver: &Arc<dyn WorkflowDriver>,
+    task_id: String,
+    attempt: u32,
+    error: &ReplyDecodeError,
+    raw: String,
+    raw_truncated: bool,
+    note: Option<String>,
+) -> String {
+    let message = match note {
+        Some(note) => format!("{} (repair skipped: {note})", error.message()),
+        None => error.message().to_string(),
+    };
+    driver.progress(ProgressEvent::TaskSchemaValidationFailed {
+        task_id,
+        kind: error.kind().to_string(),
+        attempt,
+        message: message.clone(),
+        raw,
+        raw_truncated,
+    });
+    message
+}
+
+/// Build the repair request for `next_attempt` (#5583): the same child
+/// identity, budget fields, and schema as the original, with a repair prompt
+/// carrying the original task, the schema, the failed reply, and why it
+/// failed, plus the wall clock the first attempt did not spend.
+fn repair_request(
+    original: &TaskRequest,
+    next_attempt: u32,
+    error: &ReplyDecodeError,
+    failed_raw: &str,
+    wall_time_secs: Option<u64>,
+) -> TaskRequest {
+    let mut request = original.clone();
+    let schema = original
+        .response_schema
+        .as_ref()
+        .expect("repair only runs when responseSchema is set");
+    // The bracket prefix identifies the repair at a glance on progress
+    // surfaces and lets tests script the repair reply by rule order.
+    request.description = format!(
+        "[schema repair {next_attempt}] {}",
+        repair_prompt(&original.description, schema, failed_raw, error)
+    );
+    request.wall_time_secs = wall_time_secs;
+    // Label and phase stay inherited so progress surfaces group the repair
+    // with its task.
+    request
+}
+
+/// The one cancellation error: the run's deadline fired. Fatal in every
+/// `parallel()` / `pipeline()` mode — a cancelled run must never resolve into
+/// a slot value.
+fn cancelled_task() -> TaskError {
+    TaskError::new(TaskErrorKind::Cancelled, "task(): run cancelled")
+}
+
+/// A terminal `responseSchema` failure, already receipted by [`fail_schema`].
+fn schema_task(message: String) -> TaskError {
+    TaskError::new(TaskErrorKind::Schema, message)
+}
+
 async fn task_host_inner(
     opts_json: String,
     driver: Arc<dyn WorkflowDriver>,
     cancel: CancelHandle,
     spawned: Rc<Cell<u64>>,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, TaskError> {
+    let admission = |message: String| TaskError::new(TaskErrorKind::Admission, message);
     let request = parse_task_options(&opts_json)
-        .map_err(|message| reject_task(&driver, &opts_json, message))?;
+        .map_err(|message| admission(reject_task(&driver, &opts_json, message)))?;
     // Compile the schema before spawning so a malformed one fails fast
     // instead of burning a subagent.
     let validator = request
@@ -676,68 +788,166 @@ async fn task_host_inner(
         .as_ref()
         .map(compile_schema)
         .transpose()
-        .map_err(|message| reject_task(&driver, &opts_json, message))?;
+        .map_err(|message| admission(reject_task(&driver, &opts_json, message)))?;
 
     // Lifetime backstop (design §4.3) — checked and bumped before any await.
     if spawned.get() >= WORKFLOW_LIFETIME_CAP {
-        return Err(reject_task(
+        return Err(admission(reject_task(
             &driver,
             &opts_json,
             format!(
                 "task(): Workflow lifetime agent cap ({WORKFLOW_LIFETIME_CAP}) reached for this run"
             ),
-        ));
+        )));
     }
     // Fast-fail budget gate. The authoritative reservation lives in the
     // driver (design §5.3); this only stops obviously-doomed spawns early.
     let snapshot = driver.budget();
     if snapshot.exhausted() {
-        return Err(reject_task(
-            &driver,
-            &opts_json,
-            format!(
-                "task(): budget exhausted ({} of {} tokens spent)",
-                snapshot.spent,
-                snapshot.total.unwrap_or(0)
+        return Err(TaskError::new(
+            TaskErrorKind::Budget,
+            reject_task(
+                &driver,
+                &opts_json,
+                format!(
+                    "task(): budget exhausted ({} of {} tokens spent)",
+                    snapshot.spent,
+                    snapshot.total.unwrap_or(0)
+                ),
             ),
         ));
     }
     if cancel.is_cancelled() {
-        return Err("task(): run cancelled".to_string());
+        return Err(cancelled_task());
     }
-    spawned.set(spawned.get() + 1);
 
-    let spawned_task = driver
-        .spawn_task(request)
-        .await
-        .map_err(|err| err.to_string())?;
-    let task_id = spawned_task.task_id;
-    let completion_rx = spawned_task.completion;
-    let completion = tokio::select! {
-        _ = cancel.cancelled() => return Err("task(): run cancelled".to_string()),
-        completion = completion_rx => completion
-            .map_err(|_| "task(): driver dropped the completion channel".to_string())?,
-    };
+    // Bounded schema repair (#5583): after a failed `responseSchema` decode,
+    // re-ask the same route before throwing. `None` is the default single
+    // repair; `Some(0)` disables it. The first attempt is attempt 1, so the
+    // task is schema-terminal once `attempt` reaches this ceiling.
+    let last_attempt = 1 + request.schema_repair_attempts.unwrap_or(1);
+    // The wall clock is shared across attempts: a repair inherits the time
+    // the first attempt did not spend, not a fresh budget.
+    let started = std::time::Instant::now();
+    let mut wall_time_secs_left = request.wall_time_secs;
+    let mut current = request.clone();
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        spawned.set(spawned.get() + 1);
+        let spawned_task = driver
+            .spawn_task(current.clone())
+            .await
+            .map_err(|err| TaskError::new(TaskErrorKind::from(&err), err.to_string()))?;
+        let task_id = spawned_task.task_id;
+        let completion_rx = spawned_task.completion;
+        let completion = tokio::select! {
+            _ = cancel.cancelled() => return Err(cancelled_task()),
+            completion = completion_rx => completion.map_err(|_| {
+                TaskError::new(
+                    TaskErrorKind::Driver,
+                    "task(): driver dropped the completion channel",
+                )
+            })?,
+        };
 
-    match completion {
-        TaskCompletion::Completed { text } => match &validator {
-            None => Ok(serde_json::Value::String(text)),
-            Some(validator) => match decode_reply(&text, validator) {
-                Ok(value) => Ok(value),
-                Err(message) => {
-                    driver.progress(ProgressEvent::TaskSchemaValidationFailed {
-                        task_id,
-                        message: message.clone(),
-                    });
-                    Err(message)
-                }
-            },
-        },
-        TaskCompletion::Failed { message } => Err(format!("task(): subagent failed: {message}")),
-        TaskCompletion::Cancelled => Err("task(): subagent cancelled".to_string()),
-        TaskCompletion::BudgetExhausted { message } => {
-            Err(format!("task(): budget exhausted: {message}"))
+        let text = match completion {
+            TaskCompletion::Completed { text } => text,
+            TaskCompletion::Failed { message } => {
+                return Err(TaskError::new(
+                    TaskErrorKind::Agent,
+                    format!("task(): subagent failed: {message}"),
+                ));
+            }
+            TaskCompletion::Cancelled => {
+                return Err(TaskError::new(
+                    TaskErrorKind::Cancelled,
+                    "task(): subagent cancelled",
+                ));
+            }
+            TaskCompletion::BudgetExhausted { message } => {
+                return Err(TaskError::new(
+                    TaskErrorKind::Budget,
+                    format!("task(): budget exhausted: {message}"),
+                ));
+            }
+        };
+        // Without a schema the raw text is the contract; with one, the decode
+        // decides — and a failure may still be repaired.
+        let Some(validator) = validator.as_ref() else {
+            return Ok(serde_json::Value::String(text));
+        };
+        let error = match decode_reply(&text, validator) {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        let (raw, raw_truncated) = carried_raw(&text);
+        if attempt >= last_attempt {
+            return Err(schema_task(fail_schema(
+                &driver,
+                task_id,
+                attempt,
+                &error,
+                raw,
+                raw_truncated,
+                None,
+            )));
         }
+        // The attempt failed but a repair remains: record it as a receipt
+        // (visible even when the repair succeeds), then re-run the admission
+        // gates — a repair is a real child, not a free retry.
+        driver.progress(ProgressEvent::TaskSchemaRepairAttempted {
+            task_id: task_id.clone(),
+            kind: error.kind().to_string(),
+            attempt,
+            message: error.message().to_string(),
+            raw: raw.clone(),
+            raw_truncated,
+        });
+        if spawned.get() >= WORKFLOW_LIFETIME_CAP {
+            return Err(schema_task(fail_schema(
+                &driver,
+                task_id,
+                attempt,
+                &error,
+                raw,
+                raw_truncated,
+                Some(format!(
+                    "workflow lifetime agent cap ({WORKFLOW_LIFETIME_CAP}) reached"
+                )),
+            )));
+        }
+        let snapshot = driver.budget();
+        if snapshot.exhausted() {
+            return Err(schema_task(fail_schema(
+                &driver,
+                task_id,
+                attempt,
+                &error,
+                raw,
+                raw_truncated,
+                Some("budget exhausted".to_string()),
+            )));
+        }
+        if cancel.is_cancelled() {
+            return Err(cancelled_task());
+        }
+        if let Some(wall) = wall_time_secs_left {
+            let remaining = wall.saturating_sub(started.elapsed().as_secs());
+            if remaining == 0 {
+                return Err(schema_task(fail_schema(
+                    &driver,
+                    task_id,
+                    attempt,
+                    &error,
+                    raw,
+                    raw_truncated,
+                    Some("no wall-time left from wallTimeSecs".to_string()),
+                )));
+            }
+            wall_time_secs_left = Some(remaining);
+        }
+        current = repair_request(&request, attempt + 1, &error, &raw, wall_time_secs_left);
     }
 }
 
@@ -793,6 +1003,12 @@ struct TaskOptions {
     wall_time_secs: Option<u64>,
     #[serde(alias = "response_schema")]
     response_schema: Option<serde_json::Value>,
+    /// Bounded `responseSchema` repair attempts after a failed decode
+    /// (#5583): re-ask the same route with the schema and the failed reply.
+    /// Defaults to one; `0` disables; capped at
+    /// [`SCHEMA_REPAIR_MAX_ATTEMPTS`] so repair stays a bounded recovery.
+    #[serde(default, alias = "schema_repair_attempts")]
+    schema_repair_attempts: Option<u32>,
     label: Option<String>,
     phase: Option<String>,
 }
@@ -903,6 +1119,14 @@ fn parse_task_options(opts_json: &str) -> Result<TaskRequest, String> {
                 .to_string(),
         );
     }
+    if let Some(attempts) = options.schema_repair_attempts
+        && attempts > SCHEMA_REPAIR_MAX_ATTEMPTS
+    {
+        return Err(format!(
+            "task(): schemaRepairAttempts is bounded to {SCHEMA_REPAIR_MAX_ATTEMPTS}; \
+             repair is a bounded recovery, not a retry loop"
+        ));
+    }
     Ok(TaskRequest {
         description,
         subagent_type: options.subagent_type,
@@ -927,6 +1151,7 @@ fn parse_task_options(opts_json: &str) -> Result<TaskRequest, String> {
         max_steps: options.max_steps,
         wall_time_secs: options.wall_time_secs,
         response_schema: options.response_schema,
+        schema_repair_attempts: options.schema_repair_attempts,
         label: options.label,
         phase: options.phase,
     })
@@ -1045,6 +1270,8 @@ const PRELUDE_TEMPLATE: &str = r#""use strict";
   // globalThis so scripts only see the documented Workflow surface (#4129).
   const hostTask = __workflow_task;
   const hostLog = __workflow_log;
+  const hostEverySlotFailed = __workflow_every_slot_failed;
+  const hostSlotDropped = __workflow_slot_dropped;
   const hostPhase = __workflow_phase;
   const hostBudgetTotal = __workflow_budget_total;
   const hostBudgetSpent = __workflow_budget_spent;
@@ -1052,9 +1279,79 @@ const PRELUDE_TEMPLATE: &str = r#""use strict";
 
   const MAX_ITEMS = __MAX_ITEMS__;
   const taskErrorText = (err) => String(err && err.message !== undefined ? err.message : err);
+
+  // Typed slot errors (R9). Every error thrown by task() carries a
+  // host-assigned `kind` copied off the task envelope; anything else that
+  // reaches a slot was thrown by the script itself and reports as "script".
+  //
+  // The kind is read from the error object and never guessed from message
+  // text. A substring classifier let a child's own words ("...budget
+  // exhausted...", "...responseSchema...") forge a fatal classification and
+  // abort a healthy run, and it could not tell a genuine subagent failure
+  // apart from a plain `throw new Error(...)` in a stage.
+  const HOST_KINDS = ["admission", "budget", "cancelled", "agent", "schema", "driver"];
+  const SCRIPT_KIND = "script";
+  const taskErrorKind = (err) =>
+    err !== null && typeof err === "object" && HOST_KINDS.indexOf(err.kind) !== -1
+      ? err.kind
+      : SCRIPT_KIND;
+  // Fatal kinds are never absorbed into a slot value: cancellation is the
+  // run's own deadline, and a schema breach means the contract the caller
+  // explicitly asked for was not met. `mode: "partial"` opts out for schema
+  // (and only schema) by keeping it as a structured slot value instead.
   const isFatalTaskError = (err) => {
-    const text = taskErrorText(err);
-    return text.includes("responseSchema") || text.includes("run cancelled");
+    const kind = taskErrorKind(err);
+    return kind === "cancelled" || kind === "schema";
+  };
+
+  // Stamp the resolved kind onto an error that is about to be rethrown, so a
+  // script's own `catch (err) { err.kind }` reads the same vocabulary the
+  // slot classifier used. Host errors already carry theirs; this only names
+  // the script throws, which would otherwise surface as `undefined`.
+  const stampKind = (err, kind) => {
+    if (err !== null && typeof err === "object" && err.kind === undefined) {
+      try {
+        err.kind = kind;
+      } catch (_) {
+        // A frozen error keeps whatever it has; the log line still names it.
+      }
+    }
+    return err;
+  };
+
+  const SLOT_MODES = ["settled", "fail-fast", "partial"];
+  // `settled` is the default and is exactly today's behavior: a non-fatal
+  // slot failure resolves to `null` so an author need not handle every error.
+  // An unrecognized mode throws rather than silently falling back — a typo
+  // like `mode: "failfast"` used to read as `settled` and quietly keep
+  // dropping slots the author believed were now fatal.
+  const slotMode = (fn, opts) => {
+    if (opts === null || typeof opts !== "object" || opts.mode === undefined) {
+      return "settled";
+    }
+    if (SLOT_MODES.indexOf(opts.mode) === -1) {
+      throw new Error(
+        fn + "(): unknown mode " + JSON.stringify(opts.mode) +
+        "; expected one of " + SLOT_MODES.join(", ")
+      );
+    }
+    return opts.mode;
+  };
+
+  // The failure ledger for one fan-out, attached to the resolved array as a
+  // non-enumerable `errors` property. Non-enumerable and non-index, so the
+  // array's contents, length, and JSON encoding are byte-identical to before:
+  // `results.filter(Boolean)` still works, and a script that wants to know
+  // WHY a slot is null can now ask instead of guessing.
+  const attachSlotErrors = (results, errors) => {
+    errors.sort((a, b) => a.index - b.index);
+    Object.defineProperty(results, "errors", {
+      value: Object.freeze(errors.map((entry) => Object.freeze(entry))),
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+    return results;
   };
 
   globalThis.task = async (opts) => {
@@ -1063,31 +1360,88 @@ const PRELUDE_TEMPLATE: &str = r#""use strict";
     }
     const envelope = JSON.parse(await hostTask(JSON.stringify(opts)));
     if (envelope.error !== undefined) {
-      throw new Error(envelope.error);
+      const err = new Error(envelope.error);
+      // The host always names the kind; a missing one means an envelope this
+      // prelude did not produce, which is not a typed task failure.
+      err.kind = HOST_KINDS.indexOf(envelope.error_kind) !== -1
+        ? envelope.error_kind
+        : SCRIPT_KIND;
+      throw err;
     }
     return envelope.value;
   };
 
-  globalThis.parallel = (thunks) => {
+  globalThis.parallel = (thunks, opts) => {
     if (!Array.isArray(thunks)) {
       throw new TypeError("parallel(): expected an array of thunks");
     }
     if (thunks.length > MAX_ITEMS) {
       throw new Error("parallel(): max " + MAX_ITEMS + " items per call");
     }
-    return Promise.all(thunks.map((thunk) => {
-      try {
-        return Promise.resolve(typeof thunk === "function" ? thunk() : thunk).catch((err) => {
-          if (isFatalTaskError(err)) throw err;
-          hostLog("parallel(): dropped a failed slot as null: " + String((err && err.message) || err));
-          return null;
-        });
-      } catch (err) {
-        if (isFatalTaskError(err)) return Promise.reject(err);
-        hostLog("parallel(): dropped a failed slot as null: " + String((err && err.message) || err));
-        return null;
+    const mode = slotMode("parallel", opts);
+    const failFast = mode === "fail-fast";
+    const partial = mode === "partial";
+    const errors = [];
+    // Returns the slot value, or throws to reject the whole fan-out.
+    const onSlotError = (index, err) => {
+      const kind = taskErrorKind(err);
+      const message = taskErrorText(err);
+      stampKind(err, kind);
+      // Cancellation is the run's deadline in every mode, partial included.
+      if (kind === "cancelled") throw err;
+      if (partial) {
+        // Opt-in partial mode: every non-cancellation slot failure becomes a
+        // structured value the script can branch on. It never masquerades as
+        // a success -- `__taskError` is the whole point of the shape.
+        errors.push({ index: index, kind: kind, message: message });
+        hostLog(
+          "parallel(): partial mode kept a failed slot as __taskError (kind=" +
+          kind + ", slot " + index + "): " + message
+        );
+        return { __taskError: { index: index, kind: kind, message: message } };
       }
-    }));
+      if (isFatalTaskError(err)) throw err;
+      if (failFast) {
+        hostLog(
+          "parallel(): fail-fast slot error (kind=" + kind + ", slot " + index + "): " + message
+        );
+        throw err;
+      }
+      errors.push({ index: index, kind: kind, message: message });
+      hostLog(
+        "parallel(): dropped a failed slot as null (kind=" + kind + ", slot " + index + "): " +
+        message
+      );
+      hostSlotDropped("parallel", kind, index);
+      return null;
+    };
+    const slots = thunks.map((thunk, index) => {
+      try {
+        return Promise.resolve(typeof thunk === "function" ? thunk() : thunk)
+          .catch((err) => onSlotError(index, err));
+      } catch (err) {
+        try {
+          return onSlotError(index, err);
+        } catch (rethrown) {
+          return Promise.reject(rethrown);
+        }
+      }
+    });
+    return Promise.all(slots).then((results) => {
+      // A fan-out where nothing survived is a dead fan-out, not resilience.
+      // The default stays ergonomic (the array still resolves) but the run
+      // log says so in one line an operator can grep for, and the structured
+      // event below lets the host status classifier refuse to call such a
+      // run a plain success.
+      if (results.length > 0 && errors.length === results.length) {
+        hostLog(
+          "parallel(): every slot failed (" + errors.length + " of " + results.length +
+          "); no work survived this fan-out"
+        );
+        hostEverySlotFailed("parallel", errors.length, results.length);
+      }
+      return attachSlotErrors(results, errors);
+    });
   };
 
   globalThis.pipeline = (items, ...stages) => {
@@ -1097,19 +1451,65 @@ const PRELUDE_TEMPLATE: &str = r#""use strict";
     if (items.length > MAX_ITEMS) {
       throw new Error("pipeline(): max " + MAX_ITEMS + " items per call");
     }
+    // Options overload: pipeline(items, { stages: [...], mode: "fail-fast" }).
+    let mode = "settled";
+    if (
+      stages.length === 1 &&
+      stages[0] !== null &&
+      typeof stages[0] === "object" &&
+      Array.isArray(stages[0].stages)
+    ) {
+      mode = slotMode("pipeline", stages[0]);
+      stages = stages[0].stages;
+    }
+    const failFast = mode === "fail-fast";
+    const partial = mode === "partial";
+    const errors = [];
     return Promise.all(items.map(async (item, index) => {
       let value = item;
       for (const stage of stages) {
         try {
           value = await stage(value, item, index);
         } catch (err) {
+          const kind = taskErrorKind(err);
+          const message = taskErrorText(err);
+          stampKind(err, kind);
+          if (kind === "cancelled") throw err;
+          if (partial) {
+            errors.push({ index: index, kind: kind, message: message });
+            hostLog(
+              "pipeline(): partial mode kept item " + index +
+              " as __taskError (kind=" + kind + "): " + message
+            );
+            return { __taskError: { index: index, kind: kind, message: message } };
+          }
           if (isFatalTaskError(err)) throw err;
-          hostLog("pipeline(): dropped item " + index + " as null: " + String((err && err.message) || err));
+          if (failFast) {
+            hostLog(
+              "pipeline(): fail-fast stage error on item " + index +
+              " (kind=" + kind + "): " + message
+            );
+            throw err;
+          }
+          errors.push({ index: index, kind: kind, message: message });
+          hostLog(
+            "pipeline(): dropped item " + index + " as null (kind=" + kind + "): " + message
+          );
+          hostSlotDropped("pipeline", kind, index);
           return null;
         }
       }
       return value;
-    }));
+    })).then((results) => {
+      if (results.length > 0 && errors.length === results.length) {
+        hostLog(
+          "pipeline(): every item failed (" + errors.length + " of " + results.length +
+          "); no work survived this pipeline"
+        );
+        hostEverySlotFailed("pipeline", errors.length, results.length);
+      }
+      return attachSlotErrors(results, errors);
+    });
   };
 
   globalThis.log = (message) => {
@@ -1129,6 +1529,7 @@ const PRELUDE_TEMPLATE: &str = r#""use strict";
   for (const name of [
     "__workflow_task",
     "__workflow_log",
+    "__workflow_every_slot_failed",
     "__workflow_phase",
     "__workflow_budget_total",
     "__workflow_budget_spent",

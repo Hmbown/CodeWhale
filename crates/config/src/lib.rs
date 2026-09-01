@@ -3,6 +3,7 @@ pub mod auth_source;
 pub mod auto_model;
 pub mod catalog;
 mod config_document;
+pub mod descriptors;
 pub mod device_code;
 pub mod external_credentials;
 mod harness;
@@ -30,8 +31,11 @@ pub use model_reference::{Modality, ModelReferenceCard, ModelReferenceDatabase};
 pub(crate) use provider_defaults::*;
 pub use provider_kind::ProviderKind;
 pub use provider_templates::{
-    AGNES_TEMPLATE_ID, ProviderSetupApply, ProviderSetupTemplate, SENSENOVA_API_KEY_ENV,
-    SENSENOVA_BASE_URL, SENSENOVA_DEFAULT_MODEL, SENSENOVA_MODELS, SENSENOVA_TEMPLATE_ID,
+    AGNES_TEMPLATE_ID, BASETEN_API_KEY_ENV, BASETEN_BASE_URL, BASETEN_DEFAULT_MODEL,
+    BASETEN_TEMPLATE_ID, CEREBRAS_API_KEY_ENV, CEREBRAS_BASE_URL, CEREBRAS_DEFAULT_MODEL,
+    CEREBRAS_TEMPLATE_ID, COMMAND_CODE_TEMPLATE_ID, GROQ_API_KEY_ENV, GROQ_BASE_URL,
+    GROQ_DEFAULT_MODEL, GROQ_TEMPLATE_ID, ProviderSetupApply, ProviderSetupTemplate,
+    SENSENOVA_API_KEY_ENV, SENSENOVA_BASE_URL, SENSENOVA_DEFAULT_MODEL, SENSENOVA_TEMPLATE_ID,
     compatible_provider_setup_templates, provider_setup_template, provider_setup_templates,
 };
 pub use setup_state::{
@@ -853,6 +857,10 @@ pub struct ConfigToml {
     /// lifecycle `[hooks]` table so config rewrites preserve existing hooks.
     #[serde(default)]
     pub hook_sinks: Option<HookSinksToml>,
+    /// Lifecycle event outbox (`[lifecycle_outbox]`). Opt-in: an unset or
+    /// empty `path` disables the feature and leaves behavior unchanged.
+    #[serde(default)]
+    pub lifecycle_outbox: Option<LifecycleOutboxToml>,
     /// Agent Fleet trust and security policy (#3165). When absent, fleet
     /// workers inherit conservative Sandbox defaults.
     #[serde(default)]
@@ -1316,6 +1324,20 @@ pub const DEFAULT_HOTBAR_ACTIONS: [&str; HOTBAR_SLOT_COUNT as usize] = [
     "sidebar.toggle",
 ];
 
+/// Normalize persisted action ids at the compatibility boundary.
+///
+/// `/pod` is the canonical public command, but existing settings may still
+/// contain the former `slash.fleet` hotbar id. Resolution and direct registry
+/// lookup both use this helper so those slots continue to dispatch while any
+/// subsequent save naturally writes the canonical id.
+#[must_use]
+pub fn normalize_hotbar_action_id(action_id: &str) -> &str {
+    match action_id {
+        "slash.fleet" => "slash.pod",
+        other => other,
+    }
+}
+
 /// On-disk schema for one `[[hotbar]]` table.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -1425,7 +1447,7 @@ pub fn resolve_hotbar_bindings(
             .iter()
             .map(|binding| HotbarBinding {
                 slot: binding.slot,
-                action: binding.action.clone(),
+                action: normalize_hotbar_action_id(&binding.action).to_string(),
                 label: binding.label.clone(),
             })
             .collect::<Vec<_>>(),
@@ -1551,6 +1573,31 @@ pub struct HookSinksToml {
     /// shared `/tmp` default because socket ownership should be explicit.
     #[serde(default)]
     pub unix_socket_path: Option<PathBuf>,
+}
+
+/// On-disk schema for the `[lifecycle_outbox]` table.
+///
+/// Opt-in lifecycle event outbox: every emitted event is appended as one
+/// JSONL line to `path` in the `RuntimeEventEnvelope` shape
+/// (`schema_version, seq, event, kind, thread_id, turn_id, item_id,
+/// timestamp, payload`), and optionally POSTed to `webhook_url`. An unset or
+/// empty `path` disables the feature entirely — behavior is unchanged from a
+/// release without the table.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LifecycleOutboxToml {
+    /// Path to the JSONL outbox file. Parent directories are created lazily
+    /// on the first event. Unset or empty = feature OFF.
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    /// Optional webhook URL. Events are POSTed as `{"at", "event"}` JSON
+    /// only when this is set (in addition to, never instead of, `path`).
+    /// Delivery is best-effort: failures are logged and dropped.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    /// Optional bearer token sent as `Authorization: Bearer <token>` on
+    /// webhook POSTs. Ignored when `webhook_url` is unset.
+    #[serde(default)]
+    pub webhook_token: Option<String>,
 }
 
 /// On-disk schema for the `[skills]` table (#140). See `config.example.toml`
@@ -3208,69 +3255,8 @@ impl ConfigToml {
         ) {
             resolve_deepseek_base_url(configured_base_url, provider, provider_wire)
         } else {
-            configured_base_url.unwrap_or_else(|| match provider {
-                ProviderKind::Deepseek => DEFAULT_DEEPSEEK_BASE_URL.to_string(),
-                ProviderKind::DeepseekAnthropic => DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL.to_string(),
-                ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL.to_string(),
-                ProviderKind::Openai => DEFAULT_OPENAI_BASE_URL.to_string(),
-                ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL.to_string(),
-                ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL.to_string(),
-                ProviderKind::Volcengine => DEFAULT_VOLCENGINE_BASE_URL.to_string(),
-                ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL.to_string(),
-                ProviderKind::Orcarouter => DEFAULT_ORCAROUTER_BASE_URL.to_string(),
-                ProviderKind::XiaomiMimo => DEFAULT_XIAOMI_MIMO_BASE_URL.to_string(),
-                ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL.to_string(),
-                ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL.to_string(),
-                ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL.to_string(),
-                ProviderKind::SiliconflowCN => DEFAULT_SILICONFLOW_CN_BASE_URL.to_string(),
-                ProviderKind::Arcee => DEFAULT_ARCEE_BASE_URL.to_string(),
-                ProviderKind::Moonshot => {
-                    if auth_mode
-                        .as_deref()
-                        .is_some_and(auth_mode_uses_kimi_imported_token)
-                    {
-                        DEFAULT_KIMI_CODE_BASE_URL.to_string()
-                    } else {
-                        DEFAULT_MOONSHOT_BASE_URL.to_string()
-                    }
-                }
-                ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL.to_string(),
-                ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL.to_string(),
-                ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL.to_string(),
-                ProviderKind::OllamaCloud => DEFAULT_OLLAMA_CLOUD_BASE_URL.to_string(),
-                ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL.to_string(),
-                ProviderKind::Together => DEFAULT_TOGETHER_BASE_URL.to_string(),
-                ProviderKind::Qianfan => DEFAULT_QIANFAN_BASE_URL.to_string(),
-                ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL.to_string(),
-                ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL.to_string(),
-                ProviderKind::Openmodel => DEFAULT_OPENMODEL_BASE_URL.to_string(),
-                ProviderKind::Zai => DEFAULT_ZAI_BASE_URL.to_string(),
-                ProviderKind::Stepfun => DEFAULT_STEPFUN_BASE_URL.to_string(),
-                ProviderKind::Minimax => DEFAULT_MINIMAX_BASE_URL.to_string(),
-                ProviderKind::MinimaxAnthropic => DEFAULT_MINIMAX_ANTHROPIC_BASE_URL.to_string(),
-                ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL.to_string(),
-                ProviderKind::Sakana => DEFAULT_SAKANA_BASE_URL.to_string(),
-                ProviderKind::LongCat => DEFAULT_LONGCAT_BASE_URL.to_string(),
-                ProviderKind::OpencodeGo => DEFAULT_OPENCODE_GO_BASE_URL.to_string(),
-                ProviderKind::OpencodeZen => DEFAULT_OPENCODE_ZEN_BASE_URL.to_string(),
-                ProviderKind::Meta => DEFAULT_META_BASE_URL.to_string(),
-                ProviderKind::Xai => DEFAULT_XAI_BASE_URL.to_string(),
-                ProviderKind::Mistral => DEFAULT_MISTRAL_BASE_URL.to_string(),
-                ProviderKind::Google => DEFAULT_GOOGLE_BASE_URL.to_string(),
-                ProviderKind::Antigravity => DEFAULT_ANTIGRAVITY_BASE_URL.to_string(),
-                ProviderKind::Telecomjs => DEFAULT_TELECOMJS_BASE_URL.to_string(),
-                ProviderKind::Edenai => DEFAULT_EDENAI_BASE_URL.to_string(),
-                ProviderKind::ModelstudioTokenPlan
-                | ProviderKind::ModelstudioTokenPlanAnthropic
-                | ProviderKind::ModelstudioCodingPlan
-                | ProviderKind::ModelstudioCodingPlanAnthropic => {
-                    DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL.to_string()
-                }
-                // The custom provider has no built-in endpoint; fall back to its
-                // descriptor placeholder so the lookup is total. Real custom
-                // routes always supply a configured base_url before this point.
-                ProviderKind::Custom => provider.provider().default_base_url().to_string(),
-            })
+            configured_base_url
+                .unwrap_or_else(|| descriptor_fallback_base_url(provider, auth_mode.as_deref()))
         };
         // Released builds represented Ollama Cloud as the local `ollama`
         // identity plus one exact hosted base URL. Upgrade only that tuple in
@@ -3399,6 +3385,20 @@ impl ConfigToml {
             normalize_model_for_provider(provider, &model)
         };
 
+        // RouteResolver is the runtime path: the executable wire model,
+        // protocol, and endpoint come from a ReadyRouteCandidate. Auth/key
+        // resolution above is unchanged. A resolver error keeps the existing
+        // model string so this method stays total.
+        let route = crate::route::RouteResolver::new()
+            .resolve(&crate::route::RouteRequest {
+                explicit_provider: Some(provider),
+                model_selector: Some(crate::route::LogicalModelRef::from(model.as_str())),
+                saved_provider_model: None,
+                base_url_override: Some(base_url.clone()),
+                limit_overrides: Vec::new(),
+            })
+            .ok();
+
         let mut http_headers = self.http_headers.clone();
         http_headers.extend(provider_cfg.http_headers.clone());
         if let Some(env_headers) = env.http_headers {
@@ -3511,8 +3511,22 @@ impl ConfigToml {
             yolo,
             verbosity,
             http_headers,
+            route,
         }
     }
+}
+
+/// Default base URL from the route descriptor, plus the one Moonshot/Kimi
+/// imported-token exception that is an auth-mode fact rather than a kind.
+fn descriptor_fallback_base_url(provider: ProviderKind, auth_mode: Option<&str>) -> String {
+    if provider == ProviderKind::Moonshot
+        && auth_mode.is_some_and(auth_mode_uses_kimi_imported_token)
+    {
+        return DEFAULT_KIMI_CODE_BASE_URL.to_string();
+    }
+    crate::route::ProviderDescriptor::for_kind(provider)
+        .default_base_url()
+        .to_string()
 }
 
 fn merge_project_provider_config(target: &mut ProviderConfigToml, source: &ProviderConfigToml) {
@@ -3538,10 +3552,20 @@ fn merge_project_provider_config(target: &mut ProviderConfigToml, source: &Provi
 /// `$CODEWHALE_HOME/telemetry/dryrun.jsonl`, and no HTTP client is constructed.
 pub const DEFAULT_TELEMETRY_ENDPOINT: &str = "https://telemetry.codewhale.net/v1/telemetry";
 
+/// Provider-neutral credential value forwarded from the CLI dispatcher to the
+/// in-process TUI when `--api-key` must survive profile-late route selection.
+pub const CLI_API_KEY_ENV: &str = "CODEWHALE_CLI_API_KEY";
+
+/// Source marker paired with [`CLI_API_KEY_ENV`] on the CLI-to-TUI boundary.
+pub const CLI_API_KEY_SOURCE_ENV: &str = "CODEWHALE_CLI_API_KEY_SOURCE";
+
+/// Read-only compatibility alias used by dispatchers before v0.9.12.
+pub const LEGACY_CLI_API_KEY_SOURCE_ENV: &str = "DEEPSEEK_API_KEY_SOURCE";
+
 /// The dispatcher's statement to the TUI child about *why* telemetry is off.
 ///
 /// Private to the `codewhale` → `codewhale-tui` hop, in the same spirit as
-/// `DEEPSEEK_API_KEY_SOURCE`. Set to `1`/`0` on every delegated run.
+/// [`CLI_API_KEY_SOURCE_ENV`]. Set to `1`/`0` on every delegated run.
 pub const TELEMETRY_FLOOR_ENV: &str = "CODEWHALE_TELEMETRY_FLOOR";
 
 /// Whether an environment-level kill switch forces telemetry off here.
@@ -3786,7 +3810,7 @@ pub fn load_project_config_outcome(workspace: &Path) -> ProjectConfigOutcome {
                 };
             }
         };
-        match toml::from_str::<ConfigToml>(&raw) {
+        match parse_config_toml_str(&raw) {
             Ok(config) => {
                 let raw_provider = toml::from_str::<toml::Value>(&raw)
                     .ok()
@@ -4321,6 +4345,9 @@ fn canonical_zai_model_id(model: &str) -> Option<&'static str> {
         // moving the default (now GLM-5.3) must not silently re-point an
         // explicit GLM-5.2 route.
         "glm-5.2" | "glm-5-2" | "zai-glm-5.2" | "zai-glm-5-2" => Some(ZAI_GLM_5_2_MODEL),
+        "glm-5.3-flash" | "glm-5-3-flash" | "zai-glm-5.3-flash" | "zai-glm-5-3-flash" => {
+            Some(ZAI_GLM_5_3_FLASH_MODEL)
+        }
         "glm-5.3" | "glm-5-3" | "zai-glm-5.3" | "zai-glm-5-3" => Some(ZAI_GLM_5_3_MODEL),
         "glm-5-turbo" | "glm-5turbo" | "zai-glm-5-turbo" => Some(ZAI_GLM_5_TURBO_MODEL),
         _ => None,
@@ -4348,6 +4375,11 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
         OPENROUTER_GLM_5_2_MODEL | "glm-5.2" | "glm-5-2" | "zai-glm-5.2" | "zai-glm-5-2" => {
             Some(OPENROUTER_GLM_5_2_MODEL)
         }
+        OPENROUTER_GLM_5_3_FLASH_MODEL
+        | "glm-5.3-flash"
+        | "glm-5-3-flash"
+        | "zai-glm-5.3-flash"
+        | "zai-glm-5-3-flash" => Some(OPENROUTER_GLM_5_3_FLASH_MODEL),
         OPENROUTER_GLM_5_3_MODEL | "glm-5.3" | "glm-5-3" | "zai-glm-5.3" | "zai-glm-5-3" => {
             Some(OPENROUTER_GLM_5_3_MODEL)
         }
@@ -4400,9 +4432,16 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
         OPENROUTER_QWEN_3_7_MAX_MODEL | "qwen3.7-max" | "qwen-3.7-max" => {
             Some(OPENROUTER_QWEN_3_7_MAX_MODEL)
         }
-        OPENROUTER_TENCENT_HY3_PREVIEW_MODEL | "hy3-preview" | "tencent-hy3-preview" => {
-            Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL)
+        OPENROUTER_QWEN_3_8_FLASH_MODEL | "qwen3.8-flash" | "qwen-3.8-flash" => {
+            Some(OPENROUTER_QWEN_3_8_FLASH_MODEL)
         }
+        OPENROUTER_TENCENT_HY3_PREVIEW_MODEL
+        | "hy3-preview"
+        | "tencent-hy3-preview"
+        | "hy3"
+        | "hunyuan"
+        | "tencent-hunyuan"
+        | "hunyuan-hy3" => Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL),
         OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL
         | "mimo-v2.5-pro"
         | "mimo-v2-5-pro"
@@ -4804,8 +4843,17 @@ pub fn provider_base_url_is_official(provider: ProviderKind, base_url: &str) -> 
             "https://api.siliconflow.com/v1" | "https://api.siliconflow.cn/v1"
         ),
         ProviderKind::Moonshot => {
-            normalized == DEFAULT_MOONSHOT_BASE_URL || moonshot_base_url_uses_kimi_code(base_url)
+            matches!(
+                normalized.as_str(),
+                DEFAULT_MOONSHOT_BASE_URL | MOONSHOT_CN_BASE_URL
+            ) || moonshot_base_url_uses_kimi_code(base_url)
         }
+        ProviderKind::Zai => matches!(
+            normalized.as_str(),
+            "https://api.z.ai/api/coding/paas/v4"
+                | "https://api.z.ai/api/paas/v4"
+                | "https://open.bigmodel.cn/api/paas/v4"
+        ),
         ProviderKind::XiaomiMimo => {
             xiaomi_mimo_base_url_uses_token_plan(base_url)
                 || xiaomi_mimo_base_url_is_pay_as_you_go(base_url)
@@ -5101,6 +5149,12 @@ pub struct ResolvedRuntimeOptions {
     pub yolo: Option<bool>,
     pub verbosity: Option<String>,
     pub http_headers: BTreeMap<String, String>,
+    /// Executable route minted by [`crate::route::RouteResolver`].
+    ///
+    /// `None` only when the resolver rejected the selector (foreign model on a
+    /// strict direct provider, empty model). Auth/key fields above are
+    /// independent: the resolver never inspects credentials.
+    pub route: Option<crate::route::ReadyRouteCandidate>,
 }
 
 #[derive(Debug, Clone)]
@@ -5113,12 +5167,39 @@ pub struct ConfigStore {
     original_raw: Option<String>,
 }
 
+/// Parse a [`ConfigToml`] on a dedicated thread with an explicit stack size.
+///
+/// `ConfigToml` nests the per-provider tables, fleet trust policy, and every
+/// typed sub-table in one struct, and the monomorphized toml/serde
+/// deserializer frames for a struct this large overflow the 2 MiB default
+/// stack of libtest and tokio worker threads in debug builds (the same
+/// hazard the TUI fixed for its `ConfigFile`; reproduced as the #5585 stack
+/// overflow through the guided-setup save path). Every production
+/// `ConfigToml` parse goes through here so config-store loads stay safe
+/// regardless of the calling thread's stack budget.
+fn parse_config_toml_str(contents: &str) -> Result<ConfigToml, toml::de::Error> {
+    std::thread::scope(|scope| {
+        match std::thread::Builder::new()
+            .name("config-toml-parse".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn_scoped(scope, || toml::from_str::<ConfigToml>(contents))
+        {
+            Ok(handle) => handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            // Spawning can only fail under resource exhaustion; parsing on
+            // the caller's stack is still the best remaining option.
+            Err(_) => toml::from_str::<ConfigToml>(contents),
+        }
+    })
+}
+
 impl ConfigStore {
     pub fn load(path: Option<PathBuf>) -> Result<Self> {
         let path = resolve_config_path(path)?;
         let (config, original_raw) = if checked_path_exists(&path)? {
             let raw = read_checked_config_file(&path)?;
-            let mut parsed: ConfigToml = toml::from_str(&raw).map_err(|_| {
+            let mut parsed: ConfigToml = parse_config_toml_str(&raw).map_err(|_| {
                 anyhow::anyhow!(
                     "failed to parse config at {}; file contents were omitted",
                     quote_os_path(&path)

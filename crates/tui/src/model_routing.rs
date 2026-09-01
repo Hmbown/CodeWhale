@@ -141,13 +141,12 @@ pub(crate) fn provider_router_candidates(
         let normalized = crate::config::normalize_model_name_for_provider(provider, current_model)
             .unwrap_or_else(|| current_model.to_string());
         return RouterCandidates {
-            // GLM-5.3 (the default) and GLM-5.2 route faster/explore children
-            // to GLM-5-Turbo, the same-family fast sibling. GLM-5.1 and
-            // GLM-5-Turbo itself have no cheaper tier and keep children on the
-            // parent model.
-            cheap: if normalized == crate::config::ZAI_GLM_5_2_MODEL
-                || normalized == crate::config::ZAI_GLM_5_3_MODEL
-            {
+            // GLM-5.3 routes faster/explore children to GLM-5.3-Flash.
+            // GLM-5.2 still uses GLM-5-Turbo. Flash, Turbo, and 5.1 have no
+            // cheaper tier and keep children on the parent model.
+            cheap: if normalized == crate::config::ZAI_GLM_5_3_MODEL {
+                Some(crate::config::ZAI_GLM_5_3_FLASH_MODEL.to_string())
+            } else if normalized == crate::config::ZAI_GLM_5_2_MODEL {
                 Some(crate::config::ZAI_GLM_5_TURBO_MODEL.to_string())
             } else {
                 None
@@ -164,16 +163,17 @@ pub(crate) fn provider_router_candidates(
             crate::config::OPENROUTER_GLM_5_1_MODEL
                 | crate::config::OPENROUTER_GLM_5_2_MODEL
                 | crate::config::OPENROUTER_GLM_5_3_MODEL
+                | crate::config::OPENROUTER_GLM_5_3_FLASH_MODEL
                 | crate::config::OPENROUTER_GLM_5_TURBO_MODEL
         )
     {
         return RouterCandidates {
-            // z-ai/glm-5.2 and z-ai/glm-5.3 route faster children to
-            // z-ai/glm-5-turbo; the 5.1 and turbo ids have no cheaper tier and
-            // keep children on parent.
-            cheap: if normalized == crate::config::OPENROUTER_GLM_5_2_MODEL
-                || normalized == crate::config::OPENROUTER_GLM_5_3_MODEL
-            {
+            // z-ai/glm-5.3 routes faster children to z-ai/glm-5.3-flash;
+            // z-ai/glm-5.2 still uses z-ai/glm-5-turbo. Flash, turbo, and 5.1
+            // have no cheaper tier and keep children on parent.
+            cheap: if normalized == crate::config::OPENROUTER_GLM_5_3_MODEL {
+                Some(crate::config::OPENROUTER_GLM_5_3_FLASH_MODEL.to_string())
+            } else if normalized == crate::config::OPENROUTER_GLM_5_2_MODEL {
                 Some(crate::config::OPENROUTER_GLM_5_TURBO_MODEL.to_string())
             } else {
                 None
@@ -1345,7 +1345,7 @@ mod tests {
         assert!(!balanced.contains("Cost-saving mode is ON"));
         assert!(
             cost_saving.contains(
-                "For the active provider `zai`, `GLM-5-Turbo` is the fast tier and `GLM-5.3` is the strong tier"
+                "For the active provider `zai`, `GLM-5.3-Flash` is the fast tier and `GLM-5.3` is the strong tier"
             ),
             "cost-saving classifier policy must name the provider-safe pair: {cost_saving}"
         );
@@ -1605,7 +1605,7 @@ mod tests {
                 .expect("inventory route should resolve with authenticated active provider");
 
         assert_eq!(route.provider, ApiProvider::Zai);
-        assert_eq!(route.model, crate::config::ZAI_GLM_5_TURBO_MODEL);
+        assert_eq!(route.model, crate::config::ZAI_GLM_5_3_FLASH_MODEL);
         assert_eq!(route.source, AutoRouteSource::Heuristic);
         let receipt = route.receipt.expect("Auto route receipt");
         assert_eq!(receipt.tier, AutoRouteTier::Fast);
@@ -1618,7 +1618,7 @@ mod tests {
         assert_eq!(receipt.pair.strong, crate::config::DEFAULT_ZAI_MODEL);
         assert_eq!(
             receipt.pair.fast.as_deref(),
-            Some(crate::config::ZAI_GLM_5_TURBO_MODEL)
+            Some(crate::config::ZAI_GLM_5_3_FLASH_MODEL)
         );
     }
 
@@ -1753,7 +1753,7 @@ mod tests {
             .await
             .expect("fast-tier route");
         assert_eq!(fast.provider, ApiProvider::Zai);
-        assert_eq!(fast.model, crate::config::ZAI_GLM_5_TURBO_MODEL);
+        assert_eq!(fast.model, crate::config::ZAI_GLM_5_3_FLASH_MODEL);
         assert_eq!(
             fast.receipt.expect("fast receipt").tier,
             AutoRouteTier::Fast
@@ -1939,7 +1939,7 @@ mod tests {
         assert_eq!(cost_saving_route.provider, ApiProvider::Zai);
         assert_eq!(
             cost_saving_route.model,
-            crate::config::ZAI_GLM_5_TURBO_MODEL
+            crate::config::ZAI_GLM_5_3_FLASH_MODEL
         );
         assert_eq!(cost_saving_route.source, AutoRouteSource::Heuristic);
         assert_eq!(
@@ -2123,14 +2123,21 @@ mod tests {
         assert_eq!(openrouter_glm.big, "z-ai/glm-5.2");
         assert_eq!(openrouter_glm.cheap.as_deref(), Some("z-ai/glm-5-turbo"));
 
-        // GLM-5.3 inherits the same fast sibling without displacing GLM-5.2's.
+        // GLM-5.3's fast sibling is Flash; GLM-5.2 still uses Turbo.
         let zai_53 = provider_router_candidates(ApiProvider::Zai, "GLM-5.3");
         assert_eq!(zai_53.big, "GLM-5.3");
-        assert_eq!(zai_53.cheap.as_deref(), Some("GLM-5-Turbo"));
+        assert_eq!(zai_53.cheap.as_deref(), Some("GLM-5.3-Flash"));
 
         let openrouter_glm_53 = provider_router_candidates(ApiProvider::Openrouter, "z-ai/glm-5.3");
         assert_eq!(openrouter_glm_53.big, "z-ai/glm-5.3");
-        assert_eq!(openrouter_glm_53.cheap.as_deref(), Some("z-ai/glm-5-turbo"));
+        assert_eq!(
+            openrouter_glm_53.cheap.as_deref(),
+            Some("z-ai/glm-5.3-flash")
+        );
+
+        let zai_flash = provider_router_candidates(ApiProvider::Zai, "GLM-5.3-Flash");
+        assert_eq!(zai_flash.big, "GLM-5.3-Flash");
+        assert_eq!(zai_flash.cheap, None);
 
         // GLM-5.1 has no cheaper tier; faster children stay on the parent.
         let zai_51 = provider_router_candidates(ApiProvider::Zai, "GLM-5.1");

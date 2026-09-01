@@ -46,7 +46,9 @@ runtime model.
 ## 2. First Launch
 
 Install Codewhale with the path that fits your machine. Release installers
-provide the same runtime under the `codewhale` and `codew` command names.
+provide the same runtime under the `codewhale` and `codew` command names, and
+every supported install path ships the `codewhale` dispatcher with the
+`codewhale-tui` runtime built in.
 
 ```bash
 # npm
@@ -133,7 +135,7 @@ boundary. JSON remains offline and does not accept live flags.
 
 JSON reports credential `source` separately from literal `availability`.
 Configured environment, external-auth, OAuth, consent, and secret-store sources
-remain `not_probed`; their declaration alone does not make Setup or Fleet ready.
+remain `not_probed`; their declaration alone does not make Setup or Pod ready.
 Only a structurally present literal config value, or a route where credentials
 are not required, certifies offline readiness. A legacy secret-store sentinel on
 a route that cannot use the shared store is reported separately as
@@ -291,8 +293,11 @@ run checks, and edit files while keeping risky actions behind approval gates.
 
 Operate keeps that direct tool surface and its approval, sandbox, shell,
 ask-rule, and repository protections. Its difference is orchestration emphasis:
-Codewhale prefers Fleet workers for independent, parallel, background, or
+Codewhale prefers Pod workers for independent, parallel, background, or
 long-running work, while small or tightly coupled work can remain in the parent.
+Heavy work can also be proposed to a Daytona cloud agent with `codewhale
+dispatch` or `/dispatch` (explicit confirmation; remotes are `github` / `cnb` /
+`gitee`). See [DAYTONA_CLOUD_DISPATCH.md](DAYTONA_CLOUD_DISPATCH.md).
 
 For trusted workspaces where you intentionally want actions to proceed without
 approval prompts, select the Full Access permission posture with `Shift+Tab`.
@@ -321,13 +326,15 @@ Common commands for first-time users:
 | `/mode` | Open the mode picker or switch with `/mode agent` |
 | `/model` | Select a model or use `/model auto` |
 | `/provider` | Pick the active API provider |
-| `/fleet` | Configure Fleet roles or open worker status |
+| `/pod` | Open the selected Pod's member roster (`/fleet` is a compatibility alias) |
+| `/pod pods` | Pick or switch among named saved Pods (`/pod fleets` remains accepted) |
 | `/goal` | Set a persistent objective the agent works toward across turns; bare `/goal` shows progress |
 | `/workflow` | Orchestrate the current work as a Workflow; `status`, `cancel`, `settings` answer without a model turn |
 | `/workflows` | Open the live Workflow run dashboard: every run this workspace's journal keeps, with phases, children, progress, and host-side cancel |
 | `/config` | Edit runtime and provider settings |
 | `/statusline` | Choose which footer status chips are visible |
 | `/compact` | Summarize long context to recover token budget |
+| `/copy` | Copy the last completed assistant response to the clipboard |
 | `/review` | Ask for a structured review workflow |
 | `/memory` | Inspect or manage memory when enabled |
 | `/mcp` | Configure or inspect MCP server integration |
@@ -345,8 +352,18 @@ kept in the provider registry document.
 
 Soft-auto multi-agent work: [AUTOMATIC_WORKFLOWS.md](AUTOMATIC_WORKFLOWS.md).
 
+Posting Codewhale PR reviews as a bot identity:
+[GITHUB_APP.md](GITHUB_APP.md).
+
 Next for durable multi-worker work: [FLEET_WORKFLOW_TUTORIAL.md](FLEET_WORKFLOW_TUTORIAL.md)
-walks through Fleet task specs, monitoring, and Workflow authoring.
+walks through Pod task specs, monitoring, and Workflow authoring.
+
+Pod is the customer-facing name for the durable roster. `codewhale pod …` is
+the canonical command and `/pod` the canonical slash command; `codewhale fleet`
+and `/fleet` remain accepted compatibility spellings. The Fleet name is kept
+deliberately in what has to stay stable across versions: the durable ledger
+`.codewhale/fleet.jsonl`, saved rosters `fleets/<name>.toml`, the `[fleet]` and
+`[fleets.*]` config tables, and the `codewhale workflow run --fleet` flag.
 
 Use `/model auto` when you want Codewhale to choose the model and thinking
 level per turn. When the DeepSeek routing model is available, Auto may select

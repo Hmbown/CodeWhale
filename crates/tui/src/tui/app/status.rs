@@ -22,6 +22,13 @@ pub struct StatusToast {
     pub level: StatusToastLevel,
     pub created_at: Instant,
     pub ttl_ms: Option<u64>,
+    pub(crate) kind: StatusToastKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatusToastKind {
+    Ordinary,
+    ContextPressure(crate::context_budget::PressureLevel),
 }
 
 impl StatusToast {
@@ -32,6 +39,21 @@ impl StatusToast {
             level,
             created_at: Instant::now(),
             ttl_ms,
+            kind: StatusToastKind::Ordinary,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn context_pressure(
+        text: impl Into<String>,
+        level: crate::context_budget::PressureLevel,
+    ) -> Self {
+        Self {
+            text: text.into(),
+            level: StatusToastLevel::Warning,
+            created_at: Instant::now(),
+            ttl_ms: None,
+            kind: StatusToastKind::ContextPressure(level),
         }
     }
 
@@ -85,6 +107,25 @@ impl App {
         if self.sticky_status.take().is_some() {
             self.needs_redraw = true;
         }
+    }
+
+    /// Dismiss the persistent context-pressure warning without dismissing
+    /// unrelated error/status chrome. Returns whether anything was cleared.
+    pub fn dismiss_context_pressure_warning(&mut self) -> bool {
+        let is_context_pressure = self
+            .sticky_status
+            .as_ref()
+            .is_some_and(|status| matches!(status.kind, StatusToastKind::ContextPressure(_)));
+        if is_context_pressure {
+            if let Some(StatusToastKind::ContextPressure(level)) =
+                self.sticky_status.as_ref().map(|status| status.kind)
+            {
+                self.context_pressure_warning_dismissed = Some(level);
+            }
+            self.clear_sticky_status();
+            return true;
+        }
+        false
     }
 
     /// Drop sticky error chrome when the user resumes typing so a prior
@@ -205,8 +246,22 @@ impl App {
         let now = Instant::now();
         self.prune_expired_status_toasts(now);
 
-        self.sticky_status
-            .clone()
-            .or_else(|| self.status_toasts.back().cloned())
+        let sticky = self.sticky_status.clone();
+        let latest = self.status_toasts.back().cloned();
+        match (sticky, latest) {
+            (Some(sticky), Some(latest))
+                if matches!(
+                    sticky.kind,
+                    StatusToastKind::ContextPressure(crate::context_budget::PressureLevel::High)
+                        | StatusToastKind::ContextPressure(
+                            crate::context_budget::PressureLevel::Medium
+                        )
+                ) =>
+            {
+                Some(latest)
+            }
+            (Some(sticky), _) => Some(sticky),
+            (None, latest) => latest,
+        }
     }
 }

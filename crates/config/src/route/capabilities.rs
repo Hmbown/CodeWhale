@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ProviderKind;
+
 /// Whether a resolved provider/model offering supports one capability.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +52,12 @@ impl CapabilityState {
 /// - OpenAI Responses web search: <https://developers.openai.com/api/docs/guides/tools-web-search>
 /// - Anthropic web search tool: <https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool>
 /// - xAI web search tool: <https://docs.x.ai/developers/tools/web-search>
+/// - Xiaomi MiMo web search: <https://mimo.mi.com/docs/en-US/usage-guide/tool-calling/web-search>
+/// - Z.AI Web Search API: <https://docs.z.ai/api-reference/tools/web-search>
+/// - Zhipu Web Search API: <https://docs.bigmodel.cn/api-reference/工具-api/网络搜索>
+/// - Alibaba Model Studio Token Plan Harness tools: <https://help.aliyun.com/en/model-studio/token-plan-harness-tool>
+/// - DeepSeek Responses web search: <https://api-docs.deepseek.com/api/create-response/>
+/// - Kimi built-in and Formula web search: <https://platform.kimi.ai/docs/guide/use-web-search>
 #[must_use]
 pub(crate) fn documented_server_side_web_search(
     provider_id: &str,
@@ -74,6 +82,20 @@ pub(crate) fn documented_server_side_web_search(
                 | "claude-sonnet-4-6"
         ),
         "xai" => matches!(wire_model_id.as_str(), "grok-4.6" | "grok-4.5"),
+        "xiaomi-mimo" => matches!(wire_model_id.as_str(), "mimo-v2.5-pro" | "mimo-v2.5"),
+        "zai" => matches!(
+            wire_model_id.as_str(),
+            "glm-5.3" | "glm-5.3-flash" | "glm-5.2" | "glm-5.1" | "glm-5-turbo"
+        ),
+        "modelstudio-token-plan" => matches!(
+            wire_model_id.as_str(),
+            "qwen3.8-max" | "qwen3.7-plus" | "qwen3.7-max"
+        ),
+        "deepseek" => matches!(
+            wire_model_id.as_str(),
+            "deepseek-v4-flash" | "deepseek-v4-pro" | "deepseek-v4-flash-vision-exp"
+        ),
+        "moonshot" => matches!(wire_model_id.as_str(), "kimi-k3" | "kimi-k2.6"),
         _ => false,
     };
     if supported {
@@ -81,6 +103,54 @@ pub(crate) fn documented_server_side_web_search(
     } else {
         CapabilityState::Unknown
     }
+}
+
+/// Return the Z.AI/Zhipu search fact only for the two exact general API
+/// products that expose the structured `/web_search` endpoint.
+#[must_use]
+pub(crate) fn documented_zai_web_search_for_route(
+    provider: ProviderKind,
+    wire_model_id: &str,
+    base_url: &str,
+) -> CapabilityState {
+    if provider != ProviderKind::Zai {
+        return CapabilityState::Unknown;
+    }
+    let normalized = base_url.trim().trim_end_matches('/').to_ascii_lowercase();
+    if !matches!(
+        normalized.as_str(),
+        "https://api.z.ai/api/paas/v4" | "https://open.bigmodel.cn/api/paas/v4"
+    ) {
+        return CapabilityState::Unknown;
+    }
+    documented_server_side_web_search("zai", wire_model_id)
+}
+
+/// Return the native-search fact for exact Moonshot direct and Kimi Code
+/// product routes. Adjacent coding paths and cross-product model ids remain
+/// unknown even though they share one provider identity.
+#[must_use]
+pub(crate) fn documented_moonshot_web_search_for_route(
+    provider: ProviderKind,
+    wire_model_id: &str,
+    base_url: &str,
+) -> CapabilityState {
+    if provider != ProviderKind::Moonshot {
+        return CapabilityState::Unknown;
+    }
+    let model = wire_model_id.trim().to_ascii_lowercase();
+    if crate::provider::is_exact_kimi_code_route(provider, base_url)
+        && matches!(
+            model.as_str(),
+            "k3" | "k3-256k" | "kimi-for-coding" | "kimi-for-coding-highspeed"
+        )
+    {
+        return CapabilityState::Supported;
+    }
+    if crate::provider::is_exact_moonshot_platform_route(provider, base_url) {
+        return documented_server_side_web_search("moonshot", &model);
+    }
+    CapabilityState::Unknown
 }
 
 /// Capability facts owned by one provider/model route offering.
@@ -114,6 +184,7 @@ pub struct RouteCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DEFAULT_KIMI_CODE_BASE_URL;
 
     #[test]
     fn optional_boolean_preserves_unknown_and_false() {
@@ -159,6 +230,26 @@ mod tests {
             documented_server_side_web_search("anthropic", "claude-sonnet-4-6"),
             CapabilityState::Supported
         );
+        assert_eq!(
+            documented_server_side_web_search("xiaomi-mimo", "mimo-v2.5-pro"),
+            CapabilityState::Supported
+        );
+        assert_eq!(
+            documented_server_side_web_search("zai", "GLM-5.3"),
+            CapabilityState::Supported
+        );
+        assert_eq!(
+            documented_server_side_web_search("modelstudio-token-plan", "qwen3.8-max"),
+            CapabilityState::Supported
+        );
+        assert_eq!(
+            documented_server_side_web_search("deepseek", "deepseek-v4-flash"),
+            CapabilityState::Supported
+        );
+        assert_eq!(
+            documented_server_side_web_search("moonshot", "kimi-k3"),
+            CapabilityState::Supported
+        );
 
         for (provider, model) in [
             ("openrouter", "openai/gpt-5.6"),
@@ -168,11 +259,66 @@ mod tests {
             ("xai", "grok-4.6-latest"),
             ("xai", "grok-4.5-fast"),
             ("anthropic", "claude-haiku-4-5"),
+            ("xiaomi-mimo", "mimo-v2.5-pro-ultraspeed"),
+            ("zai", "glm-5.3-preview"),
+            ("modelstudio-coding-plan", "qwen3.8-max"),
+            ("modelstudio-token-plan", "qwen3.8-max-preview"),
+            ("deepseek", "deepseek-v4-flash-preview"),
+            ("moonshot", "kimi-k2.7-code"),
         ] {
             assert_eq!(
                 documented_server_side_web_search(provider, model),
                 CapabilityState::Unknown,
                 "{provider}/{model} must not inherit a capability by similarity"
+            );
+        }
+    }
+
+    #[test]
+    fn zai_route_fact_rejects_coding_and_neighboring_endpoints() {
+        for base_url in [
+            "https://api.z.ai/api/paas/v4",
+            "https://open.bigmodel.cn/api/paas/v4/",
+        ] {
+            assert_eq!(
+                documented_zai_web_search_for_route(ProviderKind::Zai, "GLM-5.3", base_url),
+                CapabilityState::Supported
+            );
+        }
+        for base_url in [
+            "https://api.z.ai/api/coding/paas/v4",
+            "https://open.bigmodel.cn/api/paas/v4/preview",
+            "https://gateway.example.test/v4",
+        ] {
+            assert_eq!(
+                documented_zai_web_search_for_route(ProviderKind::Zai, "GLM-5.3", base_url),
+                CapabilityState::Unknown
+            );
+        }
+    }
+
+    #[test]
+    fn moonshot_route_fact_is_exact_to_product_and_model() {
+        for (model, base_url) in [
+            ("kimi-k3", "https://api.moonshot.ai/v1"),
+            ("kimi-k3", "https://api.moonshot.cn/v1"),
+            ("kimi-k2.6", "https://api.moonshot.ai/v1"),
+            ("k3", DEFAULT_KIMI_CODE_BASE_URL),
+            ("kimi-for-coding", DEFAULT_KIMI_CODE_BASE_URL),
+        ] {
+            assert_eq!(
+                documented_moonshot_web_search_for_route(ProviderKind::Moonshot, model, base_url,),
+                CapabilityState::Supported
+            );
+        }
+        for (model, base_url) in [
+            ("kimi-k3", "https://api.kimi.com/coding/v2"),
+            ("kimi-k2.6", "https://api.kimi.com/coding/v1/preview"),
+            ("k3", "https://api.moonshot.ai/v1"),
+        ] {
+            assert_eq!(
+                documented_moonshot_web_search_for_route(ProviderKind::Moonshot, model, base_url,),
+                CapabilityState::Unknown
             );
         }
     }

@@ -4,10 +4,51 @@ Keep this file durable. Derive changing release, provider, branch, and flake
 state from the repository, tests, CI, and current issue tracker rather than from
 instructions or memory. The nearest scoped `AGENTS.md` adds path-specific rules.
 
+## The ponytail method
+
+From [dietrichgebert/ponytail](https://github.com/dietrichgebert/ponytail) —
+"the laziest senior dev in the room." *He says nothing. He writes one line. It
+works.* The best code is the code you never wrote.
+
+Before writing code, walk the decision ladder in order and stop at the first
+rung that answers:
+
+1. **Does this need to exist?** → Skip it.
+2. **Already in this codebase?** → Reuse it.
+3. **Stdlib does it?** → Use it.
+4. **Native platform feature?** → Use it.
+5. **Installed dependency?** → Use it.
+6. **One line?** → One line.
+7. **Only then:** the minimum that works.
+
+The ladder runs *after* understanding the problem. Lazy about solutions, never
+about reading the code first — a short diff written without reading the call
+sites is not ponytail, it is a guess.
+
+**Never cut, at any rung:** trust-boundary validation, data-loss handling,
+security, accessibility. Brevity is not a reason to drop a guard.
+
+Rung 2 is the one this repository keeps failing. The `model_*` / `*_config` /
+`provider_*` grep rule below is rung 2 with a name; so is "one turn loop, one
+base prompt". Two more corollaries earned here:
+
+- **An abstraction must delete caller code.** If adopting it is pure
+  obligation — required methods, no default bodies that do work — it gets
+  built, adopted once, and abandoned.
+- **Migrate the last consumer, or do not start.** Framework, one caller,
+  ticket the rest, silence the warning: that ships two systems and a comment
+  that is no longer true. If the migration will not fit, narrow the slice —
+  never the adoption. The standing `#[allow(dead_code)]` count is the running
+  receipt; `scripts/check-dead-code-budget.py` prints it.
+
 ## Working rules
 
 - Inspect status and existing consumers before editing. Preserve unrelated,
   dirty, and untracked work.
+- Before adding a module named `model_*`, `*_config`, `provider_*`, or
+  anything that "bridges", "mirrors", or "stages" an existing thing, grep
+  for the existing thing and edit it. A new layer must name the predecessor
+  it replaces in the module doc; otherwise edit the original.
 - Prefer the simplest implementation that preserves observable contracts. A
   rewrite is acceptable when justified by product intent and observed behavior,
   not as a shortcut around understanding existing code.
@@ -28,6 +69,57 @@ instructions or memory. The nearest scoped `AGENTS.md` adds path-specific rules.
 - Keep providers and models first-class and provider-neutral.
 - Never rewrite published history, retag a release, force-push a shared ref, or
   publish without explicit authorization. Preserve human contributor credit.
+
+## Landing other people's work
+
+An external contributor's branch goes stale because *we* land things, not
+because they did anything wrong. Treat their time as more expensive than ours.
+
+- **Never make a contributor rebase around our churn.** If their PR conflicts
+  only because main moved, a maintainer resolves it. Read their diff against
+  the merge base first so you know exactly what they added, and re-apply that,
+  rather than hand-merging two large sides and hoping.
+- **Conflicts that split mid-function do not resolve by keeping both sides.**
+  Git's markers can land inside a body, so a both-sides resolution produces
+  unbalanced braces that look plausible and do not compile. Take one side
+  whole, then re-insert the other side's additions at their original anchor.
+- **`maintainerCanModify` does not guarantee push access to the fork.** When
+  the push is refused, land the resolved merge on
+  `integration/<topic>-<pr>-<date>` in this repo and land from there. An
+  integration branch is the normal path for anything with conflicts or several
+  moving PRs — it is cheaper than repeatedly rebasing onto a main that keeps
+  moving, and it keeps the contributor's branch untouched.
+- **Check the contribution gate before assuming a PR is stalled.** An unlisted
+  author's workflow runs sit at `action_required` and never start, so the PR
+  looks abandoned when nobody has actually looked at it. Approve the runs, then
+  fix the cause: add them to `.github/APPROVED_CONTRIBUTORS` (`all:username`),
+  or comment `/lgtm` (PR scope) / `/lgtmi` (issue scope) on their thread.
+- **Preserve credit in the mechanical sense, not just the polite one.** Commit
+  authorship and `Co-authored-by` trailers must use the contributor's own
+  GitHub-linked address. `AUTHOR_MAP` and `.mailmap` are project conventions —
+  GitHub reads neither for the contribution graph.
+
+## Merging under a gate
+
+- **A gate is its artifact.** When a rail says a PR merges only on a passing
+  acceptance record, the record must literally say PASS at merge time. "I
+  re-ran it and the failures are rows this PR does not own" is a judgement to
+  write into the artifact first, not a reason to merge past it.
+- **Read the review thread, not the check rollup.** Green checks and an unread
+  review with confirmed findings are a merge that ships known bugs.
+- **When the artifact is ambiguous, resolve the ambiguity — never the merge.**
+
+## Claiming a test passed
+
+- Quote the real `test result: N passed; M failed` line, and confirm `N > 0`
+  for the tests that cover the change. `cargo test <filter>` exits 0 having run
+  zero tests when the filter matches nothing, and an exit code alone has
+  already been mistaken for a pass here.
+- Prefer proving a regression test fails without the fix. A test that passes
+  either way pins the implementation, not the defect.
+- Audit any harness before trusting its score. `ok = ok and X or True` parses
+  as `(ok and X) or True` and silently reported twelve unevaluated rows as
+  passing.
 
 ## Current contracts
 
@@ -95,7 +187,19 @@ Report commands actually run and distinguish source, local tests, packaged
 artifacts, CI, and public release state. Describe the evidence actually needed
 for the claim; a test count is not a proxy for product quality.
 
-Community reports, PRs, logs, and reviews are evidence. Canonical human
-identities come from `.github/AUTHOR_MAP`; `Co-authored-by` is for humans only.
+Community reports, PRs, logs, and reviews are evidence.
+
+**Harvested contributor credit is still a rule.** When a contributor's work
+lands as our commit, that commit carries `Harvested from PR #N by @handle` and a
+`Co-authored-by` naming them at their GitHub-linked address, so
+`auto-close-harvested.yml` closes their PR with credit and the contribution
+graph reflects reality. Canonical human identities come from
+`.github/AUTHOR_MAP`.
+
+**Whether a bot or agent also appears in a trailer no longer matters.** The CI
+check that policed trailer identities was removed: it rejected ordinary agent
+commits and cost more than the tidiness it bought. Give humans their credit; do
+not spend time scrubbing tool trailers.
+
 Leave unrelated work intact and keep new enforcement dry-run unless explicitly
 approved.

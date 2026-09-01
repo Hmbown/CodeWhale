@@ -20,7 +20,7 @@ let
   # (libdbus, libgcc_s). Derived once so LD_LIBRARY_PATH and the patchelf
   # RPATH can never drift apart.
   runtimeLibraryPath = lib.makeLibraryPath (
-    lib.optionals stdenv.isLinux [
+    lib.optionals stdenv.hostPlatform.isLinux [
       dbus.lib
       stdenv.cc.cc.lib
     ]
@@ -38,13 +38,13 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   nativeBuildInputs = [
     pkg-config
-  ] ++ lib.optionals stdenv.isLinux [
+  ] ++ lib.optionals stdenv.hostPlatform.isLinux [
     autoPatchelfHook
   ];
 
   buildInputs = [
     openssl
-  ] ++ lib.optionals stdenv.isLinux [
+  ] ++ lib.optionals stdenv.hostPlatform.isLinux [
     dbus.dev
     dbus.lib
     stdenv.cc.cc.lib
@@ -55,7 +55,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     gitMinimal
     cacert
   ]
-  ++ lib.optionals stdenv.isLinux [
+  ++ lib.optionals stdenv.hostPlatform.isLinux [
     # fleet host memory/zombie sampling shells out to `ps`; NixOS has no
     # system-wide /usr/bin/ps, so make it resolvable through PATH.
     procps
@@ -86,7 +86,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     export HOME="$(mktemp -d)"
     export SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt
   ''
-  + lib.optionalString stdenv.isLinux ''
+  + lib.optionalString stdenv.hostPlatform.isLinux ''
     # nixpkgs no longer derives LD_LIBRARY_PATH from buildInputs; the cargo
     # test binaries link libdbus/libgcc_s dynamically and have no RPATH until
     # autoPatchelfHook runs at fixup (after the check phase).
@@ -111,7 +111,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     echo "Building test binaries"
     cargo test --no-run "''${flagsArray[@]}"
 
-    ${lib.optionalString stdenv.isLinux ''
+    ${lib.optionalString stdenv.hostPlatform.isLinux ''
       echo "Patching runtime RPATH into test binaries"
       find "target/${stdenv.hostPlatform.config}/release/deps" \
         -maxdepth 1 -type f -executable \

@@ -405,10 +405,66 @@ const GITHUB_READONLY_PREFIXES: &[&str] = &[
     "gh workflow view",
 ];
 
+/// Normalize Windows absolute path spellings before any POSIX-style splitter
+/// (`shlex` / `shell_words`) or glob-charset gate in this module:
+///
+/// - `Path::canonicalize` on Windows embeds the verbatim prefix `\\?\C:\...`
+///   whose `?` trips the glob-charset gates and whose backslashes the POSIX
+///   splitters eat as escapes; strip it so the remaining spelling resolves to
+///   the same location (device `\\.\` paths are preserved verbatim);
+/// - double the backslashes of Windows-absolute-path-like words so the
+///   splitters round-trip the real path instead of `C:\Users\...` collapsing
+///   to `C:Users...`.
+///
+/// Words that do not look like Windows absolute paths are untouched, so POSIX
+/// escapes and unix hosts are unaffected.
+pub(crate) fn normalize_windows_command_paths(command: &str) -> String {
+    let stripped = command.replace(r"\\?\", "");
+    let mut out = String::with_capacity(stripped.len());
+    let mut word_start = 0;
+    let bytes = stripped.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_whitespace() {
+            let word = &stripped[word_start..i];
+            if looks_like_windows_absolute_path(word) {
+                out.push_str(&word.replace('\\', r"\\"));
+            } else {
+                out.push_str(word);
+            }
+            out.push(bytes[i] as char);
+            word_start = i + 1;
+        }
+        i += 1;
+    }
+    if word_start < bytes.len() {
+        let word = &stripped[word_start..];
+        if looks_like_windows_absolute_path(word) {
+            out.push_str(&word.replace('\\', r"\\"));
+        } else {
+            out.push_str(word);
+        }
+    }
+    out
+}
+
+/// A whitespace-delimited word is treated as a Windows absolute path when it
+/// starts (after optional quotes) with a drive letter plus colon, a verbatim
+/// (`\\?\`/`\\.\`) prefix, or a UNC (`\\`) prefix.
+fn looks_like_windows_absolute_path(word: &str) -> bool {
+    let word = word.trim_start_matches(['\'', '"']);
+    let bytes = word.as_bytes();
+    (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+        || word.starts_with(r"\\?\")
+        || word.starts_with(r"\\.\")
+        || word.starts_with("\\\\")
+}
+
 /// Return `true` when a shell command is safe to auto-approve and run in a
 /// parallel read-only chunk.
 pub fn is_parallel_readonly_command(command: &str) -> bool {
-    let trimmed = command.trim();
+    let trimmed = normalize_windows_command_paths(command);
+    let trimmed = trimmed.trim();
     if trimmed.is_empty() {
         return false;
     }
@@ -522,7 +578,8 @@ fn readonly_tokens_admitted(trimmed: &str) -> bool {
 /// redirects, backgrounding, command/parameter expansion, subshells, or
 /// env-assignment prefixes.
 pub fn is_agent_readonly_shell_command(command: &str) -> bool {
-    let trimmed = command.trim();
+    let trimmed = normalize_windows_command_paths(command);
+    let trimmed = trimmed.trim();
     if trimmed.is_empty() {
         return false;
     }
@@ -572,7 +629,115 @@ fn is_agent_readonly_segment(segment: &str) -> bool {
         "find" => is_agent_readonly_find(&tokens),
         "sed" => is_agent_readonly_sed(&tokens),
         "npm" => is_agent_readonly_npm(&tokens),
-        "sort" | "uniq" | "cut" | "tr" | "comm" => true,
+        "sort" => agent_text_filter_options_match(
+            &tokens,
+            &[
+                "-b",
+                "-d",
+                "-f",
+                "-g",
+                "-h",
+                "-i",
+                "-M",
+                "-n",
+                "-r",
+                "-s",
+                "-u",
+                "-V",
+                "--dictionary-order",
+                "--general-numeric-sort",
+                "--human-numeric-sort",
+                "--ignore-case",
+                "--ignore-leading-blanks",
+                "--ignore-nonprinting",
+                "--month-sort",
+                "--numeric-sort",
+                "--reverse",
+                "--stable",
+                "--unique",
+                "--version-sort",
+            ],
+            &["-k", "--key", "-t", "--field-separator"],
+            usize::MAX,
+        ),
+        "uniq" => agent_text_filter_options_match(
+            &tokens,
+            &[
+                "-c",
+                "-d",
+                "-D",
+                "-i",
+                "-u",
+                "-z",
+                "--count",
+                "--ignore-case",
+                "--repeated",
+                "--unique",
+                "--zero-terminated",
+            ],
+            &[
+                "-f",
+                "--skip-fields",
+                "-s",
+                "--skip-chars",
+                "-w",
+                "--check-chars",
+            ],
+            1,
+        ),
+        "cut" => agent_text_filter_options_match(
+            &tokens,
+            &[
+                "-n",
+                "-s",
+                "-z",
+                "--complement",
+                "--only-delimited",
+                "--zero-terminated",
+            ],
+            &[
+                "-b",
+                "--bytes",
+                "-c",
+                "--characters",
+                "-d",
+                "--delimiter",
+                "-f",
+                "--fields",
+                "--output-delimiter",
+            ],
+            usize::MAX,
+        ),
+        "tr" => agent_text_filter_options_match(
+            &tokens,
+            &[
+                "-c",
+                "-C",
+                "-d",
+                "-s",
+                "-t",
+                "--complement",
+                "--delete",
+                "--squeeze-repeats",
+                "--truncate-set1",
+            ],
+            &[],
+            2,
+        ),
+        "comm" => agent_text_filter_options_match(
+            &tokens,
+            &[
+                "-1",
+                "-2",
+                "-3",
+                "--check-order",
+                "--nocheck-order",
+                "--total",
+                "--zero-terminated",
+            ],
+            &["--output-delimiter"],
+            2,
+        ),
         // Everything else re-uses the parallel table verbatim (including the
         // gh families and per-command option allowlists); its glob-free
         // charset is enforced by the caller having already rejected every
@@ -580,6 +745,48 @@ fn is_agent_readonly_segment(segment: &str) -> bool {
         // shared token logic re-checks the rest.
         _ => readonly_tokens_admitted(segment),
     }
+}
+
+/// Admit text filters only through an explicit, output-free argv grammar.
+///
+/// Several of these programs have write or helper-execution forms despite
+/// looking like harmless stdout transforms (`sort -o`, `sort
+/// --compress-program`, and uniq's second FILE operand). Keep their accepted
+/// options exact, reject attached/unknown flags, and cap operands where the
+/// command's positional grammar can name an output file.
+fn agent_text_filter_options_match(
+    tokens: &[String],
+    switches: &[&str],
+    value_options: &[&str],
+    max_operands: usize,
+) -> bool {
+    let mut index = 1;
+    let mut options = true;
+    let mut operands = 0;
+    while index < tokens.len() {
+        let token = tokens[index].as_str();
+        if options && token == "--" {
+            options = false;
+        } else if options && token.starts_with('-') && token != "-" {
+            if switches.contains(&token) {
+                // Exact no-value switch.
+            } else if value_options.contains(&token) {
+                index += 1;
+                if index >= tokens.len() || tokens[index].starts_with('-') {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        } else {
+            operands += 1;
+            if operands > max_operands {
+                return false;
+            }
+        }
+        index += 1;
+    }
+    true
 }
 
 fn is_agent_readonly_git(tokens: &[String]) -> bool {
@@ -1893,6 +2100,25 @@ mod tests {
     }
 
     #[test]
+    fn agent_readonly_shell_admits_windows_verbatim_paths() {
+        // `Path::canonicalize` on Windows embeds `\\?\` verbatim prefixes whose
+        // `?` trips the glob-charset gate and whose backslashes POSIX splitters
+        // eat as escapes. The normalize step must admit the same commands with
+        // either spelling (the classifier is pure string logic, so this is
+        // platform-independent).
+        for command in [
+            r"git -C \\?\C:\Users\foo log --oneline -20",
+            r"git -C C:\Users\foo log --oneline -20",
+            "git -C crates/tui log --oneline -n 5",
+        ] {
+            assert!(
+                is_agent_readonly_shell_command(command),
+                "{command} should be agent read-only"
+            );
+        }
+    }
+
+    #[test]
     fn agent_readonly_shell_rejects_mutation_and_injection() {
         for command in [
             "git log; rm -rf /",
@@ -1928,6 +2154,46 @@ mod tests {
             assert!(
                 !is_agent_readonly_shell_command(command),
                 "{command} must stay denied for agents"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_readonly_text_filters_reject_output_and_program_options() {
+        for command in [
+            "sort -o out.txt input.txt",
+            "sort -oout.txt input.txt",
+            "sort --output out.txt input.txt",
+            "sort --output=out.txt input.txt",
+            "sort --compress-program sh input.txt",
+            "sort --compress-program=sh input.txt",
+            "sort -T . input.txt",
+            "sort --temporary-directory . input.txt",
+            "sort --temporary-directory=. input.txt",
+            "uniq input.txt output.txt",
+            "uniq -- input.txt output.txt",
+        ] {
+            assert!(
+                !is_agent_readonly_shell_command(command),
+                "{command} can write or execute and must not be classified read-only"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_readonly_text_filters_keep_output_free_forms_usable() {
+        for command in [
+            "sort -r deps.txt",
+            "sort -k 1 deps.txt",
+            "uniq -c deps.txt",
+            "uniq -f 1 deps.txt",
+            "cut -d : -f 1 Cargo.toml",
+            "tr -d x",
+            "comm -1 -2 a.txt b.txt",
+        ] {
+            assert!(
+                is_agent_readonly_shell_command(command),
+                "{command} should remain an output-free read-only text filter"
             );
         }
     }

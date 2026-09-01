@@ -23,7 +23,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, broadcast, mpsc, oneshot, watch};
+use tokio::sync::{Mutex, RwLock as AsyncRwLock, broadcast, mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -32,7 +32,7 @@ use crate::compaction::CompactionConfig;
 use crate::config::DEFAULT_TEXT_MODEL;
 use crate::config::{ApiProvider, Config, MAX_SUBAGENTS, ProviderIdentity};
 use crate::core::engine::{
-    EngineConfig, EngineHandle, UNBOUNDED_MODEL_STEPS, spawn_engine_with_authoritative_route_config,
+    EngineConfig, EngineHandle, spawn_engine_with_authoritative_route_config,
 };
 use crate::core::events::{Event as EngineEvent, TurnOutcomeStatus};
 use crate::core::ops::Op;
@@ -69,6 +69,7 @@ use codewhale_protocol::runtime::{
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
 pub(crate) const RUNTIME_EVENT_REPLAY_BATCH_SIZE: usize = 256;
 pub(crate) const MAX_RUNTIME_EVENT_REPLAY_TAIL: usize = 4096;
+pub(crate) const MAX_RUNTIME_TURN_OPERATION_KEY_BYTES: usize = 128;
 const MAX_ACTIVE_THREADS_DEFAULT: usize = 8;
 const MAX_PENDING_DYNAMIC_TOOL_CALLS: usize = 128;
 const SUMMARY_LIMIT: usize = 280;
@@ -77,7 +78,10 @@ const STREAM_DELTA_BATCH_MAX_BYTES: usize = 16 * 1024;
 const EVENT_TRANSACTION_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const EVENT_TRANSACTION_LOCK_POLL: Duration = Duration::from_millis(5);
 const EVENT_TRANSACTION_LOCK_FILE: &str = "events.lock";
+const RUNTIME_PROCESS_OWNER_LOCK_FILE: &str = "runtime-process.owner.lock";
+const RUNTIME_PROCESS_OWNER_LOCK_HELD: &str = "This runtime is already active in another process. Close the other Codewhale session and try again, or set CODEWHALE_RUNTIME_DIR to a different directory.";
 const AGENT_MAIL_OWNER_FILE: &str = "owner.json";
+const TURN_OPERATION_BINDING_SCHEMA_VERSION: u32 = 1;
 const REQUEST_USER_INPUT_TOOL_NAME: &str = "request_user_input";
 const REDACTED_USER_INPUT_RECEIPT: &str = "User input submitted";
 pub(crate) const MAX_ROUTED_USAGE_RECORDS_PER_TURN: usize = 64;
@@ -638,6 +642,14 @@ pub struct ThreadRecord {
     /// Exact non-secret configured provider key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_provider_id: Option<String>,
+    /// Optional thread-level reasoning preference. A turn may override this;
+    /// when absent, the Runtime falls back to the configured preference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// Optional thread-level model-visible tool allowlist. `None` keeps the
+    /// normal configured tool catalog; `Some([])` deliberately exposes none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_tools: Option<Vec<String>>,
     pub workspace: PathBuf,
     pub mode: String,
     /// Named default permission posture for new turns. Absent on legacy
@@ -677,6 +689,8 @@ fn thread_execution_state_matches(left: &ThreadRecord, right: &ThreadRecord) -> 
         && left.model == right.model
         && left.model_provider == right.model_provider
         && left.model_provider_id == right.model_provider_id
+        && left.reasoning_effort == right.reasoning_effort
+        && left.allowed_tools == right.allowed_tools
         && left.workspace == right.workspace
         && left.mode == right.mode
         && left.permission_posture == right.permission_posture
@@ -845,10 +859,6 @@ impl TurnRecord {
     }
 }
 
-fn routed_usage_source_fingerprint(source_id: &str) -> String {
-    codewhale_config::catalog::base_url_fingerprint(source_id.trim())
-}
-
 /// The only mutation path for routed provider usage. Every source is recorded
 /// once, route labels are sanitized at the boundary, and retained records are
 /// bounded regardless of whether they arrived synchronously, by mailbox, or
@@ -858,7 +868,7 @@ fn append_routed_usage_record(
     source_id: &str,
     usage: EffectiveRouteUsage,
 ) -> bool {
-    let source_fingerprint = routed_usage_source_fingerprint(source_id);
+    let source_fingerprint = crate::cost_status::usage_source_fingerprint(source_id);
     if turn
         .routed_usage_source_ids
         .iter()
@@ -1015,6 +1025,7 @@ pub struct RuntimeThreadStore {
     events_dir: PathBuf,
     goals_dir: PathBuf,
     mail_dir: PathBuf,
+    turn_operations_dir: PathBuf,
     owner_id: String,
     state_path: PathBuf,
     event_lock_path: PathBuf,
@@ -1055,31 +1066,23 @@ impl RuntimeThreadStore {
         let events_dir = root.join("events");
         let goals_dir = root.join("goals");
         let mail_dir = root.join("agent-mail");
+        let turn_operations_dir = root.join("turn-operations");
         ensure_runtime_store_dir(&threads_dir)?;
         ensure_runtime_store_dir(&turns_dir)?;
         ensure_runtime_store_dir(&items_dir)?;
         ensure_runtime_store_dir(&events_dir)?;
         ensure_runtime_store_dir(&goals_dir)?;
         ensure_runtime_store_dir(&mail_dir)?;
+        ensure_runtime_store_dir(&turn_operations_dir)?;
         let state_path = root.join("state.json");
         let owner_path = root.join(AGENT_MAIL_OWNER_FILE);
-        let owner_id = if owner_path.exists() {
-            let raw = read_store_file(&owner_path)
-                .with_context(|| format!("Failed to read {}", owner_path.display()))?;
-            let owner: RuntimeStoreOwner = serde_json::from_str(&raw)
-                .with_context(|| format!("Failed to parse {}", owner_path.display()))?;
-            validated_record_id(&owner.owner_id, "Runtime owner id")?;
-            owner.owner_id
-        } else {
-            let owner_id = format!("owner_{}", Uuid::new_v4().simple());
-            write_json_atomic(
-                &owner_path,
-                &RuntimeStoreOwner {
-                    owner_id: owner_id.clone(),
-                },
-            )?;
-            owner_id
-        };
+        let event_lock_path = root.join(EVENT_TRANSACTION_LOCK_FILE);
+        // The owner namespaces operation-key fingerprints. Creating it outside
+        // a cross-process transaction lets two first-start processes mint
+        // different owners, and therefore different operation locks, for the
+        // same store. Reuse the root event lock before any owner-derived path
+        // is computed so all processes load exactly one durable owner.
+        let owner_id = load_or_create_runtime_store_owner(&owner_path, &event_lock_path)?;
         let store = Self {
             threads_dir,
             turns_dir,
@@ -1087,9 +1090,10 @@ impl RuntimeThreadStore {
             events_dir,
             goals_dir,
             mail_dir,
+            turn_operations_dir,
             owner_id,
             state_path,
-            event_lock_path: root.join(EVENT_TRANSACTION_LOCK_FILE),
+            event_lock_path,
             thread_mutation: Arc::new(parking_lot::Mutex::new(())),
             turn_mutation: Arc::new(parking_lot::Mutex::new(())),
             mail_mutation: Arc::new(parking_lot::Mutex::new(())),
@@ -1107,6 +1111,7 @@ impl RuntimeThreadStore {
             }
             Ok(())
         })?;
+        store.recover_incomplete_turn_operations()?;
         store.recover_claimed_agent_mail()?;
         Ok(store)
     }
@@ -1184,6 +1189,141 @@ impl RuntimeThreadStore {
             "json",
             "Agent Mail message id",
         )
+    }
+
+    fn turn_operation_path(&self, operation_key_fingerprint: &str) -> Result<PathBuf> {
+        validate_sha256_fingerprint(operation_key_fingerprint, "operation key fingerprint")?;
+        Self::record_path(
+            &self.turn_operations_dir,
+            &format!("op_{operation_key_fingerprint}"),
+            "json",
+            "turn operation binding id",
+        )
+    }
+
+    fn turn_operation_lock_path(&self, operation_key_fingerprint: &str) -> Result<PathBuf> {
+        validate_sha256_fingerprint(operation_key_fingerprint, "operation key fingerprint")?;
+        Self::record_path(
+            &self.turn_operations_dir,
+            &format!("op_{operation_key_fingerprint}"),
+            "lock",
+            "turn operation claim lock id",
+        )
+    }
+
+    fn open_turn_operation_claim_lock(&self, operation_key_fingerprint: &str) -> Result<File> {
+        let path = self.turn_operation_lock_path(operation_key_fingerprint)?;
+        open_runtime_store_file(&path, "Runtime turn operation claim lock", |options| {
+            options.create(true).truncate(false).read(true).write(true);
+        })
+    }
+
+    fn with_turn_operation_claim<T>(
+        &self,
+        operation_key_fingerprint: Option<&str>,
+        operation: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        let Some(operation_key_fingerprint) = operation_key_fingerprint else {
+            return operation();
+        };
+        let mut claim =
+            fd_lock::RwLock::new(self.open_turn_operation_claim_lock(operation_key_fingerprint)?);
+        let _guard = self.acquire_turn_operation_claim(&mut claim)?;
+        operation()
+    }
+
+    fn acquire_turn_operation_claim<'a>(
+        &self,
+        claim: &'a mut fd_lock::RwLock<File>,
+    ) -> Result<fd_lock::RwLockWriteGuard<'a, File>> {
+        match claim.try_write() {
+            Ok(guard) => Ok(guard),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                bail!("Runtime turn operation is already being claimed; retry")
+            }
+            Err(error) => Err(error).context("Failed to claim Runtime turn operation"),
+        }
+    }
+
+    /// Remove a binding left before its turn record by a process crash.
+    ///
+    /// Bindings are committed before turns, while engine submission happens
+    /// only after both are durable. A binding with no turn therefore never
+    /// reached the engine and is safe to discard during startup recovery.
+    fn recover_incomplete_turn_operations(&self) -> Result<()> {
+        let operations_dir = checked_existing_runtime_store_dir(&self.turn_operations_dir)?;
+        for entry in fs::read_dir(&operations_dir)
+            .with_context(|| format!("Failed to read {}", operations_dir.display()))?
+        {
+            let path = entry?.path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let raw = read_store_file(&path)
+                .with_context(|| format!("Failed to read {}", path.display()))?;
+            let observed: RuntimeTurnOperationBinding = serde_json::from_str(&raw)
+                .with_context(|| format!("Failed to parse {}", path.display()))?;
+            observed.validate()?;
+            self.with_turn_operation_claim(Some(&observed.operation_key_fingerprint), || {
+                // A live writer may have replaced the file between the
+                // directory scan and this claim. Re-read under the same
+                // cross-process lock used by `start_turn` before deciding
+                // that the binding is torn.
+                let Some(binding) =
+                    self.load_turn_operation_binding(&observed.operation_key_fingerprint)?
+                else {
+                    return Ok(());
+                };
+                if !self.turn_path(&binding.turn_id)?.exists() {
+                    // Persistence is binding -> item -> turn. A process can
+                    // stop after the item write but before the turn commit;
+                    // that item was never submitted to an engine and has no
+                    // authoritative parent. Remove it under the same operation
+                    // claim before making the key retryable.
+                    for item in self.list_items_for_turn(&binding.turn_id)? {
+                        self.remove_item(&item.id)?;
+                    }
+                    remove_file_if_exists(&path)?;
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
+    fn save_turn_operation_binding(&self, binding: &RuntimeTurnOperationBinding) -> Result<()> {
+        binding.validate()?;
+        write_json_atomic(
+            &self.turn_operation_path(&binding.operation_key_fingerprint)?,
+            binding,
+        )
+    }
+
+    fn load_turn_operation_binding(
+        &self,
+        operation_key_fingerprint: &str,
+    ) -> Result<Option<RuntimeTurnOperationBinding>> {
+        let path = self.turn_operation_path(operation_key_fingerprint)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let raw = read_store_file(&path)
+            .with_context(|| format!("Failed to read Runtime turn operation {}", path.display()))?;
+        let binding: RuntimeTurnOperationBinding =
+            serde_json::from_str(&raw).with_context(|| {
+                format!("Failed to parse Runtime turn operation {}", path.display())
+            })?;
+        binding.validate()?;
+        Ok(Some(binding))
+    }
+
+    fn remove_turn_operation_binding(&self, operation_key_fingerprint: &str) -> Result<()> {
+        remove_file_if_exists(&self.turn_operation_path(operation_key_fingerprint)?)
     }
 
     fn recover_claimed_agent_mail(&self) -> Result<()> {
@@ -1888,17 +2028,58 @@ pub struct RuntimeThreadManagerConfig {
 impl RuntimeThreadManagerConfig {
     #[must_use]
     pub fn from_task_data_dir(task_data_dir: PathBuf) -> Self {
-        let data_dir = std::env::var("CODEWHALE_RUNTIME_DIR")
-            .or_else(|_| std::env::var("DEEPSEEK_RUNTIME_DIR"))
-            .ok()
-            .filter(|override_dir| !override_dir.trim().is_empty())
-            .map_or_else(|| task_data_dir.join("runtime"), PathBuf::from);
+        Self::resolved(task_data_dir, None)
+    }
+
+    /// Scope the Runtime thread store to one interactive session.
+    ///
+    /// The process-owner lock stays exclusive; isolation comes from the path,
+    /// not from weakening the lock (#5630).
+    #[must_use]
+    pub fn for_session(task_data_dir: PathBuf, session_id: &str) -> Self {
+        Self::resolved(task_data_dir, Some(session_id))
+    }
+
+    fn resolved(task_data_dir: PathBuf, session_id: Option<&str>) -> Self {
+        let data_dir = runtime_dir_override()
+            .unwrap_or_else(|| default_runtime_store_root(&task_data_dir, session_id));
         Self {
             data_dir,
             task_data_dir,
             max_active_threads: MAX_ACTIVE_THREADS_DEFAULT,
         }
     }
+}
+
+fn runtime_dir_override() -> Option<PathBuf> {
+    std::env::var("CODEWHALE_RUNTIME_DIR")
+        .or_else(|_| std::env::var("DEEPSEEK_RUNTIME_DIR"))
+        .ok()
+        .filter(|override_dir| !override_dir.trim().is_empty())
+        .map(PathBuf::from)
+}
+
+fn default_runtime_store_root(task_data_dir: &Path, session_id: Option<&str>) -> PathBuf {
+    match session_id
+        .map(str::trim)
+        .filter(|id| is_runtime_session_scope(id))
+    {
+        Some(id) => match crate::session_manager::default_sessions_dir() {
+            Ok(sessions_dir) => sessions_dir.join(id).join("runtime"),
+            Err(_) => task_data_dir.join("runtime").join(id),
+        },
+        None => task_data_dir.join("runtime"),
+    }
+}
+
+fn is_runtime_session_scope(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && id != "checkpoints"
+        && id != "session_boot_owners"
 }
 
 /// Visibility filter for `list_threads`. Default is `ActiveOnly`. The runtime
@@ -1924,6 +2105,13 @@ pub struct CreateThreadRequest {
     /// Exact configured provider key. Takes precedence over `model_provider`.
     #[serde(default)]
     pub model_provider_id: Option<String>,
+    /// Default reasoning preference for turns in this thread.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    /// Default model-visible tool allowlist for turns in this thread.
+    /// An empty array intentionally disables every model-visible tool.
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
     pub workspace: Option<PathBuf>,
     pub mode: Option<String>,
     #[serde(default)]
@@ -1965,9 +2153,20 @@ pub struct UpdateThreadRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StartTurnRequest {
     pub prompt: String,
+    /// Optional caller-supplied idempotency key, scoped to this Runtime store
+    /// and thread. The raw key is validated but never persisted.
+    #[serde(default, alias = "operationKey")]
+    pub operation_key: Option<String>,
     #[serde(default)]
     pub input_summary: Option<String>,
     pub model: Option<String>,
+    /// Per-turn reasoning override. Missing inherits the thread, then config.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    /// Per-turn model-visible tool override. Missing inherits the thread;
+    /// an empty array intentionally disables every model-visible tool.
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
     pub mode: Option<String>,
     #[serde(default)]
     pub permission_posture: Option<String>,
@@ -1978,6 +2177,123 @@ pub struct StartTurnRequest {
     pub dynamic_tools: Vec<DynamicToolSpec>,
     #[serde(default)]
     pub environment_id: Option<String>,
+}
+
+fn parse_runtime_reasoning_effort(value: &str) -> Result<crate::tui::app::ReasoningEffort> {
+    crate::tui::app::ReasoningEffort::parse_strict(value).map_err(anyhow::Error::msg)
+}
+
+fn canonical_runtime_reasoning_effort(value: Option<&str>) -> Result<Option<String>> {
+    value
+        .map(parse_runtime_reasoning_effort)
+        .transpose()
+        .map(|effort| effort.map(|effort| effort.as_setting().to_string()))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct RuntimeTurnOperationBinding {
+    schema_version: u32,
+    thread_id: String,
+    turn_id: String,
+    operation_key_fingerprint: String,
+    request_fingerprint: String,
+    created_at: DateTime<Utc>,
+}
+
+impl RuntimeTurnOperationBinding {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version > TURN_OPERATION_BINDING_SCHEMA_VERSION {
+            bail!(
+                "Runtime turn operation binding schema v{} is newer than supported v{}",
+                self.schema_version,
+                TURN_OPERATION_BINDING_SCHEMA_VERSION
+            );
+        }
+        validated_record_id(&self.thread_id, "operation thread id")?;
+        validated_record_id(&self.turn_id, "operation turn id")?;
+        validate_sha256_fingerprint(&self.operation_key_fingerprint, "operation key fingerprint")?;
+        validate_sha256_fingerprint(&self.request_fingerprint, "operation request fingerprint")?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PreparedRuntimeTurnOperation {
+    binding: RuntimeTurnOperationBinding,
+    requested_turn_id: Option<String>,
+}
+
+fn validate_runtime_turn_operation_key(value: &str) -> Result<()> {
+    if value.is_empty() {
+        bail!("operation_key cannot be empty");
+    }
+    if value.len() > MAX_RUNTIME_TURN_OPERATION_KEY_BYTES {
+        bail!("operation_key cannot exceed {MAX_RUNTIME_TURN_OPERATION_KEY_BYTES} UTF-8 bytes");
+    }
+    if value.trim() != value {
+        bail!("operation_key cannot contain leading or trailing whitespace");
+    }
+    if value.chars().any(char::is_control) {
+        bail!("operation_key cannot contain control characters");
+    }
+    Ok(())
+}
+
+fn validate_sha256_fingerprint(value: &str, label: &str) -> Result<()> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("{label} must be a SHA-256 hex digest");
+    }
+    Ok(())
+}
+
+fn runtime_turn_operation_key_fingerprint(
+    owner_id: &str,
+    thread_id: &str,
+    operation_key: &str,
+) -> Result<String> {
+    validate_runtime_turn_operation_key(operation_key)?;
+    Ok(crate::hashing::sha256_hex(format!(
+        "runtime-turn-operation\u{1f}{owner_id}\u{1f}{thread_id}\u{1f}{operation_key}"
+    )))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn runtime_turn_request_fingerprint(
+    thread: &ThreadRecord,
+    prompt: &str,
+    input_summary: Option<&str>,
+    requested_model: &str,
+    reasoning_effort: Option<crate::tui::app::ReasoningEffort>,
+    allowed_tools: Option<&[String]>,
+    policy: RuntimePolicyProjection,
+    allow_shell: bool,
+    trust_mode: bool,
+    dynamic_tools: &[DynamicToolSpec],
+    environment_id: Option<&str>,
+) -> Result<String> {
+    let payload = json!({
+        "version": 1,
+        "thread_id": thread.id,
+        "provider": thread.model_provider,
+        "provider_id": thread.model_provider_id,
+        "model": requested_model,
+        "prompt": prompt,
+        "input_summary": input_summary,
+        "reasoning_effort": reasoning_effort.map(|effort| effort.as_setting()),
+        "allowed_tools": allowed_tools,
+        "mode": policy.mode_setting(),
+        "permission_posture": policy.permission_wire(),
+        "allow_shell": allow_shell,
+        "trust_mode": trust_mode,
+        "auto_approve": policy.auto_approve(),
+        "dynamic_tools": dynamic_tools,
+        "environment_id": environment_id,
+        "workspace": thread.workspace,
+        "system_prompt": thread.system_prompt,
+    });
+    Ok(crate::hashing::sha256_hex(crate::client::canonical_json(
+        &payload,
+    )))
 }
 
 #[derive(Debug, Clone)]
@@ -2095,10 +2411,23 @@ pub struct UsageTotals {
     pub reasoning_replay_tokens: u64,
     pub cache_write_tokens: u64,
     pub cost_usd: f64,
+    /// Provider-published CNY subtotal, accrued only from turns whose route
+    /// published an authoritative CNY row (e.g. DeepSeek Platform). Never an
+    /// FX projection of `cost_usd`: USD-only routes contribute 0 here rather
+    /// than a fabricated amount, mirroring `SessionCostSnapshot`.
+    pub cost_cny: f64,
     /// Authoritative USD coverage for this aggregate. `cost_usd` is a priced
     /// subtotal whenever `unpriced_turns > 0`.
     pub priced_turns: u64,
     pub unpriced_turns: u64,
+    /// CNY-specific coverage over the same money-metered turns: a USD-only
+    /// route is CNY-unpriced rather than a fabricated complete zero, same
+    /// rule as `SessionCostSnapshot::cny_priced_turns`.
+    pub cny_priced_turns: u64,
+    pub cny_unpriced_turns: u64,
+    /// Why CNY is missing on money-metered turns. USD-only routes record
+    /// `currency_not_published` rather than a fabricated complete zero.
+    pub cny_unpriced_reasons: std::collections::BTreeSet<String>,
     pub nonmetered_turns: u64,
     pub cost_complete: bool,
     pub unpriced_reasons: std::collections::BTreeSet<String>,
@@ -2125,8 +2454,16 @@ pub struct UsageBucket {
     pub reasoning_replay_tokens: u64,
     pub cache_write_tokens: u64,
     pub cost_usd: f64,
+    /// Provider-published CNY subtotal; same coverage rule as the totals
+    /// field of the same name.
+    pub cost_cny: f64,
     pub priced_turns: u64,
     pub unpriced_turns: u64,
+    /// CNY-specific coverage; same rule as the totals field of the same name.
+    pub cny_priced_turns: u64,
+    pub cny_unpriced_turns: u64,
+    /// Why CNY is missing; same rule as the totals field of the same name.
+    pub cny_unpriced_reasons: std::collections::BTreeSet<String>,
     pub nonmetered_turns: u64,
     pub cost_complete: bool,
     pub unpriced_reasons: std::collections::BTreeSet<String>,
@@ -2149,17 +2486,95 @@ pub struct UsageAggregation {
     pub buckets: Vec<UsageBucket>,
 }
 
+/// Thread-scoped usage split by spend owner, for session persistence.
+///
+/// The split mirrors `SessionCostSnapshot`'s field semantics
+/// (`session_cost_*` carries parent-turn spend, `subagent_cost_*` routed
+/// child spend) so a writer can persist each side into the field readers
+/// already project into one display total.
+#[derive(Debug, Clone, Default)]
+pub struct ThreadUsageSplit {
+    /// Parent-turn usage: the session's own provider calls.
+    pub parent: UsageTotals,
+    /// Routed child (sub-agent/background) usage recorded on those turns,
+    /// including dropped-record incompleteness markers.
+    pub routed_children: UsageTotals,
+}
+
+impl ThreadUsageSplit {
+    /// Whole-history combined totals — the figure the global `/v1/usage`
+    /// thread bucket reports and the per-thread endpoint returns.
+    #[must_use]
+    pub fn combined(&self) -> UsageTotals {
+        let mut combined = self.parent.clone();
+        merge_usage_totals(&mut combined, &self.routed_children);
+        finalize_usage_totals(&mut combined);
+        combined
+    }
+}
+
+/// Recompute the derived completeness flag after accumulation.
+fn finalize_usage_totals(totals: &mut UsageTotals) {
+    // Dropped fallback receipts also bump `unpriced_turns`, so one check
+    // covers both incompleteness markers.
+    totals.cost_complete = totals.unpriced_turns == 0;
+}
+
+/// Component-wise saturating merge of usage totals; used to rebuild the
+/// combined thread figure from the parent/child split.
+fn merge_usage_totals(into: &mut UsageTotals, from: &UsageTotals) {
+    into.input_tokens = into.input_tokens.saturating_add(from.input_tokens);
+    into.output_tokens = into.output_tokens.saturating_add(from.output_tokens);
+    into.cached_tokens = into.cached_tokens.saturating_add(from.cached_tokens);
+    into.reasoning_tokens = into.reasoning_tokens.saturating_add(from.reasoning_tokens);
+    into.reasoning_replay_tokens = into
+        .reasoning_replay_tokens
+        .saturating_add(from.reasoning_replay_tokens);
+    into.cache_write_tokens = into
+        .cache_write_tokens
+        .saturating_add(from.cache_write_tokens);
+    saturating_add_cost_amount(&mut into.cost_usd, from.cost_usd);
+    saturating_add_cost_amount(&mut into.cost_cny, from.cost_cny);
+    into.priced_turns = into.priced_turns.saturating_add(from.priced_turns);
+    into.unpriced_turns = into.unpriced_turns.saturating_add(from.unpriced_turns);
+    into.cny_priced_turns = into.cny_priced_turns.saturating_add(from.cny_priced_turns);
+    into.cny_unpriced_turns = into
+        .cny_unpriced_turns
+        .saturating_add(from.cny_unpriced_turns);
+    into.cny_unpriced_reasons
+        .extend(from.cny_unpriced_reasons.clone());
+    into.nonmetered_turns = into.nonmetered_turns.saturating_add(from.nonmetered_turns);
+    into.unpriced_reasons.extend(from.unpriced_reasons.clone());
+    into.unpriced_classes.extend(from.unpriced_classes.clone());
+    into.pricing_provenances
+        .extend(from.pricing_provenances.clone());
+    into.live_pricing_defects
+        .extend(from.live_pricing_defects.clone());
+    into.live_pricing_unusable_defects
+        .extend(from.live_pricing_unusable_defects.clone());
+    into.route_receipts.extend(from.route_receipts.clone());
+    into.dropped_usage_records = into
+        .dropped_usage_records
+        .saturating_add(from.dropped_usage_records);
+    into.turns = into.turns.saturating_add(from.turns);
+}
+
 fn accumulate_runtime_cost_coverage(
     audit: Option<&crate::pricing::TurnCostAudit>,
     priced_turns: &mut u64,
     unpriced_turns: &mut u64,
+    cny_priced_turns: &mut u64,
+    cny_unpriced_turns: &mut u64,
     nonmetered_turns: &mut u64,
     reasons: &mut std::collections::BTreeSet<String>,
+    cny_reasons: &mut std::collections::BTreeSet<String>,
     provenances: &mut std::collections::BTreeSet<String>,
 ) {
     let Some(audit) = audit else {
         *unpriced_turns = (*unpriced_turns).saturating_add(1);
+        *cny_unpriced_turns = (*cny_unpriced_turns).saturating_add(1);
         reasons.insert("unknown_provider_route".to_string());
+        cny_reasons.insert("unknown_provider_route".to_string());
         return;
     };
     if let Some(provenance) = audit.provenance.as_ref() {
@@ -2176,6 +2591,20 @@ fn accumulate_runtime_cost_coverage(
         if let Some(reason) = audit.unpriced_reason {
             reasons.insert(reason.label().to_string());
         }
+    }
+    // CNY coverage counts the same money-metered turns under the provider's
+    // own CNY row: a USD-only route stays CNY-unpriced instead of reading as
+    // a complete zero (mirrors `cost_status`'s session-side accounting).
+    if audit.cny_priced {
+        *cny_priced_turns = (*cny_priced_turns).saturating_add(1);
+    } else {
+        *cny_unpriced_turns = (*cny_unpriced_turns).saturating_add(1);
+        cny_reasons.insert(
+            audit
+                .unpriced_reason
+                .map_or("currency_not_published", |reason| reason.label())
+                .to_string(),
+        );
     }
 }
 
@@ -2203,10 +2632,26 @@ fn accumulate_runtime_cost_details(
     }
 }
 
-fn saturating_add_usd(total: &mut f64, delta: f64) {
-    *total = crate::pricing::CostEstimate::usd_only(*total)
-        .saturating_add(crate::pricing::CostEstimate::usd_only(delta))
-        .usd;
+/// Add one priced amount to a running total without ever producing NaN,
+/// infinity, or a negative sum. Mirrors the component rule of
+/// `CostEstimate::saturating_add` so USD and CNY subtotals saturate
+/// identically.
+fn saturating_add_cost_amount(total: &mut f64, delta: f64) {
+    fn component(left: f64, right: f64) -> f64 {
+        let left = if left.is_finite() && left >= 0.0 {
+            left
+        } else {
+            0.0
+        };
+        let right = if right.is_finite() && right >= 0.0 {
+            right
+        } else {
+            0.0
+        };
+        let sum = left + right;
+        if sum.is_finite() { sum } else { f64::MAX }
+    }
+    *total = component(*total, delta);
 }
 
 fn runtime_usage_bucket_key(
@@ -2264,6 +2709,15 @@ fn accumulate_runtime_usage_record(
         .filter(|audit| audit.usd_priced)
         .and_then(|audit| audit.estimate)
         .map_or(0.0, |estimate| estimate.usd);
+    // CNY accrues only from provider-published CNY rows, never projected
+    // from the USD column, so routes without an authoritative CNY price
+    // contribute 0 rather than a fabricated amount (mirrors the session
+    // cost model in `tui/app.rs`).
+    let cost_cny = audit
+        .as_ref()
+        .filter(|audit| audit.cny_priced)
+        .and_then(|audit| audit.estimate)
+        .map_or(0.0, |estimate| estimate.cny);
     let receipt = route.zip(audit.as_ref()).map(|(route, audit)| {
         crate::cost_status::effective_route_usage_receipt(route, audit, usage)
     });
@@ -2278,13 +2732,17 @@ fn accumulate_runtime_usage_record(
     totals.cache_write_tokens = totals
         .cache_write_tokens
         .saturating_add(classes.cache_write);
-    saturating_add_usd(&mut totals.cost_usd, cost);
+    saturating_add_cost_amount(&mut totals.cost_usd, cost);
+    saturating_add_cost_amount(&mut totals.cost_cny, cost_cny);
     accumulate_runtime_cost_coverage(
         audit.as_ref(),
         &mut totals.priced_turns,
         &mut totals.unpriced_turns,
+        &mut totals.cny_priced_turns,
+        &mut totals.cny_unpriced_turns,
         &mut totals.nonmetered_turns,
         &mut totals.unpriced_reasons,
+        &mut totals.cny_unpriced_reasons,
         &mut totals.pricing_provenances,
     );
     accumulate_runtime_cost_details(
@@ -2313,13 +2771,17 @@ fn accumulate_runtime_usage_record(
     bucket.cache_write_tokens = bucket
         .cache_write_tokens
         .saturating_add(classes.cache_write);
-    saturating_add_usd(&mut bucket.cost_usd, cost);
+    saturating_add_cost_amount(&mut bucket.cost_usd, cost);
+    saturating_add_cost_amount(&mut bucket.cost_cny, cost_cny);
     accumulate_runtime_cost_coverage(
         audit.as_ref(),
         &mut bucket.priced_turns,
         &mut bucket.unpriced_turns,
+        &mut bucket.cny_priced_turns,
+        &mut bucket.cny_unpriced_turns,
         &mut bucket.nonmetered_turns,
         &mut bucket.unpriced_reasons,
+        &mut bucket.cny_unpriced_reasons,
         &mut bucket.pricing_provenances,
     );
     accumulate_runtime_cost_details(
@@ -2355,9 +2817,13 @@ fn accumulate_truncated_runtime_usage(
     }
     totals.dropped_usage_records = totals.dropped_usage_records.saturating_add(dropped);
     totals.unpriced_turns = totals.unpriced_turns.saturating_add(dropped);
+    totals.cny_unpriced_turns = totals.cny_unpriced_turns.saturating_add(dropped);
     totals.turns = totals.turns.saturating_add(dropped);
     totals
         .unpriced_reasons
+        .insert("runtime_usage_journal_truncated".to_string());
+    totals
+        .cny_unpriced_reasons
         .insert("runtime_usage_journal_truncated".to_string());
 
     let key = match group_by {
@@ -2371,9 +2837,13 @@ fn accumulate_truncated_runtime_usage(
     });
     bucket.dropped_usage_records = bucket.dropped_usage_records.saturating_add(dropped);
     bucket.unpriced_turns = bucket.unpriced_turns.saturating_add(dropped);
+    bucket.cny_unpriced_turns = bucket.cny_unpriced_turns.saturating_add(dropped);
     bucket.turns = bucket.turns.saturating_add(dropped);
     bucket
         .unpriced_reasons
+        .insert("runtime_usage_journal_truncated".to_string());
+    bucket
+        .cny_unpriced_reasons
         .insert("runtime_usage_journal_truncated".to_string());
 }
 
@@ -2504,6 +2974,12 @@ pub struct RuntimeThreadManager {
     workspace: PathBuf,
     plugin_registry: Option<Arc<crate::plugins::PluginRegistry>>,
     store: RuntimeThreadStore,
+    _process_owner_lock: Arc<RuntimeProcessOwnerLock>,
+    /// Concurrent turn admissions share a read lease; config reload owns the
+    /// write lease from validation through publication. A turn therefore
+    /// cannot snapshot old credentials/routes and dispatch after reload has
+    /// returned.
+    config_admission: Arc<AsyncRwLock<()>>,
     engine_load: Arc<Mutex<()>>,
     active: Arc<Mutex<ActiveThreads>>,
     event_emit: Arc<Mutex<()>>,
@@ -2521,6 +2997,52 @@ pub struct RuntimeThreadManager {
     recovery_flush: Arc<Mutex<()>>,
     #[cfg(test)]
     snapshot_test_hook: Arc<parking_lot::Mutex<Option<mpsc::UnboundedSender<SnapshotTestPoint>>>>,
+}
+
+#[derive(Debug)]
+struct RuntimeProcessOwnerLock {
+    _file: File,
+}
+
+impl RuntimeProcessOwnerLock {
+    fn acquire(root: &Path) -> Result<Self> {
+        let root = checked_runtime_store_root(root.to_path_buf())?;
+        ensure_runtime_store_dir(&root)?;
+        let path = root.join(RUNTIME_PROCESS_OWNER_LOCK_FILE);
+        let file = open_runtime_store_file(&path, "Runtime process owner lock", |options| {
+            options.create(true).truncate(false).read(true).write(true);
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd as _;
+            use std::os::unix::fs::PermissionsExt as _;
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .context("Failed to protect Runtime process owner lock")?;
+            // SAFETY: `file` owns a valid descriptor and is retained by this
+            // guard for the entire RuntimeThreadManager lifetime.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    bail!("{RUNTIME_PROCESS_OWNER_LOCK_HELD}");
+                }
+                return Err(error).context("Failed to acquire Runtime process owner lock");
+            }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle as _;
+            use windows_sys::Win32::Storage::FileSystem::LockFile;
+            // SAFETY: `file` owns a valid handle retained by this guard.
+            if unsafe { LockFile(file.as_raw_handle() as _, 0, 0, u32::MAX, u32::MAX) } == 0 {
+                let error = std::io::Error::last_os_error();
+                if matches!(error.raw_os_error(), Some(32 | 33)) {
+                    bail!("{RUNTIME_PROCESS_OWNER_LOCK_HELD}");
+                }
+                return Err(error).context("Failed to acquire Runtime process owner lock");
+            }
+        }
+        Ok(Self { _file: file })
+    }
 }
 
 #[cfg(test)]
@@ -2746,8 +3268,10 @@ impl RuntimeThreadManager {
     /// descriptor; the next `start_turn` resolves and installs the new route.
     pub async fn reload_config(
         &self,
-        new_config: Config,
+        mut new_config: Config,
     ) -> Result<crate::tools::large_output_router::WorkshopConfig> {
+        new_config.runtime_thread_inference_unrelated = !new_config.runtime_chat_isolated;
+        let _config_admission = self.config_admission.write().await;
         let _engine_load = self.engine_load.lock().await;
         let entries: Vec<(
             String,
@@ -2873,11 +3397,18 @@ impl RuntimeThreadManager {
     }
 
     fn open_inner(
-        config: Config,
+        mut config: Config,
         workspace: PathBuf,
         manager_cfg: RuntimeThreadManagerConfig,
         plugin_registry: Option<Arc<crate::plugins::PluginRegistry>>,
     ) -> Result<Self> {
+        // A public RuntimeThreadManager owns independent native threads. They
+        // may run concurrently with the interactive TUI because their events
+        // cannot be projected into that TUI's attached CWC run. The private
+        // Runtime Chat manager keeps its isolated marker instead and executes
+        // only while its host holds the exclusive run lease.
+        config.runtime_thread_inference_unrelated = !config.runtime_chat_isolated;
+        let process_owner_lock = Arc::new(RuntimeProcessOwnerLock::acquire(&manager_cfg.data_dir)?);
         let store = RuntimeThreadStore::open(manager_cfg.data_dir.clone())?;
         let (event_tx, _event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let manager = Self {
@@ -2885,6 +3416,8 @@ impl RuntimeThreadManager {
             workspace,
             plugin_registry,
             store,
+            _process_owner_lock: process_owner_lock,
+            config_admission: Arc::new(AsyncRwLock::new(())),
             engine_load: Arc::new(Mutex::new(())),
             active: Arc::new(Mutex::new(ActiveThreads::default())),
             event_emit: Arc::new(Mutex::new(())),
@@ -3928,8 +4461,11 @@ impl RuntimeThreadManager {
                 thread_id,
                 StartTurnRequest {
                     prompt,
+                    operation_key: None,
                     input_summary: Some(input_summary),
                     model: None,
+                    reasoning_effort: None,
+                    allowed_tools: None,
                     mode: None,
                     permission_posture: None,
                     allow_shell: None,
@@ -3942,6 +4478,7 @@ impl RuntimeThreadManager {
                     message_id: message_id.to_string(),
                     persisted_summary: claimed.summary.clone(),
                 },
+                None,
             )
             .await;
 
@@ -4502,6 +5039,7 @@ impl RuntimeThreadManager {
 
     pub async fn create_thread(&self, req: CreateThreadRequest) -> Result<ThreadRecord> {
         let now = Utc::now();
+        let reasoning_effort = canonical_runtime_reasoning_effort(req.reasoning_effort.as_deref())?;
         let (model_provider, model_provider_id, default_model) = {
             let config = self.read_config().clone();
             let requested_kind = req
@@ -4561,6 +5099,8 @@ impl RuntimeThreadManager {
             model,
             model_provider: Some(model_provider),
             model_provider_id,
+            reasoning_effort,
+            allowed_tools: req.allowed_tools,
             workspace,
             mode,
             permission_posture,
@@ -4576,15 +5116,33 @@ impl RuntimeThreadManager {
             session_id: None,
         };
         self.store.save_thread(&thread)?;
-        self.emit_event(
-            &thread.id,
-            None,
-            None,
-            "thread.started",
-            json!({ "thread": thread }),
-        )
-        .await?;
+        if let Err(error) = self
+            .emit_event(
+                &thread.id,
+                None,
+                None,
+                "thread.started",
+                json!({ "thread": thread.clone() }),
+            )
+            .await
+        {
+            let _ = self.store.remove_thread(&thread.id);
+            return Err(error);
+        }
         Ok(thread)
+    }
+
+    pub(crate) async fn discard_empty_thread(&self, thread_id: &str) -> Result<()> {
+        let active = self.active.lock().await;
+        if active.engines.contains_key(thread_id) {
+            bail!("cannot discard a loaded Runtime thread");
+        }
+        let _thread_mutation = self.store.thread_mutation.lock();
+        let thread = self.store.load_thread(thread_id)?;
+        if thread.latest_turn_id.is_some() {
+            bail!("cannot discard a Runtime thread that owns turns");
+        }
+        self.store.remove_thread(thread_id)
     }
 
     pub async fn list_threads(
@@ -4725,6 +5283,75 @@ impl RuntimeThreadManager {
             totals,
             buckets: buckets.into_values().collect(),
         })
+    }
+
+    /// Thread-scoped token + cost totals for one thread's whole history,
+    /// split by spend owner.
+    ///
+    /// Reuses the exact per-record accumulation of [`Self::aggregate_usage`]
+    /// (parent usage, routed child usage, dropped-record markers) so the
+    /// per-thread figure and the global `/v1/usage` figure can never disagree
+    /// about how a turn is priced — including the CNY coverage rule. The
+    /// parent/child split mirrors the session-persistence field semantics
+    /// (`session_cost_*` vs `subagent_cost_*`), so a session resumed across
+    /// the TUI and runtime writers never double-counts child spend. A
+    /// missing thread is an error, matching [`Self::get_thread`].
+    pub async fn aggregate_usage_for_thread(&self, id: &str) -> Result<ThreadUsageSplit> {
+        let store = self.store.clone();
+        let thread_id = id.to_string();
+        let (thread, turns) = tokio::task::spawn_blocking(move || {
+            let thread = store
+                .load_thread(&thread_id)
+                .with_context(|| format!("Thread not found: {thread_id}"))?;
+            let turns = store.list_turns_for_thread(&thread_id)?;
+            Ok::<_, anyhow::Error>((thread, turns))
+        })
+        .await
+        .context("Runtime thread usage aggregation task failed")??;
+
+        let mut split = ThreadUsageSplit::default();
+        // Buckets are a discarded byproduct: the shared accumulator writes
+        // both totals and buckets, and this surface reports totals only.
+        let mut buckets: std::collections::BTreeMap<String, UsageBucket> =
+            std::collections::BTreeMap::new();
+        for turn in &turns {
+            let parent_route = turn.effective_route_envelope();
+            if let Some(usage) = turn.usage.as_ref() {
+                accumulate_runtime_usage_record(
+                    &mut split.parent,
+                    &mut buckets,
+                    UsageGroupBy::Thread,
+                    parent_route.as_ref(),
+                    usage,
+                    turn,
+                    &thread,
+                );
+            }
+            for child in &turn.routed_usage {
+                accumulate_runtime_usage_record(
+                    &mut split.routed_children,
+                    &mut buckets,
+                    UsageGroupBy::Thread,
+                    Some(&child.route),
+                    &child.usage,
+                    turn,
+                    &thread,
+                );
+            }
+            // Dropped fallback receipts are routed-child records, so the
+            // incompleteness marker lands on the child side.
+            accumulate_truncated_runtime_usage(
+                &mut split.routed_children,
+                &mut buckets,
+                UsageGroupBy::Thread,
+                turn.routed_usage_dropped_records,
+                turn,
+                &thread,
+            );
+        }
+        finalize_usage_totals(&mut split.parent);
+        finalize_usage_totals(&mut split.routed_children);
+        Ok(split)
     }
 
     pub async fn get_thread(&self, id: &str) -> Result<ThreadRecord> {
@@ -5623,7 +6250,76 @@ impl RuntimeThreadManager {
         Ok(())
     }
 
-    fn cleanup_unaccepted_turn_records(&self, turn_id: &str, item_id: Option<&str>) -> Result<()> {
+    fn prepare_runtime_turn_operation(
+        &self,
+        thread_id: &str,
+        operation_key: Option<&str>,
+        request_fingerprint: String,
+        requested_turn_id: Option<&str>,
+    ) -> Result<Option<PreparedRuntimeTurnOperation>> {
+        let Some(operation_key) = operation_key else {
+            return Ok(None);
+        };
+        let operation_key_fingerprint =
+            runtime_turn_operation_key_fingerprint(&self.store.owner_id, thread_id, operation_key)?;
+        let requested_turn_id = requested_turn_id
+            .map(|turn_id| validated_record_id(turn_id, "requested turn id").map(str::to_string))
+            .transpose()?;
+        let turn_id = match requested_turn_id.as_deref() {
+            Some(turn_id) => turn_id.to_string(),
+            None => format!("turn_{}", &Uuid::new_v4().to_string()[..8]),
+        };
+        Ok(Some(PreparedRuntimeTurnOperation {
+            binding: RuntimeTurnOperationBinding {
+                schema_version: TURN_OPERATION_BINDING_SCHEMA_VERSION,
+                thread_id: thread_id.to_string(),
+                turn_id,
+                operation_key_fingerprint,
+                request_fingerprint,
+                created_at: Utc::now(),
+            },
+            requested_turn_id,
+        }))
+    }
+
+    fn replay_turn_for_operation(
+        &self,
+        prepared: &PreparedRuntimeTurnOperation,
+    ) -> Result<Option<TurnRecord>> {
+        let requested = &prepared.binding;
+        let Some(persisted) = self
+            .store
+            .load_turn_operation_binding(&requested.operation_key_fingerprint)?
+        else {
+            return Ok(None);
+        };
+        if persisted.thread_id != requested.thread_id
+            || persisted.operation_key_fingerprint != requested.operation_key_fingerprint
+            || persisted.request_fingerprint != requested.request_fingerprint
+            || prepared
+                .requested_turn_id
+                .as_deref()
+                .is_some_and(|turn_id| persisted.turn_id != turn_id)
+        {
+            bail!("operation_key is already bound to a different turn request");
+        }
+        let turn_path = self.store.turn_path(&persisted.turn_id)?;
+        if !turn_path.exists() {
+            bail!("operation_key binding is incomplete; retry after Runtime recovery");
+        }
+        let turn = self.store.load_turn(&persisted.turn_id)?;
+        if turn.id != persisted.turn_id || turn.thread_id != persisted.thread_id {
+            bail!("operation_key binding does not match its persisted Runtime turn");
+        }
+        Ok(Some(turn))
+    }
+
+    fn cleanup_unaccepted_turn_records(
+        &self,
+        turn_id: &str,
+        item_id: Option<&str>,
+        operation_key_fingerprint: Option<&str>,
+    ) -> Result<()> {
         let mut errors = Vec::new();
         if let Some(item_id) = item_id
             && let Err(err) = self.store.remove_item(item_id)
@@ -5632,6 +6328,13 @@ impl RuntimeThreadManager {
         }
         if let Err(err) = self.store.remove_turn(turn_id) {
             errors.push(format!("remove turn: {err}"));
+        }
+        if let Some(operation_key_fingerprint) = operation_key_fingerprint
+            && let Err(err) = self
+                .store
+                .remove_turn_operation_binding(operation_key_fingerprint)
+        {
+            errors.push(format!("remove turn operation binding: {err}"));
         }
         if errors.is_empty() {
             Ok(())
@@ -6008,8 +6711,41 @@ impl RuntimeThreadManager {
     }
 
     pub async fn start_turn(&self, thread_id: &str, req: StartTurnRequest) -> Result<TurnRecord> {
-        self.start_turn_with_source(thread_id, req, RuntimeTurnInputSource::ExternalUser)
-            .await
+        self.start_turn_inner(thread_id, req, None).await
+    }
+
+    pub(crate) async fn start_turn_with_reserved_id(
+        &self,
+        thread_id: &str,
+        req: StartTurnRequest,
+        reserved_turn_id: &str,
+    ) -> Result<TurnRecord> {
+        validated_record_id(reserved_turn_id, "reserved turn id")?;
+        let turn = self
+            .start_turn_inner(thread_id, req, Some(reserved_turn_id))
+            .await?;
+        if turn.id != reserved_turn_id {
+            bail!("reserved Runtime turn id does not match the durable operation binding");
+        }
+        Ok(turn)
+    }
+
+    async fn start_turn_inner(
+        &self,
+        thread_id: &str,
+        req: StartTurnRequest,
+        reserved_turn_id: Option<&str>,
+    ) -> Result<TurnRecord> {
+        if reserved_turn_id.is_some() && req.operation_key.is_none() {
+            bail!("a reserved turn id requires an operation key");
+        }
+        self.start_turn_with_source(
+            thread_id,
+            req,
+            RuntimeTurnInputSource::ExternalUser,
+            reserved_turn_id,
+        )
+        .await
     }
 
     async fn start_turn_with_source(
@@ -6017,6 +6753,7 @@ impl RuntimeThreadManager {
         thread_id: &str,
         req: StartTurnRequest,
         input_source: RuntimeTurnInputSource,
+        reserved_turn_id: Option<&str>,
     ) -> Result<TurnRecord> {
         // Heap-allocate the turn-start state machine. Its future holds two full
         // Config clones plus ThreadRecord/EngineHandle/TurnRecord/TurnItemRecord
@@ -6028,12 +6765,28 @@ impl RuntimeThreadManager {
         // STATUS_STACK_OVERFLOW). Box::pin moves the whole frame to the heap so
         // no caller's stack carries it; behavior is unchanged.
         Box::pin(async move {
+        // Keep config publication and turn admission in one ordering domain.
+        // This read lease spans route/classifier resolution and the durable
+        // engine handoff, so a completed reload is a hard boundary: no later
+        // dispatch can carry its predecessor's URL, key, model, or policy.
+        let _config_admission = self.config_admission.read().await;
         let prompt = req.prompt.trim().to_string();
         if prompt.is_empty() {
             bail!("prompt is required");
         }
 
         let thread = self.get_thread(thread_id).await?;
+        let turn_reasoning_preference = req
+            .reasoning_effort
+            .as_deref()
+            .map(parse_runtime_reasoning_effort)
+            .transpose()?;
+        let thread_reasoning_preference = thread
+            .reasoning_effort
+            .as_deref()
+            .map(parse_runtime_reasoning_effort)
+            .transpose()
+            .with_context(|| format!("Thread {thread_id} has invalid reasoning_effort"))?;
         let policy =
             if req.mode.is_some() || req.permission_posture.is_some() || req.auto_approve.is_some()
             {
@@ -6051,6 +6804,53 @@ impl RuntimeThreadManager {
                 )
             };
         let mode = policy.mode;
+        let requested_model = req.model.as_deref().unwrap_or(&thread.model).to_string();
+        let auto_model = requested_model.trim().eq_ignore_ascii_case("auto");
+        let cfg_snapshot = self.config.read().clone();
+        let configured_reasoning_preference = cfg_snapshot
+            .reasoning_effort()
+            .map(crate::tui::app::ReasoningEffort::from_setting);
+        // Runtime API precedence is explicit and stable: a turn override wins
+        // over its persisted thread default, which wins over normal config.
+        let reasoning_preference = turn_reasoning_preference
+            .or(thread_reasoning_preference)
+            .or(configured_reasoning_preference);
+        let allow_shell = req.allow_shell.unwrap_or(thread.allow_shell);
+        let trust_mode = req.trust_mode.unwrap_or(thread.trust_mode);
+        let auto_approve = policy.auto_approve();
+        let allowed_tools = req
+            .allowed_tools
+            .clone()
+            .or_else(|| thread.allowed_tools.clone());
+        let operation = if let Some(operation_key) = req.operation_key.as_deref() {
+            validate_runtime_turn_operation_key(operation_key)?;
+            let request_fingerprint = runtime_turn_request_fingerprint(
+                &thread,
+                &prompt,
+                req.input_summary.as_deref(),
+                &requested_model,
+                reasoning_preference,
+                allowed_tools.as_deref(),
+                policy,
+                allow_shell,
+                trust_mode,
+                &req.dynamic_tools,
+                req.environment_id.as_deref(),
+            )?;
+            self.prepare_runtime_turn_operation(
+                thread_id,
+                Some(operation_key),
+                request_fingerprint,
+                reserved_turn_id,
+            )?
+        } else {
+            None
+        };
+        if let Some(operation) = operation.as_ref()
+            && let Some(original_turn) = self.replay_turn_for_operation(operation)?
+        {
+            return Ok(original_turn);
+        }
         let engine = self.ensure_engine_loaded(&thread).await?;
 
         let client_preflight_required = {
@@ -6069,17 +6869,10 @@ impl RuntimeThreadManager {
         // Resolve the concrete provider/model before persisting a turn. Auto
         // routing can fail, and such a failure must not leave a zombie
         // in-progress record behind.
-        let requested_model = req.model.as_deref().unwrap_or(&thread.model).to_string();
-        let auto_model = requested_model.trim().eq_ignore_ascii_case("auto");
-        let cfg_snapshot = self.config.read().clone();
         let identity = self.provider_identity_for_thread(&cfg_snapshot, &thread)?;
         let mut thread_config = cfg_snapshot.clone();
         thread_config.scope_to_provider_identity(&identity);
         let verbosity = thread_config.verbosity.clone();
-        let reasoning_preference = thread_config
-            .reasoning_effort()
-            .filter(|_| thread_config.reasoning_effort_is_explicit())
-            .map(crate::tui::app::ReasoningEffort::from_setting);
         let (route, reasoning_effort, auto_controls_reasoning) = if auto_model {
             let selection = crate::model_routing::resolve_auto_route_with_inventory(
                 &thread_config,
@@ -6111,15 +6904,33 @@ impl RuntimeThreadManager {
             });
             (route, reasoning_effort, auto_controls_reasoning)
         } else {
-            (
-                resolve_runtime_thread_route_for_identity(
-                    &cfg_snapshot,
-                    &identity,
-                    Some(&requested_model),
-                )?,
-                None,
-                false,
-            )
+            let route = resolve_runtime_thread_route_for_identity(
+                &cfg_snapshot,
+                &identity,
+                Some(&requested_model),
+            )?;
+            let auto_controls_reasoning = matches!(
+                reasoning_preference,
+                Some(crate::tui::app::ReasoningEffort::Auto)
+            );
+            let selected_reasoning = reasoning_preference.map(|effort| {
+                if effort == crate::tui::app::ReasoningEffort::Auto {
+                    crate::auto_reasoning::select(false, &prompt)
+                } else {
+                    effort
+                }
+            });
+            let reasoning_effort = selected_reasoning.map(|effort| {
+                effort
+                    .normalize_for_route(
+                        route.identity.provider,
+                        &route.candidate.endpoint().base_url,
+                        &route.model,
+                    )
+                    .as_setting()
+                    .to_string()
+            });
+            (route, reasoning_effort, auto_controls_reasoning)
         };
         let route = if client_preflight_required {
             route
@@ -6143,7 +6954,10 @@ impl RuntimeThreadManager {
             settings.auto_compact_threshold_percent,
         );
         let now = Utc::now();
-        let turn_id = format!("turn_{}", &Uuid::new_v4().to_string()[..8]);
+        let turn_id = operation
+            .as_ref()
+            .map(|operation| operation.binding.turn_id.clone())
+            .unwrap_or_else(|| format!("turn_{}", &Uuid::new_v4().to_string()[..8]));
         compaction.runtime_cost_owner = Some(turn_id.clone());
         let input_summary = req
             .input_summary
@@ -6196,9 +7010,6 @@ impl RuntimeThreadManager {
         };
         turn.item_ids.push(user_item_id.clone());
 
-        let allow_shell = req.allow_shell.unwrap_or(thread.allow_shell);
-        let trust_mode = req.trust_mode.unwrap_or(thread.trust_mode);
-        let auto_approve = policy.auto_approve();
         let op = Op::SendMessage {
             content: prompt,
             mode,
@@ -6214,7 +7025,7 @@ impl RuntimeThreadManager {
             trust_mode,
             auto_approve,
             translation_enabled: false,
-            allowed_tools: None,
+            allowed_tools,
             dynamic_tools: req.dynamic_tools,
             hook_executor: None,
             approval_mode: policy.permission,
@@ -6235,7 +7046,32 @@ impl RuntimeThreadManager {
         let acceptance_rx = {
             // Lock order is active -> thread_mutation. Neither guard crosses
             // an await, and spawning the owned lifecycle task is synchronous.
+            // The operation claim is an OS-backed file lock, so another
+            // Runtime process sharing this store cannot pass the replay check
+            // or persist a competing turn for the same operation key.
             let mut active = self.active.lock().await;
+            let mut operation_claim = operation
+                .as_ref()
+                .map(|operation| {
+                    self.store.open_turn_operation_claim_lock(
+                        &operation.binding.operation_key_fingerprint,
+                    )
+                })
+                .transpose()?
+                .map(fd_lock::RwLock::new);
+            let operation_claim_guard = operation_claim
+                .as_mut()
+                .map(|claim| self.store.acquire_turn_operation_claim(claim))
+                .transpose()?;
+            // A concurrent exact retry may have crossed the first lookup
+            // before the original request committed its binding. Recheck
+            // under the same claim lock before inspecting active-turn state or
+            // persisting/sending anything.
+            if let Some(operation) = operation.as_ref()
+                && let Some(original_turn) = self.replay_turn_for_operation(operation)?
+            {
+                return Ok(original_turn);
+            }
             let Some(state) = active.engines.get_mut(thread_id) else {
                 bail!("Thread engine not loaded");
             };
@@ -6257,6 +7093,10 @@ impl RuntimeThreadManager {
             state.route_model.clone_from(&model);
 
             let persistence_result = (|| -> Result<()> {
+                if let Some(operation) = operation.as_ref() {
+                    self.store
+                        .save_turn_operation_binding(&operation.binding)?;
+                }
                 self.store.save_item(&user_item)?;
                 self.store.save_turn(&turn)?;
                 current_thread.latest_turn_id = Some(turn_id.clone());
@@ -6265,7 +7105,13 @@ impl RuntimeThreadManager {
             })();
             if let Err(persistence_error) = persistence_result {
                 let cleanup_error = self
-                    .cleanup_unaccepted_turn_records(&turn_id, Some(&user_item_id))
+                    .cleanup_unaccepted_turn_records(
+                        &turn_id,
+                        Some(&user_item_id),
+                        operation
+                            .as_ref()
+                            .map(|operation| operation.binding.operation_key_fingerprint.as_str()),
+                    )
                     .err();
                 state.active_turn = None;
                 state.route_identity = previous_active_route.0;
@@ -6277,6 +7123,12 @@ impl RuntimeThreadManager {
                     )),
                 };
             }
+
+            // The binding, item, turn, and thread pointer are now durable.
+            // Release the cross-process claim before handing the provider work
+            // to the engine; exact retries will observe and replay this turn.
+            drop(operation_claim_guard);
+            drop(operation_claim);
 
             self.register_runtime_usage_sink(&turn_id);
             // Sending through an owned permit cannot await or fail. From this
@@ -6452,6 +7304,11 @@ impl RuntimeThreadManager {
         thread_id: &str,
         req: CompactThreadRequest,
     ) -> Result<TurnRecord> {
+        // Compaction carries a concrete provider route just like a normal
+        // turn. Keep the same reload/admission boundary through durable engine
+        // handoff so it cannot dispatch an old credential or endpoint after a
+        // successful config reload.
+        let _config_admission = self.config_admission.read().await;
         let thread = self.get_thread(thread_id).await?;
         let engine = self.ensure_engine_loaded(&thread).await?;
 
@@ -6574,7 +7431,9 @@ impl RuntimeThreadManager {
                 self.store.save_thread(&current_thread)
             })();
             if let Err(persistence_error) = persistence_result {
-                let cleanup_error = self.cleanup_unaccepted_turn_records(&turn_id, None).err();
+                let cleanup_error = self
+                    .cleanup_unaccepted_turn_records(&turn_id, None, None)
+                    .err();
                 state.active_turn = None;
                 state.route_identity = previous_active_route.0;
                 state.route_model = previous_active_route.1;
@@ -6630,6 +7489,13 @@ impl RuntimeThreadManager {
         thread_id: &str,
         since_seq: Option<u64>,
     ) -> Result<Vec<RuntimeEventRecord>> {
+        // Startup recovery deliberately queues terminal receipts until an
+        // async consumer can append them without blocking manager open. The
+        // Runtime Chat relay reads this API directly (rather than first
+        // loading a thread detail), so make the event boundary itself flush
+        // those receipts. Otherwise a crash-recovered accepted turn could
+        // remain terminal on disk without ever producing turn.completed.
+        self.flush_recovery_receipts_for_thread(thread_id).await?;
         let store = self.store.clone();
         let thread_id = thread_id.to_string();
         tokio::task::spawn_blocking(move || store.events_since(&thread_id, since_seq))
@@ -6717,6 +7583,7 @@ impl RuntimeThreadManager {
             let route_model = route.model;
             let route_limits = known_route_limits(route.candidate.limits());
             let cfg = route.config;
+            let isolated_chat = cfg.runtime_chat_isolated;
 
             // Resolve the provider-route-aware auto-compaction default unless the
             // user persisted an explicit preference.
@@ -6729,26 +7596,34 @@ impl RuntimeThreadManager {
                 crate::settings::Settings::auto_compact_explicitly_configured(),
                 settings.auto_compact_threshold_percent,
             );
-            let network_policy = cfg.network.clone().map(|toml_cfg| {
-                crate::network_policy::NetworkPolicyDecider::with_default_audit(
-                    toml_cfg.into_runtime(),
-                )
-            });
-            let lsp_config = cfg
-                .lsp
-                .clone()
+            let network_policy =
+                (!isolated_chat)
+                    .then(|| cfg.network.clone())
+                    .flatten()
+                    .map(|toml_cfg| {
+                        crate::network_policy::NetworkPolicyDecider::with_default_audit(
+                            toml_cfg.into_runtime(),
+                        )
+                    });
+            let lsp_config = (!isolated_chat)
+                .then(|| cfg.lsp.clone())
+                .flatten()
                 .map(crate::config::LspConfigToml::into_runtime);
             let max_subagents = cfg
                 .max_subagents_for_provider(provider)
                 .clamp(1, MAX_SUBAGENTS);
-            let thread_plugin_registry = self
-                .plugin_registry
-                .as_ref()
-                .map(|registry| registry.rediscover_for_workspace(&thread.workspace));
+            let thread_plugin_registry = (!isolated_chat)
+                .then(|| {
+                    self.plugin_registry
+                        .as_ref()
+                        .map(|registry| registry.rediscover_for_workspace(&thread.workspace))
+                })
+                .flatten();
             let engine_cfg = EngineConfig {
                 model: route_model.clone(),
                 active_route_limits: route_limits,
                 workspace: thread.workspace.clone(),
+                session_id: None,
                 subagent_state_root: None,
                 plugin_registry: thread_plugin_registry.clone(),
                 allow_shell: thread.allow_shell,
@@ -6757,22 +7632,25 @@ impl RuntimeThreadManager {
                 mcp_config_path: cfg.mcp_config_path(),
                 skills_dir: cfg.skills_dir(),
                 skills_scan_codewhale_only: cfg.skills_config().scan_codewhale_only(),
-                instructions: cfg
-                    .instructions_paths()
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-                project_context_pack_enabled: cfg.project_context_pack_enabled(),
+                instructions: if isolated_chat {
+                    Vec::new()
+                } else {
+                    cfg.instructions_paths()
+                        .into_iter()
+                        .map(Into::into)
+                        .collect()
+                },
+                project_context_pack_enabled: !isolated_chat && cfg.project_context_pack_enabled(),
                 translation_enabled: false,
-                // Runtime/API turns follow the same no-hidden-step-budget
+                // R1: runtime/API turns follow the same finite-budget
                 // contract as the ordinary interactive engine.
-                max_steps: UNBOUNDED_MODEL_STEPS,
+                max_steps: cfg.max_model_steps(),
                 max_subagents,
                 max_admitted_subagents: cfg
                     .max_admitted_subagents_for_provider(provider)
                     .max(max_subagents),
                 launch_concurrency: cfg.launch_concurrency_for_provider(provider),
-                subagents_enabled: cfg.subagents_enabled_for_provider(provider),
+                subagents_enabled: !isolated_chat && cfg.subagents_enabled_for_provider(provider),
                 features: cfg.features(),
                 auto_review_policy: cfg.auto_review_policy(),
                 compaction,
@@ -6782,7 +7660,7 @@ impl RuntimeThreadManager {
                 max_spawn_depth: cfg.subagent_max_spawn_depth_for_provider(provider),
                 subagent_token_budget: cfg.subagent_token_budget_for_provider(provider),
                 network_policy,
-                snapshots_enabled: cfg.snapshots_config().enabled,
+                snapshots_enabled: !isolated_chat && cfg.snapshots_config().enabled,
                 snapshots_max_workspace_bytes: cfg
                     .snapshots_config()
                     .max_workspace_gb
@@ -6794,26 +7672,42 @@ impl RuntimeThreadManager {
                     task_data_dir: Some(self.manager_cfg.task_data_dir.clone()),
                     active_task_id: thread.task_id.clone(),
                     active_thread_id: Some(thread.id.clone()),
-                    dynamic_tool_executor: Some(Arc::new(self.clone())),
+                    dynamic_tool_executor: if isolated_chat {
+                        None
+                    } else {
+                        Some(Arc::new(self.clone()))
+                    },
                     work: None,
                     shell_manager: None,
                     persist_services_enabled: false,
                     hook_executor: None,
                     handle_store: crate::tools::handle::new_shared_handle_store(),
                     rlm_sessions: crate::rlm::session::new_shared_rlm_session_store(),
+                    media_originals_dir: crate::media_originals::default_store_dir(),
                 },
-                subagent_model_overrides: cfg.subagent_model_overrides(),
-                fleet_roster: Arc::new(crate::fleet::identity::load_effective_roster(
-                    &cfg.fleet_config(),
-                    &thread.workspace,
-                    thread_plugin_registry.as_deref(),
-                )),
+                subagent_model_overrides: if isolated_chat {
+                    HashMap::new()
+                } else {
+                    cfg.subagent_model_overrides()
+                },
+                fleet_roster: if isolated_chat {
+                    Arc::new(crate::fleet::roster::FleetRoster::built_ins_only())
+                } else {
+                    Arc::new(crate::fleet::identity::load_effective_roster(
+                        &cfg.fleet_config(),
+                        &thread.workspace,
+                        thread_plugin_registry.as_deref(),
+                    ))
+                },
                 subagent_api_timeout: std::time::Duration::from_secs(
                     cfg.subagent_api_timeout_secs_for_provider(provider),
                 ),
                 stream_chunk_timeout: std::time::Duration::from_secs(
                     cfg.stream_chunk_timeout_secs(),
                 ),
+                turn_wall_clock: cfg.turn_wall_clock(),
+                stream_max_content_bytes: cfg.stream_max_content_bytes(),
+                stream_max_duration: cfg.stream_max_duration(),
                 subagent_heartbeat_timeout: std::time::Duration::from_secs(
                     cfg.subagent_heartbeat_timeout_secs_for_provider(provider),
                 ),
@@ -6822,17 +7716,20 @@ impl RuntimeThreadManager {
                     read_only_roots: cfg.bwrap_ro_roots.clone(),
                     device_roots: cfg.bwrap_dev_roots.clone(),
                 },
-                memory_enabled: cfg.memory_enabled(),
+                read_denylist: cfg.read_denylist(),
+                memory_enabled: !isolated_chat && cfg.memory_enabled(),
                 memory_path: cfg.memory_path(),
                 speech_output_dir: cfg.speech_output_dir(),
-                vision_config: cfg.vision_model_config(),
+                vision_config: (!isolated_chat)
+                    .then(|| cfg.vision_model_config())
+                    .flatten(),
                 strict_tool_mode: cfg.strict_tool_mode.unwrap_or(false),
                 goal_objective: None,
                 goal_token_budget: None,
                 goal_status: crate::tools::goal::GoalStatus::Active,
                 goal_max_continuations: cfg.goal_max_continuations(),
                 goal_continuation_delay_seconds: cfg.goal_continuation_delay_seconds(),
-                allowed_tools: None,
+                allowed_tools: isolated_chat.then(Vec::new),
                 disallowed_tools: None,
                 max_tool_calls: None,
                 hook_executor: None,
@@ -6843,8 +7740,12 @@ impl RuntimeThreadManager {
                 search_provider: cfg.search_provider(),
                 search_api_key: cfg.search.as_ref().and_then(|s| s.api_key.clone()),
                 search_base_url: cfg.search.as_ref().and_then(|s| s.base_url.clone()),
-                tools_always_load: cfg.tools_always_load(),
-                tools: cfg.tools.clone(),
+                tools_always_load: if isolated_chat {
+                    HashSet::new()
+                } else {
+                    cfg.tools_always_load()
+                },
+                tools: (!isolated_chat).then(|| cfg.tools.clone()).flatten(),
                 verbosity: cfg.verbosity.clone(),
                 workspace_follow_symlinks: settings.workspace_follow_symlinks,
                 exec_policy_engine: cfg.exec_policy_engine.clone(),
@@ -7195,6 +8096,7 @@ impl RuntimeThreadManager {
                 && matches!(
                     &event,
                     EngineEvent::Status { .. }
+                        | EngineEvent::McpSessionBoot { .. }
                         | EngineEvent::SessionUpdated { .. }
                         | EngineEvent::AgentList { .. }
                         | EngineEvent::AgentSpawned { .. }
@@ -7584,6 +8486,7 @@ impl RuntimeThreadManager {
                     messages_before,
                     messages_after,
                     summary_prompt,
+                    post_input_tokens: _,
                 } => {
                     // Persist the summary in the legacy thread-record carrier
                     // so reloads survive LRU eviction/restart. SyncSession
@@ -8112,6 +9015,45 @@ impl RuntimeThreadManager {
                     )
                     .await?;
                 }
+                EngineEvent::ToolProjectionWarning {
+                    provider,
+                    omitted_tool_names,
+                    omitted_tool_count,
+                } => {
+                    let message = crate::core::events::tool_projection_warning_message(
+                        &provider,
+                        &omitted_tool_names,
+                        omitted_tool_count,
+                    );
+                    let item = TurnItemRecord {
+                        schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+                        id: format!("item_{}", &Uuid::new_v4().to_string()[..8]),
+                        turn_id: turn_id.clone(),
+                        kind: TurnItemKind::Status,
+                        status: TurnItemLifecycleStatus::Completed,
+                        summary: summarize_text(&message, SUMMARY_LIMIT),
+                        detail: Some(message),
+                        metadata: Some(json!({
+                            "code": "provider_tool_projection_warning",
+                            "provider": provider,
+                            "omitted_tool_names": omitted_tool_names,
+                            "omitted_tool_count": omitted_tool_count,
+                        })),
+                        artifact_refs: Vec::new(),
+                        started_at: Some(Utc::now()),
+                        ended_at: Some(Utc::now()),
+                    };
+                    self.store.save_item(&item)?;
+                    self.attach_item_to_turn(&turn_id, &item.id)?;
+                    self.emit_event(
+                        &thread_id,
+                        Some(&turn_id),
+                        Some(&item.id),
+                        "item.completed",
+                        json!({ "item": item }),
+                    )
+                    .await?;
+                }
                 EngineEvent::Error { envelope, .. } => {
                     turn_status = Some(RuntimeTurnStatus::Failed);
                     turn_error = Some(envelope.message.clone());
@@ -8424,26 +9366,34 @@ impl RuntimeThreadManager {
             .map(|thread| (thread.id.clone(), thread))
             .collect::<HashMap<_, _>>();
         let mut turns_by_thread: HashMap<String, Vec<TurnRecord>> = HashMap::new();
+        let mut latest_turn_by_thread: HashMap<String, (DateTime<Utc>, String)> = HashMap::new();
         let mut changed_threads = HashSet::new();
 
         // First terminalize interrupted candidates. Keep every terminal turn
         // in the same one-pass grouping so already-terminal records whose
         // completion append failed are reconciled too.
         for mut turn in self.store.list_all_turns()? {
+            latest_turn_by_thread
+                .entry(turn.thread_id.clone())
+                .and_modify(|latest| {
+                    if (turn.created_at, turn.id.as_str()) > (latest.0, latest.1.as_str()) {
+                        *latest = (turn.created_at, turn.id.clone());
+                    }
+                })
+                .or_insert_with(|| (turn.created_at, turn.id.clone()));
             let mut thread_changed = false;
-            if matches!(
+            let interrupted_candidate = matches!(
                 turn.status,
                 RuntimeTurnStatus::Queued | RuntimeTurnStatus::InProgress
-            ) {
-                turn.status = RuntimeTurnStatus::Interrupted;
-                turn.error = Some(RUNTIME_RESTART_REASON.to_string());
-                turn.ended_at = Some(now);
-                if let Some(started_at) = turn.started_at {
-                    let elapsed = now.signed_duration_since(started_at);
-                    turn.duration_ms = Some(elapsed.num_milliseconds().max(0) as u64);
-                }
-                self.store.save_turn(&turn)?;
-
+            );
+            let resume_interrupted_normalization = turn.status == RuntimeTurnStatus::Interrupted
+                && turn.error.as_deref() == Some(RUNTIME_RESTART_REASON);
+            if interrupted_candidate || resume_interrupted_normalization {
+                // Items must reach their terminal state before the parent
+                // turn. If a process stops during this loop, the still-live
+                // parent makes the next recovery pass resume normalization.
+                // Also repair stores written by older builds that committed
+                // the interrupted parent first and crashed before its items.
                 for item_id in &turn.item_ids {
                     let mut item = self.store.load_item(item_id)?;
                     if matches!(
@@ -8453,9 +9403,19 @@ impl RuntimeThreadManager {
                         item.status = TurnItemLifecycleStatus::Interrupted;
                         item.ended_at = Some(now);
                         self.store.save_item(&item)?;
+                        thread_changed = true;
                     }
                 }
-
+            }
+            if interrupted_candidate {
+                turn.status = RuntimeTurnStatus::Interrupted;
+                turn.error = Some(RUNTIME_RESTART_REASON.to_string());
+                turn.ended_at = Some(now);
+                if let Some(started_at) = turn.started_at {
+                    let elapsed = now.signed_duration_since(started_at);
+                    turn.duration_ms = Some(elapsed.num_milliseconds().max(0) as u64);
+                }
+                self.store.save_turn(&turn)?;
                 thread_changed = true;
             }
             if thread_changed && let Some(thread) = threads.get_mut(&turn.thread_id) {
@@ -8473,6 +9433,20 @@ impl RuntimeThreadManager {
                     .entry(turn.thread_id.clone())
                     .or_default()
                     .push(turn);
+            }
+        }
+
+        // A crash can land after the turn record but before the thread's
+        // latest-turn pointer for both ordinary and compaction admissions.
+        // Recompute it from durable records on every recovery pass so detail
+        // and subsequent mutation never hide an accepted/recovered turn.
+        for thread in threads.values_mut() {
+            let latest = latest_turn_by_thread
+                .get(&thread.id)
+                .map(|(_, turn_id)| turn_id.clone());
+            if thread.latest_turn_id != latest {
+                thread.latest_turn_id = latest;
+                changed_threads.insert(thread.id.clone());
             }
         }
 
@@ -9068,6 +10042,55 @@ fn open_runtime_store_file(
     runtime_store_file_identity(&file)
         .with_context(|| format!("Invalid {purpose} {}", path.display()))?;
     Ok(file)
+}
+
+fn load_or_create_runtime_store_owner(owner_path: &Path, event_lock_path: &Path) -> Result<String> {
+    let lock_file =
+        open_runtime_store_file(event_lock_path, "Runtime store ownership lock", |options| {
+            options.create(true).truncate(false).read(true).write(true);
+        })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        lock_file
+            .set_permissions(fs::Permissions::from_mode(0o600))
+            .context("Failed to secure Runtime store ownership lock")?;
+    }
+    let mut lock = fd_lock::RwLock::new(lock_file);
+    let started = Instant::now();
+    loop {
+        match lock.try_write() {
+            Ok(_guard) => {
+                if owner_path.exists() {
+                    let raw = read_store_file(owner_path)
+                        .with_context(|| format!("Failed to read {}", owner_path.display()))?;
+                    let owner: RuntimeStoreOwner = serde_json::from_str(&raw)
+                        .with_context(|| format!("Failed to parse {}", owner_path.display()))?;
+                    validated_record_id(&owner.owner_id, "Runtime owner id")?;
+                    return Ok(owner.owner_id);
+                }
+                let owner_id = format!("owner_{}", Uuid::new_v4().simple());
+                write_json_atomic(
+                    owner_path,
+                    &RuntimeStoreOwner {
+                        owner_id: owner_id.clone(),
+                    },
+                )?;
+                return Ok(owner_id);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                wait_for_event_lock(started, EVENT_TRANSACTION_LOCK_TIMEOUT)?;
+            }
+            Err(error) => {
+                return Err(error).context("Failed to lock Runtime store ownership");
+            }
+        }
+    }
 }
 
 #[cfg(unix)]

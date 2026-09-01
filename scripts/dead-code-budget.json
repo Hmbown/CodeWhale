@@ -3,8 +3,7 @@
   "_issue": "https://github.com/Hmbown/CodeWhale/issues/4785",
   "total": 448,
   "per_crate": {
-    "config": 1,
     "tools": 2,
-    "tui": 445
+    "tui": 446
   }
 }

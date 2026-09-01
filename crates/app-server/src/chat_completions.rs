@@ -1,9 +1,10 @@
 //! Provider-neutral `/v1/chat/completions` pass-through endpoint.
 //!
-//! This module resolves a model through the [`ModelRegistry`], looks up the
-//! matching provider configuration, and forwards an OpenAI-compatible request
-//! body upstream.  It does **not** import or call any DeepSeek-named client
-//! APIs — routing stays in neutral config/provider types.
+//! This module resolves a model inside the configured provider's authority and
+//! forwards an OpenAI-compatible request body upstream. Model text is metadata:
+//! it never selects a provider configuration or credential slot. It does
+//! **not** import or call any DeepSeek-named client APIs — routing stays in
+//! neutral config/provider types.
 //!
 //! Only providers whose [`WireFormat`] is [`WireFormat::ChatCompletions`] are
 //! served.  Streaming requests are explicitly rejected for now.
@@ -51,19 +52,10 @@ fn resolve_endpoint(
     registry: &ModelRegistry,
     request_model: Option<&str>,
 ) -> Result<ResolvedModelEndpoint, RouteError> {
-    let configured_base_url = provider_base_url(config, config.provider);
-    let configured_endpoint_owns_models =
-        endpoint_preserves_raw_model_ids(config.provider, &configured_base_url);
-    let provider_kind = if configured_endpoint_owns_models {
-        config.provider
-    } else {
-        request_model
-            .filter(|model| !model.trim().is_empty())
-            .and_then(|model_name| {
-                inferred_provider_for_model(registry, config.provider, model_name)
-            })
-            .unwrap_or(config.provider)
-    };
+    // The configured provider is route authority. A request's model field can
+    // select only within that provider; it may never switch endpoints or
+    // credential slots by resembling another provider's catalog row.
+    let provider_kind = config.provider;
     let provider_cfg = config.providers.for_provider(provider_kind);
     let provider_meta = provider_kind.provider();
 
@@ -71,9 +63,9 @@ fn resolve_endpoint(
     let base_url = provider_base_url(config, provider_kind);
     let endpoint_owns_models = endpoint_preserves_raw_model_ids(provider_kind, &base_url);
 
-    // Keep provider inference and wire identity separate: ModelRegistry picks
-    // the provider for a known request alias, while RouteResolver owns the
-    // provider-scoped wire model and custom-endpoint passthrough contract.
+    // ModelRegistry canonicalizes provider-owned aliases and detects clearly
+    // foreign rows. RouteResolver remains authoritative for the provider-scoped
+    // wire model and custom-endpoint passthrough contract.
     let raw_selected_model = request_model
         .filter(|m| !m.trim().is_empty())
         .map(str::to_string)
@@ -87,11 +79,23 @@ fn resolve_endpoint(
     let selected_model = if endpoint_owns_models {
         raw_selected_model
     } else {
-        let resolved = registry.resolve(Some(&raw_selected_model), Some(provider_kind));
-        if !resolved.used_fallback && resolved.resolved.provider == provider_kind {
-            resolved.resolved.id
-        } else {
-            raw_selected_model
+        match registry.resolve(Some(&raw_selected_model), Some(provider_kind)) {
+            Ok(resolved)
+                if !resolved.used_fallback && resolved.resolved.provider == provider_kind =>
+            {
+                resolved.resolved.id
+            }
+            Err(_) if registry.is_known_for_other_provider(&raw_selected_model, provider_kind) => {
+                return Err(RouteError::ForeignModelForDirectProvider {
+                    provider: provider_kind.as_str().into(),
+                    model: raw_selected_model,
+                });
+            }
+            // Registry metadata is advisory. An unknown future id stays in the
+            // selected provider's scope, where RouteResolver either accepts the
+            // provider's pass-through contract or rejects the model. It never
+            // borrows another provider's default or credentials.
+            Ok(_) | Err(_) => raw_selected_model,
         }
     };
     let route = RouteResolver::new().resolve(&RouteRequest {
@@ -158,31 +162,6 @@ fn resolve_endpoint(
         insecure_skip_tls_verify,
         wire_format,
     })
-}
-
-/// Prefer the configured provider when a model id/alias exists on more than
-/// one provider. Only a genuine scoped miss may infer a different registry
-/// provider. This keeps `deepseek-v4-pro` on a configured OpenRouter route
-/// while still allowing a DeepSeek default to route an unambiguous `inkling`
-/// request to Together.
-fn inferred_provider_for_model(
-    registry: &ModelRegistry,
-    configured_provider: ProviderKind,
-    model_name: &str,
-) -> Option<ProviderKind> {
-    // OpenCode Go is an explicit Chat-only provider scope. A same-named model
-    // on OpenRouter/MiniMax must not escape that scope through the registry's
-    // global inference; RouteResolver owns the authoritative Go allowlist and
-    // will reject Messages-only ids.
-    if configured_provider == ProviderKind::OpencodeGo {
-        return Some(configured_provider);
-    }
-    let scoped = registry.resolve(Some(model_name), Some(configured_provider));
-    if !scoped.used_fallback && scoped.resolved.provider == configured_provider {
-        return Some(configured_provider);
-    }
-    let global = registry.resolve(Some(model_name), None);
-    (!global.used_fallback).then_some(global.resolved.provider)
 }
 
 fn resolve_upstream_api_key(
@@ -626,7 +605,7 @@ api_key = "arcee-configured-key"
         let config_path = tmp.path().join("config.toml");
         let config_content = format!(
             r#"
-provider = "deepseek"
+provider = "together"
 
 [providers.together]
 base_url = "{mock_base_url}"
@@ -845,20 +824,23 @@ api_key = {provider_api_key:?}
     }
 
     #[test]
-    fn official_together_inkling_aliases_resolve_to_the_exact_wire_model() {
+    fn providerless_together_aliases_are_rejected_under_deepseek_authority() {
         let config = ConfigToml::default();
         let registry = ModelRegistry::default();
 
         for requested in ["inkling", "together-inkling", "thinkingmachines/inkling"] {
-            let endpoint =
-                resolve_endpoint(&config, &registry, Some(requested)).expect("Inkling route");
-            assert_eq!(endpoint.provider, ProviderKind::Together, "{requested}");
-            assert_eq!(endpoint.model, "thinkingmachines/inkling", "{requested}");
+            assert!(
+                matches!(
+                    resolve_endpoint(&config, &registry, Some(requested)),
+                    Err(RouteError::ForeignModelForDirectProvider { .. })
+                ),
+                "model text must not switch the configured DeepSeek route to Together: {requested}"
+            );
         }
     }
 
     #[test]
-    fn shared_alias_prefers_the_configured_provider_before_global_inference() {
+    fn shared_alias_stays_inside_the_configured_provider() {
         let config = ConfigToml {
             provider: ProviderKind::Openrouter,
             ..ConfigToml::default()
@@ -869,6 +851,94 @@ api_key = {provider_api_key:?}
                 .expect("configured-provider route");
 
         assert_eq!(endpoint.provider, ProviderKind::Openrouter);
+    }
+
+    #[test]
+    fn unknown_model_under_zai_never_infers_deepseek_provider_authority() {
+        let config = ConfigToml {
+            provider: ProviderKind::Zai,
+            ..ConfigToml::default()
+        };
+        let registry = ModelRegistry::default();
+
+        let endpoint = resolve_endpoint(&config, &registry, Some("totally-unknown-model"))
+            .expect("unknown future id stays inside explicit Z.ai authority");
+        assert_eq!(endpoint.provider, ProviderKind::Zai);
+        assert_eq!(endpoint.model, "totally-unknown-model");
+        assert_eq!(endpoint.api_key, None);
+    }
+
+    #[test]
+    fn known_deepseek_model_under_zai_is_rejected_instead_of_switching_credentials() {
+        let mut config = ConfigToml {
+            provider: ProviderKind::Zai,
+            ..ConfigToml::default()
+        };
+        config.providers.zai.api_key = Some("zai-only-key".to_string());
+        config.providers.deepseek.api_key = Some("must-not-be-selected".to_string());
+
+        assert!(matches!(
+            resolve_endpoint(
+                &config,
+                &ModelRegistry::default(),
+                Some("deepseek-reasoner")
+            ),
+            Err(RouteError::ForeignModelForDirectProvider { .. })
+        ));
+    }
+
+    #[test]
+    fn configured_together_authority_canonicalizes_its_own_inkling_aliases() {
+        let config = ConfigToml {
+            provider: ProviderKind::Together,
+            ..ConfigToml::default()
+        };
+
+        for requested in ["inkling", "together-inkling", "thinkingmachines/inkling"] {
+            let endpoint = resolve_endpoint(&config, &ModelRegistry::default(), Some(requested))
+                .expect("configured Together route");
+            assert_eq!(endpoint.provider, ProviderKind::Together, "{requested}");
+            assert_eq!(endpoint.model, "thinkingmachines/inkling", "{requested}");
+        }
+    }
+
+    #[test]
+    fn configured_provider_is_required_for_each_official_alias() {
+        let registry = ModelRegistry::default();
+
+        for (requested, provider, expected) in [
+            (
+                "qwen3.7-plus",
+                ProviderKind::Openrouter,
+                "qwen/qwen3.7-plus",
+            ),
+            ("gpt53-codex", ProviderKind::Openai, "gpt-5.3-codex"),
+            ("arcee-trinity-mini", ProviderKind::Arcee, "trinity-mini"),
+        ] {
+            let config = ConfigToml {
+                provider,
+                ..ConfigToml::default()
+            };
+            let endpoint = resolve_endpoint(&config, &registry, Some(requested))
+                .expect("provider-owned known alias route");
+            assert_eq!(endpoint.provider, provider, "{requested}");
+            assert_eq!(endpoint.model, expected, "{requested}");
+        }
+    }
+
+    #[test]
+    fn default_deepseek_route_cannot_claim_foreign_official_aliases() {
+        let config = ConfigToml::default();
+
+        for requested in ["qwen3.7-plus", "gpt53-codex", "arcee-trinity-mini"] {
+            assert!(
+                matches!(
+                    resolve_endpoint(&config, &ModelRegistry::default(), Some(requested)),
+                    Err(RouteError::ForeignModelForDirectProvider { .. })
+                ),
+                "{requested} must not select another provider from model text"
+            );
+        }
     }
 
     #[test]
@@ -957,7 +1027,7 @@ api_key = {provider_api_key:?}
     }
 
     #[test]
-    fn root_auth_and_headers_do_not_bleed_across_inferred_providers() {
+    fn foreign_model_is_rejected_before_credentials_or_headers_can_cross() {
         let mut config = ConfigToml {
             provider: ProviderKind::Deepseek,
             auth_mode: Some("none".to_string()),
@@ -969,34 +1039,10 @@ api_key = {provider_api_key:?}
         );
         config.providers.together.api_key = Some("together-key".to_string());
 
-        let endpoint = resolve_endpoint(&config, &ModelRegistry::default(), Some("inkling"))
-            .expect("Together route");
-
-        assert_eq!(endpoint.provider, ProviderKind::Together);
-        assert!(!endpoint.auth_disabled);
-        assert_eq!(endpoint.api_key.as_deref(), Some("together-key"));
-        assert!(!endpoint.http_headers.contains_key("X-Root-Route"));
-    }
-
-    #[test]
-    fn official_endpoints_forward_canonical_registry_wire_ids() {
-        let config = ConfigToml::default();
-        let registry = ModelRegistry::default();
-
-        for (requested, provider, expected) in [
-            (
-                "qwen3.7-plus",
-                ProviderKind::Openrouter,
-                "qwen/qwen3.7-plus",
-            ),
-            ("gpt53-codex", ProviderKind::Openai, "gpt-5.3-codex"),
-            ("arcee-trinity-mini", ProviderKind::Arcee, "trinity-mini"),
-        ] {
-            let endpoint =
-                resolve_endpoint(&config, &registry, Some(requested)).expect("known alias route");
-            assert_eq!(endpoint.provider, provider, "{requested}");
-            assert_eq!(endpoint.model, expected, "{requested}");
-        }
+        assert!(matches!(
+            resolve_endpoint(&config, &ModelRegistry::default(), Some("inkling")),
+            Err(RouteError::ForeignModelForDirectProvider { .. })
+        ));
     }
 
     #[test]
@@ -1020,7 +1066,10 @@ api_key = {provider_api_key:?}
 
     #[test]
     fn custom_endpoint_preserves_known_registry_alias_verbatim() {
-        let mut config = ConfigToml::default();
+        let mut config = ConfigToml {
+            provider: ProviderKind::Openrouter,
+            ..ConfigToml::default()
+        };
         config
             .providers
             .for_provider_mut(ProviderKind::Openrouter)

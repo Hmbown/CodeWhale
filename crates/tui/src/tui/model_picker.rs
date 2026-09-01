@@ -300,7 +300,9 @@ impl ModelPickerView {
             .collect();
         let mut default_visible_rows: Vec<_> = model_rows
             .iter()
-            .filter(|row| model_row_visible_in_view(row, ModelListView::Configured))
+            .filter(|row| {
+                model_row_visible_in_view(row, ModelListView::Configured, app.api_provider)
+            })
             .collect();
         // Selection indices must be calculated in the same order that the
         // configured view renders. Pinned rows are sorted to the top by
@@ -415,7 +417,7 @@ impl ModelPickerView {
             .filter(|row| {
                 if query.is_empty() {
                     // Empty query: view scope only (Configured stays conservative).
-                    model_row_visible_in_view(row, self.view)
+                    model_row_visible_in_view(row, self.view, self.initial_provider)
                 } else {
                     // Typed filter searches the full lake so cross-provider
                     // routes remain discoverable without leaving Configured.
@@ -1837,10 +1839,16 @@ fn route_discriminator(display: &str, provider_id: &str) -> Option<String> {
 /// here: a token repeated on forty rows cannot tell them apart, and it is what
 /// pushed the differentiating tokens off the end of the line. Facts the
 /// registry does not know are omitted rather than guessed.
-/// The catalog model family for a provider/model row, when the catalog
-/// states one. Used for Provider → family → model grouping; unknown families
-/// render no header (never a guessed label).
+/// The picker section label for a provider/model row.
+///
+/// Catalog families are useful grouping metadata, but they are not model names.
+/// DeepSeek has published both `deepseek` and `deepseek-thinking` as family
+/// values for its current V4 models, so keep its picker heading stable and
+/// provider-facing rather than exposing either implementation detail.
 fn catalog_family_for(provider: ApiProvider, model_id: &str) -> Option<String> {
+    if provider == ApiProvider::Deepseek {
+        return Some(provider.display_name().to_string());
+    }
     crate::provider_lake::catalog_offering_for_model(provider, model_id)
         .and_then(|offering| offering.family)
 }
@@ -1920,9 +1928,13 @@ fn fit_meta_chips(chips: &[String], width: usize) -> String {
 }
 
 /// Whether a model row shows in the active catalog view (#3830 / #4115).
-fn model_row_visible_in_view(row: &ModelPickerRow, view: ModelListView) -> bool {
+fn model_row_visible_in_view(
+    row: &ModelPickerRow,
+    view: ModelListView,
+    active_provider: ApiProvider,
+) -> bool {
     match view {
-        ModelListView::Configured => model_row_visible_by_default(row),
+        ModelListView::Configured => model_row_visible_by_default(row, active_provider),
         ModelListView::Catalog => true,
         ModelListView::Recent
         | ModelListView::Coding
@@ -1936,11 +1948,11 @@ fn model_row_visible_in_view(row: &ModelPickerRow, view: ModelListView) -> bool 
 }
 
 /// Whether a model row shows up without the user typing a search query
-/// (#3830): `auto`, the active provider's own rows, and any other
-/// provider's rows once that provider is "configured" — same definition the
-/// `/provider` manager's default view uses.
-fn model_row_visible_by_default(row: &ModelPickerRow) -> bool {
-    row.provider.is_none() || row.enabled
+/// (#3830): `auto`, every catalog row for the active provider, and rows for
+/// other providers once those providers are configured — the selected route
+/// stays complete while cross-provider choices remain conservative.
+fn model_row_visible_by_default(row: &ModelPickerRow, active_provider: ApiProvider) -> bool {
+    row.provider.is_none() || row.provider == Some(active_provider) || row.enabled
 }
 
 fn sort_model_rows_for_view(
@@ -2007,7 +2019,10 @@ fn offering_for_row(row: &ModelPickerRow) -> Option<codewhale_config::catalog::C
 
 fn offering_fetched_at(row: &ModelPickerRow) -> u64 {
     match offering_for_row(row).map(|o| o.source) {
-        Some(CatalogSource::Live { fetched_at, .. }) => fetched_at,
+        Some(
+            CatalogSource::Live { fetched_at, .. }
+            | CatalogSource::CodewhaleLive { fetched_at, .. },
+        ) => fetched_at,
         _ => 0,
     }
 }
@@ -2304,9 +2319,17 @@ fn render_picker_model_hint(
         PickerPricing::Unknown => parts.push("price unknown".to_string()),
     }
     match metadata.source.as_ref() {
-        Some(CatalogSource::Live { .. }) => parts.push("live".to_string()),
-        Some(CatalogSource::Bundled) => parts.push("bundled".to_string()),
-        Some(CatalogSource::UserOverride) => parts.push("override".to_string()),
+        Some(
+            CatalogSource::Live { .. }
+            | CatalogSource::ModelsDevLive { .. }
+            | CatalogSource::CodewhaleLive { .. },
+        ) => parts.push("live".to_string()),
+        Some(CatalogSource::Bundled | CatalogSource::CodewhaleBundled { .. }) => {
+            parts.push("bundled".to_string())
+        }
+        Some(CatalogSource::ConfigOverride | CatalogSource::UserOverride) => {
+            parts.push("override".to_string())
+        }
         None => {}
     }
     if provider == Some(ApiProvider::OpenaiCodex) {
@@ -2441,7 +2464,9 @@ impl ModalView for ModelPickerView {
             {
                 self.explain_unselectable_selection()
             }
-            KeyCode::Char('p') if key.modifiers.is_empty() && self.query.is_empty() => {
+            // Pinning must never steal the first character of a route search:
+            // use the explicitly shifted key advertised in the footer.
+            KeyCode::Char('P') if key.modifiers == KeyModifiers::SHIFT && self.query.is_empty() => {
                 let rows = self.visible_model_rows();
                 let Some(row) = rows.get(self.selected_model_idx) else {
                     return ViewAction::None;
@@ -2461,13 +2486,9 @@ impl ModalView for ModelPickerView {
             KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) && self.query.is_empty() => {
                 self.emit_pin_move(1)
             }
-            // Cycle catalog views (#4115). Handled before the query-typing arm
-            // so `a`/`A` always advances the view instead of filtering.
-            KeyCode::Char(c)
-                if key.modifiers.is_empty()
-                    && self.query.is_empty()
-                    && c.eq_ignore_ascii_case(&'a') =>
-            {
+            // Cycle catalog views (#4115) without shadowing a typed provider
+            // name such as `anthropic` or `azure`.
+            KeyCode::Char('A') if key.modifiers == KeyModifiers::SHIFT && self.query.is_empty() => {
                 self.toggle_view();
                 ViewAction::None
             }
@@ -2539,11 +2560,9 @@ impl ModalView for ModelPickerView {
                 ViewAction::None
             }
             // Explicit readiness + catalog refresh (safe, non-destructive).
+            // Plain `r` remains a route-search character.
             KeyCode::Char('r') | KeyCode::Char('R')
-                if key
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL)
-                    || (key.modifiers.is_empty() && self.query.is_empty()) =>
+                if key.modifiers == crossterm::event::KeyModifiers::CONTROL =>
             {
                 ViewAction::Emit(ViewEvent::ModelPickerRefresh)
             }
@@ -2627,25 +2646,33 @@ impl ModelPickerView {
             ModelListView::Configured => tr(self.locale, MessageId::RouteBrowseCatalog),
             other => other.next().title_label().into(),
         };
-        let content = render_modal_footer(
-            inner,
-            buf,
-            &[
-                ActionHint::new("↑↓", tr(self.locale, MessageId::PickerActionMove)),
-                ActionHint::new("Tab", tr(self.locale, MessageId::PickerActionSwitch)),
-                ActionHint::new(
-                    tr(self.locale, MessageId::RouteActionType),
-                    tr(self.locale, MessageId::RouteActionSearchAnyModel),
-                ),
-                ActionHint::new("Enter", tr(self.locale, MessageId::PickerActionApply)),
-                ActionHint::new(
-                    "⇧D",
-                    tr(self.locale, MessageId::PickerActionSetStartupDefault),
-                ),
-                ActionHint::new("A", view_action),
-                ActionHint::new("Esc", tr(self.locale, MessageId::PickerActionCancel)),
-            ],
-        );
+        let mut footer_hints = vec![
+            ActionHint::new("↑↓", tr(self.locale, MessageId::PickerActionMove)),
+            ActionHint::new("Tab", tr(self.locale, MessageId::PickerActionSwitch)),
+            ActionHint::new(
+                tr(self.locale, MessageId::RouteActionType),
+                tr(self.locale, MessageId::RouteActionSearchAnyModel),
+            ),
+            ActionHint::new("Enter", tr(self.locale, MessageId::PickerActionApply)),
+            ActionHint::new(
+                "⇧D",
+                tr(self.locale, MessageId::PickerActionSetStartupDefault),
+            ),
+            ActionHint::new("⇧A", view_action),
+        ];
+        // Keep compact route modals focused on the core browse/apply actions;
+        // wider shells have room to disclose the pin action too.
+        if inner.width >= 72 {
+            footer_hints.push(ActionHint::new(
+                "⇧P",
+                tr(self.locale, MessageId::PickerActionPin),
+            ));
+        }
+        footer_hints.push(ActionHint::new(
+            "Esc",
+            tr(self.locale, MessageId::PickerActionCancel),
+        ));
+        let content = render_modal_footer(inner, buf, &footer_hints);
 
         let shell = ratatui::layout::Layout::default()
             .direction(ratatui::layout::Direction::Vertical)
@@ -2957,4 +2984,126 @@ fn default_picker_effort_idx(
         .iter()
         .position(|effort| *effort == default_effort)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model_row(provider: ApiProvider, enabled: bool) -> ModelPickerRow {
+        ModelPickerRow {
+            id: "model".to_string(),
+            provider: Some(provider),
+            provider_identity: None,
+            hint: String::new(),
+            metadata: EffectivePickerMetadata::default(),
+            selectable: true,
+            blocked_reason: None,
+            enabled,
+        }
+    }
+
+    fn test_picker() -> ModelPickerView {
+        ModelPickerView {
+            initial_model: "model".to_string(),
+            previous_model: "model".to_string(),
+            initial_provider: ApiProvider::Openai,
+            initial_effort: ReasoningEffort::Auto,
+            selected_effort_request: ReasoningEffort::Auto,
+            active_accepts_custom_model_ids: false,
+            query: String::new(),
+            selected_model_idx: 0,
+            selected_effort_idx: 0,
+            focus: Pane::Model,
+            show_custom_model_row: false,
+            model_rows: vec![model_row(ApiProvider::Openai, true)],
+            route_config: Config::default(),
+            provider_health: Default::default(),
+            view: ModelListView::Configured,
+            configured_providers: Vec::new(),
+            row_hitboxes: RefCell::new(Vec::new()),
+            last_mouse_selected: None,
+            locale: Locale::En,
+            pinned_models: Vec::new(),
+        }
+    }
+
+    fn render_text(picker: &ModelPickerView, width: u16, height: u16) -> String {
+        let area = Rect::new(0, 0, width, height);
+        let mut buffer = Buffer::empty(area);
+        picker.render(area, &mut buffer);
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn deepseek_picker_heading_hides_legacy_family_metadata() {
+        assert_eq!(
+            catalog_family_for(ApiProvider::Deepseek, "deepseek-v4-pro").as_deref(),
+            Some("DeepSeek")
+        );
+    }
+
+    #[test]
+    fn configured_view_keeps_active_provider_catalog_models_visible() {
+        let row = model_row(ApiProvider::Deepseek, false);
+
+        assert!(model_row_visible_by_default(&row, ApiProvider::Deepseek));
+        assert!(!model_row_visible_by_default(&row, ApiProvider::Openai));
+    }
+
+    #[test]
+    fn lowercase_picker_action_letters_begin_a_model_search() {
+        for ch in ['a', 'p', 'r'] {
+            let mut picker = test_picker();
+            assert!(matches!(
+                picker.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+                ViewAction::None
+            ));
+            assert_eq!(picker.query, ch.to_string(), "{ch} must begin a search");
+            assert_eq!(picker.view, ModelListView::Configured);
+        }
+    }
+
+    #[test]
+    fn shifted_picker_actions_cycle_views_pin_and_refresh_explicitly() {
+        let mut picker = test_picker();
+
+        assert!(matches!(
+            picker.handle_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT)),
+            ViewAction::None
+        ));
+        assert_eq!(picker.view, ModelListView::Catalog);
+        assert!(picker.query.is_empty());
+
+        assert!(matches!(
+            picker.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT)),
+            ViewAction::Emit(ViewEvent::ModelPickerTogglePin {
+                provider: ApiProvider::Openai,
+                provider_id: None,
+                model,
+            }) if model == "model"
+        ));
+        assert!(picker.query.is_empty());
+
+        assert!(matches!(
+            picker.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)),
+            ViewAction::Emit(ViewEvent::ModelPickerRefresh)
+        ));
+    }
+
+    #[test]
+    fn wide_picker_footer_advertises_shifted_view_and_pin_actions() {
+        let picker = test_picker();
+        let text = render_text(&picker, 100, 30);
+
+        assert!(text.contains("⇧A"), "missing shifted view hint: {text}");
+        assert!(text.contains("⇧P"), "missing shifted pin hint: {text}");
+    }
 }

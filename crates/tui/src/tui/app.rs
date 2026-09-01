@@ -24,7 +24,7 @@ use crate::core::authority::{ModeSessionPrefs, base_policy_for_mode};
 use crate::core::events::TurnRoute;
 use crate::hooks::{HookContext, HookEvent, HookExecutor, HookResult};
 use crate::localization::{Locale, MessageId, resolve_locale, tr};
-use crate::models::{Message, SystemPrompt, Tool};
+use crate::models::{Message, SystemPrompt, Tool, Usage};
 use crate::palette::{self, UiTheme};
 use crate::pricing::{CostCurrency, CostEstimate};
 use crate::resource_telemetry::TokenThroughput;
@@ -61,6 +61,7 @@ pub(crate) use composer::{InputHistoryDraft, char_count};
 pub(crate) use composer::{
     MAX_SUBMITTED_INPUT_CHARS, next_grapheme_boundary, prev_grapheme_boundary,
 };
+pub(crate) use status::StatusToastKind;
 pub use status::{StatusToast, StatusToastLevel};
 pub use types::{
     AppAction, AppMode, AppModeUi, AutomationAction, ComposerDensity, ComposerSubmitAction,
@@ -110,6 +111,12 @@ pub(crate) struct ActiveCompaction {
 #[derive(Debug, Default)]
 pub(crate) struct ContextTokenCache {
     pub(crate) message_tokens: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompletedAssistantOutputReceipt {
+    history_index: usize,
+    text: String,
 }
 
 impl ContextTokenCache {
@@ -538,8 +545,24 @@ pub struct LaunchState {
     pub status: Option<String>,
     pub workspace_session_count: usize,
     pub worktree_available: bool,
-    /// Row hitboxes from the most recent launch render.
+    /// Row hitboxes from the most recent launch render. Index order is
+    /// focus order: the three quick-action rows (`index == launch.selected`
+    /// for 0–2), so the mouse click path and the keyboard share dispatch.
     pub row_areas: Vec<Rect>,
+    /// Option-strip tile hitboxes from the most recent launch render
+    /// (Tideline startup stage), with their dispatch intent.
+    pub option_areas: Vec<(crate::tui::underwater::LaunchOptionAction, Rect)>,
+    /// Whether launch keys type into the pre-session composer instead of
+    /// driving the menu. The composer itself is the session `App`'s own
+    /// `ComposerState` — this flag only decides where keystrokes go.
+    pub composer_focus: bool,
+    /// Composer input-row hitbox from the most recent launch render (the
+    /// docked strip below the option strip). A click here focuses the
+    /// composer, exactly like the Tab key.
+    pub composer_area: Option<Rect>,
+    /// Send-glyph hitbox inside the composer row. A click here submits the
+    /// composed message through the normal dispatch path.
+    pub send_area: Option<Rect>,
 }
 
 impl LaunchState {
@@ -574,6 +597,10 @@ impl LaunchState {
             workspace_session_count,
             worktree_available,
             row_areas: Vec::new(),
+            option_areas: Vec::new(),
+            composer_focus: false,
+            composer_area: None,
+            send_area: None,
         }
     }
 }
@@ -686,6 +713,21 @@ impl Default for ComposerState {
     }
 }
 
+/// Compatibility name retained for the first Tideline header slice. New
+/// surfaces register [`crate::tui::tideline::InteractionAction`] directly.
+pub type HeaderActionTarget = crate::tui::tideline::InteractionAction;
+
+/// A header target painted in the latest frame.
+///
+/// The visible chrome owns placement; input owns dispatch. Keeping the
+/// rectangular target alongside its typed action gives mouse and keyboard
+/// routes one shared destination without a second navigation system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeaderHitbox {
+    pub area: Rect,
+    pub target: HeaderActionTarget,
+}
+
 /// Viewport/scroll state — fields related to transcript scrolling and caching.
 pub struct ViewportState {
     pub transcript_scroll: TranscriptScroll,
@@ -697,12 +739,26 @@ pub struct ViewportState {
     pub transcript_scrollbar_dragging: bool,
     pub last_transcript_area: Option<Rect>,
     pub last_composer_area: Option<Rect>,
+    /// Selectable targets from the latest painted frame. Cleared before every
+    /// render so resized or hidden controls can never swallow a click.
+    pub interaction_targets: crate::tui::tideline::InteractionRegistry,
+    /// Last left-click trace over the composer, for double/triple-click
+    /// word/line selection (crossterm does not decode click counts).
+    pub composer_click_trace: Option<crate::tui::mouse_ui::ComposerClickTrace>,
     /// Painted band occupied by the active inline approval. Stored so wheel
     /// routing can prefer the visible card over side surfaces underneath it.
     pub last_approval_area: Option<Rect>,
     /// WorkflowPanel rect above the composer (#4121), for mouse toggle/cancel.
     pub last_workflow_panel_area: Option<Rect>,
     pub last_workflow_cancel_area: Option<Rect>,
+    /// Topbar segment rects (Tideline shell, spec §6), recorded at render so
+    /// hover and — in a follow-up slice — click routing can hit-test the
+    /// painted cells. Mirrors the workflow-panel cancel-area storage pattern.
+    pub last_topbar_hitboxes: Vec<crate::tui::topbar::TopbarHitbox>,
+    /// Live plugin CTA row above the composer, plus review/dismiss hitboxes.
+    pub last_plugin_cta_area: Option<Rect>,
+    pub last_plugin_cta_review_area: Option<Rect>,
+    pub last_plugin_cta_dismiss_area: Option<Rect>,
     pub last_transcript_top: usize,
     pub last_transcript_visible: usize,
     pub last_transcript_total: usize,
@@ -731,9 +787,15 @@ impl Default for ViewportState {
             transcript_scrollbar_dragging: false,
             last_transcript_area: None,
             last_composer_area: None,
+            interaction_targets: crate::tui::tideline::InteractionRegistry::default(),
+            composer_click_trace: None,
             last_approval_area: None,
             last_workflow_panel_area: None,
             last_workflow_cancel_area: None,
+            last_topbar_hitboxes: Vec::new(),
+            last_plugin_cta_area: None,
+            last_plugin_cta_review_area: None,
+            last_plugin_cta_dismiss_area: None,
             last_transcript_top: 0,
             last_transcript_visible: 0,
             last_transcript_total: 0,
@@ -772,11 +834,26 @@ pub struct HostGoalState {
 pub struct SessionState {
     pub session_cost: f64,
     pub session_cost_cny: f64,
+    /// Priced estimate accumulated from the in-flight turn's per-step
+    /// `TurnUsage` receipts, so the cost surfaces move while a long agentic
+    /// turn is still running. Display-only: cleared at `TurnComplete`, which
+    /// re-prices the whole turn's cumulative usage authoritatively into
+    /// `session_cost`. Never persisted.
+    pub pending_turn_cost: f64,
+    pub pending_turn_cost_cny: f64,
+    /// Display-only per-step token deltas for the active turn. These are
+    /// cleared at `TurnComplete` before authoritative cumulative totals land.
+    pub pending_turn_total_tokens: u32,
+    pub pending_turn_input_tokens: u32,
+    pub pending_turn_output_tokens: u32,
+    pub pending_turn_cache_hit_tokens: u32,
+    pub pending_turn_cache_miss_tokens: u32,
+    pub pending_turn_cache_write_tokens: u32,
     pub subagent_cost: f64,
     pub subagent_cost_cny: f64,
-    /// Child usage envelopes already accrued, keyed by child and the stable
-    /// provider-response identity carried by `TokenUsage`.
-    pub subagent_usage_sources: HashSet<(String, String)>,
+    /// Redacted provider-response identities already accrued. The same
+    /// fingerprints are persisted by the session and worker projections.
+    pub subagent_usage_sources: HashSet<String>,
     pub displayed_cost_high_water: f64,
     pub displayed_cost_high_water_cny: f64,
     pub last_prompt_tokens: Option<u32>,
@@ -955,6 +1032,14 @@ impl Default for SessionState {
         Self {
             session_cost: 0.0,
             session_cost_cny: 0.0,
+            pending_turn_cost: 0.0,
+            pending_turn_cost_cny: 0.0,
+            pending_turn_total_tokens: 0,
+            pending_turn_input_tokens: 0,
+            pending_turn_output_tokens: 0,
+            pending_turn_cache_hit_tokens: 0,
+            pending_turn_cache_miss_tokens: 0,
+            pending_turn_cache_write_tokens: 0,
             subagent_cost: 0.0,
             subagent_cost_cny: 0.0,
             subagent_usage_sources: HashSet::new(),
@@ -1003,7 +1088,84 @@ impl SessionState {
         self.total_cache_miss_tokens = 0;
         self.total_cache_write_tokens = 0;
         self.total_output_tokens = 0;
+        self.clear_pending_turn_usage();
         self.last_output_throughput = None;
+    }
+
+    /// Add one provider-reported model-call receipt to the display-only
+    /// in-flight ledger. The cache split mirrors the authoritative
+    /// `TurnComplete` accounting path.
+    pub fn accrue_pending_turn_usage(&mut self, usage: &Usage) {
+        self.pending_turn_total_tokens = self
+            .pending_turn_total_tokens
+            .saturating_add(usage.input_tokens.saturating_add(usage.output_tokens));
+        self.pending_turn_input_tokens = self
+            .pending_turn_input_tokens
+            .saturating_add(usage.input_tokens);
+        self.pending_turn_output_tokens = self
+            .pending_turn_output_tokens
+            .saturating_add(usage.output_tokens);
+        if usage.prompt_cache_hit_tokens.is_some()
+            || usage.prompt_cache_miss_tokens.is_some()
+            || usage.prompt_cache_write_tokens.is_some()
+        {
+            let classes = crate::pricing::token_usage_for_pricing(usage);
+            self.pending_turn_cache_hit_tokens = self
+                .pending_turn_cache_hit_tokens
+                .saturating_add(u32::try_from(classes.cache_read).unwrap_or(u32::MAX));
+            self.pending_turn_cache_miss_tokens = self
+                .pending_turn_cache_miss_tokens
+                .saturating_add(u32::try_from(classes.input).unwrap_or(u32::MAX));
+            self.pending_turn_cache_write_tokens = self
+                .pending_turn_cache_write_tokens
+                .saturating_add(u32::try_from(classes.cache_write).unwrap_or(u32::MAX));
+        }
+    }
+
+    /// Clear the active turn's display-only token deltas before the
+    /// authoritative cumulative usage is reconciled.
+    pub fn clear_pending_turn_usage(&mut self) {
+        self.pending_turn_total_tokens = 0;
+        self.pending_turn_input_tokens = 0;
+        self.pending_turn_output_tokens = 0;
+        self.pending_turn_cache_hit_tokens = 0;
+        self.pending_turn_cache_miss_tokens = 0;
+        self.pending_turn_cache_write_tokens = 0;
+    }
+
+    pub fn displayed_total_tokens(&self) -> u32 {
+        self.total_tokens
+            .saturating_add(self.pending_turn_total_tokens)
+    }
+
+    pub fn displayed_total_conversation_tokens(&self) -> u32 {
+        self.total_conversation_tokens
+            .saturating_add(self.pending_turn_total_tokens)
+    }
+
+    pub fn displayed_total_input_tokens(&self) -> u32 {
+        self.total_input_tokens
+            .saturating_add(self.pending_turn_input_tokens)
+    }
+
+    pub fn displayed_total_output_tokens(&self) -> u32 {
+        self.total_output_tokens
+            .saturating_add(self.pending_turn_output_tokens)
+    }
+
+    pub fn displayed_total_cache_hit_tokens(&self) -> u32 {
+        self.total_cache_hit_tokens
+            .saturating_add(self.pending_turn_cache_hit_tokens)
+    }
+
+    pub fn displayed_total_cache_miss_tokens(&self) -> u32 {
+        self.total_cache_miss_tokens
+            .saturating_add(self.pending_turn_cache_miss_tokens)
+    }
+
+    pub fn displayed_total_cache_write_tokens(&self) -> u32 {
+        self.total_cache_write_tokens
+            .saturating_add(self.pending_turn_cache_write_tokens)
     }
 }
 
@@ -1044,7 +1206,7 @@ pub type DispatchApplyFn = Box<
 #[allow(clippy::struct_excessive_bools)]
 /// A route change made in-session that the user has not yet decided how to
 /// save. Route changes are temporary by default; persisting them requires an
-/// explicit choice (Update this Fleet / Save as a new Fleet / Remember as my
+/// explicit choice (Update this Pod / Save as a new Pod / Remember as my
 /// default / Keep for this session only).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingRouteSave {
@@ -1132,6 +1294,10 @@ pub struct App {
     /// Monotonic counter used to issue fresh per-cell revisions.
     pub next_history_revision: u64,
     pub api_messages: Vec<Message>,
+    /// User-visible assistant text that crossed typed completion boundaries.
+    /// Receipts are aligned to transcript cells because provider context can
+    /// be compacted or purged without changing what remains visible.
+    completed_assistant_outputs: Vec<CompletedAssistantOutputReceipt>,
     pub(crate) context_token_cache: RefCell<ContextTokenCache>,
     /// Typed account-owned browser relay for this exact TUI session.
     pub remote_control: crate::remote_control::RemoteControlController,
@@ -1181,6 +1347,19 @@ pub struct App {
     pub sticky_status: Option<StatusToast>,
     /// Last status text already promoted from `status_message` into toast state.
     pub last_status_message_seen: Option<String>,
+    /// Prevents the same pressure condition from immediately re-arming after
+    /// the operator explicitly dismisses its sticky warning. Reset when the
+    /// pressure falls below the warning threshold or compaction starts.
+    pub context_pressure_warning_dismissed: Option<crate::context_budget::PressureLevel>,
+    /// Last on-disk plugin catalog stamp we already nudged `/plugin reload` for.
+    pub plugin_reload_nudge_stamp: Option<crate::plugins::PluginCatalogStamp>,
+    /// Plugin names already toasted for this session's prompt matching.
+    pub plugin_prompt_suggest_names: HashSet<String>,
+    pub plugin_prompt_suggest_count: u8,
+    /// Last idle catalog fingerprint poll, so disk changes can surface between turns.
+    pub last_plugin_catalog_poll: Option<Instant>,
+    /// Live composer plugin CTA (debounce + one match, never auto-install).
+    pub plugin_cta: crate::tui::plugin_suggestions::PluginCtaState,
     pub model: String,
     /// Persisted model selections by provider name. Loaded from settings so
     /// `/model` and the picker can surface saved provider-specific choices.
@@ -1358,7 +1537,6 @@ pub struct App {
     pub calm_mode: bool,
     pub low_motion: bool,
     pub constrained_frame_rate: bool,
-    pub ocean_started_at: Instant,
     /// The ambient animation clock, in clamped milliseconds. Creature and
     /// water positions are pure functions of this value; advancing it by at
     /// most [`App::AMBIENT_MAX_STEP_MS`] per sampled frame keeps motion
@@ -1398,6 +1576,9 @@ pub struct App {
     pub launch: LaunchState,
     /// Mouse-selected launch action, consumed by the async UI loop.
     pub pending_launch_action: Option<crate::tui::underwater::LaunchAction>,
+    /// Mouse click on the live composer's `[↑]` send target. The async UI loop
+    /// consumes it through the same submit dispatcher as Enter.
+    pub pending_composer_submit: Option<ComposerSubmitChord>,
     /// Mouse-selected hotbar slot, consumed by the async UI loop.
     pub pending_hotbar_slot: Option<u8>,
     /// Whether the renderer should wrap each frame in DEC mode 2026
@@ -1579,6 +1760,9 @@ pub struct App {
     pub api_key_env_only: bool,
     // Hooks system
     pub hooks: HookExecutor,
+    /// Lifecycle event outbox (`[lifecycle_outbox]` config). Disabled
+    /// (all emits no-ops) when no path is configured.
+    pub lifecycle_outbox: codewhale_hooks::LifecycleOutbox,
     #[allow(dead_code)]
     pub yolo: bool,
     /// One-shot YOLO→Act+Bypass migration notice for this session (#0.8.68 M6).
@@ -1666,6 +1850,12 @@ pub struct App {
     pub status_items: Vec<crate::config::StatusItem>,
     /// Optional header items enabled from `tui.header_items` in `config.toml`
     /// at startup. Built-in header content remains independent of this list.
+    /// Unread since the classic header was superseded by the Tideline topbar
+    /// (2026-08-29): the topbar carries the context meter by default and the
+    /// token breakdown lives behind `/cost` (spec §3). The field stays so the
+    /// config surface keeps parsing; its reader returns with the classic
+    /// renderer deletion slice.
+    #[allow(dead_code)]
     pub header_items: Vec<crate::config::HeaderItem>,
     /// Project documentation (AGENTS.md or CLAUDE.md)
     #[allow(dead_code)]
@@ -1682,6 +1872,16 @@ pub struct App {
     pub coordination_detail: Option<crate::tools::subagent::CoordinationDetailProjection>,
     /// Last MCP manager/discovery snapshot shown in the UI.
     pub mcp_snapshot: Option<crate::mcp::McpManagerSnapshot>,
+    /// True while the engine-owned MCP boot connection pass is in flight.
+    /// Configured rows render as connecting until its snapshot lands.
+    pub mcp_initializing: bool,
+    /// Latest engine-owned MCP event generation applied to the UI.
+    pub mcp_snapshot_generation: u64,
+    /// The direct snapshot from a successful `/mcp` action supersedes any
+    /// queued event at `mcp_snapshot_generation`, but not a later generation.
+    pub mcp_snapshot_generation_invalidated: bool,
+    /// Enabled servers that have not settled in the current boot pass.
+    pub mcp_connecting: Vec<String>,
     /// Number of MCP servers declared in the user's config at app boot.
     /// Used by the footer chip (#502) so a count is visible even before
     /// the user runs `/mcp` for the first time. `0` hides the chip.
@@ -1766,6 +1966,16 @@ pub struct App {
     pub streaming_state: StreamingState,
     /// Live approximate output tokens for the current assistant stream.
     pub streaming_output_token_estimate: u64,
+    /// Provider-billed prompt tokens from the most recent parent model call
+    /// (per-step `TurnUsage`). The context meter takes the max of this and
+    /// the local estimate — the same rule the auto-compaction trigger uses —
+    /// so the two can never disagree about pressure (#5577). Cleared when
+    /// compaction rewrites history, since the receipt describes the
+    /// pre-compaction context.
+    pub last_billed_input_tokens: Option<u32>,
+    /// Last successful compaction, so `/context` and the inspector can name
+    /// the path and the last-round floor instead of looking empty.
+    pub last_compaction: Option<crate::compaction::LastCompactionSnapshot>,
     /// Accumulated reasoning text
     pub reasoning_buffer: String,
     /// Live reasoning header extracted from bold text
@@ -2084,8 +2294,8 @@ fn push_enabled_provider_model(
 }
 
 impl App {
-    /// Persist the pending session route as the explicit choice (`/fleet
-    /// save`, `/fleet save-as`, `/model save-default`). Returns the receipt
+    /// Persist the pending session route as the explicit choice (`/pod save`,
+    /// `/pod save-as`, `/model save-default`). Returns the receipt
     /// message naming the exact file written — or an error message when the
     /// write failed. Nothing is ever written without this explicit call.
     pub fn apply_route_save_choice(
@@ -2101,8 +2311,8 @@ impl App {
         match choice {
             RouteSaveChoice::UpdateFleet => {
                 let Some((name, scope)) = pending.fleet.clone() else {
-                    return "Nothing to update — no Fleet is selected. Use /fleet save-as to \
-                             save this route as a new Fleet."
+                    return "Nothing to update — no Pod is selected. Use /pod save-as to \
+                             save this route as a new Pod."
                         .to_string();
                 };
                 match crate::fleet::store::load_fleet_in_scope(&name, scope, &self.workspace) {
@@ -2114,16 +2324,16 @@ impl App {
                         });
                         match save_fleet(&fleet, scope, &self.workspace) {
                             Ok(path) => format!(
-                                "Fleet `{}` now runs on {route} — wrote {}",
+                                "Pod `{}` now runs on {route} — wrote {}",
                                 fleet.name,
                                 path.display()
                             ),
-                            Err(err) => format!("Fleet update failed: {err}"),
+                            Err(err) => format!("Pod update failed: {err}"),
                         }
                     }
                     Err(err) => format!(
-                        "Fleet update failed: {err} — the saved Fleet may have moved. Use \
-                         /fleet save-as to persist the route."
+                        "Pod update failed: {err} — the saved Pod may have moved. Use \
+                         /pod save-as to persist the route."
                     ),
                 }
             }
@@ -2139,7 +2349,7 @@ impl App {
                     display.clone(),
                     Some("Saved from a session route choice.".to_string()),
                 ) else {
-                    return "Could not create the Fleet.".to_string();
+                    return "Could not create the Pod.".to_string();
                 };
                 fleet.operator = Some(FleetOperator {
                     provider: pending.provider_identity.clone(),
@@ -2164,7 +2374,7 @@ impl App {
                             Err(err) => format!(" — selection failed: {err}"),
                         };
                         format!(
-                            "Saved route {route} as new Fleet `{}` — wrote {}{selected_note}",
+                            "Saved route {route} as new Pod `{}` — wrote {}{selected_note}",
                             display,
                             path.display()
                         )
@@ -3383,6 +3593,25 @@ impl App {
         }
     }
 
+    /// Fold one atomic background batch into the live session projection.
+    /// Returns whether the batch carried runtime-owned response identities and
+    /// therefore needs a fresh durable snapshot (it may have landed after the
+    /// ordinary TurnComplete save).
+    pub fn absorb_pending_background_cost(
+        &mut self,
+        pool: &crate::cost_status::PendingBackgroundCost,
+    ) -> bool {
+        let runtime_usage_arrived = !pool.usage_source_fingerprints.is_empty();
+        self.session
+            .subagent_usage_sources
+            .extend(pool.usage_source_fingerprints.iter().cloned());
+        if pool.estimate.is_positive() {
+            self.accrue_subagent_cost_estimate(pool.estimate);
+        }
+        self.absorb_background_cost_coverage(pool);
+        runtime_usage_arrived
+    }
+
     /// Clear every live cost-coverage counter.
     ///
     /// Used by `/new` and by the session-load path: loading a session must not
@@ -3413,6 +3642,31 @@ impl App {
         self.session.session_cost = total.usd;
         self.session.session_cost_cny = total.cny;
         self.refresh_displayed_cost_high_water();
+    }
+
+    /// Fold one in-flight model call's priced receipt into the pending-turn
+    /// estimate so cost surfaces move during a long agentic turn rather than
+    /// only when it completes. The turn's authoritative price still lands via
+    /// `accrue_session_cost_estimate` at `TurnComplete`; callers must
+    /// `clear_pending_turn_cost` there first so nothing counts twice.
+    pub fn accrue_pending_turn_cost_estimate(&mut self, estimate: CostEstimate) {
+        let total = CostEstimate {
+            usd: self.session.pending_turn_cost,
+            cny: self.session.pending_turn_cost_cny,
+        }
+        .saturating_add(estimate);
+        self.session.pending_turn_cost = total.usd;
+        self.session.pending_turn_cost_cny = total.cny;
+        self.refresh_displayed_cost_high_water();
+    }
+
+    /// Drop the in-flight turn's provisional estimate. Called at
+    /// `TurnComplete` (any outcome) immediately before the authoritative
+    /// cumulative price accrues; the display stays monotonic through the
+    /// swap via the high-water mark (#244).
+    pub fn clear_pending_turn_cost(&mut self) {
+        self.session.pending_turn_cost = 0.0;
+        self.session.pending_turn_cost_cny = 0.0;
     }
 
     /// Add `delta` to the running sub-agent cost and bump the displayed
@@ -3459,6 +3713,12 @@ impl App {
         metadata.cost.live_pricing_unusable_defects =
             self.session.cost_live_pricing_unusable_defects.clone();
         metadata.cost.route_receipts = self.session.cost_route_receipts.clone();
+        metadata.cost.usage_source_fingerprints = self
+            .session
+            .subagent_usage_sources
+            .iter()
+            .cloned()
+            .collect();
         // A session restored as legacy-unknown stays unknown when re-saved:
         // re-writing it as "recorded" would launder the missing evidence into an
         // apparently complete zero.
@@ -3475,6 +3735,10 @@ impl App {
             usd: self.session.session_cost,
             cny: self.session.session_cost_cny,
         }
+        .saturating_add(CostEstimate {
+            usd: self.session.pending_turn_cost,
+            cny: self.session.pending_turn_cost_cny,
+        })
         .saturating_add(CostEstimate {
             usd: self.session.subagent_cost,
             cny: self.session.subagent_cost_cny,
@@ -3504,6 +3768,10 @@ impl App {
                     cny: 0.0,
                 }
                 .saturating_add(CostEstimate {
+                    usd: self.session.pending_turn_cost,
+                    cny: 0.0,
+                })
+                .saturating_add(CostEstimate {
                     usd: self.session.subagent_cost,
                     cny: 0.0,
                 })
@@ -3517,6 +3785,10 @@ impl App {
                 }
                 .saturating_add(CostEstimate {
                     usd: 0.0,
+                    cny: self.session.pending_turn_cost_cny,
+                })
+                .saturating_add(CostEstimate {
+                    usd: 0.0,
                     cny: self.session.subagent_cost_cny,
                 })
                 .cny;
@@ -3525,10 +3797,14 @@ impl App {
         }
     }
 
+    /// The session's own display share: settled turns plus the in-flight
+    /// turn's provisional estimate (the running turn's money is session
+    /// money, so the sidebar breakdown keeps summing to the displayed total
+    /// mid-turn).
     pub fn session_cost_for_currency(&self, currency: CostCurrency) -> f64 {
         match self.cost_display_currency(currency) {
-            CostCurrency::Usd => self.session.session_cost,
-            CostCurrency::Cny => self.session.session_cost_cny,
+            CostCurrency::Usd => self.session.session_cost + self.session.pending_turn_cost,
+            CostCurrency::Cny => self.session.session_cost_cny + self.session.pending_turn_cost_cny,
         }
     }
 
@@ -3615,6 +3891,18 @@ impl App {
     /// `n` history cells. Every map key >= n is mapped to key - n; keys < n
     /// are dropped.
     fn shift_history_maps_down(&mut self, n: usize) {
+        // A folded-range placeholder is inserted at index 0 immediately
+        // after this shift, so surviving completed-output receipts move down
+        // by `n` and then forward by one.
+        self.completed_assistant_outputs.retain_mut(|receipt| {
+            if receipt.history_index >= n {
+                receipt.history_index = receipt.history_index - n + 1;
+                true
+            } else {
+                false
+            }
+        });
+
         // tool_cells: HashMap<String, usize>
         self.tool_cells.retain(|_, idx| {
             if *idx >= n {
@@ -3975,6 +4263,7 @@ impl App {
     pub fn clear_history(&mut self) {
         self.history.clear();
         self.history_revisions.clear();
+        self.completed_assistant_outputs.clear();
         self.context_references_by_cell.clear();
         self.session_context_references.clear();
         self.session_artifacts.clear();
@@ -3983,11 +4272,63 @@ impl App {
         self.needs_redraw = true;
     }
 
+    /// Record one user-visible assistant message after its typed completion
+    /// boundary. Interrupted salvage never calls this path.
+    pub(crate) fn record_completed_assistant_output(&mut self, history_index: usize, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        if let Some(receipt) = self
+            .completed_assistant_outputs
+            .iter_mut()
+            .find(|receipt| receipt.history_index == history_index)
+        {
+            receipt.text = text.to_string();
+            return;
+        }
+        self.completed_assistant_outputs
+            .push(CompletedAssistantOutputReceipt {
+                history_index,
+                text: text.to_string(),
+            });
+    }
+
+    /// Rebuild receipts only from the restored typed transcript projection.
+    /// `history_cells_from_message` has already routed repair receipts to
+    /// System cells and omitted interrupted assistant salvage.
+    pub(crate) fn rebuild_completed_assistant_outputs_from_restored_history(&mut self) {
+        self.completed_assistant_outputs = self
+            .history
+            .iter()
+            .enumerate()
+            .filter_map(|(history_index, cell)| match cell {
+                HistoryCell::Assistant {
+                    content,
+                    streaming: false,
+                } if !content.trim().is_empty() => Some(CompletedAssistantOutputReceipt {
+                    history_index,
+                    text: content.clone(),
+                }),
+                _ => None,
+            })
+            .collect();
+    }
+
+    pub(crate) fn completed_assistant_output_receipt(&self) -> Option<&str> {
+        self.completed_assistant_outputs
+            .iter()
+            .rev()
+            .find(|receipt| !receipt.text.trim().is_empty())
+            .map(|receipt| receipt.text.as_str())
+    }
+
     /// Pop the trailing history cell, keeping revisions in sync.
     pub fn pop_history(&mut self) -> Option<HistoryCell> {
         let cell = self.history.pop();
         if cell.is_some() {
             self.history_revisions.pop();
+            self.completed_assistant_outputs
+                .retain(|receipt| receipt.history_index < self.history.len());
             self.context_references_by_cell.remove(&self.history.len());
             self.rebuild_session_context_references();
             self.prune_transcript_index_state(self.history.len());
@@ -4011,6 +4352,8 @@ impl App {
         if self.history_revisions.len() > new_len {
             self.history_revisions.truncate(new_len);
         }
+        self.completed_assistant_outputs
+            .retain(|receipt| receipt.history_index < new_len);
         // Drop any auxiliary maps keyed on history indices that now point
         // past the new tail. We keep the rest intact so unaffected tool
         // cells continue to render correctly.

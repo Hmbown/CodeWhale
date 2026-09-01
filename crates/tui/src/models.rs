@@ -170,6 +170,11 @@ pub fn context_window_for_model(model: &str) -> Option<u32> {
         return Some(window);
     }
     let lower = model.to_lowercase();
+    // Concrete model facts take precedence over vendor-agnostic suffix
+    // inference (`k3-256k` means 262,144 tokens, not 256,000).
+    if let Some(window) = known_context_window_for_model(&lower) {
+        return Some(window);
+    }
     if let Some(explicit_window) = explicit_context_window_hint(&lower) {
         return Some(explicit_window);
     }
@@ -184,9 +189,6 @@ pub fn context_window_for_model(model: &str) -> Option<u32> {
     }
     if is_openai_codex_model(&lower) {
         return Some(400_000);
-    }
-    if let Some(window) = known_context_window_for_model(&lower) {
-        return Some(window);
     }
     if lower.contains("claude") {
         return Some(200_000);
@@ -229,11 +231,9 @@ fn known_context_window_for_model(model_lower: &str) -> Option<u32> {
         "moonshotai/kimi-k3" | "kimi-k3" | "opencode-go/kimi-k3" => {
             Some(KIMI_K3_CONTEXT_WINDOW_TOKENS)
         }
-        // Bare `k3` is the Kimi Code membership route id whose context is
-        // plan-tier dependent (256K on lower tiers, up to 1M on higher ones)
-        // — keep the safe floor, and never fall through to the 128K legacy
-        // default.
-        "k3" => Some(KIMI_CODE_K3_CONTEXT_WINDOW_TOKENS),
+        // Bare `k3` is plan-tier dependent; `k3-256k` is fixed at 256 KiTok.
+        // Neither may fall through to the generic suffix heuristic.
+        "k3" | "k3-256k" => Some(KIMI_CODE_K3_CONTEXT_WINDOW_TOKENS),
         // `kimi-k2.7-code-highspeed` is the same model on the direct
         // platform's high-speed tier (262,144 context), per
         // https://platform.kimi.ai/docs/pricing/chat-k27-code (2026-08-17).
@@ -258,15 +258,20 @@ fn known_context_window_for_model(model_lower: &str) -> Option<u32> {
         "z-ai/glm-5-turbo" | "glm-5-turbo" => Some(202_752),
         // GLM-5.3 limits are inherited from GLM-5.2 pending official Z.ai
         // release metadata (see `INHERITED FROM glm-5.2` in config/models.rs).
-        "z-ai/glm-5.2" | "glm-5.2" | "z-ai/glm-5.3" | "glm-5.3" => Some(1_000_000),
-        "minimax/minimax-m3" | "minimax-m3" | "qwen/qwen3.6-flash" | "qwen/qwen3.6-plus" => {
-            Some(1_000_000)
-        }
+        // GLM-5.3-Flash is the published 1M multimodal sibling (2026-08-26).
+        "z-ai/glm-5.2" | "glm-5.2" | "z-ai/glm-5.3" | "glm-5.3" | "z-ai/glm-5.3-flash"
+        | "glm-5.3-flash" => Some(1_000_000),
+        "minimax/minimax-m3" | "minimax-m3" | "qwen/qwen3.8-flash" | "qwen/qwen3.6-flash"
+        | "qwen/qwen3.6-plus" => Some(1_000_000),
         // Alibaba Cloud Model Studio (Token Plan console + curated catalog,
         // verified 2026-08-03): ~1M context. Never fall through to the 128K
         // legacy default — that number is the generation ceiling, not the window.
+        // Bare `qwen3.8-flash` is the OpenRouter short id (verified 2026-08-26
+        // against models.dev: 1M context / 131K output); Alibaba first-party
+        // does not list a flash row, so this is not a Model Studio default.
         "qwen3.8-max"
         | "qwen3.8-max-preview"
+        | "qwen3.8-flash"
         | "qwen3.7-plus"
         | "qwen3.7-max"
         | "qwen3.6-flash" => Some(1_000_000),
@@ -363,7 +368,7 @@ pub fn max_output_tokens_for_model(model: &str) -> Option<u32> {
         // default generation ceiling. The exact direct route's 1M maximum is
         // applied later with endpoint-aware provenance; membership and
         // neighboring routes must not inherit it.
-        "moonshotai/kimi-k3" | "kimi-k3" | "k3" | "opencode-go/kimi-k3" => {
+        "moonshotai/kimi-k3" | "kimi-k3" | "k3" | "k3-256k" | "opencode-go/kimi-k3" => {
             Some(KIMI_K3_DEFAULT_MAX_COMPLETION_TOKENS)
         }
         // Kimi K2.7 Code has a 256K context window but its documented default
@@ -390,10 +395,15 @@ pub fn max_output_tokens_for_model(model: &str) -> Option<u32> {
         | "qwen/qwen3.6-max-preview"
         | "qwen/qwen3.6-plus" => Some(65_536),
         // Model Studio: 128K is the generation ceiling, not the context window.
-        "qwen3.8-max" | "qwen3.8-max-preview" => Some(131_072),
+        // OpenRouter qwen3.8-flash shares the 131,072 output cap (models.dev
+        // 2026-08-26); do not inherit qwen3.6-flash's 65,536 ceiling.
+        "qwen3.8-max" | "qwen3.8-max-preview" | "qwen/qwen3.8-flash" | "qwen3.8-flash" => {
+            Some(131_072)
+        }
         "qwen3.7-plus" | "qwen3.7-max" | "qwen3.6-flash" => Some(65_536),
-        "z-ai/glm-5.1" | "z-ai/glm-5.2" | "z-ai/glm-5.3" | "z-ai/glm-5-turbo" | "glm-5.1"
-        | "glm-5.2" | "glm-5.3" | "glm-5-turbo" => Some(131_072),
+        "z-ai/glm-5.1" | "z-ai/glm-5.2" | "z-ai/glm-5.3" | "z-ai/glm-5.3-flash"
+        | "z-ai/glm-5-turbo" | "glm-5.1" | "glm-5.2" | "glm-5.3" | "glm-5.3-flash"
+        | "glm-5-turbo" => Some(131_072),
         "xiaomi/mimo-v2.5-pro"
         | "xiaomi/mimo-v2.5"
         | "mimo-v2.5-pro"
@@ -482,6 +492,7 @@ pub fn model_supports_reasoning(model: &str) -> bool {
             | "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
             | "nvidia/nemotron-3-ultra-550b-a55b"
             | "nvidia/nemotron-3-ultra-550b-a55b:free"
+            | "qwen/qwen3.8-flash"
             | "qwen/qwen3.6-flash"
             | "qwen/qwen3.6-35b-a3b"
             | "qwen/qwen3.6-max-preview"
@@ -493,9 +504,12 @@ pub fn model_supports_reasoning(model: &str) -> bool {
             // deep-thinking docs these are hybrid-thinking models that stream
             // `reasoning_content` (OpenAI dialect) or thinking blocks
             // (Anthropic dialect); qwen3.7/3.6/3.5 families default thinking
-            // ON server-side.
+            // ON server-side. Bare `qwen3.8-flash` is the OpenRouter short
+            // id (reasoning: true on models.dev 2026-08-26), not a Model
+            // Studio family default.
             | "qwen3.8-max"
             | "qwen3.8-max-preview"
+            | "qwen3.8-flash"
             | "qwen3.7-max"
             | "qwen3.7-plus"
             | "qwen3.6-plus"
@@ -511,10 +525,12 @@ pub fn model_supports_reasoning(model: &str) -> bool {
             | "z-ai/glm-5.1"
             | "z-ai/glm-5.2"
             | "z-ai/glm-5.3"
+            | "z-ai/glm-5.3-flash"
             | "z-ai/glm-5-turbo"
             | "glm-5.1"
             | "glm-5.2"
             | "glm-5.3"
+            | "glm-5.3-flash"
             | "glm-5-turbo"
             | "grok-4.6"
             | "grok-4.5"
@@ -674,6 +690,14 @@ pub fn auto_compact_default_for_model(model: &str) -> bool {
 #[serde(tag = "type")]
 /// Streaming event types for SSE responses.
 pub enum StreamEvent {
+    /// Local pre-stream receipt: the provider request was sent with a reduced
+    /// tool surface. This is not provider SSE and must not count as content.
+    #[serde(rename = "tool_projection_warning")]
+    ToolProjectionWarning {
+        provider: String,
+        omitted_tool_names: Vec<String>,
+        omitted_tool_count: usize,
+    },
     #[serde(rename = "message_start")]
     MessageStart { message: MessageResponse },
     #[serde(rename = "content_block_start")]
@@ -884,6 +908,7 @@ mod tests {
         for (model, expected_window) in [
             ("arcee-ai/trinity-large-thinking", 262_144),
             ("trinity-large-thinking", 262_144),
+            (concat!("qwen/", "qwen3.8-flash"), 1_000_000),
             (concat!("qwen/", "qwen3.6-flash"), 1_000_000),
             (concat!("qwen/", "qwen3.6-35b-a3b"), 262_144),
             (concat!("qwen/", "qwen3.6-max-preview"), 262_144),
@@ -900,6 +925,7 @@ mod tests {
             ("z-ai/glm-5.1", 202_752),
             ("z-ai/glm-5.2", 1_000_000),
             ("z-ai/glm-5.3", 1_000_000),
+            ("z-ai/glm-5.3-flash", 1_000_000),
         ] {
             assert_eq!(context_window_for_model(model), Some(expected_window));
             assert!(model_supports_reasoning(model));
@@ -1073,6 +1099,17 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_qwen38_flash_is_1m_context_with_128k_output() {
+        // models.dev OpenRouter listing 2026-08-26: 1,000,000 / 131,072.
+        // Both the namespaced wire id and the bare short id must resolve.
+        for model in ["qwen/qwen3.8-flash", "qwen3.8-flash"] {
+            assert_eq!(context_window_for_model(model), Some(1_000_000), "{model}");
+            assert_eq!(max_output_tokens_for_model(model), Some(131_072), "{model}");
+            assert!(model_supports_reasoning(model), "{model}");
+        }
+    }
+
+    #[test]
     fn modelstudio_bare_qwen_models_support_reasoning() {
         // Model Studio's deep-thinking docs: every qwen3.x family the Token /
         // Coding Plan catalogs carry is hybrid-thinking (reasoning_content on
@@ -1189,6 +1226,10 @@ mod tests {
             Some(262_144)
         );
         assert_eq!(
+            max_output_tokens_for_model(concat!("qwen/", "qwen3.8-flash")),
+            Some(131_072)
+        );
+        assert_eq!(
             max_output_tokens_for_model(concat!("qwen/", "qwen3.6-flash")),
             Some(65_536)
         );
@@ -1236,7 +1277,9 @@ mod tests {
         // keeps the documented safe floor — and must never fall through to
         // the 128K legacy default.
         assert_eq!(context_window_for_model("k3"), Some(262_144));
+        assert_eq!(context_window_for_model("k3-256k"), Some(262_144));
         assert_eq!(max_output_tokens_for_model("k3"), Some(131_072));
+        assert_eq!(max_output_tokens_for_model("k3-256k"), Some(131_072));
         assert_eq!(max_output_tokens_for_model("kimi-k3"), Some(131_072));
         // Never project max output as the context window.
         assert_ne!(
@@ -1285,6 +1328,7 @@ mod tests {
             ("glm-5.2", 1_000_000),
             // Inherited from glm-5.2 pending official Z.ai release metadata.
             ("glm-5.3", 1_000_000),
+            ("glm-5.3-flash", 1_000_000),
             ("glm-5-turbo", 202_752),
         ] {
             assert_eq!(context_window_for_model(model), Some(expected_window));
@@ -1310,6 +1354,7 @@ mod tests {
         assert_eq!(max_output_tokens_for_model("glm-5.1"), Some(131_072));
         assert_eq!(max_output_tokens_for_model("glm-5.2"), Some(131_072));
         assert_eq!(max_output_tokens_for_model("glm-5.3"), Some(131_072));
+        assert_eq!(max_output_tokens_for_model("glm-5.3-flash"), Some(131_072));
     }
 
     #[test]

@@ -76,7 +76,7 @@ export default async function FeedPage({ params }: { params: Promise<{ locale: s
 
             <div className="lg:col-span-6">
               <div className="hairline-t hairline-b hairline-l hairline-r bg-paper">
-                <div className="bg-ink text-paper px-4 py-3 flex items-baseline justify-between">
+                <div className="bg-paper-deep text-ink px-4 py-3 flex items-baseline justify-between">
                   <h2 className="font-cjk text-base tracking-wider">议题 · Issues</h2>
                   <span className="font-mono text-[0.7rem] uppercase tabular tracking-widest">{issues.length} 条</span>
                 </div>
@@ -144,7 +144,7 @@ export default async function FeedPage({ params }: { params: Promise<{ locale: s
 
             <div className="lg:col-span-6">
               <div className="hairline-t hairline-b hairline-l hairline-r bg-paper">
-                <div className="bg-ink text-paper px-4 py-3 flex items-baseline justify-between">
+                <div className="bg-paper-deep text-ink px-4 py-3 flex items-baseline justify-between">
                   <h2 className="font-cjk text-base tracking-wider">议题 · Issues</h2>
                   <span className="font-mono text-[0.7rem] uppercase tabular tracking-widest">{issues.length} shown</span>
                 </div>

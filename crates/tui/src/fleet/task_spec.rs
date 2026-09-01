@@ -33,6 +33,11 @@ pub struct FleetTaskSpecDocument {
     pub workers: Vec<FleetWorkerSpec>,
     #[serde(default)]
     pub tasks: Vec<FleetTaskSpec>,
+    /// Optional run-wide usage ceiling (R6, #5567), e.g.
+    /// `usage_ceiling = { max_total_tokens = 2_000_000 }`.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_ceiling: Option<codewhale_protocol::fleet::FleetUsageCeiling>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -58,6 +63,7 @@ impl FleetTaskSpecFile {
                 security_policy: None,
                 workers: Vec::new(),
                 tasks,
+                usage_ceiling: None,
             },
             Self::Single(task) => FleetTaskSpecDocument {
                 name: Some(fallback_name),
@@ -65,6 +71,7 @@ impl FleetTaskSpecFile {
                 security_policy: None,
                 workers: Vec::new(),
                 tasks: vec![*task],
+                usage_ceiling: None,
             },
         }
     }
@@ -95,7 +102,7 @@ pub struct FleetTaskVerification {
 
 pub fn load_task_spec_document(path: &Path) -> Result<FleetTaskSpecDocument> {
     let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("reading fleet task spec {}", path.display()))?;
+        .with_context(|| format!("reading pod task spec {}", path.display()))?;
     let fallback_name = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -104,9 +111,9 @@ pub fn load_task_spec_document(path: &Path) -> Result<FleetTaskSpecDocument> {
         .to_string();
     let parsed = match path.extension().and_then(|s| s.to_str()) {
         Some("toml") => toml::from_str::<FleetTaskSpecFile>(&raw)
-            .with_context(|| format!("parsing TOML fleet task spec {}", path.display()))?,
+            .with_context(|| format!("parsing TOML pod task spec {}", path.display()))?,
         _ => serde_json::from_str::<FleetTaskSpecFile>(&raw)
-            .with_context(|| format!("parsing JSON fleet task spec {}", path.display()))?,
+            .with_context(|| format!("parsing JSON pod task spec {}", path.display()))?,
     };
     let doc = parsed.into_document(fallback_name);
     validate_task_spec_document(&doc)?;
@@ -116,26 +123,26 @@ pub fn load_task_spec_document(path: &Path) -> Result<FleetTaskSpecDocument> {
 pub fn validate_task_spec_document(doc: &FleetTaskSpecDocument) -> Result<()> {
     if doc.security_policy.is_some() {
         bail!(
-            "fleet task spec security_policy is a legacy compatibility field, not executable Fleet identity; configure trust, secrets, approvals, sandboxing, and tool authority through Runtime policy"
+            "pod task spec security_policy is a legacy compatibility field, not executable Pod identity; configure trust, secrets, approvals, sandboxing, and tool authority through Runtime policy"
         );
     }
     if doc.tasks.is_empty() {
-        bail!("fleet task spec must include at least one task");
+        bail!("pod task spec must include at least one task");
     }
     let mut ids = BTreeSet::new();
     for task in &doc.tasks {
         validate_fleet_identity("task id", &task.id)?;
         if !ids.insert(task.id.clone()) {
-            bail!("duplicate fleet task id {}", task.id);
+            bail!("duplicate pod task id {}", task.id);
         }
         validate_fleet_name(&format!("task {} name", task.id), &task.name)?;
         if task.instructions.trim().is_empty() {
-            bail!("fleet task {} instructions cannot be empty", task.id);
+            bail!("pod task {} instructions cannot be empty", task.id);
         }
         if let Some(objective) = &task.objective
             && objective.trim().is_empty()
         {
-            bail!("fleet task {} objective cannot be empty", task.id);
+            bail!("pod task {} objective cannot be empty", task.id);
         }
         validate_worker_profile(&task.id, task.worker.as_ref())?;
         if task
@@ -143,7 +150,7 @@ pub fn validate_task_spec_document(doc: &FleetTaskSpecDocument) -> Result<()> {
             .contains_key(super::worker_runtime::FROZEN_FLEET_MEMBER_METADATA_KEY)
         {
             bail!(
-                "fleet task {} metadata key {} is reserved for the durable Runtime selection receipt",
+                "pod task {} metadata key {} is reserved for the durable Runtime selection receipt",
                 task.id,
                 super::worker_runtime::FROZEN_FLEET_MEMBER_METADATA_KEY
             );
@@ -155,12 +162,12 @@ pub fn validate_task_spec_document(doc: &FleetTaskSpecDocument) -> Result<()> {
     for worker in &doc.workers {
         validate_fleet_identity("worker id", &worker.id)?;
         if !worker_ids.insert(worker.id.clone()) {
-            bail!("duplicate fleet worker id {}", worker.id);
+            bail!("duplicate pod worker id {}", worker.id);
         }
         validate_fleet_name(&format!("worker {} name", worker.id), &worker.name)?;
         if worker.trust_level.is_some() {
             bail!(
-                "fleet worker {} trust_level is a legacy compatibility field, not Fleet identity; configure execution authority through Runtime policy",
+                "pod worker {} trust_level is a legacy compatibility field, not Pod identity; configure execution authority through Runtime policy",
                 worker.id
             );
         }
@@ -170,24 +177,20 @@ pub fn validate_task_spec_document(doc: &FleetTaskSpecDocument) -> Result<()> {
 
 fn validate_fleet_identity(field: &str, value: &str) -> Result<()> {
     if value.is_empty() {
-        bail!("fleet {field} cannot be empty");
+        bail!("pod {field} cannot be empty");
     }
     if value.len() > MAX_FLEET_ID_BYTES || !value.chars().all(is_worker_token_char) {
-        bail!(
-            "fleet {field} must be a simple ASCII token no longer than {MAX_FLEET_ID_BYTES} bytes"
-        );
+        bail!("pod {field} must be a simple ASCII token no longer than {MAX_FLEET_ID_BYTES} bytes");
     }
     Ok(())
 }
 
 fn validate_fleet_name(field: &str, value: &str) -> Result<()> {
     if value.trim().is_empty() {
-        bail!("fleet {field} cannot be empty");
+        bail!("pod {field} cannot be empty");
     }
     if value.len() > MAX_FLEET_NAME_BYTES || value.chars().any(char::is_control) {
-        bail!(
-            "fleet {field} must be one printable line no longer than {MAX_FLEET_NAME_BYTES} bytes"
-        );
+        bail!("pod {field} must be one printable line no longer than {MAX_FLEET_NAME_BYTES} bytes");
     }
     Ok(())
 }
@@ -213,12 +216,12 @@ fn validate_worker_selector(task_id: &str, field: &str, value: Option<&str>) -> 
     };
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        bail!("fleet task {task_id} {field} cannot be empty");
+        bail!("pod task {task_id} {field} cannot be empty");
     }
     if trimmed != value || value.len() > MAX_FLEET_NAME_BYTES || value.chars().any(char::is_control)
     {
         bail!(
-            "fleet task {task_id} {field} must be one printable selector no longer than {MAX_FLEET_NAME_BYTES} bytes"
+            "pod task {task_id} {field} must be one printable selector no longer than {MAX_FLEET_NAME_BYTES} bytes"
         );
     }
     Ok(())
@@ -230,12 +233,10 @@ fn validate_worker_token(task_id: &str, field: &str, value: Option<&str>) -> Res
     };
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        bail!("fleet task {task_id} {field} cannot be empty");
+        bail!("pod task {task_id} {field} cannot be empty");
     }
     if trimmed != value || !trimmed.chars().all(is_worker_token_char) {
-        bail!(
-            "fleet task {task_id} {field} must be a simple token, not a path or provider/model id"
-        );
+        bail!("pod task {task_id} {field} must be a simple token, not a path or provider/model id");
     }
     Ok(())
 }
@@ -250,7 +251,7 @@ fn validate_worker_model(task_id: &str, value: Option<&str>) -> Result<()> {
     };
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        bail!("fleet task {task_id} worker.model cannot be empty");
+        bail!("pod task {task_id} worker.model cannot be empty");
     }
     if trimmed != value
         || !trimmed
@@ -258,7 +259,7 @@ fn validate_worker_model(task_id: &str, value: Option<&str>) -> Result<()> {
             .all(|ch| ch.is_ascii_graphic() && !matches!(ch, '=' | '\'' | '"'))
     {
         bail!(
-            "fleet task {task_id} worker.model must be a visible model id without whitespace or secrets"
+            "pod task {task_id} worker.model must be a visible model id without whitespace or secrets"
         );
     }
     Ok(())
@@ -284,10 +285,10 @@ pub fn write_fleet_artifact_ref(
     let abs_path = workspace.join(&rel_path);
     if let Some(parent) = abs_path.parent() {
         std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating fleet artifact dir {}", parent.display()))?;
+            .with_context(|| format!("creating pod artifact dir {}", parent.display()))?;
     }
     std::fs::write(&abs_path, contents)
-        .with_context(|| format!("writing fleet artifact {}", abs_path.display()))?;
+        .with_context(|| format!("writing pod artifact {}", abs_path.display()))?;
     Ok(FleetArtifactRef {
         kind,
         path: rel_path,
@@ -350,8 +351,7 @@ pub fn prepare_verification_receipt(
         "evidence": verification.evidence.clone(),
         "artifacts": input.artifacts.clone(),
     });
-    let bytes =
-        serde_json::to_vec_pretty(&evidence).context("serializing fleet receipt evidence")?;
+    let bytes = serde_json::to_vec_pretty(&evidence).context("serializing pod receipt evidence")?;
     // Content-address the evidence as well as namespacing it by attempt. A
     // stale verifier may finish after a retry has started; it is allowed to
     // leave an orphaned evidence file, but it must never overwrite the file a
@@ -405,10 +405,10 @@ fn validate_tags(task_id: &str, tags: &[String]) -> Result<()> {
     let mut seen = BTreeSet::new();
     for tag in tags {
         if tag.trim().is_empty() {
-            bail!("fleet task {task_id} tag cannot be empty");
+            bail!("pod task {task_id} tag cannot be empty");
         }
         if !seen.insert(tag) {
-            bail!("fleet task {task_id} has duplicate tag {tag}");
+            bail!("pod task {task_id} has duplicate tag {tag}");
         }
     }
     Ok(())
@@ -425,7 +425,7 @@ fn validate_workspace_requirements(task: &FleetTaskSpec) -> Result<()> {
     {
         if name.trim().is_empty() {
             bail!(
-                "fleet task {} environment variable name cannot be empty",
+                "pod task {} environment variable name cannot be empty",
                 task.id
             );
         }
@@ -889,6 +889,7 @@ mod tests {
             security_policy: None,
             workers: Vec::new(),
             tasks: vec![doc],
+            usage_ceiling: None,
         })
         .unwrap_err()
         .to_string();
@@ -906,6 +907,7 @@ mod tests {
             security_policy: Some(FleetSecurityPolicy::default()),
             workers: Vec::new(),
             tasks: vec![task("review", None)],
+            usage_ceiling: None,
         };
         let error = validate_task_spec_document(&security_doc)
             .unwrap_err()

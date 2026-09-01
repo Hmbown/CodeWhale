@@ -73,10 +73,11 @@ pub(crate) fn friendly_subagent_progress(app: &App, id: &str, status: &str) -> S
     if let Some(existing) = app.agent_progress.get(id)
         && !is_noisy_subagent_progress(existing)
         && existing != "working"
+        && existing != "in the current"
     {
         return existing.clone();
     }
-    "working".to_string()
+    "in the current".to_string()
 }
 
 pub(crate) fn one_line_summary(text: &str, max_width: usize) -> String {

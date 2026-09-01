@@ -113,8 +113,12 @@ impl App {
             false
         };
         settings.apply_env_overrides();
-        let launch_visible =
-            settings.launch_screen && resume_session_id.is_none() && initial_input.is_none();
+        // Tideline Startup is the fresh interactive landing surface. It must
+        // not be bypassed by a stale historical `launch_screen = false`, a
+        // provider/config notice, or a previous session record: only an
+        // intentional resume or explicit initial input enters the live session
+        // path directly.
+        let launch_visible = resume_session_id.is_none() && initial_input.is_none();
         let launch = LaunchState::new(launch_visible, &workspace);
 
         // If settings.toml exists on disk but couldn't be parsed (we fell back
@@ -612,6 +616,20 @@ impl App {
         );
         let hooks = HookExecutor::new(hooks_config, workspace.clone());
 
+        // Initialize the lifecycle event outbox (`[lifecycle_outbox]`).
+        // Disabled (all emits no-op) when the config has no path.
+        let lifecycle_outbox = config
+            .lifecycle_outbox
+            .as_ref()
+            .map(|outbox| {
+                codewhale_hooks::LifecycleOutbox::new(
+                    outbox.path.clone(),
+                    outbox.webhook_url.clone(),
+                    outbox.webhook_token.clone(),
+                )
+            })
+            .unwrap_or_else(codewhale_hooks::LifecycleOutbox::disabled);
+
         // Initialize plan state
         let plan_state = new_shared_plan_state();
         let todos = new_shared_todo_list();
@@ -647,13 +665,23 @@ impl App {
                 Some(InitialInput::RemoteControl) => (String::new(), 0, false),
                 _ => (String::new(), 0, false),
             };
-        let mcp_configured_count = crate::mcp::load_config_with_workspace_and_plugins(
-            &mcp_config_path,
-            &workspace,
-            plugin_registry.as_ref(),
-        )
-        .map(|cfg| cfg.servers.len())
-        .unwrap_or(0);
+        let (mcp_configured_count, mcp_connecting) =
+            crate::mcp::load_config_with_workspace_and_plugins(
+                &mcp_config_path,
+                &workspace,
+                plugin_registry.as_ref(),
+            )
+            .map(|cfg| {
+                let mut connecting = cfg
+                    .servers
+                    .iter()
+                    .filter(|(_, server)| server.is_enabled())
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>();
+                connecting.sort();
+                (cfg.servers.len(), connecting)
+            })
+            .unwrap_or((0, Vec::new()));
         let mut hotbar_actions = HotbarActionRegistry::with_configured_routes(
             config,
             provider,
@@ -704,6 +732,8 @@ impl App {
             },
             goal: HostGoalState::default(),
             session: SessionState::default(),
+            last_billed_input_tokens: None,
+            last_compaction: None,
             active_allowed_tools: None,
             pausable: false,
             pending_route_save: None,
@@ -716,6 +746,7 @@ impl App {
             tool_run_cache: ToolRunCache::default(),
             next_history_revision: 1,
             api_messages: Vec::new(),
+            completed_assistant_outputs: Vec::new(),
             context_token_cache: std::cell::RefCell::new(Default::default()),
             remote_control: crate::remote_control::RemoteControlController::default(),
             start_remote_control_on_launch: start_remote_control,
@@ -738,6 +769,12 @@ impl App {
             update_available: None,
             sticky_status: None,
             last_status_message_seen: None,
+            context_pressure_warning_dismissed: None,
+            plugin_reload_nudge_stamp: None,
+            plugin_prompt_suggest_names: HashSet::new(),
+            plugin_prompt_suggest_count: 0,
+            last_plugin_catalog_poll: None,
+            plugin_cta: crate::tui::plugin_suggestions::PluginCtaState::default(),
             model,
             provider_models,
             enabled_provider_models,
@@ -805,7 +842,6 @@ impl App {
             calm_mode,
             low_motion,
             constrained_frame_rate,
-            ocean_started_at: Instant::now(),
             ambient_clock_ms: 0,
             ambient_clock_sampled_at: None,
             ambient_idle_since: None,
@@ -817,6 +853,7 @@ impl App {
             focus_texture,
             launch,
             pending_launch_action: None,
+            pending_composer_submit: None,
             pending_hotbar_slot: None,
             synchronized_output_enabled,
             status_indicator,
@@ -888,6 +925,7 @@ impl App {
             onboarding_had_trust_step: !was_onboarded && needs_workspace_trust,
             api_key_env_only,
             hooks,
+            lifecycle_outbox,
             yolo: yolo_compat,
             yolo_compat_notified: false,
             startup_defaults: Default::default(),
@@ -937,10 +975,16 @@ impl App {
             runtime_services: RuntimeToolServices {
                 shell_manager: Some(shell_manager),
                 work: Some(work_runtime),
+                media_originals_dir: crate::media_originals::default_store_dir(),
                 ..RuntimeToolServices::default()
             },
             coordination_detail: None,
             mcp_snapshot: None,
+            mcp_initializing: !mcp_connecting.is_empty()
+                && config.features().enabled(crate::features::Feature::Mcp),
+            mcp_snapshot_generation: 0,
+            mcp_snapshot_generation_invalidated: false,
+            mcp_connecting,
             // Read the MCP config once at boot to know how many servers
             // the user has declared. The footer chip uses this even when
             // no live snapshot is available (#502). Cheap (just reads

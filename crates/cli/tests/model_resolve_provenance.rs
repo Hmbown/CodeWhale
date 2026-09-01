@@ -49,6 +49,28 @@ fn resolve_with_config(config: &str, args: &[&str]) -> BTreeMap<String, String> 
         .collect()
 }
 
+/// Run a model query that must fail without reading ambient configuration or
+/// credentials. Keeping the raw output lets the regression prove the CLI did
+/// not print a fabricated provider route before exiting.
+fn resolve_failure_with_config(config: &str, args: &[&str]) -> std::process::Output {
+    let fixture = TempDir::new().expect("fixture root");
+    let home = fixture.path().join("sealed-home");
+    fs::create_dir_all(home.join(".codewhale")).expect("sealed config dir");
+    fs::write(home.join(".codewhale").join("config.toml"), config).expect("seed config");
+
+    Command::new(codewhale_binary())
+        .arg("model")
+        .arg("resolve")
+        .args(args)
+        .env_clear()
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("CODEWHALE_HOME", home.join(".codewhale"))
+        .env("CODEWHALE_SECRET_BACKEND", "file")
+        .output()
+        .expect("run failing model resolve")
+}
+
 #[test]
 fn resolve_reports_the_configured_provider_not_a_deepseek_fallback() {
     let report = resolve_with_config(
@@ -117,29 +139,65 @@ fn resolve_admits_when_nothing_was_configured() {
 }
 
 #[test]
-fn an_explicit_model_argument_still_answers_the_hypothetical() {
-    // Naming a model asks "what would this resolve to", which must keep
-    // working even when the configured provider is something else.
-    let report = resolve_with_config(
+fn a_foreign_model_argument_cannot_switch_the_configured_provider() {
+    let output = resolve_failure_with_config(
         "provider = \"zai\"\n\n[providers.zai]\napi_key = \"k\"\n",
         &["deepseek-v4-flash"],
     );
 
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .to_ascii_lowercase();
+    assert!(
+        combined.contains("not available from provider 'zai'"),
+        "{combined}"
+    );
+    assert!(!combined.contains("provider: deepseek"), "{combined}");
+}
+
+#[test]
+fn an_explicit_matching_provider_can_resolve_its_model() {
+    let report = resolve_with_config(
+        "provider = \"zai\"\n\n[providers.zai]\napi_key = \"k\"\n",
+        &["deepseek-v4-flash", "--provider", "deepseek"],
+    );
+
+    assert_eq!(report.get("provider").map(String::as_str), Some("deepseek"));
     assert_eq!(
         report.get("requested").map(String::as_str),
-        Some("deepseek-v4-flash"),
-        "{report:?}"
-    );
-    assert_eq!(
-        report.get("model_source").map(String::as_str),
-        Some("argument"),
-        "{report:?}"
+        Some("deepseek-v4-flash")
     );
     assert_eq!(
         report.get("used_fallback").map(String::as_str),
-        Some("false"),
-        "{report:?}"
+        Some("false")
     );
+    assert_eq!(
+        report.get("provider_source").map(String::as_str),
+        Some("--provider")
+    );
+}
+
+#[test]
+fn unknown_providerless_model_fails_without_printing_a_deepseek_route() {
+    let output = resolve_failure_with_config(
+        "provider = \"zai\"\n\n[providers.zai]\napi_key = \"k\"\n",
+        &["totally-unknown-model"],
+    );
+
+    assert!(!output.status.success(), "unknown model must fail closed");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+    let combined = format!("{stdout}\n{stderr}");
+    assert!(
+        combined.contains("not available from provider 'zai'"),
+        "{combined}"
+    );
+    assert!(!combined.contains("provider: deepseek"), "{combined}");
+    assert!(!combined.contains("deepseek-v4-pro"), "{combined}");
 }
 
 #[test]
@@ -154,6 +212,36 @@ fn an_explicit_provider_flag_is_reported_as_the_source() {
         report.get("provider_source").map(String::as_str),
         Some("--provider"),
         "{report:?}"
+    );
+}
+
+#[test]
+fn explicit_openai_without_a_model_reports_its_own_documented_default() {
+    let report = resolve_with_config(
+        "provider = \"zai\"\n\n[providers.zai]\napi_key = \"k\"\nmodel = \"GLM-5.2\"\n",
+        &["--provider", "openai"],
+    );
+
+    assert_eq!(report.get("provider").map(String::as_str), Some("openai"));
+    assert_eq!(
+        report.get("resolved").map(String::as_str),
+        Some("gpt-5.6"),
+        "an OpenAI query must use OpenAI's documented default, not the first catalog row or the configured Z.ai model: {report:?}"
+    );
+    assert_eq!(
+        report.get("used_fallback").map(String::as_str),
+        Some("true"),
+        "{report:?}"
+    );
+    assert_eq!(
+        report.get("provider_source").map(String::as_str),
+        Some("--provider"),
+        "{report:?}"
+    );
+    assert_eq!(
+        report.get("model_source").map(String::as_str),
+        Some("provider default"),
+        "the overridden Z.ai model provenance must not leak into the OpenAI hypothetical: {report:?}"
     );
 }
 
@@ -260,21 +348,25 @@ fn moonshot_k3_products_resolve_without_crossing_providers() {
     }
 }
 
-/// An id the selected provider cannot serve must be reported as a fallback,
-/// never as if the request had been honoured.
+/// An id the selected provider cannot serve must fail closed. Falling back
+/// after a concrete request would silently run a different model.
 #[test]
-fn an_unservable_model_on_the_selected_provider_is_reported_as_a_fallback() {
-    let report = resolve_with_global_flags(
+fn an_unservable_model_on_the_selected_provider_is_rejected() {
+    let output = resolve_failure_with_config(
         "provider = \"moonshot\"\n\n[providers.moonshot]\napi_key = \"k\"\n",
-        &[],
         &["glm-5.2", "--provider", "moonshot"],
     );
 
-    assert_eq!(report.get("provider").map(String::as_str), Some("moonshot"));
-    assert_eq!(
-        report.get("used_fallback").map(String::as_str),
-        Some("true"),
-        "an unservable id must not be presented as an honoured request: {report:?}"
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .to_ascii_lowercase();
+    assert!(
+        combined.contains("model 'glm-5.2' is not available from provider 'moonshot'"),
+        "{combined}"
     );
 }
 
@@ -304,28 +396,21 @@ fn a_new_glm_sibling_is_servable_on_zai_but_not_on_moonshot() {
         "a model the provider serves must not be reported as a fallback: {served:?}"
     );
 
-    let refused = resolve_with_global_flags(
+    let refused = resolve_failure_with_config(
         "provider = \"moonshot\"\n\n[providers.moonshot]\napi_key = \"k\"\n",
-        &[],
         &["glm-5.3", "--provider", "moonshot"],
     );
 
-    assert_eq!(
-        refused.get("provider").map(String::as_str),
-        Some("moonshot")
-    );
-    assert_eq!(
-        refused.get("used_fallback").map(String::as_str),
-        Some("true"),
-        "a Z.ai id must not be presented as honoured by Moonshot: {refused:?}"
-    );
-    let resolved = refused
-        .get("resolved")
-        .map(String::as_str)
-        .unwrap_or_default();
+    assert!(!refused.status.success());
+    let resolved = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    )
+    .to_ascii_lowercase();
     assert!(
-        !resolved.to_ascii_lowercase().contains("glm"),
-        "a provider that cannot serve GLM must not be handed a fabricated GLM id: {refused:?}"
+        resolved.contains("model 'glm-5.3' is not available from provider 'moonshot'"),
+        "a provider that cannot serve GLM must fail instead of choosing its default: {resolved}"
     );
 }
 

@@ -17,7 +17,7 @@ use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
     optional_str, required_str,
 };
-use crate::tui::notifications::{Method, NotificationPayload, notify_done};
+use crate::tui::notifications::{NotificationPayload, notify_done};
 
 /// Maximum chars passed through for the title — keeps the OSC 9 escape
 /// reasonable on terminals that wrap long titles awkwardly.
@@ -106,15 +106,18 @@ impl ToolSpec for NotifyTool {
 
         // Threshold = 0 so the notification always fires; the model has
         // already decided this is the moment.
-        notify_done(
-            Method::Auto,
+        let outcome = notify_done(
+            crate::tui::notifications::configured_method(),
             in_tmux,
             &payload,
             std::time::Duration::ZERO,
             std::time::Duration::from_secs(1),
         );
 
-        Ok(ToolResult::success(format!("notified: {title}")))
+        Ok(ToolResult::success(format!(
+            "{}: {title}",
+            outcome.receipt()
+        )))
     }
 }
 

@@ -1,7 +1,7 @@
 /**
  * <GettingStartedSteps> — renders the shared new-user path from
  * web/lib/content/getting-started.ts: install → first offline session →
- * provider connection → fleet setup.
+ * provider connection → pod setup.
  *
  * Used by the homepage band and the /docs/guide page so the path reads
  * identically in both places. Server component, SSG-safe.

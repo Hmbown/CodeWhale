@@ -1175,7 +1175,7 @@ fn a_card_verb_agrees_with_its_own_label_in_every_locale() {
             }],
         };
 
-        let header_en = line_text(&cell.lines_with_motion_and_locale(80, true, Locale::En)[0]);
+        let header_en = line_text(&cell.lines_with_motion(80, true)[0]);
         assert!(
             header_en.contains(expected_en),
             "{label:?} should read {expected_en:?}: {header_en:?}"

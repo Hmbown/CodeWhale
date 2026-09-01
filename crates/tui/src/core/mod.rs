@@ -28,12 +28,9 @@ pub mod events;
 #[path = "runtime_contract/model.rs"]
 pub mod model_client;
 pub mod ops;
+pub mod session;
 #[path = "runtime_contract/termination.rs"]
 pub mod termination;
-// The rest of `runtime_contract/` stays on disk as staged Core-runtime
-// scaffolding and remains deliberately uncompiled until it has production
-// consumers (TUI-DOG-017).
-pub mod session;
 // Moved to `codewhale_core::tool_parser` (zero crate-internal dependencies);
 // re-exported so `crate::core::tool_parser` keeps working.
 pub use codewhale_core::tool_parser;

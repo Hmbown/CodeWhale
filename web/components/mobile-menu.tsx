@@ -201,7 +201,7 @@ export function MobileMenu({
               landmark name and the inner nav stays unlabeled — two nested
               "Primary" landmarks would read as duplication. */}
           <nav className="px-6 py-4">
-            <ul className="divide-y divide-[rgba(27,34,48,0.18)]">
+            <ul className="divide-y divide-[rgba(106,174,242,0.16)]">
               {links.map((l) => {
                 const isActive = l.href === currentHref;
                 return (

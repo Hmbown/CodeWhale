@@ -150,6 +150,8 @@ pub struct AutomationRecord {
     #[serde(default)]
     pub cwds: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_shell: Option<bool>,
@@ -227,6 +229,8 @@ pub struct CreateAutomationRequest {
     #[serde(default)]
     pub cwds: Vec<PathBuf>,
     #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
     pub mode: Option<String>,
     #[serde(default)]
     pub allow_shell: Option<bool>,
@@ -246,6 +250,7 @@ pub struct UpdateAutomationRequest {
     pub prompt: Option<String>,
     pub rrule: Option<String>,
     pub cwds: Option<Vec<PathBuf>>,
+    pub model: Option<String>,
     pub mode: Option<String>,
     pub allow_shell: Option<bool>,
     pub trust_mode: Option<bool>,
@@ -970,6 +975,7 @@ impl AutomationManager {
             prompt: req.prompt.trim().to_string(),
             rrule: req.rrule.trim().to_ascii_uppercase(),
             cwds: req.cwds,
+            model: normalize_optional_string(req.model),
             mode: normalize_optional_string(req.mode),
             allow_shell: req.allow_shell,
             trust_mode: req.trust_mode,
@@ -1064,6 +1070,9 @@ impl AutomationManager {
         }
         if let Some(cwds) = req.cwds {
             existing.cwds = cwds;
+        }
+        if let Some(model) = req.model {
+            existing.model = normalize_optional_string(Some(model));
         }
         if let Some(mode) = req.mode {
             existing.mode = normalize_optional_string(Some(mode));
@@ -1510,7 +1519,7 @@ async fn enqueue_run_task(
 
     let new_task = NewTaskRequest {
         prompt: automation.prompt.clone(),
-        model: None,
+        model: automation.model.clone(),
         workspace,
         mode: Some(automation.task_mode()),
         allow_shell: Some(automation.task_allow_shell()),
@@ -2104,6 +2113,7 @@ mod tests {
             prompt: "Run the automation".to_string(),
             rrule: "FREQ=HOURLY;INTERVAL=1".to_string(),
             cwds: Vec::new(),
+            model: None,
             mode: mode.map(ToString::to_string),
             allow_shell,
             trust_mode,
@@ -2491,6 +2501,48 @@ mod tests {
     }
 
     #[test]
+    fn automation_model_round_trips_through_create_and_update() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let manager = AutomationManager::open(tempdir.path().to_path_buf()).expect("manager");
+
+        let created = manager
+            .create_automation(CreateAutomationRequest {
+                name: "Pinned model".to_string(),
+                prompt: "prompt".to_string(),
+                rrule: "FREQ=HOURLY;INTERVAL=1".to_string(),
+                cwds: Vec::new(),
+                model: Some("  scheduled-model  ".to_string()),
+                mode: None,
+                allow_shell: None,
+                trust_mode: None,
+                auto_approve: None,
+                delivery_mode: None,
+                status: Some(AutomationStatus::Active),
+            })
+            .expect("create");
+        assert_eq!(created.model.as_deref(), Some("scheduled-model"));
+        assert_eq!(
+            manager
+                .get_automation(&created.id)
+                .expect("reload")
+                .model
+                .as_deref(),
+            Some("scheduled-model")
+        );
+
+        let updated = manager
+            .update_automation(
+                &created.id,
+                UpdateAutomationRequest {
+                    model: Some("replacement-model".to_string()),
+                    ..UpdateAutomationRequest::default()
+                },
+            )
+            .expect("update");
+        assert_eq!(updated.model.as_deref(), Some("replacement-model"));
+    }
+
+    #[test]
     fn deletes_automation_and_runs() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let manager = AutomationManager::open(tempdir.path().to_path_buf()).expect("manager");
@@ -2501,6 +2553,7 @@ mod tests {
                 prompt: "prompt".to_string(),
                 rrule: "FREQ=HOURLY;INTERVAL=1".to_string(),
                 cwds: Vec::new(),
+                model: None,
                 mode: None,
                 allow_shell: None,
                 trust_mode: None,
@@ -2624,18 +2677,21 @@ mod tests {
         let default_task = task_manager
             .get_task(default_run.task_id.as_deref().expect("task id"))
             .await?;
+        assert_eq!(default_task.model, "deepseek-v4-flash");
         assert_eq!(default_task.mode, "agent");
         assert!(!default_task.allow_shell);
         assert!(!default_task.trust_mode);
         assert!(!default_task.auto_approve);
 
-        let explicit_automation =
+        let mut explicit_automation =
             automation_record_with_settings(Some("plan"), Some(true), Some(true), Some(true));
+        explicit_automation.model = Some("scheduled-model".to_string());
         let mut explicit_run = queued_run_for(&explicit_automation);
         enqueue_run_task(&explicit_automation, &mut explicit_run, &task_manager).await;
         let explicit_task = task_manager
             .get_task(explicit_run.task_id.as_deref().expect("task id"))
             .await?;
+        assert_eq!(explicit_task.model, "scheduled-model");
         assert_eq!(explicit_task.mode, "plan");
         assert!(explicit_task.allow_shell);
         assert!(explicit_task.trust_mode);
@@ -2910,6 +2966,7 @@ mod tests {
                 prompt: "prompt".to_string(),
                 rrule: "FREQ=HOURLY;INTERVAL=1".to_string(),
                 cwds: Vec::new(),
+                model: None,
                 mode: None,
                 allow_shell: None,
                 trust_mode: None,

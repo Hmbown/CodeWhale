@@ -258,36 +258,32 @@ pub(crate) async fn send_taken_queued_message_now(
 ) -> Result<()> {
     if app.offline_mode {
         restore_queued_or_draft_message(app, recovery, message);
-        app.status_message = Some(format!(
-            "Offline: {} queued follow-up(s) — /queue send <n>, /queue clear",
-            app.queued_message_count()
-        ));
+        app.status_message = Some(
+            app.tr(MessageId::ToastOfflineQueuedCount)
+                .replace("{count}", &app.queued_message_count().to_string()),
+        );
         return Ok(());
     }
 
-    let display = message.display.clone();
     if app.dispatch_in_flight {
         // A spawned dispatch is still resolving route/sending its op (#4605):
         // there is no turn to steer into yet. Re-queue; the completion/turn
         // lifecycle will drive the next drain.
         restore_queued_or_draft_message(app, recovery, message);
-        app.status_message = Some(format!(
-            "{} queued follow-up(s) — sends after current dispatch starts",
-            app.queued_message_count()
-        ));
+        app.status_message = Some(queued_follow_up_toast(app));
         return Ok(());
     }
     if app.is_loading {
         match steer_user_message(app, config, engine_handle, message.clone()).await {
             Ok(true) => app.push_status_toast(
-                "Sent queued follow-up into current turn",
+                app.tr(MessageId::ToastSentIntoTurn).into_owned(),
                 StatusToastLevel::Info,
                 Some(1_500),
             ),
             Ok(false) => {
                 restore_queued_or_draft_message(app, recovery, message);
                 app.push_status_toast(
-                    "message_submit hook blocked the follow-up; original queue/draft restored",
+                    app.tr(MessageId::ToastHookBlockedFollowUp).into_owned(),
                     StatusToastLevel::Warning,
                     Some(4_000),
                 );
@@ -295,8 +291,8 @@ pub(crate) async fn send_taken_queued_message_now(
             Err(err) => {
                 restore_queued_or_draft_message(app, recovery, message);
                 app.status_message = Some(format!(
-                    "Steer failed ({err}); {} queued follow-up(s) — /queue send <n>, /queue clear",
-                    app.queued_message_count()
+                    "{} ({err})",
+                    app.tr(MessageId::ToastCouldNotSendIntoTurn)
                 ));
             }
         }
@@ -305,7 +301,7 @@ pub(crate) async fn send_taken_queued_message_now(
     {
         // The completion closure re-queued the message and set the status.
     } else {
-        app.status_message = Some(format!("Sent queued follow-up: {display}"));
+        app.status_message = Some(app.tr(MessageId::ToastSentIntoTurn).into_owned());
     }
     Ok(())
 }
@@ -528,6 +524,7 @@ pub(crate) fn prepare_user_dispatch(
     message: QueuedMessage,
 ) -> Result<UserDispatchPrepare> {
     let _ = app.maybe_nudge_for_planning_prompt(&message.display);
+    let _ = app.maybe_nudge_plugin_for_prompt(&message.display);
 
     // Plan paused-command changes without touching App or the engine pause
     // gate. Route selection can await and client preflight can fail; neither
@@ -848,6 +845,12 @@ pub(crate) fn build_dispatch_success_closure(
             ));
 
             maybe_warn_context_pressure_for_config(app, &outcome.turn_compaction);
+            if let Some(message) = crate::plugins::plugin_reload_nudge(
+                app.plugin_registry.as_ref(),
+                &mut app.plugin_reload_nudge_stamp,
+            ) {
+                app.push_status_toast(message, StatusToastLevel::Warning, Some(8_000));
+            }
             app.session.last_prompt_tokens = None;
             app.session.last_completion_tokens = None;
             app.session.last_output_throughput = None;
@@ -1117,7 +1120,7 @@ pub(crate) async fn attempt_steer_with_queue_fallback(
     match steer_user_message(app, config, engine_handle, message.clone()).await {
         Ok(true) => {
             app.push_status_toast(
-                "Steering into current turn",
+                app.tr(MessageId::ToastSentIntoTurn).into_owned(),
                 StatusToastLevel::Info,
                 Some(1_500),
             );
@@ -1125,17 +1128,14 @@ pub(crate) async fn attempt_steer_with_queue_fallback(
         Ok(false) => {
             restore_queued_or_draft_message(app, recovery, message);
             app.push_status_toast(
-                "message_submit hook blocked the steer; original queue/draft restored",
+                app.tr(MessageId::ToastHookBlockedFollowUp).into_owned(),
                 StatusToastLevel::Warning,
                 Some(4_000),
             );
         }
         Err(err) => {
             restore_queued_or_draft_message(app, recovery, message);
-            let status = format!(
-                "Steer failed ({err}); {} queued follow-up(s) — /queue send <n>",
-                app.queued_message_count()
-            );
+            let status = format!("{} ({err})", app.tr(MessageId::ToastCouldNotSendIntoTurn));
             app.status_message = Some(status.clone());
             app.push_status_toast(status, StatusToastLevel::Warning, Some(4_000));
         }
@@ -1146,22 +1146,24 @@ pub(crate) async fn attempt_steer_with_queue_fallback(
 /// Unlike a steer, the message is NOT forwarded immediately — it waits for
 /// the current turn to finish, then dispatches as a normal user message.
 pub(crate) async fn queue_follow_up(app: &mut App, message: QueuedMessage) -> Result<()> {
-    let display = message.display.clone();
     enqueue_offline_message(app, message);
-    let toast = if app.mode == AppMode::Operate {
-        format!(
-            "Queued task: {display} ({} total) — dispatches next while workers continue; ↑ to edit",
-            app.queued_message_count()
-        )
-    } else {
-        format!(
-            "Queued: {display} ({} total) — sends after current output; ↑ to edit",
-            app.queued_message_count()
-        )
-    };
+    let toast = queued_follow_up_toast(app);
     app.status_message = Some(toast.clone());
     app.push_status_toast(toast, StatusToastLevel::Info, Some(3_000));
     Ok(())
+}
+
+fn queued_follow_up_toast(app: &App) -> String {
+    if app.offline_mode {
+        return app.tr(MessageId::ToastQueuedOffline).into_owned();
+    }
+    let count = app.queued_message_count();
+    if count <= 1 {
+        app.tr(MessageId::ToastQueuedFollowUp).into_owned()
+    } else {
+        app.tr(MessageId::ToastQueuedFollowUpCount)
+            .replace("{count}", &count.to_string())
+    }
 }
 
 pub(crate) async fn dispatch_composer_message(
@@ -1172,9 +1174,24 @@ pub(crate) async fn dispatch_composer_message(
     recovery: DispatchRecovery,
     action: ComposerSubmitAction,
 ) -> Result<()> {
-    // Mirror semantics: a connected web mirror never blocks local prompts.
-    // One-turn-at-a-time is enforced by is_loading/dispatch_in_flight below,
-    // which equally governs local and remote prompts.
+    // The ordinary web mirror does not block local prompts. Isolated Runtime
+    // Chat is different: it owns a provider-backed native turn that is not
+    // reflected by the interactive engine's `is_loading` bit. Preserve the
+    // local message in the queue until that exact turn and its terminal relay
+    // receipt have settled, so one attached run never has two inference loops.
+    if app.remote_control.runtime_chat_blocks_local_dispatch() {
+        enqueue_offline_message(app, message);
+        let queued = app
+            .tr(MessageId::AgentRailQueuedCount)
+            .replace("{count}", &app.queued_message_count().to_string());
+        let status = format!(
+            "Runtime Chat · {} · {queued}",
+            app.tr(MessageId::PhaseFinishing)
+        );
+        app.push_status_toast(status, StatusToastLevel::Info, Some(4_000));
+        return Ok(());
+    }
+
     // Agent focus: the composer addresses one child's fork, not the main
     // session. The follow-up is real runtime work (Op::FollowUpSubAgent); the
     // main transcript keeps a receipt line and the focused view echoes the
@@ -1222,29 +1239,9 @@ pub(crate) async fn dispatch_composer_message(
             Ok(())
         }
         SubmitDisposition::Queue => {
-            let count = app.queued_message_count().saturating_add(1);
             enqueue_offline_message(app, message);
-            let (status, toast) = if app.offline_mode {
-                (
-                    format!("Offline: {count} queued follow-up(s) — ↑ edit last, /queue send <n>"),
-                    format!("Offline: queued follow-up ({count} total)"),
-                )
-            } else if app.mode == AppMode::Operate {
-                (
-                    format!(
-                        "{count} queued task(s) — dispatches next while workers continue; ↑ edit last, /queue send <n>"
-                    ),
-                    format!("Queued task ({count} total) — dispatches next"),
-                )
-            } else {
-                (
-                    format!(
-                        "{count} queued follow-up(s) — sends after current output; ↑ edit last, /queue send <n>"
-                    ),
-                    format!("Queued follow-up ({count} total) — sends after current output"),
-                )
-            };
-            app.status_message = Some(status);
+            let toast = queued_follow_up_toast(app);
+            app.status_message = Some(toast.clone());
             app.push_status_toast(toast, StatusToastLevel::Info, Some(3_000));
             Ok(())
         }

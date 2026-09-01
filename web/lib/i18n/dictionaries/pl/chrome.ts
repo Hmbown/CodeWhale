@@ -8,7 +8,7 @@ import type { ChromeDict } from "../types";
  * (ty), standard polskich narzędzi deweloperskich.
  *
  * Tryby i postawy uprawnień zostają dosłowne (Plan / Work / Operate, Ask /
- * Auto-Review / Full Access); `Runtime`, `Fleet` i `TUI` to nazwy produktu;
+ * Auto-Review / Full Access); `Runtime`, `Pod` i `TUI` to nazwy produktu;
  * „receipt" to potwierdzenie.
  *
  * Drugie etykiety nawigacji parują polską etykietę z krótkim angielskim
@@ -84,6 +84,9 @@ export const chrome: ChromeDict = {
   footerIssues: "Issues",
   footerContribute: "Współtwórz",
   footerLicense: "Licencja MIT",
+  footerPricing: "Cennik",
+  footerTerms: "Warunki usługi",
+  footerPrivacy: "Prywatność",
   footerCanonicalSource: "Repozytorium źródłowe: ",
   footerReleases: " · Wydania: ",
   footerReleasesLink: "Wydania na GitHubie",

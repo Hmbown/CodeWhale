@@ -60,6 +60,78 @@ fn verifier_config_rejects_unknown_verdict_policy() {
 }
 
 #[test]
+fn lifecycle_outbox_toml_is_off_by_default_and_parses_when_configured() {
+    // Unset = feature OFF: the table is absent and the field is None.
+    let absent: ConfigToml = toml::from_str("model = \"demo\"\n").expect("minimal config");
+    assert!(
+        absent.lifecycle_outbox.is_none(),
+        "unset [lifecycle_outbox] must leave the feature off"
+    );
+
+    // An empty table is also off: no path means no outbox file.
+    let empty: ConfigToml =
+        toml::from_str("[lifecycle_outbox]\n").expect("empty lifecycle_outbox table");
+    let outbox = empty.lifecycle_outbox.expect("table should parse");
+    assert!(outbox.path.is_none());
+    assert!(outbox.webhook_url.is_none());
+    assert!(outbox.webhook_token.is_none());
+
+    // Full configuration: path plus optional webhook url and token.
+    let full: ConfigToml = toml::from_str(
+        r#"
+        [lifecycle_outbox]
+        path = "~/.codewhale/notifications/outbox.jsonl"
+        webhook_url = "https://example.com/hooks/codewhale"
+        webhook_token = "secret-token"
+        "#,
+    )
+    .expect("full lifecycle_outbox table");
+    let outbox = full.lifecycle_outbox.expect("table should parse");
+    assert_eq!(
+        outbox.path,
+        Some(PathBuf::from("~/.codewhale/notifications/outbox.jsonl"))
+    );
+    assert_eq!(
+        outbox.webhook_url.as_deref(),
+        Some("https://example.com/hooks/codewhale")
+    );
+    assert_eq!(outbox.webhook_token.as_deref(), Some("secret-token"));
+}
+
+#[test]
+fn lifecycle_outbox_toml_webhook_is_optional() {
+    // `path` alone enables the file outbox without any webhook.
+    let file_only: ConfigToml = toml::from_str(
+        r#"
+        [lifecycle_outbox]
+        path = "/tmp/outbox.jsonl"
+        "#,
+    )
+    .expect("file-only lifecycle_outbox table");
+    let outbox = file_only.lifecycle_outbox.expect("table should parse");
+    assert_eq!(outbox.path, Some(PathBuf::from("/tmp/outbox.jsonl")));
+    assert!(outbox.webhook_url.is_none());
+
+    // A webhook url without a path does not enable a file outbox; the
+    // consumer decides whether webhook-only delivery is meaningful, but the
+    // parse must stay lossless either way.
+    let webhook_only: ConfigToml = toml::from_str(
+        r#"
+        [lifecycle_outbox]
+        webhook_url = "https://example.com/hooks/codewhale"
+        "#,
+    )
+    .expect("webhook-only lifecycle_outbox table");
+    let outbox = webhook_only.lifecycle_outbox.expect("table should parse");
+    assert!(outbox.path.is_none());
+    assert_eq!(
+        outbox.webhook_url.as_deref(),
+        Some("https://example.com/hooks/codewhale")
+    );
+    assert!(outbox.webhook_token.is_none());
+}
+
+#[test]
 fn permissions_toml_deserializes_typed_ask_rules() {
     let permissions: PermissionsToml = toml::from_str(
         r#"
@@ -437,6 +509,36 @@ action = "session.compact"
     let round_tripped: ConfigToml =
         toml::from_str(&serialized).expect("deserialize serialized config");
     assert_eq!(round_tripped.hotbar, config.hotbar);
+}
+
+#[test]
+fn legacy_fleet_hotbar_action_resolves_to_canonical_pod_without_rewriting_disk() {
+    let config: ConfigToml = toml::from_str(
+        r#"
+[[hotbar]]
+slot = 3
+action = "slash.fleet"
+label = "Pod"
+"#,
+    )
+    .expect("parse legacy hotbar binding");
+
+    let resolved = config.resolve_hotbar_bindings(&["slash.pod"]);
+
+    assert_eq!(resolved.warnings, Vec::new());
+    assert_eq!(
+        resolved.bindings,
+        vec![HotbarBinding {
+            slot: 3,
+            action: "slash.pod".to_string(),
+            label: Some("Pod".to_string()),
+        }]
+    );
+    assert_eq!(
+        config.hotbar.as_ref().unwrap()[0].action,
+        "slash.fleet",
+        "read-time compatibility must not mutate the parsed on-disk value"
+    );
 }
 
 #[test]
@@ -1989,7 +2091,7 @@ fn nvidia_nim_provider_accepts_short_nim_base_url_alias() {
 }
 
 #[test]
-fn nvidia_nim_provider_can_fallback_to_deepseek_api_key_env() {
+fn nvidia_nim_provider_does_not_fallback_to_deepseek_api_key_env() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();
     // Safety: test-only environment mutation guarded by a module mutex.
@@ -2002,7 +2104,8 @@ fn nvidia_nim_provider_can_fallback_to_deepseek_api_key_env() {
     let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
 
     assert_eq!(resolved.provider, ProviderKind::NvidiaNim);
-    assert_eq!(resolved.api_key.as_deref(), Some("deepseek-compat-key"));
+    assert_eq!(resolved.api_key, None);
+    assert_eq!(resolved.api_key_source, None);
 }
 
 #[test]
@@ -5266,6 +5369,23 @@ fn zai_aliases_resolve_to_canonical_models() {
             "{alias} must not resolve to the Z.ai default"
         );
     }
+    for alias in [
+        "glm-5.3-flash",
+        "glm-5-3-flash",
+        "zai-glm-5.3-flash",
+        "GLM-5.3-Flash",
+    ] {
+        assert_eq!(
+            normalize_model_for_provider(ProviderKind::Zai, alias),
+            ZAI_GLM_5_3_FLASH_MODEL,
+            "{alias} must canonicalize to GLM-5.3-Flash"
+        );
+        assert_ne!(
+            normalize_model_for_provider(ProviderKind::Zai, alias),
+            ZAI_GLM_5_3_MODEL,
+            "{alias} must not collapse onto GLM-5.3"
+        );
+    }
     assert_eq!(
         normalize_model_for_provider(ProviderKind::Zai, "glm-5-turbo"),
         ZAI_GLM_5_TURBO_MODEL
@@ -5310,6 +5430,28 @@ fn zhipu_aliases_fold_into_zai_provider() {
         normalize_model_for_provider(ProviderKind::Zai, "glm-5-2"),
         ZAI_GLM_5_2_MODEL
     );
+}
+
+#[test]
+fn zai_official_endpoint_family_includes_zhipu_general_api() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+    for base_url in [
+        "https://api.z.ai/api/coding/paas/v4",
+        "https://api.z.ai/api/paas/v4/",
+        "https://open.bigmodel.cn/api/paas/v4",
+    ] {
+        assert!(provider_base_url_is_official(ProviderKind::Zai, base_url));
+        assert!(!provider_preserves_custom_base_url_model(
+            ProviderKind::Zai,
+            base_url
+        ));
+    }
+    assert!(!provider_base_url_is_official(
+        ProviderKind::Zai,
+        "https://open.bigmodel.cn/api/paas/v4/preview"
+    ));
 }
 
 #[test]
@@ -7034,6 +7176,7 @@ fn openrouter_provider_normalizes_recent_large_model_aliases() {
         ("glm-5.1", OPENROUTER_GLM_5_1_MODEL),
         ("glm-5.2", OPENROUTER_GLM_5_2_MODEL),
         ("glm-5.3", OPENROUTER_GLM_5_3_MODEL),
+        ("glm-5.3-flash", OPENROUTER_GLM_5_3_FLASH_MODEL),
     ] {
         let cli = CliRuntimeOverrides {
             provider: Some(ProviderKind::Openrouter),
@@ -8661,6 +8804,17 @@ fn telemetry_consent_names_its_source() {
     let (on, source) = resolved_telemetry_consent(None);
     assert!(on);
     assert_eq!(source, TelemetrySource::Env);
+}
+
+#[test]
+fn resolved_runtime_options_mints_a_route_candidate() {
+    let resolved = ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+    let route = resolved
+        .route
+        .as_ref()
+        .expect("RouteResolver is the runtime path");
+    assert_eq!(route.provider_kind(), resolved.provider);
+    assert_eq!(route.endpoint().base_url, resolved.base_url);
 }
 
 /// #5441: the runtime receipt carries the same source the surfaces print.

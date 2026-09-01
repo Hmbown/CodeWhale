@@ -4,12 +4,12 @@
 //! request building (`build_chat_messages*`), and SSE parsing
 //! (`parse_sse_chunk_with_reasoning_style`) all live here.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::Write;
 use std::pin::Pin;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::time::timeout as tokio_timeout;
@@ -17,7 +17,8 @@ use tokio::time::timeout as tokio_timeout;
 use crate::config::{
     TOGETHER_INKLING_MODEL, is_exact_direct_moonshot_k3_route, is_exact_kimi_code_k3_route,
     is_exact_xai_grok_4_6_route, is_exact_zai_chat_route, is_exact_zai_tiered_effort_route,
-    minimax_m3_route_uses_max_completion_tokens, wire_model_for_provider_route,
+    is_kimi_code_membership_model, minimax_m3_route_uses_max_completion_tokens,
+    moonshot_base_url_is_exact_kimi_code, wire_model_for_provider_route,
 };
 
 // The bounded response-header wait (`stream_open_timeout`) and its env
@@ -864,6 +865,29 @@ fn apply_direct_moonshot_k3_fixed_sampling(
     }
 }
 
+/// Kimi Code's documented membership models own their sampling behavior.
+/// Strip generic controls only on the exact first-party membership route;
+/// custom gateways and unknown model ids retain their own wire contract.
+/// Source: <https://www.kimi.com/code/docs/en/third-party-tools/codex.html>
+/// (verified 2026-08-26).
+fn apply_kimi_code_fixed_sampling(
+    body: &mut Value,
+    provider: ApiProvider,
+    base_url: &str,
+    model: &str,
+) {
+    if provider != ApiProvider::Moonshot
+        || !moonshot_base_url_is_exact_kimi_code(base_url)
+        || !is_kimi_code_membership_model(model)
+    {
+        return;
+    }
+    if let Some(object) = body.as_object_mut() {
+        object.remove("temperature");
+        object.remove("top_p");
+    }
+}
+
 fn openai_compatible_reasoning_effort(
     effort: &str,
     supports_max: bool,
@@ -918,38 +942,62 @@ fn mirror_minimax_reasoning_details_for_body(body: &mut Value, provider: ApiProv
     mirror_minimax_reasoning_details_for_messages(messages);
 }
 
-fn sanitize_moonshot_chat_tools(chat_tools: &mut [Value]) -> Result<()> {
-    for tool in chat_tools {
+/// Sanitize every Moonshot chat tool in place, dropping only the tools whose
+/// parameters cannot pass MFJS compatibility validation.
+///
+/// Per-tool degradation: a single incompatible tool (e.g. a third-party MCP
+/// server whose schema uses keywords outside the MFJS whitelist) is excluded
+/// from this request with a warning instead of failing the whole request
+/// before transport. The tool name is safe to log — it is already visible in
+/// the UI — while the error's `Display` deliberately carries no schema values.
+///
+/// Returns the names of the dropped tools, in catalog order.
+fn sanitize_moonshot_chat_tools(chat_tools: &mut Vec<Value>) -> Vec<String> {
+    let mut dropped = Vec::new();
+    chat_tools.retain_mut(|tool| {
         let Some(function) = tool
             .as_object_mut()
             .and_then(|tool| tool.get_mut("function"))
             .and_then(Value::as_object_mut)
         else {
-            continue;
+            return true;
         };
         let Some(parameters) = function.get_mut("parameters") else {
-            continue;
+            return true;
         };
-        let note = crate::tools::schema_sanitize::sanitize_for_kimi_parameters(parameters)
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "Moonshot function parameters failed safe compatibility validation: {error}"
-                )
-            })?;
-        if let Some(note) = note {
-            let description = function
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let description = if description.is_empty() {
-                note
-            } else {
-                format!("{description} {note}")
-            };
-            function.insert("description".to_string(), json!(description));
+        match crate::tools::schema_sanitize::sanitize_for_kimi_parameters(parameters) {
+            Ok(note) => {
+                if let Some(note) = note {
+                    let description = function
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let description = if description.is_empty() {
+                        note
+                    } else {
+                        format!("{description} {note}")
+                    };
+                    function.insert("description".to_string(), json!(description));
+                }
+                true
+            }
+            Err(error) => {
+                let name = function
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("<unnamed>")
+                    .to_string();
+                tracing::warn!(
+                    tool = %name,
+                    error = %error,
+                    "dropping Moonshot tool from this request: parameters failed safe compatibility validation"
+                );
+                dropped.push(name);
+                false
+            }
         }
-    }
-    Ok(())
+    });
+    dropped
 }
 
 /// The final Chat Completions wire payload for one request.
@@ -973,6 +1021,10 @@ pub(crate) struct ChatWireBody {
     /// `reasoning_content`. Only computed on the streaming path, which is the
     /// only path that runs the replay sanitizer today.
     pub(crate) replay_input_tokens: Option<u32>,
+    /// Wire-normalized tool names omitted because Moonshot's MFJS validator
+    /// rejected their parameter schemas. Kept outside the wire body so the
+    /// caller can surface one bounded diagnostic without leaking schema data.
+    pub(crate) omitted_tool_names: Vec<String>,
 }
 
 /// Build the Chat Completions wire body for `request`.
@@ -1018,16 +1070,18 @@ pub(crate) fn build_chat_wire_body(
     if let Some(top_p) = request.top_p {
         body["top_p"] = json!(top_p);
     }
+    let mut omitted_tool_names = Vec::new();
     if let Some(tools) = request.tools.as_ref() {
         let mut chat_tools: Vec<_> = tools
             .iter()
             .map(|tool| tool_to_chat_for_base_url(tool, base_url))
             .collect();
         // Moonshot function parameters must end at a plain object root.
-        // Flatten root composition, preserve valid nested anyOf, and fail
-        // closed before transport when an internal root ref is unsafe.
+        // Flatten root composition, preserve valid nested anyOf, and drop
+        // only the tools whose parameters cannot pass MFJS validation so one
+        // incompatible tool never sinks the whole request.
         if matches!(provider, crate::config::ApiProvider::Moonshot) {
-            sanitize_moonshot_chat_tools(&mut chat_tools)?;
+            omitted_tool_names = sanitize_moonshot_chat_tools(&mut chat_tools);
         }
         // xAI rejects a parameters root that is not a plain object schema
         // (e.g. apply_patch's root `oneOf` required-groups) with a 400.
@@ -1055,13 +1109,28 @@ pub(crate) fn build_chat_wire_body(
                 }
             }
         }
-        body["tools"] = json!(chat_tools);
+        // When per-tool degradation (or the caller) left no tools, omit the
+        // key entirely: an empty `tools` array — or a `tool_choice` pointing
+        // at a dropped tool — is itself a fresh 400 on strict providers.
+        if !chat_tools.is_empty() {
+            body["tools"] = json!(chat_tools);
+        }
     }
     if should_send_tool_choice_for_chat(provider, request.reasoning_effort.as_deref())
         && let Some(choice) = request.tool_choice.as_ref()
         && let Some(mapped) = map_tool_choice_for_chat(choice)
     {
-        body["tool_choice"] = mapped;
+        if matches!(provider, crate::config::ApiProvider::Moonshot)
+            && let Some(name) = mapped.pointer("/function/name").and_then(Value::as_str)
+            && omitted_tool_names.iter().any(|omitted| omitted == name)
+        {
+            bail!(
+                "Moonshot cannot force tool '{name}' because its input schema is incompatible with this route"
+            );
+        }
+        if body.get("tools").is_some() {
+            body["tool_choice"] = mapped;
+        }
     }
     apply_route_reasoning_controls(
         &mut body,
@@ -1071,6 +1140,7 @@ pub(crate) fn build_chat_wire_body(
         request.reasoning_effort.as_deref(),
     );
     apply_direct_moonshot_k3_fixed_sampling(&mut body, provider, base_url, &model);
+    apply_kimi_code_fixed_sampling(&mut body, provider, base_url, &model);
 
     // Bulletproof final sanitizer: walk the wire payload and force
     // `reasoning_content` onto any assistant message that has tool_calls
@@ -1097,6 +1167,7 @@ pub(crate) fn build_chat_wire_body(
         body,
         model,
         replay_input_tokens,
+        omitted_tool_names,
     })
 }
 
@@ -1141,7 +1212,10 @@ impl DeepSeekClient {
                 status.as_u16(),
                 &raw_error_text,
             );
-            anyhow::bail!("Failed to call DeepSeek Chat API: HTTP {status}: {error_text}");
+            anyhow::bail!(
+                "Failed to call {} Chat Completions API: HTTP {status}: {error_text}",
+                self.api_provider.display_name()
+            );
         }
 
         let response_text = response
@@ -2462,6 +2536,10 @@ fn build_chat_messages_with_reasoning(
 ) -> Vec<Value> {
     let mut out = Vec::new();
     let mut pending_tool_calls: HashMap<String, PendingToolCallInfo> = HashMap::new();
+    // Chat Completions requires every result for one assistant tool-call batch
+    // to be contiguous. Keep tool-result media aside until the complete batch
+    // has been emitted as `role: tool` messages.
+    let mut deferred_tool_result_images = Vec::new();
     let mut seen_tool_results: HashMap<String, SeenToolResult> = HashMap::new();
     let mut last_full_turn_meta: Option<LastFullTurnMeta> = None;
 
@@ -2561,6 +2639,7 @@ fn build_chat_messages_with_reasoning(
             }
         }
 
+        let out_len_before_role_projection = out.len();
         if placement.is_assistant_channel() {
             let content = if placement == RolePlacement::InterruptedAssistant {
                 format!(
@@ -2599,6 +2678,7 @@ fn build_chat_messages_with_reasoning(
             // placeholder content field.
             if !has_text && !has_tool_calls && !has_reasoning {
                 pending_tool_calls.clear();
+                deferred_tool_result_images.clear();
                 continue;
             }
 
@@ -2617,9 +2697,18 @@ fn build_chat_messages_with_reasoning(
             }
             if has_tool_calls {
                 msg["tool_calls"] = json!(tool_calls);
+                let expected_tool_result_count = tool_call_infos.len();
                 pending_tool_calls = tool_call_infos.into_iter().collect();
+                deferred_tool_result_images.clear();
+                if pending_tool_calls.len() != expected_tool_result_count {
+                    logging::warn(
+                        "Rejecting assistant tool-call batch with duplicate tool_call IDs",
+                    );
+                    pending_tool_calls.clear();
+                }
             } else {
                 pending_tool_calls.clear();
+                deferred_tool_result_images.clear();
             }
             out.push(msg);
         } else if matches!(placement, RolePlacement::System | RolePlacement::Developer) {
@@ -2667,11 +2756,24 @@ fn build_chat_messages_with_reasoning(
             }
         }
 
+        // A user/system/developer wire message closes the contiguous run that
+        // must follow an assistant tool-call message. If the same stored
+        // message also carries a later tool result, reject it here instead of
+        // briefly accepting the result and letting any synthesized media
+        // escape after the safety pass strips the malformed batch.
+        if out.len() > out_len_before_role_projection
+            && !placement.is_assistant_channel()
+            && !pending_tool_calls.is_empty()
+        {
+            logging::warn("Dropping tool-call batch interrupted by non-tool content");
+            pending_tool_calls.clear();
+            deferred_tool_result_images.clear();
+        }
+
         if !tool_results.is_empty() {
             if pending_tool_calls.is_empty() {
                 logging::warn("Dropping tool results without matching tool_calls");
             } else {
-                let mut tool_result_images = Vec::new();
                 for (tool_id, content, message_label, content_blocks) in tool_results {
                     if let Some(tool_info) = pending_tool_calls.remove(&tool_id) {
                         let (image, omitted) = crate::image_attach::provider_tool_result_image_refs(
@@ -2701,14 +2803,14 @@ fn build_chat_messages_with_reasoning(
                         }
                         out.push(tool_msg);
                         if let Some((mime_type, data)) = image {
-                            tool_result_images.push(json!({
+                            deferred_tool_result_images.push(json!({
                                 "type": "text",
                                 "text": format!(
                                     "Image returned by tool `{}` (call `{tool_id}`):",
                                     tool_info.tool_name,
                                 ),
                             }));
-                            tool_result_images.push(json!({
+                            deferred_tool_result_images.push(json!({
                                 "type": "image_url",
                                 "image_url": {
                                     "url": format!("data:{mime_type};base64,{data}")
@@ -2721,12 +2823,16 @@ fn build_chat_messages_with_reasoning(
                         ));
                     }
                 }
-                if !tool_result_images.is_empty() {
-                    out.push(json!({ "role": "user", "content": tool_result_images }));
+                if pending_tool_calls.is_empty() && !deferred_tool_result_images.is_empty() {
+                    out.push(json!({
+                        "role": "user",
+                        "content": std::mem::take(&mut deferred_tool_result_images),
+                    }));
                 }
             }
         } else if !placement.is_assistant_channel() {
             pending_tool_calls.clear();
+            deferred_tool_result_images.clear();
         }
     }
 
@@ -2741,7 +2847,7 @@ fn build_chat_messages_with_reasoning(
             && out[i].get("tool_calls").is_some();
 
         if is_assistant_with_tools {
-            let expected_ids: HashSet<String> = out[i]
+            let expected_ids: Vec<String> = out[i]
                 .get("tool_calls")
                 .and_then(Value::as_array)
                 .map(|calls| {
@@ -2753,7 +2859,7 @@ fn build_chat_messages_with_reasoning(
                 .unwrap_or_default();
 
             // Collect tool result IDs immediately following this assistant message.
-            let mut found_ids: HashSet<String> = HashSet::new();
+            let mut found_ids = Vec::new();
             let mut tool_result_end = i + 1;
             while tool_result_end < out.len() {
                 if out[tool_result_end].get("role").and_then(Value::as_str) == Some("tool") {
@@ -2761,7 +2867,7 @@ fn build_chat_messages_with_reasoning(
                         .get("tool_call_id")
                         .and_then(Value::as_str)
                     {
-                        found_ids.insert(id.to_string());
+                        found_ids.push(id.to_string());
                     }
                     tool_result_end += 1;
                 } else {
@@ -2769,23 +2875,16 @@ fn build_chat_messages_with_reasoning(
                 }
             }
 
-            // Also scan non-contiguous tool results up to the next assistant message
-            // in case compaction left gaps.
-            let mut scan = tool_result_end;
-            while scan < out.len() {
-                if out[scan].get("role").and_then(Value::as_str) == Some("assistant") {
-                    break;
-                }
-                if out[scan].get("role").and_then(Value::as_str) == Some("tool")
-                    && let Some(id) = out[scan].get("tool_call_id").and_then(Value::as_str)
-                {
-                    found_ids.insert(id.to_string());
-                }
-                scan += 1;
-            }
-
-            if !expected_ids.is_subset(&found_ids) {
-                let missing: Vec<_> = expected_ids.difference(&found_ids).collect();
+            // Chat Completions accepts only the immediately contiguous tool
+            // run after its assistant tool-call message. Do not accept a
+            // later tool result after user/system content has intervened.
+            let results_match = expected_ids.len() == found_ids.len()
+                && expected_ids.iter().all(|id| found_ids.contains(id));
+            if !results_match {
+                let missing: Vec<_> = expected_ids
+                    .iter()
+                    .filter(|id| !found_ids.contains(*id))
+                    .collect();
                 logging::warn(format!(
                     "Stripping orphaned tool_calls from assistant message \
                      (expected {} tool results, found {}, missing: {:?})",
@@ -2808,7 +2907,7 @@ fn build_chat_messages_with_reasoning(
                         j -= 1;
                         if out[j].get("role").and_then(Value::as_str) == Some("tool")
                             && let Some(id) = out[j].get("tool_call_id").and_then(Value::as_str)
-                            && expected_ids.contains(id)
+                            && expected_ids.iter().any(|expected| expected == id)
                         {
                             out.remove(j);
                         }
@@ -2828,7 +2927,7 @@ fn build_chat_messages_with_reasoning(
                     j -= 1;
                     if out[j].get("role").and_then(Value::as_str) == Some("tool")
                         && let Some(id) = out[j].get("tool_call_id").and_then(Value::as_str)
-                        && expected_ids.contains(id)
+                        && expected_ids.iter().any(|expected| expected == id)
                     {
                         out.remove(j);
                     }
@@ -3802,6 +3901,22 @@ fn parse_sse_chunk_with_reasoning_style(
 ) -> Vec<StreamEvent> {
     let mut events = Vec::new();
 
+    // OpenAI-compatible providers surface mid-stream failures as a chunk-level
+    // `error` object (sometimes with `type: "error"`), delivered before
+    // `[DONE]`. Silently dropping it turned rate-limit / context-length /
+    // server errors into a truncated turn that looked successful — the frame
+    // is now surfaced through the same `StreamEvent::Error` contract the
+    // Anthropic path uses (#3014, ops R3).
+    if let Some(error) = chunk.get("error") {
+        let error = match error {
+            Value::Object(_) => error.clone(),
+            Value::String(message) => serde_json::json!({ "message": message }),
+            _ => serde_json::json!({ "message": "provider stream error" }),
+        };
+        events.push(StreamEvent::Error { error });
+        return events;
+    }
+
     let Some(choices) = chunk.get("choices").and_then(Value::as_array) else {
         // Usage-only chunk (sent at end with stream_options)
         if let Some(usage_val) = chunk.get("usage") {
@@ -4116,6 +4231,65 @@ mod stream_diagnostics_tests {
             message,
             "SSE stream idle timeout after 240s — no data received \
              (bytes_received=8192, stream_age_ms=73500, ms_since_last_chunk=41250)"
+        );
+    }
+
+    #[test]
+    fn chat_completions_error_frames_surface_as_stream_events() {
+        let mut content_index = 0u32;
+        let mut text_started = false;
+        let mut thinking_started = false;
+        let mut tool_indices = std::collections::HashMap::new();
+        let mut reasoning_buffers = std::collections::HashMap::new();
+        for chunk in [
+            json!({ "error": { "message": "rate limit exceeded", "type": "rate_limit_error" } }),
+            json!({ "type": "error", "error": { "message": "context length exceeded" } }),
+            json!({ "error": "server error" }),
+        ] {
+            let events = parse_sse_chunk(
+                &chunk,
+                &mut content_index,
+                &mut text_started,
+                &mut thinking_started,
+                &mut tool_indices,
+                &mut reasoning_buffers,
+                false,
+            );
+            assert_eq!(
+                events.len(),
+                1,
+                "a chunk-level error frame must not be swallowed ({chunk})"
+            );
+            match &events[0] {
+                StreamEvent::Error { error } => assert!(
+                    !error.is_null()
+                        && (error.get("message").and_then(Value::as_str).is_some()
+                            || error.is_string()),
+                    "the provider error message must survive parsing: {error}"
+                ),
+                other => panic!("expected StreamEvent::Error, got {other:?}"),
+            }
+        }
+        // A normal content chunk still parses as a delta after the error path.
+        let deltas = parse_sse_chunk(
+            &json!({"choices": [{"index": 0, "delta": {"content": "ok"}}]}),
+            &mut content_index,
+            &mut text_started,
+            &mut thinking_started,
+            &mut tool_indices,
+            &mut reasoning_buffers,
+            false,
+        );
+        assert!(
+            deltas.iter().any(|event| {
+                matches!(
+                    event,
+                    StreamEvent::ContentBlockDelta {
+                        delta: Delta::TextDelta { text }, ..
+                    } if text == "ok"
+                )
+            }),
+            "content deltas still parse: {deltas:?}"
         );
     }
 
@@ -4554,12 +4728,12 @@ mod alias_thinking_detection_tests {
     //! <https://api-docs.deepseek.com/guides/thinking_mode>
     use super::{
         ReasoningStreamStyle, apply_direct_moonshot_k3_fixed_sampling,
-        apply_inkling_reasoning_effort, apply_kimi_code_k3_reasoning_effort,
-        apply_openai_reasoning_effort, apply_provider_token_limit, apply_route_reasoning_controls,
-        is_reasoning_model_for_stream, is_reasoning_model_for_stream_on_route,
-        provider_accepts_reasoning_content, reasoning_stream_style_for_route,
-        requires_reasoning_content, should_replay_reasoning_content,
-        should_replay_reasoning_content_for_provider,
+        apply_inkling_reasoning_effort, apply_kimi_code_fixed_sampling,
+        apply_kimi_code_k3_reasoning_effort, apply_openai_reasoning_effort,
+        apply_provider_token_limit, apply_route_reasoning_controls, is_reasoning_model_for_stream,
+        is_reasoning_model_for_stream_on_route, provider_accepts_reasoning_content,
+        reasoning_stream_style_for_route, requires_reasoning_content,
+        should_replay_reasoning_content, should_replay_reasoning_content_for_provider,
         should_replay_reasoning_content_for_provider_on_route,
     };
     use crate::config::ApiProvider;
@@ -5449,6 +5623,62 @@ mod alias_thinking_detection_tests {
     }
 
     #[test]
+    fn kimi_code_k3_256k_uses_k3_reasoning_and_membership_sampling_contracts() {
+        let mut body = json!({
+            "reasoning_effort": "stale",
+            "temperature": 0.3,
+            "top_p": 0.8,
+        });
+        apply_kimi_code_k3_reasoning_effort(
+            &mut body,
+            ApiProvider::Moonshot,
+            crate::config::DEFAULT_KIMI_CODE_BASE_URL,
+            crate::config::KIMI_CODE_K3_256K_MODEL,
+            Some("max"),
+        );
+        apply_kimi_code_fixed_sampling(
+            &mut body,
+            ApiProvider::Moonshot,
+            crate::config::DEFAULT_KIMI_CODE_BASE_URL,
+            crate::config::KIMI_CODE_K3_256K_MODEL,
+        );
+
+        assert_eq!(
+            body["thinking"],
+            json!({ "type": "enabled", "effort": "max" })
+        );
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("top_p").is_none());
+    }
+
+    #[test]
+    fn kimi_code_fixed_sampling_does_not_leak_to_neighbor_routes() {
+        for (provider, base_url, model) in [
+            (
+                ApiProvider::Moonshot,
+                crate::config::DEFAULT_MOONSHOT_BASE_URL,
+                crate::config::KIMI_CODE_K3_256K_MODEL,
+            ),
+            (
+                ApiProvider::Openrouter,
+                crate::config::DEFAULT_KIMI_CODE_BASE_URL,
+                crate::config::KIMI_CODE_K3_256K_MODEL,
+            ),
+            (
+                ApiProvider::Moonshot,
+                crate::config::DEFAULT_KIMI_CODE_BASE_URL,
+                "k3-256k-preview",
+            ),
+        ] {
+            let mut body = json!({ "temperature": 0.3, "top_p": 0.8 });
+            apply_kimi_code_fixed_sampling(&mut body, provider, base_url, model);
+            assert_eq!(body["temperature"], json!(0.3));
+            assert_eq!(body["top_p"], json!(0.8));
+        }
+    }
+
+    #[test]
     fn direct_moonshot_k3_uses_top_level_effort_and_never_disables_thinking() {
         for (requested, expected) in [
             ("off", "low"),
@@ -5789,11 +6019,12 @@ mod alias_thinking_detection_tests {
     #[test]
     fn zai_tiered_effort_applies_to_glm_5_2_and_glm_5_3_but_not_5_1() {
         let zai = crate::config::DEFAULT_ZAI_BASE_URL;
-        // GLM-5.3 inherits GLM-5.2's reasoning_options (effort high/max), so it
-        // must take the same tiered wire path — not the generic toggle.
+        // GLM-5.3 and GLM-5.3-Flash inherit GLM-5.2's reasoning_options
+        // (effort high/max), so they must take the same tiered wire path.
         for model in [
             crate::config::ZAI_GLM_5_2_MODEL,
             crate::config::ZAI_GLM_5_3_MODEL,
+            crate::config::ZAI_GLM_5_3_FLASH_MODEL,
         ] {
             let mut body = json!({});
             apply_route_reasoning_controls(&mut body, ApiProvider::Zai, zai, model, Some("max"));
@@ -5912,11 +6143,33 @@ mod image_block_wire_tests {
     //! most of them at once. The shape is fixed by OpenAI's spec: a `user`
     //! message whose `content` is an array of parts, with the image as
     //! `{"type":"image_url","image_url":{"url":…}}`.
-    use super::{ApiProvider, build_chat_wire_body};
+    use super::{ApiProvider, build_chat_messages, build_chat_wire_body};
     use crate::models::Role;
     use crate::models::{ContentBlock, ImageUrlContent, Message, MessageRequest};
 
     const DATA_URL: &str = "data:image/png;base64,QUJD";
+
+    fn fixture_tool_use(id: &str) -> ContentBlock {
+        ContentBlock::ToolUse {
+            id: id.to_string(),
+            name: "read".to_string(),
+            input: serde_json::json!({"path": format!("{id}.txt")}),
+            caller: None,
+            thought_signature: None,
+        }
+    }
+
+    fn fixture_tool_result(id: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: id.to_string(),
+                content: format!("result for {id}"),
+                is_error: Some(false),
+                content_blocks: None,
+            }],
+        }
+    }
 
     fn request_with_image() -> MessageRequest {
         MessageRequest {
@@ -6101,6 +6354,274 @@ mod image_block_wire_tests {
             parts[0]["text"]
                 .as_str()
                 .is_some_and(|text| text.contains("read") && text.contains("call_image_1"))
+        );
+    }
+
+    #[test]
+    fn tool_result_images_follow_the_entire_tool_call_batch() {
+        let mut request = request_with_image();
+        request.messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "call_image_1".to_string(),
+                        name: "read".to_string(),
+                        input: serde_json::json!({"path": "first.png"}),
+                        caller: None,
+                        thought_signature: None,
+                    },
+                    ContentBlock::ToolUse {
+                        id: "call_image_2".to_string(),
+                        name: "read".to_string(),
+                        input: serde_json::json!({"path": "second.png"}),
+                        caller: None,
+                        thought_signature: None,
+                    },
+                ],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "call_image_1".to_string(),
+                    content: "first screenshot captured".to_string(),
+                    is_error: Some(false),
+                    content_blocks: Some(vec![serde_json::json!({
+                        "type": "image",
+                        "mime_type": "image/png",
+                        "data": "QUJD",
+                    })]),
+                }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "call_image_2".to_string(),
+                    content: "second screenshot captured".to_string(),
+                    is_error: Some(false),
+                    content_blocks: Some(vec![serde_json::json!({
+                        "type": "image",
+                        "mime_type": "image/png",
+                        "data": "REVG",
+                    })]),
+                }],
+            },
+        ];
+
+        let body = build_chat_wire_body(
+            &request,
+            ApiProvider::Openai,
+            "https://api.openai.com/v1",
+            false,
+        )
+        .expect("wire body");
+        let messages = body.body["messages"].as_array().expect("messages");
+        let roles: Vec<_> = messages
+            .iter()
+            .map(|message| message["role"].as_str().expect("role"))
+            .collect();
+        assert_eq!(roles, ["assistant", "tool", "tool", "user"]);
+        assert_eq!(messages[1]["tool_call_id"], "call_image_1");
+        assert_eq!(messages[2]["tool_call_id"], "call_image_2");
+
+        let image_parts = messages[3]["content"].as_array().expect("image parts");
+        assert_eq!(image_parts.len(), 4);
+        assert_eq!(
+            image_parts[1]["image_url"]["url"],
+            "data:image/png;base64,QUJD"
+        );
+        assert_eq!(
+            image_parts[3]["image_url"]["url"],
+            "data:image/png;base64,REVG"
+        );
+    }
+
+    #[test]
+    fn out_of_order_tool_results_remain_a_contiguous_complete_batch() {
+        let messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: vec![fixture_tool_use("call_one"), fixture_tool_use("call_two")],
+            },
+            fixture_tool_result("call_two"),
+            fixture_tool_result("call_one"),
+        ];
+
+        let wire = build_chat_messages(None, &messages, "gpt-4o");
+        let roles: Vec<_> = wire
+            .iter()
+            .map(|message| message["role"].as_str().expect("role"))
+            .collect();
+        assert_eq!(roles, ["assistant", "tool", "tool"]);
+        assert_eq!(wire[1]["tool_call_id"], "call_two");
+        assert_eq!(wire[2]["tool_call_id"], "call_one");
+    }
+
+    #[test]
+    fn incomplete_tool_result_batch_is_downgraded_before_serialization() {
+        let messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: vec![fixture_tool_use("call_one"), fixture_tool_use("call_two")],
+            },
+            fixture_tool_result("call_one"),
+        ];
+
+        let wire = build_chat_messages(None, &messages, "gpt-4o");
+        assert!(
+            !wire
+                .iter()
+                .any(|message| message.get("tool_calls").is_some()),
+            "an incomplete tool batch must not reach the provider: {wire:?}"
+        );
+        assert!(
+            !wire
+                .iter()
+                .any(|message| message["role"].as_str() == Some("tool")),
+            "the partial result must be removed with its incomplete call batch: {wire:?}"
+        );
+    }
+
+    #[test]
+    fn interleaved_tool_result_batch_is_downgraded_before_serialization() {
+        let messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "call_one".to_string(),
+                        name: "read".to_string(),
+                        input: serde_json::json!({"path": "first.png"}),
+                        caller: None,
+                        thought_signature: None,
+                    },
+                    ContentBlock::ToolUse {
+                        id: "call_two".to_string(),
+                        name: "read".to_string(),
+                        input: serde_json::json!({"path": "second.png"}),
+                        caller: None,
+                        thought_signature: None,
+                    },
+                ],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "call_one".to_string(),
+                    content: "first screenshot captured".to_string(),
+                    is_error: Some(false),
+                    content_blocks: Some(vec![serde_json::json!({
+                        "type": "image",
+                        "mime_type": "image/png",
+                        "data": "QUJD",
+                    })]),
+                }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![
+                    ContentBlock::Text {
+                        text: "interloper".to_string(),
+                        cache_control: None,
+                    },
+                    ContentBlock::ToolResult {
+                        tool_use_id: "call_two".to_string(),
+                        content: "second screenshot captured".to_string(),
+                        is_error: Some(false),
+                        content_blocks: Some(vec![serde_json::json!({
+                            "type": "image",
+                            "mime_type": "image/png",
+                            "data": "REVG",
+                        })]),
+                    },
+                ],
+            },
+        ];
+
+        let wire = build_chat_messages(None, &messages, "gpt-4o");
+        assert!(
+            !wire
+                .iter()
+                .any(|message| message.get("tool_calls").is_some()),
+            "a non-contiguous tool batch must not reach the provider: {wire:?}"
+        );
+        assert!(
+            !wire
+                .iter()
+                .any(|message| message["role"].as_str() == Some("tool")),
+            "orphaned tool replies must be removed with their stripped call batch: {wire:?}"
+        );
+        assert!(
+            !wire.iter().any(|message| {
+                message["content"].as_array().is_some_and(|parts| {
+                    parts
+                        .iter()
+                        .any(|part| part["type"].as_str() == Some("image_url"))
+                })
+            }),
+            "images from a stripped tool batch must not survive as user input: {wire:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_tool_call_ids_are_downgraded_before_serialization() {
+        let messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "duplicate".to_string(),
+                        name: "read".to_string(),
+                        input: serde_json::json!({"path": "first.png"}),
+                        caller: None,
+                        thought_signature: None,
+                    },
+                    ContentBlock::ToolUse {
+                        id: "duplicate".to_string(),
+                        name: "read".to_string(),
+                        input: serde_json::json!({"path": "second.png"}),
+                        caller: None,
+                        thought_signature: None,
+                    },
+                ],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "duplicate".to_string(),
+                    content: "one result for two calls".to_string(),
+                    is_error: Some(false),
+                    content_blocks: Some(vec![serde_json::json!({
+                        "type": "image",
+                        "mime_type": "image/png",
+                        "data": "QUJD",
+                    })]),
+                }],
+            },
+        ];
+
+        let wire = build_chat_messages(None, &messages, "gpt-4o");
+        assert!(
+            !wire
+                .iter()
+                .any(|message| message.get("tool_calls").is_some()),
+            "duplicate call IDs cannot satisfy two tool calls: {wire:?}"
+        );
+        assert!(
+            !wire
+                .iter()
+                .any(|message| message["role"].as_str() == Some("tool")),
+            "the ambiguous tool result must be removed with the stripped batch: {wire:?}"
+        );
+        assert!(
+            !wire.iter().any(|message| {
+                message["content"].as_array().is_some_and(|parts| {
+                    parts
+                        .iter()
+                        .any(|part| part["type"].as_str() == Some("image_url"))
+                })
+            }),
+            "media from an ambiguous duplicate-ID batch must not survive: {wire:?}"
         );
     }
 }

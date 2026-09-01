@@ -1,6 +1,6 @@
 # Changelog Archive
 
-Older releases of CodeWhale (v0.8.39 and earlier). Recent releases live in [CHANGELOG.md](../CHANGELOG.md).
+Older releases of Codewhale (v0.8.39 and earlier). Recent releases live in [CHANGELOG.md](../CHANGELOG.md).
 
 ## [0.8.39] - 2026-05-17
 
@@ -3431,7 +3431,7 @@ Welcome — and thank you.
   unsupported platforms don't fail the whole `npm install`.
 
 ### Docs
-- New [`docs/INSTALL.md`](docs/INSTALL.md) — every supported platform,
+- New [`INSTALL.md`](INSTALL.md) — every supported platform,
   prebuilt vs. `cargo install` vs. manual download, cross-compiling x64 → ARM64
   Linux with `cross` or `gcc-aarch64-linux-gnu`, and a troubleshooting section
   covering the common `Unsupported architecture`, `MISSING_COMPANION_BINARY`,

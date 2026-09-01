@@ -138,7 +138,7 @@ export default async function ConstitutionPage({ params }: { params: Promise<{ l
         <div className="flex flex-wrap items-center gap-3">
           <Link
             href={p("/install")}
-            className="px-5 py-3 bg-ink text-paper font-mono text-sm uppercase tracking-wider hover:bg-indigo transition-colors"
+            className="px-5 py-3 bg-indigo text-paper font-mono text-sm uppercase tracking-wider hover:bg-indigo-deep transition-colors"
           >
             {isZh ? "安装 →" : "Install →"}
           </Link>

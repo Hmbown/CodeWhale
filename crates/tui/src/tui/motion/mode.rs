@@ -72,12 +72,6 @@ impl MotionPolicy {
     }
 
     #[must_use]
-    #[allow(dead_code)] // status-spin gate; ui currently uses allows_decorative (TUI-DOG-008)
-    pub fn allows_status_spin(self) -> bool {
-        matches!(self.mode, MotionMode::Full)
-    }
-
-    #[must_use]
     pub fn allows_catch_up_bursts(self) -> bool {
         matches!(self.mode, MotionMode::Full)
     }

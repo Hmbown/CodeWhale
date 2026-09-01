@@ -5,6 +5,7 @@
 // migration scaffolding; see docs/architecture/command-dispatch.md.
 #[allow(clippy::module_inception)]
 pub mod config;
+mod import_claude;
 mod permissions;
 mod status;
 
@@ -19,7 +20,9 @@ impl CommandGroup for ConfigCommands {
     fn commands(&self) -> &'static [Box<dyn Command>] {
         cached_command_list!(vec![
             Box::new(FunctionCommand::new(&CONFIG_INFO, run_config)),
+            Box::new(FunctionCommand::new(&IMPORT_CLAUDE_INFO, run_import_claude)),
             Box::new(FunctionCommand::new(&PERMISSIONS_INFO, run_permissions)),
+            Box::new(FunctionCommand::new(&LOGIN_INFO, run_login)),
             Box::new(FunctionCommand::new(&AUTH_INFO, run_auth)),
             Box::new(FunctionCommand::new(&RAIL_INFO, run_rail)),
             Box::new(FunctionCommand::new(&SETTINGS_INFO, run_settings)),
@@ -42,11 +45,23 @@ static CONFIG_INFO: CommandInfo = CommandInfo {
     usage: "/config [ask-rules|status|<key> [value]]",
     description_id: MessageId::CmdConfigDescription,
 };
+static IMPORT_CLAUDE_INFO: CommandInfo = CommandInfo {
+    name: "import-claude",
+    aliases: &["import_claude"],
+    usage: "/import-claude",
+    description_id: MessageId::CmdImportClaudeDescription,
+};
 static PERMISSIONS_INFO: CommandInfo = CommandInfo {
     name: "permissions",
     aliases: &["permission-rules", "permission_rules"],
     usage: "/permissions [list|remove <rule-number> [--confirm <token>]]",
     description_id: MessageId::CmdPermissionsDescription,
+};
+static LOGIN_INFO: CommandInfo = CommandInfo {
+    name: "login",
+    aliases: &[],
+    usage: "/login [status|account|key]",
+    description_id: MessageId::CmdLoginDescription,
 };
 static AUTH_INFO: CommandInfo = CommandInfo {
     name: "auth",
@@ -116,8 +131,14 @@ fn run_registered(app: &mut App, name: &str, arg: Option<&str>) -> CommandResult
 fn run_config(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "config", arg)
 }
+fn run_import_claude(app: &mut App, arg: Option<&str>) -> CommandResult {
+    import_claude::import_claude_command(app, arg)
+}
 fn run_permissions(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "permissions", arg)
+}
+fn run_login(app: &mut App, arg: Option<&str>) -> CommandResult {
+    run_registered(app, "login", arg)
 }
 fn run_auth(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "auth", arg)
@@ -159,6 +180,7 @@ pub(in crate::commands) fn dispatch(
         "permissions" | "permission-rules" | "permission_rules" => {
             permissions::permissions_command(app, arg)
         }
+        "login" => config::login(app, arg),
         "auth" => match arg.map(str::trim) {
             Some("xai-device") | Some("xai_device") => {
                 CommandResult::action(crate::tui::app::AppAction::StartXaiDeviceLogin)

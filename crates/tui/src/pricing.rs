@@ -625,6 +625,9 @@ fn known_pricing_for_model(model_lower: &str) -> Option<ModelPricing> {
         // Z.ai GLM-5.2 cache-read rate per https://docs.z.ai/guides/overview/pricing
         // (cache storage limited-time free).
         "z-ai/glm-5.2" | "glm-5.2" => Some(usd_only_pricing(0.26, 1.40, 4.40)),
+        // GLM-5.3-Flash list rates (2026-08-26). Promo 50% off until
+        // 2026-09-09 UTC+8 is not the durable row.
+        "z-ai/glm-5.3-flash" | "glm-5.3-flash" => Some(usd_only_pricing(0.03, 0.15, 0.50)),
         // Moonshot K2.7 Code cache-read rate per
         // https://platform.kimi.ai/docs/pricing/chat-k27-code
         "moonshotai/kimi-k2.7-code" | "kimi-k2.7-code" => Some(usd_only_pricing(0.19, 0.95, 4.00)),
@@ -707,6 +710,9 @@ fn known_pricing_for_model(model_lower: &str) -> Option<ModelPricing> {
         // Cache-write is 0.40 upstream (#4318).
         "qwen/qwen3.7-plus" => Some(usd_pricing_with_write(0.064, 0.32, 1.28, 0.40)),
         "qwen/qwen3.7-max" => Some(usd_only_pricing(0.25, 1.25, 3.75)),
+        // OpenRouter durable list prices (models.dev 2026-08-26, no promo):
+        // input 0.16 / output 0.47 / cache_read 0.016 / cache_write 0.20 per 1M.
+        "qwen/qwen3.8-flash" => Some(usd_pricing_with_write(0.016, 0.16, 0.47, 0.20)),
 
         "google/gemma-4-31b-it" => Some(usd_only_pricing(0.09, 0.12, 0.35)),
         "google/gemma-4-26b-a4b-it" => Some(usd_only_pricing(0.06, 0.06, 0.33)),
@@ -1832,7 +1838,11 @@ fn provider_owned_hand_pricing_at(
         // owns a *hand-written price row* for the model, and no GLM-5.3 rate
         // has been published. An absent price is honest; an owned-but-empty
         // row is not. See `glm_5_3_has_no_hardcoded_price` below.
-        ApiProvider::Zai => matches!(model_lower.as_str(), "glm-5.1" | "glm-5.2" | "glm-5-turbo"),
+        // GLM-5.3-Flash *does* have a published USD list (2026-08-26).
+        ApiProvider::Zai => matches!(
+            model_lower.as_str(),
+            "glm-5.1" | "glm-5.2" | "glm-5.3-flash" | "glm-5-turbo"
+        ),
         // `k3` (Kimi Code membership) is deliberately absent: it is quota
         // billed and must never inherit the direct-platform kimi-k3 rate.
         ApiProvider::Moonshot => matches!(
@@ -3295,6 +3305,8 @@ mod tests {
             ("z-ai/glm-5.1", 0.26, 1.40, 4.40),
             ("glm-5.2", 0.26, 1.40, 4.40),
             ("z-ai/glm-5.2", 0.26, 1.40, 4.40),
+            ("glm-5.3-flash", 0.03, 0.15, 0.50),
+            ("z-ai/glm-5.3-flash", 0.03, 0.15, 0.50),
             ("glm-5-turbo", 0.24, 1.20, 4.00),
             ("z-ai/glm-5-turbo", 0.24, 1.20, 4.00),
             ("qwen/qwen3.6-plus", 0.325, 0.325, 1.95),
@@ -3560,39 +3572,43 @@ mod tests {
 
     #[test]
     fn provider_cost_does_not_fabricate_price_for_costless_catalog_route() {
-        let offering = crate::provider_lake::catalog_offering_for_model(
-            ApiProvider::Openai,
-            "deepseek-v4-pro",
-        )
-        .expect("bundled OpenAI-compatible route");
-        assert!(OfferingPricing::from_catalog_offering(&offering).is_none());
+        let _live = crate::provider_lake::lock_live_snapshot();
+        crate::provider_lake::clear_live_snapshot();
         let usage = Usage {
             input_tokens: 1_000_000,
             output_tokens: 0,
             ..Default::default()
         };
+        let recorded_at = Utc::now();
 
-        assert!(
-            calculate_turn_cost_estimate_for_provider_at(
-                ApiProvider::Openai,
-                "deepseek-v4-pro",
-                &usage,
-                Utc::now(),
-            )
-            .is_none()
-        );
-        assert!(
-            calculate_turn_cost_estimate_for_provider(
-                ApiProvider::Openai,
-                "deepseek-v4-pro",
-                &usage,
-            )
-            .is_none()
-        );
-        assert!(!has_pricing_for_provider(
-            ApiProvider::Openai,
-            "deepseek-v4-pro"
-        ));
+        for (provider, model) in [
+            (ApiProvider::Zai, "GLM-5.3"),
+            (ApiProvider::XiaomiMimo, "mimo-v2.5-pro"),
+            (ApiProvider::ModelstudioTokenPlan, "qwen3.8-max"),
+        ] {
+            let offering =
+                crate::provider_lake::bundled_catalog_offering_for_model(provider, model)
+                    .unwrap_or_else(|| panic!("missing bundled route: {provider:?}/{model}"));
+            assert!(
+                OfferingPricing::from_catalog_offering(&offering).is_none(),
+                "{provider:?}/{model}"
+            );
+            assert!(
+                calculate_turn_cost_estimate_for_provider_at(provider, model, &usage, recorded_at,)
+                    .is_none(),
+                "{provider:?}/{model}"
+            );
+            assert!(
+                calculate_turn_cost_estimate_for_provider(provider, model, &usage).is_none(),
+                "{provider:?}/{model}"
+            );
+            assert!(
+                !has_pricing_for_provider(provider, model),
+                "{provider:?}/{model}"
+            );
+        }
+
+        crate::provider_lake::clear_live_snapshot();
     }
 
     #[test]

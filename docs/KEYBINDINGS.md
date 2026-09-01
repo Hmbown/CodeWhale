@@ -1,5 +1,7 @@
 # Keybindings
 
+> 阅读简体中文版：[zh_hans/KEYBINDINGS.md](zh_hans/KEYBINDINGS.md)
+
 This is the source-of-truth catalog of every keyboard shortcut the TUI recognizes. Bindings are grouped by **context** — the focus or modal state they fire in. A binding listed under "Composer" only takes effect when the composer is focused; one under "Transcript" only when the transcript has focus; and so on.
 
 Global key chords are not yet user-configurable — tracked for a future release (#436, #437). Hotbar slot actions are configurable with `[[hotbar]]` and `/hotbar`; the Hotbar activation chord remains `Alt-1` through `Alt-8`.
@@ -10,6 +12,7 @@ Global key chords are not yet user-configurable — tracked for a future release
 |----------------------|---------------------------------------------------------------|
 | `F1` or `Ctrl-/`     | Toggle the help overlay                                       |
 | `F2`                 | Toggle the typed Settings editor                              |
+| `F3`                 | Open the provider/model picker (same as `/provider`)          |
 | `Ctrl-K`             | Open the command palette (slash-command finder)                |
 | `Ctrl-C`             | Cancel current turn / dismiss modal / arm-then-confirm quit    |
 | `Ctrl-B`             | Move a supported foreground shell wait into `/jobs` so the turn can continue; use `/jobs` or `Bash` with `action: "wait"` to inspect it |
@@ -41,7 +44,7 @@ Editing the message you're about to send.
 |-----------------------------|---------------------------------------------------------|
 | `Enter`                     | Send when idle; queue while busy; with an empty composer, send the next queued follow-up now |
 | `Shift-Enter` / `Alt-Enter` / `Ctrl-J` | Insert a newline without sending (idle or busy) |
-| `Ctrl-Enter` / `Cmd-Enter`  | Steer the current turn; send normally when idle (when supported by the terminal) |
+| `Ctrl-Enter` / `Cmd-Enter`  | Send into the current turn; send normally when idle (when the terminal reports it distinctly) |
 | `Ctrl-U`                    | Clear the whole draft (recoverable — see `Ctrl-Z`)      |
 | `Ctrl-Z`                    | Restore the cleared draft (only while the composer is empty) |
 | `Ctrl-W` / `Ctrl-Backspace` / `Alt-Backspace` | Delete previous word        |
@@ -54,7 +57,7 @@ Editing the message you're about to send.
 | `Shift-Home` / `Shift-End`  | Extend the selection to the start / end of the line     |
 | `Ctrl-Shift-Home` / `Ctrl-Shift-End` | Extend the selection to the start / end of the draft |
 | `Ctrl-Shift-A` / `Cmd-A`    | Select the whole draft (see note below)                 |
-| `Ctrl-Shift-U`           | Run `/update install` from the keyboard: check for and install the latest CodeWhale release without leaving the TUI. Managed installs (Homebrew/npm/cargo) keep their package-manager gate; when already current the updater's "Already up to date." result is shown and nothing changes |
+| `Ctrl-Shift-U`           | Run `/update install` from the keyboard: check for and install the latest Codewhale release without leaving the TUI. Managed installs (Homebrew/npm/cargo) keep their package-manager gate; when already current the updater's "Already up to date." result is shown and nothing changes |
 | Mouse drag                  | Select composer text; click moves the cursor            |
 | `Cmd-V` / `Ctrl-Shift-V`    | Terminal-local paste (arrives as bracketed paste when supported) |
 | `Ctrl-V`                    | Direct clipboard paste in a local or forwarded graphical session |
@@ -62,7 +65,7 @@ Editing the message you're about to send.
 | `↑` / `↓`                   | Cycle composer history (also selects popup/attachment items) |
 | `Shift-↑` / `Shift-↓`       | Browse conversation history                              |
 | `Ctrl-P` / `Ctrl-N`         | Navigate slash-command menu entries; `Ctrl-P` opens the file picker when the menu is empty |
-| `Ctrl-G` / `Ctrl-S`         | Stash current draft (`/stash pop` restores it); never sends or steers |
+| `Ctrl-G` / `Ctrl-S`         | Stash current draft (`/stash pop` restores it); never sends or queues |
 | `Alt-R`                    | Search prompt history (Alt-R to exit)                  |
 | `Tab`                       | Slash-command / `@`-mention completion (popup-aware)    |
 | `Ctrl-Shift-O` / `F4`       | Open the composer draft in `$VISUAL` / `$EDITOR`; F4 works when the terminal cannot distinguish Ctrl-Shift-O from Ctrl-O |
@@ -152,6 +155,10 @@ When `[memory] enabled = true`, typing `# foo` and pressing `Enter` appends `foo
 | `Alt-[` / `Alt-]`    | Jump between tool output blocks                     |
 | `Esc Esc`            | Backtrack to a previous user message (`←`/`→` steps, `Enter` rewinds) |
 | `Esc`                | Return focus to composer                           |
+| `y`                  | Copy the focused transcript block content          |
+| `Y`                  | Copy the focused transcript block with metadata    |
+| `Enter`              | Open the focused transcript block fullscreen       |
+| `r`                  | Open the focused block's raw markdown/detail view  |
 | Mouse drag           | Select transcript text in Codewhale                |
 | `Ctrl-C`             | Copy an active Codewhale selection                 |
 | `Cmd-click` (macOS) / `Ctrl-click` (Linux/Windows) | Open an OSC 8 link in a supporting terminal (terminal-owned) |

@@ -325,6 +325,16 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
     groups::config::config::set_config_value(app, key, value, persist)
 }
 
+/// Update the canonical theme + ocean-treatment selection as one operation.
+pub fn set_theme_selection(
+    app: &mut App,
+    theme: &str,
+    ocean_treatment: &str,
+    persist: bool,
+) -> CommandResult {
+    groups::config::config::set_theme_selection(app, theme, ocean_treatment, persist)
+}
+
 pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
     groups::config::config::switch_mode(app, mode)
 }
@@ -608,6 +618,35 @@ mod tests {
         assert!(message.contains("Hugging Face provider route"));
         assert!(message.contains("Hugging Face MCP"));
         assert!(message.contains("Hub workflows"));
+    }
+
+    #[test]
+    fn login_slash_command_reports_status_and_key_opens_picker() {
+        let mut app = create_test_app();
+        let status = execute("/login", &mut app);
+        assert!(!status.is_error);
+        let message = status.message.expect("login status");
+        assert!(message.contains("Codewhale login"), "{message}");
+        assert!(message.contains("Account:"), "{message}");
+        assert!(message.contains("codewhale login"), "{message}");
+        // No-brand invariant: the internal cloud-agent slot is not user
+        // surface, so status never names it or teaches a set-slot command.
+        assert!(!message.contains("Daytona"), "{message}");
+        assert!(!message.contains("set-slot"), "{message}");
+
+        let key = execute("/login key", &mut app);
+        assert!(!key.is_error);
+        assert_eq!(key.action, Some(AppAction::OpenProviderPicker));
+
+        let daytona = execute("/login daytona", &mut app);
+        assert!(daytona.is_error);
+        let err = daytona.message.expect("usage");
+        assert!(err.contains("Usage: /login [status|account|key]"), "{err}");
+
+        let unknown = execute("/login oauth", &mut app);
+        assert!(unknown.is_error);
+        let err = unknown.message.expect("usage");
+        assert!(err.contains("Usage: /login"), "{err}");
     }
 
     #[test]
@@ -921,9 +960,9 @@ mod tests {
                 has_config = true;
                 assert_eq!(
                     commands.len(),
-                    12,
+                    14,
                     "config group (group-local metadata exception) expected \
-                     exactly 12 commands, got {}",
+                     exactly 14 commands, got {}",
                     commands.len()
                 );
             }
@@ -1083,6 +1122,7 @@ mod tests {
     fn flagship_orchestration_and_workspace_commands_are_visible_at_the_palette_root() {
         for name in [
             "auto",
+            "dispatch",
             "goal",
             "hooks",
             "tokens",
@@ -1863,19 +1903,26 @@ mod tests {
         // FEAT-015 shipped no production contextual command, so the assertion
         // below used to exclude nothing. FEAT-018 migrates the utility group;
         // the remaining non-fixture commands must still use the legacy
-        // concrete-App path. The seven utility entries are asserted separately
-        // by the FEAT-018 public-dispatch and inventory tests (Phase 6).
-        const FEAT_018_UTILITY: &[&str] = &[
+        // concrete-App path. The migrated groups (FEAT-018 utility seven plus
+        // `/dispatch`, and the FEAT-021 project four) are asserted separately
+        // by their public-dispatch and inventory tests.
+        const MIGRATED_GROUPS: &[&str] = &[
             "attach",
             "automation",
+            "dispatch",
             "jobs",
             "mcp",
             "network",
             "task",
             "update",
+            // FEAT-021 project group.
+            "init",
+            "lsp",
+            "share",
+            "goal",
         ];
         for info in command_infos() {
-            if info.name == "feat015ctx" || FEAT_018_UTILITY.contains(&info.name) {
+            if info.name == "feat015ctx" || MIGRATED_GROUPS.contains(&info.name) {
                 continue;
             }
             assert!(
@@ -1983,5 +2030,105 @@ mod tests {
         // /network (pure): list produces a message.
         let network = execute("/network list", &mut app);
         assert!(network.message.is_some() || network.is_error, "{network:?}");
+    }
+
+    // FEAT-021 project group public dispatch (Phase 6)
+
+    #[test]
+    fn feat021_project_entries_register_through_portable_bridge() {
+        // main's model carries no capability bitmask: each project command
+        // must register through the portable bridge as a contextual handler
+        // and dispatch safely through the public seam. Exact facet
+        // destructuring (D4) is proven by the handler tests and the adapter
+        // exposure test.
+        for name in ["init", "lsp", "share", "goal"] {
+            assert!(
+                registry().has_contextual_handler(name),
+                "/{name} must register through the portable bridge"
+            );
+            let handler = registry()
+                .get(name)
+                .expect("entry")
+                .contextual_handler()
+                .expect("contextual handler");
+            assert!(
+                matches!(
+                    handler,
+                    codewhale_command_contract::handler::CommandHandler::Contextual(_)
+                ),
+                "/{name} must be contextual"
+            );
+        }
+    }
+
+    #[test]
+    fn feat021_project_commands_dispatch_through_public_seam() {
+        let mut app = create_test_app();
+        app.workspace = PathBuf::from(".");
+
+        // /init: creating message + SendMessage action.
+        let init = execute("/init", &mut app);
+        assert!(!init.is_error, "{init:?}");
+        assert!(matches!(init.action, Some(AppAction::SendMessage(_))));
+
+        // /lsp status reaches the adapter through the public seam.
+        let lsp = execute("/lsp status", &mut app);
+        assert!(!lsp.is_error, "{lsp:?}");
+        let lsp_msg = lsp.message.expect("lsp message");
+        assert!(
+            lsp_msg.contains("LSP diagnostics are currently **"),
+            "{lsp_msg}"
+        );
+
+        // /share help is a safe no-op route.
+        let share = execute("/share help", &mut app);
+        assert!(!share.is_error, "{share:?}");
+
+        // /goal status without a goal prints usage (no panic).
+        let goal = execute("/goal status", &mut app);
+        assert!(!goal.is_error, "{goal:?}");
+
+        // Metadata bridges to the TUI localization ids.
+        for (name, id) in [
+            ("init", MessageId::CmdInitDescription),
+            ("lsp", MessageId::CmdLspDescription),
+            ("share", MessageId::CmdShareDescription),
+            ("goal", MessageId::CmdGoalDescription),
+        ] {
+            let info = registry().get_info(name).expect("info");
+            assert_eq!(info.description_id, id, "/{name} description bridge");
+        }
+    }
+
+    #[test]
+    fn feat021_public_dispatch_never_panics_on_project_commands() {
+        let mut app = create_test_app();
+        app.workspace = PathBuf::from(".");
+        for command in [
+            "/init",
+            "/init ",
+            "/lsp",
+            "/lsp status",
+            "/lsp on",
+            "/lsp off",
+            "/lsp bogus",
+            "/share",
+            "/share help",
+            "/share bogus",
+            "/goal",
+            "/goal status",
+            "/goal pause",
+            "/goal resume",
+            "/goal done",
+            "/goal bogus",
+            "/goal 42",
+        ] {
+            let result = execute(command, &mut app);
+            // Every path returns a result; none may panic.
+            assert!(
+                result.message.is_some() || result.action.is_some(),
+                "{command}: {result:?}"
+            );
+        }
     }
 }

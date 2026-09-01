@@ -444,6 +444,33 @@ fn match_kitty_csi_fragment(chars: &[char], start: usize) -> Option<usize> {
 }
 
 pub(crate) const MAX_SUBMITTED_INPUT_CHARS: usize = 16_000;
+
+/// Bounded preview shown inside the attachment card for a consolidated
+/// paste. Small enough to stay a summary, large enough to recognize the
+/// content.
+const PASTE_ATTACHMENT_PREVIEW_CHARS: usize = 240;
+
+/// Human-readable submission text for a paste-backed input: a size header,
+/// the `@`-mention that attaches the file for the model, and a bounded
+/// preview. The mention must survive verbatim — file-mention resolution
+/// scans the submitted text for it.
+fn paste_attachment_display(reference: &str, full: &str) -> String {
+    let chars = full.chars().count();
+    let preview_lines: Vec<&str> = full.lines().take(3).collect();
+    let joined = preview_lines.join("\n");
+    let preview: String = joined
+        .chars()
+        .take(PASTE_ATTACHMENT_PREVIEW_CHARS)
+        .collect();
+    let elided = if chars > PASTE_ATTACHMENT_PREVIEW_CHARS {
+        "…"
+    } else {
+        ""
+    };
+    format!(
+        "[Pasted content attached · {chars} chars]\n{reference}\n--- preview ---\n{preview}{elided}"
+    )
+}
 /// Maximum characters displayed in the composer for oversized input.
 /// Beyond this, the text is truncated for rendering but the full content
 /// is preserved for model submission (#3263).
@@ -1591,9 +1618,17 @@ impl App {
         let mut input = self.input.clone();
         if let Some(reference) = self.pending_paste_reference.take() {
             // Drop the oversized inline copy; the paste file is now the
-            // single source of truth for this content.
-            self.oversized_paste_full_text = None;
-            input = reference;
+            // single source of truth for this content. The submitted text
+            // keeps the @-mention (mention resolution attaches the file for
+            // the model) but wraps it in a human-readable attachment card
+            // with size and a bounded preview, so the transcript row can
+            // never render as a mysterious bare filesystem path (#553
+            // follow-up: "a path is not a message").
+            let full = self.oversized_paste_full_text.take();
+            input = match full {
+                Some(full) => paste_attachment_display(&reference, &full),
+                None => reference,
+            };
         } else if let Some(full) = self.oversized_paste_full_text.take() {
             input = full;
         }
@@ -1701,6 +1736,25 @@ impl App {
             }
         }
         self.submit_input()
+    }
+
+    /// Non-destructive twin of [`Self::handle_composer_enter`] for callers
+    /// that must commit other state before the composer may be consumed:
+    /// the startup composer begins the launch session before it consumes
+    /// its draft, so it probes first and never begins a session for an
+    /// Enter the paste-burst window is about to absorb. Reads the exact
+    /// same two predicates `handle_composer_enter` acts on — the burst
+    /// window and the trimmed-empty buffer — without mutating anything.
+    #[must_use]
+    pub fn composer_enter_would_submit(&self) -> bool {
+        if self.use_paste_burst_detection
+            && self
+                .paste_burst
+                .newline_should_insert_instead_of_submit(Instant::now())
+        {
+            return false;
+        }
+        !self.input.trim().is_empty()
     }
 
     /// Public wrapper around [`Self::consolidate_large_input`] that no-ops

@@ -8,7 +8,7 @@ import type { ChromeDict } from "../types";
  * tu, lo standard dei tool per sviluppatori in italiano.
  *
  * I modi e le posture di permesso restano letterali (Plan / Work / Operate,
- * Ask / Auto-Review / Full Access); `Runtime`, `Fleet` e `TUI` restano nomi
+ * Ask / Auto-Review / Full Access); `Runtime`, `Pod` e `TUI` restano nomi
  * di prodotto; «ricevuta» è receipt.
  *
  * Le etichette secondarie di navigazione abbinano l'etichetta italiana a
@@ -85,6 +85,9 @@ export const chrome: ChromeDict = {
   footerIssues: "Issues",
   footerContribute: "Contribuisci",
   footerLicense: "Licenza MIT",
+  footerPricing: "Prezzi",
+  footerTerms: "Termini di servizio",
+  footerPrivacy: "Privacy",
   footerCanonicalSource: "Sorgente canonico: ",
   footerReleases: " · Release: ",
   footerReleasesLink: "Release di GitHub",

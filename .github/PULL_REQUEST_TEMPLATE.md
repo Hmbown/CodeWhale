@@ -11,6 +11,7 @@
 
 ## Checklist
 
+- [ ] This PR adds a new layer/module/abstraction — it names or deletes the layer it replaces
 - [ ] Updated docs or comments as needed
 - [ ] Added or updated tests where relevant
 - [ ] Verified TUI behavior manually if UI changes

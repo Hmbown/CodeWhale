@@ -114,7 +114,7 @@ pub struct FocusTextureStats {
 impl FocusTextureStats {
     /// The accounting identity asserted by the unit tests. This type's only
     /// consumer is the test gate below, hence the `dead_code` allowance.
-    #[allow(dead_code)]
+    #[cfg(test)]
     #[must_use]
     pub fn accounted(&self) -> bool {
         self.cells_examined
@@ -242,9 +242,12 @@ mod tests {
     use super::*;
     use ratatui::style::Style;
 
-    /// The Blue Stage theme: fully resolvable (Rgb) surface and dim ink.
+    /// A fully resolvable (Rgb) theme for the texture's color math.
+    ///
+    /// Whale Flat deliberately leaves its shell surface terminal-owned, so it
+    /// is not a valid fixture for tests that exercise RGB scrim blending.
     fn theme() -> UiTheme {
-        let theme = crate::palette::ThemeId::Whale.ui_theme();
+        let theme = crate::palette::ThemeId::Dracula.ui_theme();
         assert!(palette::resolvable_rgb(theme.surface_bg).is_some());
         assert!(palette::resolvable_rgb(theme.text_dim).is_some());
         theme

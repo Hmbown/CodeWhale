@@ -3,6 +3,7 @@
 mod cloud;
 mod config_bundles;
 mod credential_handoff;
+mod dispatch;
 mod metrics;
 #[cfg(not(target_env = "ohos"))]
 mod update;
@@ -19,6 +20,7 @@ use codewhale_agent::ModelRegistry;
 use codewhale_app_server::{
     AppServerOptions, run as run_app_server, run_stdio as run_app_server_stdio,
 };
+use codewhale_config::route::{ProvidersExport, parse_route_kind};
 use codewhale_config::{
     CliRuntimeOverrides, ConfigApiKeyValueKind, ConfigStore, ConfigToml, ProviderKind,
     ProviderSource, ResolvedRuntimeOptions, RuntimeApiKeySource, SetupState,
@@ -33,141 +35,17 @@ use codewhale_telemetry::{
     TelemetryDecision, TurnWall,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum ProviderArg {
-    Deepseek,
-    NvidiaNim,
-    Openai,
-    Atlascloud,
-    WanjieArk,
-    Volcengine,
-    Openrouter,
-    Orcarouter,
-    XiaomiMimo,
-    Novita,
-    Fireworks,
-    Siliconflow,
-    #[value(
-        alias = "silicon-flow-cn",
-        alias = "siliconflow-CN",
-        alias = "silicon_flow_cn",
-        alias = "siliconflow_cn",
-        alias = "siliconflow-china",
-        alias = "siliconflow_china"
-    )]
-    SiliconflowCn,
-    Arcee,
-    Moonshot,
-    Sglang,
-    Vllm,
-    Ollama,
-    #[value(alias = "ollama_cloud")]
-    OllamaCloud,
-    Huggingface,
-    Together,
-    OpenaiCodex,
-    Anthropic,
-    #[value(alias = "open-model", alias = "open_model")]
-    Openmodel,
-    Zai,
-    Stepfun,
-    Minimax,
-    #[value(
-        alias = "minimax_anthropic",
-        alias = "mini-max-anthropic",
-        alias = "mini_max_anthropic"
-    )]
-    MinimaxAnthropic,
-    #[value(alias = "deep-infra", alias = "deep_infra")]
-    Deepinfra,
-    #[value(alias = "fugu", alias = "sakana-ai", alias = "sakana_ai")]
-    Sakana,
-    #[value(alias = "long-cat", alias = "meituan-longcat", alias = "meituan")]
-    LongCat,
-    #[value(alias = "opencode_go", alias = "opencodego")]
-    OpencodeGo,
-    #[value(
-        alias = "opencode_zen",
-        alias = "opencodezen",
-        alias = "zen",
-        alias = "opencode"
-    )]
-    OpencodeZen,
-    #[value(
-        alias = "meta-ai",
-        alias = "meta_ai",
-        alias = "meta-model-api",
-        alias = "muse",
-        alias = "muse-spark"
-    )]
-    Meta,
-    #[value(alias = "x-ai", alias = "x_ai", alias = "grok")]
-    Xai,
-    #[value(
-        alias = "mistral-ai",
-        alias = "mistral_ai",
-        alias = "mistralai",
-        alias = "la-plateforme",
-        alias = "la_plateforme"
-    )]
-    Mistral,
-    /// Google Gemini (official OpenAI-compatible endpoint).
-    Google,
-    /// Google Antigravity (`agy`) — consent-gated OAuth import.
-    #[value(alias = "agy")]
-    Antigravity,
-    #[value(alias = "eden-ai", alias = "eden_ai")]
-    Edenai,
+/// Catalog-backed `--provider` parser. Replaces the closed 47-arm `ProviderArg` enum.
+fn parse_catalog_route(value: &str) -> std::result::Result<ProviderKind, String> {
+    parse_route_kind(value).ok_or_else(|| {
+        format!(
+            "unknown route '{value}'; expected a catalog route id (see `codewhale providers export --json`)"
+        )
+    })
 }
 
-impl From<ProviderArg> for ProviderKind {
-    fn from(value: ProviderArg) -> Self {
-        match value {
-            ProviderArg::Deepseek => ProviderKind::Deepseek,
-            ProviderArg::NvidiaNim => ProviderKind::NvidiaNim,
-            ProviderArg::Openai => ProviderKind::Openai,
-            ProviderArg::Atlascloud => ProviderKind::Atlascloud,
-            ProviderArg::WanjieArk => ProviderKind::WanjieArk,
-            ProviderArg::Volcengine => ProviderKind::Volcengine,
-            ProviderArg::Openrouter => ProviderKind::Openrouter,
-            ProviderArg::Orcarouter => ProviderKind::Orcarouter,
-            ProviderArg::XiaomiMimo => ProviderKind::XiaomiMimo,
-            ProviderArg::Novita => ProviderKind::Novita,
-            ProviderArg::Fireworks => ProviderKind::Fireworks,
-            ProviderArg::Siliconflow => ProviderKind::Siliconflow,
-            ProviderArg::SiliconflowCn => ProviderKind::SiliconflowCN,
-            ProviderArg::Arcee => ProviderKind::Arcee,
-            ProviderArg::Moonshot => ProviderKind::Moonshot,
-            ProviderArg::Sglang => ProviderKind::Sglang,
-            ProviderArg::Vllm => ProviderKind::Vllm,
-            ProviderArg::Ollama => ProviderKind::Ollama,
-            ProviderArg::OllamaCloud => ProviderKind::OllamaCloud,
-            ProviderArg::Huggingface => ProviderKind::Huggingface,
-            ProviderArg::Together => ProviderKind::Together,
-            ProviderArg::OpenaiCodex => ProviderKind::OpenaiCodex,
-            ProviderArg::Anthropic => ProviderKind::Anthropic,
-            ProviderArg::Openmodel => ProviderKind::Openmodel,
-            ProviderArg::Zai => ProviderKind::Zai,
-            ProviderArg::Stepfun => ProviderKind::Stepfun,
-            ProviderArg::Minimax => ProviderKind::Minimax,
-            ProviderArg::MinimaxAnthropic => ProviderKind::MinimaxAnthropic,
-            ProviderArg::Deepinfra => ProviderKind::Deepinfra,
-            ProviderArg::Sakana => ProviderKind::Sakana,
-            ProviderArg::LongCat => ProviderKind::LongCat,
-            ProviderArg::OpencodeGo => ProviderKind::OpencodeGo,
-            ProviderArg::OpencodeZen => ProviderKind::OpencodeZen,
-            ProviderArg::Meta => ProviderKind::Meta,
-            ProviderArg::Xai => ProviderKind::Xai,
-            ProviderArg::Mistral => ProviderKind::Mistral,
-            ProviderArg::Google => ProviderKind::Google,
-            ProviderArg::Antigravity => ProviderKind::Antigravity,
-            ProviderArg::Edenai => ProviderKind::Edenai,
-        }
-    }
-}
-
-fn builtin_provider_arg(value: &str) -> Option<ProviderArg> {
-    ProviderArg::from_str(value, false).ok()
+fn builtin_provider_arg(value: &str) -> Option<ProviderKind> {
+    parse_route_kind(value)
 }
 
 fn parse_provider_identifier(value: &str) -> std::result::Result<String, String> {
@@ -201,7 +79,7 @@ struct Cli {
         long,
         value_name = "PROVIDER",
         value_parser = parse_provider_identifier,
-        help = "Provider selector; exec/fleet also accept configured custom provider identifiers"
+        help = "Provider selector; exec/pod also accept configured custom provider identifiers"
     )]
     provider: Option<String>,
     #[arg(long)]
@@ -251,6 +129,21 @@ struct Cli {
     /// Continue the most recent interactive session for this workspace.
     #[arg(short = 'c', long = "continue")]
     continue_session: bool,
+    /// Resume a saved interactive session by id or unique id prefix.
+    #[arg(
+        short = 'r',
+        long = "resume",
+        value_name = "SESSION_ID",
+        conflicts_with_all = ["continue_session", "session_id"]
+    )]
+    resume: Option<String>,
+    /// Alias of `--resume` matching `codewhale exec --session-id`.
+    #[arg(
+        long = "session-id",
+        value_name = "SESSION_ID",
+        conflicts_with_all = ["continue_session", "resume"]
+    )]
+    session_id: Option<String>,
     #[arg(short = 'p', long = "prompt", value_name = "PROMPT")]
     prompt_flag: Option<String>,
     #[arg(
@@ -308,7 +201,27 @@ non-interactive filesystem/shell tool use, matching the supported automation
 path used by stream-json wrappers.
 ")]
     Exec(TuiPassthroughArgs),
-    /// Manage durable Agent Fleet runs.
+    /// Manage durable Agent Pod runs.
+    ///
+    /// `pod` is the canonical spelling. `codewhale fleet` remains accepted as
+    /// a compatibility alias for the identical command: the durable ledger,
+    /// receipts, config tables, and `--fleet` workflow flag keep the Fleet
+    /// serialization name.
+    #[command(
+        name = "pod",
+        alias = "fleet",
+        after_help = "\
+Examples:
+  codewhale pod init
+  codewhale pod run tasks.json --max-workers 4
+  codewhale pod status
+
+`codewhale fleet` is a compatibility alias for this command and dispatches
+identically, as `/fleet` does for the `/pod` slash command. What keeps the
+Fleet name is everything that has to stay readable across versions: the
+durable ledger `.codewhale/fleet.jsonl`, saved rosters `fleets/<name>.toml`,
+the `[fleet]` and `[fleets.*]` config tables, and `workflow run --fleet`."
+    )]
     Fleet(TuiPassthroughArgs),
     /// Internal model-free Workflow tool dispatcher used by Lane Runtime.
     #[command(name = "workflow-tool", hide = true)]
@@ -395,6 +308,9 @@ New integrations should prefer `codewhale app-server`.")]
     /// Sign in to your Codewhale account and manage account-scoped provider keys.
     #[command(visible_alias = "cloud")]
     Account(cloud::CloudArgs),
+    /// Offload a coding agent to Daytona. Never spends or pushes without --confirm.
+    #[command(visible_alias = "cloud-agent")]
+    Dispatch(dispatch::DispatchArgs),
     /// Run MCP server mode over stdio.
     McpServer,
     /// Read/write/list config values.
@@ -464,6 +380,24 @@ The command prints the completion script to stdout; redirect it to a path your s
     Metrics(MetricsArgs),
     /// Check for and apply updates to the `codewhale` binary.
     Update(UpdateArgs),
+    /// Export the route catalog (`providers export --json`).
+    Providers(ProvidersArgs),
+}
+
+#[derive(Debug, Args)]
+struct ProvidersArgs {
+    #[command(subcommand)]
+    command: ProvidersCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ProvidersCommand {
+    /// Write the owned route catalog as JSON (cwc contract).
+    Export {
+        /// Required. The export is the generated cwc catalog source of truth.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// The name of this crate's `[[bin]]` target, and the command users actually
@@ -553,20 +487,15 @@ fn top_level_provider_override(
         return Ok(None);
     };
     if let Some(provider) = builtin_provider_arg(provider) {
-        return Ok(Some(provider.into()));
+        return Ok(Some(provider));
     }
     if command_accepts_raw_provider(command) {
         return Ok(None);
     }
 
-    let expected = ProviderArg::value_variants()
-        .iter()
-        .filter_map(ValueEnum::to_possible_value)
-        .map(|value| value.get_name().to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let expected = ProviderKind::names_hint();
     bail!(
-        "invalid value '{provider}' for '--provider <PROVIDER>': expected one of {expected}; configured custom providers are accepted only by exec and fleet"
+        "invalid value '{provider}' for '--provider <PROVIDER>': expected one of {expected}; configured custom providers are accepted only by exec and pod"
     )
 }
 
@@ -587,8 +516,8 @@ fn prepare_raw_provider_tui_dispatch(
             reject_exec_global_flags(&args.args)?;
             tui_args("exec", args.clone())
         }
-        Some(Commands::Fleet(args)) => tui_args("fleet", args.clone()),
-        _ => unreachable!("raw provider validation only permits Exec and Fleet"),
+        Some(Commands::Fleet(args)) => tui_args("pod", args.clone()),
+        _ => unreachable!("raw provider validation only permits Exec and Pod"),
     };
 
     // Dynamic provider config belongs to the TUI schema. Do not parse it
@@ -730,7 +659,7 @@ enum LaneCommand {
         /// Workflow name (e.g. `stopship`).
         #[arg(long)]
         workflow: Option<String>,
-        /// Fleet roster name (e.g. `stopship`).
+        /// Pod roster name (e.g. `stopship`); the flag keeps its compatibility spelling.
         #[arg(long)]
         fleet: Option<String>,
         /// Issue id binding.
@@ -773,8 +702,9 @@ enum WorkflowCommand {
     Run {
         /// Workflow name or path. `stopship` maps to workflows/stopship.workflow.js.
         workflow: String,
-        /// Named Fleet roster (e.g. stopship). Optional: without one, roles
-        /// resolve against the built-in roster and the session route.
+        /// Named Pod roster (e.g. stopship). The flag keeps its compatibility
+        /// spelling. Without one, roles resolve against the built-in roster
+        /// and the session route.
         #[arg(long)]
         fleet: Option<String>,
         /// Issue id binding recorded on the Lane and passed into workflow args.
@@ -1145,14 +1075,12 @@ fn run_workflow_command(
             // loaded and validated before the run starts.
             if let Some(name) = fleet.as_deref() {
                 let roots = named_fleet_search_roots(&workspace);
-                let loaded =
-                    codewhale_workflow::load_named_fleet(name, &roots).with_context(|| {
-                        format!("load fleet `{name}` from {}", display_roots(&roots))
-                    })?;
+                let loaded = codewhale_workflow::load_named_fleet(name, &roots)
+                    .with_context(|| format!("load Pod `{name}` from {}", display_roots(&roots)))?;
                 if workflow == "stopship" || name == "stopship" {
                     loaded
                         .validate_stopship_roles()
-                        .with_context(|| format!("validate stopship roles in fleet `{name}`"))?;
+                        .with_context(|| format!("validate stopship roles in Pod `{name}`"))?;
                 }
             }
 
@@ -1532,8 +1460,8 @@ struct LoginArgs {
     #[arg(long, hide = true)]
     api_key: Option<String>,
     /// Legacy provider flag: rejected with a redirect to `auth set`.
-    #[arg(long, value_enum, hide = true)]
-    provider: Option<ProviderArg>,
+    #[arg(long, value_parser = parse_catalog_route, hide = true)]
+    provider: Option<ProviderKind>,
 }
 
 #[derive(Debug, Args)]
@@ -1551,8 +1479,8 @@ enum AuthCommand {
     /// another CLI. Managed mutation is currently unsupported and fails closed.
     #[command(name = "external-consent")]
     ExternalConsent {
-        #[arg(long, value_enum)]
-        provider: ProviderArg,
+        #[arg(long, value_parser = parse_catalog_route)]
+        provider: ProviderKind,
         #[arg(long, value_enum)]
         mode: ExternalCredentialModeArg,
         /// Exact credential file path. Defaults to the selected CLI's resolved
@@ -1567,16 +1495,16 @@ enum AuthCommand {
     /// Revoke access to another CLI's credential file for one provider.
     #[command(name = "external-revoke")]
     ExternalRevoke {
-        #[arg(long, value_enum)]
-        provider: ProviderArg,
+        #[arg(long, value_parser = parse_catalog_route)]
+        provider: ProviderKind,
     },
     /// Show current provider and runtime-effective credential route state.
     /// Without `--provider`, shows all known providers.
     /// With `--provider`, shows detailed status for that provider.
     Status {
         /// Show status for a specific provider only.
-        #[arg(long, value_enum)]
-        provider: Option<ProviderArg>,
+        #[arg(long, value_parser = parse_catalog_route)]
+        provider: Option<ProviderKind>,
         /// Report resolved home/config/settings/backend paths and structural
         /// credential-source presence without printing credential values or
         /// probing provider credential stores.
@@ -1587,8 +1515,8 @@ enum AuthCommand {
     /// `--api-key`, `--api-key-stdin`, or prompts on stdin when
     /// neither is given. Does not echo the key.
     Set {
-        #[arg(long, value_enum)]
-        provider: ProviderArg,
+        #[arg(long, value_parser = parse_catalog_route)]
+        provider: ProviderKind,
         /// Inline value (discouraged — appears in shell history).
         #[arg(long)]
         api_key: Option<String>,
@@ -1599,18 +1527,18 @@ enum AuthCommand {
     /// Report the effective credential route for a provider. Never prints a
     /// credential; reports the source layer or structural OAuth/repair state.
     Get {
-        #[arg(long, value_enum)]
-        provider: ProviderArg,
+        #[arg(long, value_parser = parse_catalog_route)]
+        provider: ProviderKind,
     },
     /// Pipe the runtime-effective API key to a local client; refuses terminals.
     PrintApiKey {
-        #[arg(long, value_enum)]
-        provider: ProviderArg,
+        #[arg(long, value_parser = parse_catalog_route)]
+        provider: ProviderKind,
     },
     /// Delete a provider's key from config and secret-store storage.
     Clear {
-        #[arg(long, value_enum)]
-        provider: ProviderArg,
+        #[arg(long, value_parser = parse_catalog_route)]
+        provider: ProviderKind,
     },
     /// List all known providers with their runtime-effective auth state,
     /// without revealing credentials.
@@ -1665,13 +1593,13 @@ struct ModelArgs {
 #[derive(Debug, Subcommand)]
 enum ModelCommand {
     List {
-        #[arg(long, value_enum)]
-        provider: Option<ProviderArg>,
+        #[arg(long, value_parser = parse_catalog_route)]
+        provider: Option<ProviderKind>,
     },
     Resolve {
         model: Option<String>,
-        #[arg(long, value_enum)]
-        provider: Option<ProviderArg>,
+        #[arg(long, value_parser = parse_catalog_route)]
+        provider: Option<ProviderKind>,
     },
     /// Set the default model (e.g. "pro", "flash", "deepseek-v4-pro").
     Set { model: String },
@@ -1813,6 +1741,19 @@ pub fn run_cli() -> std::process::ExitCode {
             for cause in err.chain().skip(1) {
                 eprintln!("  caused by: {cause}");
             }
+            // A Codewhale account failure carries a class: CI logs must be
+            // able to tell a bad credential from an unconfigured agent model
+            // without parsing English, and the machine-readable code beside
+            // it names the control-plane branch that was taken.
+            if let Some(machine) = err.downcast_ref::<cloud::machine::MachineError>() {
+                eprintln!(
+                    "  codewhale: code={} status={}",
+                    machine.code, machine.status
+                );
+                if let Ok(code) = u8::try_from(machine.exit_code) {
+                    return std::process::ExitCode::from(code);
+                }
+            }
             std::process::ExitCode::FAILURE
         }
     }
@@ -1924,6 +1865,20 @@ fn run() -> Result<()> {
             error
         }
     })?;
+    // Root session flags only reach the TUI through the `None` branch below;
+    // no subcommand handler reads them. Accepting them silently resumes
+    // nothing -- `codewhale --resume abc exec "..."` would start a fresh
+    // session while looking like it continued one.
+    if command.is_some()
+        && (cli.continue_session || cli.resume.is_some() || cli.session_id.is_some())
+    {
+        anyhow::bail!(
+            "--continue/--resume/--session-id apply to the interactive session and \
+             cannot be combined with a subcommand. Run them without a subcommand, or \
+             use the subcommand's own flag (for example `codewhale exec --session-id <id>`)."
+        );
+    }
+
     match command {
         Some(Commands::Run(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
@@ -1983,7 +1938,7 @@ fn run() -> Result<()> {
         }
         Some(Commands::Fleet(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
-            run_tui_in_process(&cli, &resolved_runtime, tui_args("fleet", args))
+            run_tui_in_process(&cli, &resolved_runtime, tui_args("pod", args))
         }
         Some(Commands::WorkflowTool(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
@@ -1997,7 +1952,17 @@ fn run() -> Result<()> {
         }
         Some(Commands::Lane(args)) => run_lane_command(args),
         Some(Commands::Review(args)) => {
-            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
+            // CI path: a machine token authenticates as the account with no
+            // local session and no browser. The account's own configured
+            // provider then disambiguates a model that maps to several
+            // configured routes, which review otherwise hard-errors on.
+            let mut overrides = runtime_overrides.clone();
+            if overrides.provider.is_none()
+                && let Some(provider) = cloud::machine_review_provider()?
+            {
+                overrides.provider = Some(provider);
+            }
+            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &overrides);
             run_tui_in_process(&cli, &resolved_runtime, tui_args("review", args))
         }
         Some(Commands::Apply(args)) => {
@@ -2044,7 +2009,7 @@ fn run() -> Result<()> {
                 &store,
             )
         }
-        Some(Commands::Logout) => run_logout_command(&mut store),
+        Some(Commands::Logout) => run_logout_command(&mut store, cli.profile.as_deref()),
         Some(Commands::Auth(args)) => match args.command {
             AuthCommand::XaiDevice => {
                 let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
@@ -2081,6 +2046,7 @@ fn run() -> Result<()> {
             cloud::reject_inline_api_key(cli.api_key.as_deref())?;
             cloud::run(args, cli.profile.as_deref(), &store)
         }
+        Some(Commands::Dispatch(args)) => dispatch::run(args),
         Some(Commands::McpServer) => {
             // `codewhale serve --mcp` delegates to the TUI and arms there, so
             // without this the same user action reported differently depending
@@ -2167,6 +2133,7 @@ fn run() -> Result<()> {
             finish_cli_telemetry(session, &outcome);
             outcome
         }
+        Some(Commands::Providers(args)) => run_providers_command(args),
         None => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             let forwarded = root_tui_passthrough(&cli)?;
@@ -2179,6 +2146,26 @@ fn root_tui_passthrough(cli: &Cli) -> Result<Vec<String>> {
     let mut forwarded = Vec::new();
     if cli.continue_session {
         forwarded.push("--continue".to_string());
+    }
+    let resume_session_id = cli
+        .resume
+        .as_deref()
+        .or(cli.session_id.as_deref())
+        .map(str::trim);
+    if resume_session_id.is_some_and(str::is_empty) {
+        // A shell expanding an unset variable -- `codewhale --resume
+        // "$SESSION_ID"` -- must not quietly become a fresh session. The user
+        // asked to resume; starting new loses the session they meant, and the
+        // mistake is invisible until the history is gone.
+        bail!(
+            "--resume/--session-id needs a session id, but got an empty value \
+             (an unset shell variable?). Use `codewhale --continue` to resume \
+             the most recent session."
+        );
+    }
+    if let Some(session_id) = resume_session_id {
+        forwarded.push("--resume".to_string());
+        forwarded.push(session_id.to_string());
     }
 
     let prompt =
@@ -2196,6 +2183,11 @@ fn root_tui_passthrough(cli: &Cli) -> Result<Vec<String>> {
         if cli.continue_session {
             bail!(
                 "`codewhale --continue` resumes the interactive TUI. Use `codewhale exec --continue <PROMPT>` to continue a session non-interactively."
+            );
+        }
+        if let Some(session_id) = resume_session_id {
+            bail!(
+                "`codewhale --resume {session_id}` resumes the interactive TUI. Use `codewhale exec --resume {session_id} <PROMPT>` to continue a session non-interactively."
             );
         }
         forwarded.push("--prompt".to_string());
@@ -2365,19 +2357,24 @@ fn reject_legacy_login_provider_args(args: &LoginArgs) -> Result<()> {
     )
 }
 
-fn run_logout_command(store: &mut ConfigStore) -> Result<()> {
-    run_logout_command_with_secrets(store, &Secrets::auto_detect())
+fn run_logout_command(store: &mut ConfigStore, profile: Option<&str>) -> Result<()> {
+    run_logout_command_with_secrets(store, &Secrets::auto_detect(), profile)
 }
 
-fn run_logout_command_with_secrets(store: &mut ConfigStore, secrets: &Secrets) -> Result<()> {
+fn run_logout_command_with_secrets(
+    store: &mut ConfigStore,
+    secrets: &Secrets,
+    profile: Option<&str>,
+) -> Result<()> {
     codewhale_config::with_xai_oauth_revocation_transaction(|| {
-        run_logout_command_with_secrets_unlocked(store, secrets)
+        run_logout_command_with_secrets_unlocked(store, secrets, profile)
     })
 }
 
 fn run_logout_command_with_secrets_unlocked(
     store: &mut ConfigStore,
     secrets: &Secrets,
+    profile: Option<&str>,
 ) -> Result<()> {
     let original_config = store.config.clone();
     store.config.api_key = None;
@@ -2397,7 +2394,16 @@ fn run_logout_command_with_secrets_unlocked(
         store.config = original_config;
         return Err(error);
     }
-    let keyring_failures = clear_all_provider_api_keys_from_keyring(secrets);
+    let mut keyring_failures = clear_all_provider_api_keys_from_keyring(secrets);
+    if let Err(error) = clear_daytona_slot(secrets) {
+        keyring_failures.push(format!(
+            "{}: {error}",
+            codewhale_secrets::DAYTONA_TOKEN_SLOT
+        ));
+    }
+    if let Err(error) = clear_account_session(profile) {
+        keyring_failures.push(format!("account session: {error}"));
+    }
     if keyring_failures.is_empty() {
         println!("logged out");
     } else {
@@ -2408,6 +2414,32 @@ fn run_logout_command_with_secrets_unlocked(
         println!("logged out (some stored credentials could not be deleted)");
     }
     Ok(())
+}
+
+fn clear_daytona_slot(secrets: &Secrets) -> Result<(), codewhale_secrets::SecretsError> {
+    if secrets
+        .get(codewhale_secrets::DAYTONA_TOKEN_SLOT)?
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        secrets.delete(codewhale_secrets::DAYTONA_TOKEN_SLOT)?;
+    }
+    Ok(())
+}
+
+fn clear_account_session(profile: Option<&str>) -> Result<(), String> {
+    use codewhale_secrets::account::{
+        ACCOUNT_API_BASE_ENV, AccountSessionStore, DEFAULT_ACCOUNT_API_BASE,
+        secure_account_session_secrets,
+    };
+    let secrets = secure_account_session_secrets().map_err(|error| error.to_string())?;
+    let api_base = std::env::var(ACCOUNT_API_BASE_ENV)
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_ACCOUNT_API_BASE.to_string());
+    AccountSessionStore::new(secrets, profile, &api_base)
+        .clear()
+        .map_err(|error| error.to_string())
 }
 
 /// Map [`ProviderKind`] to the canonical provider credential slot.
@@ -3187,6 +3219,8 @@ fn auth_status_all_providers_with_runtime(
 ) -> Vec<String> {
     let active_provider = store.config.provider;
     let mut lines = Vec::new();
+    lines.push(account_status_line());
+    lines.push(String::new());
     lines.push(format!(
         "active provider: {} (set via config or CODEWHALE_PROVIDER)",
         active_provider.as_str()
@@ -3273,7 +3307,40 @@ fn auth_status_all_providers_with_runtime(
     lines.push(String::new());
     lines.push("* = active provider (from config or CODEWHALE_PROVIDER)".to_string());
     lines.push("Run `codewhale auth status --provider <id>` for detailed info.".to_string());
+    lines.push("Account sign-in is `codewhale login`.".to_string());
     lines
+}
+
+fn account_status_line() -> String {
+    use codewhale_secrets::account::{
+        ACCOUNT_API_BASE_ENV, AccountSessionState, AccountSessionStore, DEFAULT_ACCOUNT_API_BASE,
+        secure_account_session_secrets,
+    };
+    let api_base = std::env::var(ACCOUNT_API_BASE_ENV)
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_ACCOUNT_API_BASE.to_string());
+    match secure_account_session_secrets() {
+        Ok(secrets) => {
+            match AccountSessionStore::new(secrets, None, &api_base)
+                .runtime_info_at(chrono::Utc::now())
+            {
+                Ok(info) => {
+                    let state = match info.state {
+                        AccountSessionState::SignedOut => "not signed in",
+                        AccountSessionState::Authenticated => "signed in",
+                        AccountSessionState::OfflineCached => "offline (cached)",
+                        AccountSessionState::Expired => "expired",
+                        AccountSessionState::Revoked => "revoked",
+                    };
+                    format!("account: {state} (api {api_base})")
+                }
+                Err(error) => format!("account: unavailable ({error})"),
+            }
+        }
+        Err(error) => format!("account: unavailable ({error})"),
+    }
 }
 
 fn diagnostic_path_state(path: &Path, directory: bool) -> &'static str {
@@ -3434,8 +3501,8 @@ fn auth_diagnostic_lines(store: &ConfigStore, provider: Option<ProviderKind>) ->
     lines
 }
 
-fn run_auth_diagnostic(store: &ConfigStore, provider: Option<ProviderArg>) -> Result<()> {
-    for line in auth_diagnostic_lines(store, provider.map(ProviderKind::from)) {
+fn run_auth_diagnostic(store: &ConfigStore, provider: Option<ProviderKind>) -> Result<()> {
+    for line in auth_diagnostic_lines(store, provider) {
         println!("{line}");
     }
     Ok(())
@@ -3454,14 +3521,23 @@ fn auth_list_lines_with_runtime(
     let mut lines = Vec::new();
     lines.push("provider     config store env  route".to_string());
     for provider in ProviderKind::ALL {
-        let slot = provider_slot(provider);
+        // Label the row by the provider, not by its credential slot. This
+        // table has one row per ProviderKind, but several kinds share a slot
+        // (ProviderKind::secret_store_slot): SiliconflowCN shares
+        // `siliconflow`, and the four Model Studio variants share
+        // `modelstudio-token-plan`. Labelling by slot printed `siliconflow`
+        // twice and `modelstudio-token-plan` four times, so the reader could
+        // not tell which row was which provider. The status columns still
+        // read the shared slot, which is what makes one saved key light up
+        // the whole family.
+        let label = provider.as_str();
         if provider == ProviderKind::Xai {
             let diagnostics = xai_auth_diagnostics(store, runtime_overrides);
             let api_key = diagnostics
                 .evaluates_runtime_api_key()
                 .then(|| xai_runtime_api_key(store, secrets, runtime_overrides));
             lines.push(format!(
-                "{slot:<12}  {}     {}      {}   {}",
+                "{label:<12}  {}     {}      {}   {}",
                 xai_list_storage_status(api_key.as_ref(), RuntimeApiKeySource::ConfigFile),
                 xai_list_storage_status(api_key.as_ref(), RuntimeApiKeySource::Keyring),
                 xai_list_storage_status(api_key.as_ref(), RuntimeApiKeySource::Env),
@@ -3494,7 +3570,7 @@ fn auth_list_lines_with_runtime(
             "missing"
         };
         lines.push(format!(
-            "{slot:<12}  {}     {}      {}   {active}",
+            "{label:<12}  {}     {}      {}   {active}",
             yes_no(file),
             keyring_status_short(keyring),
             yes_no(env)
@@ -3872,7 +3948,6 @@ fn run_auth_command_with_secrets_and_runtime(
             path,
             yes,
         } => {
-            let provider: ProviderKind = provider.into();
             let (source, path) = external_credential_target(provider, path)?;
             let preview = external_consent_preview_lines(provider, source, &path);
             for line in &preview {
@@ -3941,7 +4016,6 @@ fn run_auth_command_with_secrets_and_runtime(
             Ok(())
         }
         AuthCommand::ExternalRevoke { provider } => {
-            let provider: ProviderKind = provider.into();
             let provider_key = provider.provider().provider_config_key();
             codewhale_config::mutate_config_document(store.path(), |document| {
                 codewhale_config::unset_config_document_value(
@@ -3967,8 +4041,7 @@ fn run_auth_command_with_secrets_and_runtime(
                 return run_auth_diagnostic(store, provider);
             }
             match provider {
-                Some(p) => {
-                    let provider: ProviderKind = p.into();
+                Some(provider) => {
                     for line in auth_status_lines_for_provider_with_runtime(
                         store,
                         secrets,
@@ -3993,7 +4066,6 @@ fn run_auth_command_with_secrets_and_runtime(
             api_key,
             api_key_stdin,
         } => {
-            let provider: ProviderKind = provider.into();
             let slot = provider_slot(provider);
             if provider == ProviderKind::Ollama && api_key.is_none() && !api_key_stdin {
                 let provider_cfg = store.config.providers.for_provider_mut(provider);
@@ -4027,7 +4099,6 @@ fn run_auth_command_with_secrets_and_runtime(
             Ok(())
         }
         AuthCommand::Get { provider } => {
-            let provider: ProviderKind = provider.into();
             println!(
                 "{}",
                 auth_get_line_with_runtime(store, secrets, provider, runtime_overrides)
@@ -4035,14 +4106,12 @@ fn run_auth_command_with_secrets_and_runtime(
             Ok(())
         }
         AuthCommand::PrintApiKey { provider } => {
-            let provider: ProviderKind = provider.into();
             let mut stdout = io::stdout().lock();
             credential_handoff::handoff_secret_line(&mut stdout, io::stdout().is_terminal(), || {
                 credential_handoff::resolve_api_key(store, secrets, provider, runtime_overrides)
             })
         }
         AuthCommand::Clear { provider } => {
-            let provider: ProviderKind = provider.into();
             if provider == ProviderKind::Xai {
                 codewhale_config::with_xai_oauth_revocation_transaction(|| {
                     clear_auth_provider(store, secrets, provider)
@@ -4311,12 +4380,10 @@ fn clear_recorded_telemetry_opt_out_if_reenabled(key: &str, value: &str) -> Resu
 }
 
 fn model_command_provider_hint(
-    command_provider: Option<ProviderArg>,
+    command_provider: Option<ProviderKind>,
     top_level_provider: Option<ProviderKind>,
 ) -> Option<ProviderKind> {
-    command_provider
-        .map(ProviderKind::from)
-        .or(top_level_provider)
+    command_provider.or(top_level_provider)
 }
 
 fn provider_source_label(source: ProviderSource) -> String {
@@ -4363,7 +4430,7 @@ fn run_model_command(
             // kimi-k3 model resolve` re-derive a registry default and report
             // `kimi-k2.7-code` while the runtime used `kimi-k3` (v0.9.1 kimi-k3 dogfood report). The
             // top-level `--model` was not consulted at all on that path.
-            let subcommand_provider = provider.map(ProviderKind::from);
+            let subcommand_provider = provider;
             let queried = model.as_deref().map(str::trim).filter(|m| !m.is_empty());
 
             // With no explicit query, this reports the route the runtime would
@@ -4392,22 +4459,11 @@ fn run_model_command(
             }
 
             // An explicit model or provider makes this a hypothetical query
-            // ("what would this name resolve to"), so answer it against the
-            // registry — but default the provider to the configured one rather
-            // than to any single vendor.
+            // inside a named route. The subcommand provider wins; otherwise
+            // the configured runtime provider remains authoritative. Model
+            // text never authorizes switching providers or credential slots.
             let provider_hint = subcommand_provider.or(Some(resolved_runtime.provider));
-            let mut resolved = registry.resolve(queried, provider_hint);
-            // The registry refuses to answer a provider-scoped question with
-            // another vendor's model. That is right when the *user* named the
-            // provider, but the hint above is often ours: when only a model was
-            // named, "what does this id mean" is still a global question, so
-            // retry unhinted rather than substituting the configured provider's
-            // default for the id the user typed.
-            let provider_named_by_user =
-                subcommand_provider.is_some() || top_level_provider.is_some();
-            if !provider_named_by_user && queried.is_some() && resolved.used_fallback {
-                resolved = registry.resolve(queried, None);
-            }
+            let resolved = registry.resolve(queried, provider_hint)?;
             println!("requested: {}", resolved.requested.unwrap_or_default());
             println!("resolved: {}", resolved.resolved.id);
             println!("provider: {}", resolved.resolved.provider.as_str());
@@ -4425,7 +4481,11 @@ fn run_model_command(
                 if queried.is_some() {
                     "argument"
                 } else {
-                    resolved_runtime.model_source.as_str()
+                    // This branch is reachable only for an explicit
+                    // subcommand provider with no requested model. The model
+                    // therefore came from that provider's default, not from
+                    // the configured runtime route we deliberately overrode.
+                    "provider default"
                 }
             );
             Ok(())
@@ -4930,12 +4990,10 @@ fn apply_tui_env(cli: &Cli, resolved_runtime: &ResolvedRuntimeOptions, passthrou
     let keyring_bridge_api_key = resolved_runtime.api_key.as_ref();
     let keyring_bridge_source = resolved_runtime.api_key_source;
     if let Some(provider) = cli.provider.as_deref() {
-        let provider = builtin_provider_arg(provider)
-            .map(ProviderKind::from)
-            .map_or_else(
-                || provider.to_string(),
-                |provider| provider.as_str().to_string(),
-            );
+        let provider = builtin_provider_arg(provider).map_or_else(
+            || provider.to_string(),
+            |provider| provider.as_str().to_string(),
+        );
         unsafe {
             std::env::set_var("CODEWHALE_PROVIDER", &provider);
             std::env::set_var("DEEPSEEK_PROVIDER", provider);
@@ -4948,14 +5006,11 @@ fn apply_tui_env(cli: &Cli, resolved_runtime: &ResolvedRuntimeOptions, passthrou
         && let Some(api_key) = keyring_bridge_api_key
     {
         unsafe {
-            std::env::set_var("DEEPSEEK_API_KEY", api_key);
             for var in provider_env_vars(keyring_bridge_provider) {
-                if *var != "DEEPSEEK_API_KEY" {
-                    std::env::set_var(var, api_key);
-                }
+                std::env::set_var(var, api_key);
             }
             std::env::set_var(
-                "DEEPSEEK_API_KEY_SOURCE",
+                codewhale_config::CLI_API_KEY_SOURCE_ENV,
                 RuntimeApiKeySource::Keyring.as_env_value(),
             );
         }
@@ -5022,20 +5077,17 @@ fn apply_tui_env(cli: &Cli, resolved_runtime: &ResolvedRuntimeOptions, passthrou
     }
     if let Some(api_key) = cli.api_key.as_ref() {
         unsafe {
-            std::env::set_var("CODEWHALE_CLI_API_KEY", api_key);
+            std::env::set_var(codewhale_config::CLI_API_KEY_ENV, api_key);
         }
         if !uses_raw_tui_provider && (cli.profile.is_none() || cli.provider.is_some()) {
             unsafe {
-                std::env::set_var("DEEPSEEK_API_KEY", api_key);
                 for var in provider_env_vars(resolved_runtime.provider) {
-                    if *var != "DEEPSEEK_API_KEY" {
-                        std::env::set_var(var, api_key);
-                    }
+                    std::env::set_var(var, api_key);
                 }
             }
         }
         unsafe {
-            std::env::set_var("DEEPSEEK_API_KEY_SOURCE", "cli");
+            std::env::set_var(codewhale_config::CLI_API_KEY_SOURCE_ENV, "cli");
         }
     }
     if let Some(base_url) = cli.base_url.as_ref() {
@@ -5052,6 +5104,21 @@ fn apply_tui_env(cli: &Cli, resolved_runtime: &ResolvedRuntimeOptions, passthrou
 // dispatcher had already applied never reached the process that emits. Every
 // delegation is now in-process, and
 // `only_one_function_may_locate_and_spawn_the_tui` pins that.
+
+fn run_providers_command(args: ProvidersArgs) -> Result<()> {
+    match args.command {
+        ProvidersCommand::Export { json } => {
+            if !json {
+                bail!("`codewhale providers export` requires `--json`");
+            }
+            let export = ProvidersExport::from_registry(env!("CODEWHALE_BUILD_VERSION"));
+            serde_json::to_writer_pretty(io::stdout(), &export)
+                .context("failed to write providers export")?;
+            println!();
+            Ok(())
+        }
+    }
+}
 
 fn run_metrics_command(args: MetricsArgs) -> Result<()> {
     let since = match args.since.as_deref() {
@@ -5233,6 +5300,123 @@ mod tests {
             yolo: None,
             verbosity: None,
             http_headers: std::collections::BTreeMap::new(),
+            route: None,
+        }
+    }
+
+    #[test]
+    fn tui_credential_handoff_stays_with_the_selected_provider() {
+        let _lock = env_lock();
+        let mut names = ProviderKind::ALL
+            .into_iter()
+            .flat_map(provider_env_vars)
+            .copied()
+            .collect::<Vec<_>>();
+        names.extend([
+            codewhale_config::CLI_API_KEY_ENV,
+            codewhale_config::CLI_API_KEY_SOURCE_ENV,
+            codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV,
+            "CODEWHALE_PROVIDER",
+            "DEEPSEEK_PROVIDER",
+            "CODEWHALE_TELEMETRY",
+            "DEEPSEEK_TELEMETRY",
+            codewhale_config::TELEMETRY_FLOOR_ENV,
+        ]);
+        names.sort_unstable();
+        names.dedup();
+        let _clean_env = names
+            .into_iter()
+            .map(ScopedEnvVar::remove)
+            .collect::<Vec<_>>();
+        let _deepseek_key = ScopedEnvVar::set("DEEPSEEK_API_KEY", "existing-deepseek-key");
+
+        let clear_bridge = || {
+            // Safety: this test holds env_lock() and the guards above restore
+            // every touched variable.
+            unsafe {
+                for var in ProviderKind::ALL
+                    .into_iter()
+                    .flat_map(provider_env_vars)
+                    .filter(|var| **var != "DEEPSEEK_API_KEY")
+                {
+                    std::env::remove_var(var);
+                }
+                std::env::remove_var(codewhale_config::CLI_API_KEY_ENV);
+                std::env::remove_var(codewhale_config::CLI_API_KEY_SOURCE_ENV);
+                std::env::remove_var(codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV);
+            }
+        };
+
+        for (provider_arg, provider) in [
+            ("nvidia-nim", ProviderKind::NvidiaNim),
+            ("openrouter", ProviderKind::Openrouter),
+            ("anthropic", ProviderKind::Anthropic),
+        ] {
+            clear_bridge();
+            let keyring_key = format!("{provider_arg}-keyring-key");
+            let mut keyring_runtime = resolved_runtime_for_test(provider, ProviderSource::Cli);
+            keyring_runtime.api_key = Some(keyring_key.clone());
+            keyring_runtime.api_key_source = Some(RuntimeApiKeySource::Keyring);
+            let keyring_cli = parse_ok(&["codewhale", "--provider", provider_arg]);
+
+            apply_tui_env(&keyring_cli, &keyring_runtime, &[]);
+
+            assert_eq!(
+                std::env::var("DEEPSEEK_API_KEY").as_deref(),
+                Ok("existing-deepseek-key"),
+                "{provider_arg} keyring handoff replaced DeepSeek's credential"
+            );
+            for var in provider_env_vars(provider) {
+                assert_eq!(
+                    std::env::var(var).as_deref(),
+                    Ok(keyring_key.as_str()),
+                    "{provider_arg} keyring handoff missed {var}"
+                );
+            }
+            assert_eq!(
+                std::env::var(codewhale_config::CLI_API_KEY_SOURCE_ENV).as_deref(),
+                Ok("keyring")
+            );
+            assert!(std::env::var(codewhale_config::CLI_API_KEY_ENV).is_err());
+            assert!(
+                std::env::var(codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV).is_err(),
+                "new dispatchers must not write the retired vendor-named marker"
+            );
+
+            clear_bridge();
+            let explicit_key = format!("{provider_arg}-explicit-key");
+            let explicit_cli = parse_ok(&[
+                "codewhale",
+                "--provider",
+                provider_arg,
+                "--api-key",
+                explicit_key.as_str(),
+            ]);
+            let explicit_runtime = resolved_runtime_for_test(provider, ProviderSource::Cli);
+
+            apply_tui_env(&explicit_cli, &explicit_runtime, &[]);
+
+            assert_eq!(
+                std::env::var("DEEPSEEK_API_KEY").as_deref(),
+                Ok("existing-deepseek-key"),
+                "{provider_arg} explicit CLI credential handoff replaced DeepSeek's credential"
+            );
+            for var in provider_env_vars(provider) {
+                assert_eq!(
+                    std::env::var(var).as_deref(),
+                    Ok(explicit_key.as_str()),
+                    "{provider_arg} explicit CLI credential handoff missed {var}"
+                );
+            }
+            assert_eq!(
+                std::env::var(codewhale_config::CLI_API_KEY_ENV).as_deref(),
+                Ok(explicit_key.as_str())
+            );
+            assert_eq!(
+                std::env::var(codewhale_config::CLI_API_KEY_SOURCE_ENV).as_deref(),
+                Ok("cli")
+            );
+            assert!(std::env::var(codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV).is_err());
         }
     }
 
@@ -5584,7 +5768,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Model(ModelArgs {
                 command: ModelCommand::List {
-                    provider: Some(ProviderArg::Openai)
+                    provider: Some(ProviderKind::Openai)
                 }
             }))
         ));
@@ -5613,7 +5797,7 @@ verbosity = "project-imported"
             Some(Commands::Model(ModelArgs {
                 command: ModelCommand::Resolve {
                     model: Some(ref model),
-                    provider: Some(ProviderArg::Deepseek)
+                    provider: Some(ProviderKind::Deepseek)
                 }
             })) if model == "deepseek-v4-pro"
         ));
@@ -5634,7 +5818,7 @@ verbosity = "project-imported"
             Some(ProviderKind::Zai)
         );
         assert_eq!(
-            model_command_provider_hint(Some(ProviderArg::Minimax), Some(ProviderKind::Zai)),
+            model_command_provider_hint(Some(ProviderKind::Minimax), Some(ProviderKind::Zai)),
             Some(ProviderKind::Minimax)
         );
         assert_eq!(model_command_provider_hint(None, None), None);
@@ -6167,8 +6351,81 @@ verbosity = "project-imported"
         ));
     }
 
+    /// Pod is the canonical customer-facing top-level command; `fleet` is a
+    /// compatibility alias that must keep dispatching to the same code path.
+    /// The Fleet spelling survives on purpose in the durable ledger, saved
+    /// roster files, config tables, and the `workflow --fleet` flag.
     #[test]
-    fn exec_and_fleet_accept_builtin_and_raw_provider_identifiers() {
+    fn pod_is_the_canonical_top_level_command_and_fleet_stays_a_compatibility_alias() {
+        for tail in [
+            vec!["init"],
+            vec!["status"],
+            vec!["run", "tasks.json", "--max-workers", "2"],
+        ] {
+            let pod = parse_ok(
+                &std::iter::once("codewhale")
+                    .chain(["pod"])
+                    .chain(tail.iter().copied())
+                    .collect::<Vec<_>>(),
+            );
+            let fleet = parse_ok(
+                &std::iter::once("codewhale")
+                    .chain(["fleet"])
+                    .chain(tail.iter().copied())
+                    .collect::<Vec<_>>(),
+            );
+            let (Some(Commands::Fleet(pod_args)), Some(Commands::Fleet(fleet_args))) =
+                (&pod.command, &fleet.command)
+            else {
+                panic!("both spellings must parse into the same command: {tail:?}");
+            };
+            assert_eq!(pod_args.args, tail, "{tail:?}");
+            assert_eq!(pod_args.args, fleet_args.args, "{tail:?}");
+            assert!(pod.prompt.is_empty() && fleet.prompt.is_empty(), "{tail:?}");
+        }
+
+        // Help advertises Pod. The alias still resolves, but discovery has one
+        // canonical answer, so `fleet` must not be listed as its own command.
+        let help = help_for(&["codewhale", "--help"]);
+        let commands = help
+            .lines()
+            .map(str::trim_start)
+            .filter(|line| line.starts_with("pod") || line.starts_with("fleet"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            commands.len(),
+            1,
+            "expected exactly one entry: {commands:?}"
+        );
+        assert!(commands[0].starts_with("pod"), "{commands:?}");
+        assert!(
+            commands[0].contains("Pod"),
+            "help summary should name Pod: {commands:?}"
+        );
+        assert!(
+            !help.contains("Manage durable Agent Fleet runs"),
+            "the old Fleet-led summary must be gone from top-level help"
+        );
+
+        let pod_help = help_for(&["codewhale", "pod", "--help"]);
+        assert!(pod_help.contains("Manage durable Agent Pod runs"));
+        assert!(pod_help.contains("codewhale pod run tasks.json --max-workers 4"));
+        assert!(pod_help.contains("codewhale fleet` is a compatibility alias"));
+
+        // Both spellings normalize to the canonical inner command so receipts
+        // and any echoed invocation never regress to the compatibility name.
+        let args = TuiPassthroughArgs {
+            args: vec!["status".into()],
+        };
+        assert_eq!(
+            tui_args("pod", args.clone()),
+            vec!["pod".to_string(), "status".to_string()]
+        );
+        assert!(command_accepts_raw_provider(Some(&Commands::Fleet(args))));
+    }
+
+    #[test]
+    fn exec_and_pod_accept_builtin_and_raw_provider_identifiers() {
         let builtin = parse_ok(&["codewhale", "--provider", "openrouter", "exec", "Reply OK"]);
         assert_eq!(builtin.provider.as_deref(), Some("openrouter"));
         assert_eq!(
@@ -6177,9 +6434,20 @@ verbosity = "project-imported"
             Some(ProviderKind::Openrouter)
         );
 
+        assert_eq!(
+            top_level_provider_override(
+                Some("qianfan"),
+                Some(&Commands::Exec(TuiPassthroughArgs {
+                    args: vec!["Reply OK".into()]
+                }))
+            )
+            .expect("qianfan is a catalog route"),
+            Some(ProviderKind::Qianfan)
+        );
+
         for (provider, command) in [
-            ("qianfan", vec!["exec", "Reply OK"]),
             ("lm-studio", vec!["exec", "Reply OK"]),
+            ("lm-studio", vec!["pod", "status"]),
             ("lm-studio", vec!["fleet", "status"]),
         ] {
             let argv = std::iter::once("codewhale")
@@ -6200,21 +6468,21 @@ verbosity = "project-imported"
     #[test]
     fn opencode_go_provider_aliases_parse_as_builtin() {
         for alias in ["opencode-go", "opencode_go", "opencodego"] {
-            assert_eq!(builtin_provider_arg(alias), Some(ProviderArg::OpencodeGo));
+            assert_eq!(builtin_provider_arg(alias), Some(ProviderKind::OpencodeGo));
         }
     }
 
     #[test]
     fn ollama_cloud_provider_aliases_parse_as_builtin() {
         for alias in ["ollama-cloud", "ollama_cloud"] {
-            assert_eq!(builtin_provider_arg(alias), Some(ProviderArg::OllamaCloud));
+            assert_eq!(builtin_provider_arg(alias), Some(ProviderKind::OllamaCloud));
         }
     }
 
     #[test]
     fn antigravity_provider_aliases_parse_as_builtin() {
         for alias in ["antigravity", "agy"] {
-            assert_eq!(builtin_provider_arg(alias), Some(ProviderArg::Antigravity));
+            assert_eq!(builtin_provider_arg(alias), Some(ProviderKind::Antigravity));
         }
     }
 
@@ -6231,7 +6499,7 @@ verbosity = "project-imported"
         ] {
             assert_eq!(
                 builtin_provider_arg(alias),
-                Some(ProviderArg::MinimaxAnthropic),
+                Some(ProviderKind::MinimaxAnthropic),
                 "{alias}"
             );
         }
@@ -6258,23 +6526,23 @@ verbosity = "project-imported"
             "zen",
             "opencode",
         ] {
-            assert_eq!(builtin_provider_arg(alias), Some(ProviderArg::OpencodeZen));
+            assert_eq!(builtin_provider_arg(alias), Some(ProviderKind::OpencodeZen));
         }
     }
 
     #[test]
-    fn raw_provider_ids_remain_restricted_to_exec_and_fleet() {
+    fn raw_provider_ids_remain_restricted_to_exec_and_pod() {
         let cli = parse_ok(&["codewhale", "--provider", "lm-studio", "model", "list"]);
         let err = top_level_provider_override(cli.provider.as_deref(), cli.command.as_ref())
             .expect_err("model registry commands still require a built-in provider");
         assert!(
             err.to_string()
-                .contains("configured custom providers are accepted only by exec and fleet")
+                .contains("configured custom providers are accepted only by exec and pod")
         );
 
         let err = Cli::try_parse_from(["codewhale", "auth", "set", "--provider", "lm-studio"])
             .expect_err("auth keeps enum-only provider validation");
-        assert_eq!(err.kind(), ErrorKind::InvalidValue);
+        assert_eq!(err.kind(), ErrorKind::ValueValidation);
 
         let err = Cli::try_parse_from([
             "codewhale",
@@ -6637,7 +6905,7 @@ verbosity = "project-imported"
         run_auth_command_with_secrets(
             &mut store,
             AuthCommand::Set {
-                provider: ProviderArg::Deepseek,
+                provider: ProviderKind::Deepseek,
                 api_key: Some("sk-test".to_string()),
                 api_key_stdin: false,
             },
@@ -6707,7 +6975,7 @@ verbosity = "project-imported"
             no_open: false,
             timeout_seconds: 600,
             api_key: None,
-            provider: Some(ProviderArg::Deepseek),
+            provider: Some(ProviderKind::Deepseek),
         })
         .expect_err("legacy --provider must be rejected");
         assert!(
@@ -6739,6 +7007,29 @@ verbosity = "project-imported"
         );
     }
 
+    #[test]
+    fn auth_parses_daytona_slot_commands_as_unknown() {
+        // The internal cloud-agent slot must not be a user command: parsing
+        // rejects it and `auth --help` never teaches it.
+        for argv in [
+            vec![
+                "codewhale",
+                "auth",
+                "set-slot",
+                "daytona",
+                "--api-key-stdin",
+            ],
+            vec!["codewhale", "auth", "clear-slot", "daytona"],
+        ] {
+            let error = Cli::try_parse_from(argv).expect_err("slot commands must not parse");
+            assert_eq!(error.kind(), ErrorKind::InvalidSubcommand, "{error}");
+        }
+        let help = help_for(&["codewhale", "auth", "--help"]);
+        assert!(!help.contains("set-slot"), "{help}");
+        assert!(!help.contains("clear-slot"), "{help}");
+        assert!(!help.to_lowercase().contains("daytona"), "{help}");
+    }
+
     /// #5198: `auth set` shares the login resolver — provider auth markers go
     /// user-global even when the ambient config is workspace-scoped.
     #[test]
@@ -6763,7 +7054,7 @@ verbosity = "project-imported"
         run_auth_command_with_secrets(
             &mut store,
             AuthCommand::Set {
-                provider: ProviderArg::Openrouter,
+                provider: ProviderKind::Openrouter,
                 api_key: Some("sk-or-repo-scoped".to_string()),
                 api_key_stdin: false,
             },
@@ -6819,7 +7110,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::ExternalConsent {
-                    provider: ProviderArg::OpenaiCodex,
+                    provider: ProviderKind::OpenaiCodex,
                     mode: ExternalCredentialModeArg::ReadOnly,
                     path: Some(_),
                     yes: true,
@@ -6832,7 +7123,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::ExternalRevoke {
-                    provider: ProviderArg::Xai,
+                    provider: ProviderKind::Xai,
                 }
             }))
         ));
@@ -6842,7 +7133,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Set {
-                    provider: ProviderArg::Deepseek,
+                    provider: ProviderKind::Deepseek,
                     api_key: None,
                     api_key_stdin: false,
                 }
@@ -6861,7 +7152,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Set {
-                    provider: ProviderArg::Openrouter,
+                    provider: ProviderKind::Openrouter,
                     api_key: None,
                     api_key_stdin: true,
                 }
@@ -6873,7 +7164,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Get {
-                    provider: ProviderArg::Novita
+                    provider: ProviderKind::Novita
                 }
             }))
         ));
@@ -6883,7 +7174,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Clear {
-                    provider: ProviderArg::NvidiaNim
+                    provider: ProviderKind::NvidiaNim
                 }
             }))
         ));
@@ -6893,7 +7184,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Set {
-                    provider: ProviderArg::Fireworks,
+                    provider: ProviderKind::Fireworks,
                     api_key: None,
                     api_key_stdin: false,
                 }
@@ -6905,7 +7196,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Set {
-                    provider: ProviderArg::Siliconflow,
+                    provider: ProviderKind::Siliconflow,
                     api_key: None,
                     api_key_stdin: false,
                 }
@@ -6917,7 +7208,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Set {
-                    provider: ProviderArg::Arcee,
+                    provider: ProviderKind::Arcee,
                     api_key: None,
                     api_key_stdin: false,
                 }
@@ -6929,7 +7220,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Set {
-                    provider: ProviderArg::Moonshot,
+                    provider: ProviderKind::Moonshot,
                     api_key: None,
                     api_key_stdin: false,
                 }
@@ -6941,7 +7232,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Set {
-                    provider: ProviderArg::WanjieArk,
+                    provider: ProviderKind::WanjieArk,
                     api_key: None,
                     api_key_stdin: false,
                 }
@@ -6953,7 +7244,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Get {
-                    provider: ProviderArg::Sglang
+                    provider: ProviderKind::Sglang
                 }
             }))
         ));
@@ -6963,7 +7254,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Get {
-                    provider: ProviderArg::Vllm
+                    provider: ProviderKind::Vllm
                 }
             }))
         ));
@@ -6973,7 +7264,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Set {
-                    provider: ProviderArg::Ollama,
+                    provider: ProviderKind::Ollama,
                     api_key: None,
                     api_key_stdin: false,
                 }
@@ -6985,7 +7276,7 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Status {
-                    provider: Some(ProviderArg::OpenaiCodex),
+                    provider: Some(ProviderKind::OpenaiCodex),
                     diagnostic: false,
                 }
             }))
@@ -7003,26 +7294,26 @@ verbosity = "project-imported"
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Status {
-                    provider: Some(ProviderArg::Deepseek),
+                    provider: Some(ProviderKind::Deepseek),
                     diagnostic: true,
                 }
             }))
         ));
 
         for (provider, expected) in [
-            ("anthropic", ProviderArg::Anthropic),
-            ("openmodel", ProviderArg::Openmodel),
-            ("open-model", ProviderArg::Openmodel),
-            ("zai", ProviderArg::Zai),
-            ("stepfun", ProviderArg::Stepfun),
-            ("minimax", ProviderArg::Minimax),
-            ("minimax-anthropic", ProviderArg::MinimaxAnthropic),
-            ("minimax_anthropic", ProviderArg::MinimaxAnthropic),
-            ("deepinfra", ProviderArg::Deepinfra),
-            ("deep-infra", ProviderArg::Deepinfra),
-            ("siliconflow-cn", ProviderArg::SiliconflowCn),
-            ("siliconflow-CN", ProviderArg::SiliconflowCn),
-            ("siliconflow_china", ProviderArg::SiliconflowCn),
+            ("anthropic", ProviderKind::Anthropic),
+            ("openmodel", ProviderKind::Openmodel),
+            ("open-model", ProviderKind::Openmodel),
+            ("zai", ProviderKind::Zai),
+            ("stepfun", ProviderKind::Stepfun),
+            ("minimax", ProviderKind::Minimax),
+            ("minimax-anthropic", ProviderKind::MinimaxAnthropic),
+            ("minimax_anthropic", ProviderKind::MinimaxAnthropic),
+            ("deepinfra", ProviderKind::Deepinfra),
+            ("deep-infra", ProviderKind::Deepinfra),
+            ("siliconflow-cn", ProviderKind::SiliconflowCN),
+            ("siliconflow-CN", ProviderKind::SiliconflowCN),
+            ("siliconflow_china", ProviderKind::SiliconflowCN),
         ] {
             let cli = parse_ok(&[
                 "deepseek",
@@ -7102,7 +7393,7 @@ verbosity = "project-imported"
         run_auth_command_with_secrets(
             &mut store,
             AuthCommand::Set {
-                provider: ProviderArg::Deepseek,
+                provider: ProviderKind::Deepseek,
                 api_key: Some("sk-keyring".to_string()),
                 api_key_stdin: false,
             },
@@ -7160,7 +7451,7 @@ verbosity = "project-imported"
         let error = run_auth_command_with_secrets(
             &mut store,
             AuthCommand::Set {
-                provider: ProviderArg::Openrouter,
+                provider: ProviderKind::Openrouter,
                 api_key: Some("fallback-test-credential".to_string()),
                 api_key_stdin: false,
             },
@@ -7193,7 +7484,7 @@ verbosity = "project-imported"
         run_auth_command_with_secrets(
             &mut store,
             AuthCommand::Set {
-                provider: ProviderArg::Arcee,
+                provider: ProviderKind::Arcee,
                 api_key: Some("arcee-key".to_string()),
                 api_key_stdin: false,
             },
@@ -7233,7 +7524,7 @@ verbosity = "project-imported"
         run_auth_command_with_secrets(
             &mut store,
             AuthCommand::Set {
-                provider: ProviderArg::Ollama,
+                provider: ProviderKind::Ollama,
                 api_key: None,
                 api_key_stdin: false,
             },
@@ -7273,7 +7564,7 @@ verbosity = "project-imported"
         run_auth_command_with_secrets(
             &mut store,
             AuthCommand::Clear {
-                provider: ProviderArg::Deepseek,
+                provider: ProviderKind::Deepseek,
             },
             &secrets,
         )
@@ -7328,7 +7619,7 @@ verbosity = "project-imported"
         run_auth_command_with_secrets(
             &mut store,
             AuthCommand::Status {
-                provider: Some(ProviderArg::Deepseek),
+                provider: Some(ProviderKind::Deepseek),
                 diagnostic: false,
             },
             &secrets,
@@ -7505,6 +7796,13 @@ verbosity = "project-imported"
         let secrets = Secrets::new(inner);
 
         let output = auth_status_all_providers(&store, &secrets).join("\n");
+
+        assert!(output.contains("account:"), "{output}");
+        assert!(output.contains("codewhale login"), "{output}");
+        // No-brand invariant: the internal cloud-agent slot is not user
+        // surface, so status never names it or teaches a set-slot command.
+        assert!(!output.to_lowercase().contains("daytona"), "{output}");
+        assert!(!output.contains("set-slot"), "{output}");
 
         // Should list all known providers
         assert!(output.contains("deepseek"));
@@ -8130,6 +8428,42 @@ verbosity = "project-imported"
     }
 
     #[test]
+    fn auth_list_labels_each_row_by_its_own_provider() {
+        // ProviderKind::secret_store_slot collapses families onto one durable
+        // slot -- SiliconflowCN onto `siliconflow`, the four Model Studio
+        // variants onto `modelstudio-token-plan` -- but this table has one row
+        // per kind. Labelling rows by slot printed `siliconflow` twice and
+        // `modelstudio-token-plan` four times, so a reader could not tell which
+        // row belonged to which provider.
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let store =
+            ConfigStore::load(Some(dir.path().join("config.toml"))).expect("store should load");
+        let secrets = Secrets::new(std::sync::Arc::new(
+            codewhale_secrets::InMemoryKeyringStore::new(),
+        ));
+
+        let lines = auth_list_lines(&store, &secrets);
+        let labels: Vec<&str> = lines
+            .iter()
+            .skip(1)
+            .filter_map(|line| line.split_whitespace().next())
+            .collect();
+
+        assert_eq!(
+            labels.len(),
+            ProviderKind::ALL.len(),
+            "one row per provider kind: {labels:?}"
+        );
+        let unique: std::collections::BTreeSet<&&str> = labels.iter().collect();
+        assert_eq!(
+            unique.len(),
+            labels.len(),
+            "every row must name its own provider, not a shared slot: {labels:?}"
+        );
+    }
+
+    #[test]
     fn external_consent_persists_exact_scope_and_api_key_or_revoke_disables_it() {
         let _lock = env_lock();
         let dir = tempfile::TempDir::new().expect("tempdir");
@@ -8179,7 +8513,7 @@ verbosity = "project-imported"
         let unconfirmed = run_auth_command_with_secrets(
             &mut store,
             AuthCommand::ExternalConsent {
-                provider: ProviderArg::Xai,
+                provider: ProviderKind::Xai,
                 mode: ExternalCredentialModeArg::ReadOnly,
                 path: Some(external_path.clone()),
                 yes: false,
@@ -8197,7 +8531,7 @@ verbosity = "project-imported"
         run_auth_command_with_secrets(
             &mut store,
             AuthCommand::ExternalConsent {
-                provider: ProviderArg::Xai,
+                provider: ProviderKind::Xai,
                 mode: ExternalCredentialModeArg::ReadOnly,
                 path: Some(external_path.clone()),
                 yes: true,
@@ -8258,7 +8592,7 @@ verbosity = "project-imported"
         run_auth_command_with_secrets(
             &mut store,
             AuthCommand::Set {
-                provider: ProviderArg::Xai,
+                provider: ProviderKind::Xai,
                 api_key: Some("xai-codewhale-owned-key".to_string()),
                 api_key_stdin: false,
             },
@@ -8274,7 +8608,7 @@ verbosity = "project-imported"
         run_auth_command_with_secrets(
             &mut store,
             AuthCommand::ExternalConsent {
-                provider: ProviderArg::Xai,
+                provider: ProviderKind::Xai,
                 mode: ExternalCredentialModeArg::ReadOnly,
                 path: Some(external_path.clone()),
                 yes: true,
@@ -8285,7 +8619,7 @@ verbosity = "project-imported"
         run_auth_command_with_secrets(
             &mut store,
             AuthCommand::ExternalRevoke {
-                provider: ProviderArg::Xai,
+                provider: ProviderKind::Xai,
             },
             &secrets,
         )
@@ -8309,7 +8643,7 @@ verbosity = "project-imported"
         let managed = run_auth_command_with_secrets(
             &mut store,
             AuthCommand::ExternalConsent {
-                provider: ProviderArg::OpenaiCodex,
+                provider: ProviderKind::OpenaiCodex,
                 mode: ExternalCredentialModeArg::Managed,
                 path: Some(external_path.clone()),
                 yes: true,
@@ -8326,7 +8660,7 @@ verbosity = "project-imported"
         let kimi = run_auth_command_with_secrets(
             &mut store,
             AuthCommand::ExternalConsent {
-                provider: ProviderArg::Moonshot,
+                provider: ProviderKind::Moonshot,
                 mode: ExternalCredentialModeArg::ReadOnly,
                 path: Some(external_path.clone()),
                 yes: true,
@@ -8394,7 +8728,7 @@ verbosity = "project-imported"
             let error = run_auth_command_with_secrets(
                 &mut store,
                 AuthCommand::Set {
-                    provider: ProviderArg::Xai,
+                    provider: ProviderKind::Xai,
                     api_key: Some("new-xai-key".to_string()),
                     api_key_stdin: false,
                 },
@@ -8535,7 +8869,7 @@ verbosity = "project-imported"
 
         let secrets = no_keyring_secrets();
 
-        run_logout_command_with_secrets(&mut store, &secrets).expect("logout should succeed");
+        run_logout_command_with_secrets(&mut store, &secrets, None).expect("logout should succeed");
 
         assert!(store.config.api_key.is_none());
         assert!(store.config.providers.deepseek.api_key.is_none());
@@ -8581,7 +8915,7 @@ verbosity = "project-imported"
             .set(provider_slot(ProviderKind::Fireworks), "fw-stale")
             .expect("seed fireworks key");
 
-        run_logout_command_with_secrets(&mut store, &secrets).expect("logout should succeed");
+        run_logout_command_with_secrets(&mut store, &secrets, None).expect("logout should succeed");
 
         for provider in [ProviderKind::Deepseek, ProviderKind::Fireworks] {
             assert!(
@@ -8591,6 +8925,102 @@ verbosity = "project-imported"
         }
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn logout_clears_account_session_and_daytona_slot() {
+        use codewhale_secrets::account::{
+            AccountAuthBundle, AccountSession, AccountSessionStore, AccountUser,
+            DEFAULT_ACCOUNT_API_BASE, secure_account_session_secrets,
+        };
+
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let home = dir
+            .path()
+            .canonicalize()
+            .expect("canonical temp root")
+            .join("codewhale-home");
+        let _home = ScopedEnvVar::set("CODEWHALE_HOME", &home.to_string_lossy());
+        let path = home.join("config.toml");
+        let mut store = ConfigStore::load(Some(path.clone())).expect("store should load");
+
+        let secrets = no_keyring_secrets();
+        secrets
+            .set(codewhale_secrets::DAYTONA_TOKEN_SLOT, "dtn_logout")
+            .expect("seed daytona token");
+
+        let account = secure_account_session_secrets().expect("account store");
+        AccountSessionStore::new(account, None, DEFAULT_ACCOUNT_API_BASE)
+            .save(AccountAuthBundle {
+                token_type: "Bearer".to_string(),
+                access_token: "access-logout".to_string(),
+                refresh_token: "refresh-logout".to_string(),
+                session: Some(AccountSession {
+                    id: "session-logout".to_string(),
+                    ..AccountSession::default()
+                }),
+                user: Some(AccountUser {
+                    id: "acct-logout".to_string(),
+                    ..AccountUser::default()
+                }),
+            })
+            .expect("seed account session");
+
+        run_logout_command_with_secrets(&mut store, &secrets, None).expect("logout should succeed");
+
+        assert!(
+            secrets
+                .get(codewhale_secrets::DAYTONA_TOKEN_SLOT)
+                .expect("read daytona")
+                .is_none(),
+            "daytona slot survived logout"
+        );
+        let account = secure_account_session_secrets().expect("account store after logout");
+        assert!(
+            AccountSessionStore::new(account, None, DEFAULT_ACCOUNT_API_BASE)
+                .load()
+                .expect("load account")
+                .is_none(),
+            "account session survived logout"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn auth_set_slot_daytona_has_no_user_surface() {
+        // The internal cloud-agent credential is managed by Codewhale, not
+        // users: no CLI command may write or clear it, and no help text may
+        // teach it. Membership (`codewhale login`) is the only door.
+        use codewhale_secrets::InMemoryKeyringStore;
+        use std::sync::Arc;
+
+        for argv in [
+            vec![
+                "codewhale",
+                "auth",
+                "set-slot",
+                "daytona",
+                "--api-key",
+                "dtn_saved",
+            ],
+            vec!["codewhale", "auth", "clear-slot", "daytona"],
+        ] {
+            assert!(
+                Cli::try_parse_from(argv).is_err(),
+                "slot commands must not parse"
+            );
+        }
+
+        let inner = Arc::new(InMemoryKeyringStore::new());
+        let secrets = Secrets::new(inner);
+        assert!(
+            secrets
+                .get(codewhale_secrets::DAYTONA_TOKEN_SLOT)
+                .expect("read slot")
+                .is_none()
+        );
     }
 
     #[test]
@@ -8915,6 +9345,69 @@ verbosity = "project-imported"
     }
 
     #[test]
+    fn parses_top_level_resume_flags_for_interactive_resume() {
+        // The operations runbook advertises `codewhale --resume <id>`. Before
+        // the root flag existed, the trailing prompt positional swallowed it
+        // and forwarded `--prompt "--resume <id>"` to the TUI (exit 2).
+        for argv in [
+            &["codewhale", "--resume", "800596e6"][..],
+            &["codewhale", "--resume=800596e6"][..],
+            &["codewhale", "-r", "800596e6"][..],
+            &["codewhale", "--session-id", "800596e6"][..],
+            &["codewhale", "--session-id=800596e6"][..],
+        ] {
+            let cli = parse_ok(argv);
+            assert!(
+                cli.prompt.is_empty(),
+                "{argv:?} must not be swallowed as a prompt: {:?}",
+                cli.prompt
+            );
+            assert!(cli.prompt_flag.is_none(), "{argv:?}");
+            assert!(cli.command.is_none(), "{argv:?}");
+            assert_eq!(
+                root_tui_passthrough(&cli).unwrap(),
+                vec!["--resume".to_string(), "800596e6".to_string()],
+                "{argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_resume_identifier_is_rejected_rather_than_starting_fresh() {
+        // `codewhale --resume "$SESSION_ID"` with the variable unset used to
+        // trim to empty, filter to None, and start a brand-new session while
+        // looking like it resumed one. Losing the session the user asked for
+        // must be loud.
+        for argv in [
+            &["codewhale", "--resume", ""][..],
+            &["codewhale", "--session-id", "   "][..],
+        ] {
+            let cli = parse_ok(argv);
+            let err = root_tui_passthrough(&cli)
+                .expect_err("an empty resume id must not silently start a fresh session");
+            assert!(
+                err.to_string().contains("needs a session id"),
+                "{argv:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn top_level_resume_rejects_startup_prompt_and_conflicting_flags() {
+        let cli = parse_ok(&["codewhale", "--resume", "800596e6", "-p", "follow up"]);
+        let err = root_tui_passthrough(&cli).expect_err("prompted resume should be rejected");
+        assert!(
+            err.to_string()
+                .contains("codewhale exec --resume 800596e6 <PROMPT>"),
+            "{err}"
+        );
+
+        assert!(Cli::try_parse_from(["codewhale", "--resume", "800596e6", "--continue"]).is_err());
+        assert!(Cli::try_parse_from(["codewhale", "--resume", "a", "--session-id", "b"]).is_err());
+        assert!(Cli::try_parse_from(["codewhale", "--session-id", "b", "-c"]).is_err());
+    }
+
+    #[test]
     fn parses_rc_as_the_account_owned_interactive_handoff() {
         let cli = parse_ok(&["codewhale", "rc"]);
 
@@ -8984,6 +9477,7 @@ verbosity = "project-imported"
             "mcp-server",
             "config",
             "model",
+            "providers",
             "thread",
             "sandbox",
             "app-server",

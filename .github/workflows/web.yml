@@ -34,6 +34,15 @@ jobs:
         # fields by design, so it is safe to run against the committed copy that
         # exists at checkout.
         run: npm run check:facts
+      - name: Check published-release fact is current
+        # web/data/latest-published-release.json is hand-maintained and feeds
+        # facts.generated.ts. Nothing wrote it, so it drifted to v0.9.10 while
+        # v0.9.11 was live, and the post-deploy comparison below failed on
+        # latestPublishedRelease.tag AFTER the site had already shipped. Gate it
+        # here so the mismatch is caught before deploying, not after.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npm run check:latest-release
       - name: Generate derived facts
         # Regenerate after the drift gate so tsc --noEmit (TS2307 without it) and
         # the build use a current facts.generated.ts. When the gate passes this

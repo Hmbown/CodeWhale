@@ -129,6 +129,19 @@ impl PluginDiscoveryContext {
     pub fn user_plugins_dir(&self) -> &Path {
         &self.user_plugins_dir
     }
+
+    #[must_use]
+    pub fn catalog_stamp_for_workspace(
+        &self,
+        workspace: &Path,
+    ) -> super::discovery::PluginCatalogStamp {
+        let mut roots = vec![
+            self.user_plugins_dir.clone(),
+            super::discovery::default_workspace_plugins_dir(workspace),
+        ];
+        roots.extend(self.builtin_plugin_dirs.iter().cloned());
+        super::discovery::PluginCatalogStamp::capture(roots)
+    }
 }
 
 #[cfg(test)]

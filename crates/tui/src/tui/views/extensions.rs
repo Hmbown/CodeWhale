@@ -5,6 +5,7 @@
 //! database, installer, or network fetch of its own. Future actions emitted by
 //! this view must delegate to the existing command/mutation controllers.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -639,7 +640,15 @@ fn plugins_model(app: &App, locale: Locale) -> ExtensionsTabModel {
             crate::plugins::types::PluginScope::Workspace => 2,
         };
         let diagnostic_count = plugin.diagnostics.len();
-        let action = if plugin.active() {
+        let has_error_diagnostics = plugin.diagnostics.iter().any(|diagnostic| {
+            diagnostic.level == crate::plugins::types::PluginDiagnosticLevel::Error
+        });
+        let action = if has_error_diagnostics {
+            ExtensionAction::Command {
+                label: tr(locale, MessageId::ExtensionsActionDiagnose).into_owned(),
+                command: format!("/plugin validate {}", plugin.name()),
+            }
+        } else if plugin.active() {
             ExtensionAction::Command {
                 label: tr(locale, MessageId::LaunchHintOpen).into_owned(),
                 command: format!("/plugin show {}", plugin.name()),
@@ -698,7 +707,7 @@ fn plugins_model(app: &App, locale: Locale) -> ExtensionsTabModel {
             tr(locale, MessageId::ExtensionsGroupWorkspace).into_owned(),
         ),
     ];
-    let groups = labels
+    let mut groups = labels
         .into_iter()
         .zip(by_scope)
         .filter(|(_, items)| !items.is_empty())
@@ -707,7 +716,40 @@ fn plugins_model(app: &App, locale: Locale) -> ExtensionsTabModel {
             label,
             items,
         })
-        .collect();
+        .collect::<Vec<_>>();
+    let problems = app
+        .plugin_registry
+        .diagnostics()
+        .iter()
+        .enumerate()
+        .map(|(index, diagnostic)| ExtensionItem {
+            id: format!("plugin-diagnostic-{index}"),
+            label: diagnostic.code.to_string(),
+            description: diagnostic.message.clone(),
+            state: if diagnostic.level == crate::plugins::types::PluginDiagnosticLevel::Error {
+                tr(locale, MessageId::ExtensionsStateInvalid)
+            } else {
+                tr(locale, MessageId::ExtensionsStateWarning)
+            }
+            .into_owned(),
+            detail: diagnostic
+                .path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| diagnostic.message.clone()),
+            action: Some(ExtensionAction::Command {
+                label: tr(locale, MessageId::ExtensionsActionDiagnose).into_owned(),
+                command: "/plugin validate".into(),
+            }),
+        })
+        .collect::<Vec<_>>();
+    if !problems.is_empty() {
+        groups.push(ExtensionGroup {
+            id: "problems".into(),
+            label: tr(locale, MessageId::ExtensionsGroupProblems).into_owned(),
+            items: problems,
+        });
+    }
     ExtensionsTabModel {
         groups,
         problem: app.plugin_registry.state_error().map(ToString::to_string),
@@ -894,8 +936,13 @@ fn mcp_model(app: &App, locale: Locale) -> ExtensionsTabModel {
                 .map(|server| server.enabled)
                 .or_else(|| config.map(crate::mcp::McpServerConfig::is_enabled))
                 .unwrap_or(true);
+            let initializing = app.mcp_initializing
+                && enabled
+                && observed.is_none_or(|server| !server.connected && server.error.is_none());
             let state = if !enabled {
                 tr(locale, MessageId::HotbarSetupStatusDisabled)
+            } else if initializing {
+                Cow::Borrowed("connecting")
             } else if observed.is_some_and(|server| server.connected) {
                 tr(locale, MessageId::ExtensionsStateConnected)
             } else if observed.is_some_and(|server| server.error.is_some()) {
@@ -906,23 +953,34 @@ fn mcp_model(app: &App, locale: Locale) -> ExtensionsTabModel {
                 tr(locale, MessageId::PickerActionConfigured)
             }
             .into_owned();
-            let action = if !enabled
-                && name
-                    .chars()
-                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
-            {
-                ExtensionAction::Command {
-                    label: tr(locale, MessageId::ExtensionsActionEnable).into_owned(),
-                    command: format!("/mcp enable {name}"),
-                }
-            } else if enabled && observed.is_none() {
-                ExtensionAction::Command {
-                    label: tr(locale, MessageId::ExtensionsActionReload).into_owned(),
-                    command: "/mcp reload".into(),
-                }
-            } else {
+            let oauth_capable = config.is_some_and(crate::mcp::mcp_server_oauth_capable);
+            let recovery = crate::mcp::mcp_recovery_kind(
+                enabled,
+                observed.is_some(),
+                observed.is_some_and(|server| server.connected),
+                observed.and_then(|server| server.error.as_deref()),
+                oauth_capable,
+            );
+            let action = if initializing {
                 ExtensionAction::Status {
                     label: state.clone(),
+                }
+            } else if crate::mcp::mcp_name_is_command_safe(&name)
+                || matches!(
+                    recovery,
+                    crate::mcp::McpRecoveryKind::Connect
+                        | crate::mcp::McpRecoveryKind::Reconnect
+                        | crate::mcp::McpRecoveryKind::Diagnose
+                )
+            {
+                ExtensionAction::Command {
+                    label: tr(locale, recovery.label_key()).into_owned(),
+                    command: recovery.slash_command(&name),
+                }
+            } else {
+                ExtensionAction::Command {
+                    label: tr(locale, MessageId::ExtensionsActionDiagnose).into_owned(),
+                    command: "/mcp validate".into(),
                 }
             };
             ExtensionItem {
@@ -1504,5 +1562,28 @@ impl ModalView for ExtensionsView {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::McpRecoveryKind;
+
+    #[test]
+    fn mcp_item_action_for_stale_oauth_is_login() {
+        let recovery =
+            crate::mcp::mcp_recovery_kind(true, true, false, Some("401 Unauthorized"), true);
+        assert_eq!(recovery, McpRecoveryKind::Reauth);
+        assert_eq!(recovery.slash_command("github"), "/mcp login github");
+        assert_eq!(tr(Locale::En, recovery.label_key()).as_ref(), "re-auth");
+    }
+
+    #[test]
+    fn mcp_item_action_for_disconnected_server_is_reconnect() {
+        let recovery = crate::mcp::mcp_recovery_kind(true, true, false, None, false);
+        assert_eq!(recovery, McpRecoveryKind::Reconnect);
+        assert_eq!(recovery.slash_command("playwright"), "/mcp reload");
+        assert_eq!(tr(Locale::En, recovery.label_key()).as_ref(), "reconnect");
     }
 }

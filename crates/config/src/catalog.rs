@@ -6,12 +6,15 @@
 //! refresh) and live [`ProviderCatalogDelta`]s; the HTTP `/models` fetch layer
 //! lives above this module. Nothing here performs I/O or reads credentials.
 //!
-//! Layering (lowest precedence first; #4188):
+//! Layering (lowest precedence first):
 //!
 //! ```text
-//! bundled Models.dev snapshot       (offline/stale fallback only — not competing truth)
-//!   < live Models.dev / provider `/models` cache
-//!   < user / custom overrides        (custom endpoints, pinned models, explicit facts)
+//! bundled Models.dev snapshot         (legacy seed, not competing truth)
+//!   < bundled Codewhale catalog       (Codewhale-owned offline snapshot)
+//!   < live Models.dev
+//!   < live provider `/v1/models`      (credential-scoped workspace list)
+//!   < live Codewhale signed catalog   (authority when present)
+//!   < config.toml / user overrides
 //! ```
 //!
 //! After #4187, live Models.dev rows are preferred whenever present. The bundled
@@ -32,6 +35,7 @@
 //! [`ProviderCatalogCache`] tests).
 
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -56,6 +60,14 @@ pub enum CatalogSource {
     },
     /// A user / custom override (custom endpoint, pinned model, explicit facts).
     UserOverride,
+    /// Live models.dev refresh (layer 10). Distinct from provider `/v1/models`.
+    ModelsDevLive { fetched_at: u64 },
+    /// `config.toml` `[providers.*]` override (layer 30).
+    ConfigOverride,
+    /// Codewhale-owned bundled catalog snapshot (offline authority seed).
+    CodewhaleBundled { revision: String },
+    /// Live Codewhale signed catalog fetched from CWC / `CODEWHALE_CATALOG_URL`.
+    CodewhaleLive { revision: String, fetched_at: u64 },
 }
 
 /// One catalog-layer offering row.
@@ -186,16 +198,30 @@ impl CatalogOffering {
 /// honesty rule on omitted pricing (`UnknownOrStale`, never a fabricated zero).
 pub const BUNDLED_MODELS_DEV_JSON: &str = include_str!("../assets/models_dev.bundled.json");
 
+/// Parse-once cache for the committed bundled Models.dev snapshot.
+///
+/// The bundled asset is compile-time constant (`include_str!`), so its parsed
+/// form is immutable and safe to share process-wide. Before this cache, every
+/// call site parsed the full snapshot independently — the client route path,
+/// pickers, provider lake, and fleet identity each paid a full serde parse of
+/// ~50KB on their own first use (perf-attributed during the 0.9.x perf
+/// gauntlet: `ModelsDevCost` serde frames in startup profiles).
+static BUNDLED_MODELS_DEV_CATALOG: OnceLock<ModelsDevCatalog> = OnceLock::new();
+
 /// Parse the committed bundled Models.dev snapshot.
+///
+/// The first call parses; later calls return the shared parsed catalog.
 ///
 /// # Panics
 /// Panics only if the committed asset is not valid Models.dev JSON. The
 /// `tests::bundled_asset_parses` guard makes that a build-time failure, so this
 /// never panics in shipped builds.
 #[must_use]
-pub fn bundled_models_dev_catalog() -> ModelsDevCatalog {
-    ModelsDevCatalog::parse_json(BUNDLED_MODELS_DEV_JSON)
-        .expect("committed bundled Models.dev asset must be valid JSON")
+pub fn bundled_models_dev_catalog() -> &'static ModelsDevCatalog {
+    BUNDLED_MODELS_DEV_CATALOG.get_or_init(|| {
+        ModelsDevCatalog::parse_json(BUNDLED_MODELS_DEV_JSON)
+            .expect("committed bundled Models.dev asset must be valid JSON")
+    })
 }
 
 /// Bundled-layer [`CatalogOffering`] rows from the offline snapshot (#4188).
@@ -205,7 +231,7 @@ pub fn bundled_models_dev_catalog() -> ModelsDevCatalog {
 /// rows override these on `(provider, wire_model_id)` when available.
 #[must_use]
 pub fn bundled_catalog_offerings() -> Vec<CatalogOffering> {
-    bundled_offerings_from_models_dev(&bundled_models_dev_catalog())
+    bundled_offerings_from_models_dev(bundled_models_dev_catalog())
 }
 
 /// Hydrate bundled [`CatalogOffering`] rows from a parsed Models.dev catalog.
@@ -600,14 +626,36 @@ impl CatalogSnapshot {
     }
 }
 
-/// Builds a [`CatalogSnapshot`] by merging layers in precedence order:
-/// bundled < live < user overrides. Later layers override earlier rows that
-/// share a (provider, wire id) identity.
+/// Builds a [`CatalogSnapshot`] by merging layers in precedence order.
+///
+/// Last writer wins per `(provider, wire id)` field. Policy DENY is applied
+/// after every layer and is never overridden:
+///
+/// ```text
+///  0 bundled              committed models.dev-shaped snapshot
+///  5 codewhale bundled    Codewhale-owned offline snapshot
+/// 10 live models.dev      models.dev refresh
+/// 20 provider             per-provider /v1/models refresh
+/// 25 codewhale live       signed CWC catalog (authority)
+/// 30 config               config.toml [providers.*] overrides
+/// 40 user                 user approved set
+///    policy DENY          last, never overridden
+/// ```
+///
+/// [`Self::with_live`] remains the combined live bucket so existing callers
+/// keep working; prefer [`Self::with_models_dev_live`] / [`Self::with_provider_live`]
+/// for the split.
 #[derive(Debug, Clone, Default)]
 pub struct CatalogCompiler {
     bundled: Vec<CatalogOffering>,
+    codewhale_bundled: Vec<CatalogOffering>,
+    models_dev_live: Vec<CatalogOffering>,
     live: Vec<CatalogOffering>,
+    provider_live: Vec<CatalogOffering>,
+    codewhale_live: Vec<CatalogOffering>,
+    config: Vec<CatalogOffering>,
     overrides: Vec<CatalogOffering>,
+    policy: crate::route::CatalogPolicy,
 }
 
 impl CatalogCompiler {
@@ -632,35 +680,88 @@ impl CatalogCompiler {
         self
     }
 
-    /// Add live (middle-precedence) rows.
+    /// Add Codewhale-owned bundled catalog rows (layer 5).
+    #[must_use]
+    pub fn with_codewhale_bundled(mut self, rows: Vec<CatalogOffering>) -> Self {
+        self.codewhale_bundled.extend(rows);
+        self
+    }
+
+    /// Add live signed Codewhale catalog rows (layer 25; authority when present).
+    #[must_use]
+    pub fn with_codewhale_live(mut self, rows: Vec<CatalogOffering>) -> Self {
+        self.codewhale_live.extend(rows);
+        self
+    }
+
+    /// Add live models.dev refresh rows (layer 10).
+    #[must_use]
+    pub fn with_models_dev_live(mut self, rows: Vec<CatalogOffering>) -> Self {
+        self.models_dev_live.extend(rows);
+        self
+    }
+
+    /// Add live (combined models.dev + provider) rows.
+    ///
+    /// Prefer [`Self::with_models_dev_live`] / [`Self::with_provider_live`].
+    /// Kept so existing callers still compile; these rows sit between
+    /// models.dev live and provider live.
     #[must_use]
     pub fn with_live(mut self, rows: Vec<CatalogOffering>) -> Self {
         self.live.extend(rows);
         self
     }
 
-    /// Add user/custom override (highest-precedence) rows.
+    /// Add per-provider `/v1/models` refresh rows (layer 20).
+    #[must_use]
+    pub fn with_provider_live(mut self, rows: Vec<CatalogOffering>) -> Self {
+        self.provider_live.extend(rows);
+        self
+    }
+
+    /// Add `config.toml` `[providers.*]` override rows (layer 30).
+    #[must_use]
+    pub fn with_config(mut self, rows: Vec<CatalogOffering>) -> Self {
+        self.config.extend(rows);
+        self
+    }
+
+    /// Add user/custom override (highest catalog-layer precedence) rows.
     #[must_use]
     pub fn with_overrides(mut self, rows: Vec<CatalogOffering>) -> Self {
         self.overrides.extend(rows);
         self
     }
 
-    /// Merge all layers into a deterministic snapshot.
+    /// Attach policy evaluated after every layer. DENY is never overridden.
+    #[must_use]
+    pub fn with_policy(mut self, policy: crate::route::CatalogPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Merge all layers into a deterministic snapshot, then apply policy DENY.
     #[must_use]
     pub fn compile(self) -> CatalogSnapshot {
         let mut merged: BTreeMap<(String, String), CatalogOffering> = BTreeMap::new();
         for row in self
             .bundled
             .into_iter()
+            .chain(self.codewhale_bundled)
+            .chain(self.models_dev_live)
             .chain(self.live)
+            .chain(self.provider_live)
+            .chain(self.codewhale_live)
+            .chain(self.config)
             .chain(self.overrides)
         {
             merged.insert(row.merge_key(), row);
         }
-        CatalogSnapshot {
-            offerings: merged.into_values().collect(),
-        }
+        let offerings = merged
+            .into_values()
+            .filter(|row| self.policy.allows(&row.provider, &row.wire_model_id))
+            .collect();
+        CatalogSnapshot { offerings }
     }
 }
 

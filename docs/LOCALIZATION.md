@@ -81,6 +81,17 @@ locale, Chinese included.** `web/app/[locale]/page.tsx`,
 `getChrome(locale)`. `web/lib/i18n/dictionaries/zh/` now exists (it used to
 be inline TSX), and nav/footer link sets are generated once in
 `web/lib/i18n/links.ts` so every locale gets the identical route shape.
+
+**Website/docs translation pipeline (General Translation CLI, 2026-08-28).**
+Runtime stays the dictionaries above — do not add `gt-next` beside them.
+`web/gt-catalog/[locale].json` is the local JSON interchange (`en` + live
+`zh` first). `npm run i18n:gt -- export` writes catalogs from dictionaries;
+`check` (hooked from `check:locales`) requires them to match; `import`
+writes reviewed JSON back to website dictionary TS only. `translate` is
+fail-closed unless BYOK `GT_API_KEY` and `GT_PROJECT_ID` are set in the
+environment — never commit those values, never point this config at
+`crates/tui/locales`, and never wrap model completions. `gt generate` is
+not used: it is a framework JSX scanner, not a JSON-catalog tool.
 Reference shape: **`ChromeDict` 52 keys, `HomeDict` 62 keys.** Bilingual
 secondary nav labels, the masthead seal and issue line, the ticker live
 label, and the per-locale `Intl` date tag are dictionary values — no locale

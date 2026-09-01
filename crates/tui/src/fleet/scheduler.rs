@@ -404,7 +404,7 @@ impl FleetScheduler {
             let run = state
                 .runs
                 .get(&run_id.0)
-                .ok_or_else(|| anyhow!("fleet run {} does not exist", run_id.0))?;
+                .ok_or_else(|| anyhow!("Pod run {} does not exist", run_id.0))?;
             let active = active_tasks_for_run(&state, run_id);
             if active.len() >= self.policy.max_workers_per_run {
                 return Ok(());
@@ -760,6 +760,7 @@ mod tests {
                 workflow: None,
                 roles: Vec::new(),
                 max_workers: Some(workers),
+                usage_ceiling: None,
                 task_specs: tasks.clone(),
                 worker_specs: (1..=workers)
                     .map(|idx| worker(&format!("worker-{idx}")))

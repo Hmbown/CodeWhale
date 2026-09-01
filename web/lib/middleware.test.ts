@@ -58,6 +58,60 @@ describe("dotted well-known paths", () => {
   });
 });
 
+describe("public auth aliases (#5767)", () => {
+  it("does not locale-prefix /auth/callback into a 404", () => {
+    const res = middleware(
+      request("https://codewhale.net/auth/callback?code=abc&state=1", "codewhale.net"),
+    );
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe(
+      "https://app.codewhale.net/auth/callback?code=abc&state=1",
+    );
+  });
+
+  it("hops an already-localized callback to the CWC app", () => {
+    const res = middleware(
+      request("https://codewhale.net/en/auth/callback?code=abc", "codewhale.net"),
+    );
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe(
+      "https://app.codewhale.net/auth/callback?code=abc",
+    );
+  });
+
+  it("folds /login onto /signin before locale prefixing", () => {
+    const res = middleware(request("https://codewhale.net/login", "codewhale.net"));
+    expect(res.status).toBe(308);
+    expect(res.headers.get("location")).toBe("https://codewhale.net/signin");
+  });
+
+  it("folds a localized /register onto /signup", () => {
+    const res = middleware(request("https://codewhale.net/zh/register", "codewhale.net"));
+    expect(res.status).toBe(308);
+    expect(res.headers.get("location")).toBe("https://codewhale.net/zh/signup");
+  });
+
+  it("locale-prefixes /signin and /signup onto real public pages", () => {
+    const signin = middleware(
+      request("https://codewhale.net/signin", "codewhale.net", {
+        "accept-language": "ja,en;q=0.8",
+      }),
+    );
+    expect(signin.status).toBe(307);
+    expect(signin.headers.get("location")).toBe("https://codewhale.net/ja/signin");
+
+    const signup = middleware(request("https://codewhale.net/signup", "codewhale.net"));
+    expect(signup.status).toBe(307);
+    expect(signup.headers.get("location")).toBe("https://codewhale.net/en/signup");
+  });
+
+  it("leaves an already-localized sign-in page unprefixed", () => {
+    const res = middleware(request("https://codewhale.net/en/signin", "codewhale.net"));
+    expect(res.status).not.toBe(307);
+    expect(res.headers.get("location")).toBeNull();
+  });
+});
+
 describe("locale prefix", () => {
   it("prefixes a bare path with the detected locale", () => {
     const res = middleware(

@@ -24,6 +24,11 @@ const DEFAULT_MAX_CHARS: usize = 200_000;
 const MAX_MAX_CHARS: usize = 1_000_000;
 const FALLBACK_MAX_CHARS: usize = 4000;
 const REVIEW_RECEIPT_SCHEMA_VERSION: u32 = 1;
+
+/// Budget for how many lines a committable suggestion may replace. A
+/// mechanical fix is small; anything larger is judgement wearing a
+/// suggestion fence, so it must degrade to prose.
+pub const MAX_COMMITTABLE_SUGGESTION_LINES: u32 = 25;
 const REVIEW_CLIENT_UNAVAILABLE: &str = "Review tool requires an active Codewhale model client";
 
 const REVIEW_SYSTEM_PROMPT: &str = "You are a senior code reviewer. Return ONLY valid JSON with \
@@ -43,12 +48,31 @@ the following schema:\n\
     {\n\
       \"path\": \"relative/file/path or null\",\n\
       \"line\": 123,\n\
-      \"suggestion\": \"actionable improvement\"\n\
+      \"start_line\": 121,\n\
+      \"end_line\": 123,\n\
+      \"suggestion\": \"why this change is needed\",\n\
+      \"replacement\": \"the exact literal lines that replace start_line..end_line\"\n\
     }\n\
   ],\n\
   \"overall_assessment\": \"final assessment\"\n\
 }\n\
-If a field is unknown, use an empty string or null. Prioritize correctness and missing tests.";
+If a field is unknown, use an empty string or null. Prioritize correctness and missing tests.\n\
+\n\
+Rules for \"suggestions\":\n\
+- \"suggestion\" is prose explaining the change.\n\
+- \"replacement\" is NOT a description. It is the literal replacement source code, verbatim, with the exact indentation it must have in the file, and with no diff markers, no line numbers, and no fences. It replaces lines start_line..end_line (inclusive) of the NEW version of the file; when the change is a single line, set start_line == end_line == line.\n\
+- Supply \"replacement\" ONLY for a mechanical, high-confidence fix you are certain compiles and is correct as written (a typo, a wrong comparison operator, a missing await/unwrap guard, a renamed symbol, a wrong constant). Anything requiring judgement, new imports, or edits elsewhere in the file must omit \"replacement\" and stay prose-only.\n\
+- Anchor a suggestion only to lines that appear in the diff you were given, and never to a deleted line. If you are not sure of the exact line numbers, omit \"replacement\".\n\
+- A wrong replacement is worse than no replacement: it is one click from being merged. When in doubt, omit it.";
+
+/// The system prompt shared by every structured review path (`review`
+/// tool and `codewhale review --pr`). Callers parse the reply with
+/// [`ReviewOutput::from_str`], which falls back to freeform text when a
+/// model ignores the JSON contract.
+#[must_use]
+pub fn review_system_prompt() -> &'static str {
+    REVIEW_SYSTEM_PROMPT
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewIssue {
@@ -70,8 +94,22 @@ pub struct ReviewSuggestion {
     pub path: Option<String>,
     #[serde(default)]
     pub line: Option<u32>,
+    /// First line of the replaced span (inclusive). `None` means the
+    /// suggestion covers a single line, `line`.
+    #[serde(default)]
+    pub start_line: Option<u32>,
+    /// Last line of the replaced span (inclusive). Defaults to `line`.
+    #[serde(default)]
+    pub end_line: Option<u32>,
+    /// Prose: why the change is wanted.
     #[serde(default)]
     pub suggestion: String,
+    /// Literal replacement source for `start_line..=end_line`, indentation
+    /// included. `Some` only for mechanical, high-confidence fixes; when it
+    /// is `None` the reviewer posts prose instead of a committable
+    /// GitHub suggestion block.
+    #[serde(default)]
+    pub replacement: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,8 +165,93 @@ impl ReviewOutput {
         for suggestion in &mut self.suggestions {
             suggestion.suggestion = suggestion.suggestion.trim().to_string();
             suggestion.path = normalize_optional(suggestion.path.take());
+            // Leading whitespace in `replacement` is load-bearing indentation,
+            // so only trailing newlines and all-whitespace payloads are
+            // normalized away.
+            suggestion.replacement = suggestion
+                .replacement
+                .take()
+                .map(|replacement| replacement.trim_end_matches(['\n', '\r']).to_string())
+                .filter(|replacement| !replacement.trim().is_empty());
         }
         self
+    }
+}
+
+/// Resolve a model-supplied review path to the post-image form diff hunks
+/// are keyed by: trimmed, with any `./` prefix removed. `None` means the
+/// finding has no position at all.
+#[must_use]
+pub fn normalize_review_path(path: Option<&str>) -> Option<String> {
+    let path = path?.trim().trim_start_matches("./");
+    if path.is_empty() {
+        return None;
+    }
+    Some(path.to_string())
+}
+
+/// Where a suggestion can anchor in a diff, and whether its replacement may
+/// be emitted as a one-click committable block.
+///
+/// This is the single source of truth for "is this committable": the PR
+/// inline-comment path and the review receipt both derive from it, so a
+/// receipt can never claim a suggestion was committable while the posted
+/// comment degraded it to prose (or the reverse).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SuggestionAnchor {
+    /// No path or no line at all: only the summary body can carry it.
+    NoPosition,
+    /// Path and line exist but no hunk contains the line — a model-estimated
+    /// position that missed the diff.
+    Unanchorable { path: String },
+    /// Anchored to RIGHT-side `path:start..=end`. `committable` is true only
+    /// when the literal replacement passed every safety gate: non-empty,
+    /// within the span-size budget, an explicitly bounded (or single-line)
+    /// span, and fully covered by RIGHT-side hunk lines.
+    Anchored {
+        path: String,
+        start: u32,
+        end: u32,
+        committable: bool,
+    },
+}
+
+/// Resolve one suggestion against a diff's hunks.
+#[must_use]
+pub fn resolve_suggestion_anchor(
+    suggestion: &ReviewSuggestion,
+    hunks: &super::review_hunks::DiffHunks,
+) -> SuggestionAnchor {
+    let Some(path) = normalize_review_path(suggestion.path.as_deref()) else {
+        return SuggestionAnchor::NoPosition;
+    };
+    let Some(end) = suggestion.end_line.or(suggestion.line) else {
+        return SuggestionAnchor::NoPosition;
+    };
+    if !hunks.contains_line(&path, end) {
+        return SuggestionAnchor::Unanchorable { path };
+    }
+    let start = suggestion.start_line.unwrap_or(end);
+    // A model that gives neither start_line nor end_line has told us nothing
+    // about how much code it means to replace. GitHub would happily *insert*
+    // a multi-line replacement at a single-line anchor, duplicating the lines
+    // the model meant to replace, so that shape is not committable.
+    let explicit_span = suggestion.start_line.is_some() || suggestion.end_line.is_some();
+    let committable = suggestion
+        .replacement
+        .as_deref()
+        .is_some_and(|replacement| {
+            !replacement.trim().is_empty()
+                && start <= end
+                && end.saturating_sub(start).saturating_add(1) <= MAX_COMMITTABLE_SUGGESTION_LINES
+                && (explicit_span || start < end || !replacement.contains('\n'))
+                && hunks.contains_span(&path, start, end)
+        });
+    SuggestionAnchor::Anchored {
+        path,
+        start,
+        end,
+        committable,
     }
 }
 
@@ -162,6 +285,42 @@ pub struct ReviewReceiptFindings {
     pub suggestion_count: usize,
     pub highest_severity: String,
     pub issues: Vec<ReviewReceiptIssue>,
+    /// What the suggestion pipeline would do with each suggestion against
+    /// this diff. `#[serde(default)]` keeps receipts written before the
+    /// field existed readable, so the schema version does not move.
+    #[serde(default)]
+    pub suggestions: ReviewReceiptSuggestions,
+}
+
+/// One suggestion emitted as a one-click committable block: where it
+/// anchored, nothing else. The replacement text is deliberately absent —
+/// a receipt is an audit record, never a second channel for model-written
+/// code.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReviewReceiptSuggestion {
+    pub path: String,
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+/// Receipt provenance for the suggestion pipeline. The three counters use
+/// the same [`SuggestionAnchor`] resolution as the posted inline comments,
+/// so the numbers a receipt records are exactly what the PR path would
+/// emit for the same diff.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReviewReceiptSuggestions {
+    /// Suggestions emitted as committable blocks (one entry each, below).
+    pub committable_count: usize,
+    /// Anchor spans of the committable suggestions: path + line range, no
+    /// replacement text.
+    pub committable: Vec<ReviewReceiptSuggestion>,
+    /// Suggestions whose anchor was valid but whose replacement failed a
+    /// safety gate, so they posted as prose instead.
+    pub degraded_to_prose: usize,
+    /// Suggestions whose line missed every hunk (or whose file is not in
+    /// the diff), so nothing was posted inline. Suggestions with no
+    /// position at all are not counted — they never had an anchor to lose.
+    pub dropped_unanchorable: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -187,6 +346,35 @@ pub struct ReviewReceiptValidation {
     pub receipt_fingerprint: Option<String>,
     pub receipt_path: Option<PathBuf>,
     pub unresolved_risk: Option<ReviewReceiptRisk>,
+}
+
+/// Classify every suggestion in `output` against `diff` exactly as the PR
+/// inline-comment path would, producing the receipt's provenance counts.
+#[must_use]
+pub fn suggestion_provenance(output: &ReviewOutput, diff: &str) -> ReviewReceiptSuggestions {
+    let hunks = super::review_hunks::DiffHunks::parse(diff);
+    let mut suggestions = ReviewReceiptSuggestions::default();
+    for suggestion in &output.suggestions {
+        match resolve_suggestion_anchor(suggestion, &hunks) {
+            SuggestionAnchor::Anchored {
+                path,
+                start,
+                end,
+                committable: true,
+            } => suggestions.committable.push(ReviewReceiptSuggestion {
+                path,
+                start_line: start,
+                end_line: end,
+            }),
+            SuggestionAnchor::Anchored {
+                committable: false, ..
+            } => suggestions.degraded_to_prose += 1,
+            SuggestionAnchor::Unanchorable { .. } => suggestions.dropped_unanchorable += 1,
+            SuggestionAnchor::NoPosition => {}
+        }
+    }
+    suggestions.committable_count = suggestions.committable.len();
+    suggestions
 }
 
 #[must_use]
@@ -231,6 +419,7 @@ pub fn build_review_receipt(
             issue_count: output.issues.len(),
             suggestion_count: output.suggestions.len(),
             highest_severity: highest_severity.clone(),
+            suggestions: suggestion_provenance(output, diff),
             issues: output
                 .issues
                 .iter()
@@ -1104,7 +1293,10 @@ mod tests {
             suggestions: vec![ReviewSuggestion {
                 path: Some("src/lib.rs".to_string()),
                 line: Some(12),
+                start_line: None,
+                end_line: None,
                 suggestion: "Add a regression test".to_string(),
+                replacement: None,
             }],
             overall_assessment: "Needs a test".to_string(),
         };
@@ -1138,6 +1330,127 @@ mod tests {
         assert_eq!(
             receipt.review_content_sha256,
             sha256_hex("review body".as_bytes())
+        );
+    }
+
+    #[test]
+    fn review_receipt_records_committable_suggestion_provenance() {
+        // Built from a slice, not one string literal: a `\` continuation
+        // strips the leading space that marks a context line.
+        let diff = [
+            "diff --git a/src/lib.rs b/src/lib.rs",
+            "--- a/src/lib.rs",
+            "+++ b/src/lib.rs",
+            "@@ -10,2 +10,3 @@ fn head() {",
+            " let a = 1;",
+            "+let b = a.unwrap();",
+            " let c = 2;",
+            "",
+        ]
+        .join("\n");
+        let output = ReviewOutput {
+            summary: "One fix, one judgement call, one miss".to_string(),
+            issues: Vec::new(),
+            suggestions: vec![
+                // Valid anchor, explicit in-hunk span, literal replacement:
+                // the only shape that may become a committable block.
+                ReviewSuggestion {
+                    path: Some("src/lib.rs".to_string()),
+                    line: Some(12),
+                    start_line: Some(11),
+                    end_line: Some(12),
+                    suggestion: "Use the checked variant".to_string(),
+                    replacement: Some("let b = a.unwrap_or_default();\nlet c = 2;".to_string()),
+                },
+                // Valid anchor, no literal replacement: degrades to prose.
+                ReviewSuggestion {
+                    path: Some("src/lib.rs".to_string()),
+                    line: Some(11),
+                    start_line: None,
+                    end_line: None,
+                    suggestion: "Add a test".to_string(),
+                    replacement: None,
+                },
+                // Line 25 sits between hunks: unanchorable.
+                ReviewSuggestion {
+                    path: Some("src/lib.rs".to_string()),
+                    line: Some(25),
+                    start_line: None,
+                    end_line: None,
+                    suggestion: "Wrong line".to_string(),
+                    replacement: Some("x = 1;".to_string()),
+                },
+                // No position at all: summary-body only, counted nowhere here.
+                ReviewSuggestion {
+                    path: None,
+                    line: None,
+                    start_line: None,
+                    end_line: None,
+                    suggestion: "Consider renaming".to_string(),
+                    replacement: None,
+                },
+            ],
+            overall_assessment: "Fix the unwrap".to_string(),
+        };
+
+        let receipt = build_review_receipt(
+            "working-tree",
+            &diff,
+            "deepseek",
+            "deepseek-v4-pro",
+            &output,
+            "review body",
+            Vec::new(),
+        );
+
+        let provenance = &receipt.findings.suggestions;
+        assert_eq!(provenance.committable_count, 1);
+        assert_eq!(
+            provenance.committable,
+            vec![ReviewReceiptSuggestion {
+                path: "src/lib.rs".to_string(),
+                start_line: 11,
+                end_line: 12,
+            }]
+        );
+        assert_eq!(provenance.degraded_to_prose, 1);
+        assert_eq!(provenance.dropped_unanchorable, 1);
+        assert_eq!(receipt.findings.suggestion_count, 4);
+
+        // Provenance records anchors, never code: the replacement text must
+        // not leak into the receipt.
+        let serialized = serde_json::to_string(&receipt).expect("serialize receipt");
+        assert!(!serialized.contains("unwrap_or_default"), "{serialized}");
+        assert!(!serialized.contains("x = 1;"), "{serialized}");
+    }
+
+    #[test]
+    fn review_receipt_without_suggestion_provenance_still_decodes() {
+        // Receipts written before the provenance field existed are schema v1;
+        // the field is additive and serde-defaulted, so they must keep
+        // decoding and the schema version must not move.
+        let output = ReviewOutput::from_str("Looks good");
+        let receipt = build_review_receipt(
+            "working-tree",
+            "diff --git a/a b/a\n",
+            "deepseek",
+            "deepseek-v4-flash",
+            &output,
+            "Looks good",
+            Vec::new(),
+        );
+        let mut value = serde_json::to_value(&receipt).expect("serialize");
+        value
+            .get_mut("findings")
+            .expect("findings")
+            .as_object_mut()
+            .expect("findings object")
+            .remove("suggestions");
+        let legacy: ReviewReceipt = serde_json::from_value(value).expect("legacy receipt decodes");
+        assert_eq!(legacy.schema_version, REVIEW_RECEIPT_SCHEMA_VERSION);
+        assert_eq!(
+            legacy.findings.suggestions,
+            ReviewReceiptSuggestions::default()
         );
     }
 

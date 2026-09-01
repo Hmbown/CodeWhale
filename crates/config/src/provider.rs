@@ -2,7 +2,8 @@
 //!
 //! This module is a metadata foundation for collapsing provider drift over
 //! time. It deliberately does not mutate request bodies or choose fallback
-//! providers; runtime routing remains in `ConfigToml::resolve_runtime_options`.
+//! providers; `ConfigToml::resolve_runtime_options` now mints the executable
+//! route through `RouteResolver` (Phase 1). Auth/key resolution stays here.
 
 use super::{
     DEFAULT_ANTIGRAVITY_BASE_URL, DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_ARCEE_BASE_URL,
@@ -145,6 +146,12 @@ pub const OLLAMA_CLOUD_API_KEY_URL: &str = "https://ollama.com/settings/keys";
 
 /// Ollama Cloud's exact OpenAI-compatible API base URL.
 pub const OLLAMA_CLOUD_BASE_URL: &str = DEFAULT_OLLAMA_CLOUD_BASE_URL;
+
+/// OpenAI's default model for its first-party API endpoint.
+///
+/// Public consumers should use this provider-owned value instead of copying
+/// the default into another configuration layer.
+pub const OPENAI_DEFAULT_MODEL: &str = DEFAULT_OPENAI_MODEL;
 
 /// Static metadata for a built-in model provider.
 pub trait Provider: Send + Sync {
@@ -523,7 +530,9 @@ pub fn migrates_legacy_ollama_cloud_route(kind: ProviderKind, base_url: &str) ->
 /// neighboring Moonshot paths do not inherit direct-K3 wire semantics.
 #[must_use]
 pub fn is_exact_moonshot_platform_route(kind: ProviderKind, base_url: &str) -> bool {
-    kind == ProviderKind::Moonshot && is_exact_https_route(base_url, "api.moonshot.ai", "v1")
+    kind == ProviderKind::Moonshot
+        && (is_exact_https_route(base_url, "api.moonshot.ai", "v1")
+            || is_exact_https_route(base_url, "api.moonshot.cn", "v1"))
 }
 
 /// Whether a configured route is exactly xAI's first-party OpenAI-compatible
@@ -760,7 +769,11 @@ provider!(
     "NVIDIA NIM",
     DEFAULT_NVIDIA_NIM_BASE_URL,
     DEFAULT_NVIDIA_NIM_MODEL,
-    ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"],
+    // DEEPSEEK_API_KEY was listed here as a third fallback and silently
+    // transmitted a DeepSeek credential to NVIDIA's endpoint when a user
+    // with that variable exported switched providers. Removed (#5588);
+    // the legacy root api_key compatibility path stays DeepSeek-scoped.
+    ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"],
     "nvidia_nim",
     aliases: ["nvidia", "nvidia_nim", "nim"]
 );
@@ -1639,6 +1652,13 @@ impl Provider for Custom {
     }
 
     fn wire_policy(&self) -> WirePolicy {
+        // Static default remains Chat Completions for backward compatibility.
+        // Per-config `wire = "responses" | "anthropic" | "chat"` overrides are
+        // honored in `crates/tui/src/client.rs::provider_wire_format_for_config`
+        // and `crates/tui/src/config.rs::provider_capability`, which read
+        // `ProviderConfig::wire` for the `Custom` catalog identity. This keeps
+        // the `Provider` trait `Fixed` while giving custom endpoints the same
+        // three-way switch (`responses` / `anthropic` / `chat`) as built-ins.
         WirePolicy::Fixed(WireFormat::ChatCompletions)
     }
 }
@@ -1951,10 +1971,12 @@ mod tests {
 
     #[test]
     fn direct_moonshot_route_matching_is_exact() {
-        assert!(is_exact_moonshot_platform_route(
-            ProviderKind::Moonshot,
-            "HTTPS://API.MOONSHOT.AI/v1/"
-        ));
+        for route in ["HTTPS://API.MOONSHOT.AI/v1/", "HTTPS://API.MOONSHOT.CN/v1/"] {
+            assert!(is_exact_moonshot_platform_route(
+                ProviderKind::Moonshot,
+                route
+            ));
+        }
         for neighboring_route in [
             "https://api.moonshot.ai/V1",
             "http://api.moonshot.ai/v1",
@@ -1963,6 +1985,7 @@ mod tests {
             "https://api.moonshot.ai/v1#fragment",
             "https://api.moonshot.ai/v1//",
             "https://api.moonshot.ai/v1/chat/completions",
+            "https://api.moonshot.cn/v1/chat/completions",
             "https://api.kimi.com/coding/v1",
         ] {
             assert!(
@@ -1972,7 +1995,7 @@ mod tests {
         }
         assert!(!is_exact_moonshot_platform_route(
             ProviderKind::Openai,
-            DEFAULT_MOONSHOT_BASE_URL
+            crate::MOONSHOT_CN_BASE_URL
         ));
     }
 

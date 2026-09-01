@@ -32,6 +32,43 @@ fn write_named_plugin(config: &DiscoveryConfig, name: &str, extra: &str) -> Path
 }
 
 #[test]
+fn on_disk_catalog_change_nudges_reload_once_until_rediscover() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = config(tmp.path());
+    write_plugin(&config, "");
+
+    let registry = discover_with_config(&config);
+    assert!(
+        !registry.on_disk_catalog_changed(),
+        "fresh discovery must match the on-disk stamp"
+    );
+
+    let mut last_nudged = None;
+    assert!(
+        crate::plugins::plugin_reload_nudge(&registry, &mut last_nudged).is_none(),
+        "unchanged catalog must not nudge"
+    );
+
+    write_named_plugin(&config, "extra", "");
+    assert!(
+        registry.on_disk_catalog_changed(),
+        "a new bundle directory is a catalog change"
+    );
+    assert_eq!(
+        crate::plugins::plugin_reload_nudge(&registry, &mut last_nudged),
+        Some(crate::plugins::PLUGIN_RELOAD_NUDGE)
+    );
+    assert!(
+        crate::plugins::plugin_reload_nudge(&registry, &mut last_nudged).is_none(),
+        "the same unseen catalog must nudge only once"
+    );
+
+    let reloaded = registry.rediscover_for_workspace(&config.workspace);
+    assert!(!reloaded.on_disk_catalog_changed());
+    assert!(crate::plugins::plugin_reload_nudge(&reloaded, &mut last_nudged).is_none());
+}
+
+#[test]
 fn trust_and_enablement_are_separate_atomic_state_transitions() {
     let tmp = tempfile::tempdir().unwrap();
     let config = config(tmp.path());

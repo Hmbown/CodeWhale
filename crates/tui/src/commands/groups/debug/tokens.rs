@@ -65,7 +65,7 @@ pub fn tokens(app: &mut App) -> CommandResult {
             &token_count(app.session.last_completion_tokens, locale),
         )
         .replace("{cache}", &cache_summary(app, locale))
-        .replace("{total}", &app.session.total_tokens.to_string())
+        .replace("{total}", &app.session.displayed_total_tokens().to_string())
         .replace("{cost}", &cost_report_amount(app, locale))
         .replace("{api_messages}", &message_count.to_string())
         .replace("{chat_messages}", &chat_count.to_string())
@@ -85,7 +85,7 @@ pub fn tokens(app: &mut App) -> CommandResult {
 /// is neither folded into input nor hidden: `/tokens` shows the total and says
 /// where the detail lives.
 fn cache_write_summary(app: &App, locale: Locale) -> String {
-    let write = app.session.total_cache_write_tokens;
+    let write = app.session.displayed_total_cache_write_tokens();
     let mut out = String::from("\n");
     out.push_str(&tr(locale, MessageId::CmdTokensCacheWriteTotal).replace(
         "{write}",

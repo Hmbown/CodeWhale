@@ -61,15 +61,18 @@ impl PrefixFingerprint {
     /// Compute a fingerprint from system prompt text and tool list.
     ///
     /// Tools are serialized to the same JSON shape the chat API receives
-    /// (`type`, `name`, `description`, `parameters`, `strict`), sorted
-    /// lexicographically by JSON text, then SHA-256 hashed. This catches
-    /// schema/description drift that actually affects the API prefix,
-    /// while ignoring internal-only fields like `allowed_callers` (#2264).
+    /// (`type`, `name`, `description`, `parameters`, `strict`) **in provider
+    /// wire order**, then SHA-256 hashed. Order is load-bearing: the provider
+    /// KV cache is order-sensitive, so sorting before hashing could read a
+    /// false-green while the real prefix cache misses every turn (ops C1,
+    /// DSH invariant). This also catches schema/description drift that
+    /// actually affects the API prefix, while ignoring internal-only fields
+    /// like `allowed_callers` (#2264).
     ///
     /// This entry point shares a process-local [`ToolCatalogCache`] with
     /// every other call, so a stable tool set (the common case after the
     /// first turn of a session) avoids the per-tool JSON serialization
-    /// and sort/join entirely. Callers that hold their own cache — e.g.
+    /// and join entirely. Callers that hold their own cache — e.g.
     /// [`PrefixStabilityManager`] — should use
     /// [`Self::compute_with_tool_cache`] to share *that* cache instead
     /// and avoid the thread-local lookup.
@@ -80,9 +83,9 @@ impl PrefixFingerprint {
     }
 
     /// Compute a fingerprint while reusing a [`ToolCatalogCache`] for the
-    /// tool-side work. The cache holds the joined+sorted+SHA-256'd catalog
+    /// tool-side work. The cache holds the joined+SHA-256'd catalog
     /// under a content-derived identity so the per-tool JSON serialization
-    /// and the sort/join only run on the first call for a given tool set.
+    /// and the join only run on the first call for a given tool set.
     ///
     /// On a cache hit this function avoids the entire tool serialization
     /// path, which can be 100+ microseconds for a 60-tool catalog.
@@ -195,7 +198,7 @@ pub struct PrefixStabilityManager {
     /// delivered as history, with the pinned header untouched).
     context_update_count: u64,
     /// Process-local cache for the tool-catalog JSON serialization. Avoids
-    /// re-running `tool_to_api_json` + sort + join on every `check_and_update`
+    /// re-running `tool_to_api_json` + join on every `check_and_update`
     /// when the tool set is unchanged (the common case once tools are
     /// registered at session start).
     tool_catalog_cache: ToolCatalogCache,
@@ -241,8 +244,8 @@ const TOOL_CATALOG_CACHE_CAPACITY: usize = 8;
 ///
 /// The cache key is a content-derived `u64` hash of the tool list (length +
 /// per-tool `name` + `description` + serialized `input_schema`). On a hit,
-/// `PrefixFingerprint::compute` skips the per-tool JSON serialization, the
-/// sort, and the join — a workload that can be 100+ microseconds for a
+/// `PrefixFingerprint::compute` skips the per-tool JSON serialization and
+/// the join — a workload that can be 100+ microseconds for a
 /// 60-tool catalog. On a miss, the work runs once and only the digest is
 /// retained (#3854); the joined catalog string is ephemeral.
 #[derive(Debug, Default, Clone)]
@@ -253,10 +256,10 @@ pub struct ToolCatalogCache {
 }
 
 /// One entry in [`ToolCatalogCache`]. Production only needs the pre-computed
-/// SHA-256 digest of the sorted joined catalog.
+/// SHA-256 digest of the in-order joined catalog.
 #[derive(Debug, Clone)]
 pub struct CachedCatalog {
-    /// SHA-256 hex digest of the newline-joined, sorted tool-catalog JSON.
+    /// SHA-256 hex digest of the newline-joined, in-order tool-catalog JSON.
     pub sha256_hex: String,
 }
 
@@ -288,10 +291,12 @@ impl ToolCatalogCache {
             return cached.clone();
         }
 
-        // Miss: serialize, sort, join, hash. Keep only the digest in the
-        // cache — the joined string is not needed on the hot path (#3854).
-        let mut serialized: Vec<String> = tools.iter().filter_map(tool_to_api_json).collect();
-        serialized.sort();
+        // Miss: serialize, join, hash — in wire order, never sorted. The
+        // provider cache is order-sensitive; a sorted fingerprint can say
+        // "stable" while the real prefix misses every turn (ops C1). Keep
+        // only the digest in the cache — the joined string is not needed on
+        // the hot path (#3854).
+        let serialized: Vec<String> = tools.iter().filter_map(tool_to_api_json).collect();
         let joined = serialized.join("\n");
         let entry = CachedCatalog {
             sha256_hex: sha256_hex(joined.as_bytes()),
@@ -853,12 +858,15 @@ mod tests {
     }
 
     #[test]
-    fn tool_order_does_not_affect_fingerprint() {
+    fn tool_order_affects_fingerprint() {
+        // The provider KV cache is order-sensitive; sorting before hashing
+        // could read a false-green while the real prefix cache missed every
+        // turn (ops C1).
         let tools_a = vec![make_tool("read_file"), make_tool("write_file")];
         let tools_b = vec![make_tool("write_file"), make_tool("read_file")];
         let a = PrefixFingerprint::compute("system", Some(&tools_a));
         let b = PrefixFingerprint::compute("system", Some(&tools_b));
-        assert_eq!(a.combined_sha256, b.combined_sha256);
+        assert_ne!(a.combined_sha256, b.combined_sha256);
     }
 
     #[test]
@@ -1108,20 +1116,23 @@ mod tests {
     }
 
     #[test]
-    fn tool_catalog_cache_pinned_by_input_order() {
+    fn tool_catalog_cache_fingerprint_is_order_sensitive_like_the_provider_cache() {
         // The identity hash includes the input order so re-registering the
         // same set with a different permutation produces a separate cache
-        // entry. The sorted-and-joined digest still matches the order-
-        // independent fingerprint that the chat API sees.
+        // entry. The digest is now order-sensitive too: the provider KV cache
+        // is order-sensitive, so a sorted fingerprint read a false-green while
+        // the real prefix missed every turn (ops C1). Different wire order =
+        // different prefix = different fingerprint.
         let mut cache = ToolCatalogCache::new();
         let a = vec![make_tool("read_file"), make_tool("write_file")];
         let b = vec![make_tool("write_file"), make_tool("read_file")];
         let entry_a = cache.fingerprint_for(&a);
         let entry_b = cache.fingerprint_for(&b);
-        // Digests match (sorted join) but the two cache entries are distinct
-        // because their identities differ.
-        assert_eq!(entry_a.sha256_hex, entry_b.sha256_hex);
+        assert_ne!(entry_a.sha256_hex, entry_b.sha256_hex);
         assert_eq!(cache.len(), 2);
+        // Re-requesting the original order returns the cached digest.
+        let again = cache.fingerprint_for(&a);
+        assert_eq!(again.sha256_hex, entry_a.sha256_hex);
     }
 
     #[test]

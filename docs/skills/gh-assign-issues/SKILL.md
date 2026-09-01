@@ -5,7 +5,7 @@ description: "Use to assign GitHub issues to a milestone and/or owners in bulk, 
 
 # gh-assign-issues
 
-Retarget or assign a set of CodeWhale issues to a milestone and/or owners in
+Retarget or assign a set of Codewhale issues to a milestone and/or owners in
 bulk, verifying every one. The milestone (or assignee) change is the signal;
 do not narrate it with comments. Use `gh` for all GitHub
 calls.

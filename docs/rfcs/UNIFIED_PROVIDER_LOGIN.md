@@ -61,7 +61,7 @@ provider picker row, `auth status`, and logout behave identically:
 Do not copy OAuth constants, client IDs, scopes, or Claude-Code-specific
 headers from reference implementations (e.g. Pi's
 `packages/ai/src/utils/oauth/anthropic.ts`) without first verifying that
-CodeWhale is permitted to use that flow. Those details may be
+Codewhale is permitted to use that flow. Those details may be
 client-specific or governed by Anthropic compatibility policy. This
 verification is an explicit maintainer action and blocks the Anthropic
 adapter, not the shared `auth login` scaffolding.

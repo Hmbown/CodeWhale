@@ -66,7 +66,7 @@ use crate::runtime_threads::{
     CompactThreadRequest, CreateThreadRequest, ExternalApprovalDecision,
     MAX_RUNTIME_EVENT_REPLAY_TAIL, RuntimeThreadManager, RuntimeThreadManagerConfig,
     SharedRuntimeThreadManager, StartTurnRequest, SteerTurnRequest, ThreadDetail, ThreadListFilter,
-    ThreadRecord, TurnItemKind, TurnRecord, UpdateThreadRequest, UsageGroupBy,
+    ThreadRecord, TurnItemKind, TurnRecord, UpdateThreadRequest, UsageGroupBy, UsageTotals,
 };
 #[cfg(test)]
 pub(super) use crate::runtime_threads::{RuntimeTurnStatus, TurnItemLifecycleStatus};
@@ -532,6 +532,7 @@ fn default_runtime_capabilities() -> RuntimeCapabilities {
         account_session: true,
         threads: true,
         turns: true,
+        turn_operation_idempotency: true,
         turn_steer: true,
         turn_interrupt: true,
         event_replay: true,
@@ -765,6 +766,9 @@ struct CreateFleetRunRequest {
     security_policy: Option<FleetSecurityPolicy>,
     #[serde(default)]
     max_workers: Option<usize>,
+    /// Optional run-wide usage ceiling (R6, #5567).
+    #[serde(default)]
+    usage_ceiling: Option<codewhale_protocol::fleet::FleetUsageCeiling>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -842,10 +846,11 @@ pub async fn run_http_server(
         bail!("Codewhale web requires Runtime authentication; remove --insecure");
     }
 
+    let task_default_model = config.default_model();
     let task_cfg = TaskManagerConfig::from_runtime(
         &config,
         workspace.clone(),
-        config.default_text_model.clone(),
+        Some(task_default_model),
         Some(options.workers),
     );
     let (runtime_threads, _workshop_activation) = open_runtime_threads_for_server(
@@ -1020,6 +1025,7 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/workspace/status", get(workspace_status))
         .route("/v1/agent-runs", get(list_agent_runs))
         .route("/v1/agent-runs/{run_id}", get(get_agent_run))
+        .route("/v1/fleet/profiles", get(list_fleet_profiles))
         .route(
             "/v1/fleet/runs",
             get(list_fleet_runs).post(create_fleet_run),
@@ -1084,6 +1090,7 @@ pub fn build_router(state: RuntimeApiState) -> Router {
             post(deliver_dynamic_tool_result),
         )
         .route("/v1/threads/{id}/compact", post(compact_thread))
+        .route("/v1/threads/{id}/usage", get(get_thread_usage))
         .route("/v1/threads/{id}/events", get(stream_thread_events))
         .route("/v1/agent-mail", post(send_agent_mail))
         .route("/v1/threads/{id}/agent-mail", get(list_agent_mail))
@@ -1283,6 +1290,10 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
+fn runtime_request_model(config: &Config, requested: Option<&str>) -> String {
+    requested.map_or_else(|| config.default_model(), str::to_string)
+}
+
 async fn create_task(
     State(state): State<RuntimeApiState>,
     Json(mut req): Json<NewTaskRequest>,
@@ -1294,14 +1305,7 @@ async fn create_task(
         req.workspace = Some(state.workspace.clone());
     }
     if req.model.is_none() {
-        req.model = Some(
-            state
-                .config
-                .read()
-                .default_text_model
-                .clone()
-                .unwrap_or_else(|| DEFAULT_TEXT_MODEL.to_string()),
-        );
+        req.model = Some(runtime_request_model(&state.config.read(), None));
     }
     let task = state
         .task_manager
@@ -1479,13 +1483,39 @@ async fn get_agent_run(
     Ok(Json(run))
 }
 
+async fn list_fleet_profiles(
+    State(state): State<RuntimeApiState>,
+) -> Result<Json<Value>, ApiError> {
+    let manager = open_fleet_manager(&state)?;
+    // Same roster path the manager uses to validate `agent_profile` ids on
+    // run creation, so GUI pickers can never offer a profile the runtime
+    // would reject.
+    let roster = manager.agent_roster();
+    let profiles = roster
+        .members()
+        .iter()
+        .map(|member| {
+            json!({
+                "id": member.id.clone(),
+                "display_name": member.display_name.clone(),
+                "description": member.description.clone(),
+                "origin": member.origin.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({
+        "profiles": profiles,
+        "load_error": roster.load_error().map(str::to_string),
+    })))
+}
+
 async fn create_fleet_run(
     State(state): State<RuntimeApiState>,
     Json(request): Json<CreateFleetRunRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     if request.target != FleetRuntimeTarget::ThisComputer {
         return Err(ApiError::not_implemented(format!(
-            "Fleet target {:?} is not available in this local Runtime; choose this_computer",
+            "Pod target {:?} is not available in this local Runtime; choose this_computer",
             request.target
         )));
     }
@@ -1493,14 +1523,14 @@ async fn create_fleet_run(
     let manager = open_fleet_manager(&state)?;
     let report = manager
         .create_queued_run_with_descriptor(document, max_workers, descriptor)
-        .map_err(|error| ApiError::bad_request(format!("Failed to create Fleet run: {error}")))?;
+        .map_err(|error| ApiError::bad_request(format!("Failed to create Pod run: {error}")))?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|error| ApiError::internal(format!("Failed to rebuild Fleet state: {error}")))?;
+        .map_err(|error| ApiError::internal(format!("Failed to rebuild Pod state: {error}")))?;
     let run = ledger_state
         .runs
         .get(&report.run_id.0)
-        .ok_or_else(|| ApiError::internal("Created Fleet run was missing from its ledger"))?;
+        .ok_or_else(|| ApiError::internal("Created Pod run was missing from its ledger"))?;
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -1516,17 +1546,17 @@ fn prepare_managed_fleet_run(
 ) -> Result<(FleetTaskSpecDocument, ManagedFleetRunDescriptor, usize), ApiError> {
     if request.security_policy.is_some() {
         return Err(ApiError::not_implemented(
-            "Managed Fleet security_policy overrides are not executable yet; use named roles and bounded task workspace/tool scopes",
+            "Managed Pod security_policy overrides are not executable yet; use named roles and bounded task workspace/tool scopes",
         ));
     }
     if !request.worker_specs.is_empty() {
         return Err(ApiError::not_implemented(
-            "Managed Fleet custom worker_specs are not available yet; local Runtime worker IDs are generated per run so worker controls cannot collide across Fleets",
+            "Managed Pod custom worker_specs are not available yet; local Runtime worker IDs are generated per run so worker controls cannot collide across Pods",
         ));
     }
     if request.roles.is_empty() {
         return Err(ApiError::bad_request(
-            "roles must declare at least one named Fleet role",
+            "roles must declare at least one named Pod role",
         ));
     }
     if request.roles.len() > 128 {
@@ -1559,7 +1589,7 @@ fn prepare_managed_fleet_run(
             .transpose()?;
         if roles.insert(normalized.clone(), agent_profile).is_some() {
             return Err(ApiError::bad_request(format!(
-                "duplicate Fleet role '{normalized}'"
+                "duplicate Pod role '{normalized}'"
             )));
         }
     }
@@ -1569,20 +1599,20 @@ fn prepare_managed_fleet_run(
     for task in &mut tasks {
         let worker = task.worker.as_mut().ok_or_else(|| {
             ApiError::bad_request(format!(
-                "Fleet task '{}' must select one named role through worker.role",
+                "Pod task '{}' must select one named role through worker.role",
                 task.id
             ))
         })?;
         let role = worker.role.as_deref().ok_or_else(|| {
             ApiError::bad_request(format!(
-                "Fleet task '{}' must select one named role through worker.role",
+                "Pod task '{}' must select one named role through worker.role",
                 task.id
             ))
         })?;
         let role = canonical_public_role_name(&managed_fleet_token("task.worker.role", role)?);
         let declared_profile = roles.get(&role).ok_or_else(|| {
             ApiError::bad_request(format!(
-                "Fleet task '{}' references undeclared role '{role}'",
+                "Pod task '{}' references undeclared role '{role}'",
                 task.id
             ))
         })?;
@@ -1590,7 +1620,7 @@ fn prepare_managed_fleet_run(
             match worker.agent_profile.as_deref() {
                 Some(task_profile) if task_profile != profile => {
                     return Err(ApiError::bad_request(format!(
-                        "Fleet task '{}' overrides role '{role}' agent_profile '{profile}' with '{task_profile}'",
+                        "Pod task '{}' overrides role '{role}' agent_profile '{profile}' with '{task_profile}'",
                         task.id
                     )));
                 }
@@ -1608,7 +1638,7 @@ fn prepare_managed_fleet_run(
         .collect::<Vec<_>>();
     if !unused_roles.is_empty() {
         return Err(ApiError::bad_request(format!(
-            "Every declared Fleet role must own a Workflow task; unused roles: {}",
+            "Every declared Pod role must own a Workflow task; unused roles: {}",
             unused_roles.join(", ")
         )));
     }
@@ -1629,6 +1659,7 @@ fn prepare_managed_fleet_run(
             security_policy: None,
             workers: Vec::new(),
             tasks,
+            usage_ceiling: request.usage_ceiling,
         },
         ManagedFleetRunDescriptor {
             target: Some(request.target),
@@ -1662,7 +1693,7 @@ fn reject_parallel_write_collisions(tasks: &[FleetTaskSpec]) -> Result<(), ApiEr
     for task in tasks {
         let write_roots = fleet_write_roots(task).map_err(|error| {
             ApiError::bad_request(format!(
-                "Fleet task '{}' has an invalid write scope: {error}",
+                "Pod task '{}' has an invalid write scope: {error}",
                 task.id
             ))
         })?;
@@ -1705,32 +1736,32 @@ async fn start_fleet_run(
     let manager = open_fleet_manager(&state)?;
     let durable = manager
         .rebuild_state()
-        .map_err(|error| ApiError::internal(format!("Failed to rebuild Fleet state: {error}")))?;
+        .map_err(|error| ApiError::internal(format!("Failed to rebuild Pod state: {error}")))?;
     let run = durable
         .runs
         .get(&run_id)
-        .ok_or_else(|| ApiError::not_found(format!("fleet run '{run_id}' not found")))?;
+        .ok_or_else(|| ApiError::not_found(format!("Pod run '{run_id}' not found")))?;
     match run.target {
         Some(FleetRuntimeTarget::ThisComputer) => {}
         Some(target) => {
             return Err(ApiError::not_implemented(format!(
-                "Fleet target {target:?} is not available in this local Runtime"
+                "Pod target {target:?} is not available in this local Runtime"
             )));
         }
         None => {
             return Err(ApiError::bad_request(
-                "Fleet run has no explicit Runtime target and cannot be started through the managed API",
+                "Pod run has no explicit Runtime target and cannot be started through the managed API",
             ));
         }
     }
     if run.workflow.is_none() || run.roles.is_empty() {
         return Err(ApiError::bad_request(
-            "Fleet run has no managed Workflow/role descriptor and cannot be started through the managed API",
+            "Pod run has no managed Workflow/role descriptor and cannot be started through the managed API",
         ));
     }
     let run_id = FleetRunId::from(run_id);
     let report = manager.activate_run(&run_id).map_err(|error| {
-        let message = format!("Failed to start Fleet run '{}': {error}", run_id.0);
+        let message = format!("Failed to start Pod run '{}': {error}", run_id.0);
         if message.contains("already terminal") {
             ApiError::conflict(message)
         } else {
@@ -1761,7 +1792,7 @@ async fn start_fleet_run(
             tracing::error!(
                 run_id = %execution_run_id.0,
                 error = %error,
-                "Runtime API Fleet manager exited with an error"
+                "Runtime API Pod manager exited with an error"
             );
         }
     });
@@ -1858,7 +1889,7 @@ fn replay_live_fleet_events(
                     tracing::warn!(
                         run_id = %run_id.0,
                         error = %error,
-                        "Fleet event stream stopped while reading durable history"
+                        "Pod event stream stopped while reading durable history"
                     );
                     yield Ok(sse_json(
                         "fleet.stream.error",
@@ -1886,7 +1917,7 @@ async fn load_fleet_event_replay(
     })
     .await
     .map_err(|error| FleetEventReplayError::Storage {
-        message: format!("Fleet replay worker failed: {error}"),
+        message: format!("Pod replay worker failed: {error}"),
     })?
 }
 
@@ -1905,7 +1936,7 @@ fn validate_fleet_events_query(
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
     }) {
         return Err(ApiError::bad_request(
-            "after is not a valid Fleet event cursor",
+            "after is not a valid Pod event cursor",
         ));
     }
     let limit = query.limit.unwrap_or(DEFAULT_FLEET_EVENT_REPLAY_LIMIT);
@@ -1938,7 +1969,7 @@ async fn list_fleet_runs(State(state): State<RuntimeApiState>) -> Result<Json<Va
     let manager = open_fleet_manager(&state)?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild Pod state: {err}")))?;
     let runs: Vec<_> = ledger_state
         .runs
         .values()
@@ -1946,7 +1977,7 @@ async fn list_fleet_runs(State(state): State<RuntimeApiState>) -> Result<Json<Va
         .collect::<Result<Vec<_>, _>>()?;
     let status = manager
         .status()
-        .map_err(|err| ApiError::internal(format!("Failed to read fleet status: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to read Pod status: {err}")))?;
     Ok(Json(json!({
         "status": fleet_status_json(&status),
         "runs": runs,
@@ -1960,11 +1991,11 @@ async fn get_fleet_run(
     let manager = open_fleet_manager(&state)?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild Pod state: {err}")))?;
     let run = ledger_state
         .runs
         .get(&run_id)
-        .ok_or_else(|| ApiError::not_found(format!("fleet run '{run_id}' not found")))?;
+        .ok_or_else(|| ApiError::not_found(format!("Pod run '{run_id}' not found")))?;
     Ok(Json(fleet_run_detail_json(&manager, run, &ledger_state)?))
 }
 
@@ -1975,11 +2006,11 @@ async fn list_fleet_run_workers(
     let manager = open_fleet_manager(&state)?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild Pod state: {err}")))?;
     let run = ledger_state
         .runs
         .get(&run_id)
-        .ok_or_else(|| ApiError::not_found(format!("fleet run '{run_id}' not found")))?;
+        .ok_or_else(|| ApiError::not_found(format!("Pod run '{run_id}' not found")))?;
     let workers = run
         .worker_specs
         .iter()
@@ -1988,10 +2019,7 @@ async fn list_fleet_run_workers(
                 .inspect_worker(&worker.id)
                 .map(|inspection| fleet_worker_json(&inspection))
                 .map_err(|err| {
-                    ApiError::internal(format!(
-                        "Failed to inspect fleet worker {}: {err}",
-                        worker.id
-                    ))
+                    ApiError::internal(format!("Failed to inspect Pod worker {}: {err}", worker.id))
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -2006,9 +2034,9 @@ async fn get_fleet_worker(
     Path(worker_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let manager = open_fleet_manager(&state)?;
-    let inspection = manager.inspect_worker(&worker_id).map_err(|err| {
-        ApiError::not_found(format!("fleet worker '{worker_id}' not found: {err}"))
-    })?;
+    let inspection = manager
+        .inspect_worker(&worker_id)
+        .map_err(|err| ApiError::not_found(format!("Pod worker '{worker_id}' not found: {err}")))?;
     Ok(Json(fleet_worker_json(&inspection)))
 }
 
@@ -2019,7 +2047,7 @@ async fn interrupt_fleet_worker(
     let manager = open_fleet_manager(&state)?;
     let inspection = manager.interrupt_worker(&worker_id).map_err(|err| {
         ApiError::bad_request(format!(
-            "Failed to interrupt fleet worker '{worker_id}': {err}"
+            "Failed to interrupt Pod worker '{worker_id}': {err}"
         ))
     })?;
     Ok(Json(json!({
@@ -2034,7 +2062,7 @@ async fn stop_fleet_worker(
 ) -> Result<Json<Value>, ApiError> {
     let manager = open_fleet_manager(&state)?;
     let inspection = manager.interrupt_worker(&worker_id).map_err(|err| {
-        ApiError::bad_request(format!("Failed to stop fleet worker '{worker_id}': {err}"))
+        ApiError::bad_request(format!("Failed to stop Pod worker '{worker_id}': {err}"))
     })?;
     Ok(Json(json!({
         "action": "stop",
@@ -2048,9 +2076,7 @@ async fn restart_fleet_worker(
 ) -> Result<Json<Value>, ApiError> {
     let manager = open_fleet_manager(&state)?;
     let report = manager.restart_worker(&worker_id).map_err(|err| {
-        ApiError::bad_request(format!(
-            "Failed to restart fleet worker '{worker_id}': {err}"
-        ))
+        ApiError::bad_request(format!("Failed to restart Pod worker '{worker_id}': {err}"))
     })?;
     let worker = fleet_worker_json(&report.inspection);
     let run_id = report.run_id.clone();
@@ -2073,7 +2099,7 @@ async fn restart_fleet_worker(
             tracing::error!(
                 run_id = %run_id.0,
                 error = %err,
-                "Runtime API Fleet restart manager exited with an error"
+                "Runtime API Pod restart manager exited with an error"
             );
         }
     });
@@ -2092,11 +2118,11 @@ async fn stop_fleet_run(
     let manager = open_fleet_manager(&state)?;
     let run_id = FleetRunId::from(run_id);
     let stopped = manager.stop_run(&run_id).map_err(|err| {
-        ApiError::bad_request(format!("Failed to stop fleet run '{}': {err}", run_id.0))
+        ApiError::bad_request(format!("Failed to stop Pod run '{}': {err}", run_id.0))
     })?;
     let status = manager
         .run_status(&run_id)
-        .map_err(|err| ApiError::internal(format!("Failed to read fleet run status: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to read Pod run status: {err}")))?;
     Ok(Json(json!({
         "action": "stop",
         "run_id": run_id.0,
@@ -2115,11 +2141,9 @@ async fn list_fleet_run_receipts(
     let manager = open_fleet_manager(&state)?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild Pod state: {err}")))?;
     if !ledger_state.runs.contains_key(&run_id) {
-        return Err(ApiError::not_found(format!(
-            "fleet run '{run_id}' not found"
-        )));
+        return Err(ApiError::not_found(format!("Pod run '{run_id}' not found")));
     }
     let run_id_parsed = FleetRunId::from(run_id.clone());
     let receipts: Vec<Value> = ledger_state
@@ -2141,7 +2165,7 @@ async fn get_fleet_run_receipt(
     let manager = open_fleet_manager(&state)?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild Pod state: {err}")))?;
     let key = format!("{run_id}:{task_id}");
     let receipt = ledger_state.receipts.get(&key).ok_or_else(|| {
         ApiError::not_found(format!(
@@ -2158,7 +2182,7 @@ async fn inspect_fleet_run_receipt_evidence(
     let manager = open_fleet_manager(&state)?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild Pod state: {err}")))?;
     let key = format!("{run_id}:{task_id}");
     let receipt = ledger_state.receipts.get(&key).ok_or_else(|| {
         ApiError::not_found(format!(
@@ -2233,7 +2257,7 @@ fn open_fleet_manager(state: &RuntimeApiState) -> Result<FleetManager, ApiError>
                 .with_session_model(session_model)
                 .with_route_config(route_config)
         })
-        .map_err(|err| ApiError::internal(format!("Failed to open fleet manager: {err}")))
+        .map_err(|err| ApiError::internal(format!("Failed to open Pod manager: {err}")))
 }
 
 fn fleet_run_summary_json(
@@ -2243,7 +2267,7 @@ fn fleet_run_summary_json(
 ) -> Result<Value, ApiError> {
     let status = manager
         .run_status(&run.id)
-        .map_err(|err| ApiError::internal(format!("Failed to read fleet run status: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to read Pod run status: {err}")))?;
     let task_statuses = ledger_state
         .tasks
         .values()
@@ -2483,6 +2507,10 @@ fn fleet_event_label(payload: &FleetWorkerEventPayload) -> String {
             .map(|kind| format!("workflow_event run_id={workflow_run_id} type={kind}"))
             .unwrap_or_else(|| format!("workflow_event run_id={workflow_run_id}")),
         FleetWorkerEventPayload::Heartbeat { .. } => "heartbeat".to_string(),
+        FleetWorkerEventPayload::UsageReport {
+            input_tokens,
+            output_tokens,
+        } => format!("usage_report input={input_tokens} output={output_tokens}"),
         FleetWorkerEventPayload::Artifact(artifact) => {
             format!("artifact kind={}", artifact_kind_label(&artifact.kind))
         }
@@ -3755,6 +3783,34 @@ async fn get_thread(
     Ok(Json(detail))
 }
 
+/// Response for `GET /v1/threads/{id}/usage`.
+///
+/// Thin adapter over `RuntimeThreadManager::aggregate_usage_for_thread`: the
+/// GUI's session-cost surface reads provider-aware, recorded-time pricing in
+/// both published currencies from the same accumulation that powers
+/// `/v1/usage`, instead of reimplementing rate tables client-side.
+#[derive(Debug, Serialize)]
+struct ThreadUsageResponse {
+    thread_id: String,
+    totals: UsageTotals,
+}
+
+async fn get_thread_usage(
+    State(state): State<RuntimeApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<ThreadUsageResponse>, ApiError> {
+    let totals = state
+        .runtime_threads
+        .aggregate_usage_for_thread(&id)
+        .await
+        .map_err(map_thread_err)?
+        .combined();
+    Ok(Json(ThreadUsageResponse {
+        thread_id: id,
+        totals,
+    }))
+}
+
 async fn update_thread(
     State(state): State<RuntimeApiState>,
     Path(id): Path<String>,
@@ -4016,8 +4072,11 @@ async fn retry_thread_turn(
             &forked_thread.id,
             StartTurnRequest {
                 prompt: retry_prompt,
+                operation_key: None,
                 input_summary: None,
                 model: None,
+                reasoning_effort: None,
+                allowed_tools: None,
                 mode: None,
                 permission_posture: None,
                 allow_shell: None,
@@ -4606,14 +4665,7 @@ async fn stream_turn(
         return Err(ApiError::bad_request("prompt is required"));
     }
 
-    let model = req.model.clone().unwrap_or_else(|| {
-        state
-            .config
-            .read()
-            .default_text_model
-            .clone()
-            .unwrap_or_else(|| DEFAULT_TEXT_MODEL.to_string())
-    });
+    let model = runtime_request_model(&state.config.read(), req.model.as_deref());
     let workspace = req
         .workspace
         .clone()
@@ -5337,9 +5389,6 @@ struct ProviderEntry {
     model_provider_id: Option<String>,
     /// Human-friendly name for picker UIs (e.g. "DeepSeek", "OpenAI").
     display_name: String,
-    /// Default base URL for this provider ( informational; the live base URL
-    /// may be overridden in config.toml).
-    default_base_url: String,
     /// Default model id for this provider, if any. Empty for pass-through
     /// providers (Ollama / Custom) that expose no built-in catalog.
     default_model: String,
@@ -5347,9 +5396,42 @@ struct ProviderEntry {
     /// GUI should render a free-text input instead of calling
     /// `/v1/providers/{id}/models`.
     has_model_catalog: bool,
-    /// API key environment variable candidates, e.g. `["DEEPSEEK_API_KEY"]`.
-    /// The GUI may surface these in a tooltip when auth is missing.
-    env_vars: Vec<String>,
+    /// Sanitized structural credential classification for the exact route.
+    /// This deliberately contains no credential, endpoint, path, environment
+    /// variable, consent-source, or token metadata.
+    #[serde(rename = "credentialState")]
+    credential_state: ProviderCredentialState,
+}
+
+/// Stable, non-secret wire projection of provider readiness.
+///
+/// The richer internal classification remains private to the Runtime. In
+/// particular, saved API keys and imported tokens collapse to `configured`,
+/// while login and external-consent states collapse to `login_required`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ProviderCredentialState {
+    Configured,
+    LoginRequired,
+    Missing,
+    NoAuth,
+    Local,
+    Legacy,
+}
+
+impl From<crate::provider_readiness::CredentialState> for ProviderCredentialState {
+    fn from(value: crate::provider_readiness::CredentialState) -> Self {
+        use crate::provider_readiness::CredentialState;
+
+        match value {
+            CredentialState::Saved | CredentialState::ImportedToken => Self::Configured,
+            CredentialState::MissingLogin | CredentialState::ExternalConsent => Self::LoginRequired,
+            CredentialState::MissingKey => Self::Missing,
+            CredentialState::NoAuth => Self::NoAuth,
+            CredentialState::Local => Self::Local,
+            CredentialState::Legacy => Self::Legacy,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5445,6 +5527,150 @@ fn provider_default_model_for_api(
         .unwrap_or_default()
 }
 
+pub(crate) fn runtime_chat_model_id_is_safe(value: &str) -> bool {
+    let sanitized = crate::cost_status::sanitize_persisted_route_label(value);
+    value == value.trim()
+        && !value.is_empty()
+        && value.len() <= 256
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && !value.contains("..")
+        && !value.contains("://")
+        // Runtime Chat publishes a non-secret selector, never an endpoint or
+        // userinfo-bearing authority. Model families that need revisions can
+        // use their ordinary slash/dash ids; `@` is intentionally excluded at
+        // this trust boundary because `user:password@host:port/path` otherwise
+        // passes the generic route-label sanitizer.
+        && !value.contains('@')
+        && !runtime_chat_model_id_looks_like_host_port(value)
+        && !value.starts_with("redacted-")
+        && sanitized == value
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b'.' | b'_' | b':' | b'/' | b'@' | b'+' | b'-')
+        })
+}
+
+fn runtime_chat_model_id_looks_like_host_port(value: &str) -> bool {
+    let authority = value.split('/').next().unwrap_or(value);
+    let Some((host, port)) = authority.rsplit_once(':') else {
+        return false;
+    };
+    !host.is_empty() && !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+pub(crate) fn runtime_chat_route_id_is_safe(value: &str) -> bool {
+    let sanitized = crate::cost_status::sanitize_persisted_route_label(value);
+    value == value.trim()
+        && !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && !value.contains("..")
+        && !value.starts_with("redacted-")
+        && sanitized == value
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// Build the deliberately narrow provider projection used by the account-owned
+/// Runtime Chat relay. This is the same active-route truth exposed by the
+/// authenticated native `/v1/runtime/info`, `/v1/providers`, and
+/// `/v1/providers/{id}/models` endpoints, collapsed to the one exact route the
+/// current Runtime can use without moving credentials across the relay.
+pub(crate) fn runtime_chat_relay_catalog(
+    config: &Config,
+    challenge: &str,
+) -> Result<Value, String> {
+    use crate::provider_readiness::CredentialState;
+
+    const PROTOCOL: &str = "codewhale.runtime-chat-relay.v1";
+    if !(32..=128).contains(&challenge.len())
+        || !challenge
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err("Codewhale returned an invalid Runtime Chat relay challenge.".to_string());
+    }
+
+    let provider = config.api_provider();
+    let identity = config
+        .active_provider_identity(provider)
+        .map_err(|_| "The active Runtime provider identity is invalid.".to_string())?;
+    let credential_state =
+        match crate::provider_readiness::credential_state_for_provider(config, provider) {
+            CredentialState::Saved | CredentialState::ImportedToken => "configured",
+            CredentialState::Local => "local",
+            CredentialState::NoAuth => "no_auth",
+            CredentialState::MissingKey
+            | CredentialState::MissingLogin
+            | CredentialState::ExternalConsent
+            | CredentialState::Legacy => {
+                return Err("The active Runtime provider is not ready for Chat.".to_string());
+            }
+        };
+
+    let mut models = provider_models_for_api(config, provider, provider);
+    models.retain(|model| runtime_chat_model_id_is_safe(model));
+    models.sort();
+    models.dedup();
+    models.truncate(256);
+    if models.is_empty() {
+        return Err("The active Runtime provider has no safe model catalog.".to_string());
+    }
+    let requested_default = provider_default_model_for_api(config, provider, provider);
+    let default_model = models
+        .iter()
+        .find(|model| model.as_str() == requested_default)
+        .cloned()
+        .unwrap_or_else(|| models[0].clone());
+    let model_provider_id = identity
+        .persisted_id()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| provider.as_str())
+        .to_string();
+    if !runtime_chat_route_id_is_safe(&model_provider_id) {
+        return Err("The active Runtime model-provider identity is invalid.".to_string());
+    }
+
+    Ok(json!({
+        "protocol": PROTOCOL,
+        "challenge": challenge,
+        "runtime": {
+            "service": "codewhale-runtime-api",
+            "apiVersion": RUNTIME_API_VERSION,
+            "codewhaleVersion": env!("CARGO_PKG_VERSION"),
+            "authRequired": true,
+            "capabilities": {
+                "relay_chat_v1": true,
+                "isolated_chat_threads": true,
+                "turn_operation_idempotency": true,
+                "tool_execution": false,
+                "stable_event_ids": true,
+            },
+        },
+        "providers": [{
+            "id": provider.as_str(),
+            "modelProviderId": model_provider_id,
+            "displayName": provider.display_name(),
+            "defaultModel": default_model,
+            "credentialState": credential_state,
+            "models": models.into_iter().map(|model| json!({
+                // Runtime Chat commands currently carry text only. Provider
+                // vision support is not relay capability truth until bounded
+                // image bytes are part of this protocol.
+                "imageInput": "unsupported",
+                "id": model,
+            })).collect::<Vec<_>>(),
+        }],
+    }))
+}
+
 async fn list_providers(
     State(state): State<RuntimeApiState>,
 ) -> Result<Json<ProvidersResponse>, ApiError> {
@@ -5465,14 +5691,13 @@ async fn list_providers(
                 .then(|| active_identity.persisted_id().map(str::to_string))
                 .flatten(),
             display_name: api_provider.display_name().to_string(),
-            default_base_url: api_provider.default_base_url().to_string(),
             default_model,
             has_model_catalog,
-            env_vars: api_provider
-                .env_vars()
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect(),
+            credential_state: crate::provider_readiness::credential_state_for_provider(
+                &config,
+                api_provider,
+            )
+            .into(),
         });
     }
     Ok(Json(ProvidersResponse { current, providers }))
@@ -6446,11 +6671,11 @@ fn map_thread_err(err: anyhow::Error) -> ApiError {
     } else if message.contains("already has an active turn")
         || message.contains("No active turn")
         || message.contains("is not active")
+        || lower.contains("operation_key is already bound")
+        || lower.contains("operation_key binding is incomplete")
+        || lower.contains("operation_key binding does not match")
     {
-        ApiError {
-            status: StatusCode::CONFLICT,
-            message,
-        }
+        ApiError::conflict(message)
     } else {
         ApiError::bad_request(message)
     }

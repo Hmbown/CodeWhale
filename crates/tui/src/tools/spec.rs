@@ -116,6 +116,11 @@ pub struct RuntimeToolServices {
     pub handle_store: SharedHandleStore,
     /// Per-session persistent RLM kernels, keyed by caller-chosen context name.
     pub rlm_sessions: SharedRlmSessionStore,
+    /// Directory for `read_media`'s content-addressed store of
+    /// pre-compression image originals. `None` (tests and one-off contexts)
+    /// disables persistence so unit tests never touch the real state dir;
+    /// production wiring points it at `<codewhale home>/media-originals`.
+    pub media_originals_dir: Option<PathBuf>,
 }
 
 impl Default for RuntimeToolServices {
@@ -133,6 +138,7 @@ impl Default for RuntimeToolServices {
             hook_executor: None,
             handle_store: new_shared_handle_store(),
             rlm_sessions: new_shared_rlm_session_store(),
+            media_originals_dir: None,
         }
     }
 }
@@ -155,6 +161,7 @@ impl std::fmt::Debug for RuntimeToolServices {
             .field("hook_executor", &self.hook_executor.is_some())
             .field("handle_store", &true)
             .field("rlm_sessions", &true)
+            .field("media_originals_dir", &self.media_originals_dir)
             .finish()
     }
 }
@@ -207,7 +214,7 @@ pub struct ToolAuthorityEnvelope {
     pub owner: String,
     pub authority: ToolMutationAuthority,
     /// Optional outer network cap for headless workers. `None` preserves the
-    /// behavior of v1 envelopes written before this field existed; new Fleet
+    /// behavior of v1 envelopes written before this field existed; new Pod
     /// launches always carry the resolved worker permission explicitly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_access: Option<bool>,
@@ -713,6 +720,18 @@ impl std::ops::DerefMut for ToolContext {
 }
 
 impl ToolContext {
+    /// Create an inert context for a registry that intentionally has no tools.
+    ///
+    /// Empty paths are deliberate: isolated Runtime Chat must not retain the
+    /// host workspace or derive project notes and MCP paths. Isolation comes
+    /// from callers pairing this context with an empty registry and allow-list
+    /// plus a zero tool-call budget; this constructor is not a security
+    /// boundary by itself.
+    #[must_use]
+    pub(crate) fn for_empty_registry() -> Self {
+        Self::with_options(PathBuf::new(), false, PathBuf::new(), PathBuf::new())
+    }
+
     /// Create a new `ToolContext` with default settings.
     #[must_use]
     pub fn new(workspace: impl Into<PathBuf>) -> Self {
@@ -1172,13 +1191,6 @@ impl ToolContext {
     #[allow(dead_code)]
     pub fn with_trust_mode(mut self, trust: bool) -> Self {
         self.trust_mode = trust;
-        self
-    }
-
-    /// Set the sandbox policy.
-    #[allow(dead_code)]
-    pub fn with_sandbox_policy(mut self, policy: SandboxPolicy) -> Self {
-        self.sandbox_policy = policy;
         self
     }
 

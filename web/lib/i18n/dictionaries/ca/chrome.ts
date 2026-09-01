@@ -11,7 +11,7 @@ import type { ChromeDict } from "../types";
  * Terminologia alineada amb el pack TUI: els modes i les postures de
  * permisos es mantenen literals (Plan / Work / Operate, Ask / Auto-Review /
  * Full Access), «permisos» és permissions, «resguard» és receipt; `Runtime`,
- * `Fleet` i `TUI` resten noms de producte.
+ * `Pod` i `TUI` resten noms de producte.
  *
  * Les etiquetes secundàries de navegació aparien l’etiqueta catalana amb
  * un equivalent anglès curt — la parella han és el recurs editorial propi
@@ -87,6 +87,9 @@ export const chrome: ChromeDict = {
   footerIssues: "Issues",
   footerContribute: "Col·laborar",
   footerLicense: "Llicència MIT",
+  footerPricing: "Preus",
+  footerTerms: "Termes del servei",
+  footerPrivacy: "Privadesa",
   footerCanonicalSource: "Font canònica: ",
   footerReleases: " · Versions: ",
   footerReleasesLink: "Versions de GitHub",

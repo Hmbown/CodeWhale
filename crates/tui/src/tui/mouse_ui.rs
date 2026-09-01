@@ -1,5 +1,101 @@
 use std::time::{Duration, Instant};
 
+/// Timing trace of the last left-click in the composer. crossterm never
+/// decodes click counts, so double/triple-click detection keeps the prior
+/// click's time and position; a fast click within the slop window increments
+/// the count, anything else resets it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ComposerClickTrace {
+    at: Instant,
+    column: u16,
+    row: u16,
+    count: u8,
+}
+
+const COMPOSER_DOUBLE_CLICK_MS: u128 = 400;
+const COMPOSER_CLICK_SLOP_CELLS: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ComposerClickGesture {
+    Caret,
+    Word,
+    Line,
+}
+
+fn classify_composer_click(
+    trace: &mut Option<ComposerClickTrace>,
+    column: u16,
+    row: u16,
+) -> ComposerClickGesture {
+    let at = Instant::now();
+    let next = match trace.as_ref() {
+        Some(prev)
+            if at.duration_since(prev.at).as_millis() <= COMPOSER_DOUBLE_CLICK_MS
+                && prev.row.abs_diff(row) <= COMPOSER_CLICK_SLOP_CELLS
+                && prev.column.abs_diff(column) <= COMPOSER_CLICK_SLOP_CELLS =>
+        {
+            ComposerClickTrace {
+                at,
+                column,
+                row,
+                count: prev.count.saturating_add(1),
+            }
+        }
+        _ => ComposerClickTrace {
+            at,
+            column,
+            row,
+            count: 1,
+        },
+    };
+    let count = next.count;
+    *trace = Some(next);
+    match count {
+        2 => ComposerClickGesture::Word,
+        n if n >= 3 => ComposerClickGesture::Line,
+        _ => ComposerClickGesture::Caret,
+    }
+}
+
+/// Byte bounds of the word (or CJK run) containing `pos`.
+fn composer_word_bounds(text: &str, pos: usize) -> (usize, usize) {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    if chars.is_empty() {
+        return (0, 0);
+    }
+    let is_word = |ch: char| ch.is_alphanumeric() || (ch as u32) >= 0x80;
+    let idx = chars.partition_point(|(byte, _)| *byte < pos);
+    let idx = idx.min(chars.len().saturating_sub(1));
+    if !is_word(chars[idx].1) {
+        return (chars[idx].0, chars[idx].0 + chars[idx].1.len_utf8());
+    }
+    let mut start = idx;
+    while start > 0 && is_word(chars[start - 1].1) {
+        start -= 1;
+    }
+    let mut end = idx + 1;
+    while end < chars.len() && is_word(chars[end].1) {
+        end += 1;
+    }
+    let start_byte = chars[start].0;
+    let end_byte = if end < chars.len() {
+        chars[end].0
+    } else {
+        text.len()
+    };
+    (start_byte, end_byte)
+}
+
+/// Byte bounds of the logical line containing `pos` (excluding the newline).
+fn composer_line_bounds(text: &str, pos: usize) -> (usize, usize) {
+    let pos = pos.min(text.len());
+    let start = text[..pos].rfind('\n').map_or(0, |i| i + 1);
+    let end = text[pos..]
+        .find('\n')
+        .map_or(text.len(), |offset| pos + offset);
+    (start, end)
+}
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use unicode_segmentation::UnicodeSegmentation;
@@ -15,6 +111,7 @@ use crate::tui::context_menu::{ContextMenuEntry, ContextMenuView};
 use crate::tui::history::HistoryCell;
 use crate::tui::scrolling::{ScrollDirection, TranscriptScroll};
 use crate::tui::selection::{SelectionAutoscroll, TranscriptSelectionPoint};
+use crate::tui::tideline::InteractionAction;
 use crate::tui::ui_text::{
     history_cell_to_text, line_to_plain, slice_text, text_display_width, truncate_line_to_width,
 };
@@ -218,6 +315,28 @@ fn handle_workflow_panel_mouse(app: &mut App, mouse: MouseEvent) -> bool {
     true
 }
 
+fn handle_plugin_cta_mouse(app: &mut App, mouse: MouseEvent) -> Option<Vec<ViewEvent>> {
+    if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        return None;
+    }
+    if !mouse_hits_rect(mouse, app.viewport.last_plugin_cta_area) {
+        return None;
+    }
+    if mouse_hits_rect(mouse, app.viewport.last_plugin_cta_dismiss_area) {
+        let _ = app.dismiss_plugin_cta();
+        return Some(Vec::new());
+    }
+    // Review button, or the rest of the CTA line, runs the existing review
+    // command. Never auto-installs: the slash command is the human path.
+    if let Some(command) = app.accept_plugin_cta_command() {
+        return Some(apply_sidebar_row_action(
+            app,
+            crate::tui::app::SidebarRowAction::Command(command),
+        ));
+    }
+    Some(Vec::new())
+}
+
 /// Handle mouse events within the composer area.
 /// Returns true if the event was consumed.
 pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
@@ -232,11 +351,12 @@ pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
     {
         return false;
     }
-    // Resolve the border-aware inner rect through the same persistent prompt
-    // geometry used by rendering, cursor placement, and viewport bookkeeping.
-    let inner = app.viewport.last_composer_content.unwrap_or(area);
+    // Resolve the border- and submit-aware input plane through the same
+    // persistent prompt geometry used by rendering, cursor placement, and
+    // viewport bookkeeping. The frame records it after reserving `[↑]`.
+    let input_plane = app.viewport.last_composer_content.unwrap_or(area);
     let text_area =
-        crate::tui::widgets::composer_content_geometry(inner, app.is_history_search_active())
+        crate::tui::widgets::composer_content_geometry(input_plane, app.is_history_search_active())
             .text_area;
 
     match mouse.kind {
@@ -255,9 +375,43 @@ pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
             COMPOSER_MOUSE_SCROLL_LINES as isize,
         ),
         MouseEventKind::Down(MouseButton::Left) => {
+            if let Some(submit) = crate::tui::widgets::active_composer_submit_rect(app, area)
+                && mouse_hits_rect(mouse, Some(submit))
+            {
+                // Same chord the keyboard Enter path uses. Empty / paste-burst
+                // clicks are consumed so they cannot also move the caret.
+                let action =
+                    app.decide_composer_submit(crate::tui::app::ComposerSubmitChord::Enter);
+                if !matches!(action, crate::tui::app::ComposerSubmitAction::Noop)
+                    && (app.composer_enter_would_submit()
+                        || matches!(action, crate::tui::app::ComposerSubmitAction::SendQueuedNow))
+                {
+                    app.pending_composer_submit = Some(crate::tui::app::ComposerSubmitChord::Enter);
+                }
+                app.needs_redraw = true;
+                return true;
+            }
             if let Some(pos) = mouse_pos_to_char_index(app, mouse.column, mouse.row, text_area) {
-                app.cursor_position = pos;
-                app.selection_anchor = None;
+                match classify_composer_click(
+                    &mut app.viewport.composer_click_trace,
+                    mouse.column,
+                    mouse.row,
+                ) {
+                    ComposerClickGesture::Word => {
+                        let (start, end) = composer_word_bounds(&app.input, pos);
+                        app.selection_anchor = Some(start);
+                        app.cursor_position = end;
+                    }
+                    ComposerClickGesture::Line => {
+                        let (start, end) = composer_line_bounds(&app.input, pos);
+                        app.selection_anchor = Some(start);
+                        app.cursor_position = end;
+                    }
+                    ComposerClickGesture::Caret => {
+                        app.cursor_position = pos;
+                        app.selection_anchor = None;
+                    }
+                }
                 app.needs_redraw = true;
             }
             true
@@ -322,39 +476,104 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
         return app.view_stack.handle_mouse(mouse);
     }
 
+    // Topbar facts are typed controls, not decorative text. Route this before
+    // either launch or session content so a segment painted in the one shared
+    // header has identical mouse behavior in both shell states.
+    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        let action = app
+            .viewport
+            .interaction_targets
+            .target_at(mouse.column, mouse.row)
+            .and_then(|target| target.mouse_action);
+        if let Some(action) = action {
+            app.needs_redraw = true;
+            return match action {
+                InteractionAction::InspectContext => {
+                    open_context_inspector(app);
+                    Vec::new()
+                }
+                InteractionAction::OpenProviderPicker => {
+                    vec![ViewEvent::TopbarRoutePickerRequested]
+                }
+            };
+        }
+    }
+
     // The launch surface owns the whole frame until a session is chosen.
     // Consume every mouse event here so wheel input cannot leak into the
     // transcript or composer behind the splash.
     if app.launch.visible {
         match mouse.kind {
-            MouseEventKind::ScrollUp => {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                // Wheeling away from the composer returns focus to the menu.
+                app.launch.composer_focus = false;
+                let key = if matches!(mouse.kind, MouseEventKind::ScrollUp) {
+                    KeyCode::Up
+                } else {
+                    KeyCode::Down
+                };
                 crate::tui::underwater::handle_launch_key(
                     &mut app.launch,
-                    KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
-                    app.ui_locale,
-                );
-            }
-            MouseEventKind::ScrollDown => {
-                crate::tui::underwater::handle_launch_key(
-                    &mut app.launch,
-                    KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                    KeyEvent::new(key, KeyModifiers::NONE),
                     app.ui_locale,
                 );
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some((index, _)) = app
+                // Send glyph first: it sits inside the composer row.
+                let send_hit = app
                     .launch
-                    .row_areas
-                    .iter()
-                    .enumerate()
-                    .find(|(_, area)| mouse_hits_rect(mouse, Some(**area)))
-                {
-                    app.launch.selected = index;
-                    app.pending_launch_action = Some(crate::tui::underwater::handle_launch_key(
-                        &mut app.launch,
-                        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-                        app.ui_locale,
-                    ));
+                    .send_area
+                    .is_some_and(|area| mouse_hits_rect(mouse, Some(area)));
+                let composer_hit = app
+                    .launch
+                    .composer_area
+                    .is_some_and(|area| mouse_hits_rect(mouse, Some(area)));
+                if send_hit && !app.input.trim().is_empty() {
+                    // Same submit path as the composer's Enter key.
+                    app.pending_launch_action =
+                        Some(crate::tui::underwater::LaunchAction::SendComposer);
+                } else if composer_hit || send_hit {
+                    // Clicking the composer — or its send glyph with nothing
+                    // to send — focuses it, exactly like the Tab key.
+                    app.launch.composer_focus = true;
+                } else {
+                    // Clicking anywhere else hands focus back to the menu.
+                    app.launch.composer_focus = false;
+                    // Option-strip tiles (below the quick-action rows, never
+                    // overlapping them): every tile dispatches through the
+                    // launch table — the same code its printed key takes
+                    // (spec §6 parity).
+                    if let Some((action, _)) = app
+                        .launch
+                        .option_areas
+                        .iter()
+                        .find(|(_, area)| mouse_hits_rect(mouse, Some(*area)))
+                        .map(|(action, area)| (*action, *area))
+                    {
+                        app.launch.selected = action.launch_row();
+                        app.pending_launch_action =
+                            Some(crate::tui::underwater::handle_launch_key(
+                                &mut app.launch,
+                                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                                app.ui_locale,
+                            ));
+                    } else if let Some((index, _)) = app
+                        .launch
+                        .row_areas
+                        .iter()
+                        .enumerate()
+                        .find(|(_, area)| mouse_hits_rect(mouse, Some(**area)))
+                    {
+                        // `row_areas` is the launch table's seven slots, so
+                        // the clicked slot IS the table row.
+                        app.launch.selected = index;
+                        app.pending_launch_action =
+                            Some(crate::tui::underwater::handle_launch_key(
+                                &mut app.launch,
+                                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                                app.ui_locale,
+                            ));
+                    }
                 }
             }
             _ => {}
@@ -378,6 +597,10 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
     // above the input remains clickable.
     if handle_workflow_panel_mouse(app, mouse) {
         return Vec::new();
+    }
+
+    if let Some(events) = handle_plugin_cta_mouse(app, mouse) {
+        return events;
     }
 
     // Composer mouse events take priority over transcript.
@@ -1624,8 +1847,14 @@ mod tests {
     use crate::tui::app::{
         App, SidebarHoverRow, SidebarHoverSection, SidebarRowAction, TuiOptions,
     };
-    use crate::tui::views::ContextMenuAction;
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use crate::tui::tideline::{
+        ContextBudgetSnapshot, InspectDetail, InteractionAction, InteractionFocus,
+        InteractionTarget, InteractionTargetId,
+    };
+    use crate::tui::views::{ContextMenuAction, ModalKind, ViewEvent};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use ratatui::layout::Rect;
     use serde_json::json;
     use std::path::PathBuf;
@@ -1733,24 +1962,270 @@ mod tests {
     }
 
     #[test]
-    fn launch_mouse_rows_dispatch_the_same_work_and_chat_actions_as_keyboard() {
+    fn every_visible_launch_row_dispatches_the_same_action_as_keyboard() {
+        // `row_areas` is the launch table's seven slots; the stage shows the
+        // three quick actions at slots [2, 4, 1] (New session, Chat only,
+        // Resume last). Clicking a row selects its TABLE row, so mouse and
+        // keyboard (select the row, Enter) dispatch identically.
+        for index in [2usize, 4, 1] {
+            let mut app = create_test_app();
+            app.launch.visible = true;
+            app.launch.worktree_available = true;
+            let stage = Rect::new(0, 1, 80, 22); // the frame's stage slot at 80x24
+            let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
+            crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
+
+            let mut keyboard = app.launch.clone();
+            keyboard.selected = index;
+            let keyboard_action = crate::tui::underwater::handle_launch_key(
+                &mut keyboard,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                app.ui_locale,
+            );
+
+            let row = app.launch.row_areas[index];
+            assert!(row.width > 0, "slot {index} must own a painted row");
+            handle_mouse_event(&mut app, left_click(row.x, row.y));
+            assert_eq!(app.launch.selected, index);
+            assert_eq!(app.pending_launch_action.take(), Some(keyboard_action));
+            assert_eq!(app.launch.worktree_input, keyboard.worktree_input);
+            assert_eq!(app.launch.status, keyboard.status);
+        }
+    }
+
+    #[test]
+    fn composer_click_focuses_and_send_click_matches_the_keyboard_submit() {
         let mut app = create_test_app();
         app.launch.visible = true;
         app.launch.worktree_available = true;
-        crate::tui::underwater::record_launch_row_areas(Rect::new(0, 0, 80, 24), &mut app.launch);
+        let stage = Rect::new(0, 1, 80, 22); // the frame's stage slot at 80x24
+        let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
+        crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
+        assert_eq!(
+            app.launch.row_areas.len(),
+            7,
+            "one slot per launch-table row"
+        );
+        let composer = app.launch.composer_area.expect("composer hitbox");
+        let send = app.launch.send_area.expect("send hitbox");
 
-        handle_mouse_event(&mut app, left_click(10, 10));
-        assert_eq!(app.launch.selected, 1);
+        // Clicking the composer focuses it — the mouse equivalent of Tab.
+        handle_mouse_event(&mut app, left_click(composer.x + 4, composer.y));
+        assert!(app.launch.composer_focus);
+        assert_eq!(app.pending_launch_action, None);
+
+        // Clicking the send glyph produces the same action the event loop
+        // consumes for the composer's Enter key, from the same input state.
+        app.input = "ship it".to_string();
+        handle_mouse_event(&mut app, left_click(send.x, send.y));
+        assert_eq!(
+            app.pending_launch_action.take(),
+            Some(crate::tui::underwater::LaunchAction::SendComposer)
+        );
+        assert_eq!(app.input, "ship it");
+        assert!(app.launch.composer_focus);
+
+        // Nothing to send: the send glyph focuses the composer instead.
+        app.input.clear();
+        handle_mouse_event(&mut app, left_click(send.x, send.y));
+        assert_eq!(app.pending_launch_action, None);
+        assert!(app.launch.composer_focus);
+
+        // Clicking a startup row hands focus back to the menu.
+        let row = app.launch.row_areas[2];
+        handle_mouse_event(&mut app, left_click(row.x, row.y));
+        assert!(!app.launch.composer_focus);
+        assert_eq!(app.launch.selected, 2);
+
+        // Wheeling away from the composer also returns focus to the menu.
+        app.launch.composer_focus = true;
+        handle_mouse_event(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: composer.x + 4,
+                row: composer.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert!(!app.launch.composer_focus);
+    }
+
+    #[test]
+    fn active_composer_send_click_queues_the_keyboard_submit_chord() {
+        let mut app = create_test_app();
+        app.launch.visible = false;
+        app.composer_border = true;
+        app.input = "ship it".to_string();
+        app.cursor_position = app.input.chars().count();
+        let area = Rect::new(0, 20, 80, 4);
+        app.viewport.last_composer_area = Some(area);
+        // Match the frame's submit-aware input plane: x=74 stays blank,
+        // then the shared `[↑]` target begins at x=75.
+        app.viewport.last_composer_content = Some(Rect::new(1, 21, 73, 2));
+        let submit = crate::tui::widgets::active_composer_submit_rect(&app, area)
+            .expect("enclosed composer submit");
+
+        handle_mouse_event(&mut app, left_click(submit.x, submit.y));
+        assert_eq!(
+            app.pending_composer_submit,
+            Some(crate::tui::app::ComposerSubmitChord::Enter)
+        );
+        assert_eq!(app.input, "ship it");
+        assert_eq!(app.cursor_position, app.input.chars().count());
+
+        app.pending_composer_submit = None;
+        handle_mouse_event(&mut app, left_click(area.x + 4, area.y + 1));
+        assert_eq!(app.pending_composer_submit, None);
+
+        app.input.clear();
+        app.cursor_position = 0;
+        handle_mouse_event(&mut app, left_click(submit.x, submit.y));
+        assert_eq!(app.pending_composer_submit, None);
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn context_meter_click_uses_the_same_inspector_as_the_keyboard_shortcut() {
+        let mut app = create_test_app();
+        app.launch.visible = false;
+        app.viewport
+            .interaction_targets
+            .register(InteractionTarget {
+                id: InteractionTargetId::HEADER_CONTEXT,
+                area: Rect::new(52, 0, 20, 1),
+                focus: InteractionFocus::Direct,
+                keyboard_action: Some(InteractionAction::InspectContext),
+                mouse_action: Some(InteractionAction::InspectContext),
+                inspect_detail: InspectDetail::ContextBudget(ContextBudgetSnapshot {
+                    used_tokens: 3_000,
+                    max_tokens: 10_000,
+                    percent_basis_points: 3_000,
+                }),
+            });
+
+        handle_mouse_event(&mut app, left_click(60, 0));
+
+        assert_eq!(app.view_stack.top_kind(), Some(ModalKind::ContextInspector));
+        assert!(
+            crate::tui::shell_key_routing::is_context_inspector_shortcut(&KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::ALT
+            ))
+        );
+    }
+
+    #[test]
+    fn topbar_route_click_emits_provider_picker_request() {
+        let mut app = create_test_app();
+        // The launch screen shares the same header, so this specifically
+        // protects against its old catch-all mouse route swallowing the
+        // topbar affordance before it reached the event handler.
+        app.launch.visible = true;
+        app.viewport
+            .interaction_targets
+            .register(InteractionTarget {
+                id: InteractionTargetId::HEADER_ROUTE,
+                area: Rect::new(20, 0, 24, 1),
+                focus: InteractionFocus::Direct,
+                keyboard_action: Some(InteractionAction::OpenProviderPicker),
+                mouse_action: Some(InteractionAction::OpenProviderPicker),
+                inspect_detail: InspectDetail::Route,
+            });
+
+        let events = handle_mouse_event(&mut app, left_click(24, 0));
+
+        assert!(matches!(
+            events.as_slice(),
+            [ViewEvent::TopbarRoutePickerRequested]
+        ));
+        assert!(app.view_stack.is_empty());
+    }
+
+    #[test]
+    fn quick_action_row_clicks_select_their_launch_table_rows() {
+        let mut app = create_test_app();
+        app.launch.visible = true;
+        app.launch.worktree_available = true;
+        let stage = Rect::new(0, 1, 80, 22); // the frame's stage slot at 80x24
+        let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
+        crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
+
+        // The Chat only quick action is launch-table row 4 (its `C` direct
+        // key), not the strip position: clicking it selects row 4 and Enter
+        // dispatches NewChat through the same table.
+        let chat = app.launch.row_areas[4];
+        handle_mouse_event(&mut app, left_click(chat.x + 2, chat.y));
+        assert_eq!(app.launch.selected, 4);
         assert_eq!(
             app.pending_launch_action.take(),
             Some(crate::tui::underwater::LaunchAction::NewChat)
         );
 
-        handle_mouse_event(&mut app, left_click(10, 7));
-        assert_eq!(app.launch.selected, 0);
+        // The New session quick action is table row 2 (its `W` direct key).
+        let work = app.launch.row_areas[2];
+        handle_mouse_event(&mut app, left_click(work.x + 2, work.y));
+        assert_eq!(app.launch.selected, 2);
         assert_eq!(
             app.pending_launch_action.take(),
             Some(crate::tui::underwater::LaunchAction::NewSession)
+        );
+    }
+
+    #[test]
+    fn launch_option_tiles_dispatch_the_same_actions_as_their_keys() {
+        let mut app = create_test_app();
+        app.launch.visible = true;
+        app.launch.worktree_available = true;
+        let stage = Rect::new(0, 1, 80, 22);
+        let startup = crate::tui::underwater::tideline_startup_from_app(&app);
+        drop(startup);
+        let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
+        crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
+        assert_eq!(app.launch.option_areas.len(), 4, "four tiles at 80 cols");
+
+        // Worktree tile: same path as Ctrl+N — the name prompt opens.
+        let (worktree, area) = app.launch.option_areas[0];
+        assert_eq!(
+            worktree,
+            crate::tui::underwater::LaunchOptionAction::Worktree
+        );
+        handle_mouse_event(&mut app, left_click(area.x + 1, area.y + 1));
+        assert!(
+            app.launch.worktree_input.is_some(),
+            "worktree tile opens the name prompt"
+        );
+        app.launch.worktree_input = None;
+
+        // Chat tile: same path as C.
+        let (chat, area) = app.launch.option_areas[1];
+        assert_eq!(chat, crate::tui::underwater::LaunchOptionAction::Chat);
+        handle_mouse_event(&mut app, left_click(area.x + 1, area.y + 1));
+        assert_eq!(
+            app.pending_launch_action.take(),
+            Some(crate::tui::underwater::LaunchAction::NewChat)
+        );
+
+        // Theme tile: launch-table row 5 — the same LaunchAction::Theme its
+        // printed `T` key and the event loop's table dispatch take (the
+        // picker itself opens when the pending action is consumed).
+        let (theme, area) = app.launch.option_areas[2];
+        assert_eq!(theme, crate::tui::underwater::LaunchOptionAction::Theme);
+        handle_mouse_event(&mut app, left_click(area.x + 1, area.y + 1));
+        assert_eq!(app.launch.selected, 5);
+        assert_eq!(
+            app.pending_launch_action.take(),
+            Some(crate::tui::underwater::LaunchAction::Theme)
+        );
+
+        // Help tile: launch-table row 6 (`F1`).
+        let (help, area) = app.launch.option_areas[3];
+        assert_eq!(help, crate::tui::underwater::LaunchOptionAction::Help);
+        handle_mouse_event(&mut app, left_click(area.x + 1, area.y + 1));
+        assert_eq!(app.launch.selected, 6);
+        assert_eq!(
+            app.pending_launch_action.take(),
+            Some(crate::tui::underwater::LaunchAction::Help)
         );
     }
 
@@ -2070,5 +2545,63 @@ mod tests {
             focus.omitted_messages, 0,
             "Open must use the complete artifact, not the compacted resident tail"
         );
+    }
+
+    #[cfg(test)]
+    mod composer_selection_tests {
+        use super::super::*;
+
+        #[test]
+        fn word_bounds_select_words_and_respect_cjk() {
+            // Bytes: fix(0-2) sp(3) the(4-6) sp(7) 深=3B(8-10) 海=3B(11-13) sp(14) test.rs(15-21)
+            let text = "fix the 深海 test.rs";
+            assert_eq!(composer_word_bounds(text, 2), (0, 3)); // 'fix'
+            assert_eq!(composer_word_bounds(text, 5), (4, 7)); // 'the'
+            assert_eq!(composer_word_bounds(text, 10), (8, 14)); // '深海' (space at 14)
+            assert_eq!(composer_word_bounds(text, 15), (15, 19)); // 'test' (stops at '.')
+            assert_eq!(composer_word_bounds(text, 19), (19, 20)); // '.'
+            assert_eq!(composer_word_bounds(text, 20), (20, 22)); // 'rs'
+        }
+
+        #[test]
+        fn word_bounds_at_punctuation_returns_the_single_char() {
+            let text = "a, b";
+            assert_eq!(composer_word_bounds(text, 1), (1, 2)); // ','
+        }
+
+        #[test]
+        fn line_bounds_exclude_the_newline() {
+            let text = "first\nsecond third\nfourth";
+            assert_eq!(composer_line_bounds(text, 2), (0, 5));
+            assert_eq!(composer_line_bounds(text, 9), (6, 18));
+            assert_eq!(composer_line_bounds(text, 20), (19, 25));
+            assert_eq!(composer_line_bounds(text, 0), (0, 5));
+        }
+
+        #[test]
+        fn click_classification_resets_outside_the_window_or_slop() {
+            let mut trace = None;
+            assert_eq!(
+                classify_composer_click(&mut trace, 10, 4),
+                ComposerClickGesture::Caret
+            );
+            assert_eq!(
+                classify_composer_click(&mut trace, 10, 4),
+                ComposerClickGesture::Word
+            );
+            assert_eq!(
+                classify_composer_click(&mut trace, 10, 4),
+                ComposerClickGesture::Line
+            );
+            // A click far away resets the chain back to a caret.
+            assert_eq!(
+                classify_composer_click(&mut trace, 10, 40),
+                ComposerClickGesture::Caret
+            );
+            assert_eq!(
+                classify_composer_click(&mut trace, 10, 40),
+                ComposerClickGesture::Word
+            );
+        }
     }
 }

@@ -167,6 +167,10 @@ impl ToolSpec for AutomationTool {
                 json!({ "type": "array", "items": { "type": "string" }, "description": "Working directories for scheduled runs (action=create/update)." }),
             );
             properties.insert(
+                "model".to_string(),
+                json!({ "type": "string", "description": "Model id for scheduled runs (action=create/update)." }),
+            );
+            properties.insert(
                 "mode".to_string(),
                 json!({ "type": "string", "description": "Task mode for scheduled runs. Defaults to agent when omitted. (action=create/update)" }),
             );
@@ -296,6 +300,7 @@ impl AutomationTool {
                 .into_iter()
                 .map(PathBuf::from)
                 .collect(),
+            model: optional_str(input, "model")?.map(ToString::to_string),
             mode: optional_str(input, "mode")?.map(ToString::to_string),
             allow_shell: optional_bool_value(input, "allow_shell"),
             trust_mode: optional_bool_value(input, "trust_mode"),
@@ -387,6 +392,7 @@ impl AutomationTool {
             } else {
                 None
             },
+            model: optional_str(input, "model")?.map(ToString::to_string),
             mode: optional_str(input, "mode")?.map(ToString::to_string),
             allow_shell: optional_bool_value(input, "allow_shell"),
             trust_mode: optional_bool_value(input, "trust_mode"),
@@ -461,6 +467,7 @@ fn legacy_action_schema(action: &str) -> Value {
                     "description": "Supported: FREQ=ONCE;AT=2026-08-03T14:30 (local time or RFC3339), FREQ=HOURLY;INTERVAL=N[;BYDAY=MO,TU][;BYHOUR=9][;BYMINUTE=30], FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=30, or FREQ=CRON;EXPR=*/17 * * * *. Cron uses standard 5-field local time. For HOURLY, BYHOUR/BYMINUTE choose the initial local wall-clock anchor and INTERVAL advances from that anchor; BYHOUR is not a daily-only filter. Anchored wall times skip nonexistent clock times and use the first occurrence of ambiguous clock times."
                 },
                 "cwds": { "type": "array", "items": { "type": "string" } },
+                "model": { "type": "string", "description": "Model id for scheduled runs." },
                 "mode": { "type": "string", "description": "Task mode for scheduled runs. Defaults to agent when omitted." },
                 "allow_shell": { "type": "boolean", "default": false },
                 "trust_mode": { "type": "boolean", "default": false },
@@ -491,6 +498,7 @@ fn legacy_action_schema(action: &str) -> Value {
                 "prompt": { "type": "string" },
                 "rrule": { "type": "string" },
                 "cwds": { "type": "array", "items": { "type": "string" } },
+                "model": { "type": "string", "description": "Model id for scheduled runs." },
                 "mode": { "type": "string", "description": "Task mode for scheduled runs. Defaults to agent when omitted." },
                 "allow_shell": { "type": "boolean" },
                 "trust_mode": { "type": "boolean" },
@@ -603,6 +611,7 @@ mod tests {
     #[test]
     fn create_schema_exposes_delivery_mode_and_new_schedule_forms() {
         let schema = AutomationTool::alias("automation_create", "create").input_schema();
+        assert!(schema["properties"]["model"].is_object());
         assert_eq!(
             schema["properties"]["delivery_mode"]["enum"],
             json!(["task", "watcher"])
@@ -632,6 +641,7 @@ mod tests {
             "name",
             "prompt",
             "rrule",
+            "model",
             "delivery_mode",
             "automation_id",
             "limit",

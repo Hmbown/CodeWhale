@@ -164,6 +164,50 @@ pub struct FleetLedgerState {
     pub receipts: BTreeMap<String, FleetReceipt>,
     /// Durable alert deliveries keyed by run/task/attempt/channel.
     pub(crate) alerts: BTreeMap<(String, String, Option<u32>, String), FleetLedgerAlert>,
+    /// Accumulated worker usage per run_id (R6, #5567), folded from
+    /// `UsageReport` events during replay.
+    pub run_usage: BTreeMap<String, FleetRunUsage>,
+}
+
+/// Run-level usage accumulator (R6, #5567).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FleetRunUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+impl FleetRunUsage {
+    #[must_use]
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens.saturating_add(self.output_tokens)
+    }
+}
+
+/// Run-level budget alert identity (R6, #5567): one alert per run, not per
+/// task, so the dedupe key uses a reserved task slot.
+pub(crate) const BUDGET_ALERT_TASK: &str = "__run__";
+pub(crate) const BUDGET_ALERT_CHANNEL: &str = "budget_exceeded";
+
+impl FleetLedgerState {
+    /// Accumulated worker usage for one run; zero when nothing reported.
+    #[must_use]
+    pub fn run_usage(&self, run_id: &FleetRunId) -> FleetRunUsage {
+        self.run_usage.get(&run_id.0).copied().unwrap_or_default()
+    }
+
+    /// `(total, ceiling)` when the run declares a usage ceiling and the
+    /// accumulated total has reached it; `None` for unbounded runs.
+    #[must_use]
+    pub fn run_ceiling_breached(&self, run_id: &FleetRunId) -> Option<(u64, u64)> {
+        let ceiling = self
+            .runs
+            .get(&run_id.0)?
+            .usage_ceiling
+            .as_ref()?
+            .max_total_tokens;
+        let total = self.run_usage(run_id).total_tokens();
+        (total >= ceiling).then_some((total, ceiling))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -527,6 +571,13 @@ impl FleetLedger {
                 return Ok(false);
             }
 
+            // Budget ceiling (R6, #5567): a breached run admits nothing new.
+            // Already-leased tasks finish; the once-only alert is recorded by
+            // the usage-event path.
+            if state.run_ceiling_breached(run_id).is_some() {
+                return Ok(false);
+            }
+
             let mut records =
                 Vec::with_capacity(1 + initial_events.len() + usize::from(record_heartbeat));
             records.push(FleetLedgerRecord::TaskLeased {
@@ -640,7 +691,14 @@ impl FleetLedger {
     }
 
     pub fn append_event(&self, event: FleetWorkerEvent) -> Result<()> {
-        self.append_record(&FleetLedgerRecord::EventAppended { event })
+        let usage_receipt = matches!(&event.payload, FleetWorkerEventPayload::UsageReport { .. });
+        let run_id = event.run_id.clone();
+        let timestamp = event.timestamp.clone();
+        self.append_record(&FleetLedgerRecord::EventAppended { event })?;
+        if usage_receipt {
+            self.record_budget_exceeded_alert_once(&run_id, &timestamp)?;
+        }
+        Ok(())
     }
 
     /// Allocate and append the next event sequence under one ledger lock.
@@ -652,14 +710,18 @@ impl FleetLedger {
         timestamp: &str,
         payload: FleetWorkerEventPayload,
     ) -> Result<FleetWorkerEvent> {
-        self.with_write_lock(|| {
+        let event = self.with_write_lock(|| {
             let state = self.rebuild_state_unlocked()?;
             let event = next_worker_event(&state, run_id, worker_id, task_id, timestamp, payload);
             self.append_record_unlocked(&FleetLedgerRecord::EventAppended {
                 event: event.clone(),
             })?;
             Ok(event)
-        })
+        })?;
+        if matches!(&event.payload, FleetWorkerEventPayload::UsageReport { .. }) {
+            self.record_budget_exceeded_alert_once(run_id, timestamp)?;
+        }
+        Ok(event)
     }
 
     /// Append progress only while this exact worker still owns the live lease.
@@ -682,7 +744,7 @@ impl FleetLedger {
         ) {
             bail!("conditional progress append does not accept terminal worker events");
         }
-        self.with_write_lock(|| {
+        let appended = self.with_write_lock(|| {
             let state = self.rebuild_state_unlocked()?;
             let key = task_key(&run_id.0, task_id);
             let Some(task) = state.tasks.get(&key) else {
@@ -699,7 +761,13 @@ impl FleetLedger {
                 event: event.clone(),
             })?;
             Ok(Some(event))
-        })
+        });
+        if let Ok(Some(event)) = &appended
+            && matches!(&event.payload, FleetWorkerEventPayload::UsageReport { .. })
+        {
+            self.record_budget_exceeded_alert_once(run_id, timestamp)?;
+        }
+        appended
     }
 
     /// Append a non-terminal scheduler event only if the complete lease
@@ -724,7 +792,7 @@ impl FleetLedger {
         ) {
             bail!("conditional progress append does not accept terminal worker events");
         }
-        self.with_write_lock(|| {
+        let appended = self.with_write_lock(|| {
             let state = self.rebuild_state_unlocked()?;
             let key = task_key(&run_id.0, task_id);
             let Some(task) = state.tasks.get(&key) else {
@@ -752,7 +820,13 @@ impl FleetLedger {
                 event: event.clone(),
             })?;
             Ok(Some(event))
-        })
+        });
+        if let Ok(Some(event)) = &appended
+            && matches!(&event.payload, FleetWorkerEventPayload::UsageReport { .. })
+        {
+            self.record_budget_exceeded_alert_once(run_id, timestamp)?;
+        }
+        appended
     }
 
     /// Append a terminal worker event only while the expected task lease is
@@ -776,7 +850,7 @@ impl FleetLedger {
         ) {
             bail!("conditional terminal append requires a terminal worker event");
         }
-        self.with_write_lock(|| {
+        let appended = self.with_write_lock(|| {
             let state = self.rebuild_state_unlocked()?;
             let key = task_key(&run_id.0, task_id);
             let Some(task) = state.tasks.get(&key) else {
@@ -793,7 +867,13 @@ impl FleetLedger {
                 event: event.clone(),
             })?;
             Ok(Some(event))
-        })
+        });
+        if let Ok(Some(event)) = &appended
+            && matches!(&event.payload, FleetWorkerEventPayload::UsageReport { .. })
+        {
+            self.record_budget_exceeded_alert_once(run_id, timestamp)?;
+        }
+        appended
     }
 
     /// Finalize one exact process attempt and its receipt as one JSONL record.
@@ -886,7 +966,7 @@ impl FleetLedger {
         ) {
             bail!("conditional terminal append requires a terminal worker event");
         }
-        self.with_write_lock(|| {
+        let appended = self.with_write_lock(|| {
             let state = self.rebuild_state_unlocked()?;
             let key = task_key(&run_id.0, task_id);
             let Some(task) = state.tasks.get(&key) else {
@@ -914,7 +994,13 @@ impl FleetLedger {
                 event: event.clone(),
             })?;
             Ok(Some(event))
-        })
+        });
+        if let Ok(Some(event)) = &appended
+            && matches!(&event.payload, FleetWorkerEventPayload::UsageReport { .. })
+        {
+            self.record_budget_exceeded_alert_once(run_id, timestamp)?;
+        }
+        appended
     }
 
     /// Atomically restart the exact task attempt observed by a manager.
@@ -1147,6 +1233,48 @@ impl FleetLedger {
     pub fn record_receipt(&self, receipt: FleetReceipt) -> Result<()> {
         self.append_record(&FleetLedgerRecord::ReceiptRecorded {
             receipt: Box::new(receipt),
+        })
+    }
+
+    /// Record the run's budget-exceeded alert exactly once and pause the
+    /// run (R6, #5567). Returns true only for the recording transition; a
+    /// non-breached or already-alerted run is a no-op.
+    pub fn record_budget_exceeded_alert_once(
+        &self,
+        run_id: &FleetRunId,
+        timestamp: &str,
+    ) -> Result<bool> {
+        self.with_write_lock(|| {
+            let state = self.rebuild_state_unlocked()?;
+            let Some((total, ceiling)) = state.run_ceiling_breached(run_id) else {
+                return Ok(false);
+            };
+            let key = alert_key(run_id, BUDGET_ALERT_TASK, None, BUDGET_ALERT_CHANNEL);
+            if state.alerts.contains_key(&key) {
+                return Ok(false);
+            }
+            tracing::warn!(
+                target: "fleet",
+                run = %run_id.0,
+                total,
+                ceiling,
+                "fleet run crossed its usage ceiling; pausing run and refusing new admissions"
+            );
+            self.append_record_unlocked(&FleetLedgerRecord::AlertSent {
+                run_id: run_id.clone(),
+                task_id: BUDGET_ALERT_TASK.to_string(),
+                channel: BUDGET_ALERT_CHANNEL.to_string(),
+                timestamp: timestamp.to_string(),
+                worker_id: None,
+                attempt: None,
+                seq: None,
+            })?;
+            self.append_record_unlocked(&FleetLedgerRecord::RunStatusChanged {
+                run_id: run_id.clone(),
+                status: FleetRunStatus::Paused,
+                timestamp: timestamp.to_string(),
+            })?;
+            Ok(true)
         })
     }
 
@@ -1835,6 +1963,7 @@ fn privacy_bounded_worker_payload(payload: &FleetWorkerEventPayload) -> (String,
         FleetWorkerEventPayload::RunningTool { .. } => "running_tool",
         FleetWorkerEventPayload::WorkflowEvent { .. } => "workflow_event",
         FleetWorkerEventPayload::Heartbeat { .. } => "heartbeat",
+        FleetWorkerEventPayload::UsageReport { .. } => "usage_report",
         FleetWorkerEventPayload::Artifact(_) => "artifact",
         FleetWorkerEventPayload::Completed { .. } => "completed",
         FleetWorkerEventPayload::Failed { .. } => "failed",
@@ -1869,6 +1998,14 @@ fn privacy_bounded_worker_payload(payload: &FleetWorkerEventPayload) -> (String,
             "state": state,
             "cpu_percent": cpu_percent,
             "memory_mb": memory_mb,
+        }),
+        FleetWorkerEventPayload::UsageReport {
+            input_tokens,
+            output_tokens,
+        } => json!({
+            "state": state,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
         }),
         FleetWorkerEventPayload::Artifact(artifact) => json!({
             "state": state,
@@ -2150,6 +2287,7 @@ fn apply_record(state: &mut FleetLedgerState, record: FleetLedgerRecord) {
                         | FleetWorkerEventPayload::RunningTool { .. }
                         | FleetWorkerEventPayload::WorkflowEvent { .. }
                         | FleetWorkerEventPayload::Heartbeat { .. }
+                        | FleetWorkerEventPayload::UsageReport { .. }
                         | FleetWorkerEventPayload::Starting
                         | FleetWorkerEventPayload::Running
                         | FleetWorkerEventPayload::Stale { .. }
@@ -2184,6 +2322,17 @@ fn apply_record(state: &mut FleetLedgerState, record: FleetLedgerRecord) {
                     event.clone(),
                 );
             }
+            // Usage always counts, even when a late receipt lands after the
+            // task went terminal — the provider billed it either way.
+            if let FleetWorkerEventPayload::UsageReport {
+                input_tokens,
+                output_tokens,
+            } = &event.payload
+            {
+                let usage = state.run_usage.entry(event.run_id.0.clone()).or_default();
+                usage.input_tokens = usage.input_tokens.saturating_add(*input_tokens);
+                usage.output_tokens = usage.output_tokens.saturating_add(*output_tokens);
+            }
             // Derive worker status from lifecycle events. A late stream event
             // must never resurrect a terminal task after an out-of-process
             // cancellation raced the foreground executor's final drain.
@@ -2197,6 +2346,7 @@ fn apply_record(state: &mut FleetLedgerState, record: FleetLedgerRecord) {
                 | FleetWorkerEventPayload::RunningTool { .. }
                 | FleetWorkerEventPayload::WorkflowEvent { .. }
                 | FleetWorkerEventPayload::Heartbeat { .. }
+                | FleetWorkerEventPayload::UsageReport { .. }
                 | FleetWorkerEventPayload::Starting
                 | FleetWorkerEventPayload::Running => {
                     state
@@ -2412,6 +2562,7 @@ mod tests {
             workflow: None,
             roles: Vec::new(),
             max_workers: None,
+            usage_ceiling: None,
             task_specs: vec![],
             worker_specs: vec![],
             labels: BTreeMap::new(),
@@ -2431,6 +2582,106 @@ mod tests {
             lease_deadline: None,
             attempts: 0,
         }
+    }
+
+    #[test]
+    fn usage_ceiling_breach_pauses_run_refuses_admissions_and_alerts_once() {
+        let tmp = TempDir::new().unwrap();
+        let ledger = FleetLedger::open(tmp.path()).unwrap();
+        let mut run = sample_run("budget-run");
+        run.usage_ceiling = Some(codewhale_protocol::fleet::FleetUsageCeiling {
+            max_total_tokens: 1_000,
+        });
+        ledger.create_run(&run).unwrap();
+        ledger
+            .enqueue(sample_entry("budget-run", "task-a"))
+            .unwrap();
+        ledger
+            .enqueue(sample_entry("budget-run", "task-b"))
+            .unwrap();
+
+        // Under the ceiling, admission works.
+        assert!(
+            ledger
+                .lease_task_if_enqueued(
+                    &run.id,
+                    "task-a",
+                    "worker-1",
+                    "2026-06-12T17:00:01Z",
+                    None,
+                    None,
+                )
+                .unwrap()
+        );
+
+        // Usage receipts accumulate; the second crosses the 1 000 ceiling and
+        // must pause the run and fire exactly one durable alert.
+        for (ts, input, output) in [
+            ("2026-06-12T17:00:02Z", 600, 0),
+            ("2026-06-12T17:00:03Z", 300, 200),
+        ] {
+            ledger
+                .append_event_next_seq(
+                    &run.id,
+                    "worker-1",
+                    "task-a",
+                    ts,
+                    FleetWorkerEventPayload::UsageReport {
+                        input_tokens: input,
+                        output_tokens: output,
+                    },
+                )
+                .unwrap();
+        }
+        let budget_alerts = |state: &FleetLedgerState| {
+            state
+                .alerts
+                .keys()
+                .filter(|(run, task, _, channel)| {
+                    run == "budget-run"
+                        && task == BUDGET_ALERT_TASK
+                        && channel == BUDGET_ALERT_CHANNEL
+                })
+                .count()
+        };
+        let state = ledger.rebuild_state().unwrap();
+        assert_eq!(state.run_usage(&run.id).total_tokens(), 1_100);
+        assert!(state.run_ceiling_breached(&run.id).is_some());
+        assert_eq!(budget_alerts(&state), 1);
+        assert_eq!(
+            state.run_status_overrides["budget-run"],
+            FleetRunStatus::Paused
+        );
+
+        // A later receipt cannot duplicate the alert…
+        ledger
+            .append_event_next_seq(
+                &run.id,
+                "worker-1",
+                "task-a",
+                "2026-06-12T17:00:04Z",
+                FleetWorkerEventPayload::UsageReport {
+                    input_tokens: 50,
+                    output_tokens: 0,
+                },
+            )
+            .unwrap();
+        let state = ledger.rebuild_state().unwrap();
+        assert_eq!(budget_alerts(&state), 1);
+
+        // …and the breached run admits nothing new.
+        assert!(
+            !ledger
+                .lease_task_if_enqueued(
+                    &run.id,
+                    "task-b",
+                    "worker-2",
+                    "2026-06-12T17:00:05Z",
+                    None,
+                    None,
+                )
+                .unwrap()
+        );
     }
 
     #[test]

@@ -6,10 +6,9 @@
 
 use crate::facets::{
     CommandCostContext, CommandMediaContext, CommandModePolicyContext, CommandModelContext,
-    CommandPresentationContext, CommandSessionContext, CommandSkillsContext,
+    CommandPresentationContext, CommandProjectContext, CommandSessionContext, CommandSkillsContext,
     CommandSystemPromptContext, CommandWorkspaceContext,
 };
-
 /// A command handler that is either argument-only or capability-scoped.
 #[derive(Clone, Copy)]
 pub enum CommandHandler<R> {
@@ -28,6 +27,7 @@ pub struct CommandContexts<'a> {
     workspace: Option<&'a mut dyn CommandWorkspaceContext>,
     presentation: Option<&'a mut dyn CommandPresentationContext>,
     media: Option<&'a mut dyn CommandMediaContext>,
+    project: Option<&'a mut dyn CommandProjectContext>,
 }
 
 /// Consumed envelope used when one handler needs several independent facets.
@@ -41,6 +41,7 @@ pub struct ContextParts<'a> {
     pub workspace: Option<&'a mut dyn CommandWorkspaceContext>,
     pub presentation: Option<&'a mut dyn CommandPresentationContext>,
     pub media: Option<&'a mut dyn CommandMediaContext>,
+    pub project: Option<&'a mut dyn CommandProjectContext>,
 }
 
 impl<'a> CommandContexts<'a> {
@@ -55,6 +56,7 @@ impl<'a> CommandContexts<'a> {
             workspace: None,
             presentation: None,
             media: None,
+            project: None,
         }
     }
 
@@ -69,6 +71,7 @@ impl<'a> CommandContexts<'a> {
             workspace: self.workspace,
             presentation: self.presentation,
             media: self.media,
+            project: self.project,
         }
     }
 
@@ -137,6 +140,14 @@ impl<'a> CommandContexts<'a> {
         assert!(
             self.media.replace(value).is_none(),
             "media facet already set"
+        );
+        self
+    }
+
+    pub fn with_project(mut self, value: &'a mut dyn CommandProjectContext) -> Self {
+        assert!(
+            self.project.replace(value).is_none(),
+            "project facet already set"
         );
         self
     }
