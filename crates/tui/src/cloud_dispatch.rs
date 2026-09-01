@@ -15,6 +15,10 @@
 //! the persisted contract, the launcher seam, and the fail-closed gates.
 //! Auto-decide heuristics remain leftover: Codewhale may propose, never
 //! confirm itself.
+//!
+//! A sandbox create receipt is infrastructure identity, not Computer
+//! entitlement. Metering requires [`crate::computer_meter`] admission plus a
+//! provider-accepted active observation.
 
 use std::fs;
 use std::io::Write;
@@ -26,6 +30,11 @@ use anyhow::{Context, Result, anyhow, bail};
 use codewhale_paths::codewhale_home;
 use codewhale_secrets::Secrets;
 use serde::{Deserialize, Serialize};
+
+use crate::computer_meter::{
+    ComputerAdmission, ComputerMeterError, ComputerMeterReceipt, ProviderObservation,
+    issue_computer_meter_receipt,
+};
 
 const MAX_PROMPT_CHARS: usize = 4_000;
 const MAX_REMOTE_BYTES: usize = 4 * 1024;
@@ -217,6 +226,7 @@ pub enum DispatchError {
     AmbiguousRemote,
     RemoteMissing(Forge),
     NoSupportedRemote,
+    UnsafeRemote,
 }
 
 impl std::fmt::Display for DispatchError {
@@ -248,6 +258,10 @@ impl std::fmt::Display for DispatchError {
             Self::NoSupportedRemote => write!(
                 f,
                 "No GitHub, CNB, or Gitee remote was found. Remotes are classified by name (`github`/`cnb`/`gitee`) then by host."
+            ),
+            Self::UnsafeRemote => write!(
+                f,
+                "The selected remote URL is unsafe (leading-dash, embedded userinfo, or a non-forge host). Refusing to clone or show it."
             ),
         }
     }
@@ -369,6 +383,95 @@ pub fn classify_remote(name: &str, url: &str) -> Option<Forge> {
     }
 }
 
+/// True when `branch` is a forge default that a non-force push could
+/// fast-forward past review (`main` / `master` / `HEAD`).
+pub fn is_forge_default_branch(branch: &str) -> bool {
+    matches!(
+        branch.trim().to_ascii_lowercase().as_str(),
+        "main" | "master" | "head"
+    )
+}
+
+/// Whether a git remote is safe to clone, show, or hand to a sandbox.
+///
+/// Rejects leading-dash injection (`--upload-pack=…`), embedded userinfo,
+/// and network remotes that do not classify as a supported forge. Local
+/// path remotes (offline fixtures) are allowed when they do not start
+/// with `-` and carry no userinfo.
+pub fn safe_git_remote_url(raw: &str) -> bool {
+    validate_git_remote_url(raw).is_ok()
+}
+
+/// Classify and validate `job.remote_url` before any `git clone` or
+/// sandbox clone. Returns the trimmed URL on success.
+pub fn validate_git_remote_url(raw: &str) -> Result<String> {
+    let url = raw.trim();
+    if url.is_empty() || url.len() > MAX_REMOTE_BYTES {
+        bail!("remote url is empty or oversized");
+    }
+    if url.starts_with('-') {
+        bail!("remote url must not start with '-'");
+    }
+    if url.chars().any(char::is_control) {
+        bail!("remote url contains control characters");
+    }
+    if remote_has_userinfo(url) {
+        bail!("remote url must not embed userinfo");
+    }
+    if looks_like_network_git_url(url) && classify_url(url).is_none() {
+        bail!("remote url is not a supported forge");
+    }
+    Ok(url.to_string())
+}
+
+/// Display form of a remote: userinfo is never printed.
+pub fn redact_remote_url(raw: &str) -> String {
+    redact_url_userinfo(raw)
+}
+
+fn remote_has_userinfo(url: &str) -> bool {
+    if let Ok(parsed) = reqwest::Url::parse(url) {
+        return !parsed.username().is_empty() || parsed.password().is_some();
+    }
+    // scp-style `user:token@host:path` (plain `git@host:path` is identity, not a secret).
+    if let Some((userinfo, _host)) = url.split_once('@') {
+        return userinfo.contains(':') && !userinfo.eq_ignore_ascii_case("git");
+    }
+    false
+}
+
+fn looks_like_network_git_url(url: &str) -> bool {
+    url.contains("://") || url.contains('@')
+}
+
+/// Strip `user:token@` (and URL userinfo) from free-form text for notes.
+pub fn redact_url_userinfo(text: &str) -> String {
+    if let Ok(parsed) = reqwest::Url::parse(text)
+        && (!parsed.username().is_empty() || parsed.password().is_some())
+    {
+        let mut redacted = parsed;
+        let _ = redacted.set_username("");
+        let _ = redacted.set_password(None);
+        return redacted.to_string();
+    }
+    // scp-style or pasted `scheme://user:token@host`.
+    if let Some(scheme_end) = text.find("://") {
+        let rest = &text[scheme_end + 3..];
+        if let Some(at) = rest.find('@') {
+            let userinfo = &rest[..at];
+            if userinfo.contains(':') {
+                return format!("{}://[redacted]@{}", &text[..scheme_end], &rest[at + 1..]);
+            }
+        }
+    } else if let Some(at) = text.find('@') {
+        let userinfo = &text[..at];
+        if userinfo.contains(':') && !userinfo.eq_ignore_ascii_case("git") {
+            return format!("[redacted]@{}", &text[at + 1..]);
+        }
+    }
+    text.to_string()
+}
+
 /// Classify a clone URL by host. `origin` uses this path.
 pub fn classify_url(url: &str) -> Option<Forge> {
     let host = remote_host(url)?;
@@ -467,6 +570,9 @@ pub fn plan_dispatch(
 ) -> Result<DispatchPlan, DispatchError> {
     let prompt = validate_prompt(prompt)?;
     let remote = select_remote(remotes, requested)?;
+    if !safe_git_remote_url(&remote.url) {
+        return Err(DispatchError::UnsafeRemote);
+    }
     let branch = match branch.map(str::trim).filter(|value| !value.is_empty()) {
         Some(value) => {
             if !valid_branch(value) {
@@ -857,14 +963,16 @@ pub fn sweep_stale_jobs(
             "Marked stale by the startup sweep: no terminal state for {} minutes and the declared harness budget is 60. {sandbox_note}",
             age_secs / 60,
         );
-        if let Some(sandbox_id) = job.sandbox_id.clone() {
-            let receipt = SandboxReceipt {
-                sandbox_id,
-                toolbox_url: None,
-            };
-            let _ = launcher.teardown(&receipt);
-        }
+        // Persist the terminal record first: a crash mid-teardown must still
+        // leave a failed job the label reconciler can clean up.
         if store.save(&job).is_ok() {
+            if let Some(sandbox_id) = job.sandbox_id.clone() {
+                let receipt = SandboxReceipt {
+                    sandbox_id,
+                    toolbox_url: None,
+                };
+                let _ = launcher.teardown(&receipt);
+            }
             swept.push(job);
         }
     }
@@ -943,7 +1051,11 @@ pub fn format_job(job: &CloudJob) -> String {
         format!("Kind: {}", job.kind),
         format!("Status: {}", status_label(job.status)),
         format!("Forge: {}", job.forge.as_str()),
-        format!("Remote: {} {}", job.remote_name, job.remote_url),
+        format!(
+            "Remote: {} {}",
+            job.remote_name,
+            redact_remote_url(&job.remote_url)
+        ),
         format!("Branch: {}", job.branch),
         format!(
             "Base: {}",
@@ -1031,7 +1143,11 @@ pub fn format_status(
             let forge = classify_remote(&remote.name, &remote.url)
                 .map(Forge::as_str)
                 .unwrap_or("unsupported");
-            lines.push(format!("  {}  {forge}  {}", remote.name, remote.url));
+            lines.push(format!(
+                "  {}  {forge}  {}",
+                remote.name,
+                redact_remote_url(&remote.url)
+            ));
         }
     }
     lines.push(
@@ -1096,6 +1212,10 @@ pub struct LabeledSandbox {
 
 /// Provider receipt for a created sandbox. `toolbox_url` is the validated
 /// per-sandbox toolbox origin returned by the create call, when present.
+/// `pr_url` is intentionally omitted from this slice.
+///
+/// This is the infrastructure id of a created sandbox. It is not Computer
+/// entitlement and must not be treated as provider-accepted active seconds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxReceipt {
     pub sandbox_id: String,
@@ -1185,11 +1305,23 @@ pub fn validate_outbound_origin(raw: &str) -> Result<reqwest::Url> {
                     || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 0b0100_0000)
             }
             std::net::IpAddr::V6(v6) => {
-                v6.is_loopback()
-                    || v6.is_unspecified()
-                    || v6.is_multicast()
-                    || (v6.segments()[0] & 0xfe00) == 0xfc00
-                    || (v6.segments()[0] & 0xffc0) == 0xfe80
+                if let Some(v4) = v6.to_ipv4_mapped() {
+                    let octets = v4.octets();
+                    v4.is_loopback()
+                        || v4.is_private()
+                        || v4.is_link_local()
+                        || v4.is_unspecified()
+                        || v4.is_broadcast()
+                        || v4.is_multicast()
+                        || v4.is_documentation()
+                        || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 0b0100_0000)
+                } else {
+                    v6.is_loopback()
+                        || v6.is_unspecified()
+                        || v6.is_multicast()
+                        || (v6.segments()[0] & 0xfe00) == 0xfc00
+                        || (v6.segments()[0] & 0xffc0) == 0xfe80
+                }
             }
         };
         if blocked {
@@ -1210,6 +1342,27 @@ pub fn validate_outbound_origin(raw: &str) -> Result<reqwest::Url> {
 /// - control plane `POST /sandbox`, `GET /sandbox/{id}`, `DELETE /sandbox/{id}`
 /// - toolbox `{toolboxProxyUrl}/{sandboxId}` with `POST /git/clone` and
 ///   `POST /process/execute` (`{command, cwd, timeout}` → `{exitCode, result}`)
+/// Meter one closed interval on a dispatched cloud job.
+///
+/// The job's sandbox id must match the provider observation. Wall-clock after
+/// create is not enough: the observation has to be provider-accepted active
+/// time bound to the immutable admission.
+pub fn meter_cloud_job(
+    job: &CloudJob,
+    admission: &ComputerAdmission,
+    observation: ProviderObservation,
+) -> Result<ComputerMeterReceipt, ComputerMeterError> {
+    match job.sandbox_id.as_deref() {
+        Some(sandbox_id) if sandbox_id == observation.provider_sandbox_id => {
+            issue_computer_meter_receipt(admission, observation)
+        }
+        _ => Err(ComputerMeterError::AllocationMismatch {
+            message: "Cloud job sandbox id does not match the provider allocation snapshot."
+                .to_string(),
+        }),
+    }
+}
+
 pub struct LiveDaytonaLauncher;
 
 impl LiveDaytonaLauncher {
@@ -1465,6 +1618,7 @@ impl DaytonaLauncher for LiveDaytonaLauncher {
     }
 
     fn clone_repository(&self, receipt: &SandboxReceipt, repo_url: &str, path: &str) -> Result<()> {
+        let repo_url = validate_git_remote_url(repo_url)?;
         let api_key = Self::api_key()?;
         let url = Self::toolbox_base(receipt)?.join("git/clone")?;
         let body = serde_json::json!({ "url": repo_url, "path": path });
@@ -1695,6 +1849,9 @@ fn validate_prompt(prompt: &str) -> Result<String, DispatchError> {
 }
 
 fn valid_branch(branch: &str) -> bool {
+    if is_forge_default_branch(branch) {
+        return false;
+    }
     if branch.is_empty()
         || branch.len() > 255
         || branch.starts_with('-')
@@ -1779,11 +1936,23 @@ fn read_cloud_agent_token() -> Option<String> {
 /// Pure core of [`read_cloud_agent_token`] and
 /// [`discover_machine_token`]: trim, shape-check, bound.
 pub(crate) fn machine_token_from_value(raw: &str) -> Option<String> {
-    let value = raw.trim().to_string();
-    (value.starts_with("cwc_key_")
-        && MACHINE_TOKEN_MIN_BYTES <= value.len()
-        && value.len() <= MAX_MACHINE_TOKEN_BYTES)
-        .then_some(value)
+    let value = raw.trim();
+    let rest = value.strip_prefix("cwc_key_")?;
+    // Documented shape: `cwc_key_` + 24 hex + separator + secret.
+    if rest.len() < 25 {
+        return None;
+    }
+    let (head, tail) = rest.split_at(24);
+    if !head.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    if !matches!(tail.as_bytes().first(), Some(b'_' | b'-')) {
+        return None;
+    }
+    if !(MACHINE_TOKEN_MIN_BYTES..=MAX_MACHINE_TOKEN_BYTES).contains(&value.len()) {
+        return None;
+    }
+    Some(value.to_string())
 }
 
 /// `cwc_key_` (8) + at least the 24-hex id + one separator + a secret.
@@ -1926,12 +2095,12 @@ fn one_line(value: &str, max: usize) -> String {
 
 /// Sanitized (control-character-free, bounded) error text for job notes.
 pub fn sanitize_error(message: &str) -> String {
-    redact_machine_tokens(
+    redact_machine_tokens(&redact_url_userinfo(
         &message
             .chars()
             .filter(|ch| !ch.is_control())
             .collect::<String>(),
-    )
+    ))
     .chars()
     .take(240)
     .collect()
@@ -2054,6 +2223,11 @@ mod tests {
             plan_dispatch(&rows, "fix flake", None, Some("-bad;rm")).unwrap_err(),
             DispatchError::InvalidBranch
         );
+        assert_eq!(
+            plan_dispatch(&rows, "fix flake", None, Some("main")).unwrap_err(),
+            DispatchError::InvalidBranch,
+            "a non-force push must never target the forge default branch"
+        );
         let plan = plan_dispatch(
             &rows,
             "fix flake",
@@ -2063,6 +2237,38 @@ mod tests {
         .unwrap();
         assert_eq!(plan.remote.forge, Forge::Github);
         assert_eq!(plan.branch, "codewhale/cloud-1");
+    }
+
+    #[test]
+    fn plan_rejects_leading_dash_and_userinfo_remotes() {
+        assert_eq!(
+            plan_dispatch(
+                &remotes(&[("github", "--upload-pack=evil")]),
+                "fix flake",
+                Some(Forge::Github),
+                None,
+            )
+            .unwrap_err(),
+            DispatchError::UnsafeRemote
+        );
+        assert_eq!(
+            plan_dispatch(
+                &remotes(&[(
+                    "github",
+                    "https://user:token@github.com/org/repo.git"
+                )]),
+                "fix flake",
+                Some(Forge::Github),
+                None,
+            )
+            .unwrap_err(),
+            DispatchError::UnsafeRemote
+        );
+        assert!(
+            validate_git_remote_url("https://github.com/org/repo.git").is_ok()
+        );
+        assert!(validate_git_remote_url("--upload-pack=evil").is_err());
+        assert!(validate_git_remote_url("https://user:ghp_x@github.com/org/repo.git").is_err());
     }
 
     #[test]
@@ -2327,6 +2533,16 @@ mod tests {
             Some(good),
             "surrounding whitespace is trimmed"
         );
+        assert_eq!(
+            machine_token_from_value("cwc_key_zzzzzzzzzzzzzzzzzzzzzzzz_nothex"),
+            None,
+            "the 24-char id must be hex"
+        );
+        assert_eq!(
+            machine_token_from_value("cwc_key_0123456789abcdef01234567XXXX"),
+            None,
+            "documented shape requires a separator after the 24-hex id"
+        );
     }
 
     #[test]
@@ -2345,6 +2561,11 @@ mod tests {
         let summary = crate::dispatch_runner::summary_line(&format!("done with {token}"));
         assert!(!summary.contains("AAAAAAAA"));
         assert!(summary.contains("[redacted]"));
+        assert!(
+            !sanitize_error("clone failed https://user:token@github.com/org/repo.git")
+                .contains("token"),
+            "userinfo must not survive sanitize_error"
+        );
     }
 
     #[test]
@@ -2609,6 +2830,8 @@ mod tests {
             "https://0.0.0.0/api",
             "https://[fc00::1]/api",
             "https://[fe80::1]/api",
+            "https://[::ffff:10.0.0.1]/api",
+            "https://[::ffff:169.254.169.254]/latest/meta-data",
             "https://router.internal/api",
             "https://printer.local/api",
         ] {
@@ -2724,6 +2947,30 @@ mod tests {
                 .lock()
                 .map(|ids| ids.clone())
                 .unwrap_or_default()
+        }
+    }
+
+    /// Records the persisted job status at the moment teardown runs, so
+    /// tests can prove the terminal record was saved first.
+    struct ObservingSweepLauncher {
+        store: CloudJobStore,
+        id: String,
+        status_at_teardown: std::sync::Mutex<Option<CloudJobStatus>>,
+    }
+
+    impl DaytonaLauncher for ObservingSweepLauncher {
+        fn create_sandbox(&self, _job: &CloudJob) -> Result<SandboxReceipt> {
+            bail!("no sandbox create in this fixture")
+        }
+        fn teardown(&self, _receipt: &SandboxReceipt) -> Result<()> {
+            let status = self.store.load(&self.id).ok().map(|job| job.status);
+            if let Ok(mut slot) = self.status_at_teardown.lock() {
+                *slot = status;
+            }
+            Ok(())
+        }
+        fn list_job_sandboxes(&self) -> Result<Vec<LabeledSandbox>> {
+            Ok(Vec::new())
         }
     }
 
@@ -2902,6 +3149,45 @@ mod tests {
     }
 
     #[test]
+    fn sweep_persists_the_terminal_record_before_teardown() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        let now = 10_000_000_u64;
+        let mut stale = stored_job(CloudJobStatus::Running, now - STALE_ACTIVE_JOB_SECS - 60);
+        stale.sandbox_id = Some("sandbox_stale".to_string());
+        store.save(&stale).unwrap();
+        let launcher = ObservingSweepLauncher {
+            store: store.clone(),
+            id: stale.id.clone(),
+            status_at_teardown: std::sync::Mutex::new(None),
+        };
+        let swept = sweep_stale_jobs(&store, &launcher, now);
+        assert_eq!(swept.len(), 1);
+        let seen = launcher.status_at_teardown.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            Some(CloudJobStatus::Failed),
+            "teardown must observe an already-terminal record"
+        );
+    }
+
+    #[test]
+    fn format_job_and_status_redact_remote_userinfo() {
+        let mut job = stored_job(CloudJobStatus::Proposed, 10);
+        job.remote_url = "https://user:token@github.com/org/repo.git".to_string();
+        let card = format_job(&job);
+        assert!(!card.contains("token"), "{card}");
+        assert!(!card.contains("user:"), "{card}");
+        assert!(card.contains("github.com/org/repo.git"), "{card}");
+        let status = format_status(
+            &remotes(&[("github", "https://user:token@github.com/org/repo.git")]),
+            &CredentialState::Missing,
+            &[],
+        );
+        assert!(!status.contains("token"), "{status}");
+    }
+
+    #[test]
     fn reconcile_deletes_sandboxes_for_terminal_or_absent_jobs_and_keeps_active() {
         let temp = tempfile::tempdir().unwrap();
         let store = CloudJobStore::from_path(temp.path().join("jobs"));
@@ -2998,5 +3284,86 @@ mod tests {
         assert!(warning.contains("cloud_00000000000000aa"));
         assert!(!warning.contains("cloud_00000000000000ab"));
         assert!(!warning.contains("cloud_00000000000000ac"));
+    }
+
+    #[test]
+    fn sandbox_create_is_not_computer_entitlement() {
+        use crate::computer_meter::{
+            ComputerAdmissionRequest, MeterBasis, bind_computer_admission,
+        };
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        let plan = plan_dispatch(
+            &remotes(&[("github", "https://github.com/org/repo.git")]),
+            "meter honesty",
+            Some(Forge::Github),
+            Some("codewhale/cloud-meter"),
+        )
+        .unwrap();
+        let outcome = execute_dispatch(
+            &store,
+            plan,
+            true,
+            &CredentialState::Present {
+                source: CredentialSource::Keyring,
+            },
+            &MachineTokenState::Present,
+        )
+        .unwrap();
+        let DispatchOutcome::Accepted(mut job) = outcome else {
+            panic!("expected accept");
+        };
+        job.sandbox_id = Some("sbox_std8_a".to_string());
+        let admission = bind_computer_admission(ComputerAdmissionRequest {
+            admission_id: "adm_dispatch".to_string(),
+            account_id: "acct_demo".to_string(),
+            computer_id: "cmp_dispatch".to_string(),
+            run_id: job.id.clone(),
+            provider: "daytona".to_string(),
+            profile_id: "standard-8".to_string(),
+            funding_authority: "coding_membership_included".to_string(),
+            quote_id: "quote_dispatch".to_string(),
+            expires_at: "2026-08-31T18:00:00.000Z".to_string(),
+            meter_revision: String::new(),
+            catalog_revision: String::new(),
+        })
+        .unwrap();
+        let idle = ProviderObservation {
+            provider: "daytona".to_string(),
+            provider_sandbox_id: "sbox_std8_a".to_string(),
+            provider_event_ref: "daytona:sbox_std8_a:idle".to_string(),
+            state: "running".to_string(),
+            idle: true,
+            provider_accepted: true,
+            meter_basis: MeterBasis::WallClock,
+            cpu: 2,
+            memory_gib: 8,
+            disk_gib: 8,
+            started_at: "2026-08-31T12:00:00.000Z".to_string(),
+            ended_at: "2026-08-31T13:00:00.000Z".to_string(),
+        };
+        assert_eq!(
+            meter_cloud_job(&job, &admission, idle).unwrap_err().code(),
+            "computer_meter_wall_clock_idle"
+        );
+        let accepted = ProviderObservation {
+            provider: "daytona".to_string(),
+            provider_sandbox_id: "sbox_std8_a".to_string(),
+            provider_event_ref: "daytona:sbox_std8_a:running".to_string(),
+            state: "running".to_string(),
+            idle: false,
+            provider_accepted: true,
+            meter_basis: MeterBasis::ProviderAcceptedActive,
+            cpu: 2,
+            memory_gib: 8,
+            disk_gib: 8,
+            started_at: "2026-08-31T12:00:00.000Z".to_string(),
+            ended_at: "2026-08-31T12:10:00.000Z".to_string(),
+        };
+        let receipt = meter_cloud_job(&job, &admission, accepted).unwrap();
+        assert_eq!(receipt.accepted_seconds, 600);
+        assert_eq!(receipt.standard_equivalent_seconds, 600);
+        assert_eq!(receipt.admission_id, admission.admission_id);
     }
 }

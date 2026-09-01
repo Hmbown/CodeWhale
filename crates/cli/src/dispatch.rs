@@ -248,6 +248,37 @@ mod tests {
     }
 
     #[test]
+    fn refused_confirmation_is_a_nonzero_error() {
+        use codewhale_tui::cloud_dispatch::{CloudJob, CloudJobStatus};
+        let job = CloudJob {
+            id: "cloud_00000000000000dd".to_string(),
+            kind: "cloud".to_string(),
+            status: CloudJobStatus::Refused,
+            prompt: "fix".to_string(),
+            forge: Forge::Github,
+            remote_name: "github".to_string(),
+            remote_url: "https://github.com/org/repo.git".to_string(),
+            branch: "codewhale/cloud-x".to_string(),
+            confirmed: true,
+            sandbox_id: None,
+            pr_url: None,
+            refusal: Some("no credentials".to_string()),
+            note: "Refused: cloud agents are not available.".to_string(),
+            created_unix: 1,
+            base_branch: None,
+            head_sha: None,
+            agent_summary: None,
+            finished_unix: Some(1),
+            sandbox_pending: false,
+        };
+        let error = write_outcome(&mut Vec::new(), DispatchOutcome::Refused(job)).unwrap_err();
+        assert!(
+            error.to_string().contains("Refused"),
+            "refused confirmations must not exit 0: {error}"
+        );
+    }
+
+    #[test]
     fn status_is_fail_closed_and_never_prints_secrets() {
         let temp = tempfile::tempdir().unwrap();
         let mut output = Vec::new();

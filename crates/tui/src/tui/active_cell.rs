@@ -232,14 +232,6 @@ impl ActiveCell {
         idx
     }
 
-    /// Remove the tool-id binding for an entry without removing the entry
-    /// itself (the entry remains in the active group, presumably with its
-    /// status updated).
-    #[allow(dead_code)] // Reserved for cancellation paths that prune ids without flushing.
-    pub fn forget_tool(&mut self, tool_id: &str) -> Option<usize> {
-        self.tool_to_entry.remove(tool_id)
-    }
-
     /// Drain every entry, returning them in insertion order. Resets internal
     /// state (revision is bumped via `bump_revision`).
     ///

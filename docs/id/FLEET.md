@@ -1,35 +1,41 @@
-# Agent Fleet (Armada Agen)
+# Agent Pod (Armada Agen)
 
-Agent Fleet adalah control plane yang mengutamakan lokal (*local-first*) untuk eksekusi banyak pekerja (*multi-worker*) yang tahan lama. Fleet **bukanlah** mesin eksekusi terpisah: seorang pekerja fleet (*fleet worker*) adalah eksekusi `codewhale exec` tanpa antarmuka yang diluncurkan dan dilacak oleh fleet secara permanen.
+Agent Pod adalah control plane yang mengutamakan lokal (*local-first*) untuk eksekusi banyak pekerja (*multi-worker*) yang tahan lama. Pod **bukanlah** mesin eksekusi terpisah: worker Pod adalah eksekusi `codewhale exec` tanpa antarmuka yang diluncurkan dan dilacak secara permanen oleh Runtime.
 
-Gunakan Fleet daripada pembagian tugas agen yang berumur pendek ketika pekerjaan membutuhkan percobaan ulang (*retry*), ketahanan terhadap mode tidur/restart komputer, eksekusi jarak jauh, bukti tanda terima (*receipts*), atau jejak audit ber-ledger.
+**Pod** adalah nama yang ditampilkan kepada pengguna. **Fleet** tetap menjadi
+nama kompatibilitas untuk artefak tersimpan: `.codewhale/fleet.jsonl`,
+`.codewhale/fleet/`, tabel konfigurasi `[fleet]`, dan flag Workflow `--fleet`.
+Perintah `codewhale fleet …` dan `/fleet …` tetap diterima sebagai alias, tetapi
+dokumentasi dan bantuan baru menggunakan `codewhale pod …` dan `/pod …`.
+
+Gunakan Pod daripada pembagian tugas agen yang berumur pendek ketika pekerjaan membutuhkan percobaan ulang (*retry*), ketahanan terhadap mode tidur/restart komputer, eksekusi jarak jauh, bukti tanda terima (*receipts*), atau jejak audit ber-ledger.
 
 ---
 
-## Perintah Dasar CLI Fleet
+## Perintah Dasar CLI Pod
 
 ```sh
-codewhale fleet init
-codewhale fleet run tasks.json --max-workers 4
-codewhale fleet status
-codewhale fleet inspect <worker-id>
-codewhale fleet logs <worker-id>
-codewhale fleet artifacts <worker-id>
-codewhale fleet interrupt <worker-id>
-codewhale fleet restart <worker-id>
-codewhale fleet resume <run-id>
-codewhale fleet stop --all
+codewhale pod init
+codewhale pod run tasks.json --max-workers 4
+codewhale pod status
+codewhale pod inspect <worker-id>
+codewhale pod logs <worker-id>
+codewhale pod artifacts <worker-id>
+codewhale pod interrupt <worker-id>
+codewhale pod restart <worker-id>
+codewhale pod resume <run-id>
+codewhale pod stop --all
 ```
 
-`codewhale fleet resume <run-id>` adalah perintah pemulihan setelah sistem terhenti: perintah ini memutar ulang ledger, merekonsiliasi tugas yang terhenti (Mencoba lagi sesuai anggaran tugas, atau melaporkannya jika gagal), lalu menampilkan status setelah pemulihan. Perintah ini aman dijalankan setelah laptop terbangun dari mode tidur atau setelah restart runtime.
+`codewhale pod resume <run-id>` adalah perintah pemulihan setelah sistem terhenti: perintah ini memutar ulang ledger, merekonsiliasi tugas yang terhenti (Mencoba lagi sesuai anggaran tugas, atau melaporkannya jika gagal), lalu menampilkan status setelah pemulihan. Perintah ini aman dijalankan setelah laptop terbangun dari mode tidur atau setelah restart runtime.
 
 ---
 
 ## Lokasi Penyimpanan Status
 
-Status Fleet disimpan di dalam ruang kerja di bawah `.codewhale/fleet.jsonl`. Log pekerja dan log adapter disimpan di bawah `.codewhale/fleet/` dan `.codewhale/fleet-host/`.
+Status Pod disimpan di dalam ruang kerja di bawah `.codewhale/fleet.jsonl`. Log pekerja dan log adapter disimpan di bawah `.codewhale/fleet/` dan `.codewhale/fleet-host/`.
 
-### Perbedaan Status Interaktif dan Persisten
+### Perbedaan Status Pod dan Worker Sesi
 
-- Di dalam TUI: Perintah `/fleet status` (atau `/subagents`) menampilkan sub-agen yang terhubung ke sesi interaktif saat ini.
-- Di dalam Shell: Perintah `codewhale fleet status` membaca riwayat eksekusi Fleet yang tersimpan di ledger `.codewhale/fleet.jsonl`.
+- Perintah TUI `/pod status` dan perintah shell `codewhale pod status` membaca ledger Pod persisten yang sama di `.codewhale/fleet.jsonl`.
+- Gunakan `/subagents` atau `/pod workers` untuk menampilkan sub-agen yang hanya terhubung ke sesi TUI saat ini.

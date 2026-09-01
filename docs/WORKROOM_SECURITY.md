@@ -2,7 +2,7 @@
 
 ## Scope
 
-This document covers the security boundaries of CodeWhale Workrooms — the
+This document covers the security boundaries of Codewhale Workrooms — the
 durable, addressable containers for threaded agent conversations described
 in [RFC 3209](rfcs/3209-workrooms.md).
 
@@ -18,7 +18,7 @@ model-visible link resolution remain follow-up work.
 ## Principles
 
 1. **Local-first.** Future persisted workroom state should live under the
-   CodeWhale home directory, protected by user-only filesystem permissions.
+   Codewhale home directory, protected by user-only filesystem permissions.
    No cloud sync and no third-party hosting. Workroom content is never a
    telemetry subject: the anonymous usage counting in `docs/TELEMETRY.md`
    collects counts and closed enums only, and no workroom id, title, link, or

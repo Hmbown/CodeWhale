@@ -92,6 +92,17 @@ fn footer_merges_phase_cost_left_and_depth_keys_right() {
     assert!(band.ends_with(KEYS), "keys legend right: {band}");
 }
 
+#[test]
+fn footer_keeps_help_discoverable_when_the_full_legend_sheds() {
+    let footer = thinking_footer().widget(&UI_THEME);
+    let text = draw(80, 24, &footer);
+    assert!(text.contains("? help"), "{text}");
+    assert!(
+        !text.contains("Enter send"),
+        "compact footer sheds the chorus: {text}"
+    );
+}
+
 /// §3: the old header's mode/permission chips move into the footer's left
 /// half. A chip that cannot fit whole stands down rather than clipping —
 /// the classic header's own rule for posture words.
@@ -129,6 +140,17 @@ fn footer_notice_owns_the_trailing_slot_over_the_keys() {
         "the notice outranks the keys legend: {text}"
     );
     assert!(text.contains("61%"), "the depth line stays: {text}");
+}
+
+#[test]
+fn nonurgent_notice_keeps_compact_help_when_the_floor_fits() {
+    let mut fixture = thinking_footer();
+    fixture.phase_word = "draft";
+    fixture.live_detail = None;
+    fixture.notice = Some(("Auto-compaction enabled", ChromeInk::Info));
+    let text = draw(60, 16, &fixture.widget(&UI_THEME));
+    assert!(text.contains("Auto-compaction enabled"), "{text}");
+    assert!(text.contains("? help"), "{text}");
 }
 
 #[test]

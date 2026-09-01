@@ -122,7 +122,7 @@
     "receiptReport": "检查通过 · 摘要已保存",
     "sealStart": "起",
     "startHeading": "第一次用？四步。",
-    "startLede": "安装 → 首次会话，无需密钥 → 接入提供商 → 配置 Fleet。",
+    "startLede": "安装 → 首次会话，无需密钥 → 接入提供商 → 配置 Pod。",
     "startGuideLink": "阅读新手指引 →",
     "startVocabularyLink": "查名词 →",
     "sealBoundaries": "界",
@@ -153,7 +153,7 @@
         "本地集成"
       ],
       [
-        "Fleet",
+        "Pod",
         "多个智能体协作一件事"
       ]
     ],
@@ -170,10 +170,10 @@
   },
   "docs-guide": {
     "metaTitle": "新手指引 · Codewhale 文档",
-    "metaDescription": "从安装到配置理想 Fleet 的完整路径：安装、无需密钥的首次会话、连接提供商、设置 Fleet。",
+    "metaDescription": "从安装到配置理想 Pod 的完整路径：安装、无需密钥的首次会话、连接提供商、设置 Pod。",
     "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
     "overviewTitle": "新手指引",
-    "overviewLead": "从一条安装命令到配置好你的 Fleet，四步走完。",
+    "overviewLead": "从一条安装命令到配置好你的 Pod，四步走完。",
     "sessionTitle": "看一次真实会话",
     "sessionLead": "这里将放一段真实会话的录像。目前还没有录制，所以什么也不显示。",
     "nextTitle": "接下来",
@@ -184,7 +184,7 @@
     "metaDescription": "Codewhale 文档：安装、使用指南、配置、提供商、核心概念、工具、MCP、技能、沙箱、运行时 API、排障。",
     "portalMark": "Codewhale 文档",
     "heroTitle": "查找准确的使用说明。",
-    "heroLead": "从新手指引和安装开始，或直接查看名词、模式、权限、工具、提供商、Fleet、钩子、MCP 与运行时 API。每页都链接到仓库中的源文档。",
+    "heroLead": "从新手指引和安装开始，或直接查看名词、模式、权限、工具、提供商、Pod、钩子、MCP 与运行时 API。每页都链接到仓库中的源文档。",
     "installCta": "安装 Codewhale",
     "sourceDocsCta": "浏览源文档 ↗"
   },
@@ -292,19 +292,19 @@
     "sourceNote": "来源文档：docs/ARCHITECTURE.md · 更新时请同步修改 docs-map.ts。"
   },
   "docs-fleet": {
-    "metaTitle": "Fleet 与 Workflow · Codewhale 文档",
+    "metaTitle": "Pod 与 Workflow · Codewhale 文档",
     "metaDescription": "持久 Agent 花名册与成员选择层，以及可选的 Workflow 编排层。",
     "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
-    "overviewTitle": "Fleet 与 Workflow",
-    "overviewLead": "Fleet 是持久花名册：记录有哪些成员以及选中了哪一位。它不是执行或权限引擎。Runtime 将选定成员作为无头 codewhale exec 运行来启动和跟踪，负责重试与远程放置，并写入持久收据和台账投影。",
-    "runTitle": "运行一次 Fleet",
-    "runLead": "Runtime 的 Fleet 运行投影存放在工作区的 .codewhale/fleet.jsonl 台账中，worker 日志在 .codewhale/fleet/ 下。codewhale fleet resume <run-id> 会让 Runtime 重放台账并调和过期租约；该操作幂等，可在管理进程退出、笔记本睡眠或运行时重启后安全执行。",
-    "statusLead": "注意两个同名状态面：TUI 里的 {fleetStatusTui}（或 {subagents}）只显示当前交互会话的子 Agent；shell 里的 {fleetStatusShell} 才读取持久 Fleet 台账。",
-    "profilesTitle": "角色与 /fleet setup",
-    "profilesLead": "/fleet setup 打开渐进式向导来编写可复用的花名册成员：依次选择语义角色、模型（继承或具体已配置路由）和思考档位，再核对准确的身份与路由后保存。档案可写在项目级（.codewhale/agents/<role>.toml）或个人级（$CODEWHALE_HOME/agents/<role>.toml）；同 ID 的项目档案优先。Runtime 另行负责信任、文件系统/网络范围、密钥、审批、沙箱和工具，因此档案存储范围不会扩大执行权限。",
+    "overviewTitle": "Pod 与 Workflow",
+    "overviewLead": "Pod 是持久花名册：记录有哪些成员以及选中了哪一位。它不是执行或权限引擎。Runtime 将选定成员作为无头 codewhale exec 运行来启动和跟踪，负责重试与远程放置，并写入持久收据和台账投影。Fleet 是保留的存储名称：台账文件、已保存花名册、配置表和 Workflow 的 --fleet 标志继续使用该名称；codewhale fleet 仍作为命令别名。",
+    "runTitle": "运行一次 Pod",
+    "runLead": "Runtime 的 Pod 运行投影存放在工作区的 .codewhale/fleet.jsonl 台账中，worker 日志在 .codewhale/fleet/ 下。codewhale pod resume <run-id> 会让 Runtime 重放台账并调和过期租约；该操作幂等，可在管理进程退出、笔记本睡眠或运行时重启后安全执行。",
+    "statusLead": "TUI 命令 {fleetStatusTui} 与 shell 命令 {fleetStatusShell} 读取同一份持久 Pod 台账。若要查看仅附着于当前交互会话的子 Agent，请使用 {podWorkers}（或 {subagents}）。",
+    "profilesTitle": "已保存 Pod、角色与 /pod setup",
+    "profilesLead": "{podPods} 打开已命名保存 Pod 的选择器；裸 /pod 打开当前所选 Pod 的成员花名册。/pod setup 打开渐进式向导来编写可复用的花名册成员：依次选择语义角色、模型（继承或具体已配置路由）和思考档位，再核对准确的身份与路由后保存。档案可写在项目级（.codewhale/agents/<role>.toml）或个人级（$CODEWHALE_HOME/agents/<role>.toml）；同 ID 的项目档案优先。Runtime 另行负责信任、文件系统/网络范围、密钥、审批、沙箱和工具，因此档案存储范围不会扩大执行权限。",
     "workflowTitle": "Workflow 编排",
-    "workflowLead": "普通多 Agent 工作不需要 Workflow：在 Operate 里直接发消息，需要并行、隔离或长时间工作时让 Codewhale 优先委派后台 worker 即可。只有当工作需要有序阶段、门禁、共享预算、回放或确定性汇总时才用 Workflow。Workflow 脚本只负责协调：它选择 Fleet 成员，但没有自己的文件系统或 shell；Runtime 在实时权限策略下启动真正的 worker。脚本使用编译专用的声明式 JS 子集，降低到类型化 WorkflowSpec 后由 Rust 校验与执行；import、fetch、process、eval、async/await 会被拒绝。",
-    "workflowLimits": "默认校验边界：每次 Workflow 运行最多 1,000 个 worker Agent、最多 8 层递归 Fleet 环（默认 3 层）、循环必须声明 max_iterations、动态 expand 节点必须声明 max_children 和模板。这些是数量上限而非并发要求：Runtime 每个运行最多接纳 16 个存活 worker，其余排队。省略 max_steps 或设为 0 都保持无界；只有正值才增加模型轮次上限。",
+    "workflowLead": "普通多 Agent 工作不需要 Workflow：在 Operate 里直接发消息，需要并行、隔离或长时间工作时让 Codewhale 优先委派后台 worker 即可。只有当工作需要有序阶段、门禁、共享预算、回放或确定性汇总时才用 Workflow。Workflow 脚本只负责协调：它选择 Pod 成员，但没有自己的文件系统或 shell；Runtime 在实时权限策略下启动真正的 worker。脚本使用编译专用的声明式 JS 子集，降低到类型化 WorkflowSpec 后由 Rust 校验与执行；import、fetch、process、eval、async/await 会被拒绝。",
+    "workflowLimits": "默认校验边界：每次 Workflow 运行最多 1,000 个 worker Agent、Workflow IR 结构嵌套深度不超过 5、循环必须声明 max_iterations、动态 expand 节点必须声明 max_children 和模板。Runtime 的子委派是独立执行预算：默认 3 层，可选择启用的硬上限为 8 层。这些是数量与结构上限，而非并发要求：Runtime 每个运行最多接纳 16 个存活 worker，其余排队。省略 max_steps 或设为 0 都保持无界；只有正值才增加模型轮次上限。",
     "sourceNote": "来源文档：docs/FLEET.md, docs/WORKFLOW_AUTHORING.md · 更新时请同步修改 docs-map.ts。"
   },
   "docs-mcp": {
@@ -342,7 +342,7 @@
       ],
       [
         "Operate",
-        "用于从同一个输入区协调多项任务。父回合可以直接检查、编辑并使用 Shell 或 MCP 工具，其权限姿态、沙箱和安全规则与 Act 相同。独立、并行、后台或长时间工作会优先交给 Fleet worker，但并非所有可执行步骤都必须委派。只有需要有序阶段、门禁或确定性汇总时才需要 Workflow。"
+        "用于从同一个输入区协调多项任务。父回合可以直接检查、编辑并使用 Shell 或 MCP 工具，其权限姿态、沙箱和安全规则与 Act 相同。独立、并行、后台或长时间工作会优先交给 Pod worker，但并非所有可执行步骤都必须委派。只有需要有序阶段、门禁或确定性汇总时才需要 Workflow。"
       ]
     ],
     "switchingTitle": "切换模式",
@@ -399,7 +399,7 @@
       ],
       [
         "exec",
-        "一次性无头 worker（stream-json、Fleet 子进程、CI 原语）——不属于本 API，但共享同一运行时与事件词汇。"
+        "一次性无头 worker（stream-json、Pod 子进程、CI 原语）——不属于本 API，但共享同一运行时与事件词汇。"
       ]
     ],
     "stdioTitle": "零成本探测",
@@ -442,11 +442,11 @@
   },
   "docs-subagents": {
     "metaTitle": "子 Agent · Codewhale 文档",
-    "metaDescription": "agent 工具、Fleet 角色、上下文分叉、worktree 隔离和并发上限。",
+    "metaDescription": "agent 工具、Pod 角色、上下文分叉、worktree 隔离和并发上限。",
     "bodyClassName": "text-ink-soft leading-[1.9] tracking-wide",
     "overviewTitle": "子 Agent",
     "overviewLead": "父会话通过 agent 工具启动一个有明确职责的子 Agent，并立即拿回 agent_id、compact 收据和 transcript 句柄；子 Agent 在后台运行。子 Agent 默认继承父级的工具注册表，但它们是叶子 worker：不会再拿到 agent 或嵌套生命周期工具。agent 启动的是分离的后台工作——取消父回合会停止父级的等待路径，但不会杀死已经启动的子运行。",
-    "overviewFleetNote": "对于必须跨进程重启、睡眠或远程执行存活的工作，优先选择 Fleet 或 Workflow 支撑的 Fleet 运行，而不是会话内的短寿命 agent 调用。",
+    "overviewFleetNote": "对于必须跨进程重启、睡眠或远程执行存活的工作，优先选择 Pod 或 Workflow 支撑的 Pod 运行，而不是会话内的短寿命 agent 调用。",
     "roles": [
       [
         "worker",

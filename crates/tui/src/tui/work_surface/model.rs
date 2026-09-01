@@ -10,8 +10,8 @@ use crate::tools::canonical_action::canonical_action_alias;
 use crate::tools::subagent::{AgentWorkerStatus, SubAgentResult, SubAgentStatus};
 use crate::tui::app::{
     AgentCurrentActivityStatus, AgentProgressMeta, App, SidebarRowAction, TaskPanelEntry,
-    TaskPanelEntryKind,
 };
+use crate::tui::background_indicator::is_live_shell_entry;
 use crate::tui::history::{
     FileActivityKind, FileActivitySummary, FileMutationReceipt, HistoryCell, ToolCell,
 };
@@ -2052,16 +2052,6 @@ fn push_shell_group(out: &mut Vec<WorkRow>, shells: Vec<WorkRow>) {
     }
     out.push(shells_section_heading(&shells));
     out.extend(shells);
-}
-
-fn is_live_shell_entry(entry: &TaskPanelEntry) -> bool {
-    if entry.kind != TaskPanelEntryKind::Background {
-        return false;
-    }
-    if !matches!(entry.status.as_str(), "running" | "queued") {
-        return false;
-    }
-    entry.prompt_summary.starts_with("shell: ") || entry.id.starts_with("shell_")
 }
 
 fn shell_work_rows(app: &App) -> Vec<WorkRow> {

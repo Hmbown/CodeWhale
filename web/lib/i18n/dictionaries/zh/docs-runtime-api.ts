@@ -17,7 +17,7 @@ export const docsRuntimeApi: DocsRuntimeApiDict = {
     ["acp", "面向 Zed 等编辑器的 ACP（Agent Client Protocol）stdio 适配器。"],
     [
       "exec",
-      "一次性无头 worker（stream-json、Fleet 子进程、CI 原语）——不属于本 API，但共享同一运行时与事件词汇。",
+      "一次性无头 worker（stream-json、Pod 子进程、CI 原语）——不属于本 API，但共享同一运行时与事件词汇。",
     ],
   ],
   stdioTitle: "零成本探测",

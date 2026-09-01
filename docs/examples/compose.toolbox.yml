@@ -1,4 +1,4 @@
-# Opt-in CodeWhale toolbox workflow.
+# Opt-in Codewhale toolbox workflow.
 #
 # Usage:
 #   CODEWHALE_IMAGE=ghcr.io/hmbown/codewhale:vX.Y.Z \

@@ -13,7 +13,7 @@ import type { HomeDict } from "../types";
  *
  * Fixed vocabulary, matching crates/tui/locales/es-419.json: Plan / Act /
  * Operate, Ask / Auto-Review / Full Access, "postura de permisos",
- * "recibo", `Runtime`, `Fleet`, `Workflow`, "compositor", "pie de página",
+ * "recibo", `Runtime`, `Pod`, `Workflow`, "compositor", "pie de página",
  * "alojado" for hosted. Commands, package names, and surface names stay
  * literal.
  */
@@ -75,7 +75,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "¿Nuevo en Codewhale? Cuatro pasos de principio a fin.",
   startLede:
-    "Instalar → primera sesión sin claves → conectar un proveedor → primer Workflow de Fleet. Los términos se definen en la página de vocabulario.",
+    "Instalar → primera sesión sin claves → conectar un proveedor → primer Workflow de Pod. Los términos se definen en la página de vocabulario.",
   startGuideLink: "Leer la guía de primeros pasos →",
   startVocabularyLink: "Ver el vocabulario del producto →",
 
@@ -96,7 +96,7 @@ export const home: HomeDict = {
     ["codewhale exec", "Scripts y CI"],
     ["Cliente web", "Cliente de navegador, solo loopback"],
     ["Runtime API + MCP", "Integraciones locales"],
-    ["Fleet", "Trabajo multiagente duradero"],
+    ["Pod", "Trabajo multiagente duradero"],
   ],
   runtimeLink: "Ver las interfaces de runtime y las notas de estabilidad →",
 

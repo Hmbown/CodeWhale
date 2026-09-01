@@ -21,6 +21,16 @@ if grep -En '": "[^"]*(YOLO|Multitask|Bypass)' crates/tui/locales/*.json; then
   exit 1
 fi
 
+# `Fleet` survives in compatibility identifiers, parser aliases, config keys,
+# and durable serialization. Localized values are the customer surface and
+# must consistently call the assembled model team a Pod.
+if grep -En \
+  '": "[^"]*(Fleet|fleet|艦隊|("|[[:space:]/])플릿([[:space:]/:]|$))' \
+  crates/tui/locales/*.json; then
+  printf '%s\n' 'internal Fleet vocabulary remains in localized product copy' >&2
+  exit 1
+fi
+
 if grep -En \
   'YOLO mode is deprecated|/mode yolo|Bypass permissions|agent · yolo|Plan → Act → Multitask' \
   crates/tui/src/tui/app.rs \

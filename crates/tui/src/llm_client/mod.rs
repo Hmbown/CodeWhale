@@ -1028,18 +1028,6 @@ impl RetryConfig {
         self
     }
 
-    /// Builder method to set request timeout
-    pub fn with_request_timeout(mut self, timeout: f64) -> Self {
-        self.request_timeout = timeout;
-        self
-    }
-
-    /// Builder method to set total timeout
-    pub fn with_total_timeout(mut self, timeout: f64) -> Self {
-        self.total_timeout = timeout;
-        self
-    }
-
     /// Calculates the delay for a given retry attempt.
     ///
     /// Uses exponential backoff: delay = `initial_delay` * `exponential_base^attempt`

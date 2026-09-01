@@ -14,7 +14,7 @@ maintainer approval.
 
 ## Inputs
 
-- Repo root: the local CodeWhale checkout (run `git rev-parse --show-toplevel`).
+- Repo root: the local Codewhale checkout (run `git rev-parse --show-toplevel`).
 - GitHub repo: `Hmbown/CodeWhale`
 - Required GitHub CLI: `gh`
 - An issue set: explicit numbers, or a milestone (e.g. `v0.8.62`).

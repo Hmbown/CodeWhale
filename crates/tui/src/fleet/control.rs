@@ -152,7 +152,12 @@ pub fn event_label(payload: &FleetWorkerEventPayload) -> String {
     }
 }
 
-/// Durable status snapshot as bounded lines.
+/// Durable status snapshot as bounded Fleet receipt lines.
+///
+/// The command and slash surfaces call the customer-facing concept a Pod, but
+/// these strings are nested in the shared [`ControlReceipt`] detail contract.
+/// Keep the established `fleet:` prefix so existing receipt consumers and
+/// scripts do not need to parse a presentation rename.
 #[must_use]
 pub fn status_lines(status: &FleetStatusSnapshot) -> Vec<String> {
     let mut lines = vec![format!(
@@ -190,7 +195,10 @@ pub fn status_lines(status: &FleetStatusSnapshot) -> Vec<String> {
     lines
 }
 
-/// Exactly the text `codewhale fleet status` has always printed.
+/// Compatibility renderer shared by `codewhale pod status` and `/pod status`.
+///
+/// The invocation names are public Pod wording; the returned detail stays in
+/// the durable Fleet receipt spelling by way of [`status_lines`].
 #[must_use]
 pub fn render_fleet_status_snapshot(status: &FleetStatusSnapshot) -> String {
     status_lines(status).join("\n")
@@ -489,7 +497,7 @@ pub fn execute_fleet_control_with(
             None,
             ControlFailure::new(
                 ControlFailureKind::InvalidTarget,
-                format!("{} is not a Fleet verb", descriptor.id),
+                format!("{} is not a Pod verb", descriptor.id),
             ),
         );
     }
@@ -558,7 +566,7 @@ pub fn execute_fleet_control_with(
                             surface,
                             Some(target.clone()),
                             ControlFailure::not_found(format!(
-                                "no fleet worker with id {} in this workspace's ledger",
+                                "no Pod worker with id {} in this workspace's ledger",
                                 target.id
                             )),
                         );
@@ -690,6 +698,7 @@ pub fn execute_fleet_control_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fleet::ledger::FleetLedger;
     use codewhale_lane::{ControlAuthority, LifecycleOutcome, PersistenceScope, UnavailableReason};
     use codewhale_protocol::fleet::{FleetResolvedRoute, FleetTaskResult};
     use std::collections::BTreeMap;
@@ -789,6 +798,13 @@ mod tests {
             summary.lifecycle_seq.unknown_reason(),
             Some(UnknownReason::NotApplicable)
         );
+        let detail = summary.render_detail();
+        assert!(detail.starts_with("fleet:      run-1\n"), "{detail}");
+        assert!(detail.contains("\nfleet:     stopship\n"), "{detail}");
+        assert!(!detail.contains("\npod:"), "{detail}");
+        let wire = serde_json::to_value(&summary).expect("serialize stable run DTO");
+        assert!(wire.get("fleet").is_some(), "{wire}");
+        assert!(wire.get("pod").is_none(), "{wire}");
     }
 
     #[test]
@@ -841,6 +857,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // Creating the manager is what makes the ledger exist.
         FleetManager::open(dir.path()).unwrap();
+        assert_eq!(
+            ControlOperation::FleetStatus.descriptor().cli_invocation,
+            "codewhale pod status",
+            "Pod remains the canonical public command"
+        );
         let mut rendered = std::collections::BTreeSet::new();
         for surface in ControlSurface::ALL {
             let receipt =
@@ -854,13 +875,58 @@ mod tests {
                     .detail
                     .iter()
                     .any(|line| line.starts_with("fleet: runs=")),
-                "the durable ledger snapshot must be the payload"
+                "the durable ledger snapshot must keep its receipt prefix"
+            );
+            assert!(
+                receipt
+                    .detail
+                    .iter()
+                    .all(|line| !line.starts_with("pod: runs=")),
+                "Pod is the command name, not a replacement receipt key"
             );
             let mut normalized = receipt.clone();
             normalized.surface = ControlSurface::Cli;
             rendered.insert(normalized.render());
         }
         assert_eq!(rendered.len(), 1, "surfaces rendered different results");
+    }
+
+    #[test]
+    fn fleet_resume_receipt_preserves_established_fleet_detail_prefixes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = FleetLedger::open(dir.path()).unwrap();
+        ledger.create_run(&run("run-1")).unwrap();
+        let manager = FleetManager::open(dir.path()).unwrap();
+
+        let receipt = execute_fleet_control_with(
+            ControlSurface::Cli,
+            dir.path(),
+            fleet_control_context(dir.path()),
+            &manager,
+            ControlOperation::FleetResume,
+            Some("run-1"),
+        );
+
+        assert_eq!(receipt.operation_id, "fleet.resume");
+        assert_eq!(receipt.outcome, LifecycleOutcome::NoChange);
+        assert_eq!(
+            receipt.detail.first().map(String::as_str),
+            Some("fleet resume: run-1 reclaimed_stale=0 restarted=0 failed=0 escalated=0")
+        );
+        assert_eq!(
+            receipt.detail.get(1).map(String::as_str),
+            Some(
+                "fleet: runs=1 queued=0 running=0 completed=0 partial=0 failed=0 restarted=0 \
+                 escalated=0 transport_failed=0 task_failed=0 verifier_failed=0 cancelled=0 stale=0"
+            )
+        );
+        assert!(
+            receipt
+                .detail
+                .iter()
+                .all(|line| !line.starts_with("pod resume:") && !line.starts_with("pod: runs=")),
+            "receipt keys are compatibility fields: {receipt:?}"
+        );
     }
 
     #[test]
@@ -884,7 +950,7 @@ mod tests {
                 receipt
                     .availability
                     .hint()
-                    .is_some_and(|hint| hint.contains("codewhale fleet restart"))
+                    .is_some_and(|hint| hint.contains("codewhale pod restart"))
             );
         }
     }
@@ -986,6 +1052,13 @@ mod tests {
         let lines = status_lines(&snapshot);
         // summary + "workers:" + capped rows + the omission notice
         assert_eq!(lines.len(), 1 + 1 + MAX_STATUS_WORKER_ROWS + 1);
+        assert_eq!(
+            lines.first().map(String::as_str),
+            Some(
+                "fleet: runs=0 queued=0 running=0 completed=0 partial=0 failed=0 restarted=0 \
+                 escalated=0 transport_failed=0 task_failed=0 verifier_failed=0 cancelled=0 stale=0"
+            )
+        );
         assert!(lines.last().unwrap().contains("5 more worker(s) omitted"));
     }
 }

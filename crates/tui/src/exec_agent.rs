@@ -198,6 +198,7 @@ pub(crate) async fn run_exec_agent(
     let runtime_services = crate::tools::spec::RuntimeToolServices {
         shell_manager: Some(exec_shell_manager.clone()),
         persist_services_enabled,
+        media_originals_dir: crate::media_originals::default_store_dir(),
         ..crate::tools::spec::RuntimeToolServices::default()
     };
 
@@ -205,6 +206,7 @@ pub(crate) async fn run_exec_agent(
         model: effective_model.clone(),
         active_route_limits,
         workspace: workspace.clone(),
+        session_id: None,
         subagent_state_root: None,
         plugin_registry: Some(std::sync::Arc::clone(&engine_plugin_registry)),
         allow_shell: exec_allow_shell,

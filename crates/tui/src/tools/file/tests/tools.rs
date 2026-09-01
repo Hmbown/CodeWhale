@@ -68,7 +68,7 @@ async fn read_file_denies_codewhale_config_backups_and_secret_store() {
             .await
             .expect_err("credential-bearing CodeWhale file must be denied");
         let message = err.to_string();
-        assert!(message.contains("cannot expose CodeWhale"), "{message}");
+        assert!(message.contains("cannot expose Codewhale"), "{message}");
         assert!(message.contains("codewhale config list"), "{message}");
     }
 

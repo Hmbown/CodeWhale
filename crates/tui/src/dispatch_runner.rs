@@ -52,6 +52,8 @@ const HARNESS_TIMEOUT_SECS: u32 = 3_600;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrOpened {
     pub url: String,
+    /// SHA actually applied and pushed — not the sandbox `patch.head_sha`.
+    pub head_sha: String,
 }
 
 /// Forge seam: raise the agent's branch and open the PR. Tests inject a
@@ -212,7 +214,11 @@ fn drive(
     }
 
     launcher.wait_ready(&receipt)?;
-    launcher.clone_repository(&receipt, &job.remote_url, SANDBOX_WORKSPACE)?;
+    let clone_url = cloud_dispatch::validate_git_remote_url(&job.remote_url)?;
+    launcher.clone_repository(&receipt, &clone_url, SANDBOX_WORKSPACE)?;
+    if cancel_requested(store, job)? {
+        return finish_canceled(store, job, launcher, &receipt);
+    }
 
     // One agent turn through the standard one-shot harness entry.
     let output = launcher.run_harness(&receipt, &harness_command(job))?;
@@ -225,7 +231,7 @@ fn drive(
     let patch = launcher.collect_patch(&receipt)?;
     job.status = CloudJobStatus::OpeningPr;
     job.base_branch = Some(patch.base_branch.clone());
-    job.head_sha = Some(patch.head_sha.clone());
+    job.head_sha = Some(patch.head_sha.clone()); // replaced with the pushed sha after `forge.open`
     job.note = format!(
         "Agent turn complete ({}); raising branch {} and opening the PR on {}.",
         patch.summary,
@@ -244,6 +250,7 @@ fn drive(
     let opened = forge.open(job, &patch)?;
     job.status = CloudJobStatus::Done;
     job.pr_url = Some(opened.url.clone());
+    job.head_sha = Some(opened.head_sha.clone());
     job.finished_unix = Some(unix_timestamp());
     job.note = format!(
         "Cloud agent finished; PR opened at {}. {}",
@@ -376,6 +383,11 @@ pub fn compose_pr_title(job: &CloudJob, patch: &PatchReceipt) -> String {
 /// explicit No-Issue line (no tracked issue; the cloud job is the record).
 /// Sandbox-provider names never appear — the operator is Codewhale.
 pub fn compose_pr_body(job: &CloudJob, patch: &PatchReceipt) -> String {
+    compose_pr_body_for_head(job, patch, &patch.head_sha)
+}
+
+/// PR body whose `Head:` is the sha actually applied/pushed.
+pub fn compose_pr_body_for_head(job: &CloudJob, patch: &PatchReceipt, head_sha: &str) -> String {
     let summary = if patch.summary.trim().is_empty() {
         "(the agent's commit list is the record)".to_string()
     } else {
@@ -396,7 +408,7 @@ pub fn compose_pr_body(job: &CloudJob, patch: &PatchReceipt) -> String {
         job.sandbox_id.as_deref().unwrap_or("(pending)"),
         job.branch,
         patch.base_branch,
-        patch.head_sha,
+        head_sha,
         job.id,
     );
     one_line(&body, MAX_BODY_CHARS)
@@ -453,22 +465,23 @@ impl ForgePr for LiveForgePr {
             )
         })?;
         let title = compose_pr_title(job, patch);
-        let body = compose_pr_body(job, patch);
         let dir = tempfile::tempdir().context("could not stage the cloud agent branch")?;
-        prepare_branch(job, patch, dir.path())?;
+        let head_sha = prepare_branch(job, patch, dir.path())?;
         push_branch(&dir.path().join("repo"), &job.remote_url, &job.branch)?;
+        let body = compose_pr_body_for_head(job, patch, &head_sha);
         let url = match job.forge {
             Forge::Github => open_pr_github(&slug, job, patch, &title, &body)?,
             Forge::Gitee => open_pr_gitee(&slug, job, patch, &title, &body)?,
             Forge::Cnb => open_pr_cnb(&slug, job, patch, &title, &body)?,
         };
-        Ok(PrOpened { url })
+        Ok(PrOpened { url, head_sha })
     }
 }
 
 /// Shallow-clone the target repository, apply the agent's patch on a branch,
 /// and return the head sha. Plain git subprocess work; never forceful.
 fn prepare_branch(job: &CloudJob, patch: &PatchReceipt, dir: &Path) -> Result<String> {
+    let remote_url = cloud_dispatch::validate_git_remote_url(&job.remote_url)?;
     git(
         None,
         &[
@@ -476,7 +489,8 @@ fn prepare_branch(job: &CloudJob, patch: &PatchReceipt, dir: &Path) -> Result<St
             "--quiet",
             "--depth",
             "50",
-            &job.remote_url,
+            "--",
+            &remote_url,
             &dir.join("repo").to_string_lossy(),
         ],
     )
@@ -508,15 +522,24 @@ fn prepare_branch(job: &CloudJob, patch: &PatchReceipt, dir: &Path) -> Result<St
 /// an existing branch that is not a fast-forward fails closed instead of
 /// rewriting the target's history.
 fn push_branch(repo: &Path, remote_url: &str, branch: &str) -> Result<()> {
-    if cloud_dispatch::classify_url(remote_url).is_none() {
+    let remote_url = cloud_dispatch::validate_git_remote_url(remote_url)?;
+    if cloud_dispatch::is_forge_default_branch(branch) {
+        bail!("refusing to push onto the forge default branch {branch}");
+    }
+    if looks_like_network_remote(&remote_url) && cloud_dispatch::classify_url(&remote_url).is_none()
+    {
         bail!("refusing to push to a non-forge remote");
+    }
+    if remote_branch_exists(&remote_url, branch)? {
+        bail!("refusing to update existing remote branch {branch}");
     }
     git(
         Some(repo),
         &[
             "push",
             "--quiet",
-            remote_url,
+            "--",
+            &remote_url,
             &format!("HEAD:refs/heads/{branch}"),
         ],
     )
@@ -524,6 +547,17 @@ fn push_branch(repo: &Path, remote_url: &str, branch: &str) -> Result<()> {
     .context(
         "could not push the cloud agent branch (it may need credentials or the branch may have moved)",
     )
+}
+
+fn looks_like_network_remote(url: &str) -> bool {
+    url.contains("://") || url.contains('@')
+}
+
+fn remote_branch_exists(remote_url: &str, branch: &str) -> Result<bool> {
+    let listing = git(None, &["ls-remote", "--heads", "--", remote_url, branch]).unwrap_or_default();
+    Ok(listing
+        .lines()
+        .any(|line| line.contains(&format!("refs/heads/{branch}"))))
 }
 
 fn git(cwd: Option<&Path>, args: &[&str]) -> Result<String> {
@@ -832,6 +866,7 @@ impl ForgePr for RecordingForgePr {
         }
         Ok(PrOpened {
             url: self.url.clone(),
+            head_sha: patch.head_sha.clone(),
         })
     }
 }
@@ -959,7 +994,38 @@ mod tests {
         assert!(canceled_seen.load(std::sync::atomic::Ordering::SeqCst));
     }
 
-    /// Cancels the job from inside a phase hook with a raw status flip (no
+    #[test]
+    fn cancel_between_clone_and_harness_never_starts_the_turn() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("jobs");
+        let store = CloudJobStore::from_path(root.clone());
+        let job = confirmed_job(&store);
+        let forge = RecordingForgePr::new("https://github.com/org/repo/pull/9");
+        let mut launcher = RecordingLauncher::new("sandbox_runner_clone_cancel", fixture_patch());
+        launcher.hook = Some(Box::new({
+            let cancel = raw_cancel_from_hook(root, job.id.clone());
+            move |phase| {
+                if phase == "clone" {
+                    cancel(phase);
+                }
+            }
+        }));
+        let finished = run_confirmed_job(&store, &job.id, &launcher, &forge).unwrap();
+        assert_eq!(finished.status, CloudJobStatus::Canceled);
+        assert!(finished.pr_url.is_none());
+        let calls = launcher.calls();
+        assert!(
+            calls.contains(&"clone".to_string()),
+            "clone must have run: {calls:?}"
+        );
+        assert!(
+            !calls.contains(&"harness".to_string()),
+            "harness must not run after a post-clone cancel: {calls:?}"
+        );
+        assert!(forge.opened().is_empty());
+    }
+
+    /// Cancels the job from inside a phase hook with a raw status flip (no)
     /// `finished_unix`), mirroring the reviewer's reproduction: cancel_job
     /// saves `canceled` while a phase is in flight.
     fn raw_cancel_from_hook(root: std::path::PathBuf, id: String) -> impl Fn(&str) + Send + Sync {
@@ -1399,7 +1465,70 @@ mod tests {
     fn push_branch_refuses_non_forge_remotes() {
         let error =
             push_branch(Path::new("."), "https://example.test/org/repo.git", "b").unwrap_err();
-        assert!(error.to_string().contains("non-forge remote"));
+        let text = error.to_string();
+        assert!(
+            text.contains("non-forge") || text.contains("not a supported forge"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn push_branch_refuses_forge_default_branch_names() {
+        let error = push_branch(
+            Path::new("."),
+            "https://github.com/org/repo.git",
+            "main",
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("default branch"),
+            "{}",
+            error
+        );
+    }
+
+    #[test]
+    fn prepare_branch_rejects_leading_dash_remote_before_clone() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut job = confirmed_job(&CloudJobStore::from_path(temp.path().join("jobs")));
+        job.remote_url = "--upload-pack=evil".to_string();
+        let error = prepare_branch(&job, &fixture_patch(), temp.path()).unwrap_err();
+        assert!(
+            error.to_string().contains("must not start with '-'"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn compose_pr_body_head_is_the_pushed_sha_not_the_sandbox_sha() {
+        let job = CloudJob {
+            id: "cloud_00000000000000cc".to_string(),
+            kind: "cloud".to_string(),
+            status: CloudJobStatus::OpeningPr,
+            prompt: "fix".to_string(),
+            forge: Forge::Github,
+            remote_name: "github".to_string(),
+            remote_url: "https://github.com/org/repo.git".to_string(),
+            branch: "codewhale/cloud-b".to_string(),
+            confirmed: true,
+            sandbox_id: Some("sandbox".to_string()),
+            pr_url: None,
+            refusal: None,
+            note: "n".to_string(),
+            created_unix: 1,
+            base_branch: None,
+            head_sha: None,
+            agent_summary: None,
+            finished_unix: None,
+            sandbox_pending: false,
+        };
+        let patch = fixture_patch();
+        let body = compose_pr_body_for_head(&job, &patch, "pushedsha0000000000000000000000000001");
+        assert!(body.contains("Head: `pushedsha0000000000000000000000000001`"));
+        assert!(
+            !body.contains(&format!("Head: `{}`", patch.head_sha)),
+            "sandbox sha must not be the receipt Head"
+        );
     }
 
     /// Local-fixture integration: real git, no network — branch preparation
