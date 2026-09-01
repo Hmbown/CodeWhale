@@ -18,22 +18,23 @@ through the same lifecycle. Everything else is a way to select, launch, or
 observe that one Runtime.
 
 ```
-                         ┌───────────────────────────────┐
-                         │       headless Runtime         │
-                         │ (execution + authority +       │
-                         │  lifecycle; can sub-spawn)     │
-                         └───────────────────────────────┘
-                            ▲             ▲             ▲
-            launches │              │              │ launches
-                     │              │              │
-        ┌────────────┴───┐  ┌───────┴────────┐  ┌──┴───────────────────┐
-        │   TUI turn     │  │ `codewhale     │  │   Agent Fleet         │
-        │  (interactive, │  │   exec`        │  │  (identity, member-   │
-        │   in-process)  │  │  (headless CLI,│  │   ship, selection) —  │
-        │                │  │   anyone/any-  │  │   requests Runtime    │
-        │                │  │   time)        │  │   execution for a     │
-        └────────────────┘  └────────────────┘  │   selected Agent      │
-                                                 └───────────────────────┘
+                 ┌──────────────────────────────────────┐
+                 │          headless Runtime             │
+                 │ execution · authority · lifecycle     │
+                 │       can spawn child workers         │
+                 └───────────────┬──────────────────────┘
+                                 │
+                 ┌───────────────┴──────────────────────┐
+                 │      one durable execution substrate  │
+                 └───────┬───────────────┬──────────────┘
+                         │ launches      │ launches
+          ┌──────────────┴──────┐  ┌─────┴────────────────┐  ┌──────────────────────┐
+          │       TUI turn       │  │   `codewhale exec`  │  │     Agent Fleet       │
+          │ interactive, in-proc │  │    headless CLI     │  │ identity · membership │
+          │                      │  │ full tools · stream │  │     · selection       │
+          └─────────────────────┘  └──────────────────────┘  └──────────┬───────────┘
+                                                                          │
+                                                                          └─ selects a Runtime worker
 ```
 
 - A **sub-agent** is the user-facing name for a *nested assignment* with a role
