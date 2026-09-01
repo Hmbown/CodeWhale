@@ -1,3 +1,0 @@
-Direct commit on main with a bot trailer that must fail outside harvest flow.
-
-Co-authored-by: Cursor <cursoragent@cursor.com>

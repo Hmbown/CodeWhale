@@ -188,12 +188,11 @@ Use clear, descriptive commit messages following conventional commits:
 
 Example: `feat: add doctor subcommand for system diagnostics`
 
-**Do not leave AI-assistant co-author trailers on your commits.** Using an
-assistant is welcome and needs no disclosure, but many tools append something
-like `Co-authored-by: Claude <noreply@anthropic.com>` automatically, and the
-`Lint` job rejects it — `scripts/check-coauthor-trailers.py` requires
-contributor trailers to name humans, because those trailers feed the GitHub
-contribution graph. If CI fails on this, drop the line and force-push:
+**AI-assistant co-author trailers are fine.** Using an assistant is welcome and
+needs no disclosure, and CI no longer rejects an auto-appended
+`Co-authored-by: <some tool>` line. What we do care about is that the humans who
+did the work are named — `Co-authored-by` feeds the GitHub contribution graph.
+Remove an auto-appended line only if you want to:
 
 ```bash
 git rebase -i origin/main   # reword each commit, delete the Co-authored-by line
