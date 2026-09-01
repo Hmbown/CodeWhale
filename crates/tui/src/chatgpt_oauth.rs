@@ -21,7 +21,12 @@
 //!   (`1455`, fallback `1457`)
 //! - uses `/oauth/authorize` and `/oauth/token` on the published issuer, the
 //!   paths that public client is registered against
-//! - uses the discovery `revocation_endpoint` for local revoke
+//! - posts best-effort remote revoke to the fixed
+//!   `{issuer}/api/accounts/oauth/revoke`, the path that public client is
+//!   registered against. This is deliberately not read from the discovery
+//!   document: revoke must still clear local credentials when the issuer is
+//!   unreachable, so adding a discovery fetch would only add a failure mode to
+//!   a path whose contract is to clean up regardless
 //! - does **not** call unpublished device-auth paths (`/api/accounts/deviceauth/*`);
 //!   the issuer does not advertise `device_authorization_endpoint`
 //!
@@ -30,7 +35,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -399,11 +404,13 @@ fn query_from_target(target: &str) -> Result<&str> {
 }
 
 pub fn start_auth_request_on(
-    listener: &TcpListener,
+    listeners: &[TcpListener],
     issuer: &str,
     client_id: &str,
 ) -> Result<AuthRequest> {
-    let port = listener
+    let port = listeners
+        .first()
+        .context("ChatGPT OAuth callback has no bound listener")?
         .local_addr()
         .context("ChatGPT OAuth callback listener has no local address")?
         .port();
@@ -419,17 +426,37 @@ pub fn start_auth_request_on(
     })
 }
 
-pub fn bind_loopback_callback() -> Result<TcpListener> {
+/// Bind the loopback callback on both IP stacks for the first free port.
+///
+/// The redirect URI has to say `localhost` -- that is what is registered with
+/// the authorization server, and redirect matching is exact -- but `localhost`
+/// resolves to `::1` before `127.0.0.1` on IPv6-first hosts. Binding only IPv4
+/// left the browser connecting to a closed port, which browsers paper over with
+/// Happy Eyeballs fallback: a working sign-in becomes a slow one, and a broken
+/// one wherever that fallback is disabled. Binding both is the fix that keeps
+/// the registered redirect URI intact.
+///
+/// A host with only one stack available binds only that one and still works.
+pub fn bind_loopback_callback() -> Result<Vec<TcpListener>> {
     let mut last_error = None;
     for port in CHATGPT_OAUTH_LOOPBACK_PORTS {
-        match TcpListener::bind(("127.0.0.1", port)) {
-            Ok(listener) => {
-                listener
-                    .set_nonblocking(true)
-                    .context("ChatGPT OAuth callback listener could not be set non-blocking")?;
-                return Ok(listener);
+        let mut bound = Vec::new();
+        for addr in [
+            SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+            SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
+        ] {
+            match TcpListener::bind(addr) {
+                Ok(listener) => {
+                    listener
+                        .set_nonblocking(true)
+                        .context("ChatGPT OAuth callback listener could not be set non-blocking")?;
+                    bound.push(listener);
+                }
+                Err(error) => last_error = Some(error),
             }
-            Err(error) => last_error = Some(error),
+        }
+        if !bound.is_empty() {
+            return Ok(bound);
         }
     }
     Err(last_error
@@ -440,24 +467,26 @@ pub fn bind_loopback_callback() -> Result<TcpListener> {
         )
 }
 
-fn wait_for_callback(listener: &TcpListener, expected_state: &str) -> Result<String> {
+fn wait_for_callback(listeners: &[TcpListener], expected_state: &str) -> Result<String> {
     let deadline = Instant::now() + CALLBACK_TIMEOUT;
     loop {
         if Instant::now() >= deadline {
             bail!("ChatGPT sign-in timed out waiting for the browser callback");
         }
-        match listener.accept() {
-            Ok((stream, _)) => {
-                return handle_callback_stream(stream, expected_state);
+        // Whichever stack `localhost` resolved to for the browser is the one
+        // that gets the connection; poll them all.
+        for listener in listeners {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    return handle_callback_stream(stream, expected_state);
+                }
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error).context("ChatGPT OAuth callback accept failed"),
             }
-            Err(error)
-                if error.kind() == std::io::ErrorKind::WouldBlock
-                    || error.kind() == std::io::ErrorKind::Interrupted =>
-            {
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(error) => return Err(error).context("ChatGPT OAuth callback accept failed"),
         }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -599,15 +628,15 @@ fn pkce_login_with(
     client_id: &str,
     open_browser: bool,
 ) -> Result<PendingChatgptPkceLogin> {
-    let listener = bind_loopback_callback()?;
-    let request = start_auth_request_on(&listener, issuer, client_id)?;
+    let listeners = bind_loopback_callback()?;
+    let request = start_auth_request_on(&listeners, issuer, client_id)?;
     eprintln!("ChatGPT sign-in (PKCE)");
     eprintln!("  Open:  {}", request.authorize_url);
     eprintln!("Waiting for the browser callback… (Ctrl+C to abort)");
     if open_browser && let Err(err) = webbrowser::open(&request.authorize_url) {
         eprintln!("Could not open the browser automatically: {err}");
     }
-    let code = wait_for_callback(&listener, &request.state)?;
+    let code = wait_for_callback(&listeners, &request.state)?;
     let token = exchange_code(
         &ReqwestTokenClient,
         issuer,
@@ -768,9 +797,13 @@ fn activate_pkce_login_locked(
     })
 }
 
-/// Remove Codewhale-owned ChatGPT tokens and the config pointer. Best-effort
-/// remote revoke uses the published revocation endpoint. External Codex CLI
-/// consent is left untouched.
+/// Remove Codewhale-owned ChatGPT tokens and the config pointer.
+///
+/// Remote revoke is best-effort against the fixed
+/// `{issuer}/api/accounts/oauth/revoke` (see [`revoke_endpoint`]), not a
+/// discovery lookup: a failed or unreachable revoke must never stop the local
+/// credentials from being removed. External Codex CLI consent is left
+/// untouched.
 pub fn revoke_owned_login(
     config_path: Option<&Path>,
     live_config: Option<&mut Config>,
@@ -1514,6 +1547,46 @@ mod tests {
         .unwrap();
         let err = server.join().expect("server").unwrap_err().to_string();
         assert!(err.contains("not completed"), "{err}");
+    }
+
+    /// The registered redirect URI says `localhost`, which resolves to `::1`
+    /// as readily as `127.0.0.1`. A callback arriving on the IPv6 listener has
+    /// to be accepted, or an IPv6-first browser hangs until the timeout.
+    #[test]
+    fn callback_is_accepted_on_either_loopback_family() {
+        use std::io::Write as _;
+        for addr in [
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            SocketAddr::from((Ipv6Addr::LOCALHOST, 0)),
+        ] {
+            let Ok(target) = TcpListener::bind(addr) else {
+                // A host without this stack cannot exercise it; the other arm
+                // still covers the polling loop.
+                continue;
+            };
+            target.set_nonblocking(true).unwrap();
+            let target_addr = target.local_addr().unwrap();
+
+            // A second, permanently idle listener stands in for the family the
+            // browser did not pick: `wait_for_callback` must poll past it.
+            let idle = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .expect("bind idle listener");
+            idle.set_nonblocking(true).unwrap();
+
+            let listeners = vec![idle, target];
+            let server = std::thread::spawn(move || wait_for_callback(&listeners, "state-xyz"));
+            let mut client = std::net::TcpStream::connect(target_addr).expect("connect");
+            write!(
+                client,
+                "GET /auth/callback?code=tok&state=state-xyz HTTP/1.1\r\nHost: localhost\r\n\r\n"
+            )
+            .unwrap();
+            let code = server
+                .join()
+                .expect("server")
+                .unwrap_or_else(|error| panic!("callback on {target_addr} rejected: {error}"));
+            assert_eq!(code, "tok", "callback on {target_addr}");
+        }
     }
 
     #[test]
