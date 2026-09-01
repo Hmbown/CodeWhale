@@ -1726,6 +1726,19 @@ pub fn run_cli() -> std::process::ExitCode {
             for cause in err.chain().skip(1) {
                 eprintln!("  caused by: {cause}");
             }
+            // A Codewhale account failure carries a class: CI logs must be
+            // able to tell a bad credential from an unconfigured agent model
+            // without parsing English, and the machine-readable code beside
+            // it names the control-plane branch that was taken.
+            if let Some(machine) = err.downcast_ref::<cloud::machine::MachineError>() {
+                eprintln!(
+                    "  codewhale: code={} status={}",
+                    machine.code, machine.status
+                );
+                if let Ok(code) = u8::try_from(machine.exit_code) {
+                    return std::process::ExitCode::from(code);
+                }
+            }
             std::process::ExitCode::FAILURE
         }
     }
@@ -1910,7 +1923,17 @@ fn run() -> Result<()> {
         }
         Some(Commands::Lane(args)) => run_lane_command(args),
         Some(Commands::Review(args)) => {
-            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
+            // CI path: a machine token authenticates as the account with no
+            // local session and no browser. The account's own configured
+            // provider then disambiguates a model that maps to several
+            // configured routes, which review otherwise hard-errors on.
+            let mut overrides = runtime_overrides.clone();
+            if overrides.provider.is_none()
+                && let Some(provider) = cloud::machine_review_provider()?
+            {
+                overrides.provider = Some(provider);
+            }
+            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &overrides);
             run_tui_in_process(&cli, &resolved_runtime, tui_args("review", args))
         }
         Some(Commands::Apply(args)) => {
