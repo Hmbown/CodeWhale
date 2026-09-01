@@ -242,3 +242,39 @@ fn footer_degenerate_sizes_do_not_panic() {
         let _ = draw(w, h, &footer);
     }
 }
+
+/// Permission outranks mode when only one posture chip fits.
+///
+/// The footer paints the lockup left-to-right and drops whatever runs past
+/// the left block's edge, so the *last* chip was the first casualty — and
+/// that was permission. Operate mode made it reproducible: `operate` is the
+/// longest of the three mode words, so it ate the cells `full access`
+/// needed and the footer stopped reporting that the session could write
+/// anywhere. A preference word must never outbid a safety fact.
+#[test]
+fn footer_permission_chip_outranks_mode_when_only_one_fits() {
+    let mut fixture = thinking_footer();
+    fixture.mode_chip = Some(("operate", ChromeInk::PolicyAct));
+    fixture.permission_chip = Some(("full access", ChromeInk::PermissionFullAccess));
+
+    // Sweep the widths between "neither fits" and "both fit". Wherever a
+    // single chip fits, it has to be the permission phrase.
+    let mut saw_permission_alone = false;
+    for width in 40..=120u16 {
+        let text = draw(width, 12, &fixture.widget(&UI_THEME));
+        let has_mode = text.contains("operate");
+        let has_permission = text.contains("full access");
+        assert!(
+            !(has_mode && !has_permission),
+            "width {width} kept the mode word and shed the permission phrase: {text}"
+        );
+        if has_permission && !has_mode {
+            saw_permission_alone = true;
+        }
+    }
+    assert!(
+        saw_permission_alone,
+        "no width in 40..=120 shed the mode word while keeping permission — \
+         the sweep no longer covers the contested band"
+    );
+}

@@ -866,10 +866,21 @@ pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFoo
     }
     // Posture chips after the cost, each fitting whole or standing down —
     // a clipped posture word is worse than none (the classic header's rule).
-    for chip in [footer.mode_chip, footer.permission_chip]
-        .into_iter()
-        .flatten()
-    {
+    //
+    // When only one of the two can fit, permission keeps the cells. The mode
+    // word is a preference (`act` / `plan` / `operate`); the permission
+    // phrase is a safety fact, and a silently shed `full access` is the
+    // footer under-reporting the authority the session actually holds. This
+    // bit most in operate mode, whose mode word is the longest of the three
+    // and so consumed the budget the permission chip needed. Painting order
+    // stays mode-then-permission, so the lockup does not shift when both fit.
+    let chip_cells = |text: &str| ITEM_SEPARATOR_WIDTH + footer.sym(text).width();
+    let mut mode_chip = footer.mode_chip;
+    if let (Some(mode), Some(permission)) = (footer.mode_chip, footer.permission_chip) {
+        let both = chip_cells(mode.0) + chip_cells(permission.0);
+        mode_chip = (usize::from(x) + both <= usize::from(left_edge_end)).then_some(mode);
+    }
+    for chip in [mode_chip, footer.permission_chip].into_iter().flatten() {
         let text = footer.sym(chip.0);
         let needs = ITEM_SEPARATOR_WIDTH + text.width();
         if x + needs as u16 <= left_edge_end {
