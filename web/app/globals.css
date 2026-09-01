@@ -1,3 +1,5 @@
+@import "./tokens.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -7,73 +9,74 @@
  * The site is the deep-ocean stage the Tideline TUI redesign paints: one dark
  * field everywhere, with the whale palette's semantic inks on top. The token
  * NAMES below keep their historical shape (`--paper`, `--ink`, `--indigo`) so
- * component rules and the docs light theme stay diffable, but the values are
- * the WHALE_* dark tokens from crates/tui/src/palette/tokens.rs — the same
- * field, chrome, and ink the product renders.
+ * component rules and the docs light theme stay diffable, but the values now
+ * resolve through ./tokens.css, generated from crates/tui/src/palette/tokens.rs
+ * by scripts/export-design-tokens.py — the same field, chrome, and ink the
+ * product renders, with no hand-copied hexes.
  */
 :root {
   /* RGB channel triples backing the Tailwind surface/ink tokens (see
      tailwind.config.ts). The docs light theme overrides them for its
      opt-in light sheet. */
-  --c-paper: 3 7 13;          /* WHALE_BG — deep field */
-  --c-paper-deep: 14 23 41;   /* WHALE_PANEL */
-  --c-paper-edge: 38 62 92;   /* WHALE_BORDER — blue at 25% on stage */
-  --c-ink: 246 242 232;       /* WHALE_TEXT_BODY — whale ivory */
-  --c-ink-soft: 182 192 212;  /* WHALE_TEXT_SOFT */
-  --c-ink-mute: 147 160 184;  /* WHALE_TEXT_MUTED */
-  --c-indigo: 106 174 242;    /* WHALE_ACTION — interaction blue */
+  --c-paper: var(--whale-bg-rgb);
+  --c-paper-deep: var(--whale-panel-rgb);
+  --c-paper-edge: var(--whale-border-rgb);
+  --c-ink: var(--whale-text-body-rgb);
+  --c-ink-soft: var(--whale-text-soft-rgb);
+  --c-ink-mute: var(--whale-text-muted-rgb);
+  --c-indigo: var(--whale-action-rgb);
   --c-indigo-deep: 143 196 248; /* lifted action blue — hover on dark */
-  --c-stage-soft: 182 192 212;
+  --c-stage-soft: var(--whale-text-soft-rgb);
 
-  --paper: #03070d;
-  --paper-deep: #0e1729;
-  --paper-edge: #263e5c;
+  --paper: var(--whale-bg);
+  --paper-deep: var(--whale-panel);
+  --paper-edge: var(--whale-border);
   /* Cards are the TUI's panel plate resting on the deep field. */
   --paper-card: #101d33;
-  --paper-line: #263e5c;
-  --paper-line-soft: #263e5c;
-  --ink: #f6f2e8;
-  --ink-soft: #b6c0d4;
-  --ink-mute: #93a0b8;
-  --indigo: #6aaef2;
+  --paper-line: var(--whale-border);
+  --paper-line-soft: var(--whale-border);
+  --ink: var(--whale-text-body);
+  --ink-soft: var(--whale-text-soft);
+  --ink-mute: var(--whale-text-muted);
+  --indigo: var(--whale-action);
   --indigo-deep: #8fc4f8;
-  --indigo-pale: rgba(106, 174, 242, 0.16);
-  --action-on-dark: #6aaef2;
+  --indigo-pale: rgb(var(--whale-action-rgb) / 0.16);
+  --action-on-dark: var(--whale-action);
   /* Semantic state inks, straight from the status-bar grammar: green is
      outcome, coral is cognition/attention, gold is the human mark. */
-  --ochre: #f6c453;
-  --jade: #9bd66f;
-  --seafoam: #4fd1c5;
-  --cobalt: #6aaef2;
-  --cyan: #48d7ff; /* bounded accents only — eyebrow chrome, composer prompt */
+  --ochre: var(--whale-human);
+  --jade: var(--whale-working-green);
+  --seafoam: var(--whale-accent-secondary);
+  --cobalt: var(--whale-action);
+  --cyan: var(--whale-cyan); /* bounded accents only — eyebrow chrome, composer prompt */
   --settings-state-active: var(--indigo);
   --settings-state-ready: var(--jade);
   --settings-state-muted: var(--ink-mute);
-  --ocean-deep: #03070d;
-  --ocean-mid: #0e1729;
-  --ocean-current: #d1ebf4;
-  --ocean-mist: #b6c0d4;
-  --ocean-coral: #ff7a59;
-  --signal-gold: #f6c453;
+  --ocean-deep: var(--whale-bg);
+  --ocean-mid: var(--whale-panel);
+  --ocean-current: var(--whale-ice);
+  --ocean-mist: var(--whale-text-soft);
+  --ocean-coral: var(--whale-warning);
+  --signal-gold: var(--whale-human);
   /* The whale mark is white ink on the deep-blue tile; off the tile it is a
      white silhouette on the field. Gold stays reserved for human moments. */
   --mark-ink: #ffffff;
-  --stage-text: #f6f2e8;
-  --stage-soft: #b6c0d4;
-  --stage-muted: #93a0b8;
+  --stage-text: var(--whale-text-body);
+  --stage-soft: var(--whale-text-soft);
+  --stage-muted: var(--whale-text-muted);
 
   /* Blue Stage field, verbatim from crates/tui/src/palette/tokens.rs — the
      same gradient the TUI samples down its water column. */
-  --stage-field-top: #0e1729; /* WHALE_PANEL — surface */
-  --stage-field-mid: #08111c; /* WHALE_CHROME — the authored 42% break */
-  --stage-field-deep: #03070d; /* WHALE_BG — deep field, and the footer seabed */
+  --stage-field-top: var(--whale-panel); /* surface */
+  --stage-field-mid: var(--whale-chrome); /* the authored 42% break */
+  --stage-field-deep: var(--whale-bg); /* deep field, and the footer seabed */
   --stage-ambient: #264866;
-  --stage-composer: #162238; /* WHALE_COMPOSER — the raised input plate */
-  --stage-elevated: #182742; /* WHALE_ELEVATED */
-  --stage-line: #263e5c; /* WHALE_BORDER — blue at 25% on stage */
+  --stage-composer: var(--whale-composer); /* the raised input plate */
+  --stage-elevated: var(--whale-elevated);
+  --stage-line: var(--whale-border); /* blue at 25% on stage */
   --stage-hint: #8491aa;
-  --stage-dim: #697791;
-  --violet: #ad88ff; /* WHALE_MODE_OPERATE — 1px rules only, never text */
+  --stage-dim: var(--whale-text-dim);
+  --violet: var(--whale-mode-operate); /* 1px rules only, never text */
 
   /* Type stacks. Display and body are one instrument voice — Tideline sets
      its headings in the same sans as its copy, separated by weight and
@@ -85,9 +88,9 @@
 
   /* Hairline + code surfaces routed through vars so the docs light theme can
      re-ink them without touching every rule. */
-  --hairline: rgba(106, 174, 242, 0.2);
-  --code-bg: #08111c;
-  --code-fg: #f6f2e8;
+  --hairline: rgb(var(--whale-action-rgb) / 0.2);
+  --code-bg: var(--whale-chrome);
+  --code-fg: var(--whale-text-body);
 
   /* One site container and one vertical rhythm. Every page gutter aligns
      with the nav; every hero and section shares a single padding token. */
@@ -3403,10 +3406,10 @@ html[lang="ko"] .ocean-column h2 {
 /* ------------------------------------------------------------------ */
 
 .docs-theme {
-  --docs-accent: #6aaef2;
-  --docs-button-bg: #0e1729;
-  --docs-button-border: #263e5c;
-  --docs-button-text: #f6f2e8;
+  --docs-accent: var(--whale-action);
+  --docs-button-bg: var(--whale-panel);
+  --docs-button-border: var(--whale-border);
+  --docs-button-text: var(--whale-text-body);
   background: var(--paper);
   color: var(--ink);
 }
@@ -3450,19 +3453,19 @@ html[data-theme="light"] .docs-theme {
   --ink: #14213a;
   --ink-soft: #455168;
   --ink-mute: #5b6780;
-  --indigo: #315fd8;
+  --indigo: var(--whale-cobalt);
   --indigo-deep: #2448a6;
   --indigo-pale: #e8eef8;
   --ochre: #7a5500;
   --jade: #08766d;
-  --cobalt: #315fd8;
+  --cobalt: var(--whale-cobalt);
   --cyan: #0f7f9f;
   /* The whale silhouette re-inks to the light sheet's body navy. */
   --mark-ink: #14213a;
   --hairline: rgba(20, 35, 70, 0.14);
-  --code-bg: #03070d;
-  --code-fg: #f6f2e8;
-  --docs-accent: #315fd8;
+  --code-bg: var(--whale-bg);
+  --code-fg: var(--whale-text-body);
+  --docs-accent: var(--whale-cobalt);
   --docs-button-bg: #fff;
   --docs-button-border: #aeb8c6;
   --docs-button-text: #1b2230;

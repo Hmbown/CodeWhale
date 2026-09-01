@@ -52,6 +52,10 @@ jobs:
         # Fails CI when docs-map.ts references non-existent repo files or
         # when website version / command snippets are stale.
         run: npm run check:docs
+      - name: Check design tokens
+        # app/tokens.css is generated from crates/tui/src/palette/tokens.rs.
+        # Fails CI when the palette moved and the export was not re-run.
+        run: npm run check:tokens
       - name: Run tests
         run: npm test
       - name: Run ESLint
