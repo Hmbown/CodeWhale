@@ -7,7 +7,8 @@
 use codewhale_command_contract::facets::{
     CommandSkillGroupContext, CommandSkillsContext, ReviewOutcome,
 };
-use codewhale_command_contract::handler::CommandContexts;
+use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::commands::CommandResult;
 use crate::tui::app::AppAction;
@@ -21,29 +22,22 @@ fn warnings_suffix(warnings: &[String]) -> String {
     format!("\n\nWarnings:\n- {}", warnings.join("\n- "))
 }
 
-pub(in crate::commands) const COMMAND_INFO: crate::commands::traits::CommandInfo =
-    crate::commands::traits::CommandInfo {
-        name: "review",
-        aliases: &["shencha"],
-        usage: "/review <target>",
-        description_id: crate::localization::MessageId::CmdReviewDescription,
-    };
+pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
+    name: "review",
+    aliases: &["shencha"],
+    usage: "/review <target>",
+    description_key: "cmd_review_description",
+};
 
 pub(in crate::commands) struct ReviewCmd;
 
-impl crate::commands::traits::RegisterCommand for ReviewCmd {
-    fn info() -> &'static crate::commands::traits::CommandInfo {
+impl RegisterCommand<CommandResult> for ReviewCmd {
+    fn info() -> &'static CommandInfo {
         &COMMAND_INFO
     }
 
-    fn execute(
-        app: &mut crate::tui::app::App,
-        arg: Option<&str>,
-    ) -> crate::commands::CommandResult {
-        // Transitional shell (FEAT-022 Phase 4); replaced by the contract
-        // bridge in Phase 6.
-        let mut bundle = app.command_contexts();
-        review_contextual(bundle.contexts(), arg)
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Contextual(review_contextual)
     }
 }
 

@@ -284,7 +284,6 @@
     "debug",
     "memory",
     "plugins",
-    "session",
-    "skills"
+    "session"
   ]
 }

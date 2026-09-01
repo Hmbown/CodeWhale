@@ -367,7 +367,7 @@ class LiveGateTests(unittest.TestCase):
         # groups stay pending.
         self.assertEqual(
             set(frontier),
-            {"memory", "plugins", "skills", "session", "config", "debug", "core"},
+            {"memory", "plugins", "session", "config", "debug", "core"},
         )
 
 

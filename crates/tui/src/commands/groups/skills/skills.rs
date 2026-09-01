@@ -15,7 +15,8 @@ use codewhale_command_contract::facets::{
     SkillBundledTier, SkillEntry, SkillMutationOutcome, SkillMutationReceipt, SkillSourceKind,
     SkillSyncEntry, SkillSyncOutcome, SkillTargetScope,
 };
-use codewhale_command_contract::handler::CommandContexts;
+use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::commands::CommandResult;
 use crate::tui::app::AppAction;
@@ -238,30 +239,22 @@ fn parse_scope_args(args: &str) -> Result<(Option<SkillTargetScope>, &str), Stri
 // /skills — portable contextual dispatch
 // ---------------------------------------------------------------------------
 
-pub(in crate::commands) const SKILLS_INFO: crate::commands::traits::CommandInfo =
-    crate::commands::traits::CommandInfo {
-        name: "skills",
-        aliases: &["jinengliebiao"],
-        usage: "/skills [--remote|sync|inspect|suggest <task>|<prefix>]  (bare opens manager)",
-        description_id: crate::localization::MessageId::CmdSkillsDescription,
-    };
+pub(in crate::commands) const SKILLS_INFO: CommandInfo = CommandInfo {
+    name: "skills",
+    aliases: &["jinengliebiao"],
+    usage: "/skills [--remote|sync|inspect|suggest <task>|<prefix>]  (bare opens manager)",
+    description_key: "cmd_skills_description",
+};
 
 pub(in crate::commands) struct SkillsCmd;
 
-impl crate::commands::traits::RegisterCommand for SkillsCmd {
-    fn info() -> &'static crate::commands::traits::CommandInfo {
+impl RegisterCommand<CommandResult> for SkillsCmd {
+    fn info() -> &'static CommandInfo {
         &SKILLS_INFO
     }
 
-    fn execute(
-        app: &mut crate::tui::app::App,
-        arg: Option<&str>,
-    ) -> crate::commands::CommandResult {
-        // Transitional shell (FEAT-022 Phase 4): build the envelope and
-        // delegate to the contextual dispatch. Phase 6 replaces this with the
-        // contract bridge (`ContextualCommand::from_contract`).
-        let mut bundle = app.command_contexts();
-        skills_contextual(bundle.contexts(), arg)
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Contextual(skills_contextual)
     }
 }
 
@@ -611,29 +604,22 @@ fn sync_skills(group: &mut dyn CommandSkillGroupContext) -> CommandResult {
 // /skill — portable contextual dispatch
 // ---------------------------------------------------------------------------
 
-pub(in crate::commands) const SKILL_INFO: crate::commands::traits::CommandInfo =
-    crate::commands::traits::CommandInfo {
-        name: "skill",
-        aliases: &["jineng"],
-        usage: "/skill <name|install <spec>|update <name>|uninstall <name>|trust <name>>",
-        description_id: crate::localization::MessageId::CmdSkillDescription,
-    };
+pub(in crate::commands) const SKILL_INFO: CommandInfo = CommandInfo {
+    name: "skill",
+    aliases: &["jineng"],
+    usage: "/skill <name|install <spec>|update <name>|uninstall <name>|trust <name>>",
+    description_key: "cmd_skill_description",
+};
 
 pub(in crate::commands) struct SkillCmd;
 
-impl crate::commands::traits::RegisterCommand for SkillCmd {
-    fn info() -> &'static crate::commands::traits::CommandInfo {
+impl RegisterCommand<CommandResult> for SkillCmd {
+    fn info() -> &'static CommandInfo {
         &SKILL_INFO
     }
 
-    fn execute(
-        app: &mut crate::tui::app::App,
-        arg: Option<&str>,
-    ) -> crate::commands::CommandResult {
-        // Transitional shell (FEAT-022 Phase 4); replaced by the contract
-        // bridge in Phase 6.
-        let mut bundle = app.command_contexts();
-        skill_contextual(bundle.contexts(), arg)
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Contextual(skill_contextual)
     }
 }
 

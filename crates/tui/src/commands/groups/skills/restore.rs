@@ -15,7 +15,8 @@
 use chrono::TimeZone;
 
 use codewhale_command_contract::facets::{CommandSkillGroupContext, SnapshotEntry};
-use codewhale_command_contract::handler::CommandContexts;
+use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::commands::CommandResult;
 
@@ -23,29 +24,22 @@ const DEFAULT_LIST_LIMIT: usize = 20;
 const MAX_LIST_LIMIT: usize = 100;
 const MAX_RESTORE_INDEX: usize = 1000;
 
-pub(in crate::commands) const COMMAND_INFO: crate::commands::traits::CommandInfo =
-    crate::commands::traits::CommandInfo {
-        name: "restore",
-        aliases: &[],
-        usage: "/restore [N|list [N]]",
-        description_id: crate::localization::MessageId::CmdRestoreDescription,
-    };
+pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
+    name: "restore",
+    aliases: &[],
+    usage: "/restore [N|list [N]]",
+    description_key: "cmd_restore_description",
+};
 
 pub(in crate::commands) struct RestoreCmd;
 
-impl crate::commands::traits::RegisterCommand for RestoreCmd {
-    fn info() -> &'static crate::commands::traits::CommandInfo {
+impl RegisterCommand<CommandResult> for RestoreCmd {
+    fn info() -> &'static CommandInfo {
         &COMMAND_INFO
     }
 
-    fn execute(
-        app: &mut crate::tui::app::App,
-        arg: Option<&str>,
-    ) -> crate::commands::CommandResult {
-        // Transitional shell (FEAT-022 Phase 4); replaced by the contract
-        // bridge in Phase 6.
-        let mut bundle = app.command_contexts();
-        restore_contextual(bundle.contexts(), arg)
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Contextual(restore_contextual)
     }
 }
 
