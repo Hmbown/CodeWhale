@@ -982,12 +982,11 @@ impl CommandSkillGroupContext for SkillGroupAdapter<'_> {
         &mut self,
         name: &str,
     ) -> Result<SkillActivationOutcome, SkillActivationError> {
-        let lookup_name = if name == "new" { "skill-creator" } else { name };
         let registry = {
             let app = self.host.app.borrow();
             discover_visible(&app)
         };
-        if let Some(skill) = registry.get(lookup_name) {
+        if let Some(skill) = registry.get(name) {
             let plugin_provenance = match &skill.source {
                 crate::skills::SkillSource::Native => None,
                 crate::skills::SkillSource::Plugin { authority, .. } => {
@@ -1059,16 +1058,7 @@ impl CommandSkillGroupContext for SkillGroupAdapter<'_> {
             .await
         });
         match outcome {
-            Ok(receipt) => {
-                let portable = portable_mutation_receipt(&receipt);
-                if matches!(
-                    receipt.outcome,
-                    crate::skills::mutation::SkillMutationOutcome::Installed
-                ) {
-                    self.host.app.borrow_mut().refresh_skill_cache();
-                }
-                Ok(portable)
-            }
+            Ok(receipt) => Ok(portable_mutation_receipt(&receipt)),
             Err(err) => Err(format!("Install failed: {err:#}")),
         }
     }
@@ -1104,16 +1094,7 @@ impl CommandSkillGroupContext for SkillGroupAdapter<'_> {
             .await
         });
         match outcome {
-            Ok(receipt) => {
-                let portable = portable_mutation_receipt(&receipt);
-                if matches!(
-                    receipt.outcome,
-                    crate::skills::mutation::SkillMutationOutcome::Updated
-                ) {
-                    self.host.app.borrow_mut().refresh_skill_cache();
-                }
-                Ok(portable)
-            }
+            Ok(receipt) => Ok(portable_mutation_receipt(&receipt)),
             Err(err) => Err(format!("Update failed: {err:#}")),
         }
     }
@@ -1143,10 +1124,7 @@ impl CommandSkillGroupContext for SkillGroupAdapter<'_> {
             },
             &ctx,
         ) {
-            Ok(receipt) => {
-                self.host.app.borrow_mut().refresh_skill_cache();
-                Ok(portable_mutation_receipt(&receipt))
-            }
+            Ok(receipt) => Ok(portable_mutation_receipt(&receipt)),
             Err(err) => Err(format!("Uninstall failed: {err:#}")),
         }
     }
@@ -2225,7 +2203,9 @@ mod tests {
     }
 
     #[test]
-    fn skill_group_activation_new_aliases_skill_creator() {
+    fn skill_group_activation_looks_up_exact_name() {
+        // The `/skill new` -> skill-creator alias is handler-side parsing
+        // (Phase 4); the delegate performs an exact host lookup.
         let tmp = TempDir::new().unwrap();
         let _home = scoped_home(&tmp);
         let skills_dir = tmp.path().join("skills");
@@ -2237,7 +2217,7 @@ mod tests {
                 .parts()
                 .skill_group
                 .expect("skill_group facet must be present");
-            let outcome = group.activate_skill("new").unwrap();
+            let outcome = group.activate_skill("skill-creator").unwrap();
             assert_eq!(outcome.name, "skill-creator");
         }
         assert!(app.active_skill.is_some());

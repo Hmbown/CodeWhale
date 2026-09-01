@@ -1,26 +1,33 @@
 //! Skills commands: skills, skill
+//!
+//! FEAT-022 Phase 4: portable contextual dispatch over
+//! [`CommandSkillGroupContext`]; the legacy `RegisterCommand::execute` is a
+//! transitional shell that builds the capability envelope and delegates (Phase
+//! 6 replaces it with the contract bridge). The dispatcher-only
+//! `run_skill_by_name` path and its shared host machinery
+//! ([`discover_visible_skills`], [`activate_skill_with_task`]) stay
+//! App-carrying and co-located for FEAT-042 extraction.
 
 use std::fmt::Write;
 
-use crate::network_policy::NetworkPolicy;
-use crate::skills::install::{
-    self, DEFAULT_MAX_SIZE_BYTES, DEFAULT_REGISTRY_URL, InstallSource, RegistryFetchResult,
-    SkillSyncOutcome, SyncResult,
+use codewhale_command_contract::facets::{
+    CommandSkillGroupContext, CommandSkillsContext, RemoteRegistryOutcome, SkillActivationError,
+    SkillBundledTier, SkillEntry, SkillMutationOutcome, SkillMutationReceipt, SkillSourceKind,
+    SkillSyncEntry, SkillSyncOutcome, SkillTargetScope,
 };
-use crate::skills::{SkillRegistry, SkillSource};
-use crate::tui::app::{App, AppAction};
-use crate::tui::history::HistoryCell;
+use codewhale_command_contract::handler::CommandContexts;
 
 use crate::commands::CommandResult;
+use crate::tui::app::AppAction;
 
-#[cfg(test)]
-thread_local! {
-    static TEST_HOME_DIR: std::cell::RefCell<Option<std::path::PathBuf>> =
-        const { std::cell::RefCell::new(None) };
-}
+// ---------------------------------------------------------------------------
+// Host-side dispatcher machinery (FEAT-042 handoff — stays App-carrying)
+// ---------------------------------------------------------------------------
 
-#[cfg(not(test))]
-fn discover_visible_skills(app: &App) -> SkillRegistry {
+/// Discover the enabled visible skills for the current App state. Shared by the
+/// dispatcher fallback (`run_skill_by_name`) and the host activation helper;
+/// kept co-located for FEAT-042.
+fn discover_visible_skills(app: &crate::tui::app::App) -> crate::skills::SkillRegistry {
     crate::skills::discover_for_workspace_and_dir_with_mode_and_plugins(
         &app.workspace,
         &app.skills_dir,
@@ -30,144 +37,256 @@ fn discover_visible_skills(app: &App) -> SkillRegistry {
     .into_enabled()
 }
 
-#[cfg(test)]
-fn discover_visible_skills(app: &App) -> SkillRegistry {
-    let mode =
-        crate::skills::SkillDiscoveryMode::from_codewhale_only(app.skills_scan_codewhale_only);
-    TEST_HOME_DIR
-        .with(|home| {
-            if let Some(home) = home.borrow().as_deref() {
-                crate::skills::discover_for_workspace_and_dir_with_home_and_mode_and_plugins(
-                    &app.workspace,
-                    &app.skills_dir,
-                    Some(home),
-                    mode,
-                    Some(app.plugin_registry.as_ref()),
-                )
-            } else {
-                crate::skills::discover_for_workspace_and_dir_with_mode_and_plugins(
-                    &app.workspace,
-                    &app.skills_dir,
-                    mode,
-                    Some(app.plugin_registry.as_ref()),
-                )
-            }
-        })
-        .into_enabled()
+/// Run a specific skill — activates skill for next user message, or
+/// dispatches a sub-command (`install`, `update`, `uninstall`, `trust`).
+/// Try to run a skill by exact name (used for unified slash-command namespace, #435).
+/// Returns None when no skill with that name exists, so the caller can try other sources.
+pub(in crate::commands) fn run_skill_by_name(
+    app: &mut crate::tui::app::App,
+    name: &str,
+    arg: Option<&str>,
+) -> Option<CommandResult> {
+    let registry = discover_visible_skills(app);
+    let lookup_name = if name == "new" { "skill-creator" } else { name };
+    if registry.get(lookup_name).is_some() {
+        Some(activate_skill_with_task(app, name, arg))
+    } else {
+        None
+    }
 }
 
-fn render_skill_warnings(registry: &SkillRegistry) -> String {
-    if registry.warnings().is_empty() {
+/// Host-side activation helper shared with the dispatcher fallback. The
+/// portable `/skill` path uses the `CommandSkillGroupContext` delegate instead
+/// (D2); this App-carrying copy is retained for `run_skill_by_name` (FEAT-042).
+fn activate_skill_with_task(
+    app: &mut crate::tui::app::App,
+    name: &str,
+    task: Option<&str>,
+) -> CommandResult {
+    let mut result = activate_skill(app, name);
+    if !result.is_error
+        && let Some(task) = task.map(str::trim).filter(|task| !task.is_empty())
+    {
+        result.action = Some(AppAction::SendMessage(task.to_string()));
+    }
+    result
+}
+
+/// Host-side `/skill <name>` activation (FEAT-042 dispatcher machinery).
+fn activate_skill(app: &mut crate::tui::app::App, name: &str) -> CommandResult {
+    // `/skill new` is a friendly alias for `/skill skill-creator`.
+    let name = if name == "new" { "skill-creator" } else { name };
+
+    let registry = discover_visible_skills(app);
+
+    if let Some(skill) = registry.get(name) {
+        let plugin_provenance = match &skill.source {
+            crate::skills::SkillSource::Native => None,
+            crate::skills::SkillSource::Plugin { authority, .. } => {
+                if let Err(reason) = crate::plugins::registry::verify_plugin_component_authority(
+                    authority,
+                    crate::plugins::activation::PluginActivationCapability::Skills,
+                ) {
+                    return CommandResult::error(format!(
+                        "Plugin skill '{}' is no longer active: {reason}",
+                        skill.name
+                    ));
+                }
+                Some(authority.as_ref().clone())
+            }
+        };
+        let instruction = format!(
+            "You are now using a skill. Follow these instructions:\n\n# Skill: {}\n\n{}\n\n---\n\nNow respond to the user's request following the above skill instructions.",
+            skill.name, skill.body
+        );
+
+        app.add_message(crate::tui::history::HistoryCell::System {
+            content: format!("Activated skill: {}\n\n{}", skill.name, skill.description),
+        });
+
+        app.active_skill = Some(instruction);
+        app.active_skill_provenance = plugin_provenance;
+
+        CommandResult::message(format!(
+            "Skill '{}' activated.\n\nDescription: {}\n\nType your request and the skill instructions will be applied.",
+            skill.name, skill.description
+        ))
+    } else {
+        let available: Vec<String> = registry.list().iter().map(|s| s.name.clone()).collect();
+        let warnings = render_skill_warnings(registry.warnings());
+
+        if available.is_empty() {
+            CommandResult::error(format!(
+                "Skill '{name}' not found. No skills installed.\n\nUse /skills to see how to add skills.{warnings}"
+            ))
+        } else {
+            CommandResult::error(format!(
+                "Skill '{}' not found.\n\nAvailable skills: {}{}",
+                name,
+                available.join(", "),
+                warnings
+            ))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Portable rendering helpers (byte-identical to the pre-migration handlers)
+// ---------------------------------------------------------------------------
+
+/// Render registry warnings as the baseline suffix block.
+fn render_skill_warnings(warnings: &[String]) -> String {
+    if warnings.is_empty() {
         return String::new();
     }
 
     let mut out = String::new();
-    let _ = writeln!(out, "\nWarnings ({}):", registry.warnings().len());
-    for warning in registry.warnings() {
+    let _ = writeln!(out, "\nWarnings ({}):", warnings.len());
+    for warning in warnings {
         let _ = writeln!(out, "  - {warning}");
     }
     out
 }
 
-fn skill_discovery_mode(app: &App) -> crate::skills::SkillDiscoveryMode {
-    crate::skills::SkillDiscoveryMode::from_codewhale_only(app.skills_scan_codewhale_only)
-}
-
-fn skill_discovery_mode_label(mode: crate::skills::SkillDiscoveryMode) -> &'static str {
-    match mode {
-        crate::skills::SkillDiscoveryMode::Compatible => "compatible",
-        crate::skills::SkillDiscoveryMode::CodeWhaleOnly => "codewhale-only",
-    }
-}
-
-fn visible_skill_directories(app: &App) -> Vec<std::path::PathBuf> {
-    crate::skills::skill_directories_for_workspace_and_dir(
-        &app.workspace,
-        &app.skills_dir,
-        skill_discovery_mode(app),
-    )
-}
-
-fn skill_source_label(source: &SkillSource) -> String {
+/// Source label used by `/skills inspect` (baseline `skill_source_label`).
+fn skill_source_label(source: &SkillSourceKind) -> String {
     match source {
-        SkillSource::Native => "native".to_string(),
-        SkillSource::Plugin {
-            plugin_id,
+        SkillSourceKind::Native => "native".to_string(),
+        SkillSourceKind::Plugin {
             plugin_name,
-            ..
+            plugin_id,
         } => format!("reviewed plugin snapshot {plugin_name} ({plugin_id})"),
     }
 }
 
-fn inspect_skills(app: &mut App) -> CommandResult {
-    let mode = skill_discovery_mode(app);
-    let dirs = visible_skill_directories(app);
-    let registry = discover_visible_skills(app);
-    let warnings = render_skill_warnings(&registry);
-
-    let mut output = String::from("Skills Inspect\n");
-    output.push_str("─────────────────────────────\n");
-    let _ = writeln!(
-        output,
-        "Discovery mode: {}",
-        skill_discovery_mode_label(mode)
-    );
-    let _ = writeln!(output, "Workspace: {}", app.workspace.display());
-    let _ = writeln!(
-        output,
-        "Configured skills dir: {}",
-        app.skills_dir.display()
-    );
-
-    if dirs.is_empty() {
-        output.push_str("\nSearched directories: none found\n");
-    } else {
-        let _ = writeln!(output, "\nSearched directories ({}):", dirs.len());
-        for (idx, dir) in dirs.iter().enumerate() {
-            let _ = writeln!(output, "  {}. {}", idx + 1, dir.display());
-        }
-    }
-
-    let _ = writeln!(output, "\nAvailable skills ({}):", registry.len());
-    if registry.is_empty() {
-        output.push_str("  (none)\n");
-    } else {
-        for skill in registry.list() {
-            if skill.description.trim().is_empty() {
-                let _ = writeln!(output, "  - {}", skill.name);
-            } else {
-                let _ = writeln!(output, "  - {} — {}", skill.name, skill.description);
-            }
-            let _ = writeln!(output, "    source: {}", skill_source_label(&skill.source));
-            if matches!(skill.source, SkillSource::Native) {
-                let _ = writeln!(output, "    path: {}", skill.path.display());
-            }
-        }
-    }
-
-    output.push_str(&warnings);
-    CommandResult::message(output)
+/// Network-policy approval message (baseline `needs_approval_message`).
+fn needs_approval_message(host: &str) -> String {
+    format!(
+        "Network policy requires approval for {host}.\n\
+         Add it to your allow list with `/network allow {host}` (or set [network].default = \"allow\" in ~/.codewhale/config.toml), then retry."
+    )
 }
 
-/// List all available skills. Pass `--remote` (or `remote`) to fetch the
-/// curated registry instead of scanning the local skills directory. Pass
-/// `suggest <task>` to rank remote catalog entries for a task without
-/// installing anything.
-/// Pass `sync` to pull the registry index and download all skills to the
-/// local cache (`~/.codewhale/cache/skills/`). Pass `inspect` to show local
-/// discovery mode, searched directories, and skill source paths.
-fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
+/// Network-policy denial message (baseline `network_denied_message`).
+fn network_denied_message(host: &str) -> String {
+    format!(
+        "Network policy denied access to {host}.\n\
+         Remove the deny entry from ~/.codewhale/config.toml under [network] or contact your administrator."
+    )
+}
+
+/// Render a mutation receipt byte-identically (baseline `format_mutation_receipt`).
+fn format_mutation_receipt(receipt: &SkillMutationReceipt) -> String {
+    match &receipt.outcome {
+        SkillMutationOutcome::Installed => format!(
+            "Installed skill '{}'.\nLocation: {}\n\nManage skills with /skills.",
+            receipt.name, receipt.safe_target_path
+        ),
+        SkillMutationOutcome::Updated => format!(
+            "Skill '{}' updated.\nLocation: {}",
+            receipt.name, receipt.safe_target_path
+        ),
+        SkillMutationOutcome::NoChange => {
+            format!("Skill '{}': no upstream change.", receipt.name)
+        }
+        SkillMutationOutcome::Removed => format!("Removed skill '{}'.", receipt.name),
+        SkillMutationOutcome::Trusted => format!(
+            "Marked skill '{}' as trusted. The .trusted marker is advisory and digest-bound; it records your review intent but does not sandbox or auto-authorize scripts.",
+            receipt.name
+        ),
+        SkillMutationOutcome::Imported => format!(
+            "Imported skill '{}'.\nLocation: {}",
+            receipt.name, receipt.safe_target_path
+        ),
+        SkillMutationOutcome::AlreadyPresent => format!(
+            "Skill '{}' is already present at {} (exact duplicate).",
+            receipt.name, receipt.safe_target_path
+        ),
+        SkillMutationOutcome::NeedsApproval(host) => needs_approval_message(host),
+        SkillMutationOutcome::NetworkDenied(host) => network_denied_message(host),
+    }
+}
+
+/// Parse an optional `--project` / `--global` scope prefix (baseline
+/// `parse_scope_args`, portable scope enum).
+fn parse_scope_args(args: &str) -> Result<(Option<SkillTargetScope>, &str), String> {
+    let mut scope = None;
+    let mut rest = args.trim();
+    loop {
+        if let Some(next) = rest.strip_prefix("--project") {
+            if scope.is_some() {
+                return Err("specify at most one of --project / --global".into());
+            }
+            scope = Some(SkillTargetScope::Project);
+            rest = next.trim_start();
+            continue;
+        }
+        if let Some(next) = rest.strip_prefix("--global") {
+            if scope.is_some() {
+                return Err("specify at most one of --project / --global".into());
+            }
+            scope = Some(SkillTargetScope::Global);
+            rest = next.trim_start();
+            continue;
+        }
+        break;
+    }
+    Ok((scope, rest.trim()))
+}
+
+// ---------------------------------------------------------------------------
+// /skills — portable contextual dispatch
+// ---------------------------------------------------------------------------
+
+pub(in crate::commands) const SKILLS_INFO: crate::commands::traits::CommandInfo =
+    crate::commands::traits::CommandInfo {
+        name: "skills",
+        aliases: &["jinengliebiao"],
+        usage: "/skills [--remote|sync|inspect|suggest <task>|<prefix>]  (bare opens manager)",
+        description_id: crate::localization::MessageId::CmdSkillsDescription,
+    };
+
+pub(in crate::commands) struct SkillsCmd;
+
+impl crate::commands::traits::RegisterCommand for SkillsCmd {
+    fn info() -> &'static crate::commands::traits::CommandInfo {
+        &SKILLS_INFO
+    }
+
+    fn execute(
+        app: &mut crate::tui::app::App,
+        arg: Option<&str>,
+    ) -> crate::commands::CommandResult {
+        // Transitional shell (FEAT-022 Phase 4): build the envelope and
+        // delegate to the contextual dispatch. Phase 6 replaces this with the
+        // contract bridge (`ContextualCommand::from_contract`).
+        let mut bundle = app.command_contexts();
+        skills_contextual(bundle.contexts(), arg)
+    }
+}
+
+/// Contextual `/skills` dispatch (FEAT-022 D4): exactly the skill-group facet.
+fn skills_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
+    let mut parts = contexts.into_parts();
+    let Some(skill_group) = parts.skill_group.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: skill_group");
+    };
+    list_skills(skill_group, arg)
+}
+
+/// Portable `/skills` dispatch — byte-identical to the baseline handler.
+fn list_skills(group: &mut dyn CommandSkillGroupContext, arg: Option<&str>) -> CommandResult {
     let mut prefix: Option<String> = None;
     if let Some(arg) = arg {
         let trimmed = arg.trim();
         if trimmed == "--remote" || trimmed == "remote" {
-            return list_remote_skills(app);
+            return list_remote_skills(group);
         }
         if trimmed == "sync" || trimmed == "--sync" {
-            return sync_skills(app);
+            return sync_skills(group);
         }
         if trimmed == "inspect" || trimmed == "--inspect" {
-            return inspect_skills(app);
+            return inspect_skills(group);
         }
         if trimmed == "suggest" || trimmed == "recommend" {
             return CommandResult::error("Usage: /skills suggest <task>");
@@ -176,7 +295,7 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
             .strip_prefix("suggest ")
             .or_else(|| trimmed.strip_prefix("recommend "))
         {
-            return suggest_remote_skills(app, task);
+            return suggest_remote_skills(group, task);
         }
         if !trimmed.is_empty() {
             // Anything else is treated as a name-prefix filter (#1318).
@@ -195,11 +314,12 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
         // Bare `/skills` opens the unified manager (owned-only, zero network).
         return CommandResult::action(AppAction::OpenSkillsManager);
     }
-    let skills_dir = app.skills_dir.clone();
-    let registry = discover_visible_skills(app);
-    let warnings = render_skill_warnings(&registry);
 
-    if registry.is_empty() {
+    let projection = group.skill_registry_projection();
+    let warnings = render_skill_warnings(&projection.warnings);
+    let skills_dir = projection.skills_dir.clone();
+
+    if projection.entries.is_empty() {
         let msg = format!(
             "No skills found.\n\n\
              Skills location: {}\n\n\
@@ -211,20 +331,19 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
              description: What this skill does\n  \
              ---\n\n  \
              <instructions here>{warnings}",
-            skills_dir.display(),
-            skills_dir.display()
+            skills_dir, skills_dir
         );
         return CommandResult::message(msg);
     }
 
-    let filtered: Vec<&crate::skills::Skill> = if let Some(p) = prefix.as_deref() {
-        registry
-            .list()
+    let filtered: Vec<&SkillEntry> = if let Some(p) = prefix.as_deref() {
+        projection
+            .entries
             .iter()
             .filter(|s| s.name.to_ascii_lowercase().starts_with(p))
             .collect()
     } else {
-        registry.list().iter().collect()
+        projection.entries.iter().collect()
     };
 
     if filtered.is_empty() {
@@ -234,7 +353,7 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
         let p = prefix.as_deref().unwrap_or("");
         return CommandResult::message(format!(
             "No skills match prefix `{p}` (out of {} available).\n\nRun /skills to see them all.{warnings}",
-            registry.len()
+            projection.total
         ));
     }
 
@@ -242,10 +361,10 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
         format!(
             "Available skills matching `{p}` ({} of {}):\n",
             filtered.len(),
-            registry.len()
+            projection.total
         )
     } else {
-        format!("Available skills ({}):\n", registry.len())
+        format!("Available skills ({}):\n", projection.total)
     };
     output.push_str("─────────────────────────────\n");
 
@@ -259,13 +378,11 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
         }
     } else {
         // Unfiltered view: keep user-created skills prominent, then split the
-        // shipped catalog into its two curated product tiers.
-        let (user_skills, bundled_skills): (
-            Vec<&&crate::skills::Skill>,
-            Vec<&&crate::skills::Skill>,
-        ) = filtered
-            .iter()
-            .partition(|s| !crate::skills::is_bundled_skill_name(&s.name));
+        // shipped catalog into its two curated product tiers. The tier
+        // classification is resolved host-side into `bundled_tier` so the
+        // canonical bundle-name list is never duplicated here.
+        let (user_skills, bundled_skills): (Vec<&SkillEntry>, Vec<&SkillEntry>) =
+            filtered.iter().partition(|s| s.bundled_tier.is_none());
 
         if !user_skills.is_empty() {
             let _ = writeln!(output, "Your skills ({}):", user_skills.len());
@@ -278,15 +395,12 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
         }
 
         if !bundled_skills.is_empty() {
-            use crate::skills::{BundledSkillTier, bundled_skill_tier};
-
-            let (core, tooling): (Vec<&&crate::skills::Skill>, Vec<&&crate::skills::Skill>) =
-                bundled_skills.into_iter().partition(|skill| {
-                    bundled_skill_tier(&skill.name) == Some(BundledSkillTier::CoreAgentic)
-                });
+            let (core, tooling): (Vec<&SkillEntry>, Vec<&SkillEntry>) = bundled_skills
+                .into_iter()
+                .partition(|skill| skill.bundled_tier == Some(SkillBundledTier::CoreAgentic));
             for (group_idx, (tier, skills)) in [
-                (BundledSkillTier::CoreAgentic, core),
-                (BundledSkillTier::FormatTooling, tooling),
+                (SkillBundledTier::CoreAgentic, core),
+                (SkillBundledTier::FormatTooling, tooling),
             ]
             .into_iter()
             .enumerate()
@@ -319,404 +433,73 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
     let _ = write!(
         output,
         "\nUse /skill <name> to run a skill\nSkills location: {}{}",
-        skills_dir.display(),
-        warnings
+        skills_dir, warnings
     );
 
     CommandResult::message(output)
 }
 
-/// Run a specific skill — activates skill for next user message, or
-/// dispatches a sub-command (`install`, `update`, `uninstall`, `trust`).
-/// Try to run a skill by exact name (used for unified slash-command namespace, #435).
-/// Returns None when no skill with that name exists, so the caller can try other sources.
-pub(in crate::commands) fn run_skill_by_name(
-    app: &mut App,
-    name: &str,
-    arg: Option<&str>,
-) -> Option<CommandResult> {
-    let registry = discover_visible_skills(app);
-    let lookup_name = if name == "new" { "skill-creator" } else { name };
-    if registry.get(lookup_name).is_some() {
-        Some(activate_skill_with_task(app, name, arg))
+/// `/skills inspect` — byte-identical discovery diagnostics.
+fn inspect_skills(group: &mut dyn CommandSkillGroupContext) -> CommandResult {
+    let projection = group.skill_registry_projection();
+    let warnings = render_skill_warnings(&projection.warnings);
+
+    let mut output = String::from("Skills Inspect\n");
+    output.push_str("─────────────────────────────\n");
+    let _ = writeln!(output, "Discovery mode: {}", projection.mode_label);
+    let _ = writeln!(output, "Workspace: {}", projection.workspace);
+    let _ = writeln!(output, "Configured skills dir: {}", projection.skills_dir);
+
+    if projection.dirs.is_empty() {
+        output.push_str("\nSearched directories: none found\n");
     } else {
-        None
-    }
-}
-
-fn run_skill(app: &mut App, name: Option<&str>) -> CommandResult {
-    let raw = match name {
-        Some(n) => n.trim(),
-        None => {
-            return CommandResult::error(
-                "Usage: /skill <name>\n\nSubcommands:\n  /skill install [--project|--global] <github:owner/repo|https://…|<registry-name>>\n  /skill update [--project|--global] <name>\n  /skill uninstall [--project|--global] <name>\n  /skill trust [--project|--global] <name>",
-            );
+        let _ = writeln!(
+            output,
+            "\nSearched directories ({}):",
+            projection.dirs.len()
+        );
+        for (idx, dir) in projection.dirs.iter().enumerate() {
+            let _ = writeln!(output, "  {}. {}", idx + 1, dir);
         }
-    };
-
-    // Sub-command dispatch happens before the activation path so users can't
-    // accidentally activate a skill literally named "install".
-    let mut iter = raw.splitn(2, char::is_whitespace);
-    let head = iter.next().unwrap_or("").trim();
-    let rest = iter.next().unwrap_or("").trim();
-    match head {
-        "install" => return install_skill(app, rest),
-        "update" => return update_skill(app, rest),
-        "uninstall" => return uninstall_skill(app, rest),
-        "trust" => return trust_skill(app, rest),
-        _ => {}
     }
 
-    let task = (!rest.is_empty()).then_some(rest);
-    activate_skill_with_task(app, head, task)
-}
-
-/// Parse optional `--project` / `--global` scope prefix from a skill subcommand.
-fn parse_scope_args(
-    args: &str,
-) -> Result<(Option<crate::skills::mutation::SkillTargetScope>, &str), String> {
-    use crate::skills::mutation::SkillTargetScope;
-    let mut scope = None;
-    let mut rest = args.trim();
-    loop {
-        if let Some(next) = rest.strip_prefix("--project") {
-            if scope.is_some() {
-                return Err("specify at most one of --project / --global".into());
+    let _ = writeln!(output, "\nAvailable skills ({}):", projection.total);
+    if projection.entries.is_empty() {
+        output.push_str("  (none)\n");
+    } else {
+        for skill in &projection.entries {
+            if skill.description.trim().is_empty() {
+                let _ = writeln!(output, "  - {}", skill.name);
+            } else {
+                let _ = writeln!(output, "  - {} — {}", skill.name, skill.description);
             }
-            scope = Some(SkillTargetScope::Project);
-            rest = next.trim_start();
-            continue;
-        }
-        if let Some(next) = rest.strip_prefix("--global") {
-            if scope.is_some() {
-                return Err("specify at most one of --project / --global".into());
-            }
-            scope = Some(SkillTargetScope::Global);
-            rest = next.trim_start();
-            continue;
-        }
-        break;
-    }
-    Ok((scope, rest.trim()))
-}
-
-fn format_mutation_receipt(receipt: &crate::skills::mutation::SkillMutationReceipt) -> String {
-    use crate::skills::mutation::SkillMutationOutcome;
-    match &receipt.outcome {
-        SkillMutationOutcome::Installed => format!(
-            "Installed skill '{}'.\nLocation: {}\n\nManage skills with /skills.",
-            receipt.name, receipt.safe_target_path
-        ),
-        SkillMutationOutcome::Updated => format!(
-            "Skill '{}' updated.\nLocation: {}",
-            receipt.name, receipt.safe_target_path
-        ),
-        SkillMutationOutcome::NoChange => {
-            format!("Skill '{}': no upstream change.", receipt.name)
-        }
-        SkillMutationOutcome::Removed => format!("Removed skill '{}'.", receipt.name),
-        SkillMutationOutcome::Trusted => format!(
-            "Marked skill '{}' as trusted. The .trusted marker is advisory and digest-bound; it records your review intent but does not sandbox or auto-authorize scripts.",
-            receipt.name
-        ),
-        SkillMutationOutcome::Imported => format!(
-            "Imported skill '{}'.\nLocation: {}",
-            receipt.name, receipt.safe_target_path
-        ),
-        SkillMutationOutcome::AlreadyPresent => format!(
-            "Skill '{}' is already present at {} (exact duplicate).",
-            receipt.name, receipt.safe_target_path
-        ),
-        SkillMutationOutcome::NeedsApproval(host) => needs_approval_message(host),
-        SkillMutationOutcome::NetworkDenied(host) => network_denied_message(host),
-    }
-}
-
-/// Activate a skill and, when the invocation includes a task, send that task
-/// immediately. `AppAction::SendMessage` is converted into a `QueuedMessage`
-/// by the UI, where `app.active_skill` is consumed and attached to this turn.
-fn activate_skill_with_task(app: &mut App, name: &str, task: Option<&str>) -> CommandResult {
-    let mut result = activate_skill(app, name);
-    if !result.is_error
-        && let Some(task) = task.map(str::trim).filter(|task| !task.is_empty())
-    {
-        result.action = Some(AppAction::SendMessage(task.to_string()));
-    }
-    result
-}
-
-fn activate_skill(app: &mut App, name: &str) -> CommandResult {
-    // `/skill new` is a friendly alias for `/skill skill-creator`.
-    let name = if name == "new" { "skill-creator" } else { name };
-
-    let registry = discover_visible_skills(app);
-
-    if let Some(skill) = registry.get(name) {
-        let plugin_provenance = match &skill.source {
-            SkillSource::Native => None,
-            SkillSource::Plugin { authority, .. } => {
-                if let Err(reason) = crate::plugins::registry::verify_plugin_component_authority(
-                    authority,
-                    crate::plugins::activation::PluginActivationCapability::Skills,
-                ) {
-                    return CommandResult::error(format!(
-                        "Plugin skill '{}' is no longer active: {reason}",
-                        skill.name
-                    ));
+            let _ = writeln!(output, "    source: {}", skill_source_label(&skill.source));
+            if matches!(skill.source, SkillSourceKind::Native) {
+                if let Some(path) = &skill.path {
+                    let _ = writeln!(output, "    path: {}", path);
                 }
-                Some(authority.as_ref().clone())
-            }
-        };
-        let instruction = format!(
-            "You are now using a skill. Follow these instructions:\n\n# Skill: {}\n\n{}\n\n---\n\nNow respond to the user's request following the above skill instructions.",
-            skill.name, skill.body
-        );
-
-        app.add_message(HistoryCell::System {
-            content: format!("Activated skill: {}\n\n{}", skill.name, skill.description),
-        });
-
-        app.active_skill = Some(instruction);
-        app.active_skill_provenance = plugin_provenance;
-
-        CommandResult::message(format!(
-            "Skill '{}' activated.\n\nDescription: {}\n\nType your request and the skill instructions will be applied.",
-            skill.name, skill.description
-        ))
-    } else {
-        let available: Vec<String> = registry.list().iter().map(|s| s.name.clone()).collect();
-        let warnings = render_skill_warnings(&registry);
-
-        if available.is_empty() {
-            CommandResult::error(format!(
-                "Skill '{name}' not found. No skills installed.\n\nUse /skills to see how to add skills.{warnings}"
-            ))
-        } else {
-            CommandResult::error(format!(
-                "Skill '{}' not found.\n\nAvailable skills: {}{}",
-                name,
-                available.join(", "),
-                warnings
-            ))
-        }
-    }
-}
-
-// ─── /skill install ────────────────────────────────────────────────────────
-
-fn install_skill(app: &mut App, args: &str) -> CommandResult {
-    use crate::skills::mutation::{MutationContext, SkillMutationRequest, SkillTargetScope};
-
-    let (scope, spec) = match parse_scope_args(args) {
-        Ok(v) => v,
-        Err(err) => return CommandResult::error(err),
-    };
-    if spec.is_empty() {
-        return CommandResult::error(
-            "Usage: /skill install [--project|--global] <github:owner/repo|https://…|<registry-name>>",
-        );
-    }
-    let source = match InstallSource::parse(spec) {
-        Ok(s) => s,
-        Err(err) => return CommandResult::error(format!("Invalid install source: {err}")),
-    };
-    // Legacy no-scope install maps to the CodeWhale global owned root.
-    let target = scope.unwrap_or(SkillTargetScope::Global);
-    let workspace = app.workspace.clone();
-    let home = crate::config::effective_home_dir();
-    let (network, max_size, registry_url) = installer_settings(app);
-
-    let outcome = run_async(async move {
-        let ctx = MutationContext {
-            workspace: &workspace,
-            home: home.as_deref(),
-            configured_skills_dir: None,
-            network: &network,
-            max_size,
-            registry_url: &registry_url,
-        };
-        crate::skills::mutation::execute(
-            SkillMutationRequest::InstallRemote { source, target },
-            &ctx,
-        )
-        .await
-    });
-
-    match outcome {
-        Ok(receipt) => {
-            if matches!(
-                receipt.outcome,
-                crate::skills::mutation::SkillMutationOutcome::Installed
-            ) {
-                app.refresh_skill_cache();
-            }
-            let message = format_mutation_receipt(&receipt);
-            if matches!(
-                receipt.outcome,
-                crate::skills::mutation::SkillMutationOutcome::NeedsApproval(_)
-                    | crate::skills::mutation::SkillMutationOutcome::NetworkDenied(_)
-            ) {
-                CommandResult::error(message)
-            } else {
-                CommandResult::message(message)
             }
         }
-        Err(err) => CommandResult::error(format!("Install failed: {err:#}")),
     }
+
+    output.push_str(&warnings);
+    CommandResult::message(output)
 }
 
-// ─── /skill update ─────────────────────────────────────────────────────────
-
-fn update_skill(app: &mut App, args: &str) -> CommandResult {
-    use crate::skills::mutation::{MutationContext, SkillMutationRequest};
-
-    let (scope, name) = match parse_scope_args(args) {
-        Ok(v) => v,
-        Err(err) => return CommandResult::error(err),
-    };
-    if name.is_empty() {
-        return CommandResult::error("Usage: /skill update [--project|--global] <name>");
-    }
-    let workspace = app.workspace.clone();
-    let home = crate::config::effective_home_dir();
-    let (network, max_size, registry_url) = installer_settings(app);
-    let owned_name = name.to_string();
-
-    let outcome = run_async(async move {
-        let ctx = MutationContext {
-            workspace: &workspace,
-            home: home.as_deref(),
-            configured_skills_dir: None,
-            network: &network,
-            max_size,
-            registry_url: &registry_url,
-        };
-        crate::skills::mutation::execute(
-            SkillMutationRequest::UpdateByName {
-                name: owned_name,
-                scope,
-                expected_digest: None,
-            },
-            &ctx,
-        )
-        .await
-    });
-
-    match outcome {
-        Ok(receipt) => {
-            if matches!(
-                receipt.outcome,
-                crate::skills::mutation::SkillMutationOutcome::Updated
-            ) {
-                app.refresh_skill_cache();
-            }
-            let message = format_mutation_receipt(&receipt);
-            if matches!(
-                receipt.outcome,
-                crate::skills::mutation::SkillMutationOutcome::NeedsApproval(_)
-                    | crate::skills::mutation::SkillMutationOutcome::NetworkDenied(_)
-            ) {
-                CommandResult::error(message)
-            } else {
-                CommandResult::message(message)
-            }
-        }
-        Err(err) => CommandResult::error(format!("Update failed: {err:#}")),
-    }
-}
-
-// ─── /skill uninstall ──────────────────────────────────────────────────────
-
-fn uninstall_skill(app: &mut App, args: &str) -> CommandResult {
-    use crate::skills::mutation::{MutationContext, SkillMutationRequest};
-
-    let (scope, name) = match parse_scope_args(args) {
-        Ok(v) => v,
-        Err(err) => return CommandResult::error(err),
-    };
-    if name.is_empty() {
-        return CommandResult::error("Usage: /skill uninstall [--project|--global] <name>");
-    }
-    let home = crate::config::effective_home_dir();
-    let (network, max_size, registry_url) = installer_settings(app);
-    let ctx = MutationContext {
-        workspace: &app.workspace,
-        home: home.as_deref(),
-        configured_skills_dir: None,
-        network: &network,
-        max_size,
-        registry_url: &registry_url,
-    };
-
-    match crate::skills::mutation::execute_sync(
-        SkillMutationRequest::RemoveByName {
-            name: name.to_string(),
-            scope,
-            expected_digest: None,
-        },
-        &ctx,
-    ) {
-        Ok(receipt) => {
-            app.refresh_skill_cache();
-            CommandResult::message(format_mutation_receipt(&receipt))
-        }
-        Err(err) => CommandResult::error(format!("Uninstall failed: {err:#}")),
-    }
-}
-
-// ─── /skill trust ──────────────────────────────────────────────────────────
-
-fn trust_skill(app: &mut App, args: &str) -> CommandResult {
-    use crate::skills::mutation::{MutationContext, SkillMutationRequest};
-
-    let (scope, name) = match parse_scope_args(args) {
-        Ok(v) => v,
-        Err(err) => return CommandResult::error(err),
-    };
-    if name.is_empty() {
-        return CommandResult::error("Usage: /skill trust [--project|--global] <name>");
-    }
-    let home = crate::config::effective_home_dir();
-    let (network, max_size, registry_url) = installer_settings(app);
-    let ctx = MutationContext {
-        workspace: &app.workspace,
-        home: home.as_deref(),
-        configured_skills_dir: None,
-        network: &network,
-        max_size,
-        registry_url: &registry_url,
-    };
-
-    match crate::skills::mutation::execute_sync(
-        SkillMutationRequest::TrustByName {
-            name: name.to_string(),
-            scope,
-            expected_digest: None,
-        },
-        &ctx,
-    ) {
-        Ok(receipt) => CommandResult::message(format_mutation_receipt(&receipt)),
-        Err(err) => CommandResult::error(format!("Trust failed: {err:#}")),
-    }
-}
-
-// ─── /skills --remote ──────────────────────────────────────────────────────
-
-/// List skills available in the configured curated registry.
-fn list_remote_skills(app: &mut App) -> CommandResult {
-    let (network, _max_size, registry_url) = installer_settings(app);
-    let registry = run_async(async move { install::fetch_registry(&network, &registry_url).await });
-    match registry {
-        Ok(RegistryFetchResult::Loaded(doc)) => {
-            if doc.skills.is_empty() {
+/// `/skills --remote` — curated registry listing.
+fn list_remote_skills(group: &mut dyn CommandSkillGroupContext) -> CommandResult {
+    match group.fetch_remote_registry() {
+        Ok(RemoteRegistryOutcome::Loaded { entries }) => {
+            if entries.is_empty() {
                 return CommandResult::message("Registry is empty.");
             }
-            let mut out = format!("Available remote skills ({}):\n", doc.skills.len());
+            let mut out = format!("Available remote skills ({}):\n", entries.len());
             out.push_str("─────────────────────────────\n");
-            for (name, entry) in &doc.skills {
+            for entry in &entries {
                 let _ = writeln!(
                     out,
-                    "  {name} — {} (source: {})",
+                    "  {} — {} (source: {})",
+                    entry.name,
                     entry.description.clone().unwrap_or_default(),
                     entry.source
                 );
@@ -724,32 +507,25 @@ fn list_remote_skills(app: &mut App) -> CommandResult {
             let _ = write!(out, "\nInstall with: /skill install <name>");
             CommandResult::message(out)
         }
-        Ok(RegistryFetchResult::NeedsApproval(host)) => {
+        Ok(RemoteRegistryOutcome::NeedsApproval(host)) => {
             CommandResult::error(needs_approval_message(&host))
         }
-        Ok(RegistryFetchResult::Denied(host)) => {
+        Ok(RemoteRegistryOutcome::Denied(host)) => {
             CommandResult::error(network_denied_message(&host))
         }
-        Err(err) => CommandResult::error(format_registry_error("Failed to fetch registry", &err)),
+        Err(err) => CommandResult::error(err),
     }
 }
 
-// ─── /skills suggest ──────────────────────────────────────────────────────
-
-/// Recommend a small set of remote skills for a task. This performs the same
-/// network-policy-gated registry read as `/skills --remote`, but it cannot
-/// download, trust, enable, or activate a skill.
-fn suggest_remote_skills(app: &mut App, task: &str) -> CommandResult {
+/// `/skills suggest <task>` — ranked remote recommendations.
+fn suggest_remote_skills(group: &mut dyn CommandSkillGroupContext, task: &str) -> CommandResult {
     let task = task.trim();
     if task.chars().count() < 3 {
         return CommandResult::error("Usage: /skills suggest <task of at least 3 characters>");
     }
 
-    let (network, _max_size, registry_url) = installer_settings(app);
-    let registry = run_async(async move { install::fetch_registry(&network, &registry_url).await });
-    match registry {
-        Ok(RegistryFetchResult::Loaded(doc)) => {
-            let recommendations = crate::skills::recommend::recommend_remote_skills(task, &doc, 3);
+    match group.recommend_skills(task) {
+        Ok(recommendations) => {
             if recommendations.is_empty() {
                 return CommandResult::message(format!(
                     "No curated remote skills matched `{task}`.\n\nBrowse the catalog with /skills --remote. Nothing was installed, trusted, or enabled."
@@ -758,9 +534,8 @@ fn suggest_remote_skills(app: &mut App, task: &str) -> CommandResult {
 
             let mut out = format!("Suggested remote skills for `{task}`:\n");
             out.push_str("─────────────────────────────\n");
-            for recommendation in recommendations {
+            for recommendation in &recommendations {
                 let description = recommendation
-                    .entry
                     .description
                     .as_deref()
                     .filter(|description| !description.trim().is_empty())
@@ -776,63 +551,37 @@ fn suggest_remote_skills(app: &mut App, task: &str) -> CommandResult {
             out.push_str("\nNothing was installed, trusted, or enabled.");
             CommandResult::message(out)
         }
-        Ok(RegistryFetchResult::NeedsApproval(host)) => {
-            CommandResult::error(needs_approval_message(&host))
-        }
-        Ok(RegistryFetchResult::Denied(host)) => {
-            CommandResult::error(network_denied_message(&host))
-        }
-        Err(err) => CommandResult::error(format_registry_error("Failed to fetch registry", &err)),
+        Err(err) => CommandResult::error(err),
     }
 }
 
-// ─── /skills sync ──────────────────────────────────────────────────────────
-
-/// Fetch the remote registry index and download every listed skill into the
-/// local cache (`~/.codewhale/cache/skills/<name>/`).
-///
-/// For each skill the sync checks the cached ETag / SHA-256 before
-/// downloading so unchanged skills are skipped in O(1) network round-trips.
-fn sync_skills(app: &mut App) -> CommandResult {
-    let (network, max_size, registry_url) = installer_settings(app);
-    let cache_dir = install::default_cache_skills_dir();
-
-    let result = run_async(async move {
-        install::sync_registry(&network, &registry_url, &cache_dir, max_size).await
-    });
-
-    match result {
-        Ok(SyncResult::RegistryDenied(host)) => CommandResult::error(network_denied_message(&host)),
-        Ok(SyncResult::RegistryNeedsApproval(host)) => {
-            CommandResult::error(needs_approval_message(&host))
-        }
-        Ok(SyncResult::Done { outcomes }) => {
-            let total = outcomes.len();
-            let mut downloaded = 0usize;
-            let mut fresh = 0usize;
-            let mut failed = 0usize;
+/// `/skills sync` — registry sync report.
+fn sync_skills(group: &mut dyn CommandSkillGroupContext) -> CommandResult {
+    match group.sync_registry() {
+        Ok(SkillSyncOutcome::Done {
+            total,
+            downloaded,
+            fresh,
+            failed,
+            entries,
+        }) => {
             let mut out = String::from("Registry sync complete.\n\n");
 
-            for outcome in &outcomes {
+            for outcome in &entries {
                 match outcome {
-                    SkillSyncOutcome::Downloaded { name, path } => {
-                        downloaded += 1;
-                        let _ = writeln!(out, "  [+] {name} — downloaded to {}", path.display());
+                    SkillSyncEntry::Downloaded { name, path } => {
+                        let _ = writeln!(out, "  [+] {name} — downloaded to {path}");
                     }
-                    SkillSyncOutcome::Fresh { name } => {
-                        fresh += 1;
+                    SkillSyncEntry::Fresh { name } => {
                         let _ = writeln!(out, "  [=] {name} — already up to date");
                     }
-                    SkillSyncOutcome::Failed { name, reason } => {
-                        failed += 1;
+                    SkillSyncEntry::Failed { name, reason } => {
                         let _ = writeln!(out, "  [!] {name} — failed: {reason}");
                     }
-                    SkillSyncOutcome::Denied { name, host } => {
-                        failed += 1;
+                    SkillSyncEntry::Denied { name, host } => {
                         let _ = writeln!(out, "  [!] {name} — network denied ({host})");
                     }
-                    SkillSyncOutcome::NeedsApproval { name, host } => {
-                        failed += 1;
+                    SkillSyncEntry::NeedsApproval { name, host } => {
                         let _ = writeln!(
                             out,
                             "  [?] {name} — needs approval for {host} (run `/network allow {host}` then retry)"
@@ -848,138 +597,19 @@ fn sync_skills(app: &mut App) -> CommandResult {
 
             CommandResult::message(out)
         }
-        Err(err) => CommandResult::error(format_registry_error("Sync failed", &err)),
+        Ok(SkillSyncOutcome::RegistryNeedsApproval(host)) => {
+            CommandResult::error(needs_approval_message(&host))
+        }
+        Ok(SkillSyncOutcome::RegistryDenied(host)) => {
+            CommandResult::error(network_denied_message(&host))
+        }
+        Err(err) => CommandResult::error(err),
     }
 }
 
-// ─── helpers ───────────────────────────────────────────────────────────────
-
-/// Read the active config knobs for the installer.
-///
-/// We load `Config::load` on demand because [`App`] does not carry a `Config`
-/// field — and loading is cheap (small TOML file) compared to the network
-/// round-trip the install/update operation will incur next. If the config
-/// fails to parse, we fall back to defaults so the user still gets a
-/// network-gated install rather than a silent crash.
-fn installer_settings(_app: &App) -> (NetworkPolicy, u64, String) {
-    let cfg = crate::config::Config::load(None, None).unwrap_or_default();
-    let network = cfg
-        .network
-        .clone()
-        .map(|policy| policy.into_runtime())
-        .unwrap_or_default();
-    let skills_cfg = cfg.skills.as_ref();
-    let max_size = skills_cfg
-        .and_then(|s| s.max_install_size_bytes)
-        .unwrap_or(DEFAULT_MAX_SIZE_BYTES);
-    let registry_url = skills_cfg
-        .and_then(|s| s.registry_url.clone())
-        .unwrap_or_else(|| DEFAULT_REGISTRY_URL.to_string());
-    (network, max_size, registry_url)
-}
-
-fn run_async<F, T>(future: F) -> T
-where
-    F: std::future::Future<Output = T>,
-{
-    // We're on the TUI's thread, which is part of the multi-threaded runtime.
-    // `block_in_place` + `Handle::current().block_on` bridges sync
-    // slash-command handlers back into the async ecosystem.
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
-}
-
-fn needs_approval_message(host: &str) -> String {
-    format!(
-        "Network policy requires approval for {host}.\n\
-         Add it to your allow list with `/network allow {host}` (or set [network].default = \"allow\" in ~/.codewhale/config.toml), then retry."
-    )
-}
-
-fn network_denied_message(host: &str) -> String {
-    format!(
-        "Network policy denied access to {host}.\n\
-         Remove the deny entry from ~/.codewhale/config.toml under [network] or contact your administrator."
-    )
-}
-
-/// Inspect an anyhow chain and surface a one-line hint pointing at the most
-/// common cause of a registry fetch failure (DNS, refused, TLS, HTTP status,
-/// timeout). The chain itself is still rendered with `{err:#}`; this hint is
-/// appended below it so users on `/skills --remote` and `/skills sync` get an
-/// actionable next step instead of an opaque reqwest error.
-fn registry_fetch_error_hint(err: &anyhow::Error) -> Option<&'static str> {
-    let msg = format!("{err:#}").to_lowercase();
-    if msg.contains("dns")
-        || msg.contains("name resolution")
-        || msg.contains("getaddrinfo")
-        || msg.contains("nodename nor servname")
-    {
-        Some(
-            "Hint: DNS lookup failed. Check internet/DNS connectivity, or override the registry URL in [skills] of ~/.codewhale/config.toml.",
-        )
-    } else if msg.contains("connection refused")
-        || msg.contains("connection reset")
-        || msg.contains("connection aborted")
-    {
-        Some(
-            "Hint: connection refused/reset. The registry host may be unreachable from this network (corporate proxy, firewall, offline).",
-        )
-    } else if msg.contains("tls")
-        || msg.contains("certificate")
-        || msg.contains("ssl")
-        || msg.contains("handshake")
-    {
-        Some(
-            "Hint: TLS handshake failed. The system trust store may be missing the registry's CA, or a TLS-intercepting proxy is rewriting the certificate.",
-        )
-    } else if msg.contains(" 404") || msg.contains("not found") {
-        Some(
-            "Hint: registry URL returned 404. Verify the registry URL in [skills] of ~/.codewhale/config.toml.",
-        )
-    } else if msg.contains(" 401") || msg.contains(" 403") || msg.contains("forbidden") {
-        Some(
-            "Hint: registry returned an auth error. The registry may require credentials or have been moved.",
-        )
-    } else if msg.contains(" 429") || msg.contains("rate limit") || msg.contains("too many") {
-        Some("Hint: rate-limited by the registry. Try again in a moment.")
-    } else if msg.contains("timed out") || msg.contains("timeout") {
-        Some("Hint: request timed out. Network may be slow or the registry host may be down.")
-    } else {
-        None
-    }
-}
-
-fn format_registry_error(prefix: &str, err: &anyhow::Error) -> String {
-    let mut out = format!("{prefix}: {err:#}");
-    if let Some(hint) = registry_fetch_error_hint(err) {
-        out.push_str("\n\n");
-        out.push_str(hint);
-    }
-    out
-}
-
-pub(in crate::commands) const SKILLS_INFO: crate::commands::traits::CommandInfo =
-    crate::commands::traits::CommandInfo {
-        name: "skills",
-        aliases: &["jinengliebiao"],
-        usage: "/skills [--remote|sync|inspect|suggest <task>|<prefix>]  (bare opens manager)",
-        description_id: crate::localization::MessageId::CmdSkillsDescription,
-    };
-
-pub(in crate::commands) struct SkillsCmd;
-
-impl crate::commands::traits::RegisterCommand for SkillsCmd {
-    fn info() -> &'static crate::commands::traits::CommandInfo {
-        &SKILLS_INFO
-    }
-
-    fn execute(
-        app: &mut crate::tui::app::App,
-        arg: Option<&str>,
-    ) -> crate::commands::CommandResult {
-        list_skills(app, arg)
-    }
-}
+// ---------------------------------------------------------------------------
+// /skill — portable contextual dispatch
+// ---------------------------------------------------------------------------
 
 pub(in crate::commands) const SKILL_INFO: crate::commands::traits::CommandInfo =
     crate::commands::traits::CommandInfo {
@@ -1000,674 +630,779 @@ impl crate::commands::traits::RegisterCommand for SkillCmd {
         app: &mut crate::tui::app::App,
         arg: Option<&str>,
     ) -> crate::commands::CommandResult {
-        run_skill(app, arg)
+        // Transitional shell (FEAT-022 Phase 4); replaced by the contract
+        // bridge in Phase 6.
+        let mut bundle = app.command_contexts();
+        skill_contextual(bundle.contexts(), arg)
+    }
+}
+
+/// Contextual `/skill` dispatch (FEAT-022 D4): exactly the skill-group facet
+/// plus the shared SKILLS facet (active-skill reads + cache refresh; D2).
+fn skill_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
+    let mut parts = contexts.into_parts();
+    let Some(skill_group) = parts.skill_group.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: skill_group");
+    };
+    let Some(skills) = parts.skills.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: skills");
+    };
+    run_skill(skill_group, skills, arg)
+}
+
+/// Portable `/skill` dispatch — byte-identical to the baseline handler.
+fn run_skill(
+    group: &mut dyn CommandSkillGroupContext,
+    skills: &mut dyn CommandSkillsContext,
+    arg: Option<&str>,
+) -> CommandResult {
+    let raw = match arg {
+        Some(n) => n.trim(),
+        None => {
+            return CommandResult::error(
+                "Usage: /skill <name>\n\nSubcommands:\n  /skill install [--project|--global] <github:owner/repo|https://…|<registry-name>>\n  /skill update [--project|--global] <name>\n  /skill uninstall [--project|--global] <name>\n  /skill trust [--project|--global] <name>",
+            );
+        }
+    };
+
+    // Sub-command dispatch happens before the activation path so users can't
+    // accidentally activate a skill literally named "install".
+    let mut iter = raw.splitn(2, char::is_whitespace);
+    let head = iter.next().unwrap_or("").trim();
+    let rest = iter.next().unwrap_or("").trim();
+    match head {
+        "install" => return install_skill(group, skills, rest),
+        "update" => return update_skill(group, skills, rest),
+        "uninstall" => return uninstall_skill(group, skills, rest),
+        "trust" => return trust_skill(group, rest),
+        _ => {}
+    }
+
+    let task = (!rest.is_empty()).then_some(rest);
+    activate_skill_portable(group, head, task)
+}
+
+/// Portable activation — the host performs lookup, authority verification, and
+/// side effects; the handler composes the byte-identical messages/actions.
+fn activate_skill_portable(
+    group: &mut dyn CommandSkillGroupContext,
+    name: &str,
+    task: Option<&str>,
+) -> CommandResult {
+    // `/skill new` is a friendly alias for `/skill skill-creator`; the alias is
+    // resolved here (parsing stays portable) so the not-found message uses the
+    // mapped name exactly like the baseline.
+    let name = if name == "new" { "skill-creator" } else { name };
+
+    match group.activate_skill(name) {
+        Ok(outcome) => {
+            let mut result = CommandResult::message(format!(
+                "Skill '{}' activated.\n\nDescription: {}\n\nType your request and the skill instructions will be applied.",
+                outcome.name, outcome.description
+            ));
+            if let Some(task) = task.map(str::trim).filter(|task| !task.is_empty()) {
+                result.action = Some(AppAction::SendMessage(task.to_string()));
+            }
+            result
+        }
+        Err(SkillActivationError::NotFound {
+            requested,
+            available,
+            warnings,
+        }) => {
+            let warnings = render_skill_warnings(&warnings);
+            if available.is_empty() {
+                CommandResult::error(format!(
+                    "Skill '{requested}' not found. No skills installed.\n\nUse /skills to see how to add skills.{warnings}"
+                ))
+            } else {
+                CommandResult::error(format!(
+                    "Skill '{}' not found.\n\nAvailable skills: {}{}",
+                    requested,
+                    available.join(", "),
+                    warnings
+                ))
+            }
+        }
+        Err(SkillActivationError::PluginRejected { name, reason }) => CommandResult::error(
+            format!("Plugin skill '{}' is no longer active: {reason}", name),
+        ),
+    }
+}
+
+// ─── /skill install ────────────────────────────────────────────────────────
+
+fn install_skill(
+    group: &mut dyn CommandSkillGroupContext,
+    skills: &mut dyn CommandSkillsContext,
+    args: &str,
+) -> CommandResult {
+    let (scope, spec) = match parse_scope_args(args) {
+        Ok(v) => v,
+        Err(err) => return CommandResult::error(err),
+    };
+    if spec.is_empty() {
+        return CommandResult::error(
+            "Usage: /skill install [--project|--global] <github:owner/repo|https://…|<registry-name>>",
+        );
+    }
+    match group.install_skill(scope, spec) {
+        Ok(receipt) => {
+            // Cache refresh is a D2 shared-SKILLS operation: the host returns
+            // the receipt; the portable handler owns the refresh policy.
+            if matches!(receipt.outcome, SkillMutationOutcome::Installed) {
+                skills.refresh_skill_cache();
+            }
+            let message = format_mutation_receipt(&receipt);
+            if matches!(
+                receipt.outcome,
+                SkillMutationOutcome::NeedsApproval(_) | SkillMutationOutcome::NetworkDenied(_)
+            ) {
+                CommandResult::error(message)
+            } else {
+                CommandResult::message(message)
+            }
+        }
+        Err(err) => CommandResult::error(err),
+    }
+}
+
+// ─── /skill update ─────────────────────────────────────────────────────────
+
+fn update_skill(
+    group: &mut dyn CommandSkillGroupContext,
+    skills: &mut dyn CommandSkillsContext,
+    args: &str,
+) -> CommandResult {
+    let (scope, name) = match parse_scope_args(args) {
+        Ok(v) => v,
+        Err(err) => return CommandResult::error(err),
+    };
+    if name.is_empty() {
+        return CommandResult::error("Usage: /skill update [--project|--global] <name>");
+    }
+    match group.update_skill(scope, name) {
+        Ok(receipt) => {
+            if matches!(receipt.outcome, SkillMutationOutcome::Updated) {
+                skills.refresh_skill_cache();
+            }
+            let message = format_mutation_receipt(&receipt);
+            if matches!(
+                receipt.outcome,
+                SkillMutationOutcome::NeedsApproval(_) | SkillMutationOutcome::NetworkDenied(_)
+            ) {
+                CommandResult::error(message)
+            } else {
+                CommandResult::message(message)
+            }
+        }
+        Err(err) => CommandResult::error(err),
+    }
+}
+
+// ─── /skill uninstall ──────────────────────────────────────────────────────
+
+fn uninstall_skill(
+    group: &mut dyn CommandSkillGroupContext,
+    skills: &mut dyn CommandSkillsContext,
+    args: &str,
+) -> CommandResult {
+    let (scope, name) = match parse_scope_args(args) {
+        Ok(v) => v,
+        Err(err) => return CommandResult::error(err),
+    };
+    if name.is_empty() {
+        return CommandResult::error("Usage: /skill uninstall [--project|--global] <name>");
+    }
+    match group.uninstall_skill(scope, name) {
+        Ok(receipt) => {
+            skills.refresh_skill_cache();
+            CommandResult::message(format_mutation_receipt(&receipt))
+        }
+        Err(err) => CommandResult::error(err),
+    }
+}
+
+// ─── /skill trust ──────────────────────────────────────────────────────────
+
+fn trust_skill(group: &mut dyn CommandSkillGroupContext, args: &str) -> CommandResult {
+    let (scope, name) = match parse_scope_args(args) {
+        Ok(v) => v,
+        Err(err) => return CommandResult::error(err),
+    };
+    if name.is_empty() {
+        return CommandResult::error("Usage: /skill trust [--project|--global] <name>");
+    }
+    match group.trust_skill(scope, name) {
+        Ok(receipt) => CommandResult::message(format_mutation_receipt(&receipt)),
+        Err(err) => CommandResult::error(err),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::tui::app::{App, TuiOptions};
-    use std::ffi::OsString;
-    use tempfile::TempDir;
+    use codewhale_command_contract::facets::{
+        CommandApprovalState, RemoteRegistryOutcome, RemoteSkillEntry, ReviewOutcome,
+        SkillActivationError, SkillActivationOutcome, SkillRecommendation, SkillRegistryProjection,
+        SkillSourceKind, SnapshotEntry,
+    };
 
-    struct IsolatedHome {
-        _lock: crate::test_support::TestEnvLock,
-        home_prev: Option<OsString>,
-        userprofile_prev: Option<OsString>,
-        test_home_prev: Option<std::path::PathBuf>,
+    /// Shared SKILLS fake: read-only getters + cache refresh (D2 surface).
+    struct FakeSkills {
+        refreshed: bool,
+    }
+    impl CommandSkillsContext for FakeSkills {
+        fn active_skill(&self) -> Option<String> {
+            None
+        }
+        fn active_skill_provenance(&self) -> Option<String> {
+            None
+        }
+        fn refresh_skill_cache(&mut self) {
+            self.refreshed = true;
+        }
     }
 
-    impl IsolatedHome {
-        fn new(tmpdir: &TempDir) -> Self {
-            let lock = crate::test_support::lock_test_env();
-            let home = tmpdir.path().join("home");
-            std::fs::create_dir_all(&home).unwrap();
-            let home_prev = std::env::var_os("HOME");
-            let userprofile_prev = std::env::var_os("USERPROFILE");
-            // SAFETY: tests that mutate process env hold the shared test env
-            // mutex for the full lifetime of this guard.
-            unsafe {
-                std::env::set_var("HOME", &home);
-                std::env::set_var("USERPROFILE", &home);
-            }
-            let test_home_prev = TEST_HOME_DIR.with(|slot| slot.replace(Some(home)));
+    /// Deterministic fake skill-group facet over portable values only.
+    struct FakeSkillGroup {
+        projection: SkillRegistryProjection,
+        activation: Result<SkillActivationOutcome, SkillActivationError>,
+        install: Result<SkillMutationReceipt, String>,
+        update: Result<SkillMutationReceipt, String>,
+        uninstall: Result<SkillMutationReceipt, String>,
+        trust: Result<SkillMutationReceipt, String>,
+        remote: Result<RemoteRegistryOutcome, String>,
+        recommend: Result<Vec<SkillRecommendation>, String>,
+        sync: Result<SkillSyncOutcome, String>,
+        review: Result<ReviewOutcome, String>,
+        snapshots: Result<Vec<SnapshotEntry>, String>,
+        restore: Result<(), String>,
+        approval: CommandApprovalState,
+    }
+
+    impl FakeSkillGroup {
+        fn new(entries: Vec<SkillEntry>) -> Self {
+            let total = entries.len();
             Self {
-                _lock: lock,
-                home_prev,
-                userprofile_prev,
-                test_home_prev,
+                projection: SkillRegistryProjection {
+                    workspace: "/ws".to_string(),
+                    skills_dir: "/ws/.codewhale/skills".to_string(),
+                    mode_label: "compatible".to_string(),
+                    dirs: vec!["/ws/.codewhale/skills".to_string()],
+                    entries,
+                    warnings: vec![],
+                    total,
+                },
+                activation: Ok(SkillActivationOutcome {
+                    name: "demo".to_string(),
+                    description: "Demo skill".to_string(),
+                }),
+                install: Ok(SkillMutationReceipt {
+                    name: "demo".to_string(),
+                    safe_target_path: "/ws/.codewhale/skills/demo".to_string(),
+                    outcome: SkillMutationOutcome::Installed,
+                }),
+                update: Ok(SkillMutationReceipt {
+                    name: "demo".to_string(),
+                    safe_target_path: "/ws/.codewhale/skills/demo".to_string(),
+                    outcome: SkillMutationOutcome::Updated,
+                }),
+                uninstall: Ok(SkillMutationReceipt {
+                    name: "demo".to_string(),
+                    safe_target_path: "/ws/.codewhale/skills/demo".to_string(),
+                    outcome: SkillMutationOutcome::Removed,
+                }),
+                trust: Ok(SkillMutationReceipt {
+                    name: "demo".to_string(),
+                    safe_target_path: "/ws/.codewhale/skills/demo".to_string(),
+                    outcome: SkillMutationOutcome::Trusted,
+                }),
+                remote: Ok(RemoteRegistryOutcome::Loaded {
+                    entries: vec![RemoteSkillEntry {
+                        name: "remote-demo".to_string(),
+                        description: Some("Remote demo".to_string()),
+                        source: "github.com/acme/skills".to_string(),
+                    }],
+                }),
+                recommend: Ok(vec![SkillRecommendation {
+                    name: "remote-demo".to_string(),
+                    description: Some("Remote demo".to_string()),
+                    matched_terms: vec!["demo".to_string()],
+                }]),
+                sync: Ok(SkillSyncOutcome::Done {
+                    total: 1,
+                    downloaded: 1,
+                    fresh: 0,
+                    failed: 0,
+                    entries: vec![SkillSyncEntry::Downloaded {
+                        name: "demo".to_string(),
+                        path: "/cache/demo".to_string(),
+                    }],
+                }),
+                review: Ok(ReviewOutcome::Ready),
+                snapshots: Ok(vec![SnapshotEntry {
+                    id: "abcdef123456".to_string(),
+                    label: "pre-turn:1".to_string(),
+                    timestamp: 1_700_000_000,
+                }]),
+                restore: Ok(()),
+                approval: CommandApprovalState {
+                    yolo: true,
+                    trust_mode: false,
+                },
             }
         }
+    }
 
-        unsafe fn restore_var(key: &str, value: Option<OsString>) {
-            if let Some(value) = value {
-                unsafe { std::env::set_var(key, value) };
-            } else {
-                unsafe { std::env::remove_var(key) };
-            }
+    impl CommandSkillGroupContext for FakeSkillGroup {
+        fn skill_registry_projection(&self) -> SkillRegistryProjection {
+            self.projection.clone()
+        }
+        fn activate_skill(
+            &mut self,
+            _name: &str,
+        ) -> Result<SkillActivationOutcome, SkillActivationError> {
+            self.activation.clone()
+        }
+        fn install_skill(
+            &mut self,
+            _scope: Option<SkillTargetScope>,
+            _spec: &str,
+        ) -> Result<SkillMutationReceipt, String> {
+            self.install.clone()
+        }
+        fn update_skill(
+            &mut self,
+            _scope: Option<SkillTargetScope>,
+            _name: &str,
+        ) -> Result<SkillMutationReceipt, String> {
+            self.update.clone()
+        }
+        fn uninstall_skill(
+            &mut self,
+            _scope: Option<SkillTargetScope>,
+            _name: &str,
+        ) -> Result<SkillMutationReceipt, String> {
+            self.uninstall.clone()
+        }
+        fn trust_skill(
+            &mut self,
+            _scope: Option<SkillTargetScope>,
+            _name: &str,
+        ) -> Result<SkillMutationReceipt, String> {
+            self.trust.clone()
+        }
+        fn fetch_remote_registry(&mut self) -> Result<RemoteRegistryOutcome, String> {
+            self.remote.clone()
+        }
+        fn recommend_skills(&mut self, _task: &str) -> Result<Vec<SkillRecommendation>, String> {
+            self.recommend.clone()
+        }
+        fn sync_registry(&mut self) -> Result<SkillSyncOutcome, String> {
+            self.sync.clone()
+        }
+        fn run_review(&mut self) -> Result<ReviewOutcome, String> {
+            self.review.clone()
+        }
+        fn snapshot_list(&mut self, _limit: usize) -> Result<Vec<SnapshotEntry>, String> {
+            self.snapshots.clone()
+        }
+        fn restore_snapshot(&mut self, _id: &str) -> Result<(), String> {
+            self.restore.clone()
+        }
+        fn approval_state(&self) -> CommandApprovalState {
+            self.approval
         }
     }
 
-    impl Drop for IsolatedHome {
-        fn drop(&mut self) {
-            TEST_HOME_DIR.with(|slot| {
-                *slot.borrow_mut() = self.test_home_prev.take();
-            });
-            // SAFETY: the shared test env mutex is still held while Drop runs.
-            unsafe {
-                Self::restore_var("HOME", self.home_prev.take());
-                Self::restore_var("USERPROFILE", self.userprofile_prev.take());
-            }
+    fn demo_entry() -> SkillEntry {
+        SkillEntry {
+            name: "demo".to_string(),
+            description: "Demo skill".to_string(),
+            source: SkillSourceKind::Native,
+            path: Some("/ws/.codewhale/skills/demo".to_string()),
+            bundled_tier: None,
         }
     }
 
-    fn create_test_app_with_tmpdir(tmpdir: &TempDir) -> App {
-        let options = TuiOptions {
-            skills_dir: tmpdir.path().join("skills"),
-            memory_path: tmpdir.path().join("memory.md"),
-            notes_path: tmpdir.path().join("notes.txt"),
-            mcp_config_path: tmpdir.path().join("mcp.json"),
-            ..crate::test_support::test_tui_options(tmpdir.path())
-        };
-        let mut app = App::new(options, &Config::default());
-        app.skills_dir = tmpdir.path().join("skills");
-        app
+    fn bundled_entry(name: &str, tier: SkillBundledTier) -> SkillEntry {
+        SkillEntry {
+            name: name.to_string(),
+            description: format!("{name} skill"),
+            source: SkillSourceKind::Native,
+            path: None,
+            bundled_tier: Some(tier),
+        }
     }
 
-    fn create_skill_dir(tmpdir: &TempDir, skill_name: &str, skill_content: &str) {
-        let skill_dir = tmpdir.path().join("skills").join(skill_name);
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(skill_dir.join("SKILL.md"), skill_content).unwrap();
-    }
+    // ── /skills parity ────────────────────────────────────────────────────
 
     #[test]
-    fn registry_fetch_error_hint_recognises_dns_failures() {
-        let err = anyhow::Error::msg("error sending request: dns error: failed to lookup")
-            .context("failed to fetch registry https://example.com/registry.json");
-        let hint = registry_fetch_error_hint(&err).expect("dns hint");
-        assert!(hint.contains("DNS"), "got: {hint}");
-    }
-
-    #[test]
-    fn registry_fetch_error_hint_recognises_connection_refused() {
-        let err = anyhow::Error::msg("error sending request: tcp connect: connection refused");
-        let hint = registry_fetch_error_hint(&err).expect("refused hint");
-        assert!(hint.contains("refused"), "got: {hint}");
-    }
-
-    #[test]
-    fn registry_fetch_error_hint_recognises_tls_failures() {
-        let err = anyhow::Error::msg("invalid peer certificate: UnknownIssuer (TLS handshake)");
-        let hint = registry_fetch_error_hint(&err).expect("tls hint");
-        assert!(hint.contains("TLS"), "got: {hint}");
-    }
-
-    #[test]
-    fn registry_fetch_error_hint_recognises_http_status_codes() {
-        let err_404 = anyhow::Error::msg("registry returned an error status: 404 Not Found");
-        assert!(
-            registry_fetch_error_hint(&err_404)
-                .map(|h| h.contains("404"))
-                .unwrap_or(false)
-        );
-        let err_429 =
-            anyhow::Error::msg("registry returned an error status: 429 Too Many Requests");
-        assert!(
-            registry_fetch_error_hint(&err_429)
-                .map(|h| h.contains("rate"))
-                .unwrap_or(false)
-        );
-    }
-
-    #[test]
-    fn registry_fetch_error_hint_returns_none_for_unrecognised_errors() {
-        let err = anyhow::Error::msg("a totally novel error nobody anticipated");
-        assert!(registry_fetch_error_hint(&err).is_none());
-    }
-
-    #[test]
-    fn format_registry_error_appends_hint_when_pattern_matches() {
-        let err = anyhow::Error::msg("dns error: nodename nor servname provided");
-        let formatted = format_registry_error("Failed to fetch registry", &err);
-        assert!(formatted.starts_with("Failed to fetch registry: "));
-        assert!(
-            formatted.contains("Hint: DNS"),
-            "expected hint, got: {formatted}"
-        );
-    }
-
-    #[test]
-    fn format_registry_error_omits_hint_when_no_pattern_matches() {
-        let err = anyhow::Error::msg("inscrutable opaque failure");
-        let formatted = format_registry_error("Sync failed", &err);
-        assert_eq!(formatted, "Sync failed: inscrutable opaque failure");
-    }
-
-    #[test]
-    fn test_bare_skills_opens_manager() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = list_skills(&mut app, None);
+    fn bare_skills_opens_manager_action() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let result = list_skills(&mut group, None);
+        assert!(result.message.is_none());
         assert!(matches!(result.action, Some(AppAction::OpenSkillsManager)));
     }
 
     #[test]
-    fn test_list_skills_empty_directory() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        // Empty arg still uses the legacy text inventory (prefix path).
-        let result = list_skills(&mut app, Some(""));
-        assert!(result.message.is_some());
-        let msg = result.message.unwrap();
-        assert!(msg.contains("No skills found"));
-        assert!(msg.contains("Skills location:"));
+    fn skills_empty_registry_message_is_exact() {
+        let mut group = FakeSkillGroup::new(vec![]);
+        let result = list_skills(&mut group, Some(""));
+        let msg = result.message.expect("expected message");
         assert!(
-            !msg.contains("allowed-tools"),
-            "empty-state template must not advertise unenforced tool restrictions: {msg}"
+            msg.starts_with("No skills found.\n\nSkills location: /ws/.codewhale/skills\n"),
+            "{msg}"
         );
+        assert!(msg.contains("/ws/.codewhale/skills/my-skill/SKILL.md"));
     }
 
     #[test]
-    fn test_list_skills_with_skills() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        create_skill_dir(
-            &tmpdir,
-            "test-skill",
-            "---\nname: test-skill\ndescription: A test skill\n---\nDo something",
-        );
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = list_skills(&mut app, Some(""));
-        assert!(result.message.is_some());
-        let msg = result.message.unwrap();
-        assert!(msg.contains("Available skills"));
-        assert!(msg.contains("/test-skill"));
-    }
-
-    #[test]
-    fn test_list_skills_filters_by_name_prefix() {
-        // #1318: a `/skills <prefix>` argument should narrow the list to
-        // skills whose names start with the prefix. The header reflects
-        // both the matched count and the registry total so the user
-        // knows what they're looking at.
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        create_skill_dir(
-            &tmpdir,
-            "alpha-skill",
-            "---\nname: alpha-skill\ndescription: First\n---\nbody",
-        );
-        create_skill_dir(
-            &tmpdir,
-            "alphabet-helper",
-            "---\nname: alphabet-helper\ndescription: Helper\n---\nbody",
-        );
-        create_skill_dir(
-            &tmpdir,
-            "beta-skill",
-            "---\nname: beta-skill\ndescription: Second\n---\nbody",
-        );
-
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = list_skills(&mut app, Some("alph"));
-        let msg = result.message.expect("filter result has message");
-
-        assert!(msg.contains("/alpha-skill"));
-        assert!(msg.contains("/alphabet-helper"));
+    fn skills_prefix_listing_flat_format_is_exact() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let result = list_skills(&mut group, Some("de"));
+        let msg = result.message.expect("expected message");
         assert!(
-            !msg.contains("/beta-skill"),
-            "beta-skill must be filtered out"
+            msg.starts_with("Available skills matching `de` (1 of 1):\n"),
+            "{msg}"
         );
+        assert!(msg.contains("  /demo - Demo skill"));
+    }
+
+    #[test]
+    fn skills_no_match_reports_prefix_and_total() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let result = list_skills(&mut group, Some("zzz"));
+        let msg = result.message.expect("expected message");
         assert!(
-            msg.contains("matching `alph`") && msg.contains("2 of 3"),
-            "header should show count + total, got: {msg}"
+            msg.starts_with("No skills match prefix `zzz` (out of 1 available)."),
+            "{msg}"
         );
     }
 
     #[test]
-    fn test_list_skills_filter_is_case_insensitive() {
-        // Prefix matching is case-insensitive — typing `Alph` finds
-        // `alpha-skill` the same as `alph` does.
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        create_skill_dir(
-            &tmpdir,
-            "alpha-skill",
-            "---\nname: alpha-skill\ndescription: First\n---\nbody",
-        );
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = list_skills(&mut app, Some("ALPH"));
-        let msg = result.message.expect("case-insensitive filter has message");
-        assert!(msg.contains("/alpha-skill"));
-    }
-
-    #[test]
-    fn test_list_skills_filter_with_zero_matches_says_so() {
-        // When the prefix matches nothing, the message must say so
-        // explicitly (rather than printing an empty list) and point
-        // the user back at the unfiltered command.
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        create_skill_dir(
-            &tmpdir,
-            "alpha-skill",
-            "---\nname: alpha-skill\ndescription: First\n---\nbody",
-        );
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = list_skills(&mut app, Some("nonexistent"));
-        let msg = result.message.expect("zero-match filter still has message");
-        assert!(msg.contains("No skills match prefix `nonexistent`"));
-        assert!(msg.contains("Run /skills"));
-    }
-
-    #[test]
-    fn test_list_skills_rejects_flag_like_prefix() {
-        // `--remote` and `sync` stay reserved as subcommands; any other
-        // dash-prefixed argument is rejected so we don't silently turn
-        // a future flag into a no-match filter.
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = list_skills(&mut app, Some("--bogus"));
+    fn skills_unfiltered_splits_user_and_bundled_tiers() {
+        let mut group = FakeSkillGroup::new(vec![
+            demo_entry(),
+            bundled_entry("skill-creator", SkillBundledTier::FormatTooling),
+            bundled_entry("help", SkillBundledTier::CoreAgentic),
+        ]);
+        let result = list_skills(&mut group, Some(""));
+        let msg = result.message.expect("expected message");
+        assert!(msg.contains("Your skills (1):"), "{msg}");
+        assert!(msg.contains("Core agentic (1):"), "{msg}");
+        assert!(msg.contains("  /help"), "{msg}");
+        assert!(msg.contains("Format & tooling (1):"), "{msg}");
+        assert!(msg.contains("  /skill-creator"), "{msg}");
         assert!(
-            result.is_error,
-            "expected usage error for --bogus, got: {result:?}"
+            msg.contains("(run /skills <name> for details on a built-in)"),
+            "{msg}"
         );
+    }
+
+    #[test]
+    fn skills_rejects_flag_like_and_multiword_prefixes() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let result = list_skills(&mut group, Some("-x"));
+        assert!(result.is_error);
         assert!(
             result
                 .message
-                .as_deref()
-                .is_some_and(|m| m.contains("name-prefix")),
-            "expected --bogus error message to mention name-prefix, got: {result:?}"
+                .unwrap()
+                .contains("Usage: /skills [--remote|sync|inspect|suggest <task>|<name-prefix>]")
         );
+        let result = list_skills(&mut group, Some("two words"));
+        assert!(result.is_error);
     }
 
     #[test]
-    fn test_list_skills_suggest_requires_a_meaningful_task_before_network_access() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-
-        for arg in ["suggest", "recommend", "suggest go"] {
-            let result = list_skills(&mut app, Some(arg));
-            assert!(
-                result.is_error,
-                "expected usage error for {arg}: {result:?}"
-            );
-            assert!(
-                result
-                    .message
-                    .as_deref()
-                    .is_some_and(|message| message.contains("/skills suggest <task")),
-                "expected suggestion usage for {arg}: {result:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_list_skills_renders_user_skills_under_your_skills_section() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        create_skill_dir(
-            &tmpdir,
-            "alpha-skill",
-            "---\nname: alpha-skill\ndescription: First skill\n---\nDo alpha work",
-        );
-        create_skill_dir(
-            &tmpdir,
-            "beta-skill",
-            "---\nname: beta-skill\ndescription: Second skill\n---\nDo beta work",
-        );
-
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = list_skills(&mut app, Some(""));
-        let msg = result.message.unwrap();
-
-        // User-created skills must appear in their own section so they
-        // stay visible even when many bundled skills are installed.
-        let section = msg
-            .find("Your skills")
-            .expect("user skills section header missing");
-        let alpha = msg.find("/alpha-skill").expect("alpha skill should render");
-        let beta = msg.find("/beta-skill").expect("beta skill should render");
+    fn skills_suggest_requires_meaningful_task() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let result = list_skills(&mut group, Some("suggest"));
+        assert!(result.is_error);
         assert!(
-            alpha > section,
-            "alpha-skill should follow the header: {msg}"
+            result
+                .message
+                .unwrap()
+                .contains("Usage: /skills suggest <task>")
         );
-        assert!(beta > section, "beta-skill should follow the header: {msg}");
-        // Each entry on its own line with the description inline.
-        assert!(msg.contains("/alpha-skill - First skill"), "got: {msg}");
-        assert!(msg.contains("/beta-skill - Second skill"), "got: {msg}");
+        let result = list_skills(&mut group, Some("suggest ab"));
+        assert!(result.is_error);
+        assert!(result.message.unwrap().contains("at least 3 characters"));
     }
 
     #[test]
-    fn test_list_skills_tiers_bundled_catalog_and_omits_false_image_capability() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        crate::skills::install_system_skills(&app.skills_dir).unwrap();
+    fn skills_inspect_reports_discovery_details() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let result = list_skills(&mut group, Some("inspect"));
+        let msg = result.message.expect("expected message");
+        assert!(msg.starts_with("Skills Inspect\n"), "{msg}");
+        assert!(msg.contains("Discovery mode: compatible"));
+        assert!(msg.contains("Workspace: /ws"));
+        assert!(msg.contains("Configured skills dir: /ws/.codewhale/skills"));
+        assert!(msg.contains("Searched directories (1):"));
+        assert!(msg.contains("Available skills (1):"));
+        assert!(msg.contains("source: native"));
+        assert!(msg.contains("path: /ws/.codewhale/skills/demo"));
+    }
 
-        let result = list_skills(&mut app, Some(""));
-        let msg = result.message.unwrap();
-        let core = msg.find("Core agentic").expect("core tier");
-        let best = msg.find("/best-of-n").expect("best-of-n skill");
-        let tooling = msg.find("Format & tooling").expect("tooling tier");
-        let pdf = msg.find("/pdf").expect("pdf skill");
+    #[test]
+    fn skills_remote_lists_entries_and_policy_errors() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let result = list_skills(&mut group, Some("--remote"));
+        let msg = result.message.expect("expected message");
+        assert!(msg.contains("Available remote skills (1):"), "{msg}");
+        assert!(msg.contains("remote-demo — Remote demo (source: github.com/acme/skills)"));
+        assert!(msg.contains("\nInstall with: /skill install <name>"));
 
-        assert!(core < best && best < tooling && tooling < pdf, "got: {msg}");
+        group.remote = Ok(RemoteRegistryOutcome::NeedsApproval("acme.com".to_string()));
+        let result = list_skills(&mut group, Some("remote"));
+        assert!(result.is_error);
         assert!(
-            !msg.contains("/imagine"),
-            "catalog must not advertise an unavailable image-generation tool: {msg}"
-        );
-    }
-
-    #[test]
-    fn test_list_skills_merges_workspace_and_configured_dirs() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let workspace_skill_dir = tmpdir
-            .path()
-            .join(".agents")
-            .join("skills")
-            .join("workspace-skill");
-        std::fs::create_dir_all(&workspace_skill_dir).unwrap();
-        std::fs::write(
-            workspace_skill_dir.join("SKILL.md"),
-            "---\nname: workspace-skill\ndescription: Workspace skill\n---\nDo workspace work",
-        )
-        .unwrap();
-        create_skill_dir(
-            &tmpdir,
-            "configured-skill",
-            "---\nname: configured-skill\ndescription: Configured skill\n---\nDo configured work",
+            result
+                .message
+                .unwrap()
+                .contains("Network policy requires approval for acme.com")
         );
 
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = list_skills(&mut app, Some(""));
-        let msg = result.message.unwrap();
-
-        assert!(msg.contains("/workspace-skill"), "got: {msg}");
-        assert!(msg.contains("/configured-skill"), "got: {msg}");
-    }
-
-    #[test]
-    fn test_skills_inspect_reports_discovery_details_and_source_paths() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let workspace_skill_dir = tmpdir
-            .path()
-            .join(".agents")
-            .join("skills")
-            .join("workspace-skill");
-        std::fs::create_dir_all(&workspace_skill_dir).unwrap();
-        std::fs::write(
-            workspace_skill_dir.join("SKILL.md"),
-            "---\nname: workspace-skill\ndescription: Workspace skill\n---\nDo workspace work",
-        )
-        .unwrap();
-        create_skill_dir(
-            &tmpdir,
-            "configured-skill",
-            "---\nname: configured-skill\ndescription: Configured skill\n---\nDo configured work",
-        );
-
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = list_skills(&mut app, Some("inspect"));
-        let msg = result.message.expect("inspect should return a message");
-
-        let normalized = msg.replace('\\', "/");
-        assert!(normalized.contains("Skills Inspect"), "got: {msg}");
+        group.remote = Ok(RemoteRegistryOutcome::Denied("acme.com".to_string()));
+        let result = list_skills(&mut group, Some("remote"));
+        assert!(result.is_error);
         assert!(
-            normalized.contains("Discovery mode: compatible"),
-            "got: {msg}"
+            result
+                .message
+                .unwrap()
+                .contains("Network policy denied access to acme.com")
         );
-        assert!(normalized.contains("Searched directories"), "got: {msg}");
-        assert!(normalized.contains(".agents/skills"), "got: {msg}");
-        assert!(normalized.contains("skills"), "got: {msg}");
-        assert!(normalized.contains("Available skills (2):"), "got: {msg}");
-        assert!(normalized.contains("workspace-skill"), "got: {msg}");
-        assert!(normalized.contains("configured-skill"), "got: {msg}");
-        assert!(normalized.contains("path:"), "got: {msg}");
-    }
 
-    #[test]
-    fn test_list_skills_respects_codewhale_only_scan() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let claude_skill_dir = tmpdir
-            .path()
-            .join(".claude")
-            .join("skills")
-            .join("claude-skill");
-        std::fs::create_dir_all(&claude_skill_dir).unwrap();
-        std::fs::write(
-            claude_skill_dir.join("SKILL.md"),
-            "---\nname: claude-skill\ndescription: Claude skill\n---\nbody",
-        )
-        .unwrap();
-        let codewhale_skill_dir = tmpdir
-            .path()
-            .join(".codewhale")
-            .join("skills")
-            .join("codewhale-skill");
-        std::fs::create_dir_all(&codewhale_skill_dir).unwrap();
-        std::fs::write(
-            codewhale_skill_dir.join("SKILL.md"),
-            "---\nname: codewhale-skill\ndescription: CodeWhale skill\n---\nbody",
-        )
-        .unwrap();
-
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        app.skills_dir = tmpdir.path().join(".codewhale").join("skills");
-        app.skills_scan_codewhale_only = true;
-        let result = list_skills(&mut app, Some(""));
-        let msg = result.message.unwrap();
-
-        assert!(msg.contains("/codewhale-skill"), "got: {msg}");
-        assert!(!msg.contains("/claude-skill"), "got: {msg}");
-    }
-
-    #[test]
-    fn test_skills_inspect_reports_codewhale_only_scan_mode() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let claude_skill_dir = tmpdir
-            .path()
-            .join(".claude")
-            .join("skills")
-            .join("claude-skill");
-        std::fs::create_dir_all(&claude_skill_dir).unwrap();
-        std::fs::write(
-            claude_skill_dir.join("SKILL.md"),
-            "---\nname: claude-skill\ndescription: Claude skill\n---\nbody",
-        )
-        .unwrap();
-        let codewhale_skill_dir = tmpdir
-            .path()
-            .join(".codewhale")
-            .join("skills")
-            .join("codewhale-skill");
-        std::fs::create_dir_all(&codewhale_skill_dir).unwrap();
-        std::fs::write(
-            codewhale_skill_dir.join("SKILL.md"),
-            "---\nname: codewhale-skill\ndescription: CodeWhale skill\n---\nbody",
-        )
-        .unwrap();
-
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        app.skills_dir = tmpdir.path().join(".codewhale").join("skills");
-        app.skills_scan_codewhale_only = true;
-        let result = list_skills(&mut app, Some("--inspect"));
-        let msg = result.message.expect("inspect should return a message");
-
-        let normalized = msg.replace('\\', "/");
-        assert!(
-            normalized.contains("Discovery mode: codewhale-only"),
-            "got: {msg}"
-        );
-        assert!(normalized.contains("codewhale-skill"), "got: {msg}");
-        assert!(!normalized.contains("claude-skill"), "got: {msg}");
-        assert!(!normalized.contains(".claude/skills"), "got: {msg}");
-    }
-
-    #[test]
-    fn test_skill_subcommand_dispatch_install_usage() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        // Empty install spec → usage hint, not invalid-source error.
-        let result = run_skill(&mut app, Some("install"));
-        let msg = result.message.unwrap();
-        assert!(msg.contains("/skill install"), "got: {msg}");
-    }
-
-    #[test]
-    fn test_skill_subcommand_dispatch_uninstall_missing() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = run_skill(&mut app, Some("uninstall absent-skill"));
-        let msg = result.message.unwrap();
-        assert!(
-            msg.contains("not found") || msg.contains("not installed"),
-            "got: {msg}"
-        );
-    }
-
-    #[test]
-    fn test_skill_trust_message_marks_marker_advisory() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        // Mutations only touch CodeWhale-owned roots; place under project scope.
-        let skill_dir = tmpdir
-            .path()
-            .join(".codewhale")
-            .join("skills")
-            .join("trusted-skill");
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: trusted-skill\ndescription: Trust copy\n---\nbody",
-        )
-        .unwrap();
-        install::write_installed_from_v2(
-            &skill_dir,
-            "github:owner/repo",
-            None,
-            "src",
-            "placeholder",
-            "trusted-skill",
-        )
-        .unwrap();
-
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = run_skill(&mut app, Some("trust --project trusted-skill"));
-        assert!(!result.is_error, "got: {:?}", result.message);
-        let msg = result.message.expect("trust result");
-        assert!(msg.contains("advisory"), "got: {msg}");
-        assert!(!msg.contains("may now invoke"), "got: {msg}");
-    }
-
-    #[test]
-    fn parse_scope_args_and_default_install_target_is_global() {
-        use crate::skills::mutation::SkillTargetScope;
-
-        let (scope, rest) = parse_scope_args("github:o/r").unwrap();
-        assert_eq!(scope, None);
-        assert_eq!(rest, "github:o/r");
-        // Bare install (no --project/--global) maps to the CodeWhale global root.
+        group.remote = Err("Failed to fetch registry: boom".to_string());
+        let result = list_skills(&mut group, Some("--remote"));
+        assert!(result.is_error);
         assert_eq!(
-            scope.unwrap_or(SkillTargetScope::Global),
-            SkillTargetScope::Global
+            result.message.unwrap(),
+            "Error: Failed to fetch registry: boom"
         );
-
-        let (scope, rest) = parse_scope_args("--project my-skill").unwrap();
-        assert_eq!(scope, Some(SkillTargetScope::Project));
-        assert_eq!(rest, "my-skill");
-
-        let (scope, rest) = parse_scope_args("--global my-skill").unwrap();
-        assert_eq!(scope, Some(SkillTargetScope::Global));
-        assert_eq!(rest, "my-skill");
-
-        assert!(parse_scope_args("--project --global x").is_err());
     }
 
     #[test]
-    fn uninstall_external_only_skill_refuses_write() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let ext = tmpdir
-            .path()
-            .join(".claude")
-            .join("skills")
-            .join("ext-only");
-        std::fs::create_dir_all(&ext).unwrap();
-        std::fs::write(
-            ext.join("SKILL.md"),
-            "---\nname: ext-only\ndescription: d\n---\nbody\n",
-        )
-        .unwrap();
-        let sentinel = tmpdir
-            .path()
-            .join(".claude")
-            .join("skills")
-            .join("SENTINEL");
-        std::fs::write(&sentinel, "keep").unwrap();
+    fn skills_suggest_renders_recommendations() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let result = list_skills(&mut group, Some("suggest demo"));
+        let msg = result.message.expect("expected message");
+        assert!(msg.contains("Suggested remote skills for `demo`:"), "{msg}");
+        assert!(msg.contains("  remote-demo — Remote demo"));
+        assert!(msg.contains("    Why: demo"));
+        assert!(msg.contains("    Install if you want it: /skill install remote-demo"));
+        assert!(msg.contains("\nNothing was installed, trusted, or enabled."));
+    }
 
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        app.workspace = tmpdir.path().to_path_buf();
-        let result = run_skill(&mut app, Some("uninstall ext-only"));
-        assert!(result.is_error, "got: {:?}", result.message);
-        let msg = result.message.unwrap_or_default();
+    #[test]
+    fn skills_sync_renders_per_skill_report() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let result = list_skills(&mut group, Some("sync"));
+        let msg = result.message.expect("expected message");
+        assert!(msg.starts_with("Registry sync complete.\n"), "{msg}");
+        assert!(msg.contains("  [+] demo — downloaded to /cache/demo"));
+        assert!(msg.contains("\n1 skill(s) processed: 1 downloaded, 0 up-to-date, 0 failed."));
+
+        group.sync = Ok(SkillSyncOutcome::RegistryNeedsApproval(
+            "acme.com".to_string(),
+        ));
+        let result = list_skills(&mut group, Some("sync"));
+        assert!(result.is_error);
         assert!(
-            msg.contains("compatible external") || msg.contains("not found"),
-            "got: {msg}"
+            result
+                .message
+                .unwrap()
+                .contains("requires approval for acme.com")
         );
-        assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "keep");
-        assert!(ext.join("SKILL.md").is_file());
+    }
+
+    // ── /skill parity ─────────────────────────────────────────────────────
+
+    #[test]
+    fn skill_without_arg_prints_usage() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let mut skills = FakeSkills { refreshed: false };
+        let result = run_skill(&mut group, &mut skills, None);
+        assert!(result.is_error);
+        assert!(result.message.unwrap().contains("Usage: /skill <name>"));
     }
 
     #[test]
-    fn test_run_skill_without_name() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = run_skill(&mut app, None);
-        assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("Usage: /skill"));
-    }
-
-    #[test]
-    fn test_run_skill_not_found() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = run_skill(&mut app, Some("nonexistent"));
-        assert!(result.message.is_some());
-        let msg = result.message.unwrap();
-        assert!(msg.contains("not found"));
-    }
-
-    #[test]
-    fn test_run_skill_activates() {
-        let tmpdir = TempDir::new().unwrap();
-        let _home = IsolatedHome::new(&tmpdir);
-        create_skill_dir(
-            &tmpdir,
-            "test-skill",
-            "---\nname: test-skill\ndescription: A test skill\n---\nDo something special",
+    fn skill_activation_success_composes_message_and_task_action() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let mut skills = FakeSkills { refreshed: false };
+        let result = run_skill(&mut group, &mut skills, Some("demo"));
+        assert!(!result.is_error);
+        let msg = result.message.expect("expected message");
+        assert!(
+            msg.starts_with("Skill 'demo' activated.\n\nDescription: Demo skill"),
+            "{msg}"
         );
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = run_skill(&mut app, Some("test-skill"));
-        assert!(result.message.is_some());
+        assert!(result.action.is_none());
+
+        let result = run_skill(&mut group, &mut skills, Some("demo do the thing"));
+        assert!(
+            matches!(result.action, Some(AppAction::SendMessage(ref t)) if t == "do the thing")
+        );
+    }
+
+    #[test]
+    fn skill_new_aliases_skill_creator_in_not_found_message() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        group.activation = Err(SkillActivationError::NotFound {
+            requested: "skill-creator".to_string(),
+            available: vec!["demo".to_string()],
+            warnings: vec![],
+        });
+        let mut skills = FakeSkills { refreshed: false };
+        let result = run_skill(&mut group, &mut skills, Some("new"));
+        assert!(result.is_error);
+        assert!(
+            result
+                .message
+                .unwrap()
+                .contains("Skill 'skill-creator' not found.")
+        );
+    }
+
+    #[test]
+    fn skill_not_found_lists_available_and_warnings() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        group.activation = Err(SkillActivationError::NotFound {
+            requested: "missing".to_string(),
+            available: vec!["demo".to_string()],
+            warnings: vec!["one warning".to_string()],
+        });
+        let mut skills = FakeSkills { refreshed: false };
+        let result = run_skill(&mut group, &mut skills, Some("missing"));
+        assert!(result.is_error);
         let msg = result.message.unwrap();
-        assert!(msg.contains("Skill 'test-skill' activated"));
-        assert!(msg.contains("A test skill"));
-        assert!(app.active_skill.is_some());
-        assert!(!app.history.is_empty());
+        assert!(msg.contains("Skill 'missing' not found."), "{msg}");
+        assert!(msg.contains("Available skills: demo"), "{msg}");
+        assert!(msg.contains("Warnings (1):"), "{msg}");
+        assert!(msg.contains("  - one warning"), "{msg}");
+    }
+
+    #[test]
+    fn skill_not_found_with_no_skills_uses_install_hint() {
+        let mut group = FakeSkillGroup::new(vec![]);
+        group.activation = Err(SkillActivationError::NotFound {
+            requested: "missing".to_string(),
+            available: vec![],
+            warnings: vec![],
+        });
+        let mut skills = FakeSkills { refreshed: false };
+        let result = run_skill(&mut group, &mut skills, Some("missing"));
+        assert!(result.is_error);
+        assert!(
+            result
+                .message
+                .unwrap()
+                .contains("No skills installed.\n\nUse /skills to see how to add skills.")
+        );
+    }
+
+    #[test]
+    fn skill_plugin_rejected_renders_exact_error() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        group.activation = Err(SkillActivationError::PluginRejected {
+            name: "plug".to_string(),
+            reason: "authority revoked".to_string(),
+        });
+        let mut skills = FakeSkills { refreshed: false };
+        let result = run_skill(&mut group, &mut skills, Some("plug"));
+        assert!(result.is_error);
+        assert_eq!(
+            result.message.unwrap(),
+            "Error: Plugin skill 'plug' is no longer active: authority revoked"
+        );
+    }
+
+    #[test]
+    fn skill_install_receipt_renders_and_refreshes_cache() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let mut skills = FakeSkills { refreshed: false };
+        let result = run_skill(&mut group, &mut skills, Some("install github:acme/demo"));
+        assert!(!result.is_error);
+        assert!(
+            result
+                .message
+                .unwrap()
+                .starts_with("Installed skill 'demo'.\nLocation: /ws/.codewhale/skills/demo"),
+        );
+        assert!(
+            skills.refreshed,
+            "Installed receipt must refresh the skill cache (D2)"
+        );
+    }
+
+    #[test]
+    fn skill_update_and_uninstall_refresh_cache() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let mut skills = FakeSkills { refreshed: false };
+        let result = run_skill(&mut group, &mut skills, Some("update demo"));
+        assert!(!result.is_error);
+        assert!(skills.refreshed);
+
+        skills.refreshed = false;
+        let result = run_skill(&mut group, &mut skills, Some("uninstall --global demo"));
+        assert!(!result.is_error);
+        assert!(skills.refreshed);
+        assert!(result.message.unwrap().contains("Removed skill 'demo'."));
+    }
+
+    #[test]
+    fn skill_trust_does_not_refresh_cache() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let mut skills = FakeSkills { refreshed: false };
+        let result = run_skill(&mut group, &mut skills, Some("trust demo"));
+        assert!(!result.is_error);
+        assert!(!skills.refreshed);
+        assert!(
+            result
+                .message
+                .unwrap()
+                .contains("Marked skill 'demo' as trusted.")
+        );
+    }
+
+    #[test]
+    fn skill_install_empty_spec_prints_usage() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let mut skills = FakeSkills { refreshed: false };
+        let result = run_skill(&mut group, &mut skills, Some("install"));
+        assert!(result.is_error);
+        assert!(result.message.unwrap().contains("Usage: /skill install"));
+    }
+
+    #[test]
+    fn skill_scope_conflict_errors() {
+        let mut group = FakeSkillGroup::new(vec![demo_entry()]);
+        let mut skills = FakeSkills { refreshed: false };
+        let result = run_skill(
+            &mut group,
+            &mut skills,
+            Some("install --project --global x"),
+        );
+        assert!(result.is_error);
+        assert!(
+            result
+                .message
+                .unwrap()
+                .contains("specify at most one of --project / --global")
+        );
+    }
+
+    #[test]
+    fn skill_missing_facet_errors_are_safe() {
+        let result = skills_contextual(CommandContexts::empty(), Some("demo"));
+        assert!(result.is_error);
+        assert_eq!(
+            result.message.unwrap(),
+            "Error: Command capability unavailable: skill_group"
+        );
     }
 }
