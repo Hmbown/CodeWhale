@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The engine's internal `Op`/`Event` types and the wire protocol's `Op`/
+  `EventMsg` now carry a compile-enforced twin for every variant: adding an
+  engine variant without a protocol counterpart fails the build instead of
+  drifting silently. Internal durability work — no user-visible surface
+  change yet (#5751).
+
 - Computer session records now count only time a provider actually accepted the
   session as active, at per-second granularity. Idle, queued, stopped, and
   teardown time are excluded, and a session whose allocation does not match a
