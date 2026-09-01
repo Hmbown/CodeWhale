@@ -628,6 +628,53 @@ pub enum RequestPayloadMode {
 /// in the API payload (after normalization / provider-specific mapping).
 #[must_use]
 pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> ProviderCapability {
+    provider_capability_with_wire(provider, resolved_model, None)
+}
+
+/// Wire-aware variant of [`provider_capability`] that respects
+/// `wire = "responses" | "anthropic" | "chat"` for `Custom` providers.
+///
+/// Built-ins keep their fixed policy; `Custom` defaults to `Chat` when `wire`
+/// is absent so existing configs stay compatible. Mirrors
+/// `crates/tui/src/client.rs::provider_wire_format_for_config` and the
+/// `Custom` comment in `crates/config/src/provider.rs`.
+#[must_use]
+pub fn provider_capability_with_wire(
+    provider: ApiProvider,
+    resolved_model: &str,
+    wire: Option<&str>,
+) -> ProviderCapability {
+    // Custom wire overrides must be checked before the generic fallback so
+    // `[providers.<name>] wire = "responses"` / `"anthropic"` is honored.
+    if provider == ApiProvider::Custom {
+        if wire_config_prefers_anthropic(wire) {
+            return ProviderCapability {
+                provider,
+                resolved_model: resolved_model.to_string(),
+                context_window: crate::models::context_window_for_model(resolved_model)
+                    .unwrap_or(crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS),
+                max_output: crate::models::max_output_tokens_for_model(resolved_model),
+                thinking_supported: crate::models::model_supports_reasoning(resolved_model),
+                cache_telemetry_supported: false,
+                request_payload_mode: RequestPayloadMode::AnthropicMessages,
+                alias_deprecation: None,
+            };
+        }
+        if wire_config_prefers_responses(wire) {
+            return ProviderCapability {
+                provider,
+                resolved_model: resolved_model.to_string(),
+                context_window: crate::models::context_window_for_model(resolved_model)
+                    .unwrap_or(crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS),
+                max_output: crate::models::max_output_tokens_for_model(resolved_model),
+                thinking_supported: crate::models::model_supports_reasoning(resolved_model),
+                cache_telemetry_supported: false,
+                request_payload_mode: RequestPayloadMode::Responses,
+                alias_deprecation: None,
+            };
+        }
+    }
+
     if matches!(
         provider,
         ApiProvider::Anthropic | ApiProvider::MinimaxAnthropic | ApiProvider::Openmodel
@@ -5466,6 +5513,20 @@ impl Config {
             || (identity_is_literal_custom(identity) && self.uses_legacy_literal_custom_route())
     }
 
+    /// Trimmed, non-empty `wire` dialect preference for `provider`'s config
+    /// table (`[providers.<name>] wire = "responses" | "anthropic" | "chat"`).
+    ///
+    /// Single source for the client wire resolver and the capability reporter
+    /// so the two cannot drift. `None` means "no preference" — the provider's
+    /// static policy applies.
+    pub(crate) fn provider_wire_dialect(&self, provider: ApiProvider) -> Option<&str> {
+        self.provider_config_for(provider)?
+            .wire
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
     pub(crate) fn provider_config_for(&self, provider: ApiProvider) -> Option<&ProviderConfig> {
         let providers = self.providers.as_ref()?;
         // The custom provider's config lives in the flatten map, keyed by the
@@ -9497,6 +9558,24 @@ fn wire_config_prefers_anthropic(wire: Option<&str>) -> bool {
     )
 }
 
+fn wire_config_prefers_responses(wire: Option<&str>) -> bool {
+    let Some(raw) = wire.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let normalized = raw.to_ascii_lowercase().replace(['_', ' '], "-");
+    matches!(
+        normalized.as_str(),
+        "responses"
+            | "responses-api"
+            | "openai-responses"
+            | "openai-responses-api"
+            | "response"
+            | "response-api"
+            | "openai-responses-compat"
+            | "responses-compat"
+    )
+}
+
 fn modelstudio_mode_is_coding_plan(provider: ApiProvider, mode: Option<&str>) -> bool {
     if matches!(
         provider,
@@ -11189,13 +11268,20 @@ pub fn active_provider_has_config_api_key(config: &Config) -> bool {
     if provider == ApiProvider::OpenaiCodex && !custom_endpoint {
         // The persistent Codex login is the OAuth credential file, analogous to
         // a stored config key. Token env overrides are scored separately by
-        // active_provider_has_env_api_key.
-        let path = crate::oauth::auth_file_path();
+        // active_provider_has_env_api_key. #5772: a consent record alone is not
+        // a credential — the exact consented path (never an ambient candidate)
+        // is read through the secure adapter and must still hold a live token.
+        let Some(consent) = config
+            .provider_config_for(provider)
+            .and_then(|entry| entry.external_credentials.as_ref())
+        else {
+            return false;
+        };
         return config
             .external_credential_read_grant(
                 provider,
                 codewhale_config::ExternalCredentialSource::CodexCli,
-                &path,
+                &consent.path,
             )
             .is_ok_and(|grant| crate::oauth::stored_credentials_present(&grant));
     }
@@ -11795,9 +11881,58 @@ pub(crate) fn save_provider_context_window_for_identity(
     Ok(config_path)
 }
 
+/// Grant-time validation (#5772): read the exact file the user just confirmed,
+/// through the same secure adapter the request path uses, and require it to
+/// hold a usable credential.
+///
+/// This runs *after* the confirmation disclosure and *before* any consent
+/// record is written, which is the whole ordering the consent model depends
+/// on. Persisting first would leave a record claiming a credential exists for
+/// a file that is missing, malformed, or expired — and every status surface
+/// downstream would then have to trust it. Nothing here refreshes, rewrites,
+/// or makes a network request, and no credential value escapes this function.
+fn validate_external_credential_before_consent(
+    consent_provider: codewhale_config::ProviderKind,
+    source: codewhale_config::ExternalCredentialSource,
+    path: &Path,
+) -> Result<()> {
+    let grant = codewhale_config::ExternalCredentialConsentToml::read_only(
+        consent_provider,
+        source,
+        path.to_path_buf(),
+    )
+    .read_grant(consent_provider, source, path)?;
+    match source {
+        codewhale_config::ExternalCredentialSource::CodexCli => {
+            crate::oauth::get_credentials(&grant).map(|_| ())
+        }
+        codewhale_config::ExternalCredentialSource::GrokCli => {
+            crate::xai_oauth::validate_external_credentials(&grant)
+        }
+        codewhale_config::ExternalCredentialSource::DshCli => {
+            crate::dsh_credentials::deepseek_api_key_from_grant(&grant)?
+                .map(|_| ())
+                .context("the DeepSeek Harness credentials file holds no DEEPSEEK_API_KEY")
+        }
+        codewhale_config::ExternalCredentialSource::AgyCli => {
+            crate::agy_credentials::antigravity_oauth_token_from_grant(&grant)?
+                .map(|_| ())
+                .context("the Antigravity credential store holds no OAuth token")
+        }
+        codewhale_config::ExternalCredentialSource::KimiCodeCli => anyhow::bail!(
+            "Kimi CLI credentials are never imported; configure a Kimi API key instead"
+        ),
+    }
+}
+
 /// Persist an explicitly confirmed read-only external credential grant and
 /// update the live mirror only after the comment-preserving disk mutation
-/// succeeds. This function never inspects the external path.
+/// succeeds.
+///
+/// Order is load-bearing (#5772): the caller has already shown the
+/// confirmation disclosure, this function then reads and validates the exact
+/// consented file, and only a usable credential is allowed to produce a
+/// persisted consent record.
 pub(crate) fn persist_external_credential_consent_for_at(
     config_path: Option<&Path>,
     live_config: &mut Config,
@@ -11828,6 +11963,14 @@ pub(crate) fn persist_external_credential_consent_for_at(
     let path = codewhale_config::resolve_external_credential_path(path)?;
     let path_value = path.to_str().context(
         "external credential path cannot be persisted losslessly because it is not valid UTF-8",
+    )?;
+    validate_external_credential_before_consent(consent_provider, source, &path).with_context(
+        || {
+            format!(
+                "no usable {} credential was found, so read-only consent was not saved",
+                source.owner_label()
+            )
+        },
     )?;
     let config_path = match config_path {
         Some(path) => path.to_path_buf(),

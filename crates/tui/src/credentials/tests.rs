@@ -283,8 +283,7 @@ fn delete_removes_the_entry() {
 fn map_auth_context_answers_without_touching_the_process() {
     let ctx = MapAuthContext::new()
         .with_env("DEEPSEEK_API_KEY", "value")
-        .with_env("BLANK_KEY", "   ")
-        .with_file("/tmp/present.json");
+        .with_env("BLANK_KEY", "   ");
     assert_eq!(ctx.env("DEEPSEEK_API_KEY").as_deref(), Some("value"));
     assert_eq!(
         ctx.env("BLANK_KEY"),
@@ -292,6 +291,4 @@ fn map_auth_context_answers_without_touching_the_process() {
         "blank exports are not credentials"
     );
     assert_eq!(ctx.env("UNSET_KEY"), None);
-    assert!(ctx.file_exists(std::path::Path::new("/tmp/present.json")));
-    assert!(!ctx.file_exists(std::path::Path::new("/tmp/absent.json")));
 }

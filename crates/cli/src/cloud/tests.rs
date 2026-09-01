@@ -45,6 +45,15 @@ fn response(status: u16, body: serde_json::Value) -> CloudResponse {
     CloudResponse {
         status,
         body: serde_json::to_vec(&body).unwrap(),
+        retry_after: None,
+    }
+}
+
+fn response_retry_after(status: u16, body: serde_json::Value, seconds: u64) -> CloudResponse {
+    CloudResponse {
+        status,
+        body: serde_json::to_vec(&body).unwrap(),
+        retry_after: Some(seconds),
     }
 }
 
@@ -311,6 +320,7 @@ fn device_flow_handles_pending_then_authorized_without_printing_tokens() {
         &config,
         &secrets,
         &secrets,
+        &machine::MachineKeyEnv::default(),
         &transport,
         &mut output,
         &mut key_reader,
@@ -405,6 +415,7 @@ fn status_refreshes_once_on_unauthorized_and_never_displays_tokens() {
         &config,
         &secrets,
         &secrets,
+        &machine::MachineKeyEnv::default(),
         &transport,
         &mut output,
         &mut key_reader,
@@ -446,6 +457,7 @@ fn account_pull_refuses_to_claim_unimplemented_local_import() {
         &config,
         &secrets,
         &secrets,
+        &machine::MachineKeyEnv::default(),
         &transport,
         &mut output,
         &mut key_reader,
@@ -492,6 +504,7 @@ fn account_pull_dry_run_is_truthful_and_read_only() {
         &config,
         &secrets,
         &secrets,
+        &machine::MachineKeyEnv::default(),
         &transport,
         &mut output,
         &mut key_reader,
@@ -554,6 +567,80 @@ fn non_terminal_refresh_responses_preserve_the_local_session() {
         assert_eq!(requests[0].path, "/api/me");
         assert_eq!(requests[1].path, "/api/auth/refresh");
     }
+}
+
+/// Revoke is defined as idempotent by the control plane (a repeat returns the
+/// identical `revokedAt`), so a rate-limited revoke may be replayed — and the
+/// server's own `Retry-After` decides how long CI waits, not a guess.
+#[test]
+fn a_rate_limited_revoke_waits_the_server_named_interval_and_replays() {
+    let (secrets, _) = test_secrets();
+    let transport = FakeTransport::new(vec![
+        response_retry_after(
+            429,
+            json!({
+                "error": "rate_limited",
+                "message": "slow down",
+                "details": { "code": "rate_limited" }
+            }),
+            4,
+        ),
+        response(
+            200,
+            json!({ "ok": true, "apiKey": { "id": "3f2a9c1e4b7d8a0f5c6e2b91", "revokedAt": "2026-02-02T00:00:00Z" } }),
+        ),
+    ]);
+    let client = CloudClient::new(&transport, &secrets, "default", "https://api.codewhale.net");
+    client
+        .save_auth(auth("access-secret", "refresh-secret", "acct-1"))
+        .unwrap();
+    let mut slept = Vec::new();
+    let mut sleeper = |duration: Duration| slept.push(duration);
+    let response = client
+        .execute_authenticated_with_retry(
+            HttpMethod::Delete,
+            "/api/account/api-keys/3f2a9c1e4b7d8a0f5c6e2b91",
+            None,
+            machine::Retry::Idempotent,
+            &mut sleeper,
+        )
+        .unwrap();
+    assert_eq!(response.status, 200);
+    assert_eq!(slept, vec![Duration::from_secs(4)]);
+    assert_eq!(transport.requests().len(), 2);
+}
+
+/// The one POST in this surface mints a secret shown exactly once. A replay
+/// that actually succeeded server-side would leave a key the caller can never
+/// revoke by id, so `Retry::Never` must mean never — even on a 429.
+#[test]
+fn a_rate_limited_create_is_never_replayed() {
+    let (secrets, _) = test_secrets();
+    let transport = FakeTransport::new(vec![response_retry_after(
+        429,
+        json!({
+            "error": "rate_limited",
+            "message": "slow down",
+            "details": { "code": "rate_limited" }
+        }),
+        4,
+    )]);
+    let client = CloudClient::new(&transport, &secrets, "default", "https://api.codewhale.net");
+    client
+        .save_auth(auth("access-secret", "refresh-secret", "acct-1"))
+        .unwrap();
+    let mut sleeper = |_: Duration| panic!("create must never sleep-and-retry");
+    let response = client
+        .execute_authenticated_with_retry(
+            HttpMethod::Post,
+            "/api/account/api-keys",
+            Some(b"{}".to_vec()),
+            machine::Retry::Never,
+            &mut sleeper,
+        )
+        .unwrap();
+    assert_eq!(response.status, 429);
+    assert_eq!(transport.requests().len(), 1);
 }
 
 #[test]
@@ -670,6 +757,7 @@ fn set_list_and_remove_use_account_routes_without_secret_output() {
             &config,
             &secrets,
             &secrets,
+            &machine::MachineKeyEnv::default(),
             &transport,
             &mut output,
             &mut key_reader,
@@ -733,6 +821,7 @@ fn from_local_uses_config_without_printing_or_requiring_an_inline_key() {
         &config,
         &secrets,
         &secrets,
+        &machine::MachineKeyEnv::default(),
         &transport,
         &mut output,
         &mut key_reader,
@@ -792,6 +881,7 @@ fn logout_recovers_from_a_corrupt_local_session_record() {
         &config,
         &secrets,
         &secrets,
+        &machine::MachineKeyEnv::default(),
         &transport,
         &mut output,
         &mut key_reader,
@@ -935,6 +1025,7 @@ fn account_login_timeout_fails_the_command() {
         &config,
         &secrets,
         &secrets,
+        &machine::MachineKeyEnv::default(),
         &pending,
         &mut output,
         &mut key_reader,
@@ -949,4 +1040,325 @@ fn account_login_timeout_fails_the_command() {
         err.to_string().contains("login timed out"),
         "timeout error text: {err}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Machine-token command surface, end to end through `run_with`.
+// ---------------------------------------------------------------------------
+
+const MACHINE_TOKEN: &str =
+    "cwc_key_3f2a9c1e4b7d8a0f5c6e2b91_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-xQRST";
+
+fn machine_env() -> machine::MachineKeyEnv {
+    machine::MachineKeyEnv::from_raw(Some(MACHINE_TOKEN))
+}
+
+/// Drive one `codewhale account …` invocation with a scripted transport.
+fn run_account(
+    argv: &[&str],
+    machine: &machine::MachineKeyEnv,
+    secrets: &Secrets,
+    transport: &FakeTransport,
+) -> (Result<()>, String) {
+    let (temp, config) = test_config();
+    let _keep_temp = temp;
+    let mut output = Vec::new();
+    let mut key_reader = |_| bail!("key reader should not be called");
+    let mut opener = |_| true;
+    let mut sleeper = |_| {};
+    let result = run_with(
+        command(argv),
+        "default",
+        "https://api.codewhale.net",
+        &config,
+        secrets,
+        secrets,
+        machine,
+        transport,
+        &mut output,
+        &mut key_reader,
+        &mut opener,
+        &mut sleeper,
+    );
+    (result, String::from_utf8(output).unwrap())
+}
+
+#[test]
+fn whoami_with_a_machine_key_uses_the_key_route_and_never_the_session_route() {
+    let (secrets, _) = test_secrets();
+    let transport = FakeTransport::new(vec![response(
+        200,
+        json!({
+            "account": { "id": "user_1", "displayName": "Hunter", "email": "h@example.test",
+                         "region": "us-west", "plan": "free" },
+            "apiKey": { "id": "3f2a9c1e4b7d8a0f5c6e2b91", "name": "github-actions",
+                        "displayPrefix": "cwc_key_3f2a9c1e4b7d8a0f5c6e2b91",
+                        "scopes": ["account:read", "agent:run"],
+                        "createdAt": "2026-01-01T00:00:00Z" },
+            "agent": { "configured": true, "modelProvider": "deepseek" }
+        }),
+    )]);
+    let (result, output) = run_account(
+        &["codewhale", "account", "whoami"],
+        &machine_env(),
+        &secrets,
+        &transport,
+    );
+    result.unwrap();
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/api/account/api-key/whoami");
+    // Exactly one credential on the wire, and it is the machine key.
+    assert_eq!(requests[0].bearer.as_deref(), Some(MACHINE_TOKEN));
+    assert!(output.contains("user_1"), "{output}");
+    assert!(
+        output.contains("cwc_key_3f2a9c1e4b7d8a0f5c6e2b91"),
+        "{output}"
+    );
+    assert!(
+        !output.contains(&MACHINE_TOKEN[32..]),
+        "secret half leaked: {output}"
+    );
+}
+
+/// The load-bearing failure mode: a machine credential that fails must not
+/// quietly become a human one, or CI runs as the wrong identity.
+#[test]
+fn a_rejected_machine_key_never_falls_back_to_the_stored_session() {
+    let (secrets, _) = test_secrets();
+    let transport = FakeTransport::new(vec![response(
+        401,
+        json!({
+            "error": "unauthorized",
+            "message": "invalid key",
+            "details": { "code": "api_key_invalid" }
+        }),
+    )]);
+    // A perfectly good interactive session exists alongside the bad key.
+    CloudClient::new(&transport, &secrets, "default", "https://api.codewhale.net")
+        .save_auth(auth("access-secret", "refresh-secret", "acct-human"))
+        .unwrap();
+    let (result, output) = run_account(
+        &["codewhale", "account", "whoami"],
+        &machine_env(),
+        &secrets,
+        &transport,
+    );
+    let err = result.expect_err("an invalid machine key must fail the command");
+    assert_eq!(
+        transport.requests().len(),
+        1,
+        "there must be no second attempt"
+    );
+    assert!(output.is_empty(), "nothing should be printed: {output}");
+    let machine_error = err
+        .downcast_ref::<machine::MachineError>()
+        .expect("the failure must carry a class");
+    assert_eq!(machine_error.exit_code, machine::EXIT_AUTH);
+    assert!(err.to_string().contains("is not valid"), "{err}");
+    // The human session is untouched: a bad key is not a reason to log anyone out.
+    assert!(
+        CloudClient::new(&transport, &secrets, "default", "https://api.codewhale.net")
+            .load_auth()
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn managing_keys_with_only_a_machine_key_is_refused_before_anything_is_sent() {
+    let (secrets, _) = test_secrets();
+    for argv in [
+        vec!["codewhale", "account", "api-keys", "list"],
+        vec!["codewhale", "account", "api-keys", "create", "--name", "ci"],
+        vec![
+            "codewhale",
+            "account",
+            "api-keys",
+            "revoke",
+            "3f2a9c1e4b7d8a0f5c6e2b91",
+        ],
+    ] {
+        let transport = FakeTransport::new(Vec::new());
+        let (result, output) = run_account(&argv, &machine_env(), &secrets, &transport);
+        let err = result.expect_err("a key cannot manage keys");
+        assert!(
+            transport.requests().is_empty(),
+            "{argv:?} put the key on the wire"
+        );
+        assert!(output.is_empty(), "{argv:?}: {output}");
+        assert!(
+            err.to_string()
+                .contains("Managing API keys needs an interactive login."),
+            "{argv:?}: {err}"
+        );
+    }
+}
+
+#[test]
+fn creating_a_key_prints_the_secret_exactly_once_and_saves_it_nowhere() {
+    let (secrets, keyring) = test_secrets();
+    let transport = FakeTransport::new(vec![response(
+        201,
+        json!({
+            "apiKey": { "id": "3f2a9c1e4b7d8a0f5c6e2b91", "name": "github-actions",
+                        "displayPrefix": "cwc_key_3f2a9c1e4b7d8a0f5c6e2b91",
+                        "scopes": ["account:read", "agent:run"],
+                        "createdAt": "2026-01-01T00:00:00Z", "expiresAt": null },
+            "secret": MACHINE_TOKEN
+        }),
+    )]);
+    CloudClient::new(&transport, &secrets, "default", "https://api.codewhale.net")
+        .save_auth(auth("access-secret", "refresh-secret", "acct-human"))
+        .unwrap();
+    let (result, output) = run_account(
+        &[
+            "codewhale",
+            "account",
+            "api-keys",
+            "create",
+            "--name",
+            "github-actions",
+            "--expires-in-days",
+            "90",
+        ],
+        &machine::MachineKeyEnv::default(),
+        &secrets,
+        &transport,
+    );
+    result.unwrap();
+    assert_eq!(output.matches(MACHINE_TOKEN).count(), 1, "{output}");
+    assert!(
+        output.contains("ONLY TIME YOU WILL SEE THIS SECRET"),
+        "{output}"
+    );
+
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/api/account/api-keys");
+    let body: serde_json::Value =
+        serde_json::from_slice(requests[0].body.as_ref().unwrap()).unwrap();
+    assert_eq!(body["name"], "github-actions");
+    assert_eq!(body["expiresInDays"], 90);
+    // Scopes omitted means "both"; sending an empty array would mean nothing.
+    assert!(body.get("scopes").is_none(), "{body}");
+
+    // The plaintext exists in one response and nowhere else, ever: creating a
+    // key must not write it into the session record on its way past.
+    let stored = keyring
+        .get(&cloud_auth_slot("default", "https://api.codewhale.net"))
+        .unwrap()
+        .expect("the session record is still there");
+    assert!(
+        !stored.contains(MACHINE_TOKEN),
+        "the secret reached storage"
+    );
+}
+
+#[test]
+fn a_bad_key_name_is_rejected_locally_without_a_round_trip() {
+    let (secrets, _) = test_secrets();
+    let transport = FakeTransport::new(Vec::new());
+    CloudClient::new(&transport, &secrets, "default", "https://api.codewhale.net")
+        .save_auth(auth("access-secret", "refresh-secret", "acct-human"))
+        .unwrap();
+    let (result, _) = run_account(
+        &[
+            "codewhale",
+            "account",
+            "api-keys",
+            "create",
+            "--name",
+            "bad*name",
+        ],
+        &machine::MachineKeyEnv::default(),
+        &secrets,
+        &transport,
+    );
+    let err = result.expect_err("`*` is outside the server's name pattern");
+    assert!(transport.requests().is_empty());
+    assert!(
+        err.to_string().contains("only letters, digits, spaces"),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_agent_precondition_surfaces_the_409_with_its_own_exit_class() {
+    let (secrets, _) = test_secrets();
+    let transport = FakeTransport::new(vec![response(
+        409,
+        json!({
+            "error": "conflict",
+            "message": "no agent model",
+            "details": { "code": "account_agent_model_unconfigured" }
+        }),
+    )]);
+    let (result, _) = run_account(
+        &["codewhale", "account", "agent"],
+        &machine_env(),
+        &secrets,
+        &transport,
+    );
+    let err = result.expect_err("machine work needs a model");
+    let machine_error = err.downcast_ref::<machine::MachineError>().unwrap();
+    // A configuration problem, not a credential problem — and CI must be able
+    // to tell them apart from the exit code alone.
+    assert_eq!(machine_error.exit_code, machine::EXIT_AGENT_UNCONFIGURED);
+    assert_ne!(machine_error.exit_code, machine::EXIT_AUTH);
+    assert_eq!(transport.requests().len(), 1, "409 must not be retried");
+    assert!(
+        err.to_string().contains("codewhale account keys set"),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_agent_command_has_no_session_fallback() {
+    let (secrets, _) = test_secrets();
+    let transport = FakeTransport::new(Vec::new());
+    CloudClient::new(&transport, &secrets, "default", "https://api.codewhale.net")
+        .save_auth(auth("access-secret", "refresh-secret", "acct-human"))
+        .unwrap();
+    let (result, _) = run_account(
+        &["codewhale", "account", "agent"],
+        &machine::MachineKeyEnv::default(),
+        &secrets,
+        &transport,
+    );
+    let err = result.expect_err("the agent route is machine-key-only");
+    assert!(transport.requests().is_empty());
+    assert!(err.to_string().contains("CODEWHALE_API_KEY"), "{err}");
+}
+
+#[test]
+fn whoami_without_a_machine_key_still_reports_the_interactive_session() {
+    let (secrets, _) = test_secrets();
+    let transport = FakeTransport::new(vec![response(200, account("acct-human"))]);
+    CloudClient::new(&transport, &secrets, "default", "https://api.codewhale.net")
+        .save_auth(auth("access-secret", "refresh-secret", "acct-human"))
+        .unwrap();
+    let (result, output) = run_account(
+        &["codewhale", "account", "whoami"],
+        &machine::MachineKeyEnv::default(),
+        &secrets,
+        &transport,
+    );
+    result.unwrap();
+    assert_eq!(transport.requests()[0].path, "/api/me");
+    assert!(output.contains("acct-human"), "{output}");
+}
+
+#[test]
+fn the_machine_token_surface_is_a_different_noun_from_the_provider_vault() {
+    // `account keys` is the BYOK provider vault; `account api-keys` is the
+    // machine tokens. Merging them would let one typo revoke the wrong thing.
+    assert!(matches!(
+        command(&["codewhale", "account", "keys", "list"]),
+        CloudCommand::Keys(_)
+    ));
+    assert!(matches!(
+        command(&["codewhale", "account", "api-keys", "list"]),
+        CloudCommand::ApiKeys(_)
+    ));
 }

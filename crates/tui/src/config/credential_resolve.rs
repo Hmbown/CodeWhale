@@ -38,7 +38,19 @@
 //! * External CLI credential files are only ever consulted through
 //!   [`Config::external_credential_read_grant`], which enforces the read-only
 //!   consent model (exact path, explicit consent, never refreshed, never
-//!   rewritten). This resolver adds no new way to reach them.
+//!   rewritten). This resolver adds no new way to reach them, and #5772 tightens
+//!   the two ends of that model:
+//!   - **Nothing happens before consent.** With no persisted consent record
+//!     for a provider, this resolver resolves no candidate path, performs no
+//!     filesystem access, and names no location. Deriving a candidate from
+//!     `HOME` just to say "absent" is itself an unconsented disclosure of where
+//!     another CLI keeps credentials.
+//!   - **A consent record is not a credential.** Consent proves the user
+//!     authorized reading one exact file; it does not prove that file still
+//!     holds a usable token. Once consent exists, the consented file is read
+//!     through the secure adapter — the read the user actually authorized — so
+//!     a missing, malformed, or expired external credential resolves as missing
+//!     rather than masquerading as a stored one.
 //!
 //! # Redaction
 //!
@@ -127,28 +139,20 @@ pub(crate) fn resolve_credential_source_with(
     if provider == ApiProvider::OpenaiCodex && !config.provider_uses_custom_endpoint(provider) {
         // Token env overrides are checked above. An external Codex login is
         // considered only after exact read-only consent has been validated.
-        let path = crate::oauth::auth_file_path();
-        let granted = config
-            .external_credential_read_grant(
-                provider,
-                codewhale_config::ExternalCredentialSource::CodexCli,
-                &path,
-            )
-            .is_ok_and(|grant| crate::oauth::stored_credentials_present(&grant));
-        return if granted {
-            CredentialResolution::found(CredentialSource::ExternalGrant {
-                cli: "Codex CLI".to_string(),
-                path: path.display().to_string(),
-            })
-        } else {
-            probed.push(external_grant_probe(
-                "Codex CLI",
-                &path,
-                "codewhale auth external-consent --provider openai-codex --mode read-only",
-                ctx,
-            ));
-            CredentialResolution::missing(probed)
-        };
+        match resolve_external_grant(
+            config,
+            provider,
+            codewhale_config::ExternalCredentialSource::CodexCli,
+            "Codex CLI",
+            "codewhale auth external-consent --provider openai-codex --mode read-only",
+            crate::oauth::stored_credentials_present,
+        ) {
+            Ok(source) => return CredentialResolution::found(source),
+            Err(probe) => {
+                probed.push(probe);
+                return CredentialResolution::missing(probed);
+            }
+        }
     }
     if provider == ApiProvider::Xai
         && !config.provider_uses_custom_endpoint(provider)
@@ -162,62 +166,44 @@ pub(crate) fn resolve_credential_source_with(
         });
     }
     if provider == ApiProvider::Antigravity && !config.provider_uses_custom_endpoint(provider) {
-        let path = codewhale_config::default_agy_credentials_path();
-        if config
-            .external_credential_read_grant(
-                provider,
-                codewhale_config::ExternalCredentialSource::AgyCli,
-                &path,
-            )
-            .is_ok_and(|grant| {
-                crate::agy_credentials::antigravity_oauth_token_from_grant(&grant)
+        match resolve_external_grant(
+            config,
+            provider,
+            codewhale_config::ExternalCredentialSource::AgyCli,
+            "Antigravity CLI",
+            "codewhale auth external-consent --provider antigravity --mode read-only",
+            |grant| {
+                crate::agy_credentials::antigravity_oauth_token_from_grant(grant)
                     .ok()
                     .flatten()
                     .is_some()
-            })
-        {
-            return CredentialResolution::found(CredentialSource::ExternalGrant {
-                cli: "Antigravity CLI".to_string(),
-                path: path.display().to_string(),
-            });
+            },
+        ) {
+            Ok(source) => return CredentialResolution::found(source),
+            Err(probe) => probed.push(probe),
         }
-        probed.push(external_grant_probe(
-            "Antigravity CLI",
-            &path,
-            "codewhale auth external-consent --provider antigravity --mode read-only",
-            ctx,
-        ));
     }
     if matches!(
         provider,
         ApiProvider::Deepseek | ApiProvider::DeepseekAnthropic
     ) && !config.provider_uses_custom_endpoint(provider)
     {
-        let path = codewhale_config::default_dsh_credentials_path();
-        if config
-            .external_credential_read_grant(
-                provider,
-                codewhale_config::ExternalCredentialSource::DshCli,
-                &path,
-            )
-            .is_ok_and(|grant| {
-                crate::dsh_credentials::deepseek_api_key_from_grant(&grant)
+        match resolve_external_grant(
+            config,
+            provider,
+            codewhale_config::ExternalCredentialSource::DshCli,
+            "DeepSeek Harness",
+            "codewhale auth external-consent --provider deepseek --mode read-only",
+            |grant| {
+                crate::dsh_credentials::deepseek_api_key_from_grant(grant)
                     .ok()
                     .flatten()
                     .is_some()
-            })
-        {
-            return CredentialResolution::found(CredentialSource::ExternalGrant {
-                cli: "DeepSeek Harness".to_string(),
-                path: path.display().to_string(),
-            });
+            },
+        ) {
+            Ok(source) => return CredentialResolution::found(source),
+            Err(probe) => probed.push(probe),
         }
-        probed.push(external_grant_probe(
-            "DeepSeek Harness",
-            &path,
-            "codewhale auth external-consent --provider deepseek --mode read-only",
-            ctx,
-        ));
     }
 
     if !auth_mode_requires_api_key(auth_mode.as_deref())
@@ -322,26 +308,62 @@ fn secret_store_probe(slot: &str, provider: ApiProvider) -> CredentialProbe {
     )
 }
 
-fn external_grant_probe(
+/// Resolve one external CLI credential owner for `provider` (#5772).
+///
+/// The order here is the whole invariant, and each step is gated on the one
+/// before it:
+///
+/// 1. **No consent record** — nothing is resolved, stat'ed, read, or named.
+///    The probe offers only the explicit consent command, because deriving a
+///    candidate path from `HOME` in order to report it would already disclose
+///    where another CLI keeps credentials.
+/// 2. **Consent record, provider not active** — the grant is refused by
+///    [`Config::external_credential_read_grant`], so the record is reported as
+///    dormant. Still no filesystem access.
+/// 3. **Consent record, provider active** — the exact consented file is read
+///    through the secure adapter and `validate` decides whether it holds a
+///    usable credential. Structural consent alone never resolves as found.
+fn resolve_external_grant(
+    config: &Config,
+    provider: ApiProvider,
+    source: codewhale_config::ExternalCredentialSource,
     cli: &str,
-    path: &std::path::Path,
     consent_command: &str,
-    ctx: &dyn AuthContext,
-) -> CredentialProbe {
-    let exists = ctx.file_exists(path);
-    let place = if exists {
-        format!(
-            "{cli} credentials at {} (present, not consented)",
-            path.display()
-        )
-    } else {
-        format!("{cli} credentials at {} (absent)", path.display())
+    validate: impl FnOnce(&codewhale_config::ExternalCredentialReadGrant) -> bool,
+) -> Result<CredentialSource, CredentialProbe> {
+    let Some(consent) = config
+        .provider_config_for(provider)
+        .and_then(|entry| entry.external_credentials.as_ref())
+    else {
+        return Err(CredentialProbe::with_fix(
+            format!("{cli} credentials (no read-only consent recorded)"),
+            consent_command.to_string(),
+        ));
     };
-    if exists {
-        CredentialProbe::with_fix(place, consent_command.to_string())
-    } else {
-        CredentialProbe::new(place)
+    // The pinned path comes from the consent record the user confirmed, never
+    // from an ambient candidate, so no resolver runs here either.
+    let Ok(grant) = config.external_credential_read_grant(provider, source, &consent.path) else {
+        return Err(CredentialProbe::with_fix(
+            format!("{cli} credentials (consent dormant until this provider is selected)"),
+            format!("codewhale config set provider {}", provider.as_str()),
+        ));
+    };
+    if validate(&grant) {
+        return Ok(CredentialSource::ExternalGrant {
+            cli: cli.to_string(),
+            path: consent.path.display().to_string(),
+        });
     }
+    // Consented, read, and unusable: missing, malformed, or expired. Read-only
+    // consent never refreshes another CLI's file, so the fix is to renew it
+    // there — not to re-consent here.
+    Err(CredentialProbe::with_fix(
+        format!("{cli} credentials (consented, but no usable credential in that file)"),
+        format!(
+            "log in again with {cli}, or run codewhale auth set --provider {}",
+            provider.as_str()
+        ),
+    ))
 }
 
 #[cfg(test)]
@@ -480,5 +502,179 @@ mod tests {
                 resolution.source
             );
         }
+    }
+
+    /// #5772: with reuse off, an existing external CLI file must not be
+    /// stat'ed, read, or adopted — and the probe must not even claim whether
+    /// the candidate exists.
+    #[test]
+    fn unconsented_external_candidates_are_never_probed() {
+        let _lock = lock_test_env();
+        let temp = tempfile::tempdir().expect("external fixture");
+        let codex_path = temp
+            .path()
+            .canonicalize()
+            .expect("canonical temp root")
+            .join("auth.json");
+        std::fs::write(&codex_path, "{\"tokens\":{\"access_token\":\"x\"}}").expect("fixture");
+        let _auth = EnvVarGuard::set("OPENAI_CODEX_AUTH_FILE", &codex_path);
+        let _access = EnvVarGuard::remove("OPENAI_CODEX_ACCESS_TOKEN");
+        let _legacy_access = EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
+        let _cli_key = EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
+        let config = Config {
+            provider: Some("openai-codex".to_string()),
+            ..Config::default()
+        };
+
+        crate::external_credentials::reset_side_effect_trap();
+        let resolution = resolve_credential_source(&config, ApiProvider::OpenaiCodex);
+        assert!(!resolution.is_present());
+        assert!(!has_api_key_for(&config, ApiProvider::OpenaiCodex));
+        let checked = resolution.checked_places();
+        assert!(
+            checked.contains("no read-only consent recorded"),
+            "the probe explains the missing consent without an existence claim: {checked}"
+        );
+        assert!(
+            !checked.contains("(absent)") && !checked.contains("present, not consented"),
+            "no stat means no existence claim: {checked}"
+        );
+        assert_eq!(
+            crate::external_credentials::complete_side_effect_trap_counts(),
+            (0, 0, 0, 0, 0),
+            "resolution must not touch external credential state"
+        );
+    }
+
+    /// #5772: a consent record is not a credential. With a persisted consent
+    /// record whose pinned file is absent, resolution performs exactly the
+    /// read the user authorized — one secure open of the exact consented path —
+    /// and resolves as *missing* rather than masquerading as a stored
+    /// credential. No write, refresh, or network side effect is permitted.
+    #[test]
+    fn consented_external_resolution_validates_the_exact_consented_file() {
+        let _lock = lock_test_env();
+        let temp = tempfile::tempdir().expect("external fixture");
+        let codex_path = temp
+            .path()
+            .canonicalize()
+            .expect("canonical temp root")
+            .join("absent-auth.json");
+        let _auth = EnvVarGuard::set("OPENAI_CODEX_AUTH_FILE", &codex_path);
+        let _access = EnvVarGuard::remove("OPENAI_CODEX_ACCESS_TOKEN");
+        let _legacy_access = EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
+        let _cli_key = EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
+        let config = Config {
+            provider: Some("openai-codex".to_string()),
+            providers: Some(ProvidersConfig {
+                openai_codex: ProviderConfig {
+                    auth_mode: Some("oauth".to_string()),
+                    external_credentials: Some(
+                        codewhale_config::ExternalCredentialConsentToml::read_only(
+                            codewhale_config::ProviderKind::OpenaiCodex,
+                            codewhale_config::ExternalCredentialSource::CodexCli,
+                            codex_path.clone(),
+                        ),
+                    ),
+                    ..ProviderConfig::default()
+                },
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        crate::external_credentials::reset_side_effect_trap();
+        let resolution = resolve_credential_source(&config, ApiProvider::OpenaiCodex);
+        assert!(
+            !resolution.is_present(),
+            "a consent record whose file is gone must resolve as missing: {:?}",
+            resolution.source
+        );
+        assert!(
+            resolution
+                .checked_places()
+                .contains("consented, but no usable credential in that file"),
+            "the probe names the consented-read outcome: {}",
+            resolution.checked_places()
+        );
+        assert_eq!(
+            crate::external_credentials::complete_side_effect_trap_counts(),
+            (1, 0, 0, 0, 0),
+            "one secure open attempt of the exact consented path; NotFound stops before the read"
+        );
+        assert!(!has_api_key_for(&config, ApiProvider::OpenaiCodex));
+        assert_eq!(
+            crate::external_credentials::complete_side_effect_trap_counts(),
+            (2, 0, 0, 0, 0),
+            "has_api_key_for re-resolves through the same consented read; still no write/refresh/network"
+        );
+    }
+
+    /// #5772: a persisted Antigravity consent record authorizes reading the
+    /// exact pinned file, and nothing more. A file that holds no usable OAuth
+    /// token resolves as missing, the consented read leaves the file
+    /// byte-identical, and no write, refresh, or network side effect occurs.
+    #[test]
+    fn antigravity_consent_read_validates_without_resolving_a_route() {
+        let _lock = lock_test_env();
+        let temp = tempfile::tempdir().expect("external fixture");
+        let agy_path = temp
+            .path()
+            .canonicalize()
+            .expect("canonical temp root")
+            .join("state.vscdb");
+        std::fs::write(&agy_path, "invalid-agy-credential-bytes").expect("fixture");
+        let home = temp.path().join("home");
+        let _home = EnvVarGuard::set("HOME", &home);
+        let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", home.join("codewhale"));
+        let _agy_key = EnvVarGuard::remove("ANTIGRAVITY_API_KEY");
+        let _cli_key = EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
+        let config = Config {
+            provider: Some("antigravity".to_string()),
+            providers: Some(ProvidersConfig {
+                antigravity: ProviderConfig {
+                    auth_mode: Some("oauth".to_string()),
+                    external_credentials: Some(
+                        codewhale_config::ExternalCredentialConsentToml::read_only(
+                            codewhale_config::ProviderKind::Antigravity,
+                            codewhale_config::ExternalCredentialSource::AgyCli,
+                            agy_path.clone(),
+                        ),
+                    ),
+                    ..ProviderConfig::default()
+                },
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        crate::external_credentials::reset_side_effect_trap();
+        let resolution = resolve_credential_source(&config, ApiProvider::Antigravity);
+        assert!(
+            !resolution.is_present(),
+            "an unusable consented AGY file must resolve as missing: {:?}",
+            resolution.source
+        );
+        assert!(!has_api_key_for(&config, ApiProvider::Antigravity));
+        assert!(
+            resolution
+                .checked_places()
+                .contains("consented, but no usable credential in that file"),
+            "the probe names the consented-read outcome: {}",
+            resolution.checked_places()
+        );
+        // The AGY adapter secure-opens the file directly (SQLite header
+        // probe) rather than through `read_to_string`, so the trap observes
+        // only that no bounded read, write, refresh, or network call ran;
+        // the byte-identical fixture below is the read-only evidence.
+        assert_eq!(
+            crate::external_credentials::complete_side_effect_trap_counts(),
+            (0, 0, 0, 0, 0),
+            "read-only consent never writes, refreshes, or reaches the network"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&agy_path).expect("AGY fixture unchanged"),
+            "invalid-agy-credential-bytes"
+        );
     }
 }

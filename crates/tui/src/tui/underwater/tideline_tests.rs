@@ -12,7 +12,9 @@ use super::{
     tideline_startup_hitboxes,
 };
 use crate::palette::UI_THEME;
-use crate::tui::golden_harness::{BLOCKER_SIZES, assert_matches_golden, render_golden_text};
+use crate::tui::golden_harness::{
+    BLOCKER_SIZES, assert_matches_golden, render_golden_ink, render_golden_text, render_ink_entries,
+};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 fn draw(width: u16, height: u16, startup: &TidelineStartup<'_>) -> String {
@@ -337,4 +339,72 @@ fn startup_degenerate_sizes_do_not_panic() {
         let _ = draw(w, h, &startup);
         let _ = tideline_startup_hitboxes(Rect::new(0, 0, w, h));
     }
+}
+
+#[test]
+fn startup_ink_plane_matches_goldens_at_blocker_sizes() {
+    // The symbol goldens cannot see colour: a screen can go from a gold mark
+    // over a blue field to uniform grey without moving a glyph. This golden
+    // is the colour half of that contract.
+    let fixture = returning();
+    for (w, h) in BLOCKER_SIZES {
+        let startup = fixture.widget(&UI_THEME);
+        let rendered = render_golden_ink(w, h, |buf| {
+            render_tideline_startup(Rect::new(0, 0, w, h), buf, &startup);
+        });
+        assert_matches_golden(&format!("startup_ink_{w}x{h}"), &rendered);
+    }
+}
+
+#[test]
+fn startup_hero_paints_the_mark_in_signal_gold() {
+    // Anti-regression guard. The mark has been added to this hero and then
+    // deleted again twice (a2af80480d added it, 9c8814e8cf removed it and
+    // re-blessed all five startup goldens in the same commit). A symbol
+    // golden cannot defend itself against its own bless, so state the
+    // requirement positively: the hero paints the mark, in the gold slot.
+    let fixture = returning();
+    let startup = fixture.widget(&UI_THEME);
+    let (_plane, entries) = render_ink_entries(120, 32, |buf| {
+        render_tideline_startup(Rect::new(0, 0, 120, 32), buf, &startup);
+    });
+    let gold = match UI_THEME.accent_action {
+        ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02X}{g:02X}{b:02X}"),
+        other => panic!("gold slot is not RGB: {other:?}"),
+    };
+    let mark = entries
+        .iter()
+        .find(|entry| entry.description.starts_with(&gold) && entry.glyph_cells > 0);
+    assert!(
+        mark.is_some(),
+        "startup hero paints no {gold} cells; the mark is gone again. Inks: {:#?}",
+        entries
+            .iter()
+            .filter(|e| e.glyph_cells > 0)
+            .collect::<Vec<_>>()
+    );
+    let cells = mark.map_or(0, |entry| entry.glyph_cells);
+    assert!(
+        cells >= 20,
+        "only {cells} gold cells: the mark is present but degenerate"
+    );
+}
+
+#[test]
+fn startup_does_not_leave_the_hero_band_empty() {
+    // The complaint this screen was rebuilt for was literal: at 120x32 the
+    // top twelve rows painted nothing at all. Hold the floor.
+    let fixture = returning();
+    let startup = fixture.widget(&UI_THEME);
+    let text = draw(120, 32, &startup);
+    let hero_rows: Vec<&str> = text.lines().take(12).collect();
+    let painted = hero_rows
+        .iter()
+        .filter(|row| !row.trim().is_empty())
+        .count();
+    assert!(
+        painted >= 4,
+        "only {painted}/12 hero rows carry ink; that is the empty void:\n{}",
+        hero_rows.join("\n")
+    );
 }

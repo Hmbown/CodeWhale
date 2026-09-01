@@ -24,6 +24,8 @@ use codewhale_secrets::account::{
 use reqwest::Url;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+pub(crate) mod machine;
+
 const MAX_RESPONSE_BYTES: u64 = 256 * 1024;
 const MIN_API_KEY_BYTES: usize = 8;
 const MAX_API_KEY_BYTES: u64 = 4096;
@@ -50,7 +52,17 @@ enum CloudCommand {
     /// Remove this profile's local account session and revoke it when reachable.
     Logout,
     /// Manage provider API keys stored in the signed-in Codewhale account.
+    ///
+    /// These are credentials Codewhale presents *to* a model provider. For the
+    /// machine tokens a customer presents *to* Codewhale, see `api-keys`.
     Keys(CloudKeysArgs),
+    /// Manage Codewhale account API keys: machine tokens for CI.
+    #[command(name = "api-keys")]
+    ApiKeys(machine::ApiKeysArgs),
+    /// Show the account this CLI authenticates as, preferring a machine key.
+    Whoami,
+    /// Check the account's agent-model precondition for machine work.
+    Agent,
     /// Inspect the account document; local settings import is not available yet.
     Pull(CloudPullArgs),
     /// Push local settings to the account document (never automatic, --dry-run required).
@@ -175,19 +187,23 @@ enum HttpMethod {
     Delete,
 }
 
-struct CloudRequest {
+pub(crate) struct CloudRequest {
     method: HttpMethod,
     path: String,
     bearer: Option<String>,
     body: Option<Vec<u8>>,
 }
 
-struct CloudResponse {
+pub(crate) struct CloudResponse {
     status: u16,
     body: Vec<u8>,
+    /// `Retry-After` in whole seconds, when the service supplied one. Kept on
+    /// the response rather than re-parsed by callers so the retry policy has a
+    /// single source for how long the server asked us to wait.
+    retry_after: Option<u64>,
 }
 
-trait CloudTransport {
+pub(crate) trait CloudTransport {
     fn execute(&self, request: CloudRequest) -> Result<CloudResponse>;
 }
 
@@ -240,6 +256,11 @@ impl CloudTransport for ReqwestTransport {
             .send()
             .context("could not reach the Codewhale service")?;
         let status = response.status().as_u16();
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok());
         let mut body = Vec::new();
         response
             .take(MAX_RESPONSE_BYTES + 1)
@@ -248,7 +269,11 @@ impl CloudTransport for ReqwestTransport {
         if body.len() as u64 > MAX_RESPONSE_BYTES {
             bail!("The Codewhale service returned an unexpectedly large response");
         }
-        Ok(CloudResponse { status, body })
+        Ok(CloudResponse {
+            status,
+            body,
+            retry_after,
+        })
     }
 }
 
@@ -286,7 +311,7 @@ struct ModelKeyRequest<'a> {
     label: &'a str,
 }
 
-struct CloudClient<'a, T: CloudTransport> {
+pub(crate) struct CloudClient<'a, T: CloudTransport> {
     transport: &'a T,
     account_store: AccountSessionStore,
 }
@@ -483,6 +508,48 @@ impl<'a, T: CloudTransport> CloudClient<'a, T> {
         }
         Ok(retried)
     }
+
+    /// Whether an interactive session exists for this profile and origin.
+    ///
+    /// A management command asks this before it asks anything of the network,
+    /// so "you have a machine key but no login" is answered locally instead of
+    /// as a 403 from a route the key was never allowed to touch.
+    fn has_session(&self) -> Result<bool> {
+        Ok(self.load_auth()?.is_some())
+    }
+
+    /// `execute_authenticated`, retrying only what the caller marks replayable.
+    ///
+    /// `machine::Retry::Never` is not a default worth having: the one POST in
+    /// this surface mints a secret shown exactly once, so a retry that quietly
+    /// succeeded server-side would leave an unrevocable key behind.
+    fn execute_authenticated_with_retry(
+        &self,
+        method: HttpMethod,
+        path: &str,
+        body: Option<Vec<u8>>,
+        retry: machine::Retry,
+        sleeper: &mut dyn FnMut(Duration),
+    ) -> Result<CloudResponse> {
+        let max_attempts = if retry == machine::Retry::Idempotent {
+            3
+        } else {
+            1
+        };
+        let mut attempt = 1;
+        loop {
+            let response = self.execute_authenticated(method, path, body.clone())?;
+            if (200..300).contains(&response.status) || attempt >= max_attempts {
+                return Ok(response);
+            }
+            let retry_after = response.retry_after;
+            if !machine::classify(&response).retryable {
+                return Ok(response);
+            }
+            sleeper(machine::backoff_delay(attempt, retry_after));
+            attempt += 1;
+        }
+    }
 }
 
 enum KeyReadMode {
@@ -491,10 +558,19 @@ enum KeyReadMode {
 }
 
 pub(crate) fn run(args: CloudArgs, profile: Option<&str>, config: &ConfigStore) -> Result<()> {
-    let requested_base = args
-        .api_base
-        .or_else(|| std::env::var(CLOUD_API_BASE_ENV).ok())
-        .unwrap_or_else(|| DEFAULT_API_BASE.to_string());
+    let machine = machine::MachineKeyEnv::from_process_env();
+    let requested_base = machine::resolve_api_base(
+        args.api_base.as_deref(),
+        std::env::var(machine::MACHINE_API_BASE_ENV).ok().as_deref(),
+        std::env::var(CLOUD_API_BASE_ENV).ok().as_deref(),
+        DEFAULT_API_BASE,
+    );
+    if machine.is_present() {
+        // A machine token is a bearer credential with no replay protection.
+        // Refuse cleartext to a remote host before a transport exists, so
+        // there is no code path on which the key could be written to a socket.
+        machine::require_secure_base(&requested_base)?;
+    }
     let api_base = validate_api_base(&requested_base)?;
     let transport = ReqwestTransport::new(api_base.url.clone())?;
     // Account refresh tokens require an OS credential manager. The ordinary
@@ -516,6 +592,7 @@ pub(crate) fn run(args: CloudArgs, profile: Option<&str>, config: &ConfigStore) 
         config,
         &cloud_secrets,
         &provider_secrets,
+        &machine,
         &transport,
         &mut stdout,
         &mut key_reader,
@@ -569,6 +646,7 @@ fn run_with<T: CloudTransport, W: Write>(
     config: &ConfigStore,
     cloud_secrets: &Secrets,
     provider_secrets: &Secrets,
+    machine: &machine::MachineKeyEnv,
     transport: &T,
     out: &mut W,
     key_reader: &mut dyn FnMut(KeyReadMode) -> Result<String>,
@@ -687,6 +765,31 @@ fn run_with<T: CloudTransport, W: Write>(
                 Ok(())
             }
         },
+        CloudCommand::ApiKeys(api_keys) => {
+            machine::run_api_keys(api_keys, &client, machine, out, sleeper)
+        }
+        CloudCommand::Whoami => match machine.resolve()? {
+            // A present machine key wins and never falls back: silently
+            // downgrading a machine credential to a human one is how CI ends
+            // up running as the wrong identity.
+            Some(key) => {
+                let machine_client = machine::MachineClient::new(transport, key);
+                let who = machine_client.whoami(sleeper)?;
+                machine::write_whoami(out, &who, api_base, machine_client.key_head())
+            }
+            None => {
+                let user = client.me()?;
+                write_account(out, "Signed in to Codewhale.", profile, api_base, &user)
+            }
+        },
+        CloudCommand::Agent => {
+            // The agent route is machine-key-only by design, so CI and humans
+            // never blur in an audit trail. There is no session fallback.
+            let key = machine.require()?;
+            let machine_client = machine::MachineClient::new(transport, key);
+            let agent = machine_client.agent(sleeper)?.agent;
+            machine::write_agent(out, &agent)
+        }
         CloudCommand::Pull(args) => {
             if !args.dry_run {
                 bail!(
@@ -734,6 +837,34 @@ fn run_with<T: CloudTransport, W: Write>(
             Ok(())
         }
     }
+}
+
+/// Resolve the account's configured agent route for a machine-key run.
+///
+/// `codewhale review` hard-errors when a model resolves to several configured
+/// routes. When CI authenticates with a machine key, the account has already
+/// answered that question, so its configured provider is the disambiguator —
+/// no new flag, and no guess. Returns `None` when no machine key is set, which
+/// leaves the ordinary local resolution untouched.
+pub(crate) fn machine_review_provider() -> Result<Option<ProviderKind>> {
+    let machine = machine::MachineKeyEnv::from_process_env();
+    let Some(key) = machine.resolve()? else {
+        return Ok(None);
+    };
+    let requested_base = machine::resolve_api_base(
+        None,
+        std::env::var(machine::MACHINE_API_BASE_ENV).ok().as_deref(),
+        std::env::var(CLOUD_API_BASE_ENV).ok().as_deref(),
+        DEFAULT_API_BASE,
+    );
+    machine::require_secure_base(&requested_base)?;
+    let api_base = validate_api_base(&requested_base)?;
+    let transport = ReqwestTransport::new(api_base.url)?;
+    let client = machine::MachineClient::new(&transport, key);
+    // The call that actually needs a model is the call that refuses without
+    // one, so this precondition runs before any review work starts.
+    let agent = client.agent(&mut |duration| thread::sleep(duration))?.agent;
+    machine::review_provider_from_agent(&agent).map(Some)
 }
 
 fn write_account<W: Write>(
