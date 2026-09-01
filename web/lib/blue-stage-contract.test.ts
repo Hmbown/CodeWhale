@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { resolveWhale } from "./whale-tokens";
 
 const CSS = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 const TUI_TOKENS = readFileSync(
@@ -26,10 +27,16 @@ function selectorBlock(selector: string): string {
   return match[1];
 }
 
+// globals.css names the whale token (`--paper: var(--whale-bg)`) rather than
+// repeating its hex; resolve one hop through the generated app/tokens.css.
 function cssHexIn(block: string, name: string): string {
-  const match = block.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "i"));
+  const match = block.match(new RegExp(`--${name}:\\s*([^;]+);`, "i"));
   if (!match) throw new Error(`Missing CSS token in block: --${name}`);
-  return match[1].toLowerCase();
+  const value = resolveWhale(match[1].trim());
+  if (!/^#[0-9a-f]{6}$/i.test(value)) {
+    throw new Error(`--${name} is not a hex color: ${value}`);
+  }
+  return value.toLowerCase();
 }
 
 const ROOT = selectorBlock(":root");

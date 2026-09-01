@@ -13,6 +13,7 @@
     "sync:latest-release": "node scripts/sync-latest-release.mjs",
     "check:latest-release": "node scripts/sync-latest-release.mjs --check",
     "check:docs": "node scripts/check-docs.mjs",
+    "check:tokens": "python3 ../scripts/export-design-tokens.py --check",
     "check:locales": "node scripts/check-locales.mjs && node scripts/gt-site.mjs check",
     "i18n:gt": "node scripts/gt-site.mjs",
     "check:deploy-env": "node scripts/check-cloudflare-deploy-env.mjs",

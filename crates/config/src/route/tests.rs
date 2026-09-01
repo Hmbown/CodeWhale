@@ -60,6 +60,42 @@ fn models_dev_route_resolver() -> RouteResolver {
     RouteResolver::from_offerings(offerings)
 }
 
+/// Concentrate ids pass through verbatim (plain catalog id, upstream
+/// `provider/model` pin) and only the gateway's own `concentrate/` namespace
+/// is stripped, so `concentrate/auto` reaches the gateway's `auto` router
+/// while Codewhale's bare `auto` stays the resolver sentinel (provider
+/// default). Every selector rides the Responses protocol.
+#[test]
+fn concentrate_passes_ids_through_and_strips_only_its_own_namespace() {
+    let r = models_dev_route_resolver();
+    for (raw, wire) in [
+        ("gpt-5.6-sol", "gpt-5.6-sol"),
+        ("openai/gpt-5.6-sol", "openai/gpt-5.6-sol"),
+        ("anthropic/claude-fable-5", "anthropic/claude-fable-5"),
+        ("concentrate/auto", "auto"),
+        ("concentrate/deepseek-v4-pro", "deepseek-v4-pro"),
+    ] {
+        let out = r
+            .resolve(&req(Some(ProviderKind::Concentrate), Some(raw)))
+            .unwrap_or_else(|e| panic!("{raw} should resolve on concentrate: {e}"));
+        assert_eq!(out.provider_kind(), ProviderKind::Concentrate, "{raw}");
+        assert_eq!(out.wire_model_id().as_str(), wire, "{raw} wire id");
+        assert_eq!(
+            out.protocol(),
+            RequestProtocol::Responses,
+            "{raw} must ride the Responses wire"
+        );
+    }
+
+    // Codewhale's own `auto` sentinel resolves to the provider default, never
+    // to a literal "auto" wire id.
+    let out = r
+        .resolve(&req(Some(ProviderKind::Concentrate), Some("auto")))
+        .expect("auto resolves");
+    assert_eq!(out.wire_model_id().as_str(), "deepseek-v4-pro");
+    assert_eq!(out.protocol(), RequestProtocol::Responses);
+}
+
 #[test]
 fn provider_id_from_kind_uses_canonical_id() {
     assert_eq!(
@@ -308,7 +344,9 @@ fn descriptor_protocol_matches_provider_wire() {
             "{kind:?} protocol must equal the provider wire policy"
         );
         let expected = match kind {
-            ProviderKind::OpenaiCodex => Some(RequestProtocol::Responses),
+            ProviderKind::OpenaiCodex | ProviderKind::Concentrate => {
+                Some(RequestProtocol::Responses)
+            }
             ProviderKind::DeepseekAnthropic
             | ProviderKind::Anthropic
             | ProviderKind::MinimaxAnthropic

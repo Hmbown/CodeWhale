@@ -1,18 +1,18 @@
-//! The Codewhale fluke — the identity mark, as cells.
+//! The Codewhale mark — the identity silhouette, as cells.
 //!
-//! Two marks, two jobs: the fluke (here) is the small/chrome mark, the
-//! variant-B silhouette is the large raster one. Geometry is measured from
-//! mockup `tideline-05`, symmetrized, half-block downsampled.
+//! Side-view whale facing left, `>` prompt-eye, upward fluke. The old
+//! symmetric fluke read as a fish at 16px; this mark cannot be mirrored
+//! about its vertical axis.
 //!
 //! ASCII rungs are drawn, not transliterated — `glyphs::ascii_fallback` maps
-//! every block glyph to `#`, which would flatten the fluke to a blob.
+//! every block glyph to `#`, which would flatten the whale to a blob.
 
 use ratatui::{buffer::Buffer, layout::Rect, style::Color, style::Style};
 
 /// Rungs of the mark's scale ladder, each sampled at its own size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarkSize {
-    /// 9x4 — the smallest rung that still reads as a fluke.
+    /// 9x4 — the smallest rung that still reads as a side-view whale.
     Small,
     /// 13x6 — the default hero mark.
     Medium,
@@ -21,58 +21,58 @@ pub enum MarkSize {
 }
 
 const SMALL_ROWS: [&str; 4] = [
-    "█▄▄▄ ▄▄▄█", //
-    "▀███▄███▀",
-    "   ▀█▀",
-    "   ███",
+    "▄█████>  ", //
+    "████████▄",
+    "▀██▀ ▀██ ",
+    "  ▀▀▀    ",
 ];
 
 const MEDIUM_ROWS: [&str; 6] = [
-    "█▄         ▄█", //
-    "█████▄ ▄█████",
-    " ███████████",
-    "   ▀▀███▀▀",
-    "     ███",
-    "    █████",
+    "  ▄██████>   ", //
+    "▄██████████▄ ",
+    "█████████████",
+    "▀███▀   ▀██▀ ",
+    "   ▀▀▀▀▀     ",
+    "      ▀      ",
 ];
 
 const LARGE_ROWS: [&str; 8] = [
-    "██▄             ▄██", //
-    "███████▄   ▄███████",
-    "▀████████ ████████▀",
-    " ▀███████████████▀",
-    "    ▀▀▀█████▀▀▀",
-    "        ███",
-    "       █████",
-    "      ███████",
+    "   ▄████████>      ", //
+    "▄████████████████▄ ",
+    "███████████████████",
+    "▀████▀     ▀████▀  ",
+    "    ▀▀▀▀▀▀▀        ",
+    "       ▀▀▀         ",
+    "        ▀          ",
+    "                   ",
 ];
 
 /// `'` and `,` carry the half-cell the block glyphs carried, so lobes slope.
 const SMALL_ASCII: [&str; 4] = [
-    "#,,, ,,,#", //
-    "'###,###'",
-    "   '#'",
-    "   ###",
+    ",#####>  ", //
+    "########,",
+    "'##' '## ",
+    "  '''    ",
 ];
 
 const MEDIUM_ASCII: [&str; 6] = [
-    "#,         ,#", //
-    "#####, ,#####",
-    " ###########",
-    "   ''###''",
-    "     ###",
-    "    #####",
+    "  ,######>   ", //
+    ",##########, ",
+    "#############",
+    "'###'   '##' ",
+    "   '''''     ",
+    "      '      ",
 ];
 
 const LARGE_ASCII: [&str; 8] = [
-    "##,             ,##", //
-    "#######,   ,#######",
-    "'######## ########'",
-    " '###############'",
-    "    '''#####'''",
-    "        ###",
-    "       #####",
-    "      #######",
+    "   ,########>      ", //
+    ",################, ",
+    "###################",
+    "'####'     '####'  ",
+    "    '''''''        ",
+    "       '''         ",
+    "        '          ",
+    "                   ",
 ];
 
 impl MarkSize {
@@ -247,24 +247,15 @@ mod tests {
     }
 
     #[test]
-    fn the_mark_is_symmetric_about_its_vertical_axis() {
+    fn the_mark_has_a_prompt_eye() {
         for size in [MarkSize::Small, MarkSize::Medium, MarkSize::Large] {
-            let (cols, _) = size.cells();
-            for line in size.rows(false) {
-                let mut cells: Vec<char> = line.chars().collect();
-                cells.resize(usize::from(cols), ' ');
-                let mirrored: Vec<char> = cells.iter().rev().copied().map(mirror_glyph).collect();
-                assert_eq!(cells, mirrored, "{size:?} row {line:?} is not symmetric");
+            for ascii_safe in [false, true] {
+                let art = size.rows(ascii_safe);
+                assert!(
+                    art.iter().any(|line| line.contains('>')),
+                    "{size:?} ascii={ascii_safe} is missing the `>` prompt-eye"
+                );
             }
-        }
-    }
-
-    fn mirror_glyph(glyph: char) -> char {
-        // Half-blocks are left-right symmetric; this hook catches a future
-        // asymmetric glyph rather than letting it pass silently.
-        match glyph {
-            '█' | '▀' | '▄' | ' ' => glyph,
-            other => other,
         }
     }
 
@@ -352,12 +343,12 @@ mod tests {
             false,
         );
         assert_eq!(painted, Rect::new(4, 0, 13, 6));
-        // Row 0 is `█▄         ▄█`; the gap keeps the field beneath it.
-        assert_eq!(buf.cell((4, 0)).map(|c| c.symbol()), Some("█"));
-        assert_eq!(buf.cell((5, 0)).map(|c| c.symbol()), Some("▄"));
-        assert_eq!(buf.cell((6, 0)).map(|c| c.symbol()), Some("~"));
-        assert_eq!(buf.cell((15, 0)).map(|c| c.symbol()), Some("▄"));
-        assert_eq!(buf.cell((16, 0)).map(|c| c.symbol()), Some("█"));
+        // Row 0 is `  ▄██████>   `; leading blanks keep the field.
+        assert_eq!(buf.cell((4, 0)).map(|c| c.symbol()), Some("~"));
+        assert_eq!(buf.cell((5, 0)).map(|c| c.symbol()), Some("~"));
+        assert_eq!(buf.cell((6, 0)).map(|c| c.symbol()), Some("▄"));
+        assert_eq!(buf.cell((13, 0)).map(|c| c.symbol()), Some(">"));
+        assert_eq!(buf.cell((14, 0)).map(|c| c.symbol()), Some("~"));
     }
 
     #[test]

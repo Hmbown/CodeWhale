@@ -19,6 +19,60 @@ use std::borrow::Cow;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::tui::key_shortcuts;
+use crate::tui::views::ModalKind;
+
+/// Who owns the keyboard right now.
+///
+/// One value, derived in one place ([`crate::tui::app::App::focus`]), in
+/// place of the `app.input.is_empty()` guesses that used composer *content*
+/// as a stand-in for composer *focus*. Composer editing keys still ask about
+/// the text itself; every shell binding asks this instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    /// The onboarding rail owns every key until it finishes.
+    Onboarding,
+    /// A modal view is on top of the stack and handles its own keys.
+    Modal(ModalKind),
+    /// The pre-session launch screen — its menu or its composer.
+    Launch,
+    /// A focused rail or workflow panel inside a live session.
+    Panel,
+    /// The session composer: the default owner.
+    Composer,
+}
+
+/// Which focus states a binding is live in — the `ShellBinding` focus rule
+/// that used to be re-invented at every call site as
+/// `&& app.view_stack.is_empty()`. The variants nest: each admits everything
+/// the one above it does, plus one more surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusScope {
+    /// A live session: the composer, or a rail/workflow panel that has taken
+    /// the keys from it.
+    SessionShell,
+    /// [`FocusScope::SessionShell`], plus the pre-session launch stage.
+    AnyShell,
+    /// [`FocusScope::AnyShell`], plus the Config modal, which displays the
+    /// very setting the binding changes.
+    AnyShellOrConfig,
+    /// Every focus state, onboarding and modals included.
+    Everywhere,
+}
+
+impl FocusScope {
+    #[must_use]
+    pub fn admits(self, focus: Focus) -> bool {
+        match self {
+            Self::SessionShell => matches!(focus, Focus::Composer | Focus::Panel),
+            Self::AnyShell => matches!(focus, Focus::Composer | Focus::Panel | Focus::Launch),
+            Self::AnyShellOrConfig => matches!(
+                focus,
+                Focus::Composer | Focus::Panel | Focus::Launch | Focus::Modal(ModalKind::Config)
+            ),
+            Self::Everywhere => true,
+        }
+    }
+}
 
 /// Stable binding ids shared by handlers, footer hints, and help catalog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +81,11 @@ pub enum ShellBindingId {
     ContextInspector,
     ProviderRoute,
     Help,
+    Settings,
+    /// Tab: cycle the session mode.
+    ModeCycle,
+    /// Shift+Tab: cycle the permission posture.
+    PermissionCycle,
 }
 
 /// One advertised binding with the portable catalog chord and focus rules.
@@ -38,6 +97,39 @@ pub struct ShellBinding {
     pub catalog_chord: &'static str,
     /// Compact footer chord when this binding is advertised.
     pub footer_chord: &'static str,
+    /// The focus states this binding is live in. Never composer content:
+    /// a shell binding does the same thing whether or not you have typed.
+    pub focus: FocusScope,
+}
+
+impl ShellBinding {
+    /// Does this key press this binding, ignoring focus?
+    #[must_use]
+    pub fn matches(&self, key: &KeyEvent) -> bool {
+        match self.id {
+            ShellBindingId::ToolDetails => is_tool_details_shortcut(key),
+            ShellBindingId::ContextInspector => is_context_inspector_shortcut(key),
+            ShellBindingId::ProviderRoute => is_provider_route_shortcut(key),
+            ShellBindingId::Help => is_help_shortcut(key),
+            ShellBindingId::Settings => is_settings_shortcut(key),
+            ShellBindingId::ModeCycle => is_mode_cycle_shortcut(key),
+            ShellBindingId::PermissionCycle => is_permission_cycle_shortcut(key),
+        }
+    }
+}
+
+/// The shell's single key-admission authority: which binding, if any, this
+/// key presses for this focus owner.
+///
+/// Callers keep their position in the event loop — that ordering is a real
+/// statement about which surface sees a key first — but none of them decides
+/// admission any more, and none of them may ask about composer content.
+#[must_use]
+pub fn route(focus: Focus, key: &KeyEvent) -> Option<ShellBindingId> {
+    SHELL_BINDINGS
+        .iter()
+        .find(|binding| binding.focus.admits(focus) && binding.matches(key))
+        .map(|binding| binding.id)
 }
 
 /// Canonical shell bindings. Handlers and chrome read from here.
@@ -46,6 +138,9 @@ pub const SHELL_BINDINGS: &[ShellBinding] = &[
         id: ShellBindingId::ToolDetails,
         catalog_chord: "Alt+V",
         footer_chord: "Alt+V",
+        // The rail claims the details chord for a selected row before the
+        // transcript pager sees it; both are session surfaces.
+        focus: FocusScope::SessionShell,
     },
     ShellBinding {
         id: ShellBindingId::ContextInspector,
@@ -53,18 +148,49 @@ pub const SHELL_BINDINGS: &[ShellBinding] = &[
         // handler until proven in Cursor/Terminal.app/iTerm2/tmux/PTY.
         catalog_chord: "/context",
         footer_chord: "/context",
+        focus: FocusScope::SessionShell,
     },
     ShellBinding {
         id: ShellBindingId::ProviderRoute,
         // `/provider` remains the portable, explicit command path.
         catalog_chord: "F3 / /provider",
         footer_chord: "F3",
+        // The route is also pickable before a session exists.
+        focus: FocusScope::AnyShell,
     },
     ShellBinding {
         id: ShellBindingId::Help,
         // `/help` also opens this; Ctrl+/ is the secondary fallback.
         catalog_chord: "F1 / Ctrl+/",
         footer_chord: "F1",
+        focus: FocusScope::Everywhere,
+    },
+    ShellBinding {
+        id: ShellBindingId::Settings,
+        catalog_chord: "F2",
+        footer_chord: "F2",
+        // Shell-global for the same reason as Help: a settings route that
+        // disappears inside onboarding or a modal is not a route.
+        focus: FocusScope::Everywhere,
+    },
+    ShellBinding {
+        id: ShellBindingId::ModeCycle,
+        catalog_chord: "Tab",
+        footer_chord: "Tab",
+        // Tab is the session's mode cycle. The composer's own completions
+        // get the key first, but *having typed* never disables it. The
+        // launch screen is excluded: there Tab moves focus between the
+        // startup menu and the pre-session composer.
+        focus: FocusScope::SessionShell,
+    },
+    ShellBinding {
+        id: ShellBindingId::PermissionCycle,
+        catalog_chord: "Shift+Tab",
+        footer_chord: "Shift+Tab",
+        // A shell-level permission control, live wherever the shell is —
+        // including the launch screen, where it used to be dead — plus the
+        // Config modal that displays the posture it changes.
+        focus: FocusScope::AnyShellOrConfig,
     },
 ];
 
@@ -217,6 +343,29 @@ pub fn is_help_shortcut(key: &KeyEvent) -> bool {
 #[must_use]
 pub fn is_settings_shortcut(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::F(2)) && key.modifiers.is_empty()
+}
+
+/// Tab cycles the session mode. Terminal chords that mean something else to
+/// the host (Ctrl/Alt/Cmd+Tab) are not ours, and Shift+Tab is the permission
+/// cycle below.
+#[must_use]
+pub fn is_mode_cycle_shortcut(key: &KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Tab)
+        && !key.modifiers.intersects(
+            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::SHIFT,
+        )
+}
+
+/// Shift+Tab cycles the permission posture. Terminals encode the same chord
+/// either as `BackTab` or as `Tab` + SHIFT; accept both.
+#[must_use]
+pub fn is_permission_cycle_shortcut(key: &KeyEvent) -> bool {
+    let forbidden = KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER;
+    if key.modifiers.intersects(forbidden) {
+        return false;
+    }
+    matches!(key.code, KeyCode::BackTab)
+        || (matches!(key.code, KeyCode::Tab) && key.modifiers.contains(KeyModifiers::SHIFT))
 }
 
 #[cfg(test)]
@@ -377,6 +526,83 @@ mod tests {
             KeyCode::Char('3'),
             KeyModifiers::NONE
         )));
+    }
+
+    #[test]
+    fn footer_only_advertises_chords_that_are_live_where_it_is_shown() {
+        // The footer hint row is built from this table, so it must not be
+        // able to name a chord the same table refuses at the focus the
+        // footer is rendered in.
+        let hints = footer_action_hints_for_platform(true, false);
+        for id in [
+            ShellBindingId::ToolDetails,
+            ShellBindingId::ContextInspector,
+            ShellBindingId::Help,
+        ] {
+            let binding = binding(id);
+            assert!(hints.contains(binding.footer_chord), "{hints}");
+            assert!(
+                binding.focus.admits(Focus::Composer),
+                "footer advertises {id:?}, which the table does not admit at the composer"
+            );
+        }
+    }
+
+    #[test]
+    fn focus_scopes_nest_from_the_session_outwards() {
+        let ladder = [
+            FocusScope::SessionShell,
+            FocusScope::AnyShell,
+            FocusScope::AnyShellOrConfig,
+            FocusScope::Everywhere,
+        ];
+        let states = [
+            Focus::Composer,
+            Focus::Panel,
+            Focus::Launch,
+            Focus::Modal(ModalKind::Config),
+            Focus::Modal(ModalKind::Approval),
+            Focus::Onboarding,
+        ];
+        for pair in ladder.windows(2) {
+            for focus in states {
+                assert!(
+                    !pair[0].admits(focus) || pair[1].admits(focus),
+                    "{:?} admits {focus:?} but the wider {:?} does not",
+                    pair[0],
+                    pair[1]
+                );
+            }
+        }
+        // Nothing but Help/Settings may reach a focused workflow.
+        for binding in SHELL_BINDINGS {
+            assert_eq!(
+                binding.focus.admits(Focus::Modal(ModalKind::Approval)),
+                binding.focus == FocusScope::Everywhere,
+                "{:?} must not reach across an approval decision",
+                binding.id
+            );
+        }
+    }
+
+    #[test]
+    fn tab_and_shift_tab_are_distinct_bindings() {
+        let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let shift_tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT);
+        assert_eq!(
+            route(Focus::Composer, &tab),
+            Some(ShellBindingId::ModeCycle)
+        );
+        assert_eq!(
+            route(Focus::Composer, &shift_tab),
+            Some(ShellBindingId::PermissionCycle)
+        );
+        // Tab moves focus on the launch stage; the posture control still works.
+        assert_eq!(route(Focus::Launch, &tab), None);
+        assert_eq!(
+            route(Focus::Launch, &shift_tab),
+            Some(ShellBindingId::PermissionCycle)
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@ use super::compaction_flow::{
     apply_compaction_started, maybe_warn_context_pressure, should_auto_compact_before_send,
     should_auto_compact_before_send_with_config,
 };
+use super::event_loop::{TabDispatch, dispatch_tab_key, shell_binding_for_key};
 use super::observer_hooks::{
     bounded_subagent_hook_preview, subagent_completion_status, subagent_failure_notice,
     subagent_status_from_completion_result, turn_end_observer_metadata,
@@ -32,6 +33,9 @@ use crate::tui::history::{
 };
 use crate::tui::hotbar::actions::{HotbarActionCategory, HotbarDispatch};
 use crate::tui::provider_picker::ProviderPickerView;
+use crate::tui::shell_key_routing::{
+    Focus, SHELL_BINDINGS, ShellBindingId, is_permission_cycle_shortcut,
+};
 use crate::tui::ui_text::truncate_line_to_width;
 use crate::tui::views::{HelpView, ModalView, ViewAction};
 use crate::working_set::Workspace;
@@ -587,6 +591,194 @@ fn permission_cycle_shortcut_accepts_both_shift_tab_encodings() {
         KeyCode::BackTab,
         KeyModifiers::CONTROL,
     )));
+}
+
+/// A live session in a deterministic focus state: no onboarding, no launch
+/// screen, no modal, composer owns the keys.
+fn focus_test_app() -> App {
+    let mut app = create_test_app();
+    app.onboarding = crate::tui::app::OnboardingState::None;
+    app.launch.visible = false;
+    app.work_surface.focused = false;
+    app.workflow_panel = None;
+    app
+}
+
+/// One representative terminal encoding per shell binding.
+fn shell_binding_probe(id: ShellBindingId) -> KeyEvent {
+    match id {
+        ShellBindingId::ToolDetails => KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT),
+        ShellBindingId::ContextInspector => KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT),
+        ShellBindingId::ProviderRoute => KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE),
+        ShellBindingId::Help => KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE),
+        ShellBindingId::Settings => KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE),
+        ShellBindingId::ModeCycle => KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        ShellBindingId::PermissionCycle => KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE),
+    }
+}
+
+#[test]
+fn shell_key_seam_presses_a_key_at_the_event_loop() {
+    // The harness in one line: build an App, press a real crossterm key at
+    // the same admission the event loop uses, read the binding back.
+    let app = focus_test_app();
+    assert_eq!(
+        shell_binding_for_key(&app, &KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE)),
+        Some(ShellBindingId::Help)
+    );
+    assert_eq!(
+        shell_binding_for_key(&app, &KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+        None,
+        "an ordinary character belongs to the composer"
+    );
+}
+
+#[test]
+fn no_shell_binding_changes_meaning_once_the_composer_has_text() {
+    // The whole bug family in one assertion: a shell binding answers to the
+    // focus owner, never to whether the user has started typing. Tab was the
+    // visible case (`if !app.input.is_empty() { continue; }`), but the same
+    // guess was spread across ~21 `input.is_empty()` sites.
+    for binding in SHELL_BINDINGS {
+        let key = shell_binding_probe(binding.id);
+        let empty = focus_test_app();
+        let mut typed = focus_test_app();
+        typed.input = "draft in progress".to_string();
+        typed.cursor_position = typed.input.chars().count();
+
+        let on_empty = shell_binding_for_key(&empty, &key);
+        let on_typed = shell_binding_for_key(&typed, &key);
+        assert_eq!(
+            on_empty, on_typed,
+            "{:?} changed meaning because the composer has text",
+            binding.id
+        );
+        assert_eq!(
+            on_typed,
+            Some(binding.id),
+            "{:?} must still be live mid-draft",
+            binding.id
+        );
+
+        // Admission is only half the family: the handler behind a binding
+        // must not re-guess focus from the text either. Tab is the one with
+        // a dispatcher of its own, so press it in both states.
+        if binding.id == ShellBindingId::ModeCycle {
+            let mut empty = focus_test_app();
+            empty.prompt_suggestion = None;
+            let mut typed = focus_test_app();
+            typed.prompt_suggestion = None;
+            typed.input = "draft in progress".to_string();
+            typed.cursor_position = typed.input.chars().count();
+            assert_eq!(
+                dispatch_tab_key(&mut empty, &key, &[], &[]),
+                dispatch_tab_key(&mut typed, &key, &[], &[]),
+                "Tab dispatched differently because the composer has text"
+            );
+        }
+    }
+
+    // The exception the rule is for: the composer's own editing keys are
+    // never shell bindings, empty or not.
+    for code in [
+        KeyCode::Backspace,
+        KeyCode::Enter,
+        KeyCode::Char('y'),
+        KeyCode::Char(' '),
+    ] {
+        let mut typed = focus_test_app();
+        typed.input = "draft".to_string();
+        let key = KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(shell_binding_for_key(&focus_test_app(), &key), None);
+        assert_eq!(shell_binding_for_key(&typed, &key), None);
+    }
+}
+
+#[test]
+fn tab_still_cycles_the_mode_after_the_user_has_typed() {
+    // Regression: Tab used to stop working the moment the composer held any
+    // text, which is most of the time you are actually using the product.
+    let mut app = focus_test_app();
+    app.prompt_suggestion = None;
+    app.input = "explain this repo".to_string();
+    app.cursor_position = app.input.chars().count();
+    let before = app.mode;
+
+    let dispatch = dispatch_tab_key(
+        &mut app,
+        &KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        &[],
+        &[],
+    );
+
+    assert!(
+        matches!(dispatch, TabDispatch::ModeCycled { .. }),
+        "Tab with a typed composer dispatched {dispatch:?}"
+    );
+    assert_ne!(app.mode, before, "the session mode must actually change");
+    assert_eq!(
+        app.input, "explain this repo",
+        "cycling the mode must not disturb the draft"
+    );
+}
+
+#[test]
+fn shift_tab_cycles_permission_from_every_shell_surface() {
+    // Regression: Shift+Tab was admitted only after the launch screen had
+    // already swallowed the key, so the posture control was dead on the
+    // first screen the user sees. Both terminal encodings, both surfaces.
+    for key in [
+        KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT),
+    ] {
+        let mut session = focus_test_app();
+        session.input = "draft in progress".to_string();
+        assert_eq!(
+            shell_binding_for_key(&session, &key),
+            Some(ShellBindingId::PermissionCycle),
+            "session composer: {key:?}"
+        );
+
+        let mut launch = focus_test_app();
+        launch.launch.visible = true;
+        assert_eq!(launch.focus(), Focus::Launch);
+        assert_eq!(
+            shell_binding_for_key(&launch, &key),
+            Some(ShellBindingId::PermissionCycle),
+            "launch screen: {key:?}"
+        );
+    }
+}
+
+#[test]
+fn focus_owner_follows_the_surface_that_owns_the_keys() {
+    let mut app = focus_test_app();
+    assert_eq!(app.focus(), Focus::Composer);
+
+    app.work_surface.focused = true;
+    assert_eq!(app.focus(), Focus::Panel);
+    app.work_surface.focused = false;
+
+    app.launch.visible = true;
+    assert_eq!(app.focus(), Focus::Launch);
+    app.launch.visible = false;
+
+    app.onboarding = crate::tui::app::OnboardingState::Welcome;
+    assert_eq!(app.focus(), Focus::Onboarding);
+    app.onboarding = crate::tui::app::OnboardingState::None;
+
+    app.view_stack.push(HelpView::new_for_locale(app.ui_locale));
+    assert_eq!(app.focus(), Focus::Modal(ModalKind::Help));
+    // A modal owns Tab and the details chord; Help still does not.
+    assert_eq!(
+        shell_binding_for_key(&app, &KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        None
+    );
+    assert_eq!(
+        shell_binding_for_key(&app, &KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE)),
+        Some(ShellBindingId::Help)
+    );
 }
 
 #[test]
@@ -8192,9 +8384,12 @@ fn first_run_ollama_choice_survives_restart_without_rewriting_config() {
     );
     assert!(app.pending_route_save.is_none());
     assert!(
-        app.status_message
-            .as_deref()
-            .is_some_and(|message| message.contains("Remembered ollama/deepseek-v4-flash")),
+        app.status_message.as_deref().is_some_and(|message| {
+            message.contains(&format!(
+                "Remembered ollama/{}",
+                crate::config::DEFAULT_OLLAMA_MODEL
+            ))
+        }),
         "onboarding must truthfully receipt the durable startup route: {:?}",
         app.status_message,
     );

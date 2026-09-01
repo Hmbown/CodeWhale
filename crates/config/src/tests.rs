@@ -1271,6 +1271,9 @@ struct EnvGuard {
     edenai_api_key: Option<OsString>,
     edenai_base_url: Option<OsString>,
     edenai_model: Option<OsString>,
+    concentrate_api_key: Option<OsString>,
+    concentrate_base_url: Option<OsString>,
+    concentrate_model: Option<OsString>,
     opencode_go_api_key: Option<OsString>,
     opencode_go_base_url: Option<OsString>,
     opencode_go_model: Option<OsString>,
@@ -1313,6 +1316,9 @@ impl EnvGuard {
             edenai_api_key: env::var_os("EDENAI_API_KEY"),
             edenai_base_url: env::var_os("EDENAI_BASE_URL"),
             edenai_model: env::var_os("EDENAI_MODEL"),
+            concentrate_api_key: env::var_os("CONCENTRATE_API_KEY"),
+            concentrate_base_url: env::var_os("CONCENTRATE_BASE_URL"),
+            concentrate_model: env::var_os("CONCENTRATE_MODEL"),
             opencode_go_api_key: env::var_os("OPENCODE_GO_API_KEY"),
             opencode_go_base_url: env::var_os("OPENCODE_GO_BASE_URL"),
             opencode_go_model: env::var_os("OPENCODE_GO_MODEL"),
@@ -1612,6 +1618,9 @@ impl Drop for EnvGuard {
             Self::restore_var("EDENAI_API_KEY", self.edenai_api_key.take());
             Self::restore_var("EDENAI_BASE_URL", self.edenai_base_url.take());
             Self::restore_var("EDENAI_MODEL", self.edenai_model.take());
+            Self::restore_var("CONCENTRATE_API_KEY", self.concentrate_api_key.take());
+            Self::restore_var("CONCENTRATE_BASE_URL", self.concentrate_base_url.take());
+            Self::restore_var("CONCENTRATE_MODEL", self.concentrate_model.take());
             Self::restore_var("OPENCODE_GO_API_KEY", self.opencode_go_api_key.take());
             Self::restore_var("OPENCODE_GO_BASE_URL", self.opencode_go_base_url.take());
             Self::restore_var("OPENCODE_GO_MODEL", self.opencode_go_model.take());
@@ -4928,6 +4937,145 @@ model = "anthropic/claude-sonnet-4-5"
     assert_eq!(resolved.api_key_source, Some(RuntimeApiKeySource::Env));
 }
 
+/// Concentrate is an opt-in, BYOK, Responses-wire gateway: aliases collapse
+/// onto one catalog identity, the metadata names the official base URL and a
+/// distinct `CONCENTRATE_API_KEY` slot, the wire policy is fixed on the
+/// Responses API, and env/config overrides resolve exactly like every other
+/// provider table.
+#[test]
+fn concentrate_resolves_named_responses_gateway_and_environment_overrides() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+    for alias in [
+        "concentrate",
+        "concentrate-ai",
+        "concentrate_ai",
+        "concentrateai",
+    ] {
+        assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::Concentrate));
+        let parsed: ConfigToml =
+            toml::from_str(&format!("provider = \"{alias}\"")).expect("Concentrate alias");
+        assert_eq!(parsed.provider, ProviderKind::Concentrate);
+    }
+
+    let metadata = provider::resolve_provider("concentrate-ai").expect("Concentrate metadata");
+    assert_eq!(metadata.id(), "concentrate");
+    assert_eq!(metadata.display_name(), "Concentrate");
+    assert_eq!(metadata.provider_config_key(), "concentrate");
+    assert_eq!(metadata.default_base_url(), "https://api.concentrate.ai/v1");
+    assert_eq!(metadata.default_base_url(), DEFAULT_CONCENTRATE_BASE_URL);
+    assert_eq!(metadata.default_model(), DEFAULT_CONCENTRATE_MODEL);
+    assert_eq!(metadata.env_vars(), &["CONCENTRATE_API_KEY"]);
+    assert_eq!(
+        metadata.wire_policy(),
+        provider::WirePolicy::Fixed(provider::WireFormat::Responses)
+    );
+    assert_eq!(
+        ProviderKind::Concentrate.secret_store_slot(),
+        "concentrate",
+        "the gateway key never shares a slot with another provider"
+    );
+    let help = metadata.credential_help();
+    assert_eq!(help.acquisition, provider::CredentialAcquisition::ApiKey);
+    assert_eq!(
+        help.docs_url,
+        Some("https://concentrate.ai/docs/api-reference/introduction")
+    );
+
+    let config: ConfigToml = toml::from_str(
+        r#"
+provider = "concentrate"
+
+[providers.concentrate]
+api_key = "concentrate-config-key"
+model = "openai/gpt-5.6-sol"
+"#,
+    )
+    .expect("Concentrate provider table");
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.provider, ProviderKind::Concentrate);
+    assert_eq!(resolved.base_url, DEFAULT_CONCENTRATE_BASE_URL);
+    let alias_table: ConfigToml = toml::from_str(
+        r#"
+provider = "concentrate"
+
+[providers.concentrateai]
+api_key = "concentrate-alias-table-key"
+model = "openai/gpt-5.6-sol"
+"#,
+    )
+    .expect("[providers.concentrateai] must deserialize onto the concentrate table");
+    let alias_resolved = alias_table.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(alias_resolved.provider, ProviderKind::Concentrate);
+    assert_eq!(
+        alias_resolved.api_key.as_deref(),
+        Some("concentrate-alias-table-key"),
+        "[providers.concentrateai] must not be silently ignored"
+    );
+    assert_eq!(
+        resolved.model, "openai/gpt-5.6-sol",
+        "provider/model ids pass through verbatim"
+    );
+    assert_eq!(resolved.api_key.as_deref(), Some("concentrate-config-key"));
+    assert_eq!(
+        resolved.api_key_source,
+        Some(RuntimeApiKeySource::ConfigFile)
+    );
+
+    unsafe {
+        std::env::set_var("CONCENTRATE_API_KEY", "concentrate-env-key");
+        std::env::set_var("CONCENTRATE_MODEL", "claude-fable-5");
+    }
+    let env_config = ConfigToml {
+        provider: ProviderKind::Concentrate,
+        ..ConfigToml::default()
+    };
+    let resolved = env_config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.base_url, DEFAULT_CONCENTRATE_BASE_URL);
+    assert_eq!(resolved.model, "claude-fable-5");
+    assert_eq!(resolved.api_key.as_deref(), Some("concentrate-env-key"));
+    assert_eq!(resolved.api_key_source, Some(RuntimeApiKeySource::Env));
+
+    // Credential scope: a saved or environment Concentrate key is bound to the
+    // official gateway. Pointing the same identity at any other base URL is
+    // an arbitrary endpoint, and the key must NOT follow it (a local stub or
+    // proxy gets the key only when the user writes both into the config).
+    unsafe {
+        std::env::set_var("CONCENTRATE_BASE_URL", "http://127.0.0.1:8790/v1");
+    }
+    let resolved = env_config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.base_url, "http://127.0.0.1:8790/v1");
+    assert_eq!(
+        resolved.api_key, None,
+        "an env key must never be sent to a non-official Concentrate base URL"
+    );
+    unsafe {
+        std::env::remove_var("CONCENTRATE_BASE_URL");
+        std::env::remove_var("CONCENTRATE_MODEL");
+        std::env::remove_var("CONCENTRATE_API_KEY");
+    }
+    let custom: ConfigToml = toml::from_str(
+        r#"
+provider = "concentrate"
+
+[providers.concentrate]
+base_url = "http://127.0.0.1:8790/v1"
+api_key = "stub-key"
+model = "concentrate/auto"
+"#,
+    )
+    .expect("Concentrate custom endpoint table");
+    let resolved = custom.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.base_url, "http://127.0.0.1:8790/v1");
+    assert_eq!(resolved.api_key.as_deref(), Some("stub-key"));
+    assert_eq!(
+        resolved.api_key_source,
+        Some(RuntimeApiKeySource::ConfigFile)
+    );
+    assert_eq!(resolved.model, "concentrate/auto");
+}
+
 #[test]
 fn opencode_zen_configures_model_aware_provider_with_catalog_proof() {
     let _lock = env_lock();
@@ -5029,9 +5177,9 @@ fn meta_model_api_scopes_both_documented_key_names_to_official_endpoint() {
 fn provider_metadata_registry_covers_every_provider_kind_once() {
     let providers = provider::all_providers();
     // Full registry keeps legacy dialect/plan kinds for provider_for_kind.
-    assert_eq!(providers.len(), 47);
+    assert_eq!(providers.len(), 48);
     // Catalog surface is one identity per vendor (no dual-wire / plan rows).
-    assert_eq!(ProviderKind::ALL.len(), 42);
+    assert_eq!(ProviderKind::ALL.len(), 43);
     assert!(ProviderKind::ALL.len() < providers.len());
 
     let mut ids = std::collections::BTreeSet::new();
@@ -5138,7 +5286,9 @@ fn provider_metadata_defaults_match_runtime_helpers() {
         // other built-in provider is OpenAI-compatible Chat Completions.
         let expected_wire = match kind {
             ProviderKind::Deepseek | ProviderKind::OpencodeZen => None,
-            ProviderKind::OpenaiCodex => Some(provider::WireFormat::Responses),
+            ProviderKind::OpenaiCodex | ProviderKind::Concentrate => {
+                Some(provider::WireFormat::Responses)
+            }
             ProviderKind::Anthropic
             | ProviderKind::DeepseekAnthropic
             | ProviderKind::MinimaxAnthropic
@@ -6141,7 +6291,7 @@ fn vllm_provider_defaults_to_local_endpoint_and_model() {
 }
 
 #[test]
-fn ollama_provider_defaults_to_local_endpoint_and_small_model() {
+fn ollama_provider_defaults_to_local_endpoint_and_unresolved_model() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();
     let config = ConfigToml {
@@ -6153,6 +6303,9 @@ fn ollama_provider_defaults_to_local_endpoint_and_small_model() {
 
     assert_eq!(resolved.provider, ProviderKind::Ollama);
     assert_eq!(resolved.base_url, DEFAULT_OLLAMA_BASE_URL);
+    // Pre-refresh window: do not invent a hosted DeepSeek id. A live
+    // `GET /v1/models` (same tags as `/api/tags`) must replace this marker.
+    assert_eq!(resolved.model, "unknown");
     assert_eq!(resolved.model, DEFAULT_OLLAMA_MODEL);
     assert_eq!(resolved.api_key, None);
 }

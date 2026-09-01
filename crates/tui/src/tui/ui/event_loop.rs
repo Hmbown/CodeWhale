@@ -15,6 +15,7 @@ use super::task_projection::{
 };
 use super::*;
 use crate::models::Role;
+use crate::tui::shell_key_routing::ShellBindingId;
 
 pub(super) fn event_owner_is_active(
     current_session_id: Option<&str>,
@@ -166,6 +167,81 @@ pub(super) fn flush_paste_burst_before_composer(app: &mut App, now: Instant) -> 
             true
         }
         crate::tui::paste_burst::FlushResult::None => false,
+    }
+}
+
+/// The shell's key admission, asked exactly as the event loop asks it: which
+/// binding does this key press, for whoever owns the keyboard right now?
+///
+/// Every seam below calls this instead of re-deriving focus from
+/// `view_stack`, `launch.visible`, or — the bug this replaces — whether the
+/// composer happens to hold text.
+pub(crate) fn shell_binding_for_key(app: &App, key: &KeyEvent) -> Option<ShellBindingId> {
+    crate::tui::shell_key_routing::route(app.focus(), key)
+}
+
+/// What pressing Tab did — see [`dispatch_tab_key`].
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum TabDispatch {
+    /// One of the composer's own completions consumed the key.
+    Completion,
+    /// Nobody owns Tab in this focus state.
+    Ignored,
+    /// The session mode cycled. The caller syncs the engine.
+    ModeCycled {
+        prior_mode: AppMode,
+        prior_model: String,
+    },
+}
+
+/// Tab dispatch, lifted out of the event loop body so a test can press Tab.
+///
+/// The composer's completions get the key first: a mention menu, a slash
+/// menu, an in-progress command or file mention, a waiting prompt
+/// suggestion. Those are genuine composer *editing* questions about the
+/// text. Once none of them claims the key, Tab is the shell's mode cycle,
+/// admitted by [`App::focus`] alone — whether the composer holds text is not
+/// part of that decision. It used to be: `if !app.input.is_empty()
+/// { continue; }` killed Tab the moment the user typed anything.
+pub(crate) fn dispatch_tab_key(
+    app: &mut App,
+    key: &KeyEvent,
+    mention_menu_entries: &[String],
+    slash_menu_entries: &[crate::tui::widgets::SlashMenuEntry],
+) -> TabDispatch {
+    if !mention_menu_entries.is_empty()
+        && crate::tui::file_mention::apply_mention_menu_selection(app, mention_menu_entries)
+    {
+        return TabDispatch::Completion;
+    }
+    if !slash_menu_entries.is_empty() && apply_slash_menu_selection(app, slash_menu_entries, true) {
+        return TabDispatch::Completion;
+    }
+    if try_autocomplete_slash_command(app) {
+        return TabDispatch::Completion;
+    }
+    if crate::tui::file_mention::try_autocomplete_file_mention(app) {
+        return TabDispatch::Completion;
+    }
+    if app.input.is_empty()
+        && let Some(suggestion) = app.prompt_suggestion.take()
+    {
+        app.input = suggestion;
+        app.cursor_position = app.input.chars().count();
+        app.needs_redraw = true;
+        return TabDispatch::Completion;
+    }
+    if shell_binding_for_key(app, key) != Some(ShellBindingId::ModeCycle) {
+        return TabDispatch::Ignored;
+    }
+    // Sending or queueing input is reserved for Enter, so Tab never changes
+    // roles based on whether a turn happens to be running.
+    let prior_model = app.model.clone();
+    let prior_mode = app.mode;
+    app.cycle_mode();
+    TabDispatch::ModeCycled {
+        prior_mode,
+        prior_model,
     }
 }
 
@@ -4401,20 +4477,30 @@ pub(crate) async fn run_event_loop(
                 continue;
             }
 
-            // Help is shell-global, including onboarding, launch, and modal
-            // surfaces. `/help` remains the guaranteed textual route; this
-            // handles function-key and control-key terminal encodings.
-            if crate::tui::shell_key_routing::is_help_shortcut(&key) {
-                toggle_help_view(app);
-                continue;
-            }
-
-            // F2 is the shell-global typed settings route. Keep it available
-            // from onboarding and modal surfaces just like Help; pressing it
-            // again closes the editor without applying an in-progress value.
-            if crate::tui::shell_key_routing::is_settings_shortcut(&key) {
-                toggle_settings_view(app);
-                continue;
+            // The shell's key admission runs through one table
+            // (`shell_key_routing::SHELL_BINDINGS`) keyed by one focus owner
+            // (`app.focus()`) — never by whether the composer happens to hold
+            // text. Help and Settings are shell-global, including onboarding,
+            // launch, and modal surfaces (`/help` and `/provider` remain the
+            // guaranteed textual routes); Shift+Tab is a shell-level
+            // permission control and is claimed here, before the launch
+            // screen swallows it. The remaining bindings are admitted by the
+            // same table at their owners' seams below, where the composer's
+            // completions and the agent-focus projection get the key first.
+            match shell_binding_for_key(app, &key) {
+                Some(ShellBindingId::Help) => {
+                    toggle_help_view(app);
+                    continue;
+                }
+                Some(ShellBindingId::Settings) => {
+                    toggle_settings_view(app);
+                    continue;
+                }
+                Some(ShellBindingId::PermissionCycle) => {
+                    cycle_permission_posture(app, config, &engine_handle).await;
+                    continue;
+                }
+                _ => {}
             }
 
             // Provider onboarding is a real ProviderPickerView, not a
@@ -4598,9 +4684,7 @@ pub(crate) async fn run_event_loop(
             // route segment in the shared topbar. Route it through the same
             // typed event as mouse input; `/provider` remains the portable
             // direct command path for terminals that do not forward F-keys.
-            if crate::tui::shell_key_routing::is_provider_route_shortcut(&key)
-                && app.view_stack.is_empty()
-            {
+            if shell_binding_for_key(app, &key) == Some(ShellBindingId::ProviderRoute) {
                 if handle_view_events_boxed(
                     terminal,
                     app,
@@ -4948,22 +5032,8 @@ pub(crate) async fn run_event_loop(
                 continue;
             }
 
-            if crate::tui::shell_key_routing::is_context_inspector_shortcut(&key)
-                && app.view_stack.is_empty()
-            {
+            if shell_binding_for_key(app, &key) == Some(ShellBindingId::ContextInspector) {
                 open_context_inspector(app);
-                continue;
-            }
-
-            // Shift+Tab is a shell-level permission control. Keep it live in
-            // the composer and the Config surface, while leaving approval,
-            // elevation, setup, and other focused workflows in full control
-            // of their own keys. Accept both terminal encodings used for the
-            // same chord (`BackTab` and `Tab` + SHIFT).
-            if is_permission_cycle_shortcut(&key)
-                && matches!(app.view_stack.top_kind(), None | Some(ModalKind::Config))
-            {
-                cycle_permission_posture(app, config, &engine_handle).await;
                 continue;
             }
 
@@ -5067,7 +5137,7 @@ pub(crate) async fn run_event_loop(
 
             // Tool details: Alt+V / Option+V only. Bare `v` always types `v`
             // in every focus state (TUI-DOG-002).
-            if crate::tui::shell_key_routing::is_tool_details_shortcut(&key) {
+            if shell_binding_for_key(app, &key) == Some(ShellBindingId::ToolDetails) {
                 // While a worker is focused the details chord is that
                 // worker's bounded Agent Details projection.
                 if let Some(agent_id) = app.agent_focus.as_ref().map(|f| f.agent_id.clone()) {
@@ -5191,7 +5261,6 @@ pub(crate) async fn run_event_loop(
                 }
                 KeyCode::Char('l')
                     if key_shortcuts::alt_nav_modifiers(key.modifiers)
-                        && app.input.is_empty()
                         && open_pager_for_last_message(app) =>
                 {
                     continue;
@@ -5611,66 +5680,40 @@ pub(crate) async fn run_event_loop(
                     app.scroll_down(page);
                 }
                 KeyCode::Tab => {
-                    if mention_menu_open
-                        && crate::tui::file_mention::apply_mention_menu_selection(
-                            app,
-                            &mention_menu_entries,
-                        )
-                    {
-                        continue;
-                    }
-                    if slash_menu_open && apply_slash_menu_selection(app, &slash_menu_entries, true)
-                    {
-                        continue;
-                    }
-                    if try_autocomplete_slash_command(app) {
-                        continue;
-                    }
-                    if crate::tui::file_mention::try_autocomplete_file_mention(app) {
-                        continue;
-                    }
-                    if app.input.is_empty()
-                        && let Some(suggestion) = app.prompt_suggestion.take()
-                    {
-                        app.input = suggestion;
-                        app.cursor_position = app.input.chars().count();
-                        app.needs_redraw = true;
-                        continue;
-                    }
-                    // Tab is completion when the composer has content and a
-                    // mode switch only when it is empty. Sending or queueing
-                    // input is reserved for Enter so Tab never changes roles
-                    // based on whether a turn happens to be running.
-                    if !app.input.is_empty() {
-                        continue;
-                    }
-                    let prior_model = app.model.clone();
-                    let prior_mode = app.mode;
-                    app.cycle_mode();
-                    if app.mode != prior_mode {
-                        sync_mode_update(app, &engine_handle).await;
-                    }
-                    if app.model != prior_model {
-                        let _ = engine_handle
-                            .send(Op::SetModel {
-                                model: app.model.clone(),
-                                mode: app.mode,
-                                route_limits: app.active_route_limits,
-                            })
-                            .await;
+                    match dispatch_tab_key(app, &key, &mention_menu_entries, &slash_menu_entries) {
+                        TabDispatch::Completion | TabDispatch::Ignored => continue,
+                        TabDispatch::ModeCycled {
+                            prior_mode,
+                            prior_model,
+                        } => {
+                            if app.mode != prior_mode {
+                                sync_mode_update(app, &engine_handle).await;
+                            }
+                            if app.model != prior_model {
+                                let _ = engine_handle
+                                    .send(Op::SetModel {
+                                        model: app.model.clone(),
+                                        mode: app.mode,
+                                        route_limits: app.active_route_limits,
+                                    })
+                                    .await;
+                            }
+                        }
                     }
                 }
                 // Transcript-nav shortcuts now require Alt, leaving most bare
-                // letters free to insert as text. Before v0.8.30, bare `g`,
+                // letters free to insert as text. Requiring Alt is also why
+                // none of them asks whether the composer is empty: an Alt
+                // chord is never composer text, so `input.is_empty()` there
+                // was guessing at focus and only ever broke the shortcut for
+                // anyone mid-draft. Before v0.8.30, bare `g`,
                 // `G`, `[`, `]`, `?`, and `l` on an empty composer were
                 // hijacked for navigation — typing "good" yielded "ood" with
                 // no whale and no warning. The Alt-prefixed shortcuts mirror
                 // the Alt+R / Alt+C pattern already in use. Shift is
                 // permitted for most capital-letter forms.
                 KeyCode::Char('g')
-                    if key_shortcuts::alt_nav_modifiers(key.modifiers)
-                        && app.input.is_empty()
-                        && !slash_menu_open =>
+                    if key_shortcuts::alt_nav_modifiers(key.modifiers) && !slash_menu_open =>
                 {
                     if let Some(anchor) =
                         TranscriptScroll::anchor_for(app.viewport.transcript_cache.line_meta(), 0)
@@ -5679,15 +5722,12 @@ pub(crate) async fn run_event_loop(
                     }
                 }
                 KeyCode::Char('G')
-                    if key_shortcuts::alt_nav_modifiers(key.modifiers)
-                        && app.input.is_empty()
-                        && !slash_menu_open =>
+                    if key_shortcuts::alt_nav_modifiers(key.modifiers) && !slash_menu_open =>
                 {
                     app.scroll_to_bottom();
                 }
                 KeyCode::Char('[')
                     if key_shortcuts::alt_nav_modifiers(key.modifiers)
-                        && app.input.is_empty()
                         && !slash_menu_open
                         && !jump_to_adjacent_tool_cell(app, SearchDirection::Backward) =>
                 {
@@ -5695,7 +5735,6 @@ pub(crate) async fn run_event_loop(
                 }
                 KeyCode::Char(']')
                     if key_shortcuts::alt_nav_modifiers(key.modifiers)
-                        && app.input.is_empty()
                         && !slash_menu_open
                         && !jump_to_adjacent_tool_cell(app, SearchDirection::Forward) =>
                 {

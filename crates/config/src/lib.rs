@@ -468,6 +468,15 @@ pub struct ProvidersToml {
         alias = "eden_ai"
     )]
     pub edenai: ProviderConfigToml,
+    /// Concentrate — OpenAI Responses-compatible AI gateway (aggregator).
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderConfigToml::is_empty",
+        alias = "concentrate-ai",
+        alias = "concentrate_ai",
+        alias = "concentrateai"
+    )]
+    pub concentrate: ProviderConfigToml,
     /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible endpoint).
     #[serde(
         default,
@@ -692,6 +701,7 @@ impl ProvidersToml {
             ProviderKind::Antigravity => &self.antigravity,
             ProviderKind::Telecomjs => &self.telecomjs,
             ProviderKind::Edenai => &self.edenai,
+            ProviderKind::Concentrate => &self.concentrate,
             ProviderKind::ModelstudioTokenPlan => &self.modelstudio_token_plan,
             ProviderKind::ModelstudioTokenPlanAnthropic => &self.modelstudio_token_plan_anthropic,
             ProviderKind::ModelstudioCodingPlan => &self.modelstudio_coding_plan,
@@ -744,6 +754,7 @@ impl ProvidersToml {
             ProviderKind::Antigravity => &mut self.antigravity,
             ProviderKind::Telecomjs => &mut self.telecomjs,
             ProviderKind::Edenai => &mut self.edenai,
+            ProviderKind::Concentrate => &mut self.concentrate,
             ProviderKind::ModelstudioTokenPlan => &mut self.modelstudio_token_plan,
             ProviderKind::ModelstudioTokenPlanAnthropic => {
                 &mut self.modelstudio_token_plan_anthropic
@@ -3926,6 +3937,7 @@ fn provider_passes_model_through(provider: ProviderKind) -> bool {
             | ProviderKind::Xai
             | ProviderKind::Telecomjs
             | ProviderKind::Edenai
+            | ProviderKind::Concentrate
             | ProviderKind::ModelstudioTokenPlan
             | ProviderKind::ModelstudioTokenPlanAnthropic
             | ProviderKind::ModelstudioCodingPlan
@@ -4516,6 +4528,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Antigravity => DEFAULT_ANTIGRAVITY_MODEL,
         ProviderKind::Telecomjs => DEFAULT_TELECOMJS_MODEL,
         ProviderKind::Edenai => DEFAULT_EDENAI_MODEL,
+        ProviderKind::Concentrate => DEFAULT_CONCENTRATE_MODEL,
         ProviderKind::ModelstudioTokenPlan
         | ProviderKind::ModelstudioTokenPlanAnthropic
         | ProviderKind::ModelstudioCodingPlan
@@ -4569,6 +4582,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Antigravity => DEFAULT_ANTIGRAVITY_BASE_URL,
         ProviderKind::Telecomjs => DEFAULT_TELECOMJS_BASE_URL,
         ProviderKind::Edenai => DEFAULT_EDENAI_BASE_URL,
+        ProviderKind::Concentrate => DEFAULT_CONCENTRATE_BASE_URL,
         ProviderKind::ModelstudioTokenPlan => DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL,
         ProviderKind::ModelstudioTokenPlanAnthropic => MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL,
         ProviderKind::ModelstudioCodingPlan => DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL,
@@ -4867,6 +4881,7 @@ pub fn provider_base_url_is_official(provider: ProviderKind, base_url: &str) -> 
             normalized.as_str(),
             "https://api.edenai.run/v3" | "https://api.eu.edenai.run/v3"
         ),
+        ProviderKind::Concentrate => normalized == DEFAULT_CONCENTRATE_BASE_URL,
         // Custom routes have no Codewhale-owned official endpoint. The
         // descriptor URL is a schema placeholder, never a credential scope.
         ProviderKind::Custom => false,
@@ -6915,6 +6930,8 @@ struct EnvRuntimeOverrides {
     telecomjs_model: Option<String>,
     edenai_base_url: Option<String>,
     edenai_model: Option<String>,
+    concentrate_base_url: Option<String>,
+    concentrate_model: Option<String>,
     modelstudio_token_plan_base_url: Option<String>,
     modelstudio_token_plan_model: Option<String>,
     modelstudio_coding_plan_base_url: Option<String>,
@@ -7269,6 +7286,12 @@ impl EnvRuntimeOverrides {
             edenai_model: std::env::var("EDENAI_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            concentrate_base_url: std::env::var("CONCENTRATE_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            concentrate_model: std::env::var("CONCENTRATE_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             modelstudio_token_plan_base_url: std::env::var("MODELSTUDIO_TOKEN_PLAN_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -7351,6 +7374,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Antigravity => self.antigravity_base_url.clone(),
             ProviderKind::Telecomjs => self.telecomjs_base_url.clone(),
             ProviderKind::Edenai => self.edenai_base_url.clone(),
+            ProviderKind::Concentrate => self.concentrate_base_url.clone(),
             ProviderKind::ModelstudioTokenPlan | ProviderKind::ModelstudioTokenPlanAnthropic => {
                 self.modelstudio_token_plan_base_url.clone()
             }
@@ -7398,6 +7422,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Antigravity => self.antigravity_model.clone(),
             ProviderKind::Telecomjs => self.telecomjs_model.clone(),
             ProviderKind::Edenai => self.edenai_model.clone(),
+            ProviderKind::Concentrate => self.concentrate_model.clone(),
             ProviderKind::ModelstudioTokenPlan | ProviderKind::ModelstudioTokenPlanAnthropic => {
                 self.modelstudio_token_plan_model.clone()
             }

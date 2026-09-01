@@ -739,23 +739,6 @@ pub(crate) fn build_session_snapshot(
     Ok(session)
 }
 
-pub(crate) fn tool_cell_is_running(tool: &ToolCell) -> bool {
-    match tool {
-        ToolCell::Exec(cell) => cell.status == ToolStatus::Running,
-        ToolCell::Exploring(cell) => cell
-            .entries
-            .iter()
-            .any(|entry| entry.status == ToolStatus::Running),
-        ToolCell::PlanUpdate(cell) => cell.status == ToolStatus::Running,
-        ToolCell::PatchSummary(cell) => cell.status == ToolStatus::Running,
-        ToolCell::Review(cell) => cell.status == ToolStatus::Running,
-        ToolCell::Mcp(cell) => cell.status == ToolStatus::Running,
-        ToolCell::ViewImage(_) => false,
-        ToolCell::WebSearch(cell) => cell.status == ToolStatus::Running,
-        ToolCell::Generic(cell) => cell.status == ToolStatus::Running,
-    }
-}
-
 /// Strip ANSI control codes / non-printable bytes from a streaming
 /// text chunk. `pub(super)` because `tui::notifications` consumes it
 /// from `crate::tui::ui` for its per-turn message composition.

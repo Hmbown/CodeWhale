@@ -160,6 +160,9 @@ def provider_kind_ids(config_rs: str) -> dict[str, str]:
         ("ModelstudioTokenPlanAnthropic", "modelstudio-token-plan-anthropic"),
         ("ModelstudioCodingPlan", "modelstudio-coding-plan"),
         ("ModelstudioCodingPlanAnthropic", "modelstudio-coding-plan-anthropic"),
+        # Concentrate is a fixed-Responses gateway; provider!() cannot express a
+        # non-Chat wire policy, so it is a hand-written impl too.
+        ("Concentrate", "concentrate"),
     ]:
         match = re.search(
             rf'impl\s+Provider\s+for\s+{variant_name}.*?fn\s+id.*?\"({id_literal})\"',

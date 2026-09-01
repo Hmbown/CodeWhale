@@ -137,7 +137,16 @@ pub const DEFAULT_SGLANG_BASE_URL: &str = "http://localhost:30000/v1";
 pub const DEFAULT_VLLM_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub const DEFAULT_VLLM_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub const DEFAULT_VLLM_BASE_URL: &str = "http://localhost:8000/v1";
-pub const DEFAULT_OLLAMA_MODEL: &str = "deepseek-v4-flash";
+/// Unresolved local-Ollama default. A live provider-catalog refresh must
+/// replace this with a tag `GET /v1/models` actually returned. Do not send
+/// this string as a model id.
+pub const DEFAULT_OLLAMA_MODEL: &str = "unknown";
+
+/// True when `model` is the pre-refresh local-Ollama placeholder, not a tag.
+#[must_use]
+pub fn is_unresolved_local_ollama_model(model: &str) -> bool {
+    model.trim().eq_ignore_ascii_case(DEFAULT_OLLAMA_MODEL)
+}
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 pub const DEFAULT_OLLAMA_CLOUD_MODEL: &str = "gpt-oss:120b";
 pub const DEFAULT_OLLAMA_CLOUD_BASE_URL: &str = codewhale_config::provider::OLLAMA_CLOUD_BASE_URL;
@@ -255,6 +264,10 @@ pub const DEFAULT_TELECOMJS_MODEL: &str = "deepseek-v4-pro";
 pub const DEFAULT_TELECOMJS_BASE_URL: &str = "https://aigw.telecomjs.com/v1";
 pub const DEFAULT_EDENAI_MODEL: &str = "deepseek/deepseek-v4-pro";
 pub const DEFAULT_EDENAI_BASE_URL: &str = "https://api.edenai.run/v3";
+// Concentrate (OpenAI Responses-compatible AI gateway) defaults; mirrors
+// crates/config/src/provider_defaults.rs for the docs drift check.
+pub const DEFAULT_CONCENTRATE_MODEL: &str = "deepseek-v4-pro";
+pub const DEFAULT_CONCENTRATE_BASE_URL: &str = "https://api.concentrate.ai/v1";
 // Alibaba Cloud Model Studio (DashScope) defaults
 pub const DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL: &str = "qwen3.8-max";
 pub const DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL: &str =

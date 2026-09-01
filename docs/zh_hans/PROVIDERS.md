@@ -210,7 +210,7 @@ model = "qwen3.8-max"
 
 | 运行时 | 默认 base URL | 默认模型 | Base URL 覆盖 |
 | --- | --- | --- | --- |
-| `ollama` | `http://localhost:11434/v1` | `deepseek-v4-flash` | `OLLAMA_BASE_URL` |
+| `ollama` | `http://localhost:11434/v1` | 来自 `GET /v1/models` 的实况标签（刷新前：`unknown`） | `OLLAMA_BASE_URL` |
 | `vllm` | `http://localhost:8000/v1` | `deepseek-ai/DeepSeek-V4-Pro` | `VLLM_BASE_URL` |
 | `sglang` | `http://localhost:30000/v1` | `deepseek-ai/DeepSeek-V4-Pro` | `SGLANG_BASE_URL` |
 
@@ -401,7 +401,7 @@ Kimi 仍然仅支持 API 密钥；对 Kimi 的外部授权被拒绝。
 | `minimax-anthropic` | `[providers.minimax_anthropic]` | `MINIMAX_API_KEY` | `MINIMAX_ANTHROPIC_BASE_URL`；默认 `https://api.minimax.io/anthropic`；中国 `https://api.minimaxi.com/anthropic` | `MiniMax-M3`, `MiniMax-M2.7` | MiniMax 直连 Anthropic 兼容 Messages 路由。保留 `/anthropic` 后缀，因为 Codewhale 会追加 `/v1/messages`；该路由使用 `x-api-key`。M3 支持自适应或禁用思考。M2.7 始终启用思考。 |
 | `sglang` | `[providers.sglang]` | 可选 `SGLANG_API_KEY` | `SGLANG_BASE_URL`；默认 `http://localhost:30000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | 自托管 OpenAI 兼容路由。本地部署通常省略认证。接受 `SGLANG_MODEL`。 |
 | `vllm` | `[providers.vllm]` | 可选 `VLLM_API_KEY` | `VLLM_BASE_URL`；默认 `http://localhost:8000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | 自托管 vLLM OpenAI 兼容路由。本地部署通常省略认证。接受 `VLLM_MODEL`。 |
-| `ollama` | `[providers.ollama]` | 本地可选 `OLLAMA_API_KEY` | `OLLAMA_BASE_URL`；默认 `http://localhost:11434/v1` | `deepseek-v4-flash`；提供商提示的自定义标签直通 | 本地 Ollama 默认无密钥。接受 `OLLAMA_MODEL`。 |
+| `ollama` | `[providers.ollama]` | 本地可选 `OLLAMA_API_KEY` | `OLLAMA_BASE_URL`；默认 `http://localhost:11434/v1` | 本地目录的实况标签；刷新前占位 `unknown`；提供商提示的自定义标签直通 | 本地 Ollama 默认无密钥。接受 `OLLAMA_MODEL`。标题栏不得绘制本机守护进程未列出的托管 id。 |
 | `ollama-cloud` | `[providers.ollama_cloud]` | `OLLAMA_CLOUD_API_KEY`, 然后是 `OLLAMA_API_KEY` | `OLLAMA_CLOUD_BASE_URL`；默认 `https://ollama.com/v1` | `gpt-oss:120b`；任意的提供商自有 ID 直通 | 托管 OpenAI 兼容 `/v1/chat/completions` 路由。在 `ollama-cloud` 下保存凭据；精确的已发布 `ollama` + Cloud URL 元组与其遗留表和秘密槽位具有有界的只读内存兼容性。接受 `OLLAMA_CLOUD_MODEL`。 |
 | `huggingface` | `[providers.huggingface]` | `HUGGINGFACE_API_KEY`, `HF_TOKEN` | `HUGGINGFACE_BASE_URL`, `HF_BASE_URL`；默认 `https://router.huggingface.co/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Hugging Face Inference Providers OpenAI 兼容路由器路由。接受的别名：`huggingface`, `hugging-face`, `hugging_face`, `hf`。Org 前缀的模型 ID 直通。接受 `HUGGINGFACE_MODEL` 和 `HF_MODEL`。Hub 浏览/导出是未来的独立功能。 |
 | `deepinfra` | `[providers.deepinfra]` | `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN` | `DEEPINFRA_BASE_URL`；默认 `https://api.deepinfra.com/v1/openai` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | DeepInfra OpenAI 兼容路由。OpenAI SDK 的直接替代品。 |
@@ -514,7 +514,7 @@ OpenRouter completions 和静态注册表行包括自 2026 年 4 月起通过 Op
 | `minimax-anthropic` | `MiniMax-M3`, `MiniMax-M2.7` | 是 | 是 |
 | `sglang` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | 是 | 是 |
 | `vllm` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | 是 | 是 |
-| `ollama` | `deepseek-v4-flash`；提供商提示为 `ollama` 时自定义标签原样通过 | 是 | 否 |
+| `ollama` | 实况本地标签；提供商提示为 `ollama` 时自定义标签原样通过 | 是 | 否 |
 | `ollama-cloud` | `gpt-oss:120b`；任意的提供商自有模型 ID 原样通过 | 是 | 是 |
 | `huggingface` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | 是 | 否 |
 | `deepinfra` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | 是 | 是 |

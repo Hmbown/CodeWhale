@@ -1173,6 +1173,7 @@ impl Secrets {
 /// | `xai` / `grok` | `XAI_API_KEY` |
 /// | `telecomjs` / `tokenhub` | `TELECOMJS_API_KEY` |
 /// | `edenai` / `eden-ai` | `EDENAI_API_KEY` |
+/// | `concentrate` / `concentrate-ai` | `CONCENTRATE_API_KEY` |
 ///
 /// Returns `None` if the provider is not recognised or none of its
 /// candidate environment variables are set to a non-empty value.
@@ -1225,6 +1226,9 @@ pub fn env_for(name: &str) -> Option<String> {
             &["TELECOMJS_API_KEY"]
         }
         "edenai" | "eden-ai" | "eden_ai" => &["EDENAI_API_KEY"],
+        "concentrate" | "concentrate-ai" | "concentrate_ai" | "concentrateai" => {
+            &["CONCENTRATE_API_KEY"]
+        }
         "daytona" => &[DAYTONA_API_KEY_ENV, CWC_DAYTONA_TOKEN_ENV],
         // One Alibaba Cloud Model Studio account authenticates every plan /
         // dialect variant; all four names share one env convention.
@@ -1328,6 +1332,7 @@ mod tests {
             "XAI_API_KEY",
             "TELECOMJS_API_KEY",
             "EDENAI_API_KEY",
+            "CONCENTRATE_API_KEY",
             "MODELSTUDIO_API_KEY",
             "DASHSCOPE_API_KEY",
             DAYTONA_API_KEY_ENV,
@@ -1931,6 +1936,32 @@ mod tests {
         for alias in ["edenai", "eden-ai", "eden_ai"] {
             assert_eq!(env_for(alias).as_deref(), Some("eden-key"), "{alias}");
         }
+
+        clear_known_envs();
+    }
+
+    #[test]
+    fn concentrate_env_aliases_resolve() {
+        let _guard = env_lock();
+        clear_known_envs();
+        unsafe { std::env::set_var("CONCENTRATE_API_KEY", "concentrate-key") };
+
+        for alias in [
+            "concentrate",
+            "concentrate-ai",
+            "concentrate_ai",
+            "concentrateai",
+        ] {
+            assert_eq!(
+                env_for(alias).as_deref(),
+                Some("concentrate-key"),
+                "{alias}"
+            );
+        }
+        // The gateway key is its own slot: no other provider's env name feeds it
+        // and it feeds no other provider.
+        assert_eq!(env_for("edenai"), None);
+        assert_eq!(env_for("openrouter"), None);
 
         clear_known_envs();
     }

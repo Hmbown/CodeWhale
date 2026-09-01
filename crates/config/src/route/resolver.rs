@@ -357,6 +357,17 @@ impl RouteResolver {
                 .strip_prefix("opencode/")
                 .or_else(|| logical_model.raw().strip_prefix("opencode-zen/"))
                 .unwrap_or_else(|| logical_model.raw())
+        } else if provider_kind == ProviderKind::Concentrate {
+            // Concentrate's own namespace is not part of its wire ids.
+            // `concentrate/auto` is the explicit spelling for the gateway's
+            // `auto` router — Codewhale's bare `auto` is the resolver sentinel
+            // above, never a literal model id — and `concentrate/<id>` is
+            // `<id>`. Upstream prefixes (`openai/gpt-5.6-sol`) stay verbatim:
+            // they pin the upstream provider inside the gateway.
+            logical_model
+                .raw()
+                .strip_prefix("concentrate/")
+                .unwrap_or_else(|| logical_model.raw())
         } else {
             provider_scoped_wire_alias(provider_kind, logical_model.raw(), class)
         };

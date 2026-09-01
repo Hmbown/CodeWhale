@@ -820,29 +820,7 @@ impl ToolCell {
     pub fn status(&self) -> Option<ToolStatus> {
         match self {
             ToolCell::Exec(cell) => Some(cell.status),
-            ToolCell::Exploring(cell) => {
-                let has_running = cell
-                    .entries
-                    .iter()
-                    .any(|entry| entry.status == ToolStatus::Running);
-                let has_failed = cell
-                    .entries
-                    .iter()
-                    .any(|entry| entry.status == ToolStatus::Failed);
-                let has_warning = cell
-                    .entries
-                    .iter()
-                    .any(|entry| entry.status == ToolStatus::Warning);
-                Some(if has_running {
-                    ToolStatus::Running
-                } else if has_failed {
-                    ToolStatus::Failed
-                } else if has_warning {
-                    ToolStatus::Warning
-                } else {
-                    ToolStatus::Success
-                })
-            }
+            ToolCell::Exploring(cell) => Some(cell.status()),
             ToolCell::PlanUpdate(cell) => Some(cell.status),
             ToolCell::PatchSummary(cell) => Some(cell.status),
             ToolCell::Review(cell) => Some(cell.status),
@@ -1045,7 +1023,7 @@ impl ExecCell {
         // Command, live output, and artifact paths belong in the Activity sidebar
         // and `/jobs` detail surfaces.
         if compact_foreground_wait {
-            return wrap_card_rail(lines);
+            return wrap_card_rail(lines, self.status);
         }
 
         // A successful shell call does not earn its full body in live mode —
@@ -1063,7 +1041,7 @@ impl ExecCell {
                 .is_some_and(is_truncated_output_preview)
         {
             lines.push(render_spillover_annotation(width));
-            return wrap_card_rail(lines);
+            return wrap_card_rail(lines, self.status);
         }
         if mode == RenderMode::Live && self.status == ToolStatus::Success {
             if self.interaction.is_none()
@@ -1086,7 +1064,7 @@ impl ExecCell {
                     width,
                 ));
             }
-            return wrap_card_rail(lines);
+            return wrap_card_rail(lines, self.status);
         }
 
         if self.status == ToolStatus::Success && self.source == ExecSource::User {
@@ -1159,7 +1137,7 @@ impl ExecCell {
             }
         }
 
-        wrap_card_rail(lines)
+        wrap_card_rail(lines, self.status)
     }
 }
 
@@ -1177,6 +1155,32 @@ pub struct ExploringCell {
 }
 
 impl ExploringCell {
+    /// The cell's own lifecycle state, rolled up from its parallel entries.
+    ///
+    /// One derivation, used by the card header, by [`ToolCell::status`], and by
+    /// the Activity surfaces — three copies of this fold had drifted apart, and
+    /// the header's copy could not produce `Failed` at all, so a fan-out with a
+    /// failed read painted itself `done` in the success colour.
+    ///
+    /// Precedence: any entry still running keeps the whole cell running; after
+    /// that the loudest terminal state wins, so a single failure is never
+    /// averaged away by its successful siblings.
+    #[must_use]
+    pub fn status(&self) -> ToolStatus {
+        let any = |wanted: ToolStatus| self.entries.iter().any(|entry| entry.status == wanted);
+        if any(ToolStatus::Running) {
+            ToolStatus::Running
+        } else if any(ToolStatus::Failed) {
+            ToolStatus::Failed
+        } else if any(ToolStatus::Warning) {
+            ToolStatus::Warning
+        } else if any(ToolStatus::Hydrated) {
+            ToolStatus::Hydrated
+        } else {
+            ToolStatus::Success
+        }
+    }
+
     /// Render the exploring cell into lines.
     #[cfg(test)]
     pub fn lines_with_motion(&self, width: u16, low_motion: bool) -> Vec<Line<'static>> {
@@ -1190,29 +1194,8 @@ impl ExploringCell {
         locale: Locale,
     ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
-        let all_done = self
-            .entries
-            .iter()
-            .all(|entry| entry.status != ToolStatus::Running);
-        let any_hydrated = self
-            .entries
-            .iter()
-            .any(|entry| entry.status == ToolStatus::Hydrated);
-        let any_warning = self
-            .entries
-            .iter()
-            .any(|entry| entry.status == ToolStatus::Warning);
-        let status = if all_done {
-            if any_warning {
-                ToolStatus::Warning
-            } else if any_hydrated {
-                ToolStatus::Hydrated
-            } else {
-                ToolStatus::Success
-            }
-        } else {
-            ToolStatus::Running
-        };
+        let status = self.status();
+        let all_done = status != ToolStatus::Running;
         let header_summary = exploring_header_summary(&self.entries);
         let multi_entry = self.entries.len() > 1;
         let header_state: Cow<'static, str> = if multi_entry {
@@ -1252,28 +1235,36 @@ impl ExploringCell {
                         ToolStatus::Running => (d, r + 1, f),
                         ToolStatus::Failed => (d, r, f + 1),
                     });
-            let dots: String = self
-                .entries
-                .iter()
-                .map(|e| match e.status {
+            // Each dot carries its own entry's state. Painting the strip one
+            // flat colour made a failed parallel read indistinguishable from a
+            // finished one, which is exactly the narration the cell is
+            // supposed to make unnecessary.
+            let mut dot_spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+            dot_spans.extend(self.entries.iter().map(|e| {
+                let glyph = match e.status {
                     ToolStatus::Success | ToolStatus::Hydrated => "\u{25CF}",
                     ToolStatus::Warning => "!",
                     ToolStatus::Running => "\u{25D0}",
                     ToolStatus::Failed => "\u{2715}",
-                })
-                .collect();
+                };
+                Span::styled(
+                    glyph,
+                    Style::default().fg(tool_glyph_color(e.status, family)),
+                )
+            }));
             let counts = format!(
-                "{done} done, {running} running{}",
+                "  {done} done, {running} running{}",
                 if failed > 0 {
                     format!(", {failed} failed")
                 } else {
                     String::new()
                 },
             );
-            lines.push(Line::styled(
-                format!("  {dots}  {counts}"),
-                Style::default().fg(palette::WHALE_INFO),
+            dot_spans.push(Span::styled(
+                counts,
+                Style::default().fg(tool_glyph_color(status, family)),
             ));
+            lines.push(Line::from(dot_spans));
         }
 
         for entry in &self.entries {
@@ -1759,14 +1750,17 @@ impl GenericToolCell {
         {
             let family = crate::tui::widgets::tool_card::tool_family_for_name(&self.name);
             let summary = truncate_text(output.trim(), 200);
-            return wrap_card_rail(vec![render_tool_header_with_family_and_summary(
-                family,
-                Some(summary.as_str()),
-                tool_status_label(self.status),
+            return wrap_card_rail(
+                vec![render_tool_header_with_family_and_summary(
+                    family,
+                    Some(summary.as_str()),
+                    tool_status_label(self.status),
+                    self.status,
+                    None,
+                    low_motion,
+                )],
                 self.status,
-                None,
-                low_motion,
-            )]);
+            );
         }
 
         // Live mode stays calm: successful tool calls collapse to one header
@@ -1797,7 +1791,7 @@ impl GenericToolCell {
                 if self.spillover_path.is_some() {
                     collapsed.push(render_spillover_annotation(width));
                 }
-                return wrap_card_rail(collapsed);
+                return wrap_card_rail(collapsed, self.status);
             }
         }
 
@@ -1906,7 +1900,7 @@ impl GenericToolCell {
                 lines.push(render_spillover_annotation(width));
             }
         }
-        wrap_card_rail(lines)
+        wrap_card_rail(lines, self.status)
     }
 
     /// If this cell is a checklist/todo write/add/update and the output is
@@ -2020,7 +2014,7 @@ impl GenericToolCell {
                     ));
                 }
             }
-            return Some(wrap_card_rail(lines));
+            return Some(wrap_card_rail(lines, self.status));
         }
 
         use crate::tui::widgets::workflow_panel::{WorkflowHistoryExtras, WorkflowPanel};
@@ -2088,7 +2082,7 @@ impl GenericToolCell {
                 ));
             }
         }
-        Some(wrap_card_rail(lines))
+        Some(wrap_card_rail(lines, self.status))
     }
 }
 
@@ -2189,13 +2183,22 @@ fn render_compact_kv(label: &str, value: &str, style: Style, width: u16) -> Vec<
 /// Wrap rendered tool-card lines with card-rail glyphs (╭ │ ╰).
 /// First non-empty line gets `╭`, middle lines get `│`, last line gets `╰`.
 /// Single-line cards get a single `─` prefix.
-fn wrap_card_rail(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+///
+/// The rail is the card's border, so it carries the cell's own state: it is
+/// painted with [`tool_rail_color`], OMP's border rule. A running card is
+/// bordered in the action accent, a failed one in the error colour, and a
+/// settled one recedes to muted — which is what makes a tool cell legible
+/// without a neighbouring row narrating what the card already shows. The
+/// header glyph inside it follows [`tool_glyph_color`] instead, so a finished
+/// card still says what it was.
+fn wrap_card_rail(mut lines: Vec<Line<'static>>, status: ToolStatus) -> Vec<Line<'static>> {
     let n = lines.len();
     if n == 0 {
         return lines;
     }
+    let rail_style = Style::default().fg(tool_rail_color(status));
     if n == 1 {
-        lines[0].spans.insert(0, Span::raw("─ "));
+        lines[0].spans.insert(0, Span::styled("─ ", rail_style));
         return lines;
     }
     for (i, line) in lines.iter_mut().enumerate() {
@@ -2206,7 +2209,7 @@ fn wrap_card_rail(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
         } else {
             "\u{2502} " // │
         };
-        line.spans.insert(0, Span::raw(rail));
+        line.spans.insert(0, Span::styled(rail, rail_style));
     }
     lines
 }
@@ -2559,18 +2562,16 @@ fn render_tool_header_with_family_and_summary(
     let glyph = crate::tui::widgets::tool_card::family_glyph(family);
     let verb = crate::tui::widgets::tool_card::family_label(family);
 
+    let glyph_style = Style::default().fg(tool_glyph_color(status, family));
     let mut spans = vec![
         Span::styled(
             format!("{} ", status_symbol(started_at, status, low_motion, family)),
-            Style::default().fg(tool_state_color(status)),
+            glyph_style,
         ),
-        Span::styled(
-            format!("{glyph} "),
-            Style::default().fg(tool_state_color(status)),
-        ),
+        Span::styled(format!("{glyph} "), glyph_style),
         Span::styled(verb.to_string(), tool_title_style()),
         Span::styled(" ", Style::default()),
-        Span::styled(state_owned, tool_status_style(status)),
+        Span::styled(state_owned, tool_status_style(status, family)),
     ];
 
     // #4148: don't let the summary echo the verb it sits next to — an
@@ -2683,16 +2684,28 @@ fn tool_title_style() -> Style {
     active_theme().tool_title_style()
 }
 
-fn tool_status_style(status: ToolStatus) -> Style {
-    active_theme().tool_status_style(status)
+fn tool_status_style(
+    status: ToolStatus,
+    family: crate::tui::widgets::tool_card::ToolFamily,
+) -> Style {
+    active_theme().tool_status_style(status, family)
 }
 
 fn tool_detail_label_style() -> Style {
     active_theme().tool_label_style()
 }
 
-fn tool_state_color(status: ToolStatus) -> Color {
-    active_theme().tool_status_color(status)
+/// Card border ink — OMP's border rule. See [`Theme::tool_rail_color`].
+fn tool_rail_color(status: ToolStatus) -> Color {
+    active_theme().tool_rail_color(status)
+}
+
+/// Status-glyph ink — the mockup's reading. See [`Theme::tool_glyph_color`].
+fn tool_glyph_color(
+    status: ToolStatus,
+    family: crate::tui::widgets::tool_card::ToolFamily,
+) -> Color {
+    active_theme().tool_glyph_color(status, family)
 }
 
 fn tool_status_label(status: ToolStatus) -> &'static str {

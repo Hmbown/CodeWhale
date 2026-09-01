@@ -2345,3 +2345,154 @@ fn the_card_helpers_accept_their_documented_forms_and_decline_the_rest() {
         "Line one\nLine two"
     );
 }
+
+/// The card rail is the block's border, so it carries the cell's own state.
+/// Property, not token: every status paints a distinct rail, the rail is never
+/// left unstyled — an unstyled rail is what shipped before, and it made a
+/// failed card look exactly like a finished one from the border in — and it
+/// agrees with the glyph beside it on everything that needs attention while
+/// receding on a settled card, which is the whole point of the split.
+#[test]
+fn card_rail_carries_the_cell_status() {
+    let mut rails = Vec::new();
+    for status in [
+        ToolStatus::Running,
+        ToolStatus::Success,
+        ToolStatus::Hydrated,
+        ToolStatus::Warning,
+        ToolStatus::Failed,
+    ] {
+        let cell = exec_tool("cargo test", status);
+        let lines = cell.render(80, /*low_motion*/ true, RenderMode::Live);
+        let first = &lines[0];
+
+        let rail = first.spans.first().expect("card rail span");
+        assert!(
+            matches!(rail.content.as_ref(), "─ " | "╭ "),
+            "{status:?} lost its card rail: {:?}",
+            rail.content
+        );
+        let rail_color = rail.style.fg.unwrap_or_else(|| {
+            panic!("{status:?} left the card rail unstyled — the border must follow the state")
+        });
+
+        let glyph_color = first.spans[1]
+            .style
+            .fg
+            .expect("header status glyph must be styled");
+        if status == ToolStatus::Success {
+            // A settled card dims its border but keeps an identifying glyph.
+            assert_ne!(
+                rail_color, glyph_color,
+                "a settled card must not dim its glyph along with its rail"
+            );
+        } else {
+            assert_eq!(
+                rail_color, glyph_color,
+                "{status:?} must read the same on the rail and the glyph"
+            );
+        }
+
+        rails.push((status, rail_color));
+    }
+
+    for (i, (status, color)) in rails.iter().enumerate() {
+        for (other_status, other_color) in &rails[i + 1..] {
+            assert_ne!(
+                color, other_color,
+                "{status:?} and {other_status:?} draw the same rail"
+            );
+        }
+    }
+}
+
+/// The header glyph reports identity, not just lifecycle: a passed `verify`
+/// card keeps its green tick where a finished `read` keeps the family accent
+/// the mockup draws as a blue magnifier. Relationship, not token — the two must
+/// simply not collapse into one another.
+#[test]
+fn a_settled_verify_glyph_does_not_read_as_a_settled_read() {
+    let verify = generic_tool("run_tests", ToolStatus::Success);
+    let read = generic_tool("read_file", ToolStatus::Success);
+
+    let glyph_color = |cell: &GenericToolCell| {
+        cell.lines_with_mode_and_locale(
+            80,
+            /*low_motion*/ true,
+            RenderMode::Live,
+            crate::localization::Locale::En,
+        )[0]
+        .spans[1]
+            .style
+            .fg
+            .expect("header status glyph must be styled")
+    };
+
+    assert_ne!(
+        glyph_color(&verify),
+        glyph_color(&read),
+        "a passed verify and a finished read must not share a glyph colour"
+    );
+}
+
+/// An exploring cell rolls its parallel entries up into one state, and a
+/// single failure is never averaged away by its successful siblings. This is
+/// the fold that used to exist in three places and could not produce `Failed`
+/// in the one that painted the header.
+#[test]
+fn exploring_cell_status_keeps_the_loudest_terminal_state() {
+    use super::{ExploringCell, ExploringEntry};
+
+    let cell = |statuses: &[ToolStatus]| ExploringCell {
+        entries: statuses
+            .iter()
+            .map(|status| ExploringEntry {
+                label: "Reading src/foo.rs".to_string(),
+                status: *status,
+            })
+            .collect(),
+    };
+
+    for (statuses, expected) in [
+        (
+            vec![ToolStatus::Success, ToolStatus::Success],
+            ToolStatus::Success,
+        ),
+        (
+            vec![ToolStatus::Success, ToolStatus::Running],
+            ToolStatus::Running,
+        ),
+        (
+            vec![ToolStatus::Failed, ToolStatus::Running],
+            ToolStatus::Running,
+        ),
+        (
+            vec![ToolStatus::Success, ToolStatus::Failed],
+            ToolStatus::Failed,
+        ),
+        (
+            vec![ToolStatus::Warning, ToolStatus::Failed],
+            ToolStatus::Failed,
+        ),
+        (
+            vec![ToolStatus::Success, ToolStatus::Warning],
+            ToolStatus::Warning,
+        ),
+        (
+            vec![ToolStatus::Success, ToolStatus::Hydrated],
+            ToolStatus::Hydrated,
+        ),
+    ] {
+        assert_eq!(
+            cell(&statuses).status(),
+            expected,
+            "{statuses:?} should roll up to {expected:?}"
+        );
+    }
+
+    // And the cell reports that state through the ToolCell it lives in.
+    assert_eq!(
+        ToolCell::Exploring(cell(&[ToolStatus::Success, ToolStatus::Failed])).status(),
+        Some(ToolStatus::Failed)
+    );
+}

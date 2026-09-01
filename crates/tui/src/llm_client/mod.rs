@@ -790,6 +790,19 @@ fn has_explicit_quota_phrase(body: &str) -> bool {
 
 fn extract_json_error_message(body: &str) -> Option<String> {
     let value: Value = serde_json::from_str(body).ok()?;
+    // Flat gateway bodies (`{"error":"Bad Request","message":"Invalid model
+    // name: 'x'"}` — Concentrate, among others) keep the class in `error` and
+    // the detail in `message`. Surfacing only the class hid the one line the
+    // person needed, so carry both when both are present and differ.
+    if let (Some(class), Some(detail)) = (
+        value.pointer("/error").and_then(Value::as_str),
+        value.pointer("/message").and_then(Value::as_str),
+    ) && !class.trim().is_empty()
+        && !detail.trim().is_empty()
+        && !class.trim().eq_ignore_ascii_case(detail.trim())
+    {
+        return Some(format!("{}: {}", class.trim(), detail.trim()));
+    }
     for pointer in [
         "/error/message",
         "/error",
@@ -1532,6 +1545,35 @@ mod tests {
         );
 
         assert_eq!(auth_user_message(err), "Invalid API Key");
+    }
+
+    /// A flat `{"error","message"}` body keeps its detail: the class alone
+    /// ("Bad Request") told the person nothing about the rejected model.
+    #[test]
+    fn flat_error_and_message_body_surfaces_both_halves() {
+        let body = r#"{"error":"Bad Request","message":"Invalid model name: 'invalid-model-xyz'"}"#;
+        assert_eq!(
+            sanitize_http_error_body(Some("Concentrate"), 400, body),
+            "Bad Request: Invalid model name: 'invalid-model-xyz'"
+        );
+        // Identical halves are not doubled, and the nested OpenAI shape is
+        // untouched.
+        assert_eq!(
+            sanitize_http_error_body(
+                Some("Concentrate"),
+                401,
+                r#"{"error":"Unauthorized","message":"Unauthorized"}"#
+            ),
+            "Unauthorized"
+        );
+        assert_eq!(
+            sanitize_http_error_body(
+                Some("fixture"),
+                400,
+                r#"{"error":{"message":"nested detail"}}"#
+            ),
+            "nested detail"
+        );
     }
 
     #[test]

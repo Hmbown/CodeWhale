@@ -5,6 +5,7 @@ anthropic
 antigravity
 arcee
 atlascloud
+concentrate
 custom
 deepinfra
 deepseek

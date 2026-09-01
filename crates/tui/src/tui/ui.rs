@@ -668,7 +668,7 @@ fn turn_stall_watchdog_timeout(app: &App) -> Duration {
 fn active_turn_has_running_tool(app: &App) -> bool {
     app.active_cell.as_ref().is_some_and(|active| {
         active.entries().iter().any(|cell| match cell {
-            HistoryCell::Tool(tool) => tool_cell_is_running(tool),
+            HistoryCell::Tool(tool) => tool.is_running(),
             _ => false,
         })
     })

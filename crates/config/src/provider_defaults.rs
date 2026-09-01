@@ -120,7 +120,10 @@ pub(crate) const DEFAULT_SGLANG_BASE_URL: &str = "http://localhost:30000/v1";
 pub(crate) const DEFAULT_VLLM_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub(crate) const DEFAULT_VLLM_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub(crate) const DEFAULT_VLLM_BASE_URL: &str = "http://localhost:8000/v1";
-pub(crate) const DEFAULT_OLLAMA_MODEL: &str = "deepseek-v4-flash";
+/// Unresolved local-Ollama default. A live `GET /v1/models` (Ollama's
+/// OpenAI-compat catalog, same tags as `/api/tags`) must supply the real id;
+/// this marker must never be sent as a model name.
+pub(crate) const DEFAULT_OLLAMA_MODEL: &str = "unknown";
 pub(crate) const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 pub(crate) const DEFAULT_OLLAMA_CLOUD_MODEL: &str = "gpt-oss:120b";
 pub(crate) const DEFAULT_OLLAMA_CLOUD_BASE_URL: &str = "https://ollama.com/v1";
@@ -196,6 +199,13 @@ pub(crate) const DEFAULT_TELECOMJS_BASE_URL: &str = "https://aigw.telecomjs.com/
 // Eden AI (OpenAI-compatible AI gateway) defaults
 pub(crate) const DEFAULT_EDENAI_MODEL: &str = "deepseek/deepseek-v4-pro";
 pub(crate) const DEFAULT_EDENAI_BASE_URL: &str = "https://api.edenai.run/v3";
+// Concentrate (OpenAI Responses-compatible AI gateway) defaults. Contract:
+// https://concentrate.ai/docs/api-reference/introduction — base URL, bearer
+// Universal API key, `POST /v1/responses`, unauthenticated `GET /v1/models`.
+// The default is a plain catalog id (the gateway picks the upstream provider);
+// `provider/model` pins a provider and `concentrate/auto` is the gateway router.
+pub(crate) const DEFAULT_CONCENTRATE_MODEL: &str = "deepseek-v4-pro";
+pub(crate) const DEFAULT_CONCENTRATE_BASE_URL: &str = "https://api.concentrate.ai/v1";
 // Alibaba Cloud Model Studio (DashScope) defaults
 // Token Plan (Personal / Team): shared endpoint, OpenAI + Anthropic dialects
 pub(crate) const DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL: &str = "qwen3.8-max";

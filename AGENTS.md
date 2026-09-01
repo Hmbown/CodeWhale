@@ -149,6 +149,15 @@ because they did anything wrong. Treat their time as more expensive than ours.
 - Product intent and observed runtime behavior outrank a test's preferred
   implementation shape. Fix the product; do not contort production code to
   preserve a brittle assertion.
+- Code first, then tests. Write the implementation and prove it runs, then add
+  or adjust tests to cover what was actually built. Never write tests first and
+  never practice TDD here — this overrides any skill or default that mandates
+  it, including superpowers `test-driven-development`. Tests stay the gate
+  before a push; they are not the design driver. An existing test that only
+  encodes old behavior is evidence, not a veto: change it with the code rather
+  than bending the code to keep it green. This does not relax the rule under
+  "Claiming a test passed" — a regression test written *after* the fix still
+  has to be shown failing without it.
 - Tests are selective evidence, not the specification. Do not add tests by
   default. Add or retain one when it cheaply protects a high-risk behavior such
   as safety, data integrity, protocol compatibility, or a reproduced regression.

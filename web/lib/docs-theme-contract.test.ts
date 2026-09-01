@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { resolveWhale } from "./whale-tokens";
 
 const CSS = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 
@@ -12,8 +13,12 @@ function selectorBlock(selector: string): string {
 function selectorVars(selector: string): Record<string, string> {
   const block = selectorBlock(selector);
   const vars: Record<string, string> = {};
-  for (const match of block.matchAll(/--([\w-]+):\s*(#[0-9a-f]{6}|#[0-9a-f]{3})/gi)) {
-    vars[match[1]] = match[2];
+  // Values may be a literal hex or a `var(--whale-*)` reference into the
+  // generated app/tokens.css; non-color values (channel triples, lengths) are
+  // skipped, exactly as the hex-only regex used to skip them.
+  for (const match of block.matchAll(/--([\w-]+):\s*([^;]+);/g)) {
+    const value = resolveWhale(match[2].trim());
+    if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value)) vars[match[1]] = value;
   }
   return vars;
 }

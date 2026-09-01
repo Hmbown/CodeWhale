@@ -366,6 +366,30 @@ fn configured_model_for_provider(config: &Config, provider: ApiProvider) -> Opti
 }
 
 fn provider_default_model(config: &Config, provider: ApiProvider) -> String {
+    if provider == ApiProvider::Ollama {
+        let configured = if provider == config.api_provider() {
+            Some(config.default_model())
+        } else {
+            configured_model_for_provider(config, provider)
+        };
+        let unresolved = configured.as_deref().is_none_or(|model| {
+            model.trim().eq_ignore_ascii_case("auto")
+                || crate::config::is_unresolved_local_ollama_model(model)
+        });
+        if unresolved
+            && let Some(live) = crate::provider_lake::live_per_provider_models(provider)
+                .into_iter()
+                .next()
+        {
+            return live;
+        }
+        if let Some(model) = configured.filter(|model| {
+            !model.trim().eq_ignore_ascii_case("auto")
+                && !crate::config::is_unresolved_local_ollama_model(model)
+        }) {
+            return model;
+        }
+    }
     if provider == config.api_provider() {
         let model = config.default_model();
         if !model.trim().eq_ignore_ascii_case("auto") {
@@ -1106,5 +1130,34 @@ mod tests {
             ..Default::default()
         };
         assert!(!ModelInventory::from_config(&deepseek).router_available);
+    }
+
+    #[test]
+    fn ollama_default_prefers_live_local_tags_over_the_unresolved_marker() {
+        let _live = crate::provider_lake::lock_live_snapshot();
+        crate::provider_lake::clear_live_snapshot();
+        let config = Config {
+            provider: Some("ollama".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            provider_default_model(&config, ApiProvider::Ollama),
+            crate::config::DEFAULT_OLLAMA_MODEL
+        );
+
+        crate::provider_lake::merge_live_offerings(vec![
+            codewhale_config::catalog::CatalogOffering {
+                provider: "ollama".to_string(),
+                wire_model_id: "qwen2.5:0.5b".to_string(),
+                endpoint_key: "chat".to_string(),
+                default_for_provider: true,
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(
+            provider_default_model(&config, ApiProvider::Ollama),
+            "qwen2.5:0.5b"
+        );
+        crate::provider_lake::clear_live_snapshot();
     }
 }

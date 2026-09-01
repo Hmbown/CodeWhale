@@ -8,14 +8,15 @@
 use super::{
     DEFAULT_ANTIGRAVITY_BASE_URL, DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_ARCEE_BASE_URL,
     DEFAULT_ARCEE_MODEL, DEFAULT_ATLASCLOUD_BASE_URL, DEFAULT_ATLASCLOUD_MODEL,
-    DEFAULT_DEEPINFRA_BASE_URL, DEFAULT_DEEPINFRA_MODEL, DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL,
-    DEFAULT_DEEPSEEK_ANTHROPIC_MODEL, DEFAULT_DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL,
-    DEFAULT_EDENAI_BASE_URL, DEFAULT_EDENAI_MODEL, DEFAULT_FIREWORKS_BASE_URL,
-    DEFAULT_FIREWORKS_MODEL, DEFAULT_GOOGLE_BASE_URL, DEFAULT_GOOGLE_MODEL,
-    DEFAULT_HUGGINGFACE_BASE_URL, DEFAULT_HUGGINGFACE_MODEL, DEFAULT_LONGCAT_BASE_URL,
-    DEFAULT_LONGCAT_MODEL, DEFAULT_META_BASE_URL, DEFAULT_META_MODEL,
-    DEFAULT_MINIMAX_ANTHROPIC_BASE_URL, DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL,
-    DEFAULT_MISTRAL_BASE_URL, DEFAULT_MISTRAL_MODEL, DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL,
+    DEFAULT_CONCENTRATE_BASE_URL, DEFAULT_CONCENTRATE_MODEL, DEFAULT_DEEPINFRA_BASE_URL,
+    DEFAULT_DEEPINFRA_MODEL, DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL, DEFAULT_DEEPSEEK_ANTHROPIC_MODEL,
+    DEFAULT_DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL, DEFAULT_EDENAI_BASE_URL,
+    DEFAULT_EDENAI_MODEL, DEFAULT_FIREWORKS_BASE_URL, DEFAULT_FIREWORKS_MODEL,
+    DEFAULT_GOOGLE_BASE_URL, DEFAULT_GOOGLE_MODEL, DEFAULT_HUGGINGFACE_BASE_URL,
+    DEFAULT_HUGGINGFACE_MODEL, DEFAULT_LONGCAT_BASE_URL, DEFAULT_LONGCAT_MODEL,
+    DEFAULT_META_BASE_URL, DEFAULT_META_MODEL, DEFAULT_MINIMAX_ANTHROPIC_BASE_URL,
+    DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL, DEFAULT_MISTRAL_BASE_URL,
+    DEFAULT_MISTRAL_MODEL, DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL,
     DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL, DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL,
     DEFAULT_MOONSHOT_BASE_URL, DEFAULT_MOONSHOT_MODEL, DEFAULT_NOVITA_BASE_URL,
     DEFAULT_NOVITA_MODEL, DEFAULT_NVIDIA_NIM_BASE_URL, DEFAULT_NVIDIA_NIM_MODEL,
@@ -437,6 +438,12 @@ pub const fn credential_help(kind: ProviderKind) -> CredentialHelp {
             credential_url: Some("https://app.edenai.run/settings/api-keys"),
             docs_url: Some("https://www.edenai.co/docs"),
             guidance: "Create an Eden AI API key from the Eden AI dashboard, then select models by their provider/model namespaced id.",
+        },
+        ProviderKind::Concentrate => CredentialHelp {
+            acquisition: ApiKey,
+            credential_url: Some("https://concentrate.ai/"),
+            docs_url: Some("https://concentrate.ai/docs/api-reference/introduction"),
+            guidance: "Create a Universal API key in the Concentrate dashboard (API Keys → Create API Key). Codewhale sends it only to the Concentrate base URL and never stores or forwards it elsewhere.",
         },
         ProviderKind::ModelstudioTokenPlan
         | ProviderKind::ModelstudioTokenPlanAnthropic
@@ -1412,6 +1419,56 @@ provider!(
     aliases: ["eden-ai", "eden_ai"]
 );
 
+/// Concentrate — OpenAI Responses-compatible AI gateway (aggregator).
+///
+/// `provider!()` fixes every macro provider on Chat Completions. Concentrate
+/// documents the Responses API as its production surface ("For production
+/// use, we recommend using the Responses API"), so it carries a fixed
+/// Responses wire policy here instead. Contract:
+/// <https://concentrate.ai/docs/api-reference/introduction>. Commercial
+/// boundary: its Terms of Service forbid resale, white-label, and
+/// service-bureau use without written consent, so this route is BYOK only —
+/// the user's own key, their own bill, no Codewhale fee or managed default.
+pub struct Concentrate;
+
+impl Provider for Concentrate {
+    fn id(&self) -> &'static str {
+        "concentrate"
+    }
+
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Concentrate
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Concentrate"
+    }
+
+    fn default_base_url(&self) -> &'static str {
+        DEFAULT_CONCENTRATE_BASE_URL
+    }
+
+    fn default_model(&self) -> &'static str {
+        DEFAULT_CONCENTRATE_MODEL
+    }
+
+    fn env_vars(&self) -> &'static [&'static str] {
+        &["CONCENTRATE_API_KEY"]
+    }
+
+    fn provider_config_key(&self) -> &'static str {
+        "concentrate"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["concentrate-ai", "concentrate_ai", "concentrateai"]
+    }
+
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::Responses)
+    }
+}
+
 /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible Chat Completions).
 ///
 /// Token Plan Personal and Team share the same regional endpoint. The default
@@ -1704,6 +1761,7 @@ static MISTRAL: Mistral = Mistral;
 static ANTIGRAVITY: Antigravity = Antigravity;
 static TELECOMJS: Telecomjs = Telecomjs;
 static EDENAI: Edenai = Edenai;
+static CONCENTRATE: Concentrate = Concentrate;
 static MODELSTUDIO_TOKEN_PLAN: ModelstudioTokenPlan = ModelstudioTokenPlan;
 static MODELSTUDIO_TOKEN_PLAN_ANTHROPIC: ModelstudioTokenPlanAnthropic =
     ModelstudioTokenPlanAnthropic;
@@ -1712,7 +1770,7 @@ static MODELSTUDIO_CODING_PLAN_ANTHROPIC: ModelstudioCodingPlanAnthropic =
     ModelstudioCodingPlanAnthropic;
 static CUSTOM: Custom = Custom;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 47] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 48] = [
     &DEEPSEEK,
     &DEEPSEEK_ANTHROPIC,
     &NVIDIA_NIM,
@@ -1753,6 +1811,7 @@ static PROVIDER_REGISTRY: [&dyn Provider; 47] = [
     &MISTRAL,
     &TELECOMJS,
     &EDENAI,
+    &CONCENTRATE,
     &MODELSTUDIO_TOKEN_PLAN,
     &MODELSTUDIO_TOKEN_PLAN_ANTHROPIC,
     &MODELSTUDIO_CODING_PLAN,

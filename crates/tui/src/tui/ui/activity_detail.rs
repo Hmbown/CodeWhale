@@ -234,48 +234,6 @@ fn activity_cell_label(app: &App, cell_index: usize, cell: &HistoryCell) -> Stri
     }
 }
 
-fn tool_status_for_activity(tool: &ToolCell) -> Option<ToolStatus> {
-    match tool {
-        ToolCell::Exec(cell) => Some(cell.status),
-        ToolCell::Exploring(cell) => {
-            if cell
-                .entries
-                .iter()
-                .any(|entry| entry.status == ToolStatus::Running)
-            {
-                Some(ToolStatus::Running)
-            } else if cell
-                .entries
-                .iter()
-                .any(|entry| entry.status == ToolStatus::Failed)
-            {
-                Some(ToolStatus::Failed)
-            } else if cell
-                .entries
-                .iter()
-                .any(|entry| entry.status == ToolStatus::Warning)
-            {
-                Some(ToolStatus::Warning)
-            } else if cell
-                .entries
-                .iter()
-                .any(|entry| entry.status == ToolStatus::Hydrated)
-            {
-                Some(ToolStatus::Hydrated)
-            } else {
-                Some(ToolStatus::Success)
-            }
-        }
-        ToolCell::PlanUpdate(cell) => Some(cell.status),
-        ToolCell::PatchSummary(cell) => Some(cell.status),
-        ToolCell::Review(cell) => Some(cell.status),
-        ToolCell::Mcp(cell) => Some(cell.status),
-        ToolCell::ViewImage(_) => Some(ToolStatus::Success),
-        ToolCell::WebSearch(cell) => Some(cell.status),
-        ToolCell::Generic(cell) => Some(cell.status),
-    }
-}
-
 fn tool_duration_for_activity(tool: &ToolCell) -> Option<u64> {
     match tool {
         ToolCell::Exec(cell) => cell.duration_ms.or_else(|| {
@@ -1232,7 +1190,7 @@ fn turn_timeline_lines(app: &App, start: usize, end: usize) -> Vec<String> {
                 let (kind, summary) = timeline_tool_summary(app, idx, tool);
                 let duration =
                     tool_duration_for_activity(tool).map(crate::elapsed::format_elapsed_ms);
-                let status = tool_status_for_activity(tool).map(activity_status_label);
+                let status = tool.status().map(activity_status_label);
                 let actions = timeline_cell_actions(app, idx, cell);
                 rows.push(timeline_row(
                     kind,
