@@ -628,6 +628,53 @@ pub enum RequestPayloadMode {
 /// in the API payload (after normalization / provider-specific mapping).
 #[must_use]
 pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> ProviderCapability {
+    provider_capability_with_wire(provider, resolved_model, None)
+}
+
+/// Wire-aware variant of [`provider_capability`] that respects
+/// `wire = "responses" | "anthropic" | "chat"` for `Custom` providers.
+///
+/// Built-ins keep their fixed policy; `Custom` defaults to `Chat` when `wire`
+/// is absent so existing configs stay compatible. Mirrors
+/// `crates/tui/src/client.rs::provider_wire_format_for_config` and the
+/// `Custom` comment in `crates/config/src/provider.rs`.
+#[must_use]
+pub fn provider_capability_with_wire(
+    provider: ApiProvider,
+    resolved_model: &str,
+    wire: Option<&str>,
+) -> ProviderCapability {
+    // Custom wire overrides must be checked before the generic fallback so
+    // `[providers.<name>] wire = "responses"` / `"anthropic"` is honored.
+    if provider == ApiProvider::Custom {
+        if wire_config_prefers_anthropic(wire) {
+            return ProviderCapability {
+                provider,
+                resolved_model: resolved_model.to_string(),
+                context_window: crate::models::context_window_for_model(resolved_model)
+                    .unwrap_or(crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS),
+                max_output: crate::models::max_output_tokens_for_model(resolved_model),
+                thinking_supported: crate::models::model_supports_reasoning(resolved_model),
+                cache_telemetry_supported: false,
+                request_payload_mode: RequestPayloadMode::AnthropicMessages,
+                alias_deprecation: None,
+            };
+        }
+        if wire_config_prefers_responses(wire) {
+            return ProviderCapability {
+                provider,
+                resolved_model: resolved_model.to_string(),
+                context_window: crate::models::context_window_for_model(resolved_model)
+                    .unwrap_or(crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS),
+                max_output: crate::models::max_output_tokens_for_model(resolved_model),
+                thinking_supported: crate::models::model_supports_reasoning(resolved_model),
+                cache_telemetry_supported: false,
+                request_payload_mode: RequestPayloadMode::Responses,
+                alias_deprecation: None,
+            };
+        }
+    }
+
     if matches!(
         provider,
         ApiProvider::Anthropic | ApiProvider::MinimaxAnthropic | ApiProvider::Openmodel
@@ -5466,6 +5513,20 @@ impl Config {
             || (identity_is_literal_custom(identity) && self.uses_legacy_literal_custom_route())
     }
 
+    /// Trimmed, non-empty `wire` dialect preference for `provider`'s config
+    /// table (`[providers.<name>] wire = "responses" | "anthropic" | "chat"`).
+    ///
+    /// Single source for the client wire resolver and the capability reporter
+    /// so the two cannot drift. `None` means "no preference" — the provider's
+    /// static policy applies.
+    pub(crate) fn provider_wire_dialect(&self, provider: ApiProvider) -> Option<&str> {
+        self.provider_config_for(provider)?
+            .wire
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
     pub(crate) fn provider_config_for(&self, provider: ApiProvider) -> Option<&ProviderConfig> {
         let providers = self.providers.as_ref()?;
         // The custom provider's config lives in the flatten map, keyed by the
@@ -9494,6 +9555,24 @@ fn wire_config_prefers_anthropic(wire: Option<&str>) -> bool {
             | "claude"
             | "anthropic-compatible"
             | "anthropic-compat"
+    )
+}
+
+fn wire_config_prefers_responses(wire: Option<&str>) -> bool {
+    let Some(raw) = wire.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let normalized = raw.to_ascii_lowercase().replace(['_', ' '], "-");
+    matches!(
+        normalized.as_str(),
+        "responses"
+            | "responses-api"
+            | "openai-responses"
+            | "openai-responses-api"
+            | "response"
+            | "response-api"
+            | "openai-responses-compat"
+            | "responses-compat"
     )
 }
 

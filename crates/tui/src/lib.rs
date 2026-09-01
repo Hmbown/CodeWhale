@@ -7054,7 +7054,14 @@ fn provider_capability_report(config: &Config) -> serde_json::Value {
     let resolved_model = route
         .as_ref()
         .map_or(configured_model.as_str(), |route| route.model.as_str());
-    let cap = crate::config::provider_capability(provider, resolved_model);
+    // Wire-aware so a custom provider's `wire = "responses" | "anthropic"`
+    // reports the payload mode the client will actually speak instead of the
+    // static Chat default.
+    let cap = crate::config::provider_capability_with_wire(
+        provider,
+        resolved_model,
+        config.provider_wire_dialect(provider),
+    );
     let route_profile = route.as_ref().map(|route| {
         crate::model_profile::resolved_capability_profile_for_route(
             provider,
