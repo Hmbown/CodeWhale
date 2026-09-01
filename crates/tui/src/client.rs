@@ -2625,16 +2625,22 @@ impl DeepSeekClient {
     /// snapshot via `provider_lake::merge_live_offerings`, preserving rows
     /// from other sources.
     ///
-    /// Currently activated for providers whose model list is not covered by the
-    /// Models.dev catalog (e.g. TelecomJS TokenHub). The refresh is non-fatal:
-    /// on failure, existing/bundled rows remain available.
+    /// Activated for providers whose model list is not covered by the
+    /// Models.dev catalog (TelecomJS TokenHub, Eden AI, Concentrate, local
+    /// Ollama).
+    /// Ollama's OpenAI-compat `GET /v1/models` returns the same tags as
+    /// native `GET /api/tags`. The refresh is non-fatal: on failure,
+    /// existing/bundled rows remain available.
     pub fn spawn_active_provider_catalog_refresh(config: &Config) {
         let provider = config.api_provider();
         // Only refresh for providers that serve their own model list and are
         // not already covered by the Models.dev catalog.
         if !matches!(
             provider,
-            ApiProvider::Telecomjs | ApiProvider::Edenai | ApiProvider::Concentrate
+            ApiProvider::Telecomjs
+                | ApiProvider::Edenai
+                | ApiProvider::Concentrate
+                | ApiProvider::Ollama
         ) {
             return;
         }

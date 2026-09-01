@@ -6291,7 +6291,7 @@ fn vllm_provider_defaults_to_local_endpoint_and_model() {
 }
 
 #[test]
-fn ollama_provider_defaults_to_local_endpoint_and_small_model() {
+fn ollama_provider_defaults_to_local_endpoint_and_unresolved_model() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();
     let config = ConfigToml {
@@ -6303,6 +6303,9 @@ fn ollama_provider_defaults_to_local_endpoint_and_small_model() {
 
     assert_eq!(resolved.provider, ProviderKind::Ollama);
     assert_eq!(resolved.base_url, DEFAULT_OLLAMA_BASE_URL);
+    // Pre-refresh window: do not invent a hosted DeepSeek id. A live
+    // `GET /v1/models` (same tags as `/api/tags`) must replace this marker.
+    assert_eq!(resolved.model, "unknown");
     assert_eq!(resolved.model, DEFAULT_OLLAMA_MODEL);
     assert_eq!(resolved.api_key, None);
 }

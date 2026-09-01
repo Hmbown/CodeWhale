@@ -1,17 +1,11 @@
 /**
- * The Codewhale brand mark — the white whale silhouette traced from the
- * 1254×1254 logo master (rounded-square tile lives in app/icon.svg; this is
- * the bare silhouette for in-page chrome). The path keeps the master's
- * coordinate frame: potrace units, y-up, offset by the silhouette's bounding
- * origin, framed by the viewBox below.
+ * The Codewhale brand mark — side-view whale facing left, `>` prompt-eye
+ * cutout (even-odd), belly crease, upward fluke. Matches `web/brand/mark/whale.svg`.
  */
 const WHALE_MARK =
-  "M5351 8953 c-174 -358 -474 -544 -1148 -713 -707 -176 -1031 -417 -1164 -862 -11 -40 -23 -77 -26 -82 -3 -4 -42 29 -87 76 -318 327 -591 401 -1321 353 -711 -47 -1078 48 -1421 367 -93 87 -93 87 -120 57 -28 -31 -24 -169 10 -334 143 -690 584 -1142 1240 -1270 165 -33 322 -43 721 -50 467 -7 597 -24 753 -101 252 -123 333 -343 298 -814 -39 -532 -41 -696 -15 -1050 55 -732 286 -1413 681 -2002 70 -104 69 -95 11 -102 -912 -117 -927 -123 -767 -332 258 -338 747 -544 1302 -550 l252 -2 103 -94 c1220 -1119 2384 -1604 3220 -1342 326 102 482 241 577 509 312 887 49 1756 -785 2591 -514 516 -1014 849 -2035 1357 -910 452 -1205 640 -1540 976 -426 427 -512 802 -248 1072 89 92 205 165 483 306 771 390 1070 709 1186 1263 75 362 -55 990 -160 773z";
+  "M10 50 C10 34 24 26 44 28 C58 29 70 36 76 46 C80 52 78 60 70 66 L86 48 C92 42 100 48 96 62 C92 78 78 86 62 82 C54 88 36 88 20 74 C8 64 10 56 10 50 Z M22 40 L36 50 L22 60 L26 50 Z M30 70 C38 74 48 74 52 70 C46 72 38 72 30 70 Z";
 
-/* Silhouette bounds in master coordinates (x 201–1054, y 177–1072), with a
-   small margin so the fluke never kisses the frame at favicon sizes. */
-const VIEW_BOX = "170 148 915 950";
-const MASTER_TRANSFORM = "translate(197 173) translate(0 904) scale(0.1 -0.1)";
+const VIEW_BOX = "0 0 100 100";
 
 export function Whale({
   size = 36,
@@ -40,9 +34,7 @@ export function Whale({
       {caustic ? (
         <defs>
           <clipPath id="codewhale-caustic-clip">
-            <g transform={MASTER_TRANSFORM}>
-              <path d={WHALE_MARK} />
-            </g>
+            <path d={WHALE_MARK} fillRule="evenodd" />
           </clipPath>
           <linearGradient id="codewhale-caustic-light" x1="0" y1="0" x2="1" y2="0">
             <stop offset="0%" stopColor="#d1ebf4" stopOpacity="0" />
@@ -52,24 +44,21 @@ export function Whale({
         </defs>
       ) : null}
 
-      <g transform={MASTER_TRANSFORM}>
-        <path className="codewhale-mark-primary" d={WHALE_MARK} />
-      </g>
+      <path
+        className="codewhale-mark-primary"
+        d={WHALE_MARK}
+        fill="currentColor"
+        fillRule="evenodd"
+      />
 
-      {/* The light is clipped to the mark itself, so it lands on the whale and
-          never on a rectangle of footer behind it. The clip lives on a STATIC
-          group and the highlight moves inside it — put the clip on the moving
-          rect and the whale-shaped window slides along with the light, which
-          is a very quiet way to render nothing at all. Parked off-canvas at
-          rest, which is also where reduced motion leaves it. */}
       {caustic ? (
         <g clipPath="url(#codewhale-caustic-clip)">
           <rect
             className="codewhale-caustic"
-            x="-460"
-            y="148"
-            width="380"
-            height="950"
+            x="-40"
+            y="0"
+            width="40"
+            height="100"
             fill="url(#codewhale-caustic-light)"
           />
         </g>

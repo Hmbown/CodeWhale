@@ -372,6 +372,23 @@ fn catalog_models_from_offerings<'a>(
     models
 }
 
+/// Tags from the provider's own live `/v1/models` partition.
+///
+/// Models.dev rows must not satisfy a LOCAL default (Ollama). This reads only
+/// the PerProvider snapshot so a cross-provider catalog cannot costume a
+/// machine that has not answered with its own tags.
+#[must_use]
+pub fn live_per_provider_models(provider: ApiProvider) -> Vec<String> {
+    let catalog_id = catalog_provider_id(provider).to_ascii_lowercase();
+    let Ok(guard) = LIVE_SNAPSHOT.read() else {
+        return Vec::new();
+    };
+    let Some(snapshot) = guard.per_provider.get(&catalog_id) else {
+        return Vec::new();
+    };
+    catalog_models_from_offerings(&snapshot.offerings)
+}
+
 /// Catalog-backed model ids for one provider (#4188).
 ///
 /// Precedence: live Models.dev rows (when published) override bundled offline
@@ -606,6 +623,43 @@ mod tests {
         // the lake must still return empty rather than inventing rows.
         assert!(all_catalog_models_for_provider(ApiProvider::Ollama).is_empty());
         assert!(model_completion_names_for_provider(ApiProvider::Ollama).is_empty());
+        assert!(live_per_provider_models(ApiProvider::Ollama).is_empty());
+    }
+
+    #[test]
+    fn ollama_live_default_uses_per_provider_tags_not_models_dev() {
+        let _live = lock_live_snapshot();
+        clear_live_snapshot();
+
+        set_live_snapshot(
+            CatalogSnapshot {
+                offerings: vec![CatalogOffering {
+                    provider: "ollama".to_string(),
+                    wire_model_id: "deepseek-v4-flash".to_string(),
+                    endpoint_key: "chat".to_string(),
+                    default_for_provider: true,
+                    ..Default::default()
+                }],
+            },
+            LiveSource::ModelsDev,
+        );
+        assert!(
+            live_per_provider_models(ApiProvider::Ollama).is_empty(),
+            "Models.dev must not satisfy a local Ollama default"
+        );
+
+        merge_live_offerings(vec![CatalogOffering {
+            provider: "ollama".to_string(),
+            wire_model_id: "qwen2.5:0.5b".to_string(),
+            endpoint_key: "chat".to_string(),
+            default_for_provider: true,
+            ..Default::default()
+        }]);
+        assert_eq!(
+            live_per_provider_models(ApiProvider::Ollama),
+            vec!["qwen2.5:0.5b".to_string()]
+        );
+        clear_live_snapshot();
     }
 
     /// #4116 / #4188 (AC): a provider with no bundled/live catalog coverage must

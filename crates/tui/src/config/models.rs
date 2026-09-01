@@ -137,7 +137,16 @@ pub const DEFAULT_SGLANG_BASE_URL: &str = "http://localhost:30000/v1";
 pub const DEFAULT_VLLM_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub const DEFAULT_VLLM_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub const DEFAULT_VLLM_BASE_URL: &str = "http://localhost:8000/v1";
-pub const DEFAULT_OLLAMA_MODEL: &str = "deepseek-v4-flash";
+/// Unresolved local-Ollama default. A live provider-catalog refresh must
+/// replace this with a tag `GET /v1/models` actually returned. Do not send
+/// this string as a model id.
+pub const DEFAULT_OLLAMA_MODEL: &str = "unknown";
+
+/// True when `model` is the pre-refresh local-Ollama placeholder, not a tag.
+#[must_use]
+pub fn is_unresolved_local_ollama_model(model: &str) -> bool {
+    model.trim().eq_ignore_ascii_case(DEFAULT_OLLAMA_MODEL)
+}
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 pub const DEFAULT_OLLAMA_CLOUD_MODEL: &str = "gpt-oss:120b";
 pub const DEFAULT_OLLAMA_CLOUD_BASE_URL: &str = codewhale_config::provider::OLLAMA_CLOUD_BASE_URL;

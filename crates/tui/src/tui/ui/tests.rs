@@ -8192,9 +8192,12 @@ fn first_run_ollama_choice_survives_restart_without_rewriting_config() {
     );
     assert!(app.pending_route_save.is_none());
     assert!(
-        app.status_message
-            .as_deref()
-            .is_some_and(|message| message.contains("Remembered ollama/deepseek-v4-flash")),
+        app.status_message.as_deref().is_some_and(|message| {
+            message.contains(&format!(
+                "Remembered ollama/{}",
+                crate::config::DEFAULT_OLLAMA_MODEL
+            ))
+        }),
         "onboarding must truthfully receipt the durable startup route: {:?}",
         app.status_message,
     );

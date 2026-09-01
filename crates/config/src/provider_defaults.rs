@@ -120,7 +120,10 @@ pub(crate) const DEFAULT_SGLANG_BASE_URL: &str = "http://localhost:30000/v1";
 pub(crate) const DEFAULT_VLLM_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub(crate) const DEFAULT_VLLM_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub(crate) const DEFAULT_VLLM_BASE_URL: &str = "http://localhost:8000/v1";
-pub(crate) const DEFAULT_OLLAMA_MODEL: &str = "deepseek-v4-flash";
+/// Unresolved local-Ollama default. A live `GET /v1/models` (Ollama's
+/// OpenAI-compat catalog, same tags as `/api/tags`) must supply the real id;
+/// this marker must never be sent as a model name.
+pub(crate) const DEFAULT_OLLAMA_MODEL: &str = "unknown";
 pub(crate) const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 pub(crate) const DEFAULT_OLLAMA_CLOUD_MODEL: &str = "gpt-oss:120b";
 pub(crate) const DEFAULT_OLLAMA_CLOUD_BASE_URL: &str = "https://ollama.com/v1";
