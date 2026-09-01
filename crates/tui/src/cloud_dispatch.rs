@@ -1334,14 +1334,6 @@ pub fn validate_outbound_origin(raw: &str) -> Result<reqwest::Url> {
     Ok(url)
 }
 
-/// Real Daytona HTTP launcher. Fails closed on every step; never invents a
-/// PR URL; never logs or returns the API key.
-///
-/// API shape (pinned against the published OpenAPI specs, see
-/// docs/DAYTONA_CLOUD_DISPATCH.md):
-/// - control plane `POST /sandbox`, `GET /sandbox/{id}`, `DELETE /sandbox/{id}`
-/// - toolbox `{toolboxProxyUrl}/{sandboxId}` with `POST /git/clone` and
-///   `POST /process/execute` (`{command, cwd, timeout}` → `{exitCode, result}`)
 /// Meter one closed interval on a dispatched cloud job.
 ///
 /// The job's sandbox id must match the provider observation. Wall-clock after
@@ -1363,6 +1355,14 @@ pub fn meter_cloud_job(
     }
 }
 
+/// Real Daytona HTTP launcher. Fails closed on every step; never invents a
+/// PR URL; never logs or returns the API key.
+///
+/// API shape (pinned against the published OpenAPI specs, see
+/// docs/DAYTONA_CLOUD_DISPATCH.md):
+/// - control plane `POST /sandbox`, `GET /sandbox/{id}`, `DELETE /sandbox/{id}`
+/// - toolbox `{toolboxProxyUrl}/{sandboxId}` with `POST /git/clone` and
+///   `POST /process/execute` (`{command, cwd, timeout}` → `{exitCode, result}`)
 pub struct LiveDaytonaLauncher;
 
 impl LiveDaytonaLauncher {
@@ -3158,7 +3158,7 @@ mod tests {
         };
         let swept = sweep_stale_jobs(&store, &launcher, now);
         assert_eq!(swept.len(), 1);
-        let seen = launcher.status_at_teardown.lock().unwrap().clone();
+        let seen = *launcher.status_at_teardown.lock().unwrap();
         assert_eq!(
             seen,
             Some(CloudJobStatus::Failed),
