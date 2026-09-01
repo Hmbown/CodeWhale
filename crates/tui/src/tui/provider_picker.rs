@@ -8469,19 +8469,26 @@ mod tests {
         );
 
         // Plain Enter begins ordinary setup; it must not read the external
-        // file, mint a grant, or emit the consent-confirmed event.
+        // file, mint a grant, or emit the consent-confirmed event. #5778 puts
+        // openai-codex behind the ChatGPT auth choice first; entering that
+        // stage stays inside the no-I/O boundary.
         assert!(matches!(
             picker.handle_key(key(KeyCode::Enter)),
             ViewAction::None
         ));
-        assert_eq!(picker.stage, Stage::KeyEntry);
+        assert_eq!(picker.stage, Stage::ChatgptAuthChoice);
         assert_eq!(
             crate::external_credentials::complete_side_effect_trap_counts(),
             (0, 0, 0, 0, 0),
             "ordinary selection must not touch external credential state"
         );
 
-        // The explicit reuse flow: choice stage still hides the path…
+        // The explicit reuse flow: choose "Import from Codex CLI", then Enter;
+        // the choice stage still hides the path and performs no I/O.
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Char('2'))),
+            ViewAction::None
+        ));
         assert!(matches!(
             picker.handle_key(key(KeyCode::Enter)),
             ViewAction::None
